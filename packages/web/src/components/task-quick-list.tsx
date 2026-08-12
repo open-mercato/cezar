@@ -1,15 +1,16 @@
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useHealth, useRuns } from '@/api/queries'
-import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
+import { Link, scopeTo, useNavigate, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
 import { ReferenceChip } from '@/components/reference-chip'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
-import { isReadDoneItem, isUnread } from '@/lib/read-state'
+import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
 import { directionalUsageText } from '@/components/directional-usage'
 import {
   groupRuns,
@@ -56,24 +57,42 @@ export function TaskQuickList({
 }) {
   const counts = listCounts(runs)
   const buckets = groupRuns(runs, view)
+  const unread = unreadDoneCount(runs)
 
   return (
     <div data-slot="quick-list">
-      {/* Sticky, not scrolled away: the tabs say what you are looking at, and a long Recent list
-          must not be able to hide that the view is filtered. */}
-      <div className="sticky top-0 z-10 bg-sidebar pt-2 pb-1">
-        <div className="inline-flex w-full gap-0.5 rounded-md bg-muted p-[3px]">
-          <ViewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
-            Active
-            {/* The one reason to look at a tab you are not on. */}
-            {counts.waiting > 0 && view !== 'active' ? (
-              <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label="needs you" />
-            ) : null}
-          </ViewTab>
-          <ViewTab view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
-            Archived
-          </ViewTab>
-        </div>
+      {/* Sticky, not scrolled away: the rows say what you are looking at, and a long Recent list
+          must not be able to hide that the view is filtered. TASKS is a labelled section of two
+          nav-style rows (the sidebar redesign), not a segmented track — the selected row carries
+          the accent tint, Active carries the count and the unread badge the Tasks nav item used
+          to wear. */}
+      <div className="sticky top-0 z-10 bg-sidebar pt-2 pb-0.5">
+        <h2 className="px-3 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+          Tasks
+        </h2>
+        <ViewRow
+          view="active"
+          current={view}
+          onSelect={onViewChange}
+          count={counts.active}
+          dotClass="bg-primary"
+          unread={unread}
+        >
+          Active
+          {/* The one reason to look at a row you are not on. */}
+          {counts.waiting > 0 && view !== 'active' ? (
+            <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label="needs you" />
+          ) : null}
+        </ViewRow>
+        <ViewRow
+          view="archived"
+          current={view}
+          onSelect={onViewChange}
+          count={counts.archived}
+          dotClass="bg-soft-foreground/40"
+        >
+          Archived
+        </ViewRow>
       </div>
 
       {buckets.length === 0 ? (
@@ -150,17 +169,23 @@ export function QuickListBuckets({
   )
 }
 
-function ViewTab({
+function ViewRow({
   view,
   current,
   onSelect,
   count,
+  dotClass,
+  unread = 0,
   children,
 }: {
   view: ListView
   current: ListView
   onSelect: (view: ListView) => void
   count: number
+  /** The row's leading status dot — accent for Active, faint for Archived. */
+  dotClass: string
+  /** Unread finished tasks (#unread-done-items) — the badge the Tasks nav item used to wear. */
+  unread?: number
   children: React.ReactNode
 }) {
   const isActive = view === current
@@ -174,13 +199,25 @@ function ViewTab({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-7 flex-1 items-center justify-center gap-1.5 rounded-[7px] text-[12.5px] font-medium text-muted-foreground',
-        isActive && 'bg-card font-semibold text-foreground shadow-xs'
+        'flex h-[30px] w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+        isActive && 'bg-primary/10 font-semibold text-foreground hover:bg-primary/10',
       )}
     >
+      <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', dotClass)} />
       {children}
-      {/* No "0": an empty bucket says so by being empty. */}
-      {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+      <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        {unread > 0 ? (
+          <span
+            data-slot="quick-list-unread-badge"
+            title={`${unread} unread finished ${unread === 1 ? 'task' : 'tasks'}`}
+            className="rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+          >
+            {unread}
+          </span>
+        ) : null}
+        {/* No "0": an empty bucket says so by being empty. */}
+        {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+      </span>
     </button>
   )
 }
@@ -460,6 +497,8 @@ export function TaskQuickListContainer() {
   const health = useHealth()
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
+  const navigate = useNavigate()
+  const onSidebarNavigate = useSidebarNavigate()
   // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
@@ -473,7 +512,14 @@ export function TaskQuickListContainer() {
     <TaskQuickList
       runs={runs.data}
       view={view}
-      onViewChange={setView}
+      // The TASKS rows replaced the Tasks nav item (sidebar redesign), so picking one also
+      // lands on the tasks overview — the filter and the view arrive together.
+      onViewChange={(next) => {
+        setView(next)
+        navigate('/')
+        // Same-path clicks can't trip the drawer's route-change close — close it ourselves.
+        onSidebarNavigate?.()
+      }}
       // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
       currentRunId={match?.params.id ?? exact?.params.id ?? null}
       now={now}

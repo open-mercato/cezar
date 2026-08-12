@@ -489,21 +489,28 @@ function SidebarContent({
       // an `@min-[…]/sidebar:` query and returns when the user drags the column wider.
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
+      {/* Two-line lockup (sidebar redesign): the product name on top, the project it is looking
+          at beneath — a hierarchy, not one crowded row. */}
       <div className="flex items-center gap-[9px] px-3.5 pt-3.5 pb-2.5">
         <BrandTile />
-        <span className="text-[15px] font-semibold">cezar</span>
-        {/* With project groups mounted the boot repo/branch is one group header among many —
-            a chip repeating it up here would just be the first group's header said twice. */}
-        {repo && !projectGroups ? (
-          <span
-            data-slot="repo-chip"
-            className="ml-auto truncate font-mono text-[11px] font-medium text-soft-foreground"
-          >
-            {repo.name} / {repo.branch}
-          </span>
-        ) : null}
-        {headerAction ? (
-          <div className={cn('shrink-0', (!repo || projectGroups) && 'ml-auto')}>{headerAction}</div>
+        <span className="flex min-w-0 flex-col leading-tight">
+          <span className="text-[15px] font-semibold">cezar</span>
+          {/* With project groups mounted the boot repo/branch is one group header among many —
+              a line repeating it up here would just be the first group's header said twice. */}
+          {repo && !projectGroups ? (
+            <span
+              data-slot="repo-chip"
+              className="truncate font-mono text-[11px] font-medium text-soft-foreground"
+            >
+              {repo.name} / {repo.branch}
+            </span>
+          ) : null}
+        </span>
+        {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
+        {!headerAction && !singleProject ? (
+          <div className="ml-auto shrink-0">
+            <AddProjectMenu />
+          </div>
         ) : null}
       </div>
 
@@ -527,7 +534,7 @@ function SidebarContent({
             </kbd>
           </Link>
         </Button>
-        {singleProject ? null : <AddProjectMenu />}
+        {/* AddProjectMenu moved up beside the lockup — the CTA owns this row alone. */}
       </div>
 
       {projectGroups ? (
@@ -542,9 +549,23 @@ function SidebarContent({
           </SidebarNavigateContext.Provider>
         </div>
       ) : (
-        <>
+        // One scroll column in the mockup's order: the TASKS rows + RECENT list first (the work),
+        // then the WORKSPACE views beneath them (the places). The Tasks nav item is gone — the
+        // quick-list's Active/Archived rows are that entry now, unread badge included. The
+        // navigate context reaches the quick-list rows so a same-path click still closes the
+        // mobile drawer (the route-change effect cannot fire without a pathname change).
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div data-slot="task-quick-list" className="px-2.5">
+            <SidebarNavigateContext.Provider value={onNavigate}>
+              {taskQuickList}
+            </SidebarNavigateContext.Provider>
+          </div>
+
           <nav aria-label="Main" className="px-2.5 py-1.5">
-            {items.map((item) => {
+            <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+              Workspace
+            </h2>
+            {items.filter((item) => item.to !== '/').map((item) => {
               const isActive = item.to === activeTo
               const Icon = item.icon
               // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
@@ -598,15 +619,7 @@ function SidebarContent({
               )
             })}
           </nav>
-
-          {/* The single-project quick-list (Needs you / Working / Recent). */}
-          <div
-            data-slot="task-quick-list"
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 pb-2"
-          >
-            {taskQuickList}
-          </div>
-        </>
+        </div>
       )}
 
       {/* Two deliberate rows, never a wrap (#702): the search bar owns line 1, the chrome controls

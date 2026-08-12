@@ -192,8 +192,9 @@ describe('sidebar wiring', () => {
     await waitFor(() => expect(versionChip()).not.toBeNull())
     expect(screen.queryByRole('link', { name: /Inbox/ })).toBeNull()
     expect(navBadge()).toBeNull()
-    // Every other view is untouched — the gate owns exactly one item.
-    expect(screen.getByRole('link', { name: /Tasks/ })).toBeTruthy()
+    // Every other view is untouched — the gate owns exactly one item. (Tasks is no longer a
+    // nav link; the quick-list's TASKS rows are that entry.)
+    expect(screen.getByRole('link', { name: /Git/ })).toBeTruthy()
     expect(screen.getByRole('link', { name: /Settings/ })).toBeTruthy()
   })
 

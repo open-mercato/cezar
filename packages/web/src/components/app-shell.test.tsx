@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { AppShell, type AppShellProps } from './app-shell'
+import { AppShell, useSidebarNavigate, type AppShellProps } from './app-shell'
 import { NAV_ITEMS } from './nav-items'
 import { ThemeProvider } from './theme-provider'
 
@@ -67,11 +67,10 @@ describe('AppShell', () => {
     expect(main.scrollTop).toBe(0)
   })
 
-  it('renders the whole nav as real router links', () => {
+  it('renders the WORKSPACE nav as real router links — Tasks lives in the quick-list rows now', () => {
     renderShell()
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.textContent)).toEqual([
-      'Tasks',
       'Inbox',
       'Git',
       'GitHub',
@@ -82,7 +81,6 @@ describe('AppShell', () => {
     ])
     // Deep-linkable per Step 2.1: every nav row is an <a href>, not a button with an onClick.
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      '/',
       '/inbox',
       '/git',
       '/github',
@@ -99,16 +97,14 @@ describe('AppShell', () => {
     renderShell('/', { forgeAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge).length)
+    // Minus the two forge-gated items AND the Tasks item, which the quick-list rows replaced.
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge && item.to !== '/').length)
   })
 
   describe('active nav state follows the current route', () => {
     const cases: Array<[entry: string, active: string]> = [
-      ['/', 'Tasks'],
       ['/git', 'Git'],
       ['/skills', 'Skills'],
-      // Tasks stays lit while a task thread is open (spec's "Task list & table").
-      ['/tasks/abc123', 'Tasks'],
     ]
 
     for (const [entry, active] of cases) {
@@ -120,6 +116,16 @@ describe('AppShell', () => {
         expect(current[0]?.textContent).toBe(active)
       })
     }
+
+    it('lights no workspace item on the tasks overview — the quick-list rows are that entry', () => {
+      renderShell('/')
+      expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+    })
+
+    it('lights no workspace item on a task thread either', () => {
+      renderShell('/tasks/abc123')
+      expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+    })
 
     it('lights nothing on a full-screen surface like /new', () => {
       renderShell('/new')
@@ -149,7 +155,7 @@ describe('AppShell', () => {
     it('is omitted in single-project mode while normal navigation remains', () => {
       renderShell('/', { singleProject: true })
       expect(within(sidebar()).queryByRole('button', { name: 'Add project' })).toBeNull()
-      expect(within(nav()).getByRole('link', { name: 'Tasks' })).toBeTruthy()
+      expect(within(nav()).getByRole('link', { name: 'Git' })).toBeTruthy()
       expect(within(sidebar()).getByRole('link', { name: /New task/ })).toBeTruthy()
     })
   })
@@ -671,8 +677,10 @@ describe('AppShell', () => {
 
       // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
       // reuses the sidebar's content, so adding a nav item must not need a second edit here.
-      expect(links.map((a) => a.getAttribute('href'))).toEqual(NAV_ITEMS.map((item) => item.to))
-      expect(links.map((a) => a.textContent)).toEqual(NAV_ITEMS.map((item) => item.label))
+      // (Minus '/': the quick-list's TASKS rows are that entry in both framings.)
+      const workspaceItems = NAV_ITEMS.filter((item) => item.to !== '/')
+      expect(links.map((a) => a.getAttribute('href'))).toEqual(workspaceItems.map((item) => item.to))
+      expect(links.map((a) => a.textContent)).toEqual(workspaceItems.map((item) => item.label))
 
       // …and the rest of the sidebar came along, not just the nav.
       expect(within(drawer() as HTMLElement).getByRole('link', { name: /New task/ })).toBeTruthy()
@@ -699,12 +707,21 @@ describe('AppShell', () => {
       expect(screen.getByTestId('location').textContent).toBe('/git')
     })
 
-    it('closes when the already-active nav item is re-clicked', async () => {
-      // No pathname change, so the route-change effect cannot fire — the link's own onNavigate
-      // is what has to close it. Tasks navigating home while already active is a spec behavior.
-      renderShell('/')
+    it('closes when a quick-list row fires the sidebar-navigate callback on a same-path click', async () => {
+      // No pathname change, so the route-change effect cannot fire — the quick-list row's own
+      // sidebar-navigate callback is what has to close it (the TASKS rows replaced the Tasks
+      // nav item). A stand-in consumes the same context the real container does.
+      function FakeQuickList() {
+        const onNavigate = useSidebarNavigate()
+        return (
+          <button type="button" onClick={() => onNavigate?.()}>
+            Active
+          </button>
+        )
+      }
+      renderShell('/', { taskQuickList: <FakeQuickList /> })
       openMenu()
-      fireEvent.click(within(drawer() as HTMLElement).getByRole('link', { name: 'Tasks' }))
+      fireEvent.click(within(drawer() as HTMLElement).getByRole('button', { name: 'Active' }))
       await waitFor(() => expect(drawer()).toBeNull())
       expect(screen.getByTestId('location').textContent).toBe('/')
     })
