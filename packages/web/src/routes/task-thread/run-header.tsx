@@ -113,7 +113,9 @@ export function RunHeader({
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-0 backdrop-blur md:px-6"
+      // The after: strip is a background-colored SHADOW under the sticky edge: scrolling content
+      // fades into the page instead of guillotining on the border line.
+      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-0 backdrop-blur after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-gradient-to-b after:from-background after:to-transparent after:content-[''] md:px-6"
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">

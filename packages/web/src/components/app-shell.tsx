@@ -225,9 +225,6 @@ export function AppShell({
     toolsMenu,
     projectGroups,
     singleProject,
-    // Inside a task (thread or compare) the CTA to LEAVE that context steps down to a quiet
-    // outline — the current task is the headline, not the exit (review's dynamic hierarchy).
-    inTaskContext: /^\/(tasks|compare)\//.test(areaPathname),
   }
 
   return (
@@ -310,9 +307,6 @@ type NavProps = {
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
   singleProject: boolean
-  /** True on /tasks/:id and /compare/:id — the New task CTA steps down to an outline there,
-   *  so the exit never outranks the task the user is inside (review's dynamic hierarchy). */
-  inTaskContext: boolean
 }
 
 /**
@@ -496,7 +490,6 @@ function SidebarContent({
   toolsMenu,
   projectGroups,
   singleProject,
-  inTaskContext,
   onNavigate,
   headerAction,
 }: NavProps & {
@@ -541,13 +534,7 @@ function SidebarContent({
       </div>
 
       <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
-        <Button
-          asChild
-          // Dynamic hierarchy (review): full purple on the lists, a quiet outline INSIDE a task —
-          // the CTA to leave the current context must not outrank the context itself.
-          variant={inTaskContext ? 'outline' : 'primary'}
-          className="relative min-w-0 flex-1 justify-center"
-        >
+        <Button asChild variant="primary" className="relative min-w-0 flex-1 justify-center">
           {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
               New task affordances stay inside the SPA. Full document loads of /new (the
               bookmarklet contract) land on the shell like any route (static-ui.ts) — the
@@ -560,12 +547,7 @@ function SidebarContent({
                 reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
             <kbd
               aria-hidden="true"
-              className={cn(
-                'absolute right-2.5 rounded-[5px] border border-b-2 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium',
-                inTaskContext
-                  ? 'border-border text-muted-foreground'
-                  : 'border-primary-foreground/25 text-primary-foreground/60',
-              )}
+              className="absolute right-2.5 rounded-[5px] border border-b-2 border-primary-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-primary-foreground/60"
             >
               C
             </kbd>
