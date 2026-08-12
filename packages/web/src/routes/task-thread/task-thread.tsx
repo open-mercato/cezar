@@ -30,6 +30,7 @@ import { AutoResumeHint } from './auto-resume-hint'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
+import { RunStatusAnnouncer } from './status-announcer'
 import { ThreadContextBar } from './thread-context-bar'
 import { collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
@@ -301,6 +302,10 @@ export function ThreadView({
             the thread so quiet gaps between bursts don't read as "finished". `waiting` hands
             off to the dock's reply hint, `queued` to the placeholder above — so `running` only. */}
         {run.status === 'running' ? <WorkingIndicator /> : null}
+
+        {/* The audible twin of all the visual state above (audit B6) — announces status
+            TRANSITIONS to screen readers, stays silent on mount. */}
+        <RunStatusAnnouncer status={run.status} />
 
         {/* Closed states read as the body's last line; the WAITING state lives in the dock
             (mockup `.paused-hint`), right above the composer it is asking the user to use. */}
