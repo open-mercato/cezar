@@ -199,7 +199,7 @@ function ViewRow({
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
       className={cn(
-        'flex h-[30px] w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+        'flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
         isActive && 'bg-primary/10 font-semibold text-foreground hover:bg-primary/10',
       )}
     >

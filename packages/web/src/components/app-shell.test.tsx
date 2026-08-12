@@ -217,7 +217,8 @@ describe('AppShell', () => {
       renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
       const chip = controls().querySelector('[data-slot="version-chip"]') as HTMLElement
       expect(chip.getAttribute('data-update-available')).toBe('true')
-      expect(chip.querySelector('[data-slot="status-dot"]')).not.toBeNull()
+      // Violet text, not a dot — the label is plain text now (no border, no button cosplay).
+      expect(chip.className).toContain('text-violet')
     })
   })
 
@@ -253,13 +254,13 @@ describe('AppShell', () => {
         expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
       })
 
-      it('pulses and names the newer version when one exists', () => {
+      it('turns violet and names the newer version when one exists', () => {
         renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
         expect(chip().getAttribute('data-update-available')).toBe('true')
         expect(chip().getAttribute('title')).toBe('update available: v1.3.0')
-        const dot = chip().querySelector('[data-slot="status-dot"]') as HTMLElement
-        expect(dot.getAttribute('data-tone')).toBe('pending')
-        expect(dot.className).toContain('animate-pulse')
+        // Violet text is the affordance — the dot went with the button-shaped border.
+        expect(chip().className).toContain('text-violet')
+        expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
         // The version shown is still the one actually running.
         expect(chip().textContent).toContain('v1.2.3')
       })

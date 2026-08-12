@@ -596,7 +596,9 @@ function SidebarContent({
                   className={cn(
                     // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
                     // they relax to 44px — the one place the two framings legitimately differ.
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
+                    // 36px is the sidebar's one control height (CTA, search, rows); the drawer
+                    // relaxes to 44px touch targets.
+                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9',
                     // Accent tint, not bg-accent (= muted): the active row must read differently
                     // from a merely hovered neighbour — same selection language as the TASKS rows.
                     isActive && 'bg-primary/10 font-semibold text-foreground hover:bg-primary/10'
@@ -739,9 +741,11 @@ function CommandPaletteHint() {
       data-slot="command-palette-hint"
       title="Search — command palette (⌘K / Ctrl+K)"
       onClick={() => openCommandPalette()}
-      className="flex w-full items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-left text-xs font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground"
+      // h-9 + 13px: an input-sized launcher (it sits under the CTA now, where a tiny strip read
+      // as an afterthought), matching the composer pickers' control height.
+      className="flex h-9 w-full items-center gap-2 rounded-md border border-border bg-card px-2.5 text-left text-[13px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground"
     >
-      <SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
+      <SearchIcon className="size-4 shrink-0" aria-hidden="true" />
       <span className="truncate">Search…</span>
       <kbd
         aria-hidden="true"
@@ -754,9 +758,10 @@ function CommandPaletteHint() {
 }
 
 /**
- * The footer's `v{version}` chip. When the server's npm-registry check found something newer
- * (`latestVersion`, #368), the chip grows a pulsing pending-tone dot and names the version in
- * its tooltip — an affordance, not an alert: updating is optional, so the chrome stays quiet.
+ * The footer's `v{version}` label. Plain quiet text — a border made it read as a button that
+ * goes nowhere. When the server's npm-registry check found something newer (`latestVersion`,
+ * #368) the label turns violet and the tooltip names the version — an affordance, not an alert:
+ * updating is optional, so the chrome stays quiet.
  */
 function VersionChip({ version, latestVersion }: { version: string; latestVersion: string | null }) {
   const updateAvailable = Boolean(latestVersion && latestVersion !== version)
@@ -765,9 +770,11 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
       data-slot="version-chip"
       data-update-available={updateAvailable ? 'true' : undefined}
       title={updateAvailable ? `update available: v${latestVersion}` : undefined}
-      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground"
+      className={cn(
+        'shrink-0 font-mono text-[10.5px] font-medium',
+        updateAvailable ? 'text-violet' : 'text-soft-foreground',
+      )}
     >
-      {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px]" /> : null}
       v{version}
     </span>
   )
@@ -800,7 +807,7 @@ function ProjectBar({ name, toolsMenu }: { name: string | null; toolsMenu?: Reac
     <div
       data-slot="project-bar"
       // Identity on the LEFT (where a breadcrumb reads), utilities — Tools, theme — on the right.
-      className="row-start-1 hidden h-9 items-center gap-2.5 border-b border-border bg-background px-4 md:flex"
+      className="row-start-1 hidden h-11 items-center gap-2.5 border-b border-border bg-background px-4 md:flex"
     >
       {name ? (
         <span className="flex min-w-0 items-center gap-2">

@@ -68,8 +68,8 @@ function LocationProbe() {
 }
 
 const trigger = () => screen.getByRole('button', { name: /Tools/ })
-const triggerDot = () =>
-  document.querySelector('[data-slot="tools-menu-trigger"] [data-slot="status-dot"]') as HTMLElement
+const triggerWrench = () =>
+  document.querySelector('[data-slot="tools-menu-trigger"] svg') as SVGElement
 
 /** Radix opens the menu on pointerdown, not click. */
 async function openMenu(): Promise<HTMLElement> {
@@ -111,15 +111,17 @@ describe('ToolsMenu', () => {
     expect(document.querySelector('[data-slot="tools-menu-trigger"]')).toBeNull()
   })
 
-  it('shows a green aggregate dot when every check is available', () => {
+  it('shows a quiet wrench when every check is available', () => {
     renderMenu(ALL_GOOD)
-    expect(triggerDot().getAttribute('data-tone')).toBe('success')
+    expect(trigger().getAttribute('data-attention')).toBeNull()
+    expect(triggerWrench().getAttribute('class')).toContain('text-soft-foreground')
     expect(trigger().getAttribute('title')).toBe('cezar v0.1.3')
   })
 
-  it('shows a pending aggregate dot and names the tool in the tooltip when one is missing', () => {
+  it('turns the wrench violet and names the tool in the tooltip when one is missing', () => {
     renderMenu(HEALTH)
-    expect(triggerDot().getAttribute('data-tone')).toBe('pending')
+    expect(trigger().getAttribute('data-attention')).toBe('true')
+    expect(triggerWrench().getAttribute('class')).toContain('text-violet')
     expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 · needs attention: codex')
   })
 

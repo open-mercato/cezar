@@ -1,5 +1,7 @@
-import { ChevronDownIcon, SettingsIcon } from 'lucide-react'
+import { SettingsIcon, WrenchIcon } from 'lucide-react'
 import { Link } from '@/lib/project-router'
+import { chipClass, chevron } from '@/components/picker-pill'
+import { cn } from '@/lib/utils'
 
 import type { BackendCheck, HealthResponse } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
@@ -70,12 +72,20 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
         <button
           type="button"
           data-slot="tools-menu-trigger"
+          // The aggregate state rides the WRENCH (a dot next to "Tools" symbolized nothing):
+          // quiet when every tool answered, violet — the cockpit's "needs a human" hue, same as
+          // the unread badges — when something is missing. The tooltip names the stragglers.
+          // `chipClass`: the same pill grammar as the composer's runner/model pickers.
+          data-attention={allAvailable ? undefined : 'true'}
           title={toolsTooltip(health)}
-          className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className={chipClass}
         >
-          <StatusDot tone={allAvailable ? 'success' : 'pending'} />
+          <WrenchIcon
+            aria-hidden="true"
+            className={cn('size-3.5 shrink-0', allAvailable ? 'text-soft-foreground' : 'text-violet')}
+          />
           Tools
-          <ChevronDownIcon className="size-[11px]" aria-hidden="true" />
+          {chevron}
         </button>
       </DropdownMenuTrigger>
 
