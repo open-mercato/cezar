@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { runnerSchema } from './health.ts';
+import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
@@ -371,11 +372,31 @@ export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
  * that says nothing reads as "your task is not here" when the honest answer is "not in the
  * newest N". Naming the projects that hit the cap is what lets a consumer say so.
  */
+/**
+ * Everything the SERVER already knew about the references its rows carry, per project — the
+ * statuses that would otherwise cost a second round trip a beat after the table paints.
+ *
+ * Read from cache only: this never asks the forge, so a cold entry is simply absent and
+ * `GET /github/ref-status` stays the route that actually goes and looks. That makes it free, and
+ * being free is what lets it be a superset — the server looks up every number a run mentions
+ * rather than re-deriving which one the cockpit will display (#407, #526 live client-side, and
+ * duplicating that rule is how the two would drift).
+ */
+export const referenceStatusesByProjectSchema = z.record(
+  z.string(),
+  z.object({
+    prs: z.record(z.number(), referenceStatusSchema),
+    issues: z.record(z.number(), referenceStatusSchema),
+  }),
+);
+
 export const runsIndexResponseSchema = z.object({
   /** Newest first, across every registered project. Archived runs are included — `GET /runs`
    *  carries them for the project you are standing in, and a finder that dropped them elsewhere
    *  would make a task vanish the moment you left its project. */
   runs: z.array(runIndexEntrySchema),
+  /** Additive: absent statuses mean "nothing warm", never "nothing to show". */
+  referenceStatuses: referenceStatusesByProjectSchema,
   /** The per-project cap that produced this list. */
   perProjectLimit: z.number(),
   /** Ids of the projects that had more runs than the cap allowed. */

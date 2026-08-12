@@ -162,7 +162,7 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, GithubPrNotFoundError, GH_CHECKS_MAX } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, GithubPrNotFoundError, GH_CHECKS_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
@@ -4196,6 +4196,11 @@ export function createApp(deps: ServerDeps) {
       if (!outcome.ok) {
         return c.json({ error: outcome.error, manual: `git merge ${run.branch}` }, 409);
       }
+      // A number the cockpit asked about BEFORE the pull request existed is cached as "this
+      // repository has no such number" — which is exactly what a `CEZ:PR=901` marker declared
+      // ahead of the push looks like. It exists now.
+      const createdNumber = refNumberFromUrl(outcome.url);
+      if (createdNumber !== null) forgetRefStatus(repoRoot, createdNumber);
       store.updateRun(id, {
         pullRequestUrl: outcome.url,
         status: 'done',
@@ -4763,6 +4768,19 @@ export function createApp(deps: ServerDeps) {
   // would be in its temporal dead zone. (The schemas below are all read inside a handler, or
   // passed as a thunk, which defers them past that point.)
   const mergeNumberParams = z.object({ number: z.coerce.number().int().positive() });
+  /** A ref-status list: `null` means malformed (the caller answers 400), `[]` means "not asked
+   *  for". Absent and empty are the same request — neither names a number. */
+  const parseRefNumbers = (raw: string | undefined): number[] | null => {
+    const parts = (raw ?? '').split(',').map((p) => p.trim()).filter(Boolean);
+    if (parts.length > GH_REF_STATUS_MAX) return null;
+    const numbers: number[] = [];
+    for (const part of parts) {
+      const n = Number(part);
+      if (!Number.isInteger(n) || n <= 0 || String(n) !== part) return null;
+      numbers.push(n);
+    }
+    return numbers;
+  };
   const prChangesParams = z.object({ number: z.coerce.number().int().positive().safe() });
   const prChangesQuery = z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') });
   const githubRoutes = new Hono<ProjectApiEnv>()
@@ -4812,6 +4830,27 @@ export function createApp(deps: ServerDeps) {
       return c.json(await fetchGithubChecks(repoRoot, numbers));
     })
 
+    // Batched status for the PR/issue chips a task table paints. Additive sibling of
+    // /github/checks and shaped like it: comma-separated positive integers, capped at
+    // GH_REF_STATUS_MAX per kind, malformed input is a 400, and an unreachable forge degrades in
+    // the payload. Unlike /github/checks BOTH keys are optional — a table may hold only issues —
+    // but at least one must name something, or the request asks for nothing.
+    .get(
+      '/github/ref-status',
+      queryZodValidator(z.object({ prs: z.string().optional(), issues: z.string().optional() })),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const { prs, issues } = c.req.valid('query');
+        const parsedPrs = parseRefNumbers(prs);
+        const parsedIssues = parseRefNumbers(issues);
+        if (parsedPrs === null || parsedIssues === null) return c.json({ error: 'invalid ref-status query' }, 400);
+        if (parsedPrs.length === 0 && parsedIssues.length === 0) {
+          return c.json({ error: 'missing prs or issues query' }, 400);
+        }
+        return c.json(await fetchGithubRefStatus(repoRoot, { prs: parsedPrs, issues: parsedIssues }));
+      },
+    )
+
     .get(
       '/github/prs/:number/merge-state',
       paramZodValidator(mergeNumberParams, { message: 'invalid pull request number' }),
@@ -4836,7 +4875,14 @@ export function createApp(deps: ServerDeps) {
         const forge = resolveForge(await getRepoInfo(repoRoot));
         if (!forge?.mergePR) return c.json({ error: 'GitHub merge is unavailable' }, 409);
         const result = await forge.mergePR(parsedNumber.data.number, body.data);
-        if (result.merged) return c.json(result);
+        if (result.merged) {
+          // We just changed this pull request, so what the ref-status cache holds about it is now
+          // known-stale — and its TTL would keep every chip showing the PRE-merge status for up to
+          // a minute after the user watched this server merge it. Forget it; the next reader asks
+          // the forge, gets `merged`, and then stops polling it at all.
+          forgetRefStatus(repoRoot, parsedNumber.data.number);
+          return c.json(result);
+        }
         return c.json(
           {
             error: result.error,
@@ -5226,6 +5272,26 @@ export function createApp(deps: ServerDeps) {
   /** `RunRecord` → the wire row. Optional keys are spread CONDITIONALLY: writing
    *  `titleSummary: run.titleSummary` types a key as always-present that `JSON.stringify` then
    *  drops when it is undefined, which is exactly the drift the parity guard fails on. */
+  /**
+   * Every number a run MENTIONS — a superset of what its chip will show.
+   *
+   * Deliberately not `taskReference()`'s rule: which of a run's references is displayed is the
+   * cockpit's decision (#407, #526), and re-deriving it here would be a second rule that drifts
+   * from the first. This feeds a CACHE READ, which costs nothing per number, so asking about one
+   * the client will not paint is free and asking about one it will is the whole point.
+   */
+  const mentionedReferenceNumbers = (run: RunRecord): number[] => {
+    const numbers: number[] = [];
+    for (const url of [run.pullRequestUrl, run.referencedPullRequestUrl, run.referencedIssueUrl]) {
+      const number = url ? refNumberFromUrl(url) : null;
+      if (number !== null) numbers.push(number);
+    }
+    for (const number of [run.prNumber, run.issueNumber, run.markerRefs?.pr, run.markerRefs?.issue]) {
+      if (typeof number === 'number' && Number.isInteger(number) && number > 0) numbers.push(number);
+    }
+    return numbers;
+  };
+
   const runIndexEntry = (projectId: string, run: RunRecord): RunIndexEntry => {
     const usage = currentUsage(run.id);
     return {
@@ -5289,6 +5355,12 @@ export function createApp(deps: ServerDeps) {
       const bootId = await resolveBootProject(projects);
       const runs: RunIndexEntry[] = [];
       const truncated: string[] = [];
+      // Statuses the server already holds, shipped WITH the rows that carry the references. The
+      // cockpit would otherwise ask for them a beat after the table paints — one round trip per
+      // project, and a visible flash of un-coloured chips before it lands. Cache-only, so this
+      // never touches `gh` and never slows the index down; anything cold stays absent and the
+      // lazy `/github/ref-status` route fills it in.
+      const referenceStatuses: RunsIndexResponse['referenceStatuses'] = {};
       for (const project of projects) {
         // No folder, no runs to read. `not-git` still has an `.ai/cezar` worth indexing.
         if (project.status === 'missing') continue;
@@ -5304,8 +5376,19 @@ export function createApp(deps: ServerDeps) {
           owned ? owned.store.listRuns() : readRunIndexFromDisk(join(project.root, '.ai/cezar'))
         ).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
         if (recent.length > RUNS_INDEX_PER_PROJECT) truncated.push(project.id);
+        const mentioned: number[] = [];
         for (const run of recent.slice(0, RUNS_INDEX_PER_PROJECT)) {
           runs.push(runIndexEntry(project.id, run));
+          mentioned.push(...mentionedReferenceNumbers(run));
+        }
+        if (mentioned.length > 0) {
+          const cached = readCachedRefStatuses(project.root, mentioned);
+          // Only when something was actually warm. A project key holding two empty maps is noise
+          // that every consumer would have to look past, and it would blur the one rule this
+          // payload has: absent means nothing is known.
+          if (Object.keys(cached.prs).length > 0 || Object.keys(cached.issues).length > 0) {
+            referenceStatuses[project.id] = cached;
+          }
         }
       }
       runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -5313,6 +5396,7 @@ export function createApp(deps: ServerDeps) {
         runs,
         perProjectLimit: RUNS_INDEX_PER_PROJECT,
         truncated,
+        referenceStatuses,
       };
       return c.json(body);
     });

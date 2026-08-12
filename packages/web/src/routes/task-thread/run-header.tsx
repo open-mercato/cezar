@@ -14,7 +14,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -27,6 +27,7 @@ import {
   useOpenTargets,
   usePatchRun,
   useProjectRepoBase,
+  useReferenceProjectId,
   useProviderStatus,
   useRunHandoff,
   useRuns,
@@ -36,6 +37,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { TabLink } from '@/components/tab-link'
 import {
   AlertDialog,
@@ -62,7 +64,14 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
-import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
+import {
+  formatCost,
+  prNumber,
+  taskIssueUrl,
+  taskPrUrl,
+  taskReferences,
+  workflowLabel,
+} from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { isHttpUrl } from '@/lib/utils'
 
@@ -483,6 +492,21 @@ function MetaRow({
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
+  // At most two references here, so this is a batch of one or two rather than of a table — but it
+  // goes through the same seam, which is what keeps the header's chip and the table's chip
+  // answering identically for the same PR.
+  const projectId = useReferenceProjectId()
+  const referenceRequests = useMemo(
+    () =>
+      projectId === undefined
+        ? []
+        : taskReferences(run, repoBase).map((reference) => ({
+            projectId,
+            kind: reference.kind,
+            number: reference.number,
+          })),
+    [run, repoBase, projectId],
+  )
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
@@ -567,22 +591,12 @@ function MetaRow({
   }
 
   return (
-    <div
-      data-slot="run-meta"
-      className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
-    >
-      {parts.map((part, index) => (
-        <Fragment key={index}>
-          {index > 0 ? (
-            <span className="text-soft-foreground" aria-hidden="true">
-              ·
-            </span>
-          ) : null}
-          {part}
-        </Fragment>
-      ))}
-      <span className="ml-auto flex shrink-0 items-center gap-1.5">
-        {usage.map((part, index) => (
+    <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <div
+        data-slot="run-meta"
+        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+      >
+        {parts.map((part, index) => (
           <Fragment key={index}>
             {index > 0 ? (
               <span className="text-soft-foreground" aria-hidden="true">
@@ -592,9 +606,21 @@ function MetaRow({
             {part}
           </Fragment>
         ))}
-        <AgentBadge run={run} />
-      </span>
-    </div>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {usage.map((part, index) => (
+            <Fragment key={index}>
+              {index > 0 ? (
+                <span className="text-soft-foreground" aria-hidden="true">
+                  ·
+                </span>
+              ) : null}
+              {part}
+            </Fragment>
+          ))}
+          <AgentBadge run={run} />
+        </span>
+      </div>
+    </ReferenceStatusProvider>
   )
 }
 

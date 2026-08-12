@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
 import { ListViewProvider, useListView } from '@/components/list-view'
-import { workspaceQueryKeys } from '@/api/queries'
+import { __clearRememberedStatusesForTests, workspaceQueryKeys } from '@/api/queries'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { GlobalTasksRoute } from './global-tasks'
@@ -23,6 +23,10 @@ afterEach(() => {
   act(() => resetToasts())
   cleanup()
   vi.unstubAllGlobals()
+  // Reference statuses are remembered for the LIFETIME OF THE TAB, deliberately (a re-keyed batch
+  // must not blank the chips) — which in vitest means one case's statuses would otherwise be
+  // remembered by the next one in this file.
+  __clearRememberedStatusesForTests()
 })
 
 const PROJECTS: ProjectListEntry[] = [
@@ -108,6 +112,8 @@ function stubFetch({
   indexStatus = 200,
   archiveStatus = 200,
   costMetrics = true,
+  refStatus,
+  indexStatuses,
 }: {
   runs?: RunIndexEntry[]
   projects?: ProjectListEntry[]
@@ -115,6 +121,11 @@ function stubFetch({
   indexStatus?: number
   archiveStatus?: number
   costMetrics?: boolean
+  /** Per-project chip status, as the forge would answer it. Absent = the forge is unreachable,
+   *  which is the only honest default here: no `gh`, no statuses, neutral chips. */
+  refStatus?: Record<string, { prs?: Record<number, string>; issues?: Record<number, string> }>
+  /** What the runs-index itself already knew — the free, no-round-trip path. */
+  indexStatuses?: Record<string, { prs: Record<number, string>; issues: Record<number, string> }>
 } = {}) {
   sent = []
   seenAt = undefined
@@ -144,6 +155,21 @@ function stubFetch({
           runs: index.map((run) => (seenAt === undefined ? run : { ...run, seenAt })),
           perProjectLimit: 200,
           truncated,
+          // Statuses the server already had, riding along with the rows — see `indexedStatuses`.
+          referenceStatuses: indexStatuses ?? {},
+        })
+      }
+      const status = /^\/api\/v1\/p\/([^/]+)\/github\/ref-status/.exec(path)
+      if (status) {
+        const answer = refStatus?.[status[1]!]
+        // `recheckAfterMs` is the server's call on when to ask again — part of the shape, so the
+        // fixture carries it.
+        if (!answer) return jsonResponse({ available: false, reason: 'gh CLI not found', recheckAfterMs: 300_000 })
+        return jsonResponse({
+          available: true,
+          prs: answer.prs ?? {},
+          issues: answer.issues ?? {},
+          recheckAfterMs: null,
         })
       }
       const receipt = /^\/api\/v1\/p\/([^/]+)\/runs\/([^/]+)\/(read|unread)$/.exec(path)
@@ -606,6 +632,85 @@ describe('global tasks page', () => {
     await screen.findByText('Add checkout endpoint')
 
     expect(document.querySelector('[data-slot="pr-chip"]')!.tagName).toBe('SPAN')
+  })
+
+  it('paints chips from the INDEX, without waiting on a ref-status answer', async () => {
+    // The statuses ride along with the rows that carry the references, so the chips are coloured
+    // in the same paint as the table rather than a round trip later. `refStatus` is deliberately
+    // left unset: the lazy route answers "gh CLI not found" here, so a coloured chip can ONLY
+    // have come from the index. (The refresh request still goes out — this removes the wait
+    // before first paint, not the cadence that keeps a status current.)
+    stubFetch({ indexStatuses: { api: { prs: { 42: 'merged' }, issues: {} } } })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="pr-chip"]')?.getAttribute('data-status')).toBe('merged'),
+    )
+  })
+
+  it('still asks about references the index had nothing warm for', async () => {
+    // Cache-only on the server means a cold reference is simply absent — the lazy route stays the
+    // thing that actually goes and looks.
+    stubFetch({
+      indexStatuses: { api: { prs: { 42: 'merged' }, issues: {} } },
+      refStatus: { web: { issues: { 7: 'open' } } },
+    })
+    renderPage()
+    await screen.findByText('Checkout page')
+
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-run-id="w1"] [data-slot="issue-chip"]')?.getAttribute('data-status'),
+      ).toBe('open'),
+    )
+  })
+
+  it('paints each chip with the state of the thing it points at', async () => {
+    // The whole point of the feature: a row's `#42` says whether that PR is merged, red, or
+    // waiting on a human — without opening it.
+    stubFetch({
+      refStatus: {
+        api: { prs: { 42: 'merged', 40: 'checks-failing' }, issues: { 12: 'completed' } },
+        web: { issues: { 7: 'open' } },
+      },
+    })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    await waitFor(() => {
+      expect(document.querySelector('[data-slot="pr-chip"]')?.getAttribute('data-status')).toBe('merged')
+    })
+    // The web row's issue belongs to ANOTHER project — its status must come from that project's
+    // answer, not from whichever one the page happens to be standing in.
+    const webRow = document.querySelector('[data-run-id="w1"]')
+    expect(webRow?.querySelector('[data-slot="issue-chip"]')?.getAttribute('data-status')).toBe('open')
+  })
+
+  it('asks each project once, for both kinds at a time', async () => {
+    stubFetch({ refStatus: { api: { prs: { 42: 'ready' } } } })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    await waitFor(() => {
+      expect(sent.filter((request) => request.path.includes('/github/ref-status')).length).toBeGreaterThan(0)
+    })
+    const asked = sent.filter((request) => request.path.includes('/github/ref-status'))
+    // Two projects hold references (api, web); infra's row has none, so it is never asked.
+    expect(asked.length).toBe(2)
+    const api = asked.find((request) => request.path.includes('/p/api/'))!
+    // Sorted, so re-sorting or re-filtering the table hits the same cache entry.
+    expect(api.path).toContain('prs=40%2C42')
+    expect(api.path).toContain('issues=12')
+  })
+
+  it('leaves every chip neutral when the forge cannot be reached', async () => {
+    // "We could not ask" must never be paintable as "nothing is wrong".
+    stubFetch()
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    expect(document.querySelector('[data-slot="pr-chip"]')?.getAttribute('data-status')).toBeNull()
   })
 
   describe('the +N reference list', () => {

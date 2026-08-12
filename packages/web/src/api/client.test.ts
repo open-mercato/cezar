@@ -12,6 +12,7 @@ import {
   finishRun,
   getGithub,
   getGithubChecks,
+  getGithubRefStatus,
   getGroup,
   getHealth,
   getProviderStatus,
@@ -166,6 +167,22 @@ describe('request shapes', () => {
       name: 'getGithubChecks (#664)',
       call: () => getGithubChecks([7, 12]),
       path: '/api/v1/github/checks?prs=7%2C12',
+      method: 'GET',
+    },
+    {
+      name: 'getGithubRefStatus (both kinds)',
+      call: () => getGithubRefStatus('api', { prs: [7, 12], issues: [3] }),
+      // The project is EXPLICIT, not the active scope: the global Tasks page asks about rows
+      // belonging to projects it is not standing in.
+      path: '/api/v1/p/api/github/ref-status?prs=7%2C12&issues=3',
+      method: 'GET',
+    },
+    {
+      name: 'getGithubRefStatus (one kind — the empty list is not sent)',
+      // An empty `prs=` is a malformed list to the route (a 400), where an ABSENT key means
+      // "not asked for". The difference has to survive the client.
+      call: () => getGithubRefStatus('api', { issues: [3] }),
+      path: '/api/v1/p/api/github/ref-status?issues=3',
       method: 'GET',
     },
     {

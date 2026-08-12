@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './client'
 import { createQueryClient } from './query-client'
 import { setApiScope } from '@open-mercato/cezar-api-client'
+import { ProjectScopeContext } from './project-scope-context'
+import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
 import {
+  refStatusRecheckAfter,
+  useReferenceProjectId,
   queryKeys,
   useProviderStatus,
   useRefreshProviderStatus,
@@ -953,5 +957,93 @@ describe('query defaults', () => {
     expect(defaults?.refetchInterval).toBe(false)
     expect(defaults?.refetchOnWindowFocus).toBe(false)
     expect(defaults?.staleTime).toBeGreaterThanOrEqual(60_000)
+  })
+})
+
+/**
+ * The refresh policy for reference statuses — and specifically, that the cockpit no longer HAS
+ * one.
+ *
+ * Reference statuses are the one query family here that polls: everything else is told what
+ * changed by the run stream, and GitHub is outside that stream, so a chip reading "checks running"
+ * has no other way to ever stop saying it. But *when* to ask is forge semantics — a merged pull
+ * request can never change, a closed one can be reopened, a running check finishes in minutes —
+ * and those live server-side, next to the cache that decides whether asking would even reach
+ * GitHub. The cockpit obeys `recheckAfterMs` and holds no table of its own; a second copy here
+ * would be two sets of constants that must agree with nothing enforcing it.
+ */
+/**
+ * One project, one name.
+ *
+ * The bug this pins: the global Tasks page keys every chip by its run's real `projectId`, because
+ * its rows span the registry — while an unscoped surface (the sidebar, the run header, the
+ * per-project table) used the `'default'` alias the routes accept. The same pull request was then
+ * remembered under two names: a status learned on one surface never reached the other, and both
+ * fetched it separately. Reported as "the ref updated in All tasks but the sidebar still holds
+ * the old status".
+ */
+describe('useReferenceProjectId', () => {
+  /** `useProjectScope` reads React context — the module-level `setApiScope` is a different seam. */
+  const mounted = (scope: string | null, health?: unknown) => {
+    const client = createQueryClient()
+    if (health !== undefined) client.setQueryData(queryKeys.health, health)
+    return function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <QueryClientProvider client={client}>
+          <ProjectScopeContext.Provider value={{ projectId: scope, apiBase: '/api/v1' }}>
+            {children}
+          </ProjectScopeContext.Provider>
+        </QueryClientProvider>
+      )
+    }
+  }
+
+  it('uses the mounted scope when there is one', () => {
+    const { result } = renderHook(() => useReferenceProjectId(), {
+      wrapper: mounted('proj-a', { ...HEALTH, bootProject: 'boot-id' }),
+    })
+    expect(result.current).toBe('proj-a')
+  })
+
+  it('names the BOOT project when unscoped — never the `default` alias', () => {
+    // `default` would key the same reference differently from every cross-project surface.
+    const { result } = renderHook(() => useReferenceProjectId(), {
+      wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id' }),
+    })
+    expect(result.current).toBe('boot-id')
+  })
+
+  it('answers undefined until health says which project that is', () => {
+    // Better a neutral chip for a moment than an entry written under a name nothing else uses.
+    const { result } = renderHook(() => useReferenceProjectId(), { wrapper: mounted(null) })
+    expect(result.current).toBeUndefined()
+  })
+})
+
+describe('refStatusRecheckAfter', () => {
+  const answered = (recheckAfterMs: number | null): GithubRefStatusData =>
+    ({ available: true, prs: {}, issues: {}, recheckAfterMs }) as GithubRefStatusData
+
+  it('takes the cadence from the answer, whatever it says', () => {
+    expect(refStatusRecheckAfter(answered(60_000))).toBe(60_000)
+    expect(refStatusRecheckAfter(answered(24 * 60 * 60_000))).toBe(24 * 60 * 60_000)
+  })
+
+  it('passes null through — nothing here can change, so nothing is scheduled', () => {
+    // Becomes `refetchInterval: false` and an infinite staleTime, so a table of merged pull
+    // requests costs nothing on a loop and ignores window focus too.
+    expect(refStatusRecheckAfter(answered(null))).toBeNull()
+  })
+
+  it('obeys an unavailable answer as readily as a successful one', () => {
+    expect(
+      refStatusRecheckAfter({ available: false, reason: 'gh CLI not found', recheckAfterMs: 300_000 } as GithubRefStatusData),
+    ).toBe(300_000)
+  })
+
+  it('falls back only where there is no answer to obey', () => {
+    // Still loading, or errored out — `retry` owns the immediate attempt; this is the backstop
+    // that keeps the query from going silent forever.
+    expect(refStatusRecheckAfter(undefined)).toBeGreaterThan(0)
   })
 })
