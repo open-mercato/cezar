@@ -44,7 +44,8 @@ import { cn } from '@/lib/utils'
 // a second, hashed URL for the same picture would be one cache entry too many. Vite serves
 // `public/` at the root in dev and copies it into the build, so the path holds in both.
 // Its own gradient + rounded corners ARE the tile.
-const brandLogoUrl = '/open-mercato.svg'
+/** Cezar himself — the grumpy violet pixel cat (public/cezar-cat.svg), also the favicon. */
+const brandLogoUrl = '/cezar-cat.svg'
 
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -498,11 +499,13 @@ function SidebarContent({
           {/* With project groups mounted the boot repo/branch is one group header among many —
               a line repeating it up here would just be the first group's header said twice. */}
           {repo && !projectGroups ? (
+            // The project's NAME only — the checked-out branch is a git detail, and the Git view
+            // and every task row already carry it. The lockup names what you're looking at.
             <span
               data-slot="repo-chip"
               className="truncate font-mono text-[11px] font-medium text-soft-foreground"
             >
-              {repo.name} / {repo.branch}
+              {repo.name}
             </span>
           ) : null}
         </span>
@@ -561,7 +564,8 @@ function SidebarContent({
             </SidebarNavigateContext.Provider>
           </div>
 
-          <nav aria-label="Main" className="px-2.5 py-1.5">
+          {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob. */}
+          <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 py-1.5">
             <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
               Workspace
             </h2>
@@ -582,7 +586,9 @@ function SidebarContent({
                     // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
                     // they relax to 44px — the one place the two framings legitimately differ.
                     'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
-                    isActive && 'bg-accent font-semibold text-foreground hover:bg-accent'
+                    // Accent tint, not bg-accent (= muted): the active row must read differently
+                    // from a merely hovered neighbour — same selection language as the TASKS rows.
+                    isActive && 'bg-primary/10 font-semibold text-foreground hover:bg-primary/10'
                   )}
                 >
                   <Icon className="size-4 shrink-0" aria-hidden="true" />
@@ -637,41 +643,13 @@ function SidebarContent({
             {toolsMenu}
           </div>
           {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
-          <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
-          <ThemeToggle />
+          {/* No second gear: the WORKSPACE nav's Settings is the one entry, and its index
+              cross-links to Global settings — two identical icons to two different settings
+              areas read as a bug, not a feature. */}
+          <ThemeToggle className="ml-auto" />
         </div>
       </div>
     </div>
-  )
-}
-
-/**
- * The footer's way into `/settings/global/*` (multi-project spec, "Sidebar → Footer").
- *
- * A PLAIN router Link, deliberately: global settings sit outside every project, and the scoped
- * `Link` this file otherwise uses would prefix the target with the active `/p/<id>` — a path
- * that is not a route. Icon-only to keep the footer's one row intact; the accessible name and
- * the tooltip both carry the label.
- */
-function GlobalSettingsLink({
-  className,
-  onNavigate,
-}: {
-  className?: string
-  onNavigate?: () => void
-}) {
-  return (
-    <Button asChild variant="ghost" size="icon" className={cn('size-7', className)}>
-      <RouterLink
-        to="/settings/global"
-        data-slot="global-settings-link"
-        aria-label="Global settings"
-        title="Global settings"
-        onClick={onNavigate}
-      >
-        <SettingsIcon className="size-4" aria-hidden="true" />
-      </RouterLink>
-    </Button>
   )
 }
 

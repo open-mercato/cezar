@@ -168,7 +168,7 @@ describe('sidebar wiring', () => {
 
     await waitFor(() => expect(repoChip()).not.toBeNull())
     // Basename of the root, then the branch — not the whole path.
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
+    expect(repoChip()?.textContent).toBe('cezar')
     expect(versionChip()?.textContent).toBe('v0.1.3')
   })
 
@@ -266,7 +266,7 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="project-groups"]')).toBeNull()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
     expect(document.querySelector('[data-slot="task-quick-list"]')).not.toBeNull()
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
+    expect(repoChip()?.textContent).toBe('cezar')
   })
 
   it('hides add-project chrome when health reports single-project mode', async () => {

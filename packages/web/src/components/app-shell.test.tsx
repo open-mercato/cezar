@@ -189,16 +189,14 @@ describe('AppShell', () => {
 
     it('keeps every control a sibling inside the one controls row', () => {
       renderShell('/', { version: '1.2.3', toolsMenu: <button type="button">Tools</button> })
-      // The gear and the toggle are the pair that came apart in #702 — assert they share a parent,
-      // and that the row is the whole of the footer's chrome rather than a subset of it.
+      // The controls came apart in #702 — assert they share a parent, and that the row is the
+      // whole of the footer's chrome. (No global-settings gear: the WORKSPACE nav's Settings is
+      // the one entry, its index cross-links to Global settings.)
       const row = controls()
-      expect(row.querySelector('[data-slot="global-settings-link"]')).not.toBeNull()
+      expect(row.querySelector('[data-slot="global-settings-link"]')).toBeNull()
       expect(row.querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
       expect(row.querySelector('[data-slot="tools-menu"]')).not.toBeNull()
       expect(row.querySelector('[data-slot="version-chip"]')).not.toBeNull()
-      // The gear pushes itself right; the toggle rides along at the end of the same row.
-      const gear = row.querySelector('[data-slot="global-settings-link"]') as HTMLElement
-      expect(gear.closest('a,button')?.parentElement).toBe(row)
     })
 
     it('renders search as a full-width launcher that still opens the palette', () => {
@@ -235,8 +233,9 @@ describe('AppShell', () => {
     })
 
     it('renders the repo chip and version chip from props', () => {
-      renderShell('/', { repo: { name: 'cezar', branch: 'main' }, version: '1.2.3' })
-      expect(screen.getByText('cezar / main')).toBeTruthy()
+      renderShell('/', { repo: { name: 'my-app', branch: 'main' }, version: '1.2.3' })
+      // The chip carries the project NAME only — the branch is a git detail the Git view owns.
+      expect(document.querySelector('[data-slot="repo-chip"]')?.textContent).toBe('my-app')
       // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
       expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
     })

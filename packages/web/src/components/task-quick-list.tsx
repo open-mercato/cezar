@@ -66,7 +66,7 @@ export function TaskQuickList({
           nav-style rows (the sidebar redesign), not a segmented track — the selected row carries
           the accent tint, Active carries the count and the unread badge the Tasks nav item used
           to wear. */}
-      <div className="sticky top-0 z-10 bg-sidebar pt-2 pb-0.5">
+      <div className="sticky top-0 z-10 flex flex-col gap-0.5 bg-sidebar pt-2 pb-0.5">
         <h2 className="px-3 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
           Tasks
         </h2>
