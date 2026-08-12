@@ -870,6 +870,24 @@ describe('Skills group', () => {
     const item = await screen.findByText('Deploy from anywhere')
     expect(item.closest('[data-slot="palette-skill"]')?.getAttribute('data-skill')).toBe('global-deploy')
   })
+
+  it('the default view caps the catalog and says how to reach the rest; typing searches all', async () => {
+    const many = Array.from({ length: 9 }, (_, i) => skill({ name: `om-skill-${i}`, source: 'project' }))
+    renderPalette({ skills: many })
+    openWith({ metaKey: true })
+    await screen.findByText('om-skill-0')
+
+    // Unfiltered: the usage-ordered top 6, plus one non-selectable "3 more" hint row.
+    expect(document.querySelectorAll('[data-slot="palette-skill"]')).toHaveLength(6)
+    expect(document.querySelector('[data-slot="palette-skills-more"]')?.textContent).toContain(
+      '3 more',
+    )
+
+    // A query searches the WHOLE catalog — including rows the preview hid — and drops the hint.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'om-skill-8' } })
+    await screen.findByText('om-skill-8')
+    expect(document.querySelector('[data-slot="palette-skills-more"]')).toBeNull()
+  })
 })
 
 describe('the pure ordering helpers', () => {

@@ -147,6 +147,10 @@ export function mergeTasks(
 const taskKey = (task: Pick<PaletteTask, 'projectId' | 'id'>): string =>
   `${task.projectId ?? ''}/${task.id}`
 
+/** How much of the usage-ordered skills catalog the DEFAULT (unfiltered) view shows. Enough to
+ *  cover the habitual picks; the rest is one keystroke away and says so in the trailing row. */
+const SKILLS_PREVIEW_COUNT = 6
+
 /**
  * Split the merged list into the default view's lead section and everything else.
  *
@@ -493,6 +497,38 @@ function PaletteContent({ close }: { close: () => void }) {
           </CommandGroup>
         ) : null}
 
+        {orderedSkills.length > 0 ? (
+          // Before Actions: starting a task from a skill is everyday work, toggling the theme is
+          // not. The DEFAULT view shows only the top of the usage order — a full skills catalog
+          // (easily 80+ rows) drowned every group below it; typing searches all of them.
+          <CommandGroup heading="Skills">
+            {(searching ? orderedSkills : orderedSkills.slice(0, SKILLS_PREVIEW_COUNT)).map((skill) => (
+              <CommandItem
+                key={skill.path}
+                // The path suffix keeps values unique when a project skill shadows a global
+                // one of the same name — both stay selectable.
+                value={`skill ${skill.name} ${skill.path}`}
+                keywords={skill.description ? [skill.description] : undefined}
+                data-slot="palette-skill"
+                data-skill={skill.name}
+                onSelect={() => go(`/new?skill=${encodeURIComponent(skill.name)}`)}
+              >
+                <span className="shrink-0 font-mono text-[13px] font-medium">{skill.name}</span>
+                {skill.description ? (
+                  <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">{skill.description}</span>
+                ) : null}
+              </CommandItem>
+            ))}
+            {!searching && orderedSkills.length > SKILLS_PREVIEW_COUNT ? (
+              <CommandItem value="skills more" disabled data-slot="palette-skills-more">
+                <span className="text-xs text-soft-foreground">
+                  {orderedSkills.length - SKILLS_PREVIEW_COUNT} more — type to search all skills
+                </span>
+              </CommandItem>
+            ) : null}
+          </CommandGroup>
+        ) : null}
+
         <CommandGroup heading="Actions">
           <CommandItem
             value="action toggle theme"
@@ -510,28 +546,6 @@ function PaletteContent({ close }: { close: () => void }) {
             </CommandShortcut>
           </CommandItem>
         </CommandGroup>
-
-        {orderedSkills.length > 0 ? (
-          <CommandGroup heading="Skills">
-            {orderedSkills.map((skill) => (
-              <CommandItem
-                key={skill.path}
-                // The path suffix keeps values unique when a project skill shadows a global
-                // one of the same name — both stay selectable.
-                value={`skill ${skill.name} ${skill.path}`}
-                keywords={skill.description ? [skill.description] : undefined}
-                data-slot="palette-skill"
-                data-skill={skill.name}
-                onSelect={() => go(`/new?skill=${encodeURIComponent(skill.name)}`)}
-              >
-                <span className="shrink-0 font-medium">{skill.name}</span>
-                {skill.description ? (
-                  <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">{skill.description}</span>
-                ) : null}
-              </CommandItem>
-            ))}
-          </CommandGroup>
-        ) : null}
       </CommandList>
     </>
   )
