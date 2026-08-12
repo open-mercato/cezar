@@ -791,13 +791,20 @@ describe('Tasks across projects', () => {
 })
 
 describe('Actions group', () => {
-  it('Toggle theme cycles exactly like the toggle button (light → dark), persists, and closes', async () => {
+  it('the theme rows pick a theme DIRECTLY (no toggle cycle), persist, mark the active one, and close', async () => {
     renderPalette({ theme: 'light' })
     expect(document.documentElement.classList.contains('light')).toBe(true)
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
-    fireEvent.click(document.querySelector('[data-action="toggle-theme"]') as HTMLElement)
+    // All three spelled out; the active one carries the check.
+    const rows = [...document.querySelectorAll('[data-slot="palette-action"]')].map((row) =>
+      row.getAttribute('data-action'),
+    )
+    expect(rows).toEqual(['theme-light', 'theme-dark', 'theme-system'])
+    expect(document.querySelector('[data-action="theme-light"] svg.lucide-check')).not.toBeNull()
+
+    fireEvent.click(document.querySelector('[data-action="theme-dark"]') as HTMLElement)
 
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('dark')
     expect(document.documentElement.classList.contains('light')).toBe(false)
@@ -872,7 +879,7 @@ describe('Skills group', () => {
   })
 
   it('the default view caps the catalog and says how to reach the rest; typing searches all', async () => {
-    const many = Array.from({ length: 9 }, (_, i) => skill({ name: `om-skill-${i}`, source: 'project' }))
+    const many = Array.from({ length: 9 }, (_, i) => skill({ name: `om-skill-${i}`, source: 'ai' }))
     renderPalette({ skills: many })
     openWith({ metaKey: true })
     await screen.findByText('om-skill-0')

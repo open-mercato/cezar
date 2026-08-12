@@ -57,7 +57,14 @@ function CommandDialog({
         className={cn("overflow-hidden p-0", className)}
         showCloseButton={showCloseButton}
       >
-        <Command filter={filter} className="**:data-[slot=command-input-wrapper]:h-12 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
+        {/* The DIALOG's design layer (only the ⌘K palette renders a CommandDialog): a taller
+            input row, uppercase section labels, roomier rows, and the accent-tinted selection
+            the rest of the cockpit uses — all scoped here so the inline pickers built from the
+            same primitives keep their compact defaults. */}
+        <Command
+          filter={filter}
+          className="**:data-[slot=command-input-wrapper]:h-[52px] **:data-[slot=command-input-wrapper]:px-4 [&_[cmdk-group-heading]]:px-2.5 [&_[cmdk-group-heading]]:pt-2.5 [&_[cmdk-group-heading]]:pb-1 [&_[cmdk-group-heading]]:text-[10.5px] [&_[cmdk-group-heading]]:font-semibold [&_[cmdk-group-heading]]:tracking-[0.08em] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:text-soft-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input]]:h-[52px] [&_[cmdk-input]]:text-[15px] [&_[cmdk-item]]:rounded-md [&_[cmdk-item]]:px-2.5 [&_[cmdk-item]]:py-2 [&_[cmdk-item]]:text-[13.5px] [&_[cmdk-item][data-selected=true]]:bg-primary/10 [&_[cmdk-item][data-selected=true]]:text-foreground"
+        >
           {children}
         </Command>
       </DialogContent>
@@ -67,8 +74,13 @@ function CommandDialog({
 
 function CommandInput({
   className,
+  trailing,
   ...props
-}: React.ComponentProps<typeof CommandPrimitive.Input>) {
+}: React.ComponentProps<typeof CommandPrimitive.Input> & {
+  /** Rendered after the input, inside the bordered row — the palette's `esc` chip. Opt-in, so
+   *  the inline pickers sharing this primitive render exactly what they always did. */
+  trailing?: React.ReactNode
+}) {
   return (
     <div
       data-slot="command-input-wrapper"
@@ -83,6 +95,7 @@ function CommandInput({
         )}
         {...props}
       />
+      {trailing}
     </div>
   )
 }
@@ -164,11 +177,13 @@ function CommandShortcut({
   className,
   ...props
 }: React.ComponentProps<"span">) {
+  // A kbd chip, not floating letters — the bordered key shape is what tells "press C" apart
+  // from ordinary trailing metadata.
   return (
     <span
       data-slot="command-shortcut"
       className={cn(
-        "ml-auto text-xs tracking-widest text-muted-foreground",
+        "ml-auto inline-flex h-[18px] shrink-0 items-center rounded border border-border bg-muted px-1.5 font-mono text-[10.5px] text-muted-foreground",
         className
       )}
       {...props}

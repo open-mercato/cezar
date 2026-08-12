@@ -1,12 +1,12 @@
-import { CheckIcon, FolderOpenIcon, MoonIcon, PlusIcon } from 'lucide-react'
+import { CheckIcon, FolderOpenIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon } from 'lucide-react'
 import * as React from 'react'
 import { useHealth, useProjects, useRuns, useRunsIndex, useSkills, useUiState } from '@/api/queries'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
-import { NEXT_THEME } from '@/components/theme-toggle'
 import { useTheme } from '@/components/theme-provider'
+import type { Theme } from '@/lib/theme'
 import {
   CommandDialog,
   CommandEmpty,
@@ -151,6 +151,26 @@ const taskKey = (task: Pick<PaletteTask, 'projectId' | 'id'>): string =>
  *  cover the habitual picks; the rest is one keystroke away and says so in the trailing row. */
 const SKILLS_PREVIEW_COUNT = 6
 
+/** Same idea for the Tasks group: recency-ordered, so past the first handful the rows are
+ *  archaeology — searchable, not worth the scroll on an empty query. */
+const TASKS_PREVIEW_COUNT = 7
+
+/** The theme picks, spelled directly (no toggle cycle: "dark → system" read as a riddle). */
+const THEME_CHOICES: ReadonlyArray<{ value: Theme; label: string; icon: typeof SunIcon }> = [
+  { value: 'light', label: 'Light theme', icon: SunIcon },
+  { value: 'dark', label: 'Dark theme', icon: MoonIcon },
+  { value: 'system', label: 'System theme', icon: MonitorIcon },
+]
+
+/** One key-shaped chip in the footer hint bar. */
+function FooterKey({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="inline-flex h-[18px] items-center rounded border border-border bg-muted px-1.5 font-mono text-[10.5px] text-muted-foreground">
+      {children}
+    </kbd>
+  )
+}
+
 /**
  * Split the merged list into the default view's lead section and everything else.
  *
@@ -227,14 +247,15 @@ export function CommandPalette() {
       // Two overrides of the shared dialog, both for this surface only — every other dialog in
       // the cockpit is a form, which wants to stay narrow and centred.
       //
-      // WIDTH: wider than the `sm:max-w-lg` default and growing with the viewport. This dialog
-      // lists task titles from every project, and at 32rem the useful half of a title truncates.
+      // WIDTH: one fixed 40rem column. Wider than the dialog default (task titles need room),
+      // but capped — the old viewport-growing max-w-4xl stretched thin rows across huge screens,
+      // which is most of why the palette read as a mess.
       //
       // TOP: pinned, replacing `top-1/2 -translate-y-1/2`. A centred dialog re-centres every time
       // the result count changes, so the whole modal — search box included — jumps under the
       // cursor as you type. Anchored near the top it only ever grows downward, and the input you
       // are typing into never moves.
-      className="top-[10vh] translate-y-0 sm:max-w-2xl lg:max-w-3xl xl:max-w-4xl"
+      className="top-[10vh] translate-y-0 sm:max-w-[40rem]"
     >
       {/* The body mounts only while the dialog is open (Radix portals nothing when closed), so
           its queries — notably the skills fetch — run on first open, never on app boot. */}
@@ -369,7 +390,6 @@ function PaletteContent({ close }: { close: () => void }) {
     close()
     navigate(task.projectId === null ? `/tasks/${task.id}` : scopeTo(task.projectId, `/tasks/${task.id}`))
   }
-  const nextTheme = NEXT_THEME[theme]
 
   return (
     <>
@@ -377,6 +397,14 @@ function PaletteContent({ close }: { close: () => void }) {
         placeholder="Search projects, tasks, views, actions, skills…"
         value={search}
         onValueChange={setSearch}
+        trailing={
+          <kbd
+            aria-hidden="true"
+            className="inline-flex h-[18px] shrink-0 items-center rounded border border-border bg-muted px-1.5 font-mono text-[10.5px] text-muted-foreground"
+          >
+            esc
+          </kbd>
+        }
       />
       {/* The shadcn default is a flat `max-h-[300px]` — about seven rows, on any monitor. Scaled
           to the viewport instead, so a large screen actually shows the list it has room for.
@@ -484,7 +512,9 @@ function PaletteContent({ close }: { close: () => void }) {
 
         {otherTasks.length > 0 ? (
           <CommandGroup heading="Tasks">
-            {otherTasks.map((task) => (
+            {/* Same preview rule as Skills: unfiltered, the recency order's head is the useful
+                part — the archive is one keystroke away and the trailing row says so. */}
+            {(searching ? otherTasks : otherTasks.slice(0, TASKS_PREVIEW_COUNT)).map((task) => (
               <TaskItem
                 key={taskKey(task)}
                 task={task}
@@ -494,6 +524,13 @@ function PaletteContent({ close }: { close: () => void }) {
                 onSelect={selectTask}
               />
             ))}
+            {!searching && otherTasks.length > TASKS_PREVIEW_COUNT ? (
+              <CommandItem value="tasks more" disabled data-slot="palette-tasks-more">
+                <span className="text-xs text-soft-foreground">
+                  {otherTasks.length - TASKS_PREVIEW_COUNT} more — type to search all tasks
+                </span>
+              </CommandItem>
+            ) : null}
           </CommandGroup>
         ) : null}
 
@@ -529,24 +566,46 @@ function PaletteContent({ close }: { close: () => void }) {
           </CommandGroup>
         ) : null}
 
-        <CommandGroup heading="Actions">
-          <CommandItem
-            value="action toggle theme"
-            data-slot="palette-action"
-            data-action="toggle-theme"
-            onSelect={() => {
-              setTheme(nextTheme)
-              close()
-            }}
-          >
-            <MoonIcon aria-hidden="true" />
-            Toggle theme
-            <CommandShortcut className="tracking-normal">
-              {theme} → {nextTheme}
-            </CommandShortcut>
-          </CommandItem>
+        <CommandGroup heading="Theme">
+          {/* Spelled directly — the old single "Toggle theme" cycled light→dark→system, and its
+              "dark → system" hint read as a riddle. Three rows, the active one checked. */}
+          {THEME_CHOICES.map(({ value, label, icon: Icon }) => (
+            <CommandItem
+              key={value}
+              value={`action theme ${value}`}
+              data-slot="palette-action"
+              data-action={`theme-${value}`}
+              onSelect={() => {
+                setTheme(value)
+                close()
+              }}
+            >
+              <Icon aria-hidden="true" />
+              {label}
+              {theme === value ? (
+                <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary" />
+              ) : null}
+            </CommandItem>
+          ))}
         </CommandGroup>
       </CommandList>
+
+      {/* The footer hint bar: the palette's three gestures, each a key chip + word. Plain gaps,
+          no separator glyphs. */}
+      <div
+        data-slot="palette-footer"
+        className="flex items-center gap-4 border-t border-border px-4 py-2 text-[11px] text-soft-foreground"
+      >
+        <span className="flex items-center gap-1.5">
+          <FooterKey>↑↓</FooterKey> Navigate
+        </span>
+        <span className="flex items-center gap-1.5">
+          <FooterKey>↵</FooterKey> Open
+        </span>
+        <span className="flex items-center gap-1.5">
+          <FooterKey>esc</FooterKey> Close
+        </span>
+      </div>
     </>
   )
 }
