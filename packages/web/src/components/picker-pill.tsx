@@ -20,7 +20,9 @@ import { RUNNERS } from '@/routes/new-task-form'
 
 /** The mockup's `.chip`: a quiet bordered pill that darkens on hover. */
 export const chipClass =
-  'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-55'
+  // outline-none + the DS ring: without it the browser paints its own blue focus outline on the
+  // pill (the one control that never declared a focus style of its own).
+  'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-55'
 
 export const chevron = (
   <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
