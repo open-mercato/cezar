@@ -113,7 +113,7 @@ export function RunHeader({
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-canvas/95 px-4 pt-6 pb-0 backdrop-blur md:px-6"
+      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-0 backdrop-blur md:px-6"
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">

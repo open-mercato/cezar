@@ -117,8 +117,6 @@
   /* The accent's TEXT-SAFE shade (review: purple-700-style ink for soft-purple chips): dark
    * enough for AA on the pale violet washes in light, bright enough on dark surfaces here. */
   --violet-strong: #c0a5ff;
-  /* Content pane, one step lighter than the app chrome (see the light block). */
-  --canvas: #121212;
   --primary: var(--violet);
   --primary-foreground: var(--violet-foreground);
   --ring: var(--violet);
@@ -184,9 +182,6 @@
   --background: #f6f6f9;
   --foreground: #18171b;
   --card: #ffffff;
-  /* The CONTENT surface (review #5): the main pane sits one step lighter than the app chrome,
-   * so the working column reads as its own plane instead of floating on the page. */
-  --canvas: #fcfcfd;
   --card-2: #f2f1f8;
   --sidebar: #f5f4f8;
   --muted: #f2f1f8;
@@ -314,7 +309,6 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-violet: var(--violet);
   --color-violet-strong: var(--violet-strong);
-  --color-canvas: var(--canvas);
   --color-violet-foreground: var(--violet-foreground);
   --color-ring: var(--ring);
 
