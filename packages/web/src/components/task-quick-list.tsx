@@ -139,8 +139,15 @@ export function QuickListBuckets({
   return (
     <>
       {buckets.map((bucket) => (
-        <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-          <h2 className="px-3 pt-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
+        <div
+          key={bucket.label}
+          data-slot="quick-list-bucket"
+          data-bucket={bucket.label}
+          // Uniform rhythm: the group separator supplies the space above the FIRST bucket;
+          // siblings space themselves identically.
+          className="mt-3 first:mt-0"
+        >
+          <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
             {bucket.label}
           </h2>
           {bucket.rows.map((row) => (
@@ -192,12 +199,19 @@ function ViewRow({
       // was what kept dyeing the whole sidebar — purple stays a signal, never a surface. Hover
       // lifts rows onto the same card white.
       className={cn(
-        'relative flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground',
+        // One row rhythm across the whole sidebar: 44px touch rows under md, 36px on desktop —
+        // identical to the WORKSPACE nav, so every clickable line lands on the same grid.
+        'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
         isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
       )}
     >
       {isActive ? (
-        <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary" />
+        // A purple CARET glued to the browser edge (not an inset bar): -left-2.5 cancels the
+        // list's own padding so the triangle touches the window; borders draw the ▶.
+        <span
+          aria-hidden="true"
+          className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
+        />
       ) : null}
       {children}
       <span className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -380,8 +394,9 @@ function RunRow({
       data-active={isActive ? 'true' : undefined}
       className={cn(
         // Plain rows on the sidebar ground; a white surface appears on hover / for the open
-        // task only (review) — a resting tint per row muddied the whole column.
-        'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-card',
+        // task only (review) — a resting tint per row muddied the whole column. min-h keeps the
+        // row on the same 44/36px grid as every other sidebar line.
+        'flex min-h-11 items-center gap-2 rounded-sm pl-3 hover:bg-card md:min-h-9',
         isActive && 'bg-card shadow-xs',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing

@@ -104,6 +104,9 @@ export type AppShellProps = {
   /** The ACTIVE project's display name for the project bar above the content (the container
    *  resolves it from the registry; falls back to `repo.name`). Null hides the bar. */
   projectName?: string | null
+  /** The registry-backed project SWITCHER for the bar's left side; when absent the bar falls
+   *  back to the static name chip (registry unknown / single project). */
+  projectSwitcher?: ReactNode
 }
 
 /**
@@ -156,6 +159,7 @@ export function AppShell({
   banner,
   projectGroups,
   projectName = null,
+  projectSwitcher,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -262,6 +266,7 @@ export function AppShell({
             name={projectName ?? repo?.name ?? null}
             toolsMenu={toolsMenu}
             addProject={singleProject ? undefined : <AddProjectMenu />}
+            projectSwitcher={projectSwitcher}
           />
 
           {banner ? (
@@ -517,10 +522,10 @@ function SidebarContent({
       <div className="flex items-center gap-[9px] px-3.5 pt-3.5 pb-2.5">
         <BrandTile />
         <span className="flex min-w-0 flex-col leading-tight">
-          {/* The wordmark in Press Start 2P — the 80s-arcade face that matches the pixel cat. */}
-          <span className="font-['Press_Start_2P'] text-[13px] leading-[1.2] tracking-tight">
-            cezar
-          </span>
+          {/* The wordmark in Press Start 2P — the 80s-arcade face that matches the pixel cat.
+              One step smaller than the old Inter title so its wide fixed grid doesn't stretch
+              the lockup. */}
+          <span className="font-['Press_Start_2P'] text-[12px] leading-[1.2]">cezar</span>
           {/* No truncate: the motto is short and fixed — clipping it to "divide et imp…" would
               undercut the whole joke. nowrap keeps it one line at every sidebar width. */}
           <span
@@ -622,12 +627,16 @@ function SidebarContent({
                     // 36px is the sidebar's one control height (CTA, search, rows); the drawer
                     // relaxes to 44px touch targets. Hover/selected lift onto card WHITE — the
                     // same rule as the TASKS rows: purple is a signal, never a surface.
-                    'relative flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
+                    'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
                     isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card'
                   )}
                 >
                   {isActive ? (
-                    <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary" />
+                    // Same edge-caret as the TASKS rows — glued to the browser edge, not inset.
+                    <span
+                      aria-hidden="true"
+                      className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
+                    />
                   ) : null}
                   <Icon className="size-4 shrink-0" aria-hidden="true" />
                   {item.label}
@@ -729,16 +738,17 @@ function AddProjectMenu() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         {/* size-11 in the drawer (touch target), the CTA's height on desktop. */}
+        {/* A LABELLED ghost, not a bare folder icon (review: nobody read the folder as "add").
+            The switcher next door changes projects; this one only ever adds. */}
         <Button
-          variant="outline"
-          size="icon"
+          variant="ghost"
+          size="sm"
           aria-label="Add project"
           title="Add project"
-          className="size-11 shrink-0 md:size-7"
+          className="shrink-0 gap-1 px-2 text-xs font-medium text-muted-foreground"
         >
-          {/* folder-PLUS: a bare folder next to the brand read as part of Cezar's profile — the
-              plus is what says "this adds something". */}
-          <FolderPlusIcon className="size-4 md:size-3.5" aria-hidden="true" />
+          <PlusIcon className="size-3.5" aria-hidden="true" />
+          Add project
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
@@ -847,27 +857,31 @@ function ProjectBar({
   name,
   toolsMenu,
   addProject,
+  projectSwitcher,
 }: {
   name: string | null
   toolsMenu?: ReactNode
   addProject?: ReactNode
+  projectSwitcher?: ReactNode
 }) {
-  if (!name && !toolsMenu && !addProject) return null
+  if (!name && !toolsMenu && !addProject && !projectSwitcher) return null
   return (
     <div
       data-slot="project-bar"
-      // Identity on the LEFT (where a breadcrumb reads) with add-project right beside it — the
-      // repo context it concerns; utilities — Tools, theme — on the right.
+      // Identity on the LEFT (where a breadcrumb reads) — the registry-backed switcher when the
+      // container provides one, the static chip otherwise — with add-project right beside it;
+      // utilities — Settings, Tools, theme — on the right.
       className="row-start-1 hidden h-11 items-center gap-2.5 border-b border-border bg-background px-4 md:flex"
     >
-      {name ? (
-        <span className="flex min-w-0 items-center gap-2">
-          <FolderOpenIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
-          <span data-slot="repo-chip" className="truncate font-mono text-[12px] font-medium text-muted-foreground">
-            {name}
+      {projectSwitcher ??
+        (name ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <FolderOpenIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+            <span data-slot="repo-chip" className="truncate font-mono text-[12px] font-medium text-muted-foreground">
+              {name}
+            </span>
           </span>
-        </span>
-      ) : null}
+        ) : null)}
       {addProject}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
         {/* Settings beside Tools — both are utilities of the workspace this bar names. */}

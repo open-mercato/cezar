@@ -207,16 +207,17 @@ describe('editable title (#389)', () => {
 })
 
 describe('action bar visibility per status (#765: primaries inline, the rest folded)', () => {
-  // Inline = the state's primary actions (Finish / Continue / Open in…) then the single
-  // "More actions" disclosure; the secondary actions live in that overflow menu.
+  // Inline = Finish (when flagged), then the ONE stateful primary CTA (its label follows the
+  // lifecycle — design review), then Open in… and the "More actions" disclosure; the secondary
+  // actions live in that overflow menu.
   const matrix: Array<{ status: RunStatus; inline: string[]; overflow: string[] }> = [
-    { status: 'queued', inline: [], overflow: ['Notes', 'Cancel'] },
-    { status: 'running', inline: [], overflow: ['Notes', 'Cancel'] },
-    { status: 'waiting', inline: ['Finish'], overflow: ['Notes', 'Cancel'] },
-    { status: 'review', inline: ['Finish', 'Continue', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'done', inline: ['Continue', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'failed', inline: ['Continue', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', inline: ['Continue', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'queued', inline: ['Stop'], overflow: ['Notes', 'Cancel'] },
+    { status: 'running', inline: ['Stop'], overflow: ['Notes', 'Cancel'] },
+    { status: 'waiting', inline: ['Finish', 'Reply'], overflow: ['Notes', 'Cancel'] },
+    { status: 'review', inline: ['Finish', 'Review changes', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'done', inline: ['Reopen', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'failed', inline: ['Retry', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'cancelled', inline: ['Reopen', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
   ]
 
   it.each(matrix)('$status → inline $inline, overflow $overflow', async ({ status, inline, overflow }) => {
@@ -339,7 +340,7 @@ describe('actions hit their endpoints', () => {
   it('Continue → POST /continue', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Reopen' })
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
     await waitFor(() => {
@@ -360,7 +361,7 @@ describe('actions hit their endpoints', () => {
     })
     renderHeader(run('done', { runner: 'claude' }))
 
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Reopen' })
     await waitFor(() => expect(button.disabled).toBe(true))
     button.removeAttribute('disabled')
     fireEvent.click(button)
@@ -404,7 +405,7 @@ describe('actions hit their endpoints', () => {
     })
     renderHeader(run('done', { runner: 'claude' }))
 
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Reopen' })
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
 
@@ -482,7 +483,7 @@ describe('actions hit their endpoints', () => {
       '/api/v1/runs/r1/continue': () => jsonResponse({ error: 'no agent session to resume' }, 409),
     })
     renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Reopen' })
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
     const item = await screen.findByRole('status')

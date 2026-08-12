@@ -15,6 +15,9 @@ import {
   MessageSquareTextIcon,
   PencilIcon,
   PlayIcon,
+  RotateCcwIcon,
+  ScanEyeIcon,
+  SendHorizontalIcon,
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
@@ -71,7 +74,7 @@ import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
-import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
+import { cliTargetResumes, cliTargetRunner, finishTitle, primaryRunCta, resumeHint, runActionFlags } from './run-actions'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -127,18 +130,7 @@ export function RunHeader({
                   Finish
                 </Button>
               ) : null}
-              {flags.continueRun ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  title={actions.continuation.reason ?? 'Reopen the session'}
-                  disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
-                  onClick={() => actions.continueRun.mutate()}
-                >
-                  <PlayIcon aria-hidden="true" />
-                  Continue
-                </Button>
-              ) : null}
+              <PrimaryCtaButton run={run} actions={actions} />
               {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
               <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
               {/* Everything past the state's primary actions folds behind one disclosure (#765). */}
@@ -355,6 +347,60 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
 }
 
 type RunActions = ReturnType<typeof useRunActions>
+
+/**
+ * The header's ONE stateful CTA (design review): a fixed slot whose label, tone and action follow
+ * the lifecycle — Stop while working, Reply when the agent waits, Review changes at the gate,
+ * Retry after a failure, Reopen once closed. `primaryRunCta` (run-actions.ts) owns the mapping;
+ * this renders it and wires each kind to its verb:
+ *  - stop    → the cancel confirm (the same dialog the kebab uses; stopping deserves a confirm)
+ *  - reply   → scroll to + focus the composer (the reply IS typing)
+ *  - review  → scroll the review panel into view
+ *  - retry / reopen → resume the session (gated on the provider's canContinue, like Continue was)
+ */
+function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }) {
+  const cta = primaryRunCta(run)
+  if (!cta) return null
+  const resumes = cta.kind === 'retry' || cta.kind === 'reopen'
+  const disabled = resumes && (actions.continueRun.isPending || !actions.continuation.canContinue)
+  const icon =
+    cta.kind === 'stop' ? <CircleStopIcon aria-hidden="true" />
+    : cta.kind === 'reply' ? <SendHorizontalIcon aria-hidden="true" />
+    : cta.kind === 'review' ? <ScanEyeIcon aria-hidden="true" />
+    : cta.kind === 'retry' ? <RotateCcwIcon aria-hidden="true" />
+    : <PlayIcon aria-hidden="true" />
+  const title =
+    cta.kind === 'stop' ? 'Stop the run'
+    : cta.kind === 'reply' ? 'Reply to the agent'
+    : cta.kind === 'review' ? 'Jump to the review'
+    : (actions.continuation.reason ?? 'Reopen the session')
+  const onClick = () => {
+    if (cta.kind === 'stop') actions.setConfirming('cancel')
+    else if (cta.kind === 'reply') {
+      const composer = document.querySelector<HTMLTextAreaElement>('textarea')
+      composer?.scrollIntoView({ block: 'center' })
+      composer?.focus()
+    } else if (cta.kind === 'review') {
+      const panel = document.querySelector('[data-slot="review-panel"]')
+      panel?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    } else actions.continueRun.mutate()
+  }
+  return (
+    <Button
+      data-slot="primary-cta"
+      data-cta={cta.kind}
+      variant={cta.tone === 'primary' ? 'primary' : 'outline'}
+      size="sm"
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(cta.tone === 'danger' && 'border-danger/40 text-danger hover:bg-danger/10')}
+    >
+      {icon}
+      {cta.label}
+    </Button>
+  )
+}
 
 async function copyToClipboard(text: string, doneMessage: string): Promise<void> {
   try {

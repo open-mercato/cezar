@@ -9,6 +9,7 @@ import { ListViewProvider } from '@/components/list-view'
 import { OfflineBanner } from '@/components/offline-banner'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectGroups } from '@/components/project-groups'
+import { ProjectSwitcher } from '@/components/project-switcher'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
@@ -139,6 +140,16 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // The project bar above the content — the same resolved name the document title uses,
         // falling back to the repo basename while the registry is unknown.
         projectName={projectName ?? repoChipOf(health.data)?.name ?? null}
+        // With a registry answer the identity becomes a real switcher; before that (or outside
+        // any project) the bar keeps the static chip built from `projectName` above.
+        projectSwitcher={
+          registry && registry.projects.length > 0 ? (
+            <ProjectSwitcher
+              projects={registry.projects}
+              activeId={projectId ?? registry.bootProject ?? null}
+            />
+          ) : undefined
+        }
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={<TaskQuickListContainer />}
         // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
