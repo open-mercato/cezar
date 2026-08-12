@@ -393,11 +393,10 @@ function RunRow({
       // `aria-current`.
       data-active={isActive ? 'true' : undefined}
       className={cn(
-        // Plain rows on the sidebar ground; a white surface appears on hover / for the open
-        // task only (review) — a resting tint per row muddied the whole column. min-h keeps the
-        // row on the same 44/36px grid as every other sidebar line.
+        // Plain rows on the sidebar ground — a white surface only on HOVER. Even the open task
+        // stays flat (a resting card here re-tinted the column); `aria-current` on the link and
+        // the thread being open are what say "this one".
         'flex min-h-11 items-center gap-2 rounded-sm pl-3 hover:bg-card md:min-h-9',
-        isActive && 'bg-card shadow-xs',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
         // to it — 26px = the row's own 10px plus the 16px indent.
