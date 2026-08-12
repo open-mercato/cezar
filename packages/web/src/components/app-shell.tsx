@@ -44,8 +44,9 @@ import { cn } from '@/lib/utils'
 // a second, hashed URL for the same picture would be one cache entry too many. Vite serves
 // `public/` at the root in dev and copies it into the build, so the path holds in both.
 // Its own gradient + rounded corners ARE the tile.
-/** Cezar himself — the grumpy violet pixel cat (public/cezar-cat.png), also the favicon. */
-const brandLogoUrl = '/cezar-cat.png'
+/** Cezar himself — the grumpy violet pixel cat, traced from the original artwork onto a
+ *  48×52 vector grid (public/cezar-cat.svg). Also the favicon. */
+const brandLogoUrl = '/cezar-cat.svg'
 
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once

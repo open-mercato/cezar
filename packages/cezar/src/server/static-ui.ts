@@ -26,7 +26,7 @@ export type GetTarget = IndexTarget | 'passthrough';
  *  hashed bundles and the favicons (the cat is the app icon; the legacy mark
  *  stays servable for cached tabs). */
 function isStaticAsset(path: string): boolean {
-  return path.startsWith('/assets/') || path === '/cezar-cat.png' || path === '/open-mercato.svg';
+  return path.startsWith('/assets/') || path === '/cezar-cat.svg' || path === '/open-mercato.svg';
 }
 
 /** Decide what any GET gets, so every route in the spec's map (`/tasks/:id/changes`,

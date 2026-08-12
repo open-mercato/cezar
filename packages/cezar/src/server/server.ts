@@ -1454,7 +1454,7 @@ export function createApp(deps: ServerDeps) {
 
   // The favicon/brand mark packages/web/index.html points at (the cat), plus the legacy mark
   // for tabs that cached the old icon link.
-  app.get('/cezar-cat.png', staticFile('cezar-cat.png', 'image/png'));
+  app.get('/cezar-cat.svg', staticFile('cezar-cat.svg', 'image/svg+xml'));
   app.get('/open-mercato.svg', staticFile('open-mercato.svg', 'image/svg+xml'));
 
   // ---- meta ----------------------------------------------------------------
