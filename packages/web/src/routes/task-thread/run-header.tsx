@@ -36,7 +36,7 @@ import {
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { RunnerLogo } from '@/components/icons'
+import { PixelHammerIcon, RunnerLogo } from '@/components/icons'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { ReferenceChip } from '@/components/reference-chip'
 import { TabLink } from '@/components/tab-link'
@@ -114,6 +114,8 @@ export function RunHeader({
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
+          {/* The task's glyph — a violet pixel hammer, same family as the brand cat. */}
+          <PixelHammerIcon className="size-[18px] shrink-0 text-violet" />
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
             {/* The run's actions ride the title row now — Finish/Continue/Open in…/overflow on the

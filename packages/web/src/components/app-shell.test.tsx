@@ -178,13 +178,10 @@ describe('AppShell', () => {
       expect(footer().className).not.toContain('flex-wrap')
     })
 
-    it('has exactly two children: the search bar, then the controls row', () => {
+    it('has exactly one child: the controls row (search moved up under the CTA)', () => {
       renderShell('/', { version: '1.2.3' })
       const children = Array.from(footer().children) as HTMLElement[]
-      expect(children.map((child) => child.dataset.slot)).toEqual([
-        'command-palette-hint',
-        'sidebar-footer-controls',
-      ])
+      expect(children.map((child) => child.dataset.slot)).toEqual(['sidebar-footer-controls'])
     })
 
     it('keeps every control a sibling inside the one controls row', () => {
@@ -199,11 +196,11 @@ describe('AppShell', () => {
       expect(row.querySelector('[data-slot="version-chip"]')).not.toBeNull()
     })
 
-    it('renders search as a full-width launcher that still opens the palette', () => {
+    it('renders search as a full-width launcher (under the CTA now) that still opens the palette', () => {
       renderShell()
       // Named by its own visible label, not by an aria-label that would diverge from it
       // (WCAG 2.5.3) — jsdom reports no `navigator.platform`, so the chord reads Ctrl+K.
-      const search = within(footer()).getByRole('button', { name: 'Search…' })
+      const search = within(sidebar()).getByRole('button', { name: 'Search…' })
       expect(search.dataset.slot).toBe('command-palette-hint')
       expect(search.className).toContain('w-full')
       expect(search.textContent).toContain('Search…')

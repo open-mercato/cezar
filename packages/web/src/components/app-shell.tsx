@@ -14,7 +14,7 @@ import { Link as RouterLink, useLocation } from 'react-router'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
-import { GithubIcon, PixelHammerIcon } from '@/components/icons'
+import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { StatusDot } from '@/components/status-dot'
@@ -254,7 +254,7 @@ export function AppShell({
           {/* Same grid row as the mobile top bar — the two are breakpoint-exclusive, so they
               never render together. The bar is where the ACTIVE PROJECT lives now: above the
               content on every route, instead of buried in the sidebar lockup. */}
-          <ProjectBar name={projectName ?? repo?.name ?? null} />
+          <ProjectBar name={projectName ?? repo?.name ?? null} toolsMenu={toolsMenu} />
 
           {banner ? (
             <div data-slot="banner-slot" className="row-start-2">
@@ -510,9 +510,8 @@ function SidebarContent({
               undercut the whole joke. nowrap keeps it one line at every sidebar width. */}
           <span
             data-slot="brand-motto"
-            className="flex items-center gap-1 text-[12px] whitespace-nowrap italic text-soft-foreground"
+            className="text-[12px] whitespace-nowrap italic text-soft-foreground"
           >
-            <PixelHammerIcon className="size-3 shrink-0 text-violet" />
             divide et impera
           </span>
         </span>
@@ -545,6 +544,11 @@ function SidebarContent({
           </Link>
         </Button>
         {/* AddProjectMenu moved up beside the lockup — the CTA owns this row alone. */}
+      </div>
+
+      {/* Search right under the CTA, above the lists it searches — not buried in the footer. */}
+      <div className="px-2.5 pb-1">
+        <CommandPaletteHint />
       </div>
 
       {projectGroups ? (
@@ -639,21 +643,22 @@ function SidebarContent({
        *  line 2. `flex-col` rather than `flex-wrap` on purpose — the previous single wrapping row
        *  overflowed the 264px column and silently stranded the theme toggle on a line of its own,
        *  and a column cannot regress into that no matter what a future control's width is. */}
+      {/* The footer thins out on desktop: Search moved up under the CTA, Tools and the theme
+          toggle moved to the project bar — here they render md:hidden so the MOBILE drawer
+          (which has no project bar) keeps them. The version chip stays at every size. */}
       <div
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
-        <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
-          {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
-          <div data-slot="tools-menu" className="shrink-0">
+          <div data-slot="tools-menu" className="shrink-0 md:hidden">
             {toolsMenu}
           </div>
           {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
           {/* No second gear: the WORKSPACE nav's Settings is the one entry, and its index
               cross-links to Global settings — two identical icons to two different settings
               areas read as a bug, not a feature. */}
-          <ThemeToggle className="ml-auto" />
+          <ThemeToggle className="ml-auto md:hidden" />
         </div>
       </div>
     </div>
@@ -789,16 +794,25 @@ function BrandTile() {
  * and what the sidebar lockup (now brand + motto) could not give it on mobile. Shares grid row 1
  * with the mobile top bar; the two are breakpoint-exclusive.
  */
-function ProjectBar({ name }: { name: string | null }) {
-  if (!name) return null
+function ProjectBar({ name, toolsMenu }: { name: string | null; toolsMenu?: ReactNode }) {
+  if (!name && !toolsMenu) return null
   return (
     <div
       data-slot="project-bar"
-      className="row-start-1 hidden h-9 items-center gap-2 border-b border-border bg-background px-4 md:flex"
+      // Identity on the LEFT (where a breadcrumb reads), utilities — Tools, theme — on the right.
+      className="row-start-1 hidden h-9 items-center gap-2.5 border-b border-border bg-background px-4 md:flex"
     >
-      <FolderOpenIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
-      <span data-slot="repo-chip" className="truncate font-mono text-[12px] font-medium text-muted-foreground">
-        {name}
+      {name ? (
+        <span className="flex min-w-0 items-center gap-2">
+          <FolderOpenIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+          <span data-slot="repo-chip" className="truncate font-mono text-[12px] font-medium text-muted-foreground">
+            {name}
+          </span>
+        </span>
+      ) : null}
+      <span className="ml-auto flex shrink-0 items-center gap-2.5">
+        {toolsMenu ? <div data-slot="topbar-tools" className="shrink-0">{toolsMenu}</div> : null}
+        <ThemeToggle />
       </span>
     </div>
   )
