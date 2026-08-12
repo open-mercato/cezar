@@ -447,7 +447,13 @@ function PaletteContent({ close }: { close: () => void }) {
           </CommandGroup>
         ) : null}
 
-        <CommandGroup heading="Views">
+        {/* Views as a chip ROW, not five full-width rows — navigation targets are short words,
+            and a vertical list spent half the palette on them. cmdk keyboard nav still walks
+            the chips one by one (they stay ordinary items). */}
+        <CommandGroup
+          heading="Views"
+          className="[&_[cmdk-group-items]]:flex [&_[cmdk-group-items]]:flex-wrap [&_[cmdk-group-items]]:gap-1.5 [&_[cmdk-group-items]]:px-0.5 [&_[cmdk-group-items]]:pb-1"
+        >
           {visibleNavItems({
             forge: health.data?.forge?.available === true,
             inbox: health.data?.capabilities.followups === true,
@@ -460,8 +466,10 @@ function PaletteContent({ close }: { close: () => void }) {
                 // deterministic hit; the value is filter fodder, never rendered.
                 value={`view ${item.label}`}
                 data-slot="palette-view"
+                data-chip=""
                 data-nav-to={item.to}
                 onSelect={() => go(item.to)}
+                className="rounded-md border border-border bg-card px-2.5 py-1.5 data-[selected=true]:border-primary/40"
               >
                 <Icon aria-hidden="true" />
                 {item.label}
