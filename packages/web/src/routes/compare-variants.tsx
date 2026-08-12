@@ -300,7 +300,7 @@ function VariantColumn({
         <div className="flex items-center gap-1.5">
           <Button
             data-slot="variant-pick"
-            variant={allTerminal ? 'default' : 'outline'}
+            variant={allTerminal ? 'primary' : 'outline'}
             title={
               allTerminal
                 ? `Keep variant ${variant.variant}'s changes and archive the others`
