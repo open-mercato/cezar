@@ -327,14 +327,20 @@ export const runIndexEntrySchema = z.object({
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),
   /**
-   * The six fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
+   * The seven fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
    * or issue chip. Carried verbatim rather than pre-resolved into a `{kind, number, url}` on the
    * server, because the rule that picks between them is subtle (#407, #526: a run that REVIEWED
    * a PR must not claim it as its own, an issue-subject run must not adopt an incidental
    * transcript PR) and it already exists, tested, on the client. Resolving it a second time
    * server-side would be a second rule, and the two would drift.
    *
-   * Six scalars is still the slim row this schema exists to keep: `steps[]` and `workflowDef`,
+   * `referencedIssueCandidates` is the seventh and rides along for #819: it is the EVIDENCE that
+   * proves a bare `issueNumber` belongs to another repository, which is what lets `taskIssueUrl`
+   * refuse to rebuild it as a local `…/issues/N` link. Leave it off and this row is the one
+   * surface that cannot run the check — the global page would keep painting the 404 chip every
+   * other surface suppresses, which is exactly the drift carrying the inputs verbatim prevents.
+   *
+   * Seven scalars is still the slim row this schema exists to keep: `steps[]` and `workflowDef`,
    * the expensive half, stay off it.
    */
   pullRequestUrl: z.string().optional(),
@@ -342,6 +348,7 @@ export const runIndexEntrySchema = z.object({
   prNumber: z.number().optional(),
   issueNumber: z.number().optional(),
   referencedIssueUrl: z.string().optional(),
+  referencedIssueCandidates: z.array(z.string()).optional(),
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
   /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
    *  cockpit prints an em dash rather than claiming a measurement that never happened. */

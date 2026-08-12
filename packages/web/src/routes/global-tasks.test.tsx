@@ -596,6 +596,31 @@ describe('global tasks page', () => {
     expect(chip.getAttribute('href')).toBe('https://github.com/acme/api/pull/5127')
   })
 
+  it('paints no issue chip for a number another repo demonstrably owns (#819)', async () => {
+    // The reported record, on the surface that has a repo for every row: the auto-namer seeded
+    // `issueNumber` from a transcript working on open-mercato, so rebuilding it against this
+    // project's repo would link `acme/api/issues/4143` — a confident 404. The candidate carrying
+    // 4143 under another repo is the proof, and no chip beats a wrong chip.
+    stubFetch({
+      runs: [
+        {
+          ...RUNS[0]!,
+          pullRequestUrl: undefined,
+          referencedPullRequestUrl: undefined,
+          referencedIssueUrl: undefined,
+          markerRefs: undefined,
+          issueNumber: 4143,
+          referencedIssueCandidates: ['https://github.com/open-mercato/open-mercato/issues/4143'],
+        },
+      ],
+    })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    expect(document.querySelector('[data-slot="issue-chip"]')).toBeNull()
+    expect(screen.queryByText(/4143/)).toBeNull()
+  })
+
   it('leaves a number-only reference inert when its project has no known repo', async () => {
     // Inert text beats a link that goes somewhere invented.
     stubFetch({
