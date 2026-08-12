@@ -966,11 +966,16 @@ function PaletteSkill({
   inFlow: boolean
   onAdd: (skill: string) => void
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+  const { listeners, setNodeRef, isDragging } = useDraggable({
     id: `palette:${skill.name}`,
     data: { type: 'palette', skill: skill.name } satisfies DragItem,
   })
   return (
+    // Pointer-only drag surface, DELIBERATELY without dnd-kit's `attributes` (audit B2): the
+    // role="button" + tabIndex they add made this row an interactive element WRAPPING the real
+    // add-button — axe's nested-interactive, once per skill. The row stays a plain div that
+    // pointers can drag; the keyboard path is the labelled add button, which performs the same
+    // insert (position is then adjustable via the canvas grips, which are keyboard-accessible).
     <div
       ref={setNodeRef}
       data-slot="wb-skill"
@@ -980,7 +985,6 @@ function PaletteSkill({
         'flex cursor-grab items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 shadow-xs transition-colors hover:bg-muted',
         isDragging && 'opacity-40',
       )}
-      {...attributes}
       {...listeners}
     >
       <SparklesIcon
