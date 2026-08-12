@@ -221,6 +221,9 @@ export function AppShell({
     toolsMenu,
     projectGroups,
     singleProject,
+    // Inside a task (thread or compare) the CTA to LEAVE that context steps down to a quiet
+    // outline — the current task is the headline, not the exit (review's dynamic hierarchy).
+    inTaskContext: /^\/(tasks|compare)\//.test(areaPathname),
   }
 
   return (
@@ -302,6 +305,9 @@ type NavProps = {
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
   singleProject: boolean
+  /** True on /tasks/:id and /compare/:id — the New task CTA steps down to an outline there,
+   *  so the exit never outranks the task the user is inside (review's dynamic hierarchy). */
+  inTaskContext: boolean
 }
 
 /**
@@ -485,6 +491,7 @@ function SidebarContent({
   toolsMenu,
   projectGroups,
   singleProject,
+  inTaskContext,
   onNavigate,
   headerAction,
 }: NavProps & {
@@ -526,7 +533,13 @@ function SidebarContent({
       </div>
 
       <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
-        <Button asChild variant="primary" className="relative min-w-0 flex-1 justify-center">
+        <Button
+          asChild
+          // Dynamic hierarchy (review): full purple on the lists, a quiet outline INSIDE a task —
+          // the CTA to leave the current context must not outrank the context itself.
+          variant={inTaskContext ? 'outline' : 'primary'}
+          className="relative min-w-0 flex-1 justify-center"
+        >
           {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
               New task affordances stay inside the SPA. Full document loads of /new (the
               bookmarklet contract) land on the shell like any route (static-ui.ts) — the
@@ -539,13 +552,17 @@ function SidebarContent({
                 reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
             <kbd
               aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-primary-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-primary-foreground/60"
+              className={cn(
+                'absolute right-2.5 rounded-[5px] border border-b-2 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium',
+                inTaskContext
+                  ? 'border-border text-muted-foreground'
+                  : 'border-primary-foreground/25 text-primary-foreground/60',
+              )}
             >
               C
             </kbd>
           </Link>
         </Button>
-        {/* AddProjectMenu moved up beside the lockup — the CTA owns this row alone. */}
       </div>
 
 
@@ -645,21 +662,25 @@ function SidebarContent({
        *  line 2. `flex-col` rather than `flex-wrap` on purpose — the previous single wrapping row
        *  overflowed the 264px column and silently stranded the theme toggle on a line of its own,
        *  and a column cannot regress into that no matter what a future control's width is. */}
-      {/* The UTILITY footer: search (a utility, not a step of the Cezar → New task → Tasks flow),
-          then Settings + version. Tools and the theme toggle render md:hidden — the desktop has
-          them on the project bar; the MOBILE drawer (no project bar) keeps them here. */}
+      {/* Search sits ABOVE the bottom bar, its own element — a utility within reach, not part
+          of the bordered strip. */}
+      <div className="px-3.5 pb-2">
+        <CommandPaletteHint />
+      </div>
+
+      {/* The UTILITY bar: Settings + version. Settings, Tools and the theme toggle render
+          md:hidden — the desktop has them on the project bar; the MOBILE drawer (which has no
+          project bar) keeps them here. The version label stays at every size. */}
       <div
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
-        <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
-          {/* Settings is a utility, not a WORKSPACE surface — it lives here, labelled. */}
           <Link
             to="/settings"
             data-slot="footer-settings"
             onClick={onNavigate}
-            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
           >
             <SettingsIcon className="size-3.5" aria-hidden="true" />
             Settings
@@ -794,14 +815,17 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
  *  the tile — no wrapper background. */
 function BrandTile() {
   return (
-    <img
-      src={brandLogoUrl}
-      alt=""
-      aria-hidden="true"
-      data-slot="brand-tile"
-      // size-9 matches the two-line lockup's height (name + motto) — the cat deserves the rank.
-      className="size-9 shrink-0 rounded-sm"
-    />
+    // A white plate under the transparent artwork: violet-on-violet (the cat over the tinted
+    // sidebar) smeared into one mass at 36px — the card surface gives the silhouette an edge.
+    <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-card p-[3px]">
+      <img
+        src={brandLogoUrl}
+        alt=""
+        aria-hidden="true"
+        data-slot="brand-tile"
+        className="size-full object-contain"
+      />
+    </span>
   )
 }
 
@@ -838,6 +862,15 @@ function ProjectBar({
       ) : null}
       {addProject}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
+        {/* Settings beside Tools — both are utilities of the workspace this bar names. */}
+        <Link
+          to="/settings"
+          data-slot="topbar-settings"
+          className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <SettingsIcon className="size-3.5" aria-hidden="true" />
+          Settings
+        </Link>
         {toolsMenu ? <div data-slot="topbar-tools" className="shrink-0">{toolsMenu}</div> : null}
         <ThemeToggle />
       </span>

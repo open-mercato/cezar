@@ -161,20 +161,24 @@
 .light {
   color-scheme: light;
 
-  --background: #f7f7fb;
-  --foreground: #171717;
+  /* THREE surface levels (design review): a near-neutral app canvas, a minimally darker
+   * sidebar, and near-white cards/inputs/code — the previous one-lavender-world flattened the
+   * screen. Borders sit between them. */
+  --background: #f8f8fb;
+  --foreground: #18171b;
   --card: #ffffff;
   --card-2: #f2f1f8;
-  --sidebar: var(--background);
+  --sidebar: #f4f3f8;
   --muted: #f2f1f8;
   /* Selection surface — a violet-tinted neutral (the 200 of the accent), so a picked/active thing
    * reads as the accent's quiet cousin, not plain grey. Overrides the shared `--accent: --muted`. */
-  --accent: #e5e3f1;
-  --muted-foreground: #5c5c5c;
+  --accent: #eee9fb;
+  --muted-foreground: #68666d;
   /* AA-checked (audit 2026-08-08): ≥4.5:1 on every light surface incl. --muted; #a3a3a3 was
-   * 2.52:1 on white across ~300 call sites. Don't lighten back above #6f6f6f. */
+   * 2.52:1 on white across ~300 call sites. Don't lighten back above #6f6f6f — the review's
+   * #96939C tertiary is 2.9:1 and would reopen finding A1. */
   --soft-foreground: #6f6f6f;
-  --border: #ebebeb;
+  --border: #e5e3ea;
   /* AA-checked (audit 2026-08-08, X1): the interactive field/control border, kept separate
    * from the decorative --border (#ebebeb) precisely so it can meet 1.4.11's 3:1 for UI
    * components. #ebebeb was 1.19:1 on white — the Search box had almost no boundary. Don't

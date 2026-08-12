@@ -181,13 +181,14 @@ describe('AppShell', () => {
       expect(footer().className).not.toContain('flex-wrap')
     })
 
-    it('has exactly two children: search (a utility) above the controls row', () => {
+    it('has exactly one child (the controls row) — search sits just ABOVE the bordered bar', () => {
       renderShell('/', { version: '1.2.3' })
       const children = Array.from(footer().children) as HTMLElement[]
-      expect(children.map((child) => child.dataset.slot)).toEqual([
-        'command-palette-hint',
-        'sidebar-footer-controls',
-      ])
+      expect(children.map((child) => child.dataset.slot)).toEqual(['sidebar-footer-controls'])
+      // …and the search launcher is the footer's immediate previous sibling, not inside it.
+      const search = document.querySelector('[data-slot="command-palette-hint"]') as HTMLElement
+      expect(search.closest('[data-slot="sidebar-footer"]')).toBeNull()
+      expect(footer().previousElementSibling?.contains(search)).toBe(true)
     })
 
     it('keeps every control a sibling inside the one controls row', () => {

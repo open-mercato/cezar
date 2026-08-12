@@ -35,8 +35,10 @@ export function ReferenceChip({
   compact?: boolean
 }) {
   const { kind, number, url } = reference
+  // NEUTRAL, deliberately (purple = action/active/Cezar only): a violet outline made every
+  // reference id compete with the real accents. It is metadata that happens to link out.
   const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border border-violet/35 px-2 font-mono text-xs font-semibold text-violet',
+    'inline-flex h-[22px] items-center gap-1 rounded-full border border-border px-2 font-mono text-xs font-medium text-muted-foreground',
     className,
   )
   const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind
@@ -60,7 +62,7 @@ export function ReferenceChip({
       rel="noopener noreferrer"
       title={url}
       aria-label={`Open the ${kind === 'PR' ? 'pull request' : 'issue'} for ${taskTitle}`}
-      className={cn(chipClass, 'hover:bg-violet/10')}
+      className={cn(chipClass, 'hover:bg-muted hover:text-foreground')}
     >
       {mark}
       {label}

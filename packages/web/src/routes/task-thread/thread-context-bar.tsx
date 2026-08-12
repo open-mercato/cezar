@@ -118,8 +118,9 @@ function PlanChip({ entries, settled }: { entries: PlanEntry[]; settled: boolean
     <ContextChip
       slot="plan-chip"
       label={`Plan: ${done} of ${total} done`}
-      // Plan owns the accent (violet) — distinct from Verify's status tone, so a glance separates them.
-      accentClass="border-t-2 border-t-violet"
+      // NEUTRAL edge (purple = action/active/Cezar only): Verify's top edge carries a real
+      // status tone; the Plan tab is a drawer of metadata and must not compete with the accents.
+      accentClass="border-t-2 border-t-muted-foreground/30"
       panel={<PlanList entries={entries} settled={settled} />}
     >
       <span className={TAB_LABEL}>Plan</span>

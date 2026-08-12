@@ -195,7 +195,8 @@ describe('sidebar wiring', () => {
     // Every other view is untouched — the gate owns exactly one item. (Tasks is no longer a
     // nav link; the quick-list's TASKS rows are that entry.)
     expect(screen.getByRole('link', { name: /Git/ })).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Settings/ })).toBeTruthy()
+    // Two Settings entries by design: the desktop topbar and the (md:hidden) drawer footer.
+    expect(screen.getAllByRole('link', { name: /Settings/ }).length).toBeGreaterThan(0)
   })
 
   it('never asks for todos on a server with the inbox off', async () => {
