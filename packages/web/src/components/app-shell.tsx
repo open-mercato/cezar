@@ -1,6 +1,7 @@
 import {
   FolderIcon,
   FolderOpenIcon,
+  FolderPlusIcon,
   MenuIcon,
   PlusIcon,
   SearchIcon,
@@ -254,7 +255,11 @@ export function AppShell({
           {/* Same grid row as the mobile top bar — the two are breakpoint-exclusive, so they
               never render together. The bar is where the ACTIVE PROJECT lives now: above the
               content on every route, instead of buried in the sidebar lockup. */}
-          <ProjectBar name={projectName ?? repo?.name ?? null} toolsMenu={toolsMenu} />
+          <ProjectBar
+            name={projectName ?? repo?.name ?? null}
+            toolsMenu={toolsMenu}
+            addProject={singleProject ? undefined : <AddProjectMenu />}
+          />
 
           {banner ? (
             <div data-slot="banner-slot" className="row-start-2">
@@ -515,12 +520,9 @@ function SidebarContent({
             divide et impera
           </span>
         </span>
+        {/* Add-project moved to the project bar, beside the repo context it actually concerns —
+            next to the brand it read as part of Cezar's profile. */}
         {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
-        {!headerAction && !singleProject ? (
-          <div className="ml-auto shrink-0">
-            <AddProjectMenu />
-          </div>
-        ) : null}
       </div>
 
       <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
@@ -546,10 +548,6 @@ function SidebarContent({
         {/* AddProjectMenu moved up beside the lockup — the CTA owns this row alone. */}
       </div>
 
-      {/* Search right under the CTA, above the lists it searches — not buried in the footer. */}
-      <div className="px-2.5 pb-1">
-        <CommandPaletteHint />
-      </div>
 
       {projectGroups ? (
         // Step 3.3: one collapsible group per registered project — nav + task list per group.
@@ -575,12 +573,14 @@ function SidebarContent({
             </SidebarNavigateContext.Provider>
           </div>
 
-          {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob. */}
-          <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 py-1.5">
-            <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+          {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob.
+              No Settings here — it is not a workspace surface; it lives in the footer with the
+              other utilities. */}
+          <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 py-1">
+            <h2 className="px-3 pt-2 pb-0.5 text-[11px] font-medium tracking-[0.04em] text-soft-foreground/70 uppercase">
               Workspace
             </h2>
-            {items.filter((item) => item.to !== '/').map((item) => {
+            {items.filter((item) => item.to !== '/' && item.to !== '/settings').map((item) => {
               const isActive = item.to === activeTo
               const Icon = item.icon
               // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
@@ -645,21 +645,29 @@ function SidebarContent({
        *  line 2. `flex-col` rather than `flex-wrap` on purpose — the previous single wrapping row
        *  overflowed the 264px column and silently stranded the theme toggle on a line of its own,
        *  and a column cannot regress into that no matter what a future control's width is. */}
-      {/* The footer thins out on desktop: Search moved up under the CTA, Tools and the theme
-          toggle moved to the project bar — here they render md:hidden so the MOBILE drawer
-          (which has no project bar) keeps them. The version chip stays at every size. */}
+      {/* The UTILITY footer: search (a utility, not a step of the Cezar → New task → Tasks flow),
+          then Settings + version. Tools and the theme toggle render md:hidden — the desktop has
+          them on the project bar; the MOBILE drawer (no project bar) keeps them here. */}
       <div
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
+        <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
+          {/* Settings is a utility, not a WORKSPACE surface — it lives here, labelled. */}
+          <Link
+            to="/settings"
+            data-slot="footer-settings"
+            onClick={onNavigate}
+            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <SettingsIcon className="size-3.5" aria-hidden="true" />
+            Settings
+          </Link>
           <div data-slot="tools-menu" className="shrink-0 md:hidden">
             {toolsMenu}
           </div>
           {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
-          {/* No second gear: the WORKSPACE nav's Settings is the one entry, and its index
-              cross-links to Global settings — two identical icons to two different settings
-              areas read as a bug, not a feature. */}
           <ThemeToggle className="ml-auto md:hidden" />
         </div>
       </div>
@@ -697,9 +705,11 @@ function AddProjectMenu() {
           size="icon"
           aria-label="Add project"
           title="Add project"
-          className="size-11 shrink-0 md:size-9"
+          className="size-11 shrink-0 md:size-7"
         >
-          <FolderOpenIcon className="size-4" aria-hidden="true" />
+          {/* folder-PLUS: a bare folder next to the brand read as part of Cezar's profile — the
+              plus is what says "this adds something". */}
+          <FolderPlusIcon className="size-4 md:size-3.5" aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-56">
@@ -801,12 +811,21 @@ function BrandTile() {
  * and what the sidebar lockup (now brand + motto) could not give it on mobile. Shares grid row 1
  * with the mobile top bar; the two are breakpoint-exclusive.
  */
-function ProjectBar({ name, toolsMenu }: { name: string | null; toolsMenu?: ReactNode }) {
-  if (!name && !toolsMenu) return null
+function ProjectBar({
+  name,
+  toolsMenu,
+  addProject,
+}: {
+  name: string | null
+  toolsMenu?: ReactNode
+  addProject?: ReactNode
+}) {
+  if (!name && !toolsMenu && !addProject) return null
   return (
     <div
       data-slot="project-bar"
-      // Identity on the LEFT (where a breadcrumb reads), utilities — Tools, theme — on the right.
+      // Identity on the LEFT (where a breadcrumb reads) with add-project right beside it — the
+      // repo context it concerns; utilities — Tools, theme — on the right.
       className="row-start-1 hidden h-11 items-center gap-2.5 border-b border-border bg-background px-4 md:flex"
     >
       {name ? (
@@ -817,6 +836,7 @@ function ProjectBar({ name, toolsMenu }: { name: string | null; toolsMenu?: Reac
           </span>
         </span>
       ) : null}
+      {addProject}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
         {toolsMenu ? <div data-slot="topbar-tools" className="shrink-0">{toolsMenu}</div> : null}
         <ThemeToggle />

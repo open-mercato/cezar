@@ -67,7 +67,7 @@ describe('AppShell', () => {
     expect(main.scrollTop).toBe(0)
   })
 
-  it('renders the WORKSPACE nav as real router links — Tasks lives in the quick-list rows now', () => {
+  it('renders the WORKSPACE nav as real router links — Tasks lives in the quick-list rows, Settings in the footer', () => {
     renderShell()
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.textContent)).toEqual([
@@ -77,7 +77,6 @@ describe('AppShell', () => {
       'Automations',
       'Skills',
       'Workflows',
-      'Settings',
     ])
     // Deep-linkable per Step 2.1: every nav row is an <a href>, not a button with an onClick.
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
@@ -87,8 +86,9 @@ describe('AppShell', () => {
       '/automations',
       '/skills',
       '/workflows',
-      '/settings',
     ])
+    // Settings is a utility, not a workspace surface — it lives in the footer, still a link.
+    expect(within(footer()).getByRole('link', { name: /Settings/ }).getAttribute('href')).toBe('/settings')
   })
 
   // R6 Step 1.1: no forge, no GitHub tab — the nav item disappears entirely (spec's
@@ -97,8 +97,10 @@ describe('AppShell', () => {
     renderShell('/', { forgeAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    // Minus the two forge-gated items AND the Tasks item, which the quick-list rows replaced.
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge && item.to !== '/').length)
+    // Minus the forge-gated items, the Tasks item (quick-list rows) and Settings (footer).
+    expect(links).toHaveLength(
+      NAV_ITEMS.filter((item) => !item.forge && item.to !== '/' && item.to !== '/settings').length,
+    )
   })
 
   describe('active nav state follows the current route', () => {
@@ -147,9 +149,10 @@ describe('AppShell', () => {
   })
 
   describe('Add project menu', () => {
-    it('is shown by default', () => {
+    it('is shown by default — on the project bar, beside the repo context', () => {
       renderShell()
-      expect(within(sidebar()).getByRole('button', { name: 'Add project' })).toBeTruthy()
+      const bar = document.querySelector('[data-slot="project-bar"]') as HTMLElement
+      expect(within(bar).getByRole('button', { name: 'Add project' })).toBeTruthy()
     })
 
     it('is omitted in single-project mode while normal navigation remains', () => {
@@ -178,10 +181,13 @@ describe('AppShell', () => {
       expect(footer().className).not.toContain('flex-wrap')
     })
 
-    it('has exactly one child: the controls row (search moved up under the CTA)', () => {
+    it('has exactly two children: search (a utility) above the controls row', () => {
       renderShell('/', { version: '1.2.3' })
       const children = Array.from(footer().children) as HTMLElement[]
-      expect(children.map((child) => child.dataset.slot)).toEqual(['sidebar-footer-controls'])
+      expect(children.map((child) => child.dataset.slot)).toEqual([
+        'command-palette-hint',
+        'sidebar-footer-controls',
+      ])
     })
 
     it('keeps every control a sibling inside the one controls row', () => {
@@ -674,8 +680,9 @@ describe('AppShell', () => {
 
       // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
       // reuses the sidebar's content, so adding a nav item must not need a second edit here.
-      // (Minus '/': the quick-list's TASKS rows are that entry in both framings.)
-      const workspaceItems = NAV_ITEMS.filter((item) => item.to !== '/')
+      // (Minus '/': the quick-list's TASKS rows are that entry in both framings. Minus
+      // '/settings': the footer utility row is that entry.)
+      const workspaceItems = NAV_ITEMS.filter((item) => item.to !== '/' && item.to !== '/settings')
       expect(links.map((a) => a.getAttribute('href'))).toEqual(workspaceItems.map((item) => item.to))
       expect(links.map((a) => a.textContent)).toEqual(workspaceItems.map((item) => item.label))
 

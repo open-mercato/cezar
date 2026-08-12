@@ -67,30 +67,17 @@ export function TaskQuickList({
           the accent tint, Active carries the count and the unread badge the Tasks nav item used
           to wear. */}
       <div className="sticky top-0 z-10 flex flex-col gap-0.5 bg-sidebar pt-2 pb-0.5">
-        <h2 className="px-3 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+        <h2 className="px-3 pb-0.5 text-[11px] font-medium tracking-[0.04em] text-soft-foreground/70 uppercase">
           Tasks
         </h2>
-        <ViewRow
-          view="active"
-          current={view}
-          onSelect={onViewChange}
-          count={counts.active}
-          dotClass="bg-primary"
-          unread={unread}
-        >
+        <ViewRow view="active" current={view} onSelect={onViewChange} count={counts.active} unread={unread}>
           Active
           {/* The one reason to look at a row you are not on. */}
           {counts.waiting > 0 && view !== 'active' ? (
             <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label="needs you" />
           ) : null}
         </ViewRow>
-        <ViewRow
-          view="archived"
-          current={view}
-          onSelect={onViewChange}
-          count={counts.archived}
-          dotClass="bg-soft-foreground/40"
-        >
+        <ViewRow view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
           Archived
         </ViewRow>
       </div>
@@ -147,7 +134,7 @@ export function QuickListBuckets({
     <>
       {buckets.map((bucket) => (
         <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
+          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-medium tracking-[0.04em] text-soft-foreground/70 uppercase">
             {bucket.label}
           </h2>
           {bucket.rows.map((row) => (
@@ -174,7 +161,6 @@ function ViewRow({
   current,
   onSelect,
   count,
-  dotClass,
   unread = 0,
   children,
 }: {
@@ -182,8 +168,6 @@ function ViewRow({
   current: ListView
   onSelect: (view: ListView) => void
   count: number
-  /** The row's leading status dot — accent for Active, faint for Archived. */
-  dotClass: string
   /** Unread finished tasks (#unread-done-items) — the badge the Tasks nav item used to wear. */
   unread?: number
   children: React.ReactNode
@@ -198,12 +182,17 @@ function ViewRow({
       // switch between panels — `aria-pressed` is what that actually is.
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
+      // Selected = a slim left indicator + a whisper of tint, not a full lavender block that
+      // read as an input. No decorative leading dot either — the selection says "active view",
+      // and the only dot left (the pulsing waiting-dot) carries real status.
       className={cn(
-        'flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-        isActive && 'bg-primary/10 font-semibold text-foreground hover:bg-primary/10',
+        'relative flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+        isActive && 'bg-primary/5 font-semibold text-foreground hover:bg-primary/5',
       )}
     >
-      <span aria-hidden="true" className={cn('size-2 shrink-0 rounded-full', dotClass)} />
+      {isActive ? (
+        <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary" />
+      ) : null}
       {children}
       <span className="ml-auto flex shrink-0 items-center gap-1.5">
         {unread > 0 ? (
@@ -402,7 +391,9 @@ function RunRow({
           reference={reference}
           taskTitle={title}
           compact
-          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+          // De-pilled for the sidebar (review): the violet outline made the id read as a CTA
+          // next to the title. Plain quiet mono text — the link behavior stays.
+          className="h-auto shrink-0 gap-[2px] rounded-none border-0 px-0 py-px text-[10.5px] font-medium text-soft-foreground"
         />
       ) : null}
       <Link
