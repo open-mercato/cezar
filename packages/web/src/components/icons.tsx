@@ -20,6 +20,16 @@ export function RunnerLogo({ runner, className }: { runner: string; className?: 
   return <img src={src} alt="" aria-hidden className={`object-contain ${className ?? ''}`} />
 }
 
+/** A pixel-art hammer (Streamline Pixel, "interface-essential-hammer-2") — the brand motto's
+ *  glyph. currentColor like every other icon here, so the caller picks the violet. */
+export function PixelHammerIcon(props: SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 32 32" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M29.71 11.43h1.53v3.05h-1.53ZM28.19 14.48h1.52V16h-1.52ZM26.67 16h1.52v1.52h-1.52ZM26.67 9.91h3.04v1.52h-3.04ZM25.14 11.43h1.53v1.52h-1.53ZM25.14 8.38h1.53v1.53h-1.53ZM23.62 17.52h3.05v1.53h-3.05ZM23.62 12.95h1.52v1.53h-1.52ZM23.62 6.86h1.52v1.52h-1.52ZM22.1 14.48h1.52v3.04H22.1ZM22.1 5.33h1.52v1.53H22.1ZM20.57 12.95h1.53v1.53h-1.53ZM20.57 3.81h1.53v1.52h-1.53ZM19.05 14.48h1.52V16h-1.52ZM19.05 2.29h1.52v1.52h-1.52Zm-1.53 12.19 -1.52 0 0 -1.53 -1.52 0 0 1.53 -1.53 0 0 1.52 1.53 0 0 1.52 -1.53 0 0 1.53 -1.52 0 0 1.52 -1.52 0 0 -1.52 -1.53 0 0 1.52 -1.52 0 0 1.53 -1.53 0 0 1.52 -1.52 0 0 1.52 -1.52 0 0 1.53 -1.53 0 0 3.05 1.53 0 0 1.52 3.04 0 0 -1.52 1.53 0 0 -1.53 1.52 0 0 -1.52 1.53 0 0 -1.53 1.52 0 0 -1.52 1.52 0 0 -1.52 1.53 0 0 -1.53 1.52 0 0 -1.52 1.52 0 0 -1.53 1.53 0 0 -1.52 -1.53 0 0 -1.52zM16 9.91h1.52v3.04H16ZM14.48 0.76h4.57v1.53h-4.57ZM14.48 8.38H16v1.53h-1.52ZM11.43 6.86h3.05v1.52h-3.05ZM11.43 2.29h3.05v1.52h-3.05ZM11.43 16h1.52v1.52h-1.52ZM9.91 17.52h1.52v1.53H9.91ZM9.91 8.38h1.52v1.53H9.91ZM9.91 3.81h1.52v1.52H9.91ZM8.38 5.33h1.53v3.05H8.38Z" />
+    </svg>
+  )
+}
+
 /** Brand marks that lucide does not ship.
  *
  *  lucide-react 1.x removed every brand icon (no `GithubIcon`), so the forge nav item would

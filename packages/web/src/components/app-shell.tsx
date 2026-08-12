@@ -14,7 +14,7 @@ import { Link as RouterLink, useLocation } from 'react-router'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
-import { GithubIcon } from '@/components/icons'
+import { GithubIcon, PixelHammerIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { StatusDot } from '@/components/status-dot'
@@ -506,8 +506,14 @@ function SidebarContent({
         <BrandTile />
         <span className="flex min-w-0 flex-col leading-tight">
           <span className="text-[15px] font-semibold">cezar</span>
-          <span data-slot="brand-motto" className="truncate text-[10.5px] italic text-soft-foreground">
-            veni, vidi, audited
+          {/* No truncate: the motto is short and fixed — clipping it to "divide et imp…" would
+              undercut the whole joke. nowrap keeps it one line at every sidebar width. */}
+          <span
+            data-slot="brand-motto"
+            className="flex items-center gap-1 text-[12px] whitespace-nowrap italic text-soft-foreground"
+          >
+            <PixelHammerIcon className="size-3 shrink-0 text-violet" />
+            divide et impera
           </span>
         </span>
         {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
