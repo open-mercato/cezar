@@ -307,8 +307,10 @@ describe('sidebar wiring', () => {
     // The flat nav and the shared quick-list step aside — each group brings its own.
     expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull()
     expect(document.querySelector('[data-slot="task-quick-list"]')).toBeNull()
-    // …and so does the repo chip, which the boot project's own group header now carries.
-    expect(repoChip()).toBeNull()
+    // The ACTIVE project still names itself on the project bar above the content — the groups
+    // list every project, the bar says which one the URL is looking at.
+    expect(repoChip()?.closest('[data-slot="project-bar"]')).not.toBeNull()
+    expect(repoChip()?.textContent).toBe('cezar')
   })
 
   it('shows the version chip even outside a git repo', async () => {

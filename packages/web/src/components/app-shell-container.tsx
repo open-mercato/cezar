@@ -136,6 +136,9 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
             <ProviderBannerContainer />
           </>
         }
+        // The project bar above the content — the same resolved name the document title uses,
+        // falling back to the repo basename while the registry is unknown.
+        projectName={projectName ?? repoChipOf(health.data)?.name ?? null}
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={<TaskQuickListContainer />}
         // Present only in a multi-project workspace; `AppShell` renders the flat nav and the

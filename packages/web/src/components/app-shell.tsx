@@ -100,6 +100,9 @@ export type AppShellProps = {
    *  still loading, or unreachable — the shell renders the single-project sidebar it always
    *  did, which is the honest degradation, not a special case. */
   projectGroups?: ReactNode
+  /** The ACTIVE project's display name for the project bar above the content (the container
+   *  resolves it from the registry; falls back to `repo.name`). Null hides the bar. */
+  projectName?: string | null
 }
 
 /**
@@ -151,6 +154,7 @@ export function AppShell({
   singleProject = false,
   banner,
   projectGroups,
+  projectName = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -247,6 +251,10 @@ export function AppShell({
 
         <div className="grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden">
           <MobileTopBar title={current?.label ?? 'cezar'} />
+          {/* Same grid row as the mobile top bar — the two are breakpoint-exclusive, so they
+              never render together. The bar is where the ACTIVE PROJECT lives now: above the
+              content on every route, instead of buried in the sidebar lockup. */}
+          <ProjectBar name={projectName ?? repo?.name ?? null} />
 
           {banner ? (
             <div data-slot="banner-slot" className="row-start-2">
@@ -491,24 +499,16 @@ function SidebarContent({
       // an `@min-[…]/sidebar:` query and returns when the user drags the column wider.
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
-      {/* Two-line lockup (sidebar redesign): the product name on top, the project it is looking
-          at beneath — a hierarchy, not one crowded row. */}
+      {/* Two-line lockup (sidebar redesign): the product name on top, the motto beneath — the
+          ACTIVE PROJECT moved out of here onto the project bar above the content, where it stays
+          in view on every route instead of hiding in a drawer on mobile. */}
       <div className="flex items-center gap-[9px] px-3.5 pt-3.5 pb-2.5">
         <BrandTile />
         <span className="flex min-w-0 flex-col leading-tight">
           <span className="text-[15px] font-semibold">cezar</span>
-          {/* With project groups mounted the boot repo/branch is one group header among many —
-              a line repeating it up here would just be the first group's header said twice. */}
-          {repo && !projectGroups ? (
-            // The project's NAME only — the checked-out branch is a git detail, and the Git view
-            // and every task row already carry it. The lockup names what you're looking at.
-            <span
-              data-slot="repo-chip"
-              className="truncate font-mono text-[11px] font-medium text-soft-foreground"
-            >
-              {repo.name}
-            </span>
-          ) : null}
+          <span data-slot="brand-motto" className="truncate text-[10.5px] italic text-soft-foreground">
+            veni, vidi, audited
+          </span>
         </span>
         {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
         {!headerAction && !singleProject ? (
@@ -773,6 +773,27 @@ function BrandTile() {
       data-slot="brand-tile"
       className="size-[26px] shrink-0 rounded-sm"
     />
+  )
+}
+
+/**
+ * The desktop project bar (sidebar redesign): a slim breadcrumb strip above the content naming
+ * the ACTIVE project — always in view on every route, which is what a workspace identity needs
+ * and what the sidebar lockup (now brand + motto) could not give it on mobile. Shares grid row 1
+ * with the mobile top bar; the two are breakpoint-exclusive.
+ */
+function ProjectBar({ name }: { name: string | null }) {
+  if (!name) return null
+  return (
+    <div
+      data-slot="project-bar"
+      className="row-start-1 hidden h-9 items-center gap-2 border-b border-border bg-background px-4 md:flex"
+    >
+      <FolderOpenIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+      <span data-slot="repo-chip" className="truncate font-mono text-[12px] font-medium text-muted-foreground">
+        {name}
+      </span>
+    </div>
   )
 }
 
