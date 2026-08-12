@@ -114,8 +114,14 @@ export function RunHeader({
     <header
       data-slot="run-header"
       // The after: strip is a background-colored SHADOW under the sticky edge: scrolling content
-      // fades into the page instead of guillotining on the border line.
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-0 backdrop-blur after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-gradient-to-b after:from-background after:to-transparent after:content-[''] md:px-6"
+      // fades into the page instead of guillotining on the border line. SESSION only — the
+      // Changes/Commits/Files views start their content flush under the header, so there the
+      // overlay would sit on the first rows instead of on scrolled-away text.
+      className={cn(
+        'sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-0 backdrop-blur md:px-6',
+        tab === 'session' &&
+          "after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-gradient-to-b after:from-background after:to-transparent after:content-['']",
+      )}
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
