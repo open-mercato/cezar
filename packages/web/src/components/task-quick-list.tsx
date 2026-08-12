@@ -67,7 +67,9 @@ export function TaskQuickList({
           the accent tint, Active carries the count and the unread badge the Tasks nav item used
           to wear. */}
       <div className="sticky top-0 z-10 flex flex-col gap-0.5 bg-sidebar pt-2 pb-0.5">
-        <h2 className="px-3 pb-0.5 text-[11px] font-medium tracking-[0.04em] text-soft-foreground/70 uppercase">
+        {/* Section headers: small but DARK, tight to their rows (review) — hierarchy from
+            contrast and rhythm, not from size. */}
+        <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
           Tasks
         </h2>
         <ViewRow view="active" current={view} onSelect={onViewChange} count={counts.active} unread={unread}>
@@ -81,6 +83,10 @@ export function TaskQuickList({
           Archived
         </ViewRow>
       </div>
+
+      {/* A delicate divider between contexts (review): siblings inside a group keep an 8–12px
+          rhythm, GROUPS separate with a line + ~28px — that difference is the hierarchy. */}
+      <hr aria-hidden="true" className="mx-3 mt-3 mb-2 border-border" />
 
       {buckets.length === 0 ? (
         <p className="px-3 py-3.5 text-xs text-soft-foreground">
@@ -134,7 +140,7 @@ export function QuickListBuckets({
     <>
       {buckets.map((bucket) => (
         <div key={bucket.label} data-slot="quick-list-bucket" data-bucket={bucket.label}>
-          <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-medium tracking-[0.04em] text-soft-foreground/70 uppercase">
+          <h2 className="px-3 pt-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
             {bucket.label}
           </h2>
           {bucket.rows.map((row) => (
@@ -182,12 +188,12 @@ function ViewRow({
       // switch between panels — `aria-pressed` is what that actually is.
       aria-pressed={isActive}
       onClick={() => onSelect(view)}
-      // Selected = a slim left indicator + a whisper of tint, not a full lavender block that
-      // read as an input. No decorative leading dot either — the selection says "active view",
-      // and the only dot left (the pulsing waiting-dot) carries real status.
+      // Selected = a WHITE surface + the slim purple indicator (review): another lavender tint
+      // was what kept dyeing the whole sidebar — purple stays a signal, never a surface. Hover
+      // lifts rows onto the same card white.
       className={cn(
-        'relative flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-        isActive && 'bg-primary/5 font-semibold text-foreground hover:bg-primary/5',
+        'relative flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground',
+        isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
       )}
     >
       {isActive ? (
@@ -373,8 +379,10 @@ function RunRow({
       // `aria-current`.
       data-active={isActive ? 'true' : undefined}
       className={cn(
-        'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
-        isActive && 'bg-muted',
+        // Plain rows on the sidebar ground; a white surface appears on hover / for the open
+        // task only (review) — a resting tint per row muddied the whole column.
+        'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-card',
+        isActive && 'bg-card shadow-xs',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
         // to it — 26px = the row's own 10px plus the 16px indent.
