@@ -162,6 +162,26 @@ test('a missing NPM token forces a dry run instead of failing the job', { timeou
   }
 });
 
+test('a main push publishes under the moving main dist-tag', { timeout: 120_000 }, async () => {
+  const root = await makeFixture();
+  try {
+    await writeFile(join(root, 'github-output.txt'), '');
+    const { stdout } = await runScript(root, {
+      GITHUB_EVENT_NAME: 'push',
+      GITHUB_REF_NAME: 'main',
+      GITHUB_REPOSITORY: 'open-mercato/cezar',
+      GITHUB_RUN_NUMBER: '9',
+    });
+    assert.match(stdout, /forcing --dry-run/);
+    const output = await readFile(join(root, 'github-output.txt'), 'utf8');
+    assert.match(output, /^dryRun=true$/m);
+    assert.match(output, /"distTag":"main"/);
+    assert.match(output, /npx fake-alias@0\.9\.9-main\.9/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a non-publishable event exits 0 without touching the manifests', { timeout: 60_000 }, async () => {
   const root = await makeFixture();
   try {

@@ -6,10 +6,11 @@ How cezar reaches npm. Two paths, deliberately separate
 - **Stable releases** (`latest`) are **owner-driven and manual**: a maintainer
   runs the [`Release`](../.github/workflows/release.yml) workflow from the
   Actions tab (`workflow_dispatch`) and picks the version bump. CI never moves
-  `latest` — a push to `main` publishes nothing.
+  `latest` — a push to `main` publishes only the moving `main` preview tag.
 - **Previews** are **CI-driven**: the `publish-snapshot` job in
   [`ci.yml`](../.github/workflows/ci.yml) publishes a snapshot of every package
-  after a fully green `verify` run — on `develop` pushes and same-repo PRs only.
+  after a fully green `verify` run — on `develop` and `main` pushes and same-repo
+  PRs.
 
 Three packages are in the release, always at the same version; two of them ship:
 
