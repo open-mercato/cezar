@@ -70,6 +70,18 @@
     U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* Press Start 2P (SIL OFL 1.1, CodeMan38) — the 80s-arcade display face, vendored latin subset.
+ * BRAND WORDMARK ONLY: it pairs with the pixel cat; body text stays Inter. */
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/press-start-2p-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 /* ---------- tokens: dark (default) ---------- */
 
 :root {
@@ -168,7 +180,7 @@
   --foreground: #18171b;
   --card: #ffffff;
   --card-2: #f2f1f8;
-  --sidebar: #f4f3f8;
+  --sidebar: #f5f4f8;
   --muted: #f2f1f8;
   /* Selection surface — a violet-tinted neutral (the 200 of the accent), so a picked/active thing
    * reads as the accent's quiet cousin, not plain grey. Overrides the shared `--accent: --muted`. */

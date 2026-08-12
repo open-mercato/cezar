@@ -517,7 +517,10 @@ function SidebarContent({
       <div className="flex items-center gap-[9px] px-3.5 pt-3.5 pb-2.5">
         <BrandTile />
         <span className="flex min-w-0 flex-col leading-tight">
-          <span className="text-[15px] font-semibold">cezar</span>
+          {/* The wordmark in Press Start 2P — the 80s-arcade face that matches the pixel cat. */}
+          <span className="font-['Press_Start_2P'] text-[13px] leading-[1.2] tracking-tight">
+            cezar
+          </span>
           {/* No truncate: the motto is short and fixed — clipping it to "divide et imp…" would
               undercut the whole joke. nowrap keeps it one line at every sidebar width. */}
           <span
@@ -590,11 +593,14 @@ function SidebarContent({
             </SidebarNavigateContext.Provider>
           </div>
 
+          {/* The group divider before WORKSPACE — same contexts-separate-with-a-line rule as the
+              quick-list's TASKS → RECENT boundary. */}
+          <hr aria-hidden="true" className="mx-5 mt-3 mb-2 border-border" />
+
           {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob.
-              No Settings here — it is not a workspace surface; it lives in the footer with the
-              other utilities. */}
-          <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 py-1">
-            <h2 className="px-3 pt-2 pb-0.5 text-[11px] font-medium tracking-[0.04em] text-soft-foreground/70 uppercase">
+              No Settings here — it is not a workspace surface; it lives with the utilities. */}
+          <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pb-2">
+            <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
               Workspace
             </h2>
             {items.filter((item) => item.to !== '/' && item.to !== '/settings').map((item) => {
@@ -614,13 +620,15 @@ function SidebarContent({
                     // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
                     // they relax to 44px — the one place the two framings legitimately differ.
                     // 36px is the sidebar's one control height (CTA, search, rows); the drawer
-                    // relaxes to 44px touch targets.
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9',
-                    // Accent tint, not bg-accent (= muted): the active row must read differently
-                    // from a merely hovered neighbour — same selection language as the TASKS rows.
-                    isActive && 'bg-primary/10 font-semibold text-foreground hover:bg-primary/10'
+                    // relaxes to 44px touch targets. Hover/selected lift onto card WHITE — the
+                    // same rule as the TASKS rows: purple is a signal, never a surface.
+                    'relative flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
+                    isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card'
                   )}
                 >
+                  {isActive ? (
+                    <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary" />
+                  ) : null}
                   <Icon className="size-4 shrink-0" aria-hidden="true" />
                   {item.label}
                   {item.badge === 'inbox-count' && inboxCount ? (
