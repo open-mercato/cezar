@@ -15,9 +15,10 @@ export const ACCENT_STORAGE_KEY = 'cez-accent'
 export const DENSITY_STORAGE_KEY = 'cez-density'
 export const WIDTH_STORAGE_KEY = 'cez-width'
 
-/** The two accents the token sheet can express today: `lime` is `--primary` as shipped;
- *  `violet` swaps the `--primary` family onto the existing `--violet` tokens (index.css
- *  `:root[data-accent="violet"]`). More accents = more token families there, nothing here. */
+/** The two accents the token sheet can express today: `violet` is `--primary` as shipped
+ *  (the cockpit's default accent); `lime` swaps the `--primary` family back onto the brand
+ *  `--accent-lime` tokens (index.css `:root[data-accent="lime"]`). More accents = more token
+ *  families there, nothing here. */
 export type Accent = 'lime' | 'violet'
 
 /** Density shrinks Tailwind v4's one spacing token (`--spacing`, default 4px/unit) so every
@@ -30,7 +31,7 @@ export type Density = 'comfortable' | 'compact' | 'ultra'
  *  to 1180px so long transcripts use more of the screen. Type size and spacing stay untouched. */
 export type Width = 'narrow' | 'wide'
 
-export const DEFAULT_ACCENT: Accent = 'lime'
+export const DEFAULT_ACCENT: Accent = 'violet'
 export const DEFAULT_DENSITY: Density = 'comfortable'
 export const DEFAULT_WIDTH: Width = 'narrow'
 

@@ -29,8 +29,8 @@ const THEME_OPTIONS: Array<{ value: Theme; label: string; icon: ComponentType<SV
 /** Swatches point at the STABLE family tokens (`--accent-lime`, `--violet`), not `--primary` —
  *  the whole point of the control is that `--primary` changes under it. */
 const ACCENT_OPTIONS: Array<{ value: Accent; label: string; swatch: string }> = [
-  { value: 'lime', label: 'Lime', swatch: 'var(--accent-lime)' },
   { value: 'violet', label: 'Violet', swatch: 'var(--violet)' },
+  { value: 'lime', label: 'Lime', swatch: 'var(--accent-lime)' },
 ]
 
 const DENSITY_OPTIONS: Array<{ value: Density; label: string }> = [

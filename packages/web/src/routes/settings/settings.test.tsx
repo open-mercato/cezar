@@ -269,17 +269,17 @@ describe('the settings shell', () => {
 
 describe('the appearance section (global scope)', () => {
   it('persisted values apply at boot: server ui-state stamps the root and the controls', async () => {
-    serve({ appearance: { accent: 'violet', density: 'compact' } })
+    serve({ appearance: { accent: 'lime', density: 'compact' } })
     renderAt('/settings/global/appearance')
 
     await waitFor(() => {
-      expect(document.documentElement.dataset.accent).toBe('violet')
+      expect(document.documentElement.dataset.accent).toBe('lime')
     })
     expect(document.documentElement.dataset.density).toBe('compact')
-    expect(screen.getByRole('radio', { name: 'Violet' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio', { name: 'Lime' }).getAttribute('aria-checked')).toBe('true')
     expect(screen.getByRole('radio', { name: 'Compact' }).getAttribute('aria-checked')).toBe('true')
     // The mirror follows the server, so the next cold load pre-paints the truth.
-    expect(localStorage.getItem('cez-accent')).toBe('violet')
+    expect(localStorage.getItem('cez-accent')).toBe('lime')
     expect(localStorage.getItem('cez-density')).toBe('compact')
   })
 
@@ -290,17 +290,17 @@ describe('the appearance section (global scope)', () => {
       expect(screen.getByRole('radio', { name: 'Compact' }).getAttribute('aria-checked')).toBe('true')
     })
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Violet' }))
-    expect(document.documentElement.dataset.accent).toBe('violet')
+    fireEvent.click(screen.getByRole('radio', { name: 'Lime' }))
+    expect(document.documentElement.dataset.accent).toBe('lime')
 
     // The whole object, not a partial — the server's ui-state merge is shallow, so a bare
     // `{ accent }` would silently drop the stored density.
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'violet', density: 'compact', width: 'narrow' },
+        appearance: { accent: 'lime', density: 'compact', width: 'narrow' },
       })
     })
-    expect(localStorage.getItem('cez-accent')).toBe('violet')
+    expect(localStorage.getItem('cez-accent')).toBe('lime')
   })
 
   it('density flips back to the default and the attribute comes OFF the root', async () => {
@@ -314,19 +314,19 @@ describe('the appearance section (global scope)', () => {
     expect(document.documentElement.hasAttribute('data-density')).toBe(false)
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'lime', density: 'comfortable', width: 'narrow' },
+        appearance: { accent: 'violet', density: 'comfortable', width: 'narrow' },
       })
     })
   })
 
   it('reading width round-trip: Wide stamps the root and PUTs the full object; back to Narrow clears it', async () => {
-    serve({ appearance: { accent: 'violet' } })
+    serve({ appearance: { accent: 'lime' } })
     renderAt('/settings/global/appearance')
-    // Wait for the server value to settle (Violet is server-provided; Narrow is the default and
+    // Wait for the server value to settle (Lime is server-provided; Narrow is the default and
     // would report "checked" from the mirror before the GET even lands), so the pending load
     // can't clobber the width write we're about to make.
     await waitFor(() => {
-      expect(screen.getByRole('radio', { name: 'Violet' }).getAttribute('aria-checked')).toBe('true')
+      expect(screen.getByRole('radio', { name: 'Lime' }).getAttribute('aria-checked')).toBe('true')
     })
     expect(screen.getByRole('radio', { name: 'Narrow' }).getAttribute('aria-checked')).toBe('true')
 
@@ -334,7 +334,7 @@ describe('the appearance section (global scope)', () => {
     expect(document.documentElement.dataset.width).toBe('wide')
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'violet', density: 'comfortable', width: 'wide' },
+        appearance: { accent: 'lime', density: 'comfortable', width: 'wide' },
       })
     })
 
@@ -376,13 +376,13 @@ describe('the settings split writes the right store', () => {
 
   it('appearance → /api/v1/workspace/ui-state, never the per-repo one', async () => {
     renderAt('/settings/global/appearance')
-    await waitFor(() => expect(screen.getByRole('radio', { name: 'Violet' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('radio', { name: 'Lime' })).toBeTruthy())
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Violet' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Lime' }))
 
     await waitFor(() => expect(putsTo('/api/v1/workspace/ui-state')).toHaveLength(1))
     expect(putsTo('/api/v1/workspace/ui-state')[0]?.body).toEqual({
-      appearance: { accent: 'violet', density: 'comfortable', width: 'narrow' },
+      appearance: { accent: 'lime', density: 'comfortable', width: 'narrow' },
     })
     expect(putsTo('/api/v1/ui-state')).toHaveLength(0)
   })

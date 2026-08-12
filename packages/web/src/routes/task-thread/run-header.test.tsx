@@ -213,10 +213,10 @@ describe('action bar visibility per status (#765: primaries inline, the rest fol
     { status: 'queued', inline: [], overflow: ['Notes', 'Cancel'] },
     { status: 'running', inline: [], overflow: ['Notes', 'Cancel'] },
     { status: 'waiting', inline: ['Finish'], overflow: ['Notes', 'Cancel'] },
-    { status: 'review', inline: ['Finish', 'Continue', 'Open in…'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'done', inline: ['Continue', 'Open in…'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'failed', inline: ['Continue', 'Open in…'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', inline: ['Continue', 'Open in…'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'review', inline: ['Finish', 'Continue', 'Open locally'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'done', inline: ['Continue', 'Open locally'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'failed', inline: ['Continue', 'Open locally'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'cancelled', inline: ['Continue', 'Open locally'], overflow: ['Notes', 'Archive', 'Delete'] },
   ]
 
   it.each(matrix)('$status → inline $inline, overflow $overflow', async ({ status, inline, overflow }) => {
@@ -494,7 +494,7 @@ describe('actions hit their endpoints', () => {
 /** Terminal now lives inside the Open in… menu: open it (Radix opens on pointerdown) and click
  *  the resume item. */
 async function clickTerminalResume(): Promise<void> {
-  fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in…' }))
+  fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open locally' }))
   const menu = await screen.findByRole('menu')
   fireEvent.click(within(menu).getByRole('menuitem', { name: /Terminal \(resume session\)/ }))
 }
@@ -555,7 +555,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   async function openMenu(): Promise<HTMLElement> {
     // Without a resumable Terminal item, the button itself only appears once the async
     // worktreeTargets query resolves (empty-until-loaded) — findByRole waits it in.
-    const trigger = await actionBar().findByRole('button', { name: 'Open in…' })
+    const trigger = await actionBar().findByRole('button', { name: 'Open locally' })
     fireEvent.pointerDown(trigger)
     return screen.findByRole('menu')
   }
@@ -647,7 +647,7 @@ describe('Open in… menu per-target icons (#361)', () => {
         }),
     })
     renderHeader(run('done', { worktreePath: '/tmp/wt' }))
-    fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in…' }))
+    fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open locally' }))
     const menu = await screen.findByRole('menu')
 
     // The menu opens immediately; the worktree targets only appear once useOpenTargets resolves.

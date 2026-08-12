@@ -246,6 +246,8 @@ function OpenInMenuForRun({
       onPick={(target) => open.mutate(target)}
       // A real bordered button, not a ghost link, so the label never reads as clipped plain text.
       triggerVariant="outline"
+      // A complete name — "Open in…"'s trailing ellipsis read as a truncated label.
+      label="Open locally"
       title="Resume in a terminal, or open the worktree locally"
       leading={
         canResumeHere ? (

@@ -2,6 +2,7 @@ import {
   BotIcon,
   BoxesIcon,
   BracesIcon,
+  ChevronDownIcon,
   CodeIcon,
   CpuIcon,
   DiamondIcon,
@@ -125,9 +126,12 @@ export function OpenInMenu({
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
+        {/* A chevron, not an ellipsis in the label: "Open in…" read as truncated text, while a
+            chevron says "menu" without pretending the name was cut off. */}
         <Button variant={triggerVariant} size="sm" title={title} disabled={disabled} data-slot={slot}>
           <ExternalLinkIcon aria-hidden="true" />
           {label}
+          <ChevronDownIcon aria-hidden="true" className="size-3 text-soft-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

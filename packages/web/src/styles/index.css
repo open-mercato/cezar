@@ -94,16 +94,17 @@
   --contrast: #ebebeb;
   --contrast-foreground: #171717;
 
-  /* accents — `--accent-lime` is the stable name for the brand lime; `--primary` points at
-   * whichever accent family is active (Settings → Appearance swaps it via [data-accent]). */
+  /* accents — `--accent-lime` / `--violet` are the stable family names; `--primary` points at
+   * whichever family is active (Settings → Appearance swaps it via [data-accent]). Violet is
+   * the DEFAULT accent; the [data-accent='lime'] block below swaps back to the brand lime. */
   --accent-lime: #a8f372;
-  --primary: var(--accent-lime);
-  --primary-foreground: #0d0d0d;
   --violet: #9655fd;
-  /* Text/icons printed *on* --violet (the Inbox count badge). White in both themes — the violet
-   * never lightens enough for ink to pass AA against it. */
+  /* Text/icons printed *on* --violet (the Inbox count badge and now every primary control).
+   * White in both themes — the violet never lightens enough for ink to pass AA against it. */
   --violet-foreground: #ffffff;
-  --ring: #a8f372;
+  --primary: var(--violet);
+  --primary-foreground: var(--violet-foreground);
+  --ring: var(--violet);
 
   /* status */
   --danger: #ef4444;
@@ -202,17 +203,17 @@
 /* ---------- appearance: accent + density (Settings → Appearance, redesign R6) ----------
  * `data-accent` / `data-density` land on <html> before first paint (the index.html pre-paint
  * script reads the localStorage mirror; ui-state.json is the authoritative store — see
- * src/lib/appearance.ts). The default (lime / comfortable) is the ABSENCE of the attribute,
+ * src/lib/appearance.ts). The default (violet / comfortable) is the ABSENCE of the attribute,
  * so these blocks only name the deviations.
  */
 
-/* Violet accent: the `--primary` family swaps onto the existing violet tokens. An accent is
+/* Lime accent: the `--primary` family swaps back onto the brand lime tokens. An accent is
  * exactly a `--primary` family swap — a new accent = a new block here + one entry in
  * ACCENT_OPTIONS (routes/settings/appearance.tsx). */
-:root[data-accent='violet'] {
-  --primary: var(--violet);
-  --primary-foreground: var(--violet-foreground);
-  --ring: var(--violet);
+:root[data-accent='lime'] {
+  --primary: var(--accent-lime);
+  --primary-foreground: #0d0d0d;
+  --ring: var(--accent-lime);
 }
 
 /* Compact density: Tailwind v4's whole numeric spacing scale keys off ONE token (`--spacing`,

@@ -31,15 +31,15 @@
         // (src/lib/appearance.ts owns the contract; keep the two in sync). Defaults are the
         // absence of the attribute, so only the known deviations are stamped.
         try {
-          if (localStorage.getItem('cez-accent') === 'violet')
-            document.documentElement.dataset.accent = 'violet'
+          if (localStorage.getItem('cez-accent') === 'lime')
+            document.documentElement.dataset.accent = 'lime'
           var density = localStorage.getItem('cez-density')
           if (density === 'compact' || density === 'ultra')
             document.documentElement.dataset.density = density
           if (localStorage.getItem('cez-width') === 'wide')
             document.documentElement.dataset.width = 'wide'
         } catch (e) {
-          // Storage unavailable — lime/comfortable defaults already apply.
+          // Storage unavailable — violet/comfortable defaults already apply.
         }
       })()
     </script>
