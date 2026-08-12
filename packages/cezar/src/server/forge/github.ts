@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
 import { autosaveCommit } from '../../git-worktree.ts';
 import type {
   DraftPrInput,
@@ -1172,8 +1173,10 @@ export type GithubRefStatusData =
   | { available: false; reason: string; recheckAfterMs: number | null };
 
 /** Numbers per kind in one ref-status query — the same bound, and for the same reasons, as
- *  `GH_CHECKS_MAX`: aliases resolve independently, and the query size stays finite. */
-export const GH_REF_STATUS_MAX = 100;
+ *  `GH_CHECKS_MAX`: aliases resolve independently, and the query size stays finite. Taken from the
+ *  contract rather than restated, because the cockpit caps its batches by the same number and a
+ *  client that guessed high would have every chip in a batch 400 instead of losing its tail. */
+export const GH_REF_STATUS_MAX = REFERENCE_STATUS_MAX;
 
 const ghRefStatusPrSchema = z
   .object({
@@ -1667,13 +1670,17 @@ export async function fetchGithubRefStatus(
     }
     const batch = await fetchRefStatuses(refStatusGraphql(repoRoot), ownerName.owner, ownerName.name, misses);
     const failed = new Set(batch.failed);
+    // Stamped when the answer ARRIVED, not when the request was assembled: `now` above predates
+    // the round trip, and dating an entry by it would age a slow query's results by its own
+    // duration — shortening the TTL of exactly the answers that cost the most to get.
+    const storedAt = Date.now();
     for (const n of misses) {
       // A number we could not ask about is NOT cached: caching it would pin "this repository has
       // no such number" for a minute on the strength of a network blip.
       if (failed.has(n)) continue;
       const entry = batch.resolved[n] ?? null;
       file(n, entry);
-      refStatusCache.set(refStatusKey(repoRoot, n), { at: now, resolved: entry });
+      refStatusCache.set(refStatusKey(repoRoot, n), { at: storedAt, resolved: entry });
     }
     while (refStatusCache.size > REF_STATUS_CACHE_MAX) {
       const oldest = refStatusCache.keys().next().value;

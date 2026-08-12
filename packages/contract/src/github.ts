@@ -135,6 +135,17 @@ const recheckAfterMsSchema = z.number().nullable();
  * same in-payload degrade, same "absent number = nothing known" rule (an unknown or unreachable
  * number is simply missing from the map, and its chip stays neutral).
  */
+/**
+ * How many numbers of ONE kind a single `/github/ref-status` request may name — the route 400s
+ * past it, and the cockpit caps its batches to match.
+ *
+ * It lives in the contract because it is one: a client that believed a larger number would send
+ * requests the server rejects outright, costing every chip in the batch its status rather than
+ * just the tail. Two constants that must agree, in two packages, with nothing making them, is the
+ * drift this export exists to prevent.
+ */
+export const REFERENCE_STATUS_MAX = 100;
+
 export const githubRefStatusDataSchema = z.discriminatedUnion('available', [
   z.object({
     available: z.literal(true),

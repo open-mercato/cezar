@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
+
 import { ReferenceChip } from './reference-chip'
 import { REFERENCE_STATUS } from '@/lib/reference-status'
 
@@ -118,6 +120,23 @@ describe('ReferenceChip with a status', () => {
         REFERENCE_STATUS['changes-requested'].hint,
       )
     })
+  })
+
+  it('renders a status from a LATER version as the neutral chip rather than throwing', () => {
+    // The vocabulary is additive by contract (BACKWARD_COMPATIBILITY.md, `/github/ref-status`):
+    // "an unknown one renders neutral". Two real paths reach this bundle with a value it has
+    // never heard of — a newer server answering an older tab, and a `sessionStorage` payload a
+    // newer cockpit wrote in this same tab — and each used to be a `TypeError` inside the
+    // accessible name, which takes the whole table down rather than the one chip.
+    const chip = chipOf(
+      <ReferenceChip reference={PR} taskTitle="Add checkout" status={'queued-for-merge' as ReferenceStatus} />,
+    )
+
+    expect(chip.className).toContain('text-violet')
+    expect(chip.querySelector('svg[data-slot="status-dot"]')).toBeNull()
+    // The neutral chip's own tooltip, not a described status: the URL, exactly as before statuses.
+    expect(chip.getAttribute('title')).toBe('https://github.com/o/r/pull/402')
+    expect(chip.getAttribute('aria-label')).toBe('Open the pull request for Add checkout')
   })
 
   it('keeps a non-http reference inert while still saying where it stands', () => {

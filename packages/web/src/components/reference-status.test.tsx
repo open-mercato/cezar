@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-api-client'
+
 import {
   __clearRememberedStatusesForTests,
   restoreRememberedStatuses,
@@ -245,6 +247,37 @@ describe('the app-root registry', () => {
     expect(asked.some((p) => p.includes('/p/web/'))).toBe(true)
   })
 
+  it('keeps the NEWEST references when a project overruns the request cap', async () => {
+    // The route 400s past `REFERENCE_STATUS_MAX` numbers of one kind, so a surface with more
+    // references than that has to drop some — and which ones is not arbitrary. Numbers grow over
+    // a repository's life, so the tail worth losing is the oldest; dropping the newest would take
+    // the status off exactly the rows somebody is looking at. The list is still sent ascending, so
+    // two orderings of one window stay one cache entry.
+    const numbers = Array.from({ length: REFERENCE_STATUS_MAX + 5 }, (_, index) => index + 1)
+    answers = [{ available: true, prs: {}, issues: {} }]
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceStatusProvider
+          projectId="api"
+          requests={numbers.map((number) => ({ projectId: 'api', kind: 'PR' as const, number }))}
+        >
+          <ReferenceChip reference={PR} taskTitle="Add checkout" />
+        </ReferenceStatusProvider>
+      </QueryClientProvider>,
+    )
+
+    const call = await waitFor(() => {
+      const found = asked.find((path) => path.includes('/github/ref-status'))
+      if (!found) throw new Error('no ref-status request yet')
+      return found
+    })
+    const sent = new URL(call, 'http://localhost').searchParams.get('prs')!.split(',').map(Number)
+    expect(sent).toHaveLength(REFERENCE_STATUS_MAX)
+    expect(sent[sent.length - 1]).toBe(REFERENCE_STATUS_MAX + 5) // the newest survived
+    expect(sent[0]).toBe(6) // the five oldest are what the cap dropped
+    expect([...sent].sort((a, b) => a - b)).toEqual(sent) // ascending, so the key is stable
+  })
+
   it('lets a surface with no registry above it fetch for itself', async () => {
     // Mounting the registry is an optimisation, never a requirement — a bare render still works.
     answers = [{ available: true, prs: { 774: 'merged' }, issues: {} }]
@@ -282,5 +315,32 @@ describe('statuses survive a reload', () => {
 
     window.sessionStorage.setItem('cez.reference-statuses.v1', JSON.stringify([['ok', 'merged'], ['bad'], 42]))
     expect(restoreRememberedStatuses()).toEqual([['ok', 'merged']])
+  })
+
+  it('drops a status this bundle has never heard of', () => {
+    // `sessionStorage` outlives a reload in the same tab, so a newer cockpit's payload can be
+    // read back by an older one after a rollback. The vocabulary is additive by contract, and
+    // "additive" has to mean the unknown value is forgotten here rather than painted with a
+    // presentation that does not exist.
+    window.sessionStorage.setItem(
+      'cez.reference-statuses.v1',
+      JSON.stringify([
+        ['api PR#774', 'merged'],
+        ['api PR#775', 'queued-for-merge'],
+      ]),
+    )
+    expect(restoreRememberedStatuses()).toEqual([['api PR#774', 'merged']])
+  })
+
+  it('paints a status from a LATER server as the neutral chip, not a crash', async () => {
+    // The same additive promise from the other direction: an open tab holding an older bundle
+    // when the server upgrades receives values it cannot describe, and `unwrap` does not
+    // re-validate the payload against the contract.
+    answers = [{ available: true, prs: { 774: 'queued-for-merge' }, issues: {} }]
+    renderChip()
+
+    await waitFor(() => expect(chip().getAttribute('data-status')).toBe('queued-for-merge'))
+    expect(chip().className).toContain('text-violet')
+    expect(chip().getAttribute('aria-label')).toBe('Open the pull request for Add checkout')
   })
 })

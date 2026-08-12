@@ -70,8 +70,9 @@ import {
   putAgentConfigFile,
   retryProviderAuth,
 } from './client'
-import { queryScope, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
+import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
@@ -1376,11 +1377,28 @@ export function useGithubChecks(prNumbers: number[], enabled = true) {
   })
 }
 
-/** How many numbers of one kind one project's ref-status request may carry (the server's
- *  `GH_REF_STATUS_MAX`, which 400s past it). A project with more references on screen than this
- *  leaves its tail without a status — the neutral chip — rather than sending a request that would
- *  be rejected outright and cost every row its status. */
-const REF_STATUS_MAX = 100
+/** How many numbers of one kind one project's ref-status request may carry. The server's cap,
+ *  imported rather than restated: the route 400s past it, so a second copy that drifted would turn
+ *  every chip on a busy project into an error instead of a neutral chip. */
+const REF_STATUS_MAX = REFERENCE_STATUS_MAX
+
+/**
+ * The numbers one request asks about, capped — **newest first, then sorted for the key**.
+ *
+ * Both halves matter. Sorting makes the truncation deterministic rather than render-order
+ * dependent (a row must not gain and lose its status as the table re-sorts), and taking the
+ * HIGHEST numbers puts the cap where it costs least: issue and PR numbers grow over a repository's
+ * life, so a project with more references on screen than the cap keeps the recent ones — the rows
+ * anybody is looking at — and drops the oldest, rather than the other way round. The result is
+ * re-sorted ascending because the query key is built from this list and two orderings of the same
+ * window must not be two cache entries.
+ */
+function cappedNumbers(numbers: Iterable<number>): number[] {
+  return [...numbers]
+    .sort((a, b) => b - a)
+    .slice(0, REF_STATUS_MAX)
+    .sort((a, b) => a - b)
+}
 
 /** One chip's identity: which project's forge to ask, and about what. */
 export interface ReferenceStatusRequest {
@@ -1484,7 +1502,12 @@ export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
     if (!Array.isArray(parsed)) return []
     return parsed.filter(
       (entry): entry is [string, ReferenceStatus] =>
-        Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && typeof entry[1] === 'string',
+        // The status is checked against the vocabulary this bundle knows, not merely against
+        // `string`: the payload may have been written by a NEWER cockpit in this same tab (it
+        // survives reloads, and a server rollback does not clear it), and a value added after
+        // this bundle shipped must degrade to the neutral chip rather than be painted with a
+        // presentation that does not exist.
+        Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && isReferenceStatus(entry[1]),
     )
   } catch {
     return []
@@ -1618,10 +1641,8 @@ export function useReferenceStatuses(
     }
     return [...byProject.entries()].map(([projectId, bucket]) => ({
       projectId,
-      // Sorted before the cap so the truncation is deterministic rather than render-order
-      // dependent — a row must not gain and lose its status as the table re-sorts.
-      prs: [...bucket.prs].sort((a, b) => a - b).slice(0, REF_STATUS_MAX),
-      issues: [...bucket.issues].sort((a, b) => a - b).slice(0, REF_STATUS_MAX),
+      prs: cappedNumbers(bucket.prs),
+      issues: cappedNumbers(bucket.issues),
     }))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `signature` IS the content of `refs`
   }, [signature])

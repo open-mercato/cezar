@@ -17,7 +17,11 @@ import { useReferenceStatus } from '@/components/reference-status'
 import type { ReferenceStatusEntry } from '@/api/queries'
 import { StatusDot } from '@/components/status-dot'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
-import { REFERENCE_STATUS, type ReferenceStatusTone } from '@/lib/reference-status'
+import {
+  referenceStatusPresentation,
+  type ReferenceStatusPresentation,
+  type ReferenceStatusTone,
+} from '@/lib/reference-status'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 /** Border + text per status tone. `violet` IS the chip's own resting look, which is why a
@@ -109,21 +113,28 @@ export function ReferenceChip({
   // has always painted.
   const entry = useReferenceStatus(kind, number, projectId)
   const status = explicitStatus ?? entry.status
-  const presentation = status ? REFERENCE_STATUS[status] : undefined
+  // A status this bundle has never heard of resolves to `undefined` here and is then treated
+  // exactly like no status at all — the neutral chip, no glyph, no claim in the accessible name.
+  // That is what the vocabulary being ADDITIVE means in practice (BACKWARD_COMPATIBILITY.md):
+  // a value added server-side after this bundle shipped, or restored from a `sessionStorage`
+  // payload a newer bundle wrote, must not be able to take a table down.
+  const presentation = referenceStatusPresentation(status)
   const chipClass = cn(
     'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-[11px] font-semibold',
     TONE_CLASS[presentation?.tone ?? 'violet'],
     className,
   )
-  const tooltip = statusTooltip(entry, status)
+  const tooltip = statusTooltip(entry, presentation)
   const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind
   const kindWord = kind === 'PR' ? 'pull request' : 'issue'
   // The accessible name carries the status too — a screen reader gets what the color says.
-  const ariaLabel = `Open the ${kindWord} for ${taskTitle}${status ? ` — ${REFERENCE_STATUS[status].label}` : ''}`
+  const ariaLabel = `Open the ${kindWord} for ${taskTitle}${presentation ? ` — ${presentation.label}` : ''}`
 
   const body = (
     <>
-      <StatusGlyph status={status} />
+      {/* `presentation ? status : undefined` — one gate for every status channel, so an unknown
+          value cannot paint a glyph either. */}
+      <StatusGlyph status={presentation ? status : undefined} />
       {label}
     </>
   )
@@ -134,7 +145,7 @@ export function ReferenceChip({
       <span
         data-slot={kind === 'PR' ? 'pr-chip' : 'issue-chip'}
         data-status={status}
-        aria-label={status ? `${kindWord} ${label} — ${REFERENCE_STATUS[status].label}` : undefined}
+        aria-label={presentation ? `${kindWord} ${label} — ${presentation.label}` : undefined}
         className={chipClass}
       >
         {body}
@@ -192,13 +203,17 @@ export function ReferenceChip({
  * in this repository" usually means the reference points at another repo, and "checking" is over
  * in a moment. `null` — and only `null` — leaves the chip with its plain URL tooltip, which is the
  * honest answer when nothing has asked about it at all.
+ *
+ * Takes the PRESENTATION rather than the status, so a value this bundle cannot describe falls
+ * through to the state below instead of being described wrongly — or, on a `ready` state, to the
+ * plain URL tooltip, which is precisely the pre-status chip.
  */
 function statusTooltip(
   entry: ReferenceStatusEntry,
-  status: ReferenceStatus | undefined,
+  presentation: ReferenceStatusPresentation | undefined,
 ): { headline: string; detail: string } | null {
-  if (status) {
-    const { label, hint } = REFERENCE_STATUS[status]
+  if (presentation) {
+    const { label, hint } = presentation
     // A remembered status while the forge is down is still the best answer there is — but it is
     // dated, and saying so is the difference between trusted and merely confident.
     if (entry.state === 'unavailable') {

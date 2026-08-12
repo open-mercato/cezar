@@ -86,6 +86,29 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
   },
 }
 
+/**
+ * Is this one of the eleven statuses this bundle knows how to paint?
+ *
+ * The guard exists because the vocabulary is documented as ADDITIVE
+ * (`BACKWARD_COMPATIBILITY.md`, `/github/ref-status`): a newer server may answer with a value
+ * added after this bundle was built, and a `sessionStorage` payload written by a newer bundle
+ * outlives a rollback in the same tab. Both must land on the neutral chip the cockpit painted
+ * before statuses existed — the promise the compatibility entry makes — rather than on a
+ * `REFERENCE_STATUS[status]` that is `undefined` and a render that throws.
+ */
+export function isReferenceStatus(value: unknown): value is ReferenceStatus {
+  return typeof value === 'string' && Object.hasOwn(REFERENCE_STATUS, value)
+}
+
+/** What a status looks like, or `undefined` for one this bundle does not know (see
+ *  `isReferenceStatus`). The one lookup every caller should use — indexing `REFERENCE_STATUS`
+ *  directly types the miss away without removing it. */
+export function referenceStatusPresentation(
+  status: ReferenceStatus | undefined,
+): ReferenceStatusPresentation | undefined {
+  return status !== undefined && isReferenceStatus(status) ? REFERENCE_STATUS[status] : undefined
+}
+
 /** The tooltip's full sentence: `Merged — this landed on its base branch`. */
 export function referenceStatusText(status: ReferenceStatus): string {
   const { label, hint } = REFERENCE_STATUS[status]

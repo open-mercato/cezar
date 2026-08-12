@@ -189,19 +189,18 @@ function ProjectGroup({
   const buckets = runs.data ? capBuckets(groupRuns(runs.data, view), RECENT_LIMIT) : []
   // Only the rows this group actually paints: `buckets` is the capped list, so a project with
   // four hundred runs asks about the handful on screen rather than all of them.
-  const referenceRequests = React.useMemo(
-    () =>
-      buckets.flatMap((bucket) =>
-        bucket.rows.flatMap((row) => {
-          // A collapsed variant group paints its FIRST member's chip, so that is the one to ask
-          // about — the others only become visible once the tile is expanded.
-          const reference = taskReference(row.kind === 'run' ? row.run : row.members[0]!)
-          return reference ? [{ projectId: project.id, kind: reference.kind, number: reference.number }] : []
-        }),
-      ),
-    // The buckets are rebuilt each render; their CONTENT is what matters, and `useReferenceStatuses`
-    // already keys off that — this memo only keeps the array from churning between fetches.
-    [buckets, project.id],
+  //
+  // Deliberately NOT memoized: `buckets` is rebuilt with a fresh identity on every render, so a
+  // `useMemo` keyed on it would recompute every time anyway while claiming otherwise. Nothing
+  // downstream needs a stable identity — `ReferenceStatusProvider` and `useReferenceStatuses` both
+  // key off the CONTENT of this list.
+  const referenceRequests = buckets.flatMap((bucket) =>
+    bucket.rows.flatMap((row) => {
+      // A collapsed variant group paints its FIRST member's chip, so that is the one to ask
+      // about — the others only become visible once the tile is expanded.
+      const reference = taskReference(row.kind === 'run' ? row.run : row.members[0]!)
+      return reference ? [{ projectId: project.id, kind: reference.kind, number: reference.number }] : []
+    }),
   )
 
   // A missing project's panes all 409 (spec, "Registered project folder deleted/moved"), so
