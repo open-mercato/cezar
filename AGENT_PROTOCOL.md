@@ -75,6 +75,14 @@ interface AgentSession {
 }
 ```
 
+A termination the runner itself caused is **not** an agent failure (#703).
+`end()` arms a SIGTERM→SIGKILL watchdog for CLIs that ignore EOF, and
+`interrupt()` signals outright; the agent CLIs install their own handlers and
+exit `128 + signal`. A runner MUST therefore record that it sent the signal and
+settle such an exit on the normal path — `isSignalTerminationExit(exitCode)`
+(`packages/cezar/src/core/agent-runner.ts`) plus a `note` — instead of throwing. Throwing makes
+a finished run settle as `failed` and a cancelled run settle as `failed` too.
+
 `SessionOptions`:
 
 - `autoEndAfterFirstTurn?` — single-turn behavior for non-interactive workflow

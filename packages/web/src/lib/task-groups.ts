@@ -23,18 +23,34 @@ export type BucketLabel = 'Needs you' | 'Working' | 'Recent' | 'Archived'
 export const BUCKET_ORDER: readonly BucketLabel[] = ['Needs you', 'Working', 'Recent', 'Archived']
 
 /**
- * Sort weight per status: needs-you first, then in-flight, then everything terminal. Ties break
- * on recency. Ported verbatim from the legacy `STATUS_ORDER` — a run that moves from `running`
- * to `waiting` must climb the list in both cockpits identically.
+ * Sort weight per status: needs-you first, then the pipeline in the order it will actually
+ * happen — running now, resuming next, waiting for a slot — and finally the outcomes. Ties break
+ * on recency. The top of the list therefore answers "what is happening, and what happens next?"
+ * without reading a single row's detail.
+ *
+ * Grown from the legacy `STATUS_ORDER` (waiting/review/running/queued, everything else 9): the
+ * terminal states are now ranked among themselves, and `scheduled` — a run waiting out a usage
+ * limit — sits between running and queued, because it is work with an appointment rather than an
+ * outcome (spec 2026-08-03-auto-resume-after-usage-limit).
  */
 const STATUS_ORDER: Partial<Record<RunRecord['status'], number>> = {
   waiting: 0,
   review: 1,
   running: 2,
-  queued: 3,
+  queued: 4,
+  done: 5,
+  failed: 6,
+  cancelled: 7,
 }
 
-const statusWeight = (run: RunRecord): number => STATUS_ORDER[run.status] ?? 9
+/** Not a status of its own: `scheduled` is a `failed` run holding a live resume deadline, which
+ *  is the same rule the status pill and the sidebar bucket read (`lib/attention.ts`). */
+const SCHEDULED_WEIGHT = 3
+
+const statusWeight = (run: RunRecord): number =>
+  run.status === 'failed' && run.autoResumeAt !== undefined
+    ? SCHEDULED_WEIGHT
+    : STATUS_ORDER[run.status] ?? 9
 
 /** One row of the quick-list: either a single run, or a collapsed variant group (spec 010). */
 export type QuickListRow =
@@ -68,6 +84,10 @@ export function bucketOf(run: RunRecord, view: ListView): BucketLabel {
   if (view === 'archived') return 'Archived'
   if (run.status === 'waiting' || run.status === 'review') return 'Needs you'
   if (run.status === 'running' || run.status === 'queued') return 'Working'
+  // A run waiting out a provider usage limit is `failed` on the record but has an appointment to
+  // resume itself (spec 2026-08-03-auto-resume-after-usage-limit) — it belongs with the work in
+  // flight, not filed under Recent as an outcome. It asks for nothing, so never "Needs you".
+  if (run.status === 'failed' && run.autoResumeAt) return 'Working'
   return 'Recent'
 }
 
@@ -114,13 +134,36 @@ export function queuePositions(runs: readonly RunRecord[]): Map<string, number> 
   return new Map(queued.map((run, index) => [run.id, index + 1]))
 }
 
-/** Runs in the view, ordered: status weight first, then newest first. */
+/**
+ * Runs in the view, ordered: status weight first, then whatever "next" means inside that rank.
+ *
+ * For most ranks that is recency — newest first, the historical rule. For the two ranks that are
+ * genuinely a QUEUE it is the order they will actually happen in, because a list sorted by
+ * "what happens next" that then shuffles its own waiting rows is only half the promise:
+ *
+ *  - `scheduled` — soonest appointment on top. A task resuming at 11:14 sits above one resuming
+ *    at 11:40, whichever was created first.
+ *  - `queued` — oldest first, which is FIFO and therefore exactly the `#1 in queue` position the
+ *    row already prints beside itself. Newest-first rendered those positions backwards.
+ *
+ * ISO-8601 strings compare lexicographically because every timestamp cezar writes is UTC
+ * (`toISOString()` → trailing `Z`), the same reason `read-state.ts` compares them directly.
+ */
 export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[] {
   return runs
     .filter((run) => (view === 'archived' ? run.archived : !run.archived))
     .sort((a, b) => {
       const weight = statusWeight(a) - statusWeight(b)
       if (weight !== 0) return weight
+      // Equal weights, and that weight is the scheduled one — so both sides carry an
+      // `autoResumeAt` (nothing else earns the rank), and the appointment is the answer.
+      if (statusWeight(a) === SCHEDULED_WEIGHT && a.autoResumeAt && b.autoResumeAt) {
+        const order = a.autoResumeAt.localeCompare(b.autoResumeAt)
+        if (order !== 0) return order
+      }
+      if (a.status === 'queued' && b.status === 'queued') {
+        return a.createdAt.localeCompare(b.createdAt)
+      }
       return b.createdAt.localeCompare(a.createdAt)
     })
 }

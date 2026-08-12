@@ -61,10 +61,10 @@ describe('automatic Open Mercato skills updates', () => {
     browser.screenshot(`${artifactsDir}/settings-skills-auto-update.png`)
 
     browser.click('[data-slot="skills-auto-update"]')
-    let config = await api<{ skillsAutoUpdate: boolean | null }>('/api/workspace/config')
+    let config = await api<{ skillsAutoUpdate: boolean | null }>('/api/v1/workspace/config')
     for (let attempt = 0; config.skillsAutoUpdate !== false && attempt < 40; attempt += 1) {
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
-      config = await api('/api/workspace/config')
+      config = await api('/api/v1/workspace/config')
     }
     expect(config.skillsAutoUpdate).toBe(false)
     expect(browser.text('[data-slot="skills-settings-section"]')).toContain('explicit workspace override')
@@ -72,7 +72,7 @@ describe('automatic Open Mercato skills updates', () => {
     browser.click('[data-action="skills-use-default"]')
     for (let attempt = 0; config.skillsAutoUpdate !== null && attempt < 40; attempt += 1) {
       await new Promise((resolvePromise) => setTimeout(resolvePromise, 100))
-      config = await api('/api/workspace/config')
+      config = await api('/api/v1/workspace/config')
     }
     expect(config.skillsAutoUpdate).toBeNull()
   })
@@ -87,7 +87,7 @@ describe('automatic Open Mercato skills updates', () => {
 
   it('renders dry-run update success and the upgrade-notes hand-off', async () => {
     const state = await api<{ status: string; needsUpgradeNotes: boolean }>(
-      '/api/workspace/skills-update/apply',
+      '/api/v1/workspace/skills-update/apply',
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },

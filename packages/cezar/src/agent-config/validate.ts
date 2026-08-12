@@ -1,5 +1,5 @@
 import { parse as parseToml } from 'smol-toml';
-import type { ConfigFormat } from './catalog.js';
+import type { ConfigFormat } from './catalog.ts';
 
 /**
  * On save, cezar proves a config file PARSES in its own format — refusing to

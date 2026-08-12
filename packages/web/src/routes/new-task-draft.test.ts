@@ -49,13 +49,12 @@ describe('resolveComposerRunMode', () => {
   it('keeps plan, parallel, and no-git constraints authoritative', () => {
     expect(resolveComposerRunMode({ ...base, planFirst: true, explicitAutonomous: true }).autonomous).toBe(false)
     expect(resolveComposerRunMode({ ...base, variants: 2, explicitWorktree: false }).worktree).toBe(true)
-    expect(resolveComposerRunMode({
-      ...base,
-      forceWorktree: true,
-      explicitWorktree: false,
-      interactive: true,
-    }).worktree).toBe(true)
     expect(resolveComposerRunMode({ ...base, hasGit: false, explicitWorktree: true }).worktree).toBe(false)
+  })
+
+  it('keeps explicit and configured Worktree opt-outs authoritative for ordinary workflows', () => {
+    expect(resolveComposerRunMode({ ...base, explicitWorktree: false }).worktree).toBe(false)
+    expect(resolveComposerRunMode({ ...base, configuredWorktree: false }).worktree).toBe(false)
   })
 })
 
@@ -65,6 +64,7 @@ describe('the new-task draft store', () => {
       text: '',
       source: null,
       runner: null,
+      agentProfile: null,
       model: null,
       variants: 1,
       planFirst: false,
@@ -79,6 +79,7 @@ describe('the new-task draft store', () => {
       text: 'fix it',
       source: { source: 'skill', ref: 'om-fix' },
       runner: 'codex',
+      agentProfile: null,
       model: 'gpt-5-codex',
       variants: 2,
       planFirst: false,
@@ -99,6 +100,7 @@ describe('the new-task draft store', () => {
       text: 'shipped',
       source: { source: 'workflow', ref: 'quick-task' },
       runner: null,
+      agentProfile: null,
       model: 'opus',
       variants: 3,
       planFirst: true,
@@ -111,6 +113,7 @@ describe('the new-task draft store', () => {
       text: '',
       source: { source: 'workflow', ref: 'quick-task' },
       runner: null,
+      agentProfile: null,
       model: 'opus',
       variants: 3,
       planFirst: true,
@@ -125,6 +128,7 @@ describe('the new-task draft store', () => {
       text: 'do not lose me',
       source: { source: 'skill', ref: 'om-fix' },
       runner: 'claude',
+      agentProfile: null,
       model: 'sonnet',
       variants: 2,
       planFirst: true,
@@ -153,6 +157,7 @@ describe('the new-task draft store', () => {
       text: '',
       source: null,
       runner: null,
+      agentProfile: null,
       model: null,
       variants: 1,
       planFirst: false,
@@ -167,6 +172,7 @@ describe('the new-task draft store', () => {
       text: '',
       source: null,
       runner: null,
+      agentProfile: null,
       model: null,
       variants: 1,
       planFirst: false,

@@ -4,7 +4,7 @@ import { WebSocketServer, type WebSocket } from 'ws';
 import { z } from 'zod';
 
 /**
- * The cockpit's WebSocket subscription bus (`GET /api/ws`, upgrade-only).
+ * The cockpit's WebSocket subscription bus (`GET /api/v1/ws`, upgrade-only).
  * Design + the subscribe/unsubscribe discipline: spec
  * `.ai/specs/2026-07-23-websocket-subscriptions.md`.
  *
@@ -27,7 +27,7 @@ import { z } from 'zod';
 
 /** The one upgrade path. Workspace-level like `/api/workspace/events` — never
  *  mirrored under `/api/p/:projectId` (topics carry workspace data). */
-export const WS_PATH = '/api/ws';
+export const WS_PATH = '/api/v1/ws';
 
 /** Heartbeat cadence — the interval on which the hub both REAPS silently-dead
  *  clients (a killed browser process sends no FIN) and emits a liveness beat

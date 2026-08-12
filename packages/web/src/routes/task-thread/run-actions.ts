@@ -1,4 +1,8 @@
 import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
+import { cliTargetRunner } from '@/components/open-in-menu'
+
+export { cliTargetRunner }
+
 
 /**
  * The run header's action policy — WHICH actions a run offers, as a pure function of the
@@ -57,14 +61,6 @@ export function resumeHint(run: RunRecord): string | undefined {
   const command = resumeCommand(run.runner, sessionId)
   if (command === undefined) return undefined
   return run.worktreePath ? `cd ${run.worktreePath} && ${command}` : command
-}
-
-/** The runner a `cli:<runner>` Open-in target hands off to, or undefined for every other
- *  target (editors, Finder, terminal) — mirrors the server's `agentCliRunner` (open-in-app.ts)
- *  without importing server code into the bundle. */
-export function cliTargetRunner(targetId: string): Runner | undefined {
-  const match = /^cli:(claude|codex|opencode)$/.exec(targetId)
-  return match ? (match[1] as Runner) : undefined
 }
 
 /** Does picking this "Open in…" CLI target resume THIS run's own session, or start a fresh

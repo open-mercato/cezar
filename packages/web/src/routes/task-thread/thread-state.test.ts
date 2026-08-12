@@ -438,11 +438,11 @@ describe('reduceThread — live-stream mechanics', () => {
 
   it('renders v1 image lines (served URL) and skips everything without one', () => {
     const { turns } = reduceThread([
-      line(1, 'image', { name: 'shot.png', url: '/api/runs/r1/images/shot.png' }),
+      line(1, 'image', { name: 'shot.png', url: '/api/v1/runs/r1/images/shot.png' }),
       line(2, 'image', { mediaType: 'image/png', data: 'aGk=' }), // v2 shape: raw base64, no URL
     ])
     expect(turns[0]!.items).toEqual([
-      { kind: 'image', id: 'v1:1', url: '/api/runs/r1/images/shot.png', name: 'shot.png' },
+      { kind: 'image', id: 'v1:1', url: '/api/v1/runs/r1/images/shot.png', name: 'shot.png' },
     ])
   })
 })
@@ -691,15 +691,15 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
       line(1, 'user-message', {
         text: "there's still error",
         imageCount: 1,
-        images: ['/api/runs/r1/images/screenshot-1.png'],
+        images: ['/api/v1/runs/r1/images/screenshot-1.png'],
       }),
     ])
-    expect(turns[0]!.userMessage?.images).toEqual(['/api/runs/r1/images/screenshot-1.png'])
+    expect(turns[0]!.userMessage?.images).toEqual(['/api/v1/runs/r1/images/screenshot-1.png'])
   })
 
   it('image (the URL-bearing v1 line) → a thread image', () => {
-    expect(allItems([line(1, 'image', { url: '/api/runs/r/images/s.png', name: 's.png' })])).toEqual([
-      { kind: 'image', id: 'v1:1', url: '/api/runs/r/images/s.png', name: 's.png' },
+    expect(allItems([line(1, 'image', { url: '/api/v1/runs/r/images/s.png', name: 's.png' })])).toEqual([
+      { kind: 'image', id: 'v1:1', url: '/api/v1/runs/r/images/s.png', name: 's.png' },
     ])
   })
 
@@ -764,6 +764,21 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
   })
 
+  // The card outlives its session: the run closed with the question unanswered, and the
+  // answer arrives as the opening `user-message` of a CONTINUATION step (`POST /continue`,
+  // `runContinuation`). Nothing about resolution is session-scoped, and this pins that —
+  // it is what makes answering a closed run's question read the same as answering a live one.
+  it('a continuation step resolves an ask left pending when the session ended', () => {
+    const ask = allItems([
+      line(1, 'text', { text: 'options', stepId: 'task' }),
+      line(2, 'ask.requested', { ...ASK, stepId: 'task' }),
+      line(3, 'lifecycle', { message: 'session closed by user' }),
+      line(4, 'step-start', { stepId: 'continue-1', name: 'Continue', kind: 'agent', iteration: 1 }),
+      line(5, 'user-message', { text: 'Library: date-fns', imageCount: 0, stepId: 'continue-1' }),
+    ]).find((i) => i.kind === 'ask')
+    expect(ask).toMatchObject({ resolved: true, answer: 'Library: date-fns' })
+  })
+
   it('drops an ask.requested with no valid questions', () => {
     expect(
       allItems([line(1, 'ask.requested', { requestId: 'x', questions: [] })]).some(
@@ -783,6 +798,19 @@ describe('reduceThread — AskUser cards (#473)', () => {
     expect(msg?.text).toBe('Pick one.')
   })
 
+  it('suppresses a complete provisional marker during the active turn', () => {
+    const markerJson = JSON.stringify({ questions: ASK.questions })
+    const events = [
+      line(1, 'item.completed', {
+        item: { kind: 'message', id: 'm1', role: 'assistant', text: `Pick one.\n\nCEZ:ASK ${markerJson}` },
+      }),
+    ]
+    const msg = reduceThread(events, { activeTurn: true }).turns[0]!.items.find(
+      (item) => item.kind === 'message',
+    ) as { text: string } | undefined
+    expect(msg?.text).toBe('Pick one.')
+  })
+
   // Regression (blank-question bug): a marker whose card never materialized —
   // invalid payload, or the session died before turn-end emitted ask.requested —
   // must stay visible. The card is the only other place the questions exist;
@@ -795,6 +823,23 @@ describe('reduceThread — AskUser cards (#473)', () => {
       }),
     ]).find((i) => i.kind === 'message') as { text: string } | undefined
     expect(msg?.text).toBe(raw)
+  })
+
+  it('restores a hard-invalid marker when the active turn settles without a card', () => {
+    const raw = 'Pick one.\n\nCEZ:ASK {"questions":[]}'
+    const events = [
+      line(1, 'item.completed', {
+        item: { kind: 'message', id: 'm1', role: 'assistant', text: raw },
+      }),
+    ]
+    const active = reduceThread(events, { activeTurn: true }).turns[0]!.items.find(
+      (item) => item.kind === 'message',
+    ) as { text: string } | undefined
+    const settled = reduceThread(events).turns[0]!.items.find(
+      (item) => item.kind === 'message',
+    ) as { text: string } | undefined
+    expect(active?.text).toBe('Pick one.')
+    expect(settled?.text).toBe(raw)
   })
 
   it("an ask card in ANOTHER turn does not license stripping this turn's marker", () => {

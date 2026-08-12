@@ -46,7 +46,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -314,7 +314,7 @@ describe('task thread', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="thread-image"]')?.naturalWidth > 0`)
     expect(
       browser.evaluate(`document.querySelector('[data-slot="thread-image"]').getAttribute('src')`),
-    ).toBe(`/api/runs/${RUN_ID}/images/screenshot-1.png`)
+    ).toBe(`/api/v1/runs/${RUN_ID}/images/screenshot-1.png`)
   })
 
   it('shows the auto-summary title and the done pill in the header', () => {
@@ -400,7 +400,7 @@ describe('task thread', () => {
       `document.querySelector('[data-route="task-thread"] h1')?.textContent === 'Renamed by the header e2e'`,
     )
     // …and the API readback proves it persisted rather than living in component state.
-    const record = (await (await fetch(`${baseUrl}/api/runs/${RUN_ID}`)).json()) as {
+    const record = (await (await fetch(`${baseUrl}/api/v1/runs/${RUN_ID}`)).json()) as {
       title: string
       titleSummary: string
     }

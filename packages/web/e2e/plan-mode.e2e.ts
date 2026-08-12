@@ -35,7 +35,7 @@ function freePort(): Promise<number> {
 async function waitForHealth(url: string): Promise<void> {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     try {
-      if ((await fetch(`${url}/api/health`)).ok) return
+      if ((await fetch(`${url}/api/v1/health`)).ok) return
     } catch {
       /* not up yet */
     }
@@ -158,14 +158,14 @@ describe('plan mode against a live dry-run server', () => {
     browser.screenshot(`${artifactsDir}/plan-overlay.png`)
   }, 90_000)
 
-  it('save as chain lands in /api/workflows; saving again asks before overwriting', async () => {
+  it('save as chain lands in /api/v1/workflows; saving again asks before overwriting', async () => {
     browser.click('[data-slot="plan-save"]')
     browser.waitForFunction(`document.querySelector('[data-slot="plan-save-dialog"]') !== null`)
     browser.fill('[aria-label="Chain name"]', 'e2e planned chain')
     browser.click('[data-slot="plan-save-dialog"] button[type="submit"]')
     browser.waitForFunction(`document.querySelector('[data-slot="plan-save-dialog"]') === null`)
 
-    const readback = (await (await fetch(`${baseUrl}/api/workflows`)).json()) as {
+    const readback = (await (await fetch(`${baseUrl}/api/v1/workflows`)).json()) as {
       workflows: Array<{ name: string; source: string; steps: Array<{ id: string }> }>
     }
     const saved = readback.workflows.find((w) => w.name === 'e2e planned chain')
@@ -183,7 +183,7 @@ describe('plan mode against a live dry-run server', () => {
       `document.querySelector('[data-slot="plan-overwrite-dialog"]') === null &&
        document.querySelector('[data-slot="plan-save-dialog"]') === null`,
     )
-    const again = (await (await fetch(`${baseUrl}/api/workflows`)).json()) as {
+    const again = (await (await fetch(`${baseUrl}/api/v1/workflows`)).json()) as {
       workflows: Array<{ name: string }>
     }
     expect(again.workflows.filter((w) => w.name === 'e2e planned chain')).toHaveLength(1)
@@ -245,7 +245,7 @@ describe('plan mode against a live dry-run server', () => {
 
     const runId = (browser.evaluate(`location.pathname.split('/').pop()`) as string) ?? ''
     expect(runId).not.toBe('')
-    const record = (await (await fetch(`${baseUrl}/api/runs/${runId}`)).json()) as {
+    const record = (await (await fetch(`${baseUrl}/api/v1/runs/${runId}`)).json()) as {
       task: string
       workflowDef?: { steps?: Array<Record<string, unknown>> }
     }

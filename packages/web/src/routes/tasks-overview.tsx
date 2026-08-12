@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
+  CheckCheckIcon,
   ListChecksIcon,
   PencilIcon,
   PlusIcon,
@@ -11,31 +12,36 @@ import {
 import * as React from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { archiveFinished, patchRun } from '@/api/client'
+import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
-import { queryKeys, useRuns } from '@/api/queries'
+import { queryKeys, useHealth, useRuns } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
-import { compactTokens, shortAge } from '@/lib/format'
+import { shortAge } from '@/lib/format'
+import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
 import { listCounts, queuePositions, runTitle, sortRuns, type ListView } from '@/lib/task-groups'
 import {
   compareGroups,
   filterRuns,
   finishedRunCount,
   formatCost,
+  scheduledResume,
   taskReference,
   usageCells,
   workflowLabel,
   type UsageCell,
 } from '@/lib/tasks-table'
+import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
@@ -56,8 +62,11 @@ export function TasksOverview({
   view,
   onViewChange,
   onArchiveFinished,
+  onMarkAllRead,
   onRename,
   now = Date.now(),
+  showTokens = true,
+  showCost = true,
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
@@ -65,11 +74,16 @@ export function TasksOverview({
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
+  /** "Mark all read" (#unread-done-items) — stamps every unread finished run. */
+  onMarkAllRead: () => void
   /** Inline rename from the table's Task cell (spec step 15) — the route wires this to
    *  `PATCH /api/runs/:id`, the same flow as the run header's pencil. */
   onRename: (id: string, title: string) => void
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
+  /** Presentation capability; defaults visible for older health responses and direct renders. */
+  showTokens?: boolean
+  showCost?: boolean
 }) {
   const [query, setQuery] = React.useState('')
   const all = runs ?? []
@@ -80,6 +94,7 @@ export function TasksOverview({
   const positions = queuePositions(all)
   const strips = compareGroups(filterRuns(all, query), view)
   const finished = finishedRunCount(all)
+  const unread = unreadDoneCount(all)
 
   return (
     <div data-route="tasks" className="flex min-h-full flex-col">
@@ -96,6 +111,21 @@ export function TasksOverview({
           </OverviewTab>
         </div>
         <div className="flex-1" />
+        {/* Count-gated, like the broom beside it: offered only while there is unread history to
+            clear (#unread-done-items). Archived runs are never unread, so this only ever lights
+            on the Active tab in practice — no need to also gate on `view`. */}
+        {unread > 0 ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-slot="mark-all-read"
+            onClick={onMarkAllRead}
+          >
+            <CheckCheckIcon className="size-3.5" aria-hidden="true" />
+            Mark all read
+          </Button>
+        ) : null}
         {/* Only when there is something to sweep, like the legacy header's count-gated broom. */}
         {view === 'active' && finished > 0 ? (
           <Button
@@ -144,8 +174,8 @@ export function TasksOverview({
                     <Th>Branch</Th>
                     <Th>±</Th>
                     <Th>Ref</Th>
-                    <Th right>Tokens</Th>
-                    <Th right>Cost</Th>
+                    {showTokens ? <Th right>IN / OUT</Th> : null}
+                    {showCost ? <Th right>Cost</Th> : null}
                     <Th right>CPU</Th>
                     <Th right>Mem</Th>
                     <Th right>Started</Th>
@@ -159,6 +189,8 @@ export function TasksOverview({
                       queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
                       onRename={onRename}
                       now={now}
+                      showTokens={showTokens}
+                      showCost={showCost}
                     />
                   ))}
                 </tbody>
@@ -173,6 +205,8 @@ export function TasksOverview({
                   run={run}
                   queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
                   now={now}
+                  showTokens={showTokens}
+                  showCost={showCost}
                 />
               ))}
             </div>
@@ -323,14 +357,19 @@ function TableRow({
   queuePosition,
   onRename,
   now,
+  showTokens,
+  showCost,
 }: {
   run: RunRecord
   queuePosition: number | null
   onRename: (id: string, title: string) => void
   now: number
+  showTokens: boolean
+  showCost: boolean
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
+  const scheduled = scheduledResume(run)
   const to = `/tasks/${run.id}`
   const cost = formatCost(run.costUsd)
   const reference = taskReference(run)
@@ -346,8 +385,11 @@ function TableRow({
       className="group/row cursor-pointer hover:bg-muted"
     >
       <td className={TD_BASE}>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
+        {/* A scheduled run wears its appointment in the pill, the way a queued one wears its
+            queue position — the row's whole answer to "what is this waiting for?". */}
+        <Pill dot={attention.tone} pulse={attention.pulse} title={scheduled?.title}>
           {attention.label}
+          {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
         </Pill>
       </td>
       <td className={cn(TD_BASE, 'w-[34%] max-w-0')}>
@@ -358,12 +400,21 @@ function TableRow({
       {/* ± — refreshed on every turn-end (#389); still an honest dash on records that predate it. */}
       <td className={TD_BASE}>{run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : <Dash />}</td>
       <td className={TD_BASE}>{reference ? <ReferenceChip reference={reference} taskTitle={runTitle(run)} /> : <Dash />}</td>
-      <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
-        {compactTokens(run.tokensUsed)}
-      </td>
-      <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
-        {cost || <Dash />}
-      </td>
+      {showTokens ? (
+        <td className={cn(TD_BASE, 'text-right text-xs text-muted-foreground')}>
+          <DirectionalUsage
+            inputTokens={run.inputTokens}
+            outputTokens={run.outputTokens}
+            variant="table"
+            omitWhenUnknown={false}
+          />
+        </td>
+      ) : null}
+      {showCost ? (
+        <td className={cn(TD_BASE, 'text-right font-mono text-xs text-muted-foreground tabular-nums')}>
+          {cost || <Dash />}
+        </td>
+      ) : null}
       {queuePosition !== null ? (
         <td
           data-slot="queue-note"
@@ -399,6 +450,10 @@ function TitleCell({
 }) {
   const title = runTitle(run)
   const editor = useTitleEditor(title, (next) => onRename(run.id, next))
+  // Read/unread (#unread-done-items, "Option B"): promote an unread done item (bright + semibold)
+  // and dim a read one, matching the sidebar row exactly so the two surfaces read as one grammar.
+  const unread = isUnread(run)
+  const readDone = isReadDoneItem(run)
 
   if (editor.editing) {
     return <TitleEditInput editor={editor} className="text-[13px] font-medium" />
@@ -406,9 +461,26 @@ function TitleCell({
 
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <Link to={to} title={title} className="min-w-0 truncate text-[13px] font-medium">
+      <Link
+        to={to}
+        title={title}
+        className={cn(
+          'min-w-0 truncate text-[13px]',
+          unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+        )}
+      >
         {title}
       </Link>
+      {/* The unread marker — same trailing violet dot as the sidebar row. */}
+      {unread ? (
+        <StatusDot
+          tone="violet"
+          role="img"
+          aria-label="unread"
+          title="Unread — not opened since it finished"
+          className="shrink-0"
+        />
+      ) : null}
       <button
         type="button"
         data-slot="row-rename"
@@ -462,15 +534,25 @@ function TaskCard({
   run,
   queuePosition,
   now,
+  showTokens,
+  showCost,
 }: {
   run: RunRecord
   queuePosition: number | null
   now: number
+  showTokens: boolean
+  showCost: boolean
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
+  const scheduled = scheduledResume(run)
   const to = `/tasks/${run.id}`
   const reference = taskReference(run)
+  // Read/unread (#unread-done-items) — the same promote-unread / dim-read treatment as the row.
+  const unread = isUnread(run)
+  const readDone = isReadDoneItem(run)
+  const cost = formatCost(run.costUsd)
+  const hasDirectionalUsage = run.inputTokens !== undefined || run.outputTokens !== undefined
 
   return (
     <div
@@ -483,12 +565,29 @@ function TaskCard({
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
     >
       <div className="flex items-start gap-2.5">
-        <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0">
+        <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
           {attention.label}
+          {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
         </Pill>
-        <Link to={to} className="min-w-0 flex-1 text-[13.5px] leading-[1.35] font-medium">
+        <Link
+          to={to}
+          className={cn(
+            'min-w-0 flex-1 text-[13.5px] leading-[1.35]',
+            unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+          )}
+        >
           {runTitle(run)}
         </Link>
+        {/* The unread marker — trailing violet dot, as on the desktop row. */}
+        {unread ? (
+          <StatusDot
+            tone="violet"
+            role="img"
+            aria-label="unread"
+            title="Unread — not opened since it finished"
+            className="mt-1.5 shrink-0"
+          />
+        ) : null}
         <span className="mt-0.5 shrink-0 text-[11.5px] text-soft-foreground tabular-nums">
           {shortAge(run.finishedAt ?? run.createdAt, now)}
         </span>
@@ -508,17 +607,23 @@ function TaskCard({
                 <span>{run.branch}</span>
               </>
             ) : null}
-            {/* Branch · ±diff · tokens — the mockup card's meta order. */}
+            {/* Branch · ±diff · IN/OUT · cost — the compact card's meta order. */}
             {run.diffStat ? (
               <>
                 <Sep />
                 <DiffStatLabel stat={run.diffStat} className="text-[11.5px]" />
               </>
             ) : null}
-            {run.tokensUsed > 0 ? (
+            {showTokens && hasDirectionalUsage ? (
               <>
                 <Sep />
-                <span>{compactTokens(run.tokensUsed)}</span>
+                <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
+              </>
+            ) : null}
+            {showCost && cost ? (
+              <>
+                <Sep />
+                <span>{cost}</span>
               </>
             ) : null}
           </>
@@ -560,11 +665,20 @@ function BranchChip({ branch }: { branch: string }) {
  */
 export function TasksOverviewRoute() {
   const runs = useRuns()
+  const health = useHealth()
+  const metricVisibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
   const queryClient = useQueryClient()
   const archive = useMutation({
     mutationFn: archiveFinished,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+  })
+  // "Mark all read" (#unread-done-items): one call stamps every unread finished run; the
+  // invalidate is the authoritative half — each stamped run also rides the `run` SSE.
+  const markAllRead = useMutation({
+    mutationFn: markAllRunsSeen,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
   // The table's inline rename — `usePatchRun` is per-run, so the any-row variant carries the id
   // in its variables. Same endpoint, same invalidation, same danger toast as the run header.
@@ -581,8 +695,11 @@ export function TasksOverviewRoute() {
       view={view}
       onViewChange={setView}
       onArchiveFinished={() => archive.mutate()}
+      onMarkAllRead={() => markAllRead.mutate()}
       onRename={(id, title) => rename.mutate({ id, title })}
       now={now}
+      showTokens={metricVisibility.tokens}
+      showCost={metricVisibility.cost}
     />
   )
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isLoopbackHost, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.js';
+import { isLoopbackHost, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 
 /**
  * `resolveCapabilities` takes its env as a parameter, so these drive it
@@ -159,6 +159,9 @@ describe('resolveCapabilities — followups (#471)', () => {
       localHandoff: false,
       followups: true,
       singleProject: false,
+      tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
     });
   });
 });
@@ -178,4 +181,46 @@ describe('resolveCapabilities — singleProject', () => {
       expect(resolveCapabilities({ CEZ_SINGLE_PROJECT: value }).singleProject).toBe(false);
     },
   );
+});
+
+describe('resolveCapabilities — usage presentation', () => {
+  it('shows token usage and cost by default', () => {
+    expect(resolveCapabilities({})).toMatchObject({
+      tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
+    });
+  });
+
+  it.each([
+    [{ CEZ_HIDE_TOKEN_METRICS: '1' }, false, false, false],
+    [{ CEZ_HIDE_TOKEN_USAGE: '1' }, false, false, true],
+    [{ CEZ_HIDE_COST: '1' }, false, true, false],
+    [{ CEZ_HIDE_TOKEN_USAGE: '1', CEZ_HIDE_COST: '1' }, false, false, false],
+    [{ CEZ_HIDE_TOKEN_METRICS: '1', CEZ_HIDE_TOKEN_USAGE: '0', CEZ_HIDE_COST: '0' }, false, false, false],
+  ] as const)(
+    'resolves strict visibility for %o',
+    (env, tokenMetrics, tokenUsageMetrics, costMetrics) => {
+      expect(resolveCapabilities(env)).toMatchObject({ tokenMetrics, tokenUsageMetrics, costMetrics });
+    },
+  );
+
+  it.each(['0', 'true', 'yes', '', 'on'])(
+    'stays visible for CEZ_HIDE_TOKEN_METRICS=%j — only an exact "1" opts out',
+    (value) => {
+      expect(resolveCapabilities({
+        CEZ_HIDE_TOKEN_METRICS: value,
+        CEZ_HIDE_TOKEN_USAGE: value,
+        CEZ_HIDE_COST: value,
+      })).toMatchObject({ tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true });
+    },
+  );
+
+  it('does not change telemetry visibility when another deployment capability is enabled', () => {
+    expect(resolveCapabilities({ CEZ_REMOTE: '1', CEZ_FOLLOWUPS: '1' })).toMatchObject({
+      tokenMetrics: true,
+      tokenUsageMetrics: true,
+      costMetrics: true,
+    });
+  });
 });

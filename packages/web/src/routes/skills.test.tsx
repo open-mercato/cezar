@@ -65,7 +65,7 @@ function serve({
   appliedSkillsUpdate?: SkillsUpdateState
 } = {}) {
   requests = []
-  // The selection lives in the GLOBAL ui-state (`/api/workspace/ui-state`), whose PUT answers the
+  // The selection lives in the GLOBAL ui-state (`/api/v1/workspace/ui-state`), whose PUT answers the
   // MERGED state; the Manage panel relies on that echo to reconcile its optimistic write, so the
   // stub must merge and return rather than answer `{}`.
   let global: Record<string, unknown> = { ...workspaceUiState }
@@ -78,24 +78,24 @@ function serve({
       const method = init?.method ?? 'GET'
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/skills' && method === 'GET') return json(skills)
-      if (url === '/api/skills/refresh' && method === 'POST') return json(refreshed)
+      if (url === '/api/v1/skills' && method === 'GET') return json(skills)
+      if (url === '/api/v1/skills/refresh' && method === 'POST') return json(refreshed)
       // Both the fast read and the ?wait=1 convergence read hit this endpoint.
-      if (url.startsWith('/api/skills/importable')) return json(importable)
-      if (url === '/api/workflows') return json(WORKFLOWS)
-      if (url === '/api/launch-key') return json({ key: 'sekret' })
-      if (url === '/api/ui-state') return json({}) // per-repo prefs — unused by the panel
-      if (url === '/api/workspace/ui-state' && method === 'GET') return json(global)
-      if (url === '/api/workspace/ui-state' && method === 'PUT') {
+      if (url.startsWith('/api/v1/skills/importable')) return json(importable)
+      if (url === '/api/v1/workflows') return json(WORKFLOWS)
+      if (url === '/api/v1/launch-key') return json({ key: 'sekret' })
+      if (url === '/api/v1/ui-state') return json({}) // per-repo prefs — unused by the panel
+      if (url === '/api/v1/workspace/ui-state' && method === 'GET') return json(global)
+      if (url === '/api/v1/workspace/ui-state' && method === 'PUT') {
         global = { ...global, ...(body as Record<string, unknown>) }
         return json(global)
       }
-      if (url === '/api/runs' && method === 'POST') {
+      if (url === '/api/v1/runs' && method === 'POST') {
         return json({ id: 'upgrade-notes-run', status: 'queued', task: 'Apply upgrade notes' })
       }
-      if (url === '/api/workspace/skills-update?projectId=boot') return json(skillsUpdate ?? UPDATE_CURRENT)
-      if (url === '/api/workspace/skills-update/check' && method === 'POST') return json(skillsUpdate ?? UPDATE_CURRENT)
-      if (url === '/api/workspace/skills-update/apply' && method === 'POST') {
+      if (url === '/api/v1/workspace/skills-update?projectId=boot') return json(skillsUpdate ?? UPDATE_CURRENT)
+      if (url === '/api/v1/workspace/skills-update/check' && method === 'POST') return json(skillsUpdate ?? UPDATE_CURRENT)
+      if (url === '/api/v1/workspace/skills-update/apply' && method === 'POST') {
         return json(appliedSkillsUpdate ?? skillsUpdate ?? UPDATE_CURRENT)
       }
       return new Promise<never>(() => {})
@@ -105,7 +105,7 @@ function serve({
 
 /** Seeds the step-3.2 route gates — boot id (legacy redirect) + registry (known-check) — so a
  *  flat entry URL lands scoped immediately. The boot project mounts UNSCOPED, so the exact
- *  `/api/*` paths this file's fetch stub matches stay byte-identical. */
+ *  `/api/v1/*` paths this file's fetch stub matches stay byte-identical. */
 function gateSeededClient() {
   const client = createQueryClient()
   client.setQueryData(queryKeys.health, { bootProject: 'boot' })
@@ -224,7 +224,7 @@ describe('the catalog list', () => {
 })
 
 describe('refresh (#384: selection and scroll survive)', () => {
-  it('POSTs /api/skills/refresh, keeps the selected skill, the row container and its scroll', async () => {
+  it('POSTs /api/v1/skills/refresh, keeps the selected skill, the row container and its scroll', async () => {
     serve({ refreshed: [...SKILLS, skill({ name: 'team-new', source: 'team' })] })
     renderAt('/skills?skill=om-review')
     await waitFor(() => expect(rowNames()).toHaveLength(3))
@@ -234,7 +234,7 @@ describe('refresh (#384: selection and scroll survive)', () => {
 
     fireEvent.click(document.querySelector('[data-slot="skills-refresh"]')!)
     await waitFor(() =>
-      expect(requests.some((r) => r.method === 'POST' && r.url === '/api/skills/refresh')).toBe(true),
+      expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/skills/refresh')).toBe(true),
     )
     // The refreshed catalog rendered (the new team skill is in the list)…
     await waitFor(() => expect(rowNames()).toEqual(['om-fix', 'om-review', 'team-new', 'zebra-global']))
@@ -278,7 +278,7 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
       .filter(
         (r) =>
           r.method === 'PUT' &&
-          r.url === '/api/workspace/ui-state' &&
+          r.url === '/api/v1/workspace/ui-state' &&
           (r.body as { importedSkills?: unknown })?.importedSkills !== undefined,
       )
       .at(-1)?.body as { importedSkills: string[] } | undefined
@@ -304,13 +304,13 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
     const fetchMock = vi.mocked(fetch)
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
-      if (url === '/api/workspace/skills-update/check') return new Promise<Response>((resolve) => { releaseCheck = resolve })
-      if (url === '/api/workspace/skills-update/apply') return json({ ...UPDATE_CURRENT, updatedAt: '2026-07-22T13:00:00.000Z', needsUpgradeNotes: true })
-      if (url === '/api/workspace/skills-update?projectId=boot') return json(UPDATE_CURRENT)
-      if (url === '/api/skills') return json(SKILLS)
-      if (url.startsWith('/api/skills/importable')) return json(IMPORTABLE)
-      if (url === '/api/workflows') return json(WORKFLOWS)
-      if (url === '/api/workspace/ui-state') return json({})
+      if (url === '/api/v1/workspace/skills-update/check') return new Promise<Response>((resolve) => { releaseCheck = resolve })
+      if (url === '/api/v1/workspace/skills-update/apply') return json({ ...UPDATE_CURRENT, updatedAt: '2026-07-22T13:00:00.000Z', needsUpgradeNotes: true })
+      if (url === '/api/v1/workspace/skills-update?projectId=boot') return json(UPDATE_CURRENT)
+      if (url === '/api/v1/skills') return json(SKILLS)
+      if (url.startsWith('/api/v1/skills/importable')) return json(IMPORTABLE)
+      if (url === '/api/v1/workflows') return json(WORKFLOWS)
+      if (url === '/api/v1/workspace/ui-state') return json({})
       return new Promise<never>(() => {})
     })
     const client = renderAt('/skills?skill=__import')
@@ -352,7 +352,7 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
     fireEvent.click(Array.from(document.querySelectorAll('button')).find((button) => button.textContent === 'Yes, start session')!)
     await waitFor(() =>
       expect(
-        requests.find((request) => request.method === 'POST' && request.url === '/api/runs')?.body,
+        requests.find((request) => request.method === 'POST' && request.url === '/api/v1/runs')?.body,
       ).toMatchObject({
         steps: [
           {
@@ -387,7 +387,7 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
     fireEvent.click(Array.from(document.querySelectorAll('button')).find((button) => button.textContent === 'No')!)
 
     await waitFor(() => expect(document.querySelector('[data-slot="skills-upgrade-notes-dialog"]')).toBeNull())
-    expect(requests.some((request) => request.method === 'POST' && request.url === '/api/runs')).toBe(false)
+    expect(requests.some((request) => request.method === 'POST' && request.url === '/api/v1/runs')).toBe(false)
   })
 
   it('does not claim a failed retry succeeded when its update timestamp is stale', async () => {
@@ -415,7 +415,7 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
     fireEvent.click(document.querySelector('[data-action="skills-update-apply"]')!)
 
     await waitFor(() =>
-      expect(requests.some((request) => request.url === '/api/workspace/skills-update/apply')).toBe(true),
+      expect(requests.some((request) => request.url === '/api/v1/workspace/skills-update/apply')).toBe(true),
     )
     expect(document.querySelector('[data-slot="skills-upgrade-notes-dialog"]')).toBeNull()
   })
@@ -513,13 +513,13 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         const method = init?.method ?? 'GET'
-        if (url === '/api/skills' && method === 'GET') return json(SKILLS)
-        if (url.startsWith('/api/skills/importable')) return json(IMPORTABLE)
-        if (url === '/api/workflows') return json(WORKFLOWS)
-        if (url === '/api/launch-key') return json({ key: 'sekret' })
-        if (url === '/api/ui-state') return json({}) // per-repo prefs — unused by the panel
-        if (url === '/api/workspace/ui-state' && method === 'GET') return json(state)
-        if (url === '/api/workspace/ui-state' && method === 'PUT') {
+        if (url === '/api/v1/skills' && method === 'GET') return json(SKILLS)
+        if (url.startsWith('/api/v1/skills/importable')) return json(IMPORTABLE)
+        if (url === '/api/v1/workflows') return json(WORKFLOWS)
+        if (url === '/api/v1/launch-key') return json({ key: 'sekret' })
+        if (url === '/api/v1/ui-state') return json({}) // per-repo prefs — unused by the panel
+        if (url === '/api/v1/workspace/ui-state' && method === 'GET') return json(state)
+        if (url === '/api/v1/workspace/ui-state' && method === 'PUT') {
           const body = JSON.parse(String(init!.body)) as { importedSkills: string[] }
           // Defer the response so the test controls when (and in what order) it lands.
           return new Promise<Response>((resolve) => {
@@ -594,9 +594,9 @@ describe('the bookmarklet panel (spec 011)', () => {
       'fetch',
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input)
-        if (url === '/api/launch-key') return json({ key: 'sekret' })
-        if (url === '/api/ui-state') return json({})
-        return new Promise<never>(() => {}) // /api/skills never settles
+        if (url === '/api/v1/launch-key') return json({ key: 'sekret' })
+        if (url === '/api/v1/ui-state') return json({})
+        return new Promise<never>(() => {}) // /api/v1/skills never settles
       }),
     )
     renderAt('/settings/bookmarklets')

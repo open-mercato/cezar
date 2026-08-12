@@ -19,7 +19,7 @@ Alongside the transcript:
   store's zod-checked shape). The spec loads it as-is, overriding only `titleSummary` (a
   legitimate user PATCH).
 - `thread-run-images/` — the `<id>-images/` directory the run persisted; the transcript's
-  `image` line points into it via `/api/runs/<id>/images/…`.
+  `image` line points into it via `/api/v1/runs/<id>/images/…`.
 
 To regenerate: build, boot `CEZ_DRY_RUN=1 node dist/index.js serve --repo <tmp-git-repo>`,
 POST a run whose task has no `mock:` marker, POST one `/messages` reply containing `mock:md`

@@ -1,7 +1,7 @@
 import { useLayoutEffect, useRef, useState } from 'react'
-import { Link } from 'react-router'
 import { Virtualizer } from 'virtua'
 
+import { Link } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
 /**

@@ -12,23 +12,23 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { mergeWriteWorkspaceConfig } from '../workspace/config.js';
-import { clearProjectProbeCache, registerProject } from '../workspace/projects.js';
-import { checkoutRepo, cleanupCheckout, isValidCheckoutName, parseRepoRef, type CloneRunner } from './checkout.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
+import { clearProjectProbeCache, registerProject } from '../workspace/projects.ts';
+import { checkoutRepo, cleanupCheckout, isValidCheckoutName, parseRepoRef, type CloneRunner } from './checkout.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 import {
   WorkspaceEventBus,
   createApp,
   type ProjectsResponse,
   type RegisterProjectResponse,
   type ServerDeps,
-} from './server.js';
+} from './server.ts';
 
 /**
  * GUI clone (spec 2026-07-20-multi-project-workspace, step 4.3):
- * `POST /api/projects/checkout`, the `checkout-progress` feed, and — the part
+ * `POST /api/v1/projects/checkout`, the `checkout-progress` feed, and — the part
  * that earns most of this file — the partial-clone cleanup guard.
  *
  * Everything runs against real temp directories with an INJECTED clone runner.
@@ -291,7 +291,7 @@ describe('checkoutRepo — clone, failure cleanup, existing target', () => {
   });
 });
 
-describe('POST /api/projects/checkout', () => {
+describe('POST /api/v1/projects/checkout', () => {
   const savedHome = process.env.CEZ_HOME;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   const savedProjectsDir = process.env.CEZ_PROJECTS_DIR;
@@ -336,7 +336,7 @@ describe('POST /api/projects/checkout', () => {
     });
 
   const post = async (body: unknown, over: Partial<ServerDeps> = {}) => {
-    const res = await apiRequest(makeApp(over), '/api/projects/checkout', {
+    const res = await apiRequest(makeApp(over), '/api/v1/projects/checkout', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -348,7 +348,7 @@ describe('POST /api/projects/checkout', () => {
   };
 
   const listProjectsViaApi = async (): Promise<ProjectsResponse> =>
-    (await (await apiRequest(makeApp(), '/api/projects')).json()) as ProjectsResponse;
+    (await (await apiRequest(makeApp(), '/api/v1/projects')).json()) as ProjectsResponse;
 
   /** Point the workspace at a temp checkout root, so nothing lands in `~`. */
   const useCheckoutRoot = () =>

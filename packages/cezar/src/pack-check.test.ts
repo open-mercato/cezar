@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findPackGaps } from './pack-check.js';
+import { findPackGaps } from './pack-check.ts';
 
 // The decision behind `npm run check:pack` (scripts/check-pack.mjs): would the
 // npm tarball ship a working cockpit? Pins the R1 "npm pack shipped no UI" bug.

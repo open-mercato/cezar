@@ -8,16 +8,16 @@ import type {
   AgentToolCallRecord,
   ContentBlock,
   SessionOptions,
-} from './agent-runner.js';
-import { prependSystemPrompt } from './agent-runner.js';
+} from './agent-runner.ts';
+import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
 import {
   AUTO_END_DELAY_MS,
   DEFAULT_RUN_TIMEOUT_MS,
   KILL_GRACE_MS,
-} from './claude-cli-runner.js';
-import { parseAskRequest, type AskQuestion } from './ask.js';
-import { readNdjson } from './ndjson.js';
-import { V1TextCoalescer } from './v1-text-coalescer.js';
+} from './claude-cli-runner.ts';
+import { parseAskRequest, type AskQuestion } from './ask.ts';
+import { readNdjson } from './ndjson.ts';
+import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   CodexAppServerRpc,
   codexSpawnError,
@@ -26,14 +26,14 @@ import {
   spawnCodexAppServer,
   type CodexAppServerMessage,
   waitForCodexAppServerExit,
-} from './codex-app-server-transport.js';
+} from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
   type CodexUiMapperState,
-} from './codex-ui-mapper.js';
+} from './codex-ui-mapper.ts';
 
 export interface CodexRunnerOptions {
   /** Override the binary name/path; defaults to `codex` on PATH. */
@@ -120,6 +120,10 @@ class CodexSession implements AgentSession {
   private eofKillTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  /** Set the moment WE signal the child (EOF watchdog, cancel, kill switch).
+   *  codex handles the signal and exits 143, so without this the runner reads
+   *  its own teardown as a codex failure (#703). */
+  private terminatedByCezar = false;
   /** Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
    *  byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
    *  lands in R2 step 2.1). */
@@ -156,7 +160,10 @@ class CodexSession implements AgentSession {
         this.interrupt();
         this.child.stdout.destroy();
         killTimer = setTimeout(() => {
-          if (this.child.exitCode == null && !this.child.killed) this.child.kill('SIGKILL');
+          if (this.child.exitCode == null && !this.child.killed) {
+            this.terminatedByCezar = true;
+            this.child.kill('SIGKILL');
+          }
         }, KILL_GRACE_MS);
         killTimer.unref?.();
       }, limitMs);
@@ -179,6 +186,12 @@ class CodexSession implements AgentSession {
             } catch {
               continue; // not JSON-RPC — skip
             }
+            // A sub-agent child thread's turn lifecycle must reach neither channel (#600):
+            // v1 would emit a bogus `turn-end`, and the v2 mapper — which carries no thread
+            // identity — would record the child turn as the parent's, clearing its turn-scoped
+            // plan/reasoning state and resetting the current turn id. Child ITEM events still
+            // flow, so nested sub-agent activity keeps rendering.
+            if (this.isForeignTurnLifecycle(msg)) continue;
             this.emitUi((state) => mapCodexNotification(msg, state));
             this.dispatch(msg);
           }
@@ -223,6 +236,17 @@ class CodexSession implements AgentSession {
       if (this.timedOut) {
         const mins = Math.round((limitMs / 60_000) * 10) / 10;
         this.emit({ type: 'error', message: `codex app-server timed out after ${mins}m and was killed` });
+        this.emit({ type: 'done' });
+        return base;
+      }
+
+      // Our own EOF watchdog / cancel signal coming back as 143/137 — the
+      // teardown cezar asked for, not a codex failure (#703).
+      if (this.terminatedByCezar && isSignalTerminationExit(exitCode)) {
+        this.emit({
+          type: 'note',
+          message: `codex app-server did not exit on its own after close; terminated by cezar (code ${exitCode})`,
+        });
         this.emit({ type: 'done' });
         return base;
       }
@@ -277,10 +301,16 @@ class CodexSession implements AgentSession {
     this.rejectPendingUserInput('session ended');
     this.stdinOpen = false;
     try {
-      endCodexAppServer(this.child, (term, kill) => {
-        this.eofTermTimer = term;
-        this.eofKillTimer = kill;
-      });
+      endCodexAppServer(
+        this.child,
+        (term, kill) => {
+          this.eofTermTimer = term;
+          this.eofKillTimer = kill;
+        },
+        () => {
+          this.terminatedByCezar = true;
+        },
+      );
     } catch {
       // already gone
     }
@@ -295,7 +325,10 @@ class CodexSession implements AgentSession {
         () => undefined,
       );
     }
-    if (!this.child.killed) this.child.kill('SIGTERM');
+    if (!this.child.killed) {
+      this.terminatedByCezar = true;
+      this.child.kill('SIGTERM');
+    }
   }
 
   // ---- protocol -----------------------------------------------------------
@@ -384,9 +417,29 @@ class CodexSession implements AgentSession {
     this.rpc.respond({ id: pending.rpcId, error: { code: -32000, message } });
   }
 
+  /** True when a turn notification belongs to a sub-agent CHILD thread rather than this run's
+   *  own main thread — its lifecycle must not start or end the parent turn (#600). The app-server
+   *  multiplexes every thread over one connection, so a spawned skill's child `turn/completed`
+   *  would otherwise emit a `turn-end` and park the actively-working run under "Needs you".
+   *  Fail-open: an absent `threadId` (the single-thread wire shape) or our own id counts as ours. */
+  private isForeignThreadTurn(params: Record<string, unknown>): boolean {
+    const eventThreadId = stringField(params, 'threadId');
+    return !!eventThreadId && !!this.threadId && eventThreadId !== this.threadId;
+  }
+
+  /** A `turn/started|completed|failed` notification for a sub-agent child thread — dropped
+   *  before either channel processes it (#600). Only turn lifecycle is filtered; child item
+   *  events still map, so nested sub-agent activity keeps rendering. */
+  private isForeignTurnLifecycle(msg: CodexAppServerMessage): boolean {
+    const method = typeof msg.method === 'string' ? msg.method : undefined;
+    if (!method || !TURN_LIFECYCLE_METHODS.has(method)) return false;
+    return this.isForeignThreadTurn((msg.params ?? {}) as Record<string, unknown>);
+  }
+
   private handleNotification(method: string, params: Record<string, unknown>): void {
     switch (method) {
       case 'turn/started': {
+        if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
         break;
       }
@@ -434,11 +487,17 @@ class CodexSession implements AgentSession {
       }
       case 'turn/completed':
       case 'turn/failed': {
+        if (this.isForeignThreadTurn(params)) break; // don't end the parent turn on a child turn (#600)
         this.pendingUserInput = undefined;
         this.activeTurnId = undefined;
         // An interrupted/failed item never sees item/completed — surface its
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
+        if (method === 'turn/failed' && !this.terminatedByCezar) {
+          const error = params.error as Record<string, unknown> | undefined;
+          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
+          this.emit({ type: 'error', message });
+        }
         this.emit({ type: 'turn-end' });
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
@@ -512,6 +571,10 @@ function userInputAnswers(questions: AskQuestion[], text: string): Record<string
 
 /** ThreadItem `type`s that are conversation text, not tool activity. */
 const NON_TOOL_ITEMS = new Set(['agentMessage', 'userMessage', 'reasoning', 'plan']);
+
+/** Turn-lifecycle notification methods — the only frames whose child-thread copies must be
+ *  dropped so a sub-agent turn can't be mistaken for the parent's (#600). */
+const TURN_LIFECYCLE_METHODS = new Set(['turn/started', 'turn/completed', 'turn/failed']);
 
 const REASONING_SUMMARIES = new Set(['auto', 'concise', 'detailed', 'none']);
 

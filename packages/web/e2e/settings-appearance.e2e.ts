@@ -48,7 +48,7 @@ afterAll(() => {
  *  the API until the write lands rather than assume it beat this assertion. */
 async function waitForServerAppearance(check: (appearance: Record<string, unknown>) => boolean) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const res = await fetch(`${baseUrl}/api/workspace/ui-state`)
+    const res = await fetch(`${baseUrl}/api/v1/workspace/ui-state`)
     const state = (await res.json()) as { appearance?: Record<string, unknown> }
     if (state.appearance && check(state.appearance)) return state.appearance
     await new Promise((resolve) => setTimeout(resolve, 250))

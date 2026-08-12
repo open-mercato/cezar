@@ -1,3 +1,105 @@
+# Unreleased
+
+## ✨ Features
+- ✨ **Agent accounts: run one project on your work login and another on your personal one.**
+  The same CLI logged in twice — `CLAUDE_CONFIG_DIR=~/.claude-klaudiusz claude`, or `CODEX_HOME` for
+  Codex — is now something cezar can address. Add the extra config folder under **Settings → Agent
+  accounts**, pick which account each project uses in **Settings → Agents**, and override it for a
+  single task from the composer. Each account reports its own connection state and gets its own
+  **Connect**, and "Open in → Claude CLI" hands the terminal the account that actually ran the
+  work, so `--resume` lands on the right conversation instead of silently starting a fresh one.
+  Each agent gets its own tab, showing whether it is installed, its version, and its logins.
+  **Show details** on a login reveals the email, organization and plan it is signed in as, and
+  opens any of that account's own config files — `settings.json`, `CLAUDE.md`, `config.toml`,
+  `AGENTS.md` — resolved inside *that* folder rather than the default account's, through the same
+  **Open in…** menu the task thread uses, so you can pick the system default or any editor the
+  machine has. Identity is opt-in
+  by construction: it has its own request, made only when you expand a row, so nothing carries an
+  email until you ask.
+  Zero-config is untouched: with one login there is no new control anywhere, and no new variable in
+  any spawned process. Accounts live in their own `~/.cezar/agent-accounts.json` rather than a key
+  in `config.json`, so switching to an older cezar and back cannot lose them — a version that has
+  never heard of accounts does not open that file. cezar does not go looking for accounts (a folder
+  is one because you said so, and you can type a path that does not exist yet), and it never
+  silently falls back to another account when the one you chose is unavailable,
+  because that would bill the wrong subscription while the UI said otherwise. OpenCode is not
+  supported yet: it keeps credentials outside its config folder, so a second folder would change
+  settings without changing the account. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+
+# 0.9.2 (2026-08-04)
+
+## ⚠️ Breaking
+- **The HTTP API moved to `/api/v1`.** Every route answers under `/api/v1/…` (project-scoped:
+  `/api/v1/p/<projectId>/…`) and the WebSocket bus is `/api/v1/ws`; the unversioned `/api/*`
+  spelling is gone. The bundled cockpit ships in lockstep, so a normal upgrade needs nothing from
+  you — this only matters if you script the API directly, where the fix is adding `/v1`.
+  `GET /api/v1/health` is still the CORS-open discovery endpoint, historical run transcripts keep
+  rendering (old image URLs are upgraded when read), and saved bookmarklets are unaffected.
+  Versioning is what lets the typed client describe the whole surface and makes a future `v2` an
+  additive mount rather than an edit to every route.
+
+## ✨ Features
+- ✨ **The two mixed-format routes do real HTTP content negotiation.** `GET /api/v1/repo/commit/:sha`
+  (legacy text blob or structured commit payload) and `GET /api/v1/runs/:id/files` (JSON listing or
+  an image's raw bytes) now honour the request's `Accept` header, answer `Vary: Accept`, and set a
+  `Content-Type` confirming what they actually sent. Purely additive: the `?structured=`/`?raw=`
+  flags still decide whenever the request carries one, `*/*` (what `fetch` and `curl` send) is read
+  as "no preference" and keeps each route's existing default, so every current caller's answer is
+  byte-identical. What is new is that a client that really does ask — an `<img>`, a browser
+  navigation — gets the other representation without the flag, under the same allowlist, size cap
+  and sandbox CSP as before.
+- ✨ **Finished tasks now carry a read/unread marker (#767).** A done or failed run you have not
+  opened since it finished reads as *unread* — its row is promoted (brighter, semibold) and wears a
+  small trailing violet dot — while everything you have already seen dims back. The Tasks nav item
+  shows how many are unread, opening a task's thread clears it, and a "Mark all read" sweep clears
+  the lot. Unread is a deliberately separate channel from the status dot, which keeps saying
+  done/failed, so "what happened" and "have I seen it" never collapse into one signal.
+
+## 🔧 Changed
+- Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
+  Its body used to be parsed inside the handler to keep "unknown id 404s before the body is
+  validated"; a small existence guard registered *before* the body validator keeps that status
+  order while the body becomes part of the route type. A bodyless POST still 201s and a malformed
+  one still 400s.
+- **Validation errors (`400 {error}`) are worded differently and now name the field.** Two causes:
+  zod 4 rewrote its default messages (`Required` → `Invalid input: expected string, received
+  undefined`), and each issue is now prefixed with its path — `task: must be at most 100000
+  characters` where it used to be `task must be at most 100000 characters` for a handful of fields
+  and an unattributed sentence for the rest. **The `{ error: string }` shape and the 400 status are
+  unchanged**, and the message was never a pinned contract (BACKWARD_COMPATIBILITY.md §2 pins the
+  shape, not the text) — but a script matching on the exact wording will need updating, and the
+  cockpit shows the new text verbatim in its toasts.
+- Every mutating route now validates its body as route middleware rather than inside the handler,
+  and the query string / path params of 17 more routes are validated too. Behaviour is unchanged
+  by design, including the tolerant cases (a body sent without a JSON content-type, a malformed
+  body, and a repeated query key such as `?refresh=1&refresh=1`, which still takes the first
+  value). The point is that the typed client can now check request bodies, params and queries at
+  compile time.
+
+## 🐛 Fixes
+- 🐛 **Running the test suite no longer wipes your project registry.** A merge-write resolved
+  `~/.cezar/config.json` twice — once to read, once to write, after the `await` — and
+  `cezarHomeDir()` re-reads `CEZ_HOME` on every call, so a test that lost its sandbox pin
+  mid-flight (a timeout was enough) read the temp home and wrote the real one, replacing every
+  project with the fixture's. The path is now resolved once per merge-write, the whole server
+  suite runs with `CEZ_HOME` pinned to a per-worker sandbox, and a write into the real `~/.cezar`
+  from a vitest process is refused outright. The same one-path fix lands in the `ui-state.json` twin.
+- 🐛 **The registry survives a lost config file.** Every merge-write that leaves projects behind
+  also writes `~/.cezar/config.json.bak`, and cezar restores from that snapshot when the config
+  file is missing, empty, or corrupt. Removing `~/.cezar` still resets cezar completely; removing
+  only `config.json` no longer loses the project list. A config that parses and is simply empty is
+  left alone — that is a user who removed their last project, not a lost registry.
+- 🐛 **Structured questions render as a form, not raw JSON (#757).** When an agent asked a
+  structured question, the Ask card could fall back to printing the raw JSON payload; it now renders
+  the real question with its options, and long question text wraps instead of overflowing.
+- 🐛 **Subagent sessions render like the main thread (#756).** A subagent's transcript now goes
+  through the same session renderer as the top-level thread, so its messages, tools and reasoning
+  look identical instead of a stripped-down variant.
+- 🐛 **The task diff stat stops counting a repointed HEAD's branch (#751).** When a task's worktree
+  HEAD was repointed onto another branch, the ± diff stat folded in that branch's whole history; it
+  is now anchored at HEAD so it counts only the task's own changes, and the Changes tab says so when
+  a repointed HEAD has narrowed what it shows.
+
 # 0.9.1 (2026-07-24)
 
 ## Highlights
@@ -7,6 +109,52 @@ A stabilization release that hardens single-project mode and sharpens the cockpi
 - ✨ Project-aware browser page titles (fixes #543). (#592) *(@pkarw)*
 
 ## 🐛 Fixes
+- ⚡ **Settings → Agent accounts opens instantly.** The account listing used to probe every agent's
+  login while you waited — one CLI shell-out per agent plus one per account, 2.5s on a machine with
+  four accounts. Which login an agent uses is operating knowledge that changes only when you run
+  `claude auth login`, so cezar now warms every account — extra logins included — once at boot and
+  keeps it in memory instead of re-probing every few seconds; the listing serves what it holds and never spawns anything (the rule
+  `/api/v1/health` already follows). A *disconnected* answer is still re-checked within seconds,
+  because that one blocks starting a run — so logging in from a terminal is not punished with a
+  ten-minute wait. Same machine, same accounts: 2.5s → 12ms.
+- **An added agent account can now be signed in from cezar.** The account row grows Connect and
+  Check again; Connect opens a terminal aimed at that account's config dir rather than the default
+  one. Previously the pane pointed at a Connect button that did not exist.
+- **A task now says which agent, account and model produced it**, as text in the header
+  (`claude · Klaudiusz · opus`) rather than hidden behind an icon; the account is the one the step actually spawned under, so a resumed
+  task reports the login that owns its session rather than whatever the project is set to now.
+- ✨ **Settings → Agent accounts now sets the default agent, account and models once, not per repo.**
+  A project that has chosen nothing now follows the machine-wide default — and a project that HAS
+  chosen is never moved by changing it, so a global tweak cannot quietly re-point work you already
+  configured. Models merge per agent, so pinning one repo's Claude model keeps the machine's Codex
+  preset.
+- **Settings → Agents picks the default agent and its account in one click.** "Default runner" and
+  the separate account picker were two fields answering one question; they are now a single flat
+  list — `claude · Default`, `claude · Klaudiusz`, `codex` — matching the composer. The runner still
+  goes to the repo's committable config and the account to your machine only, so a teammate keeps
+  their own. With no extra logins it is the control it always was.
+- **The composer's runner pill now lists agents and logins as one flat list** — `claude · Default`,
+  `claude · Klaudiusz`, `codex` — instead of a separate account pill beside it. Every row is a
+  concrete thing that can run the task, so which subscription it will bill is readable without
+  opening anything. It starts on whatever the repo is set to and any row overrides it for that task
+  alone. An agent with one login stays one row, so a machine with no extra accounts sees the list it
+  always saw.
+- **fix(server): `GET /api/v1/providers/status` no longer stalls for ~1–3s whenever its cache
+  lapses.** It shares the same knowledge as the accounts listing and had the same problem from the
+  other side: any provider you are not signed into pulled the whole response onto a five-second
+  window, so one reader in every five seconds paid for three CLI spawns. Reads are now
+  stale-while-revalidate (what `/api/v1/health` already does) and the run gate re-checks a provider
+  before refusing to start a run, instead of the cache being kept young to protect it. Measured on
+  the built server: reads that alternated between 3ms and 817ms are now 1–7ms across every cache
+  window, while "Check again" (`?refresh=1`) still blocks for the real answer.
+- 🐛 **`CLAUDE_CONFIG_DIR` is honoured.** A host that relocates Claude Code's config folder was
+  invisible to the Agent config pane, which kept showing `~/.claude`. Related: the MCP listing read
+  `~/.claude.json` from the wrong place under an override — that file is a *sibling* of the default
+  folder but lives *inside* a relocated one.
+- 🐛 **`CEZ_CLAUDE_BIN` counts as "installed".** The environment probe hardcoded a bare `claude`,
+  unlike every other call site, so a host whose only install is at a custom path reported Claude as
+  missing — dropping it from the composer and the installer's dependency step even though runs
+  would have worked.
 - ⚡ Virtualize the diff and the task commit list. (#599) *(@patzick)*
 - 🐛 Repair concatenated task titles (fixes #623). (#627) *(@pkarw)*
 - 🐛 Prevent single-project registry leak (fixes #626). (#629) *(@pkarw)*

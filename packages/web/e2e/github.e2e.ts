@@ -6,13 +6,13 @@ import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 /**
  * The GitHub tab (R6 Step 1.1) end-to-end against the shared dry-run environment.
  *
- * Reachability: under `CEZ_DRY_RUN=1` the forge driver reports AVAILABLE and `/api/github`
+ * Reachability: under `CEZ_DRY_RUN=1` the forge driver reports AVAILABLE and `/api/v1/github`
  * serves the bundled mock issues/PRs — so the lists, the detail pane and the cmdk dropdowns
  * are honestly reachable here and are covered below. The forge-OFF branch (nav item hidden,
  * unavailable explainer) is NOT reachable in this env; it is asserted structurally in the
  * unit suites (nav-items/app-shell/command-palette tests, github.test.tsx), and the gating
  * spec below asserts whichever branch the LIVE health payload actually reports rather than
- * assuming one. Strictly read-only: no run is started (`POST /api/runs` is unit-pinned) —
+ * assuming one. Strictly read-only: no run is started (`POST /api/v1/runs` is unit-pinned) —
  * the shared env's run list must not grow side effects.
  */
 
@@ -51,7 +51,7 @@ const scoped = (path: string) => `/p/${bootProject}${path}`
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
-  forgeAvailable = (await api<HealthPayload>('/api/health')).forge?.available === true
+  forgeAvailable = (await api<HealthPayload>('/api/v1/health')).forge?.available === true
   bootProject = await bootProjectId(baseUrl)
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
@@ -77,7 +77,7 @@ describe('the GitHub tab against the live dry-run server', () => {
 
   it('/github lists the real issues and PRs with honest counts', async () => {
     if (!forgeAvailable) return // covered by the gating spec + unit suites
-    const gh = await api<GithubPayload>('/api/github')
+    const gh = await api<GithubPayload>('/api/v1/github')
     expect(gh.available).toBe(true)
 
     browser.goto(`${baseUrl}${scoped('/github')}`)
@@ -108,7 +108,7 @@ describe('the GitHub tab against the live dry-run server', () => {
 
   it('opens an issue’s detail: meta, labels, markdown body, hand-to-agent dropdowns', async () => {
     if (!forgeAvailable) return
-    const gh = await api<GithubPayload>('/api/github')
+    const gh = await api<GithubPayload>('/api/v1/github')
     const first = gh.issues[0]
     expect(first).toBeDefined()
     if (!first) return
@@ -137,7 +137,7 @@ describe('the GitHub tab against the live dry-run server', () => {
     )
 
     // The #385 dropdowns: the workflow cmdk menu opens and filters (read-only — nothing run).
-    const workflows = await api<{ workflows: Array<{ name: string }> }>('/api/workflows')
+    const workflows = await api<{ workflows: Array<{ name: string }> }>('/api/v1/workflows')
     browser.click('[data-slot="gh-workflow-trigger"]')
     browser.waitForFunction(
       `document.querySelectorAll('[data-slot="gh-workflow-option"]').length === ${workflows.workflows.length}`,
@@ -158,7 +158,7 @@ describe('the GitHub tab against the live dry-run server', () => {
     // this file had NO thread assertions at all. Under CEZ_DRY_RUN=1 the mock thread serves both
     // comments and timeline events, so the whole interleave is honestly reachable here.
     if (!forgeAvailable) return
-    const gh = await api<GithubPayload>('/api/github')
+    const gh = await api<GithubPayload>('/api/v1/github')
     const pr = gh.prs[0]
     if (!pr) return
 
@@ -208,7 +208,7 @@ describe('the GitHub tab against the live dry-run server', () => {
 
   it('shows the guarded merge box and confirms before merging', async () => {
     if (!forgeAvailable) return
-    const gh = await api<GithubPayload>('/api/github')
+    const gh = await api<GithubPayload>('/api/v1/github')
     const pr = gh.prs[0]
     if (!pr) return
 
@@ -229,7 +229,7 @@ describe('the GitHub tab against the live dry-run server', () => {
 
   it('reviews a pull request file-by-file in the Changes view', async () => {
     if (!forgeAvailable) return
-    const gh = await api<GithubPayload>('/api/github')
+    const gh = await api<GithubPayload>('/api/v1/github')
     const pr = gh.prs[0]
     if (!pr) return
 
@@ -246,7 +246,7 @@ describe('the GitHub tab against the live dry-run server', () => {
 
   it('below md the list is the page, and a detail URL swaps to the detail with a way back', async () => {
     if (!forgeAvailable) return
-    const gh = await api<GithubPayload>('/api/github')
+    const gh = await api<GithubPayload>('/api/v1/github')
     const first = gh.issues[0]
     if (!first) return
 

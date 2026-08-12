@@ -5,7 +5,7 @@ import {
   stampManifests,
   type ReleaseManifests,
   type SnapshotContext,
-} from './snapshot.js';
+} from './snapshot.ts';
 
 const base: SnapshotContext = {
   eventName: 'pull_request',
@@ -84,6 +84,7 @@ describe('computeSnapshot', () => {
 
 describe('stampManifests', () => {
   const set = (): ReleaseManifests => ({
+    contract: { name: '@open-mercato/cezar-contract', version: '0.1.5' },
     apiClient: { name: '@open-mercato/cezar-api-client', version: '0.1.5' },
     cezar: {
       name: '@open-mercato/cezar',
@@ -114,6 +115,7 @@ describe('stampManifests', () => {
   it('pins against whatever the packages are currently named (rename-proof)', () => {
     const stamped = stampManifests(
       {
+        contract: { name: '@old/contract', version: '0.1.5' },
         apiClient: { name: '@old/client', version: '0.1.5' },
         cezar: { name: '@pat-lewczuk/cezar', version: '0.1.5', dependencies: { '@old/client': '^0.1.5' } },
         alias: { name: 'cezar-cli', version: '0.1.5', dependencies: { '@pat-lewczuk/cezar': '^0.1.5' } },

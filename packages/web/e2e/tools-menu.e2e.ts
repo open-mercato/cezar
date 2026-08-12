@@ -4,7 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 
 /**
- * The Tools dropdown (Step 4.2) against the shared dev env — a real `/api/health` probing this
+ * The Tools dropdown (Step 4.2) against the shared dev env — a real `/api/v1/health` probing this
  * machine's actual toolchain. Nothing here hardcodes a tool name: the suite fetches the health
  * answer from Node (as smoke.e2e.ts does — `eval` cannot await) and asserts the menu renders
  * exactly that, whatever this machine happens to have installed.
@@ -32,7 +32,7 @@ const MENU = '[data-slot="tools-menu-content"]'
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
-  health = (await fetch(`${baseUrl}/api/health`).then((r) => r.json())) as Health
+  health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as Health
   bootProject = await bootProjectId(baseUrl)
   browser = AgentBrowser.open(runId)
   browser.setViewport(1440, 900)
@@ -66,7 +66,7 @@ describe('tools menu', () => {
     ).toBe(missing.length === 0 ? 'success' : 'pending')
   })
 
-  it('opens a menu listing exactly the tools /api/health reports', () => {
+  it('opens a menu listing exactly the tools /api/v1/health reports', () => {
     browser.click(TRIGGER)
     browser.waitForFunction(`document.querySelector('${MENU}') !== null`)
 

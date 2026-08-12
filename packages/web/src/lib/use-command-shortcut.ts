@@ -94,6 +94,24 @@ export function shouldTriggerKeyShortcut(event: CommandShortcutEvent, key: strin
 }
 
 /**
+ * The kbd hint next to a control the command chord drives (spec: "kbd hints render the
+ * platform's symbol") — `⌘K` on Apple hardware, `Ctrl+K` everywhere else. The chord itself is
+ * both bindings at once (`shouldTriggerCommandShortcut` accepts either modifier); only the
+ * *label* is platform-specific, and it belongs here rather than in each caller so the ⌘K family
+ * cannot drift the way two hand-written strings would. The submit chord's twin is
+ * `submitShortcutHint` in `use-submit-shortcut.ts`.
+ *
+ * The platform string is injectable for tests; the default reads the browser's.
+ */
+export function commandShortcutHint(
+  key: string,
+  platform: string = typeof navigator === 'undefined' ? '' : navigator.platform,
+): string {
+  const upper = key.toUpperCase()
+  return /mac|iphone|ipad|ipod/i.test(platform) ? `⌘${upper}` : `Ctrl+${upper}`
+}
+
+/**
  * Register a global bare-`key` shortcut for the component's lifetime. No `preventDefault` — a
  * lone letter has no browser default to claim. Mirrors `useCommandShortcut`'s ref plumbing.
  */

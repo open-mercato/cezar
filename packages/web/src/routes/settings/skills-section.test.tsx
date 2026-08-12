@@ -20,11 +20,21 @@ function serve(
     projectsDir: '~/cezar/projects',
     skillsAutoUpdate: null,
     effectiveSkillsAutoUpdate: true,
+    composerDefaults: {
+      autonomous: null,
+      worktree: null,
+      inheritedAutonomous: 'source-dependent',
+      inheritedWorktree: false,
+    },
     resources: {
       maxParallel: 2,
+      maxMonitoringSessions: 2,
+      monitoringWakeIntervalMinutes: null,
+      autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,
     },
+    agentDefaults: {},
     ...overrides,
   }
   const update: SkillsUpdateState = {
@@ -69,15 +79,15 @@ function serve(
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/workspace/config' && method === 'GET') return json(config)
-      if (url === '/api/workspace/config' && method === 'PUT') {
+      if (url === '/api/v1/workspace/config' && method === 'GET') return json(config)
+      if (url === '/api/v1/workspace/config' && method === 'PUT') {
         if (body && 'skillsAutoUpdate' in body) {
           config.skillsAutoUpdate = body.skillsAutoUpdate as boolean | null
           config.effectiveSkillsAutoUpdate = config.skillsAutoUpdate ?? true
         }
         return json(config)
       }
-      if (url === '/api/workspace/skills-update?projectId=boot') return json(update)
+      if (url === '/api/v1/workspace/skills-update?projectId=boot') return json(update)
       return new Promise<never>(() => {})
     }),
   )

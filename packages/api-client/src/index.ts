@@ -12,18 +12,19 @@
  * Contents:
  *   - `client.ts` — `createCezarClient<AppType>()`, the typed client over the versioned
  *     `/api/v1` surface. Types come from the server's own handlers; nothing is declared twice.
- *   - `dto/*` — the response and domain shapes of the families that are NOT chained yet, still
- *     hand-maintained and still guarded against the server's own types by
- *     `packages/cezar/src/server/api-types.test.ts`. This is the part designed to disappear:
- *     as each family is chained, its shapes are inferred and the declarations here are deleted.
+ *   - `@open-mercato/cezar-contract` — re-exported wholesale, so a consumer needs one import for
+ *     both the client and the request/response schemas it speaks. The hand-written `dto/*` mirror
+ *     this barrel used to carry is gone: every shape is inferred from a zod schema now, and
+ *     `packages/cezar/src/server/contract-parity.*.test.ts` checks each schema against the route
+ *     it describes in both directions.
  *   - `protocol/*` — the agent event vocabulary the server emits over SSE and the cockpit
  *     renders (a frozen surface, BACKWARD_COMPATIBILITY.md §2).
- *   - `utils/*` — pure helpers both sides need, notably the `/api` ↔ `/api/p/:projectId`
- *     scope prefixing.
+ *   - `utils/*` — pure helpers both sides need, notably the version prefixing and the
+ *     `/api/v1` ↔ `/api/v1/p/:projectId` scope prefixing.
  */
 
 export * from './client.ts'
-export * from './dto/types.ts'
+export * from '@open-mercato/cezar-contract'
 export * from './protocol/ui-events.ts'
 export * from './protocol/tool-display.ts'
 export * from './utils/project-scope.ts'

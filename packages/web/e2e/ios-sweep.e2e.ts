@@ -58,7 +58,7 @@ interface RunRecord {
 
 async function waitForStatus(id: string, wanted: string[]): Promise<string> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const record = await api<RunRecord>(`/api/runs/${id}`)
+    const record = await api<RunRecord>(`/api/v1/runs/${id}`)
     if (wanted.includes(record.status)) return record.status
     await new Promise((r) => setTimeout(r, 500))
   }
@@ -67,7 +67,7 @@ async function waitForStatus(id: string, wanted: string[]): Promise<string> {
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
-  const health = (await api<{ forge: { available: boolean } | null }>('/api/health'))
+  const health = (await api<{ forge: { available: boolean } | null }>('/api/v1/health'))
   forgeAvailable = health.forge?.available === true
 
   // The thread view needs a run. Prefer whatever the shared env already holds (newest live
@@ -75,7 +75,7 @@ beforeAll(async () => {
   // via /finish, so the shared env is never left holding an open session another spec would
   // trip over. The run lands in `.ai/cezar/` (gitignored runtime state), same class of shared-env
   // write as the smoke spec's todos.json.
-  const runs = await api<RunRecord[]>('/api/runs')
+  const runs = await api<RunRecord[]>('/api/v1/runs')
   const existing = [...runs]
     .filter((r) => !r.archived)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
@@ -83,7 +83,7 @@ beforeAll(async () => {
     threadRunId = existing.id
   } else {
     const created = (await (
-      await fetch(`${baseUrl}/api/runs`, {
+      await fetch(`${baseUrl}/api/v1/runs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ task: 'Say hello to the iOS sweep.', workflow: 'quick-task' }),
@@ -93,7 +93,7 @@ beforeAll(async () => {
     // The dry-run mock's reply carries no CEZ:DONE marker, so the run parks at `waiting`.
     const status = await waitForStatus(threadRunId, ['waiting', 'review', 'done', 'failed'])
     if (status === 'waiting') {
-      await fetch(`${baseUrl}/api/runs/${threadRunId}/finish`, { method: 'POST' })
+      await fetch(`${baseUrl}/api/v1/runs/${threadRunId}/finish`, { method: 'POST' })
       await waitForStatus(threadRunId, ['review', 'done', 'failed'])
     }
   }
@@ -133,7 +133,7 @@ function sweep(slug: string, path: string, ready: string): void {
 
 describe('iOS sweep — every primary view at 390×844', () => {
   it('/ (tasks overview)', () => {
-    // Ready = the overview answered /api/runs: the cards/table for a filled list, the empty
+    // Ready = the overview answered /api/v1/runs: the cards/table for a filled list, the empty
     // state otherwise — both are real content, either settles the view.
     sweep('tasks', '/', '[data-slot="tasks-table"], [data-slot="task-cards"], [data-slot="tasks-empty"]')
   })

@@ -100,7 +100,7 @@ describe('pendingPlanOf', () => {
   })
 })
 
-describe('buildPlannedRunBody — the POST /api/runs wire contract for approved plans', () => {
+describe('buildPlannedRunBody — the POST /api/v1/runs wire contract for approved plans', () => {
   const base = {
     task: 'tighten the tests',
     steps: STEPS,
@@ -125,6 +125,16 @@ describe('buildPlannedRunBody — the POST /api/runs wire contract for approved 
 
   it('never sends a workflow name — an edited plan may match no saved chain', () => {
     expect('workflow' in buildPlannedRunBody(base)).toBe(false)
+  })
+
+  it('keeps an explicit runner pick even when it equals the project default', () => {
+    expect(buildPlannedRunBody({ ...base, runnerExplicit: true }).runner).toBe('claude')
+  })
+
+  it('omits the displayed native default when model selection is locked', () => {
+    expect(
+      buildPlannedRunBody({ ...base, model: 'native-sonnet', modelsLocked: true }).model,
+    ).toBeUndefined()
   })
 
   it.each([

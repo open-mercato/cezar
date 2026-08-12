@@ -468,11 +468,12 @@ function DiffLine({ text }: { text: string }) {
   )
 }
 
-/** Default-open policy (opencode research §4): failed opens itself; a running command opens
- *  to show its live tail; everything else — including edits and finished commands — starts
- *  closed but prominent. The user's own toggle always wins once they touch the card. */
+/** Default-open policy: a running command opens to show its live tail; everything else —
+ *  including edits, finished commands AND failures — starts closed but prominent. A failed step
+ *  no longer springs its red error body open on its own (it reads as calmer that way, and a
+ *  recovered failure is not an emergency); its collapsed row still carries the `failed` label and
+ *  exit code. The user's own toggle always wins once they touch the card. */
 function defaultOpen(item: UiToolItem): boolean {
-  if (item.status === 'failed') return true
   return item.toolKind === 'execute' && item.status === 'running' && item.output !== undefined
 }
 
@@ -489,10 +490,12 @@ export function ToolCard({
   item,
   nested = [],
   cacheKey,
+  renderNested,
 }: {
   item: UiToolItem
-  nested?: ThreadEntry[]
+  nested?: readonly ThreadEntry[]
   cacheKey?: string
+  renderNested?: (entries: readonly ThreadEntry[], scope: string) => ReactNode
 }) {
   const cache = useThreadCardCache()
   const [userOpen, setUserOpenState] = useState<boolean | null>(
@@ -520,8 +523,10 @@ export function ToolCard({
       open={open}
       onOpenChange={setUserOpen}
       className={cn(
+        // A failed card wears a FAINT danger tint so it reads at a glance, not the loud outline it
+        // used to — the exit code and `failed` label carry the signal, the red stays in the body.
         'min-w-0 overflow-hidden rounded-md border bg-card',
-        item.status === 'failed' ? 'border-danger/40' : 'border-border',
+        item.status === 'failed' ? 'border-danger/25' : 'border-border',
       )}
     >
       <CollapsibleTrigger
@@ -535,12 +540,11 @@ export function ToolCard({
             !hasDetail && 'invisible',
           )}
         />
-        <Icon aria-hidden className={cn('size-3.5 shrink-0', item.status === 'failed' ? 'text-danger' : 'text-muted-foreground')} />
+        <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
         <span
           className={cn(
             'shrink-0 font-semibold',
             busy && 'shimmer',
-            item.status === 'failed' && 'text-danger',
             item.status === 'declined' && 'text-muted-foreground',
           )}
         >
@@ -553,7 +557,7 @@ export function ToolCard({
           {busy ? (
             <LoaderCircleIcon role="status" aria-label="Running" className="size-3.5 animate-spin text-soft-foreground" />
           ) : null}
-          {item.status === 'failed' ? <span className="text-xs text-danger">failed</span> : null}
+          {item.status === 'failed' ? <span className="text-xs text-muted-foreground">failed</span> : null}
           {item.status === 'declined' ? <span className="text-xs text-soft-foreground">declined</span> : null}
           {item.toolKind === 'execute' && typeof item.exitCode === 'number' ? (
             <span
@@ -581,40 +585,13 @@ export function ToolCard({
           ) : null}
           {nested.length > 0 ? (
             <div data-slot="tool-nested" className="flex flex-col gap-2 border-l-2 border-border py-2.5 pr-3 pl-3 ml-4 my-2">
-              {nested.map((entry) => (
-                <NestedEntry key={entry.id} entry={entry} scope={cacheKey} />
-              ))}
+              {renderNested?.(nested, cacheKey ?? item.id)}
             </div>
           ) : null}
         </div>
       </CollapsibleContent>
     </Collapsible>
   )
-}
-
-/** A sub-agent entry inside a Task card — one level deep by design, so nested tools render
- *  without their own children. `scope` is the parent card's cache key, extended per child.
- *
- *  Exported for the sub-agent sheet (#474), which renders the SAME child entries in a focused
- *  panel: the drill-down must look like the inline nesting, not like a second renderer that
- *  drifts from it. */
-export function NestedEntry({ entry, scope }: { entry: ThreadEntry; scope?: string }) {
-  switch (entry.kind) {
-    case 'message':
-      return <AssistantMessage text={entry.text} />
-    case 'reasoning':
-      return <ReasoningItem text={entry.text} />
-    case 'tool':
-      return <ToolCard item={entry} cacheKey={scope !== undefined ? `${scope}:${entry.id}` : undefined} />
-    case 'note':
-      return <NoteLine note={entry} />
-    case 'image':
-      return <ImageItem image={entry} />
-    case 'ask':
-      // AskUser cards are always top-level turn entries (#473) — they never nest
-      // under a tool group, so there is nothing to render here.
-      return null
-  }
 }
 
 /** "Explored N files · M searches" — consecutive finished read/search tools, one row,

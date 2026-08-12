@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import { WorkspaceSemaphore } from '../workspace/semaphore.js';
-import { RunManager } from './run.js';
+import { RunStore } from '../runs/store.ts';
+import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+import { RunManager } from './run.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -47,7 +47,7 @@ describe('recover() and the autonomous flag (#489)', () => {
   const WORKFLOW_DEF = {
     name: 'quick-task',
     description: 'x',
-    source: 'built-in',
+    source: 'built-in' as const,
     steps: [{ id: 'work', name: 'Work', prompt: '{{task}}' }],
   };
 
@@ -59,7 +59,7 @@ describe('recover() and the autonomous flag (#489)', () => {
       autonomous,
       steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
     });
-    store.updateRun(id, { workflowDef: WORKFLOW_DEF as unknown as Record<string, unknown> });
+    store.updateRun(id, { workflowDef: WORKFLOW_DEF });
     return id;
   };
 

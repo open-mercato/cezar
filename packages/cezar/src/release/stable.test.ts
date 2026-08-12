@@ -4,8 +4,8 @@ import {
   isReleaseBump,
   stampStableManifests,
   type ReleaseManifests,
-} from './stable.js';
-import { isPublishable } from './manifests.js';
+} from './stable.ts';
+import { isPublishable } from './manifests.ts';
 
 describe('computeStableVersion', () => {
   it('increments each semver component the way npm version does', () => {
@@ -37,6 +37,7 @@ describe('isReleaseBump', () => {
 
 describe('stampStableManifests', () => {
   const set = (): ReleaseManifests => ({
+    contract: { name: '@scope/contract', version: '0.1.5' },
     apiClient: { name: '@scope/client', version: '0.1.5' },
     cezar: {
       name: '@scope/impl',

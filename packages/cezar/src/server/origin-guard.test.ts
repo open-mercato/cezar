@@ -3,18 +3,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager, StartRunInput } from '../workflows/run.js';
-import type { WorkflowDef } from '../workflows/types.js';
-import { connectedProviderAuth } from './provider-auth.testkit.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager, StartRunInput } from '../workflows/run.ts';
+import type { WorkflowDef } from '../workflows/types.ts';
+import { connectedProviderAuth } from './provider-auth.testkit.ts';
+import { createApp } from './server.ts';
 
 /**
  * Request-origin guard (#426). The server executes agents with shell access,
  * so "bind 127.0.0.1 + same-origin" is not a perimeter on its own: a Host
  * allowlist kills DNS rebinding and an Origin match kills blind CSRF. Both are
  * zero-config and must leave the cockpit's own same-origin traffic, the SSE
- * reads and the intentionally-open /api/health probe untouched.
+ * reads and the intentionally-open /api/v1/health probe untouched.
  */
 describe('request-origin guard (#426)', () => {
   let repoRoot: string;
@@ -27,7 +27,7 @@ describe('request-origin guard (#426)', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-guard-'));
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     delete process.env.CEZ_REMOTE;
-    process.env.CEZ_DRY_RUN = '1'; // keeps the /api/health probe off the network
+    process.env.CEZ_DRY_RUN = '1'; // keeps the /api/v1/health probe off the network
     // Capturing stub (the start-run.test.ts pattern) — the guard runs before
     // the handler, so a real run only needs to prove the request got through.
     const manager = {
@@ -56,7 +56,7 @@ describe('request-origin guard (#426)', () => {
   const startBody = { task: 'do the thing', steps: [{ id: 'work', prompt: '{{task}}' }] };
 
   const postRuns = (headers: Record<string, string>) =>
-    app.request('/api/runs', {
+    app.request('/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(startBody),
@@ -93,7 +93,7 @@ describe('request-origin guard (#426)', () => {
   });
 
   it('rejects even a READ with a foreign Host header (rebinding exfiltration) with 403', async () => {
-    const res = await app.request('/api/runs', { headers: { host: 'evil.tld' } });
+    const res = await app.request('/api/v1/runs', { headers: { host: 'evil.tld' } });
     expect(res.status).toBe(403);
   });
 
@@ -105,7 +105,7 @@ describe('request-origin guard (#426)', () => {
 
   for (const host of REBINDING_HOSTS) {
     it(`rejects a READ whose Host is the rebinding hostname ${host} → 403`, async () => {
-      const res = await app.request('/api/runs', { headers: { host: `${host}:4321` } });
+      const res = await app.request('/api/v1/runs', { headers: { host: `${host}:4321` } });
       expect(res.status).toBe(403);
     });
 
@@ -132,7 +132,7 @@ describe('request-origin guard (#426)', () => {
   });
 
   it('rejects a read with no Host header → 403', async () => {
-    const res = await app.request('/api/runs', { headers: {} });
+    const res = await app.request('/api/v1/runs', { headers: {} });
     expect(res.status).toBe(403);
   });
 
@@ -242,7 +242,7 @@ describe('request-origin guard (#426)', () => {
     '127.0.0.1:evil.com',
     'evil.com:80:127.0.0.1',
   ])('rejects the malformed/spoofing Host %s → 403', async (host) => {
-    const res = await app.request('/api/runs', { headers: { host } });
+    const res = await app.request('/api/v1/runs', { headers: { host } });
     expect(res.status).toBe(403);
   });
 
@@ -254,31 +254,31 @@ describe('request-origin guard (#426)', () => {
 
   // ---- reads and the SSE / health surfaces stay unaffected ----------------
 
-  it('leaves loopback reads unaffected (GET /api/runs) → 200', async () => {
-    const res = await app.request('/api/runs', { headers: { host: LOOPBACK } });
+  it('leaves loopback reads unaffected (GET /api/v1/runs) → 200', async () => {
+    const res = await app.request('/api/v1/runs', { headers: { host: LOOPBACK } });
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual([]);
   });
 
   it('lets a loopback SSE read through to its route (unknown id → 404, not a 403)', async () => {
-    const res = await app.request('/api/runs/nope/events', { headers: { host: LOOPBACK } });
+    const res = await app.request('/api/v1/runs/nope/events', { headers: { host: LOOPBACK } });
     expect(res.status).toBe(404); // the route's own answer — the guard let it pass
   });
 
   it('still guards the SSE route against a foreign Host → 403', async () => {
-    const res = await app.request('/api/runs/nope/events', { headers: { host: 'evil.tld' } });
+    const res = await app.request('/api/v1/runs/nope/events', { headers: { host: 'evil.tld' } });
     expect(res.status).toBe(403);
   });
 
-  it('leaves /api/health open cross-origin on a loopback Host (the bookmarklet discovery probe) → 200', async () => {
-    const res = await app.request('/api/health', {
+  it('leaves /api/v1/health open cross-origin on a loopback Host (the bookmarklet discovery probe) → 200', async () => {
+    const res = await app.request('/api/v1/health', {
       headers: { host: LOOPBACK, origin: 'https://github.com' },
     });
     expect(res.status).toBe(200);
   });
 
-  it('answers the /api/health CORS preflight on a loopback Host → 204', async () => {
-    const res = await app.request('/api/health', {
+  it('answers the /api/v1/health CORS preflight on a loopback Host → 204', async () => {
+    const res = await app.request('/api/v1/health', {
       method: 'OPTIONS',
       headers: { host: LOOPBACK, origin: 'https://github.com' },
     });
@@ -325,7 +325,7 @@ describe('request-origin guard — hosted mode (#426)', () => {
 
   const startBody = { task: 'do the thing', steps: [{ id: 'work', prompt: '{{task}}' }] };
   const postRuns = (headers: Record<string, string>) =>
-    app.request('/api/runs', {
+    app.request('/api/v1/runs', {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(startBody),

@@ -3,18 +3,18 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { WorkflowDef } from './types.js';
+import { RunStore } from '../runs/store.ts';
+import type { WorkflowDef } from './types.ts';
 
 vi.mock('../git-worktree.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../git-worktree.js')>();
+  const actual = await importOriginal<typeof import('../git-worktree.ts')>();
   return {
     ...actual,
     createWorktree: vi.fn().mockRejectedValue(new Error('simulated worktree failure')),
   };
 });
 
-import { RunManager } from './run.js';
+import { RunManager } from './run.ts';
 
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 const roots: string[] = [];
@@ -60,6 +60,8 @@ describe('RunManager repository-root isolation', () => {
     expect(store.getRun(record.id)?.error).toContain('worktree creation failed');
     expect(existsSync(join(root, 'root-was-touched'))).toBe(false);
     const notes = store.readEvents(record.id).filter((event) => event.type === 'note');
+    expect(notes.some((event) => String(event.message).includes('worktree on'))).toBe(true);
+    expect(notes.some((event) => String(event.message).includes('(default)'))).toBe(true);
     expect(notes.some((event) => String(event.message).includes('stopped before workflow execution'))).toBe(true);
     expect(notes.some((event) => String(event.message).includes('exclusive access'))).toBe(false);
   });

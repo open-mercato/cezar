@@ -17,6 +17,7 @@ import { createRun, getLaunchKey, postPlan, putConfig, putUiState } from '@/api/
 import { useProjectScope } from '@/api/project-scope-context'
 import {
   queryKeys,
+  useAgentProfiles,
   useConfig,
   useHealth,
   useProviderStatus,
@@ -38,6 +39,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { TwinkleBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
+import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { SkillPreviewDialog } from '@/components/skill-detail'
@@ -136,7 +138,8 @@ export function NewTaskRoute() {
   const skills = useSkills()
   const repo = useRepo()
   const uiState = useUiState()
-  // Settings → Agents `defaultModels` (R6 1.5): the per-runner preset the Model pill starts on.
+  // Settings → Agents runner/model policy for this project. `/api/health` is boot-bound and
+  // cannot answer these per-project defaults when another project is active (#699).
   const config = useConfig()
   const workspaceConfig = useWorkspaceConfig()
 
@@ -176,9 +179,6 @@ export function NewTaskRoute() {
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   const source = resolveSource([draft.source, uiState.data?.lastTask], skillList, workflowList)
-  const selectedWorkflow = source.source === 'workflow'
-    ? workflowList.find((workflow) => workflow.name === source.ref)
-    : undefined
   const selectedSkill = source.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
@@ -209,18 +209,45 @@ export function NewTaskRoute() {
 
   const providers = useProviderStatus()
   const runners = usableRunners(providers.data)
-  const defaultRunner = health.data?.defaultRunner
+  const defaultRunner = config.data?.defaultRunner
   const preferredRunner = defaultRunner ?? 'claude'
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
   const catalog = useRunnerModels()
+  const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
     : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
   const model = runner === null
     ? ''
-    : resolveModel(draft.model, runner, config.data?.defaultModels, catalog.data)
+    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+  // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
+  // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
+  // readable at a glance instead of assembled from two controls. An agent with a single login stays
+  // a single row, which is why a host with no extra accounts sees the list it always saw.
+  const profiles = useAgentProfiles()
+  const accountChoices = (profiles.data?.profiles ?? []).map((profile) => ({
+    provider: profile.provider as Runner,
+    id: profile.id,
+    label: profile.label,
+    configDir: profile.configDir,
+  }))
+  // A draft account belonging to ANOTHER runner is ignored rather than sent: switching runner must
+  // not silently carry a foreign account along.
+  const agentProfile = accountChoices.some(
+    (choice) => choice.provider === displayRunner && choice.id === draft.agentProfile,
+  )
+    ? draft.agentProfile
+    : null
+  // Which account each runner falls back to until the task overrides it. Selections are keyed by
+  // repo ROOT — the same key the store uses — and the root comes from `useRepo`, which is
+  // project-scoped and so already answers for the ACTIVE project; going through the projects list
+  // would mean re-deriving a mapping the API has already done.
+  const repoRoot = repo.data?.info?.root
+  const repoAccount = (repoRoot ? profiles.data?.selections[repoRoot] : undefined) as
+    | Partial<Record<Runner, string>>
+    | undefined
 
   // A cold /new load mounts the textarea disabled while provider status is checked. Restore
   // the route's autofocus contract once that check enables the form, but never steal focus if
@@ -240,14 +267,11 @@ export function NewTaskRoute() {
   const hasGit = health.data === undefined || health.data.repo !== null
   const variants = hasGit ? draft.variants : 1
 
-  // Worktree opt-out (#worktree-toggle): only offered for a single skill run in a git repo —
-  // workflows and variants always isolate, and a non-git repo already runs in place. The choice
-  // is remembered (draft → last-used → default on).
-  const singleStepSource = source.source === 'skill'
-    || source.ref === 'quick-task'
-    || selectedWorkflow?.steps.length === 1
+  // Worktree opt-out (#worktree-toggle): any ordinary run in a git repo may use the current
+  // checkout. Parallel variants are the one hard constraint because each competing run needs
+  // its own tree; a non-git repo already runs in place.
   const worktreeToggleShown = hasGit
-  const worktreeForced = !singleStepSource || variants > 1
+  const worktreeForced = variants > 1
 
   // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
   // wins; then an interactive skill recommends handing the ball back; otherwise the configured
@@ -257,7 +281,6 @@ export function NewTaskRoute() {
   const runMode = resolveComposerRunMode({
     hasGit,
     variants,
-    forceWorktree: !singleStepSource,
     planFirst: draft.planFirst,
     explicitAutonomous: draft.autonomous,
     explicitWorktree: draft.worktree,
@@ -323,10 +346,10 @@ export function NewTaskRoute() {
       setAutoStarting(false)
       return
     }
-    // Provider status often resolves before health on a cold load. The protected bookmarklet
-    // body may omit runner only against the server's authoritative default, never our display
-    // fallback; a failed health check degrades to the prefilled composer instead of guessing.
-    if (health.isPending) return
+    // Provider status often resolves before project config on a cold load. The protected
+    // bookmarklet body may omit runner only against that scoped authoritative default, never
+    // our display fallback; a failed config read degrades to the prefilled composer.
+    if (config.isPending) return
     deepLinkHandled.current = true
     if (defaultRunner === undefined) {
       setNotice({ kind: 'prefill' })
@@ -359,7 +382,7 @@ export function NewTaskRoute() {
       }
       setAutoStarting(false)
     })()
-  }, [defaultRunner, health.isPending, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [config.isPending, defaultRunner, providers.isPending, providersReady, runner]) // eslint-disable-line react-hooks/exhaustive-deps
   // The prefill toast waits for the pickers' data: whether the skill exists decides the
   // wording, and the unknown-skill case rewrites the draft the way legacy did (intent into
   // the text, quick-task as the source — its planner resolves skills from prose).
@@ -421,7 +444,10 @@ export function NewTaskRoute() {
         task: text,
         source,
         model,
+        modelsLocked,
         runner,
+        runnerExplicit: draft.runner !== null,
+        agentProfile,
         defaultRunner,
         variants,
         images,
@@ -470,7 +496,9 @@ export function NewTaskRoute() {
           task: plan.task,
           steps: plan.steps,
           model,
+          modelsLocked,
           runner,
+          runnerExplicit: draft.runner !== null,
           defaultRunner,
           variants,
           images: plan.images,
@@ -523,6 +551,7 @@ export function NewTaskRoute() {
       className="relative isolate flex min-h-full flex-col items-center overflow-x-clip px-6 pt-[clamp(32px,7vh,84px)] pb-16 max-md:px-3.5 max-md:pt-7"
     >
       <TwinkleBackdrop />
+      <GhostCodeBackdrop />
 
       <div className="w-full max-w-[720px]">
         <header className="mb-6 text-center max-md:mb-4">
@@ -584,12 +613,27 @@ export function NewTaskRoute() {
                 iconOnly
                 onInsert={(text) => composerRef.current?.insertAtCaret(text)}
               />
-              {runners.length > 1 ? (
+              {/* Shown when there is a choice to make: more than one runner, or more than one
+                  login for one of them. A host with neither sees no pill, exactly as before. */}
+              {runners.length > 1
+              || runners.some((id) => accountChoices.filter((c) => c.provider === id).length > 1) ? (
                 <RunnerPill
                   runners={runners}
                   value={displayRunner}
+                  accounts={accountChoices}
+                  account={agentProfile}
+                  repoAccount={repoAccount}
+                  // Changing the AGENT clears the model pin: presets are per-runner, so a kept
+                  // model would be one the new runner does not have. Changing only the account
+                  // keeps it — the model catalog is the same either way.
+                  onPick={(next, picked) =>
+                    update({
+                      runner: next,
+                      agentProfile: picked,
+                      ...(next === displayRunner ? {} : { model: null }),
+                    })
+                  }
                   disabled={!providersReady}
-                  onPick={(next) => update({ runner: next, model: null })}
                 />
               ) : null}
               <PickerPill
@@ -598,6 +642,12 @@ export function NewTaskRoute() {
                 label={models.find((m) => m.id === model)?.label ?? 'auto'}
                 value={model}
                 disabled={!providersReady}
+                readOnly={modelsLocked}
+                disabledHint={
+                  modelsLocked
+                    ? 'Model selection is locked to native coding-agent settings.'
+                    : undefined
+                }
                 onPick={(next) => update({ model: next })}
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
                 status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
@@ -621,9 +671,7 @@ export function NewTaskRoute() {
                 <WorktreeToggle
                   on={worktreeOn}
                   disabled={worktreeForced}
-                  disabledReason={variants > 1
-                    ? 'Parallel variants always use isolated worktrees'
-                    : 'Multi-step workflows require an isolated worktree'}
+                  disabledReason="Parallel variants always use isolated worktrees"
                   onChange={(on) => update({ worktree: on })}
                 />
               ) : null}
@@ -700,7 +748,7 @@ export function NewTaskRoute() {
   )
 }
 
-/** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for single skill runs.
+/** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for ordinary runs.
  *  Checked = isolated worktree (the default); unchecked = run in the repo working tree. */
 function WorktreeToggle({
   on,

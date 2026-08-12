@@ -4,14 +4,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore, type RunRecord } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp } from './server.js';
-import { apiRequest } from './loopback-request.testkit.js';
+import { RunStore, type RunRecord } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp } from './server.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
  * Group-pick winner-park under the optional review gate (#489). The
- * `POST /api/groups/:groupId/pick` endpoint inlines the `settleSuccess`
+ * `POST /api/v1/groups/:groupId/pick` endpoint inlines the `settleSuccess`
  * review-park rule; it must honor the same gate — flip the winner to `review`
  * only when the gate is enabled AND the winner is not autonomous. Driven against
  * a real fixture worktree with a genuine diff vs its base.
@@ -26,7 +26,7 @@ function initRepo(dir: string): void {
   g(dir, 'config', 'commit.gpgsign', 'false');
 }
 
-describe('POST /api/groups/:groupId/pick — review gate', () => {
+describe('POST /api/v1/groups/:groupId/pick — review gate', () => {
   const savedGate = process.env.CEZ_REVIEW_GATE;
   let repoRoot: string;
   let worktree: string;
@@ -75,7 +75,7 @@ describe('POST /api/groups/:groupId/pick — review gate', () => {
   }
 
   const pick = (id: string) =>
-    apiRequest(app, '/api/groups/g1/pick', {
+    apiRequest(app, '/api/v1/groups/g1/pick', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ runId: id }),

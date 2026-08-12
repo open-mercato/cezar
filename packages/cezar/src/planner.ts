@@ -1,10 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { createRunner } from './core/runner-factory.js';
-import { loadConfig } from './config.js';
-import { discoverSkills, type Skill } from './skills.js';
-import { workflowStepSchema, type WorkflowStepDef } from './workflows/types.js';
+import { createRunner } from './core/runner-factory.ts';
+import { loadConfig } from './config.ts';
+import { discoverSkills, type Skill } from './skills.ts';
+import { resolveProfileEnvForRoot } from './workspace/agent-profiles.ts';
+import { workflowStepSchema, type WorkflowStepDef } from './workflows/types.ts';
 
 /**
  * Chain-from-prompt (spec 008): one cheap `claude` call turns the user's task
@@ -65,6 +66,10 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
   // OpenCode pick their own default model instead.
   const runner = createRunner(config.defaultRunner);
   const plannerModel = config.defaultRunner === 'claude' ? config.plannerModel : undefined;
+  // Plan under the SAME agent account this project's tasks run on (spec
+  // 2026-07-29-agent-profiles). Without this the planner would quietly bill the personal
+  // subscription for a project the user pointed at their work account.
+  const { env: profileEnv } = await resolveProfileEnvForRoot(repoRoot, config.defaultRunner);
   // One retry on an unparseable answer; a runner error goes straight to fallback.
   for (let attempt = 0; attempt < 2; attempt++) {
     let text: string;
@@ -74,6 +79,7 @@ export async function planChain(repoRoot: string, task: string): Promise<PlanRes
         userPrompt,
         cwd: repoRoot,
         allowedTools: [],
+        ...(Object.keys(profileEnv).length > 0 ? { env: profileEnv } : {}),
         model: plannerModel,
         timeoutMs: PLANNER_TIMEOUT_MS,
       });
@@ -125,7 +131,7 @@ function buildPlannerPrompt(task: string, skills: Skill[], verifyCommands: strin
  */
 async function detectVerifyCommands(repoRoot: string): Promise<string[]> {
   const out: string[] = [];
-  const pkgSchema = z.object({ scripts: z.record(z.string()).default({}) });
+  const pkgSchema = z.object({ scripts: z.record(z.string(), z.string()).default({}) });
   try {
     const raw: unknown = JSON.parse(await readFile(join(repoRoot, 'package.json'), 'utf8'));
     const pkg = pkgSchema.safeParse(raw);
@@ -216,7 +222,7 @@ function uniqueId(base: string, used: Set<string>): string {
  * then scan for balanced top-level `{...}` blocks and return the first that
  * validates. Null when nothing does — the caller decides how to recover.
  */
-export function parseStructured<T>(raw: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): T | null {
+export function parseStructured<T>(raw: string, schema: z.ZodType<T, unknown>): T | null {
   const cleaned = raw
     .replace(/^```(?:json|javascript|js|jsonl)?\s*\n?/im, '')
     .replace(/\n?```\s*$/m, '')

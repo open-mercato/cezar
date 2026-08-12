@@ -1,6 +1,7 @@
 import { hc } from 'hono/client'
 import type { Hono } from 'hono'
-import type { ClientRequestOptions } from 'hono/client'
+import type { ClientRequestOptions, ClientResponse } from 'hono/client'
+import type { SuccessStatusCode } from 'hono/utils/http-status'
 
 /**
  * The typed HTTP client for a cezar service.
@@ -66,3 +67,42 @@ export function createCezarClient<
     ...(fetch ? { fetch } : {}),
   })
 }
+
+/**
+ * The 200 member of a typed response union — the shape a caller actually receives.
+ *
+ * `hc` types a call as the union of everything the handler can answer, error branches included:
+ * a route that answers `{runner, models}` or `{error}` infers both. That is honest about the
+ * wire, but a caller that treats a non-2xx as a thrown error (as cezar's client does) only ever
+ * holds the success shape, and forcing it to narrow a union it can never see would be noise.
+ *
+ * Selecting the success branch is what makes an inferred type a drop-in replacement for the
+ * hand-written DTO it retires.
+ *
+ * EVERY 2xx, not just 200: a handler answering `c.json(x, 201)` — `POST /runs`, `/workflows`,
+ * `/runs/:id/pr`, `/todos/:id/start` — has no 200 branch at all, so keying on 200 inferred
+ * `never`. That stayed invisible while a hand-written DTO still annotated the call site (`never`
+ * is assignable to anything) and would have surfaced as a broken caller at the exact moment
+ * those DTOs were deleted.
+ */
+export type Ok<R> = R extends ClientResponse<infer T, infer S, 'json'>
+  ? S extends SuccessStatusCode
+    ? T
+    : never
+  : never
+
+/**
+ * `Ok<R>`, but loud when there is no JSON branch at all.
+ *
+ * A route can answer more than one format on one path — `/repo/commit/:sha` serves a structured
+ * payload or a raw blob, `/runs/:id/files` a listing or image bytes — so `hc` infers a union of
+ * `'json'` and `'text'`/`'body'` members and `Ok` correctly picks the JSON one. But for a route
+ * that is text-only, `Ok` is `never`, and `never` is assignable to EVERY declared return type: a
+ * caller would compile and then fail at runtime, with the type system having said nothing.
+ *
+ * Substituting a branded object makes that case a readable compile error instead. It is why
+ * `unwrap` can accept mixed-format routes without becoming a hole for single-format ones.
+ */
+export type OkJson<R> = [Ok<R>] extends [never]
+  ? { readonly __error: 'this route has no JSON response; read it as text instead' }
+  : Ok<R>

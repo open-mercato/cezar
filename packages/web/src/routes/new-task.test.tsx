@@ -6,10 +6,13 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
 import type {
+  AgentProfilesResponse,
+  ConfigResponse,
   HealthResponse,
   ProviderStatusResponse,
   RepoResponse,
   Skill,
+  WorkspaceConfigResponse,
   WorkflowsResponse,
 } from '@open-mercato/cezar-api-client'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
@@ -20,7 +23,7 @@ import { NewTaskRoute } from './new-task'
 /**
  * The /new screen against a mocked API: picker data flows (runner hidden on single-backend
  * hosts, model presets switching per runner, variants gated on git), the EXACT submit bodies
- * (workflow vs skill vs variants — the wire contract with POST /api/runs), lastTask
+ * (workflow vs skill vs variants — the wire contract with POST /api/v1/runs), lastTask
  * persistence, draft survival across unmounts, ?skill/?ref prefill, and the suggested chips.
  */
 
@@ -51,6 +54,8 @@ afterEach(() => {
 
 const HEALTH: HealthResponse = {
   version: '0.1.3',
+  projects: [],
+  bootProject: 'default',
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main' },
   defaultRunner: 'claude',
@@ -59,7 +64,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -134,7 +139,42 @@ const REPO: RepoResponse = {
 
 const REPO_NO_GIT: RepoResponse = { info: null, status: [], log: [], branches: [], baseBranch: null }
 
-/** The shape `POST /api/plan` answers (spec 008) — three steps so reorder/remove are provable. */
+const CONFIG: ConfigResponse = {
+  baseBranch: null,
+  defaultRunner: 'claude',
+  systemPrompt: null,
+  defaultModels: {},
+  modelsLocked: false,
+  maxParallel: 2,
+  memoryLimitMb: null,
+  worktreeRetention: 10,
+  liveTitleUpdates: null,
+  reviewGate: null,
+}
+
+const WORKSPACE_CONFIG: WorkspaceConfigResponse = {
+  agentDefaults: {},
+  browseRoot: '~/',
+  projectsDir: '~/cezar/projects',
+  skillsAutoUpdate: null,
+  effectiveSkillsAutoUpdate: true,
+  composerDefaults: {
+    autonomous: null,
+    worktree: null,
+    inheritedAutonomous: 'source-dependent',
+    inheritedWorktree: true,
+  },
+  resources: {
+    maxParallel: 2,
+    maxMonitoringSessions: 2,
+    monitoringWakeIntervalMinutes: null,
+    autoResumeOnUsageLimit: true,
+    memoryLimitMb: null,
+    worktreeRetentionDefault: 10,
+  },
+}
+
+/** The shape `POST /api/v1/plan` answers (spec 008) — three steps so reorder/remove are provable. */
 const PLAN = {
   steps: [
     { id: 'implement', name: 'Implement', prompt: '{{task}}' },
@@ -172,6 +212,9 @@ function deferredJson<T>() {
 
 function serve(overrides: {
   health?: HealthResponse | (() => Promise<Response>)
+  /** Active project's scoped config; health may describe a different boot project. */
+  config?: Partial<ConfigResponse> | (() => Promise<Response>)
+  workspaceConfig?: WorkspaceConfigResponse
   /** Host authentication state, or a delayed answer for pending/refresh tests. */
   providerStatus?: ProviderStatusResponse | (() => Promise<Response>)
   providerStatusStatus?: number
@@ -179,20 +222,25 @@ function serve(overrides: {
   workflows?: WorkflowsResponse
   repo?: RepoResponse
   uiState?: Record<string, unknown>
-  /** Non-2xx `GET /api/ui-state` answers (the query-errored path: `data` stays undefined). */
+  /** Non-2xx `GET /api/v1/ui-state` answers (the query-errored path: `data` stays undefined). */
   uiStateStatus?: number
   createRun?: unknown
-  /** Non-2xx `POST /api/runs` answers (the auto-start failure path). */
+  /** Non-2xx `POST /api/v1/runs` answers (the auto-start failure path). */
   createRunStatus?: number
-  /** What `GET /api/launch-key` answers — the bookmarklet auto-start secret. */
+  /** What `GET /api/v1/launch-key` answers — the bookmarklet auto-start secret. */
   launchKey?: string
-  /** `POST /api/plan` — a payload, or a handler for delayed/failing answers. */
+  /** `POST /api/v1/plan` — a payload, or a handler for delayed/failing answers. */
   plan?: unknown | (() => Promise<Response>)
-  /** `POST /api/workflows` — answers in call order (409-then-201 for the overwrite flow). */
+  /** `POST /api/v1/workflows` — answers in call order (409-then-201 for the overwrite flow). */
   saveWorkflow?: Array<{ status: number; body: unknown }>
+  /** Agent accounts (spec 2026-07-29-agent-profiles). Omitted answers a 404, which is how every
+   *  pre-existing test here keeps a composer with no account pill at all. */
+  agentProfiles?: AgentProfilesResponse
 } = {}) {
   const data = {
     health: HEALTH,
+    config: CONFIG,
+    workspaceConfig: WORKSPACE_CONFIG,
     providerStatus: PROVIDERS_CONNECTED,
     providerStatusStatus: 200,
     skills: SKILLS,
@@ -218,34 +266,40 @@ function serve(overrides: {
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/health') {
+      if (url === '/api/v1/health') {
         return typeof data.health === 'function' ? data.health() : json(data.health)
       }
-      if (url === '/api/providers/status') {
+      if (url === '/api/v1/providers/status') {
         return typeof data.providerStatus === 'function'
           ? data.providerStatus()
           : json(data.providerStatus, data.providerStatusStatus)
       }
-      if (url === '/api/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
-      if (url === '/api/skills') return json(data.skills)
-      if (url === '/api/workflows' && method === 'GET') return json(data.workflows)
-      if (url === '/api/workflows' && method === 'POST') {
+      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/skills') return json(data.skills)
+      if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
+      if (url === '/api/v1/workflows' && method === 'POST') {
         const answer = data.saveWorkflow[Math.min(saves, data.saveWorkflow.length - 1)]!
         saves += 1
         return json(answer.body, answer.status)
       }
-      if (url === '/api/plan' && method === 'POST') {
+      if (url === '/api/v1/plan' && method === 'POST') {
         return typeof data.plan === 'function' ? (data.plan as () => Promise<Response>)() : json(data.plan)
       }
-      if (url === '/api/repo') return json(data.repo)
-      if (url === '/api/launch-key') return json({ key: data.launchKey })
-      if (url === '/api/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
-      if (url === '/api/ui-state' && method === 'PUT') return json(body ?? {})
-      if (url === '/api/runs' && method === 'POST') return json(data.createRun, data.createRunStatus)
-      if (url === '/api/config' && method === 'GET')
-        return json({ baseBranch: null, defaultRunner: 'claude', systemPrompt: null, defaultModels: {} })
-      if (url === '/api/config' && method === 'PUT')
+      if (url === '/api/v1/repo') return json(data.repo)
+      if (url === '/api/v1/launch-key') return json({ key: data.launchKey })
+      if (url === '/api/v1/ui-state' && method === 'GET') return json(data.uiState, data.uiStateStatus)
+      if (url === '/api/v1/ui-state' && method === 'PUT') return json(body ?? {})
+      if (url === '/api/v1/runs' && method === 'POST') return json(data.createRun, data.createRunStatus)
+      if (url === '/api/v1/config' && method === 'GET')
+        return typeof data.config === 'function'
+          ? data.config()
+          : json({ ...CONFIG, ...data.config })
+      if (url === '/api/v1/config' && method === 'PUT')
         return json({ baseBranch: (body as { baseBranch: string | null }).baseBranch, defaultRunner: 'claude' })
+      if (url === '/api/v1/workspace/config' && method === 'GET') return json(data.workspaceConfig)
+      if (url === '/api/v1/workspace/agent-profiles' && method === 'GET' && data.agentProfiles) {
+        return json(data.agentProfiles)
+      }
       return json({ error: `unmocked ${method} ${url}` }, 404)
     }),
   )
@@ -288,10 +342,10 @@ async function pillReady(label = 'quick-task') {
 
 const startTask = async () => {
   fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
-  await waitFor(() => expect(requests.some((r) => r.method === 'POST' && r.url === '/api/runs')).toBe(true))
+  await waitFor(() => expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(true))
 }
 
-const postedBody = () => requests.find((r) => r.method === 'POST' && r.url === '/api/runs')?.body
+const postedBody = () => requests.find((r) => r.method === 'POST' && r.url === '/api/v1/runs')?.body
 
 // ---- the hero surface -------------------------------------------------------------------------
 
@@ -399,7 +453,7 @@ describe('picker data flows', () => {
 
   it('drops a persisted model preset that belongs to another runner', async () => {
     writeDraft({
-      text: '', source: null, runner: 'codex', model: 'claude-opus-4-8', variants: 1,
+      text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', variants: 1,
       planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
@@ -423,7 +477,7 @@ describe('picker data flows', () => {
     expect(document.querySelector('[data-slot="base-pill"]')).toBeNull()
   })
 
-  it('base branch pill shows config default (falling back to the checkout) and PUTs /api/config', async () => {
+  it('base branch pill shows config default (falling back to the checkout) and PUTs /api/v1/config', async () => {
     serve({ repo: { ...REPO, baseBranch: 'develop' } })
     renderNewTask()
     await pillReady()
@@ -440,10 +494,10 @@ describe('picker data flows', () => {
     ])
     fireEvent.click(options[0] as HTMLElement)
     await waitFor(() =>
-      expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/config')).toBe(true),
+      expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/config')).toBe(true),
     )
-    // find the PUT specifically — the composer also GETs /api/config for the model presets.
-    expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/config')?.body).toEqual({
+    // find the PUT specifically — the composer also GETs /api/v1/config for the model presets.
+    expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/config')?.body).toEqual({
       baseBranch: null,
     })
   })
@@ -581,7 +635,7 @@ describe('provider authentication gate', () => {
     expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
-  it('sends the connected runner explicitly when health has not revealed the server default yet', async () => {
+  it('can safely omit the runner while boot health is pending because project config is authoritative', async () => {
     const delayedHealth = deferredJson<HealthResponse>()
     serve({ health: delayedHealth.fetch })
     renderNewTask()
@@ -590,7 +644,7 @@ describe('provider authentication gate', () => {
     fireEvent.change(textarea(), { target: { value: 'Start before health resolves' } })
     await startTask()
 
-    expect((postedBody() as Record<string, unknown>).runner).toBe('claude')
+    expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
     delayedHealth.release(HEALTH)
   })
 
@@ -673,7 +727,7 @@ describe('submit', () => {
     })
     await waitFor(() => expect(location()).toBe('/tasks/run-9'))
     await waitFor(() =>
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')?.body).toEqual({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body).toEqual({
         lastTask: { source: 'skill', ref: 'om-fix' },
         // The run also lands at the head of the recency list (picker sort)...
         recentSources: [{ source: 'skill', ref: 'om-fix' }],
@@ -692,7 +746,7 @@ describe('submit', () => {
     // 404, not a 5xx: the query client never retries a 4xx (query-client.ts), so the query
     // lands in its errored state immediately and the test stays deterministic.
     writeDraft({
-      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, model: null,
+      text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null,
       variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
@@ -702,7 +756,7 @@ describe('submit', () => {
     await startTask()
 
     await waitFor(() => expect(location()).toBe('/tasks/run-9'))
-    const put = requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')
+    const put = requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')
     // The other prefs still persist — only the unknowable map is left alone.
     expect(put?.body).not.toHaveProperty('skillUsage')
   })
@@ -715,6 +769,72 @@ describe('submit', () => {
     await startTask()
 
     expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'quick-task' })
+  })
+
+  it('posts worktree:false after opt-out for every single-step source shape', async () => {
+    const cases: Array<{
+      label: string
+      overrides: NonNullable<Parameters<typeof serve>[0]>
+      expected: Record<string, unknown>
+    }> = [
+      {
+        label: 'quick-task',
+        overrides: {},
+        expected: { workflow: 'quick-task' },
+      },
+      {
+        label: 'om-fix',
+        overrides: { uiState: { lastTask: { source: 'skill', ref: 'om-fix' } } },
+        expected: { steps: [{ id: 'task', name: 'om-fix', skill: 'om-fix', prompt: '{{task}}' }] },
+      },
+      {
+        label: 'one-step',
+        overrides: {
+          workflows: {
+            workflows: [
+              ...WORKFLOWS.workflows,
+              { name: 'one-step', source: 'file', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }] },
+            ],
+            issues: [],
+          },
+          uiState: { lastTask: { source: 'workflow', ref: 'one-step' } },
+        },
+        expected: { workflow: 'one-step' },
+      },
+    ]
+
+    for (const testCase of cases) {
+      cleanup()
+      resetDraft()
+      serve(testCase.overrides)
+      renderNewTask()
+      await pillReady(testCase.label)
+      const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+      fireEvent.click(worktree)
+      expect(worktree.getAttribute('aria-checked')).toBe('false')
+      fireEvent.change(textarea(), { target: { value: `Run ${testCase.label} in place` } })
+      await startTask()
+      expect(postedBody()).toMatchObject({ ...testCase.expected, worktree: false })
+    }
+  })
+
+  it('carries an inherited Worktree-off policy into the submitted payload', async () => {
+    serve({
+      workspaceConfig: {
+        ...WORKSPACE_CONFIG,
+        composerDefaults: {
+          ...WORKSPACE_CONFIG.composerDefaults!,
+          inheritedWorktree: false,
+        },
+      },
+    })
+    renderNewTask()
+    await pillReady()
+    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    fireEvent.change(textarea(), { target: { value: 'Use the environment seed' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ workflow: 'quick-task', worktree: false })
   })
 
   it('picking a model and ×2 variants rides along; {runs} answer navigates to the FIRST variant', async () => {
@@ -746,6 +866,39 @@ describe('submit', () => {
     await waitFor(() => expect(location()).toBe('/tasks/v-a'))
   })
 
+  it('shows a locked native default but omits it from the direct run request', async () => {
+    writeDraft({ ...readDraft(), model: 'opus' })
+    serve({
+      providerStatus: PROVIDERS_MULTI,
+      config: {
+        defaultModels: { claude: 'native-sonnet', codex: 'gpt-5.6-codex' },
+        modelsLocked: true,
+      },
+    })
+    renderNewTask()
+    await pillReady()
+
+    const modelPill = document.querySelector('[data-slot="model-pill"]') as HTMLElement
+    expect(modelPill.textContent).toContain('native-sonnet')
+    expect(modelPill.textContent).not.toContain('opus')
+    expect(modelPill.tagName).toBe('SPAN')
+    expect(modelPill.querySelector('svg')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Runner' }))
+    const runnerOptions = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(runnerOptions.find((option) => option.textContent?.includes('Codex')) as HTMLElement)
+    await waitFor(() => expect(modelPill.textContent).toContain('gpt-5.6-codex'))
+
+    fireEvent.change(textarea(), { target: { value: 'Use native settings' } })
+    await startTask()
+    expect(postedBody()).toEqual({
+      task: 'Use native settings',
+      workflow: 'quick-task',
+      runner: 'codex',
+    })
+  })
+
   it('single-backend hosts omit `runner` when it matches the server default', async () => {
     serve()
     renderNewTask()
@@ -755,13 +908,29 @@ describe('submit', () => {
     expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
   })
 
-  it('sends the fallback runner when the configured default is temporarily unavailable', async () => {
-    serve({ health: { ...HEALTH, defaultRunner: 'codex' } })
+  it('uses the active project default rather than the boot project health default', async () => {
+    serve({ health: { ...HEALTH, defaultRunner: 'codex' }, config: { defaultRunner: 'claude' } })
     renderNewTask()
     await pillReady()
-    fireEvent.change(textarea(), { target: { value: 'pin the healthy backend' } })
+    fireEvent.change(textarea(), { target: { value: 'follow the project default' } })
     await startTask()
-    expect(postedBody()).toMatchObject({ runner: 'claude' })
+    expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
+  })
+
+  it('sends an explicit runner pick when boot health claims that runner is the default', async () => {
+    serve({
+      health: { ...HEALTH_MULTI, defaultRunner: 'codex' },
+      config: { defaultRunner: 'claude' },
+      providerStatus: PROVIDERS_MULTI,
+    })
+    renderNewTask()
+    await pillReady()
+    fireEvent.pointerDown(document.querySelector('[data-slot="runner-pill"]') as HTMLElement)
+    const options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((option) => option.textContent?.includes('codex')) as HTMLElement)
+    fireEvent.change(textarea(), { target: { value: 'pin codex' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ runner: 'codex' })
   })
 
   it('defaults follow-up generation on, but posts and remembers an explicit opt-out', async () => {
@@ -780,7 +949,7 @@ describe('submit', () => {
 
     expect((postedBody() as Record<string, unknown>).generateFollowups).toBe(false)
     await waitFor(() =>
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')?.body).toMatchObject({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body).toMatchObject({
         lastGenerateFollowups: false,
       }),
     )
@@ -821,7 +990,7 @@ describe('submit', () => {
     expect(worktree.getAttribute('aria-checked')).toBe('true')
   })
 
-  it('forces and disables Worktree for a multi-step workflow', async () => {
+  it('lets a multi-step workflow opt out and submits worktree:false', async () => {
     serve({
       workflows: {
         workflows: [
@@ -839,23 +1008,22 @@ describe('submit', () => {
       },
       uiState: { lastTask: { source: 'workflow', ref: 'fix-and-verify' } },
     })
-    writeDraft({
-      ...readDraft(),
-      worktree: false,
-    })
     renderNewTask()
     await pillReady('fix-and-verify')
 
     const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(worktree.getAttribute('aria-checked')).toBe('true')
-    expect(worktree.disabled).toBe(true)
-    expect(worktree.title).toBe('Multi-step workflows require an isolated worktree')
+    expect(worktree.disabled).toBe(false)
+    fireEvent.click(worktree)
+    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    fireEvent.change(textarea(), { target: { value: 'Run the whole workflow in place' } })
+    await startTask()
+    expect(postedBody()).toMatchObject({ workflow: 'fix-and-verify', worktree: false })
   })
 
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, followups: false, singleProject: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -893,10 +1061,10 @@ describe('submit', () => {
     await startTask()
 
     await waitFor(() =>
-      expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/ui-state')).toBe(true),
+      expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')).toBe(true),
     )
     const persisted = requests
-      .filter((r) => r.method === 'PUT' && r.url === '/api/ui-state')
+      .filter((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')
       .map((r) => r.body as Record<string, unknown>)
     for (const body of persisted) expect(body).not.toHaveProperty('lastGenerateFollowups')
   })
@@ -933,12 +1101,12 @@ describe('drafts and prefill', () => {
     // auto=1 with the WRONG key resolves to the blocked/prefill path — never a run.
     await pillReady('deploy')
     expect(textarea().value).toBe('https://github.com/o/r/issues/5')
-    expect(requests.some((r) => r.method === 'POST' && r.url === '/api/runs')).toBe(false)
+    expect(requests.some((r) => r.method === 'POST' && r.url === '/api/v1/runs')).toBe(false)
   })
 
   // #374: the composer is the middle of the inbox round trip — the Run link carries `todo=`,
   // and the started run must carry it back so the entry is marked started and leaves the inbox.
-  it('?todo= prefill: the entry id rides along to POST /api/runs so the inbox entry is marked', async () => {
+  it('?todo= prefill: the entry id rides along to POST /api/v1/runs so the inbox entry is marked', async () => {
     serve()
     renderNewTask('/new?skill=deploy&ref=ship%20it&todo=t1')
     await pillReady('deploy')
@@ -989,8 +1157,8 @@ describe('drafts and prefill', () => {
 // ---- bookmarklet auto-start (spec 011, Step 1.3 — legacy handleDeepLink parity) -----------------
 
 describe('bookmarklet auto-start', () => {
-  const runsPosted = () => requests.filter((r) => r.method === 'POST' && r.url === '/api/runs')
-  const keyFetched = () => requests.some((r) => r.method === 'GET' && r.url === '/api/launch-key')
+  const runsPosted = () => requests.filter((r) => r.method === 'POST' && r.url === '/api/v1/runs')
+  const keyFetched = () => requests.some((r) => r.method === 'GET' && r.url === '/api/v1/launch-key')
 
   it('waits for provider status before a valid signed bookmarklet starts', async () => {
     let release!: (response: Response) => void
@@ -1003,7 +1171,7 @@ describe('bookmarklet auto-start', () => {
     renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
 
     await waitFor(() =>
-      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true),
+      expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true),
     )
     expect(keyFetched()).toBe(false)
     expect(runsPosted()).toHaveLength(0)
@@ -1018,15 +1186,19 @@ describe('bookmarklet auto-start', () => {
     expect(runsPosted()).toHaveLength(1)
   })
 
-  it('waits for health and sends Claude explicitly when the eventual server default is Codex', async () => {
-    const delayedHealth = deferredJson<HealthResponse>()
+  it('waits for project config, then keeps an untouched project-default runner implicit', async () => {
+    const delayedConfig = deferredJson<ConfigResponse>()
     const delayedProviders = deferredJson<ProviderStatusResponse>()
-    serve({ health: delayedHealth.fetch, providerStatus: delayedProviders.fetch })
+    serve({
+      health: { ...HEALTH, defaultRunner: 'codex' },
+      config: delayedConfig.fetch,
+      providerStatus: delayedProviders.fetch,
+    })
     const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
 
     await waitFor(() => {
-      expect(requests.some((request) => request.url === '/api/health')).toBe(true)
-      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/config')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true)
     })
     await act(async () => {
       delayedProviders.release(PROVIDERS_CONNECTED)
@@ -1038,43 +1210,43 @@ describe('bookmarklet auto-start', () => {
     expect(keyFetched()).toBe(false)
     expect(runsPosted()).toHaveLength(0)
 
-    delayedHealth.release({ ...HEALTH, defaultRunner: 'codex' })
+    delayedConfig.release(CONFIG)
+    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
+    expect(runsPosted().map((request) => request.body)).toEqual([
+      {
+        task: 'hello',
+        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
+      },
+    ])
+  })
+
+  it('waits for project config and sends a connected fallback when that default is unavailable', async () => {
+    const delayedConfig = deferredJson<ConfigResponse>()
+    const delayedProviders = deferredJson<ProviderStatusResponse>()
+    serve({ config: delayedConfig.fetch, providerStatus: delayedProviders.fetch })
+    const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
+
+    await waitFor(() => {
+      expect(requests.some((request) => request.url === '/api/v1/config')).toBe(true)
+      expect(requests.some((request) => request.url === '/api/v1/providers/status')).toBe(true)
+    })
+    await act(async () => {
+      delayedProviders.release(PROVIDERS_CONNECTED)
+      await Promise.resolve()
+    })
+    await waitFor(() =>
+      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('success'),
+    )
+    expect(keyFetched()).toBe(false)
+    expect(runsPosted()).toHaveLength(0)
+
+    delayedConfig.release({ ...CONFIG, defaultRunner: 'codex' })
     await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
     expect(runsPosted().map((request) => request.body)).toEqual([
       {
         task: 'hello',
         steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
         runner: 'claude',
-      },
-    ])
-  })
-
-  it('waits for health and keeps the protected body implicit when the eventual default is Claude', async () => {
-    const delayedHealth = deferredJson<HealthResponse>()
-    const delayedProviders = deferredJson<ProviderStatusResponse>()
-    serve({ health: delayedHealth.fetch, providerStatus: delayedProviders.fetch })
-    const { client } = renderNewTask('/new?skill=deploy&ref=hello&auto=1&key=k-real')
-
-    await waitFor(() => {
-      expect(requests.some((request) => request.url === '/api/health')).toBe(true)
-      expect(requests.some((request) => request.url === '/api/providers/status')).toBe(true)
-    })
-    await act(async () => {
-      delayedProviders.release(PROVIDERS_CONNECTED)
-      await Promise.resolve()
-    })
-    await waitFor(() =>
-      expect(client.getQueryState(workspaceQueryKeys.providerStatus)?.status).toBe('success'),
-    )
-    expect(keyFetched()).toBe(false)
-    expect(runsPosted()).toHaveLength(0)
-
-    delayedHealth.release(HEALTH)
-    await waitFor(() => expect(screen.queryByTestId('elsewhere')).not.toBeNull())
-    expect(runsPosted().map((request) => request.body)).toEqual([
-      {
-        task: 'hello',
-        steps: [{ id: 'task', name: 'deploy', skill: 'deploy', prompt: '{{task}}' }],
       },
     ])
   })
@@ -1092,7 +1264,7 @@ describe('bookmarklet auto-start', () => {
     ])
     expect(location()).toBe('/tasks/r1')
     // Unattended starts do not rewrite the sticky lastTask (legacy parity).
-    expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/ui-state')).toBe(false)
+    expect(requests.some((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')).toBe(false)
   })
 
   it('uses an explicit connected fallback when the saved server default is disconnected', async () => {
@@ -1301,15 +1473,15 @@ describe('the Start | Plan first toggle', () => {
 })
 
 describe('the plan flow', () => {
-  it('submit in plan mode POSTs /api/plan (never /api/runs) and opens the review overlay', async () => {
+  it('submit in plan mode POSTs /api/v1/plan (never /api/v1/runs) and opens the review overlay', async () => {
     serve()
     renderNewTask()
     await planTask('Tighten the flaky suite')
 
-    expect(requests.find((r) => r.url === '/api/plan')?.body).toEqual({
+    expect(requests.find((r) => r.url === '/api/v1/plan')?.body).toEqual({
       task: 'Tighten the flaky suite',
     })
-    expect(requests.some((r) => r.url === '/api/runs' && r.method === 'POST')).toBe(false)
+    expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(false)
 
     // Task line, rationale, numbered cards with skill/check badges and hints.
     expect(document.querySelector('[data-slot="plan-task"]')?.textContent).toBe(
@@ -1398,7 +1570,7 @@ describe('the plan flow', () => {
     fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
 
     await waitFor(() =>
-      expect(requests.some((r) => r.url === '/api/runs' && r.method === 'POST')).toBe(true),
+      expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(true),
     )
     expect(postedBody()).toEqual({
       task: 'Tighten the flaky suite',
@@ -1410,7 +1582,26 @@ describe('the plan flow', () => {
     await waitFor(() => expect(location()).toBe('/tasks/planned-1'))
   })
 
-  it('▶ Start sends the connected runner explicitly when health is still pending', async () => {
+  it('▶ Start omits a locked native default from the planned run request', async () => {
+    serve({
+      config: { defaultModels: { claude: 'native-sonnet' }, modelsLocked: true },
+      createRun: { id: 'planned-native' },
+    })
+    renderNewTask()
+    await planTask('Plan with native settings')
+    expect((document.querySelector('[data-slot="model-pill"]') as HTMLElement).textContent).toContain(
+      'native-sonnet',
+    )
+
+    fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
+    await waitFor(() => expect(postedBody()).toBeDefined())
+    expect(postedBody()).toEqual({
+      task: 'Plan with native settings',
+      steps: PLAN.steps,
+    })
+  })
+
+  it('▶ Start uses project config while boot health is still pending', async () => {
     const delayedHealth = deferredJson<HealthResponse>()
     serve({ health: delayedHealth.fetch, createRun: { id: 'planned-before-health' } })
     renderNewTask()
@@ -1419,7 +1610,7 @@ describe('the plan flow', () => {
     fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
     await waitFor(() => expect(postedBody()).toBeDefined())
 
-    expect((postedBody() as Record<string, unknown>).runner).toBe('claude')
+    expect((postedBody() as Record<string, unknown>).runner).toBeUndefined()
     delayedHealth.release(HEALTH)
   })
 
@@ -1449,7 +1640,7 @@ describe('the plan flow', () => {
     start.removeAttribute('disabled')
     fireEvent.click(start)
 
-    expect(requests.some((request) => request.url === '/api/runs')).toBe(false)
+    expect(requests.some((request) => request.url === '/api/v1/runs')).toBe(false)
   })
 
   it('▶ Start carries the follow-up opt-out from the composer and remembers it', async () => {
@@ -1464,7 +1655,7 @@ describe('the plan flow', () => {
 
     await waitFor(() => expect((postedBody() as Record<string, unknown>).generateFollowups).toBe(false))
     await waitFor(() =>
-      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')?.body).toEqual({
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body).toEqual({
         lastGenerateFollowups: false,
       }),
     )
@@ -1478,7 +1669,7 @@ describe('the plan flow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
     await waitFor(() => expect(screen.queryByText('Proposed chain')).toBeNull())
     expect(textarea().value).toBe('keep this text')
-    expect(requests.some((r) => r.url === '/api/runs' && r.method === 'POST')).toBe(false)
+    expect(requests.some((r) => r.url === '/api/v1/runs' && r.method === 'POST')).toBe(false)
   })
 })
 
@@ -1494,9 +1685,9 @@ describe('save as chain', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save' }))
 
     await waitFor(() =>
-      expect(requests.some((r) => r.url === '/api/workflows' && r.method === 'POST')).toBe(true),
+      expect(requests.some((r) => r.url === '/api/v1/workflows' && r.method === 'POST')).toBe(true),
     )
-    expect(requests.find((r) => r.url === '/api/workflows' && r.method === 'POST')?.body).toEqual({
+    expect(requests.find((r) => r.url === '/api/v1/workflows' && r.method === 'POST')?.body).toEqual({
       name: 'my chain',
       steps: PLAN.steps,
     })
@@ -1524,7 +1715,7 @@ describe('save as chain', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Overwrite' }))
 
     await waitFor(() => {
-      const saves = requests.filter((r) => r.url === '/api/workflows' && r.method === 'POST')
+      const saves = requests.filter((r) => r.url === '/api/v1/workflows' && r.method === 'POST')
       expect(saves).toHaveLength(2)
       expect(saves[1]?.body).toEqual({ name: 'my chain', steps: PLAN.steps, overwrite: true })
     })
@@ -1645,5 +1836,190 @@ describe('prompt templates on the new-task composer', () => {
       task: 'Follow the fix rules.',
       steps: [{ id: 'task', name: 'om-fix', skill: 'om-fix', prompt: '{{task}}' }],
     })
+  })
+})
+
+// ---- agent accounts (spec 2026-07-29-agent-profiles) ------------------------------------------
+
+/** One extra Claude login beside the discovered defaults. */
+const ACCOUNTS: AgentProfilesResponse = {
+  defaults: {},
+  editable: true,
+  profileCapableProviders: ['claude', 'codex'],
+  selections: {},
+  profiles: [
+    {
+      id: 'default',
+      provider: 'claude',
+      label: 'Default',
+      configDir: '/home/u/.claude',
+      path: '/home/u/.claude',
+      exists: true,
+      looksValid: true,
+      isDefault: true,
+      status: { provider: 'claude', status: 'connected' },
+      files: [],
+    },
+    {
+      id: 'klaudiusz',
+      provider: 'claude',
+      label: 'Klaudiusz',
+      configDir: '~/.claude-klaudiusz',
+      path: '/home/u/.claude-klaudiusz',
+      exists: true,
+      looksValid: true,
+      isDefault: false,
+      status: { provider: 'claude', status: 'connected', profileId: 'work' },
+      files: [],
+    },
+  ],
+}
+
+/** The one pill that now carries both: which agent, and which of that agent's logins. */
+const runnerPill = () => document.querySelector('[data-slot="runner-pill"]') as HTMLElement | null
+
+/** Open a PickerPill and click the option whose label contains `match`. */
+const pickFrom = async (pill: HTMLElement, match: string) => {
+  fireEvent.pointerDown(pill)
+  const options = await screen.findAllByRole('menuitemradio')
+  fireEvent.click(options.find((o) => o.textContent?.includes(match)) as HTMLElement)
+}
+
+/**
+ * The account lives INSIDE the runner pill (spec 2026-07-29-agent-profiles): "which agent" and
+ * "which of my logins for that agent" are one decision, and the composer row already carries six
+ * pills. The account defaults to whatever the repo is set to and is overridable per task.
+ */
+describe('the composer runner pill carries the account', () => {
+  it('adds nothing when no second login exists — the zero-config composer is unchanged', async () => {
+    serve({
+      agentProfiles: { ...ACCOUNTS, profiles: ACCOUNTS.profiles.filter((p: (typeof ACCOUNTS)['profiles'][number]) => p.isDefault) },
+    })
+    renderNewTask()
+    await pillReady()
+    // Settled: the model pill (rendered unconditionally beside it) is up, so this is not a race.
+    await waitFor(() => expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull())
+    // One runner and no accounts leaves nothing to choose, so the pill stays away entirely.
+    expect(runnerPill()).toBeNull()
+    expect(document.querySelector('[data-slot="account-pill"]')).toBeNull()
+  })
+
+  it('lists every agent-and-login as ONE flat row, on a single-runner host too', async () => {
+    // Two regressions in one: folding the account into the runner pill must not hide it on a
+    // claude-only machine (where the pill never used to render), and the list must be flat —
+    // one row per thing that can run the task, not a runner choice with an account choice nested
+    // under it.
+    serve({ agentProfiles: ACCOUNTS })
+    renderNewTask()
+    await pillReady()
+    await waitFor(() => expect(runnerPill()).not.toBeNull())
+
+    fireEvent.pointerDown(runnerPill()!)
+    const options = await screen.findAllByRole('menuitemradio')
+    expect(options.map((o) => o.textContent?.replace(/\s+/g, ' '))).toEqual([
+      'claude · Default/home/u/.claude'.replace(/\s+/g, ' '),
+      'claude · Klaudiusz~/.claude-klaudiusz'.replace(/\s+/g, ' '),
+    ])
+    // Each row names its folder: the labels are cezar's invention, the folder is the account.
+    expect(options[1]?.textContent).toContain('~/.claude-klaudiusz')
+  })
+
+  it('starts on the account the repo is set to, without the user picking anything', async () => {
+    serve({
+      agentProfiles: { ...ACCOUNTS, selections: { '/repo': { claude: 'klaudiusz' } } },
+    })
+    renderNewTask()
+    await pillReady()
+    // The repo's choice IS the initial selection — no "repo default" abstraction to decode.
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+
+    fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+    await startTask()
+    // …and an untouched pill still sends nothing, so the repo stays in charge.
+    expect(postedBody()).not.toHaveProperty('agentProfile')
+  })
+
+  it('sends `default` explicitly when the repo points elsewhere — not an absent key', async () => {
+    // The one case where "follow the repo" and "the discovered account" differ. An absent key would
+    // run the task on Klaudiusz, which is the opposite of what picking `claude · Default` says.
+    serve({
+      agentProfiles: { ...ACCOUNTS, selections: { '/repo': { claude: 'klaudiusz' } } },
+    })
+    renderNewTask()
+    await pillReady()
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+
+    await pickFrom(runnerPill()!, 'Default')
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Default'))
+    fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ agentProfile: 'default' })
+  })
+
+  it('sends the picked account on the wire', async () => {
+    serve({ agentProfiles: ACCOUNTS })
+    renderNewTask()
+    await pillReady()
+    await waitFor(() => expect(runnerPill()).not.toBeNull())
+
+    await pickFrom(runnerPill()!, 'Klaudiusz')
+    // The pill says which login the task will really use, not just which agent.
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+    await startTask()
+
+    expect(postedBody()).toMatchObject({ agentProfile: 'klaudiusz' })
+  })
+
+  it('sends NOTHING when the repo default is left alone', async () => {
+    serve({ agentProfiles: ACCOUNTS })
+    renderNewTask()
+    await pillReady()
+    await waitFor(() => expect(runnerPill()).not.toBeNull())
+
+    fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+    await startTask()
+    // An absent key means "follow the repo", which is what an untouched control means.
+    expect(postedBody()).not.toHaveProperty('agentProfile')
+  })
+
+  it('switches back to the discovered account after picking another', async () => {
+    serve({ agentProfiles: ACCOUNTS })
+    renderNewTask()
+    await pillReady()
+    await waitFor(() => expect(runnerPill()).not.toBeNull())
+
+    await pickFrom(runnerPill()!, 'Klaudiusz')
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    await pickFrom(runnerPill()!, 'Default')
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Default'))
+
+    fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+    await startTask()
+    // This repo has no selection of its own, so `default` and "follow the repo" agree — but the
+    // pick was explicit, and saying so keeps it true if the repo setting changes before it starts.
+    expect(postedBody()).toMatchObject({ agentProfile: 'default' })
+  })
+
+  it('drops an account belonging to another runner when the runner switches', async () => {
+    // A Claude account must not ride along into a codex run: the id means nothing there, and
+    // sending it would assert a choice the user never made for that engine.
+    serve({ agentProfiles: ACCOUNTS, health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    renderNewTask()
+    await pillReady()
+    await waitFor(() => expect(runnerPill()).not.toBeNull())
+
+    await pickFrom(runnerPill()!, 'Klaudiusz')
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('Klaudiusz'))
+
+    await pickFrom(runnerPill()!, 'codex')
+
+    // Codex has no second login, so the account group goes away and the pill is a runner again…
+    await waitFor(() => expect(runnerPill()?.textContent?.trim()).toBe('codex'))
+    fireEvent.change(textarea(), { target: { value: 'do the thing' } })
+    await startTask()
+    // …and nothing account-shaped reaches the wire.
+    expect(postedBody()).not.toHaveProperty('agentProfile')
   })
 })

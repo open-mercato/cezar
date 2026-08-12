@@ -21,6 +21,7 @@ import {
   ToolStreak,
 } from './thread-items'
 import { reduceThread } from './thread-state'
+import { SessionTranscript } from './session-transcript'
 
 afterEach(cleanup)
 
@@ -105,12 +106,16 @@ describe('ToolCard — states', () => {
     expect(document.querySelector('[data-slot="tool-output"] pre')?.textContent).toContain('npm warn deprecated')
   })
 
-  it('failed: open by default, danger tint, the error string rendered in danger tone', () => {
+  it('failed: closed by default with a faint tint; expands to the danger-toned error', () => {
     const item = goldenItem(failedAndDenied, 'toolu_fail_01', 'failed')
     render(<ToolCard item={item} />)
     expect(card().getAttribute('data-status')).toBe('failed')
+    // A faint danger tint still identifies it, but the loud outline and auto-open are gone.
     expect(card().className).toContain('border-danger')
     expect(screen.getByText('failed')).toBeTruthy()
+    // Calm by default: the red error body only appears once the reader opens the card.
+    expect(document.querySelector('[data-slot="tool-error"]')).toBeNull()
+    fireEvent.click(trigger(/failed/))
     const error = document.querySelector('[data-slot="tool-error"]')
     expect(error?.textContent).toContain('npm ERR! Missing script: "lint"')
     expect(error?.className).toContain('text-danger')
@@ -282,7 +287,14 @@ describe('sub-agent nesting (golden subagent-task fixture, end to end through th
     const blocks = groupThreadItems(turns[0]!.items)
     const task = blocks.find((b) => b.kind === 'tool-card')
     if (task?.kind !== 'tool-card') throw new Error('expected the Task card')
-    render(<ToolCard item={task.item} nested={task.children} />)
+    render(
+      <SessionTranscript
+        runId="r1"
+        viewId="main"
+        sections={[{ id: 'turn-1', entries: turns[0]!.items }]}
+        mode="document"
+      />,
+    )
 
     const button = screen.getByRole('button', { name: /Task/ })
     expect((button as HTMLButtonElement).disabled).toBe(false) // nested children ARE detail — the card is not locked

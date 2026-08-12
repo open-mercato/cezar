@@ -8,7 +8,7 @@ import { DEFAULT_PROMPT_TEMPLATES } from '@/lib/prompt-templates'
 import { PromptTemplatesSection } from './prompt-templates-section'
 
 /**
- * Settings → Prompt templates (#413): the round-trip against a stubbed `/api/ui-state` — an
+ * Settings → Prompt templates (#413): the round-trip against a stubbed `/api/v1/ui-state` — an
  * untouched repo shows the built-ins with nothing persisted yet, edits are local until Save,
  * and Save PUTs the whole `promptTemplates` array (the ui-state merge is shallow, same rule as
  * Appearance's accent/density PUT).
@@ -44,10 +44,10 @@ function serve(uiState: Record<string, unknown> = {}, skills: unknown[] = SKILLS
       const method = init?.method ?? 'GET'
       const body = init?.body ? (JSON.parse(String(init.body)) as unknown) : undefined
       requests.push({ method, url, body })
-      if (url === '/api/ui-state' && method === 'GET') return json(uiState)
-      if (url === '/api/ui-state' && method === 'PUT')
+      if (url === '/api/v1/ui-state' && method === 'GET') return json(uiState)
+      if (url === '/api/v1/ui-state' && method === 'PUT')
         return json({ ...uiState, ...(body as Record<string, unknown>) })
-      if (url.startsWith('/api/skills')) return json(skills)
+      if (url.startsWith('/api/v1/skills')) return json(skills)
       return new Promise<never>(() => {})
     }),
   )
@@ -63,7 +63,7 @@ function renderSection() {
 }
 
 const putBody = () =>
-  requests.find((r) => r.method === 'PUT' && r.url === '/api/ui-state')?.body as
+  requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body as
     | { promptTemplates?: unknown[] }
     | undefined
 const rows = () => [...document.querySelectorAll<HTMLElement>('[data-slot="prompt-template-row"]')]
@@ -184,9 +184,9 @@ describe('the prompt templates section', () => {
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input)
         const method = init?.method ?? 'GET'
-        if (url === '/api/ui-state' && method === 'GET')
+        if (url === '/api/v1/ui-state' && method === 'GET')
           return new Response(JSON.stringify({}), { status: 200, headers: { 'content-type': 'application/json' } })
-        if (url === '/api/ui-state' && method === 'PUT')
+        if (url === '/api/v1/ui-state' && method === 'PUT')
           return new Response(JSON.stringify({ error: 'disk full' }), {
             status: 500,
             headers: { 'content-type': 'application/json' },
@@ -211,7 +211,7 @@ describe('assigning a template to a skill', () => {
   const option = (name: string) =>
     document.querySelector<HTMLElement>(`[data-slot="prompt-template-skill-option"][data-skill="${name}"]`)
 
-  /** Open the picker. The trigger is disabled until /api/skills answers, so wait it out first —
+  /** Open the picker. The trigger is disabled until /api/v1/skills answers, so wait it out first —
    *  a click on a disabled button is silently a no-op. */
   const openPicker = async (row: HTMLElement) => {
     await waitFor(() => expect(trigger(row).disabled).toBe(false))
@@ -255,6 +255,28 @@ describe('assigning a template to a skill', () => {
     )
     const options = [...document.querySelectorAll<HTMLElement>('[data-slot="prompt-template-skill-option"]')]
     expect(options.map((o) => o.dataset.skill)).toEqual(['g-review', 'om-fix'])
+  })
+
+  it('a query filters the Most used tier too — not just the rest of the catalog (#668)', async () => {
+    // g-review is promoted into Most used by usage; a query for "fix" must still hide it.
+    serve({ skillUsage: { 'g-review': 3 } })
+    renderSection()
+    await waitFor(() => expect(rows()).toHaveLength(DEFAULT_PROMPT_TEMPLATES.length))
+
+    await openPicker(rows()[0]!)
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="prompt-template-skill-option"]')).toHaveLength(2),
+    )
+
+    const searchInput = document.querySelector<HTMLInputElement>('[placeholder="search skills…"]')!
+    fireEvent.change(searchInput, { target: { value: 'fix' } })
+
+    await waitFor(() =>
+      expect(document.querySelectorAll('[data-slot="prompt-template-skill-option"]')).toHaveLength(1),
+    )
+    expect(option('om-fix')).not.toBeNull()
+    // The frequently-used g-review must be gone even though it sits in the Most used tier.
+    expect(option('g-review')).toBeNull()
   })
 
   it('assigning shows a chip and Save PUTs the skills alongside the template', async () => {

@@ -41,6 +41,38 @@ export function formatCost(usd: number | undefined): string {
   return `$${usd >= 10 ? usd.toFixed(0) : usd.toFixed(2)}`
 }
 
+/**
+ * When a `scheduled` run resumes itself, sized for a list row (spec
+ * 2026-08-03-auto-resume-after-usage-limit).
+ *
+ * `label` rides in the status pill beside the word "scheduled", so it is deliberately terse:
+ * clock time alone for an appointment later today, a short date in front once it is not. `title`
+ * carries the full instant to the second for the hover — a row has no space for it, and the
+ * thread's own hint is where the exact time belongs.
+ *
+ * Undefined for anything without a live schedule, including an unparseable stamp: a row must
+ * never print `Invalid Date` next to "scheduled".
+ */
+export function scheduledResume(
+  run: Pick<RunRecord, 'status' | 'autoResumeAt'>,
+  now: Date = new Date(),
+): { label: string; title: string } | undefined {
+  if (run.status !== 'failed' || !run.autoResumeAt) return undefined
+  const at = new Date(run.autoResumeAt)
+  if (!Number.isFinite(at.getTime())) return undefined
+  const sameDay = at.toDateString() === now.toDateString()
+  const time = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(at)
+  return {
+    label: sameDay
+      ? time
+      : `${new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(at)} ${time}`,
+    title: `Resumes automatically at ${new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'long',
+    }).format(at)}`,
+  }
+}
+
 /** The Workflow column's text. `(planned)` chains and inbox runs carry their meaning in their
  *  first agent step, so that name reads better than the placeholder. Legacy `workflowLabel`. */
 export function workflowLabel(run: RunRecord): string {
@@ -74,18 +106,58 @@ export function finishedRunCount(runs: readonly RunRecord[]): number {
   return runs.filter((run) => !run.archived && FINISHED_STATUSES.has(run.status)).length
 }
 
+/** A git remote as a GitHub web root (`https://github.com/owner/repo`) — the caller passes the
+ *  remote `/api/v1/health` reports (`repo.remote`), via `useProjectRepoBase`. Handles the scheme forms
+ *  (`https://`, `ssh://`, credentials, port) and the scp-like `git@github.com:owner/repo.git`;
+ *  undefined for every non-github.com host, local path, or absent remote — the cockpit only knows
+ *  how to spell GitHub issue URLs. Mirrors the server's `parseRemote` (`src/server/forge/index.ts`),
+ *  duplicated rather than imported because that module is server-only. */
+export function githubRepoBase(remote: string | undefined): string | undefined {
+  if (!remote) return undefined
+  const trimmed = remote.trim().replace(/\/+$/, '')
+  const url = /^(?:https?|ssh|git|git\+ssh):\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/(.+)$/.exec(trimmed)
+  // scp-like: [user@]host:owner/repo(.git) — a leading '/' (local path) can't match the host group.
+  const scp = url ? null : /^(?:[^@/:]+@)?([^:/]+):(.+)$/.exec(trimmed)
+  const match = url ?? scp
+  if (!match) return undefined
+  const [, host, path] = match
+  if (!path || host?.toLowerCase() !== 'github.com') return undefined
+  const parts = path.replace(/\.git$/i, '').split('/').filter(Boolean)
+  const owner = parts[parts.length - 2]
+  const repo = parts[parts.length - 1]
+  return owner && repo ? `https://github.com/${owner}/${repo}` : undefined
+}
+
 /** The URL a PR *display* chip shows: the PR the task created, else the PR the conversation
  *  is about (#407 — review/continue tasks reference an existing PR instead of opening one).
  *  Action gates (Draft PR, Create PR→View PR) must keep reading `pullRequestUrl` directly:
  *  a task that reviewed PR X must still be able to open its own PR from its branch. */
 export function taskPrUrl(run: RunRecord): string | undefined {
-  return run.pullRequestUrl ?? run.referencedPullRequestUrl
+  if (run.pullRequestUrl) return run.pullRequestUrl
+  // #526: a run whose declared subject is an ISSUE (CEZ:ISSUE) and that declared no PR must
+  // not adopt an incidental transcript PR as "its" PR — an `om-prepare-issue` run linking a
+  // stray PR that merely appeared in its output is a false, misleading association.
+  if (run.markerRefs?.issue !== undefined && run.markerRefs?.pr === undefined) return undefined
+  return run.referencedPullRequestUrl
 }
 
 /** Display-only issue association. Action gates must continue to use their created-resource
- * fields directly; this accessor exists only for links painted by the cockpit. */
-export function taskIssueUrl(run: RunRecord): string | undefined {
-  return run.referencedIssueUrl
+ * fields directly; this accessor exists only for links painted by the cockpit.
+ *
+ * `repoBase` is the repository of the project on screen (`useProjectRepoBase()`) and is the only
+ * authority a *synthesized* link may be built on. Callers without it get today's behavior:
+ * a discovered URL or nothing. */
+export function taskIssueUrl(run: RunRecord, repoBase?: string): string | undefined {
+  if (run.referencedIssueUrl) return run.referencedIssueUrl
+  // #526: an issue-subject run (om-prepare-issue) knows its issue number from the CEZ:ISSUE
+  // marker even when no full `…/issues/N` link was ever scanned into referencedIssueUrl.
+  // Synthesize the link from the PROJECT's repo only — never from `referenced*Candidates` or
+  // `referenced*Url`, which are transcript scrapings that routinely name other repositories:
+  // `CEZ:ISSUE=524` beside an incidental `github.com/other/repo/pull/1` would rebuild the exact
+  // wrong-link defect #526 exists to kill, just pointing at an issue instead of a PR.
+  const number = run.markerRefs?.issue ?? run.issueNumber
+  if (!number || !repoBase) return undefined
+  return `${repoBase}/issues/${number}`
 }
 
 export interface TaskReference {

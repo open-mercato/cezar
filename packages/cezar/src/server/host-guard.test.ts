@@ -2,9 +2,9 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { createApp, type ServerDeps } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { createApp, type ServerDeps } from './server.ts';
 
 /**
  * DNS-rebinding guard: in local mode (loopback bind, no `CEZ_REMOTE`) every
@@ -47,7 +47,7 @@ describe('host-header guard (DNS rebinding)', () => {
   const makeApp = (over: Partial<ServerDeps> = {}) =>
     createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', ...over });
 
-  const request = (host: string | null, path = '/api/health', over: Partial<ServerDeps> = {}) =>
+  const request = (host: string | null, path = '/api/v1/health', over: Partial<ServerDeps> = {}) =>
     makeApp(over).request(path, host === null ? {} : { headers: { host } });
 
   it.each(['localhost', 'localhost:4321', '127.0.0.1', '127.0.0.1:4321', '[::1]', '[::1]:4321'])(
@@ -66,7 +66,7 @@ describe('host-header guard (DNS rebinding)', () => {
   it.each(['attacker.example', 'attacker.example:4321', 'cezar.attacker.example', '192.168.1.10:4321'])(
     'rejects the rebound host %s with 403 on every route',
     async (host) => {
-      for (const path of ['/api/health', '/api/projects', '/api/fs/browse?path=', '/api/runs']) {
+      for (const path of ['/api/v1/health', '/api/v1/projects', '/api/v1/fs/browse?path=', '/api/v1/runs']) {
         const res = await request(host, path);
         expect(res.status).toBe(403);
         expect(await res.json()).toEqual({
@@ -77,7 +77,7 @@ describe('host-header guard (DNS rebinding)', () => {
   );
 
   it('rejects a rebound POST before the handler can act', async () => {
-    const res = await makeApp().request('/api/projects', {
+    const res = await makeApp().request('/api/v1/projects', {
       method: 'POST',
       headers: { host: 'attacker.example', 'content-type': 'application/json' },
       body: JSON.stringify({ root: repoRoot }),
@@ -92,7 +92,7 @@ describe('host-header guard (DNS rebinding)', () => {
   });
 
   it('is exempt for a non-loopback bind host — deliberately exposed', async () => {
-    const res = await request('cockpit.example.com', '/api/health', { bindHost: '0.0.0.0' });
+    const res = await request('cockpit.example.com', '/api/v1/health', { bindHost: '0.0.0.0' });
     expect(res.status).toBe(200);
   });
 });

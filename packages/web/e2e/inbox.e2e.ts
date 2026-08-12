@@ -12,7 +12,7 @@ import { AgentBrowser, readTestEnv } from './agent-browser'
  * resolution, same save/restore discipline) and asserts real cards render LIVE over the
  * stream, no reload. Dismiss is honestly reachable (DELETE only rewrites todos.json, which
  * this suite restores) and is exercised below. Run is a client-side navigation to a prefilled
- * `/new` (#374 — it no longer POSTs `/api/todos/:id/start` itself, so no run is ever created
+ * `/new` (#374 — it no longer POSTs `/api/v1/todos/:id/start` itself, so no run is ever created
  * just by clicking it) but a full new-task submit is its own surface with its own coverage, so
  * the Run flow past the navigation stays unit-pinned in routes/inbox.test.tsx.
  */
@@ -35,7 +35,7 @@ let followupsAvailable = false
 
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
-  const health = (await fetch(`${baseUrl}/api/health`).then((r) => r.json())) as {
+  const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
     capabilities: { followups: boolean }
   }
   followupsAvailable = health.capabilities.followups
@@ -148,7 +148,7 @@ describe('the inbox against the live dry-run server', () => {
     expect(browser.count(`${CARD}[data-id="e2e-inbox-2"]`)).toBe(1)
 
     // The server agreed: the DELETE landed in todos.json, not just in the query cache.
-    const res = await fetch(`${baseUrl}/api/todos`)
+    const res = await fetch(`${baseUrl}/api/v1/todos`)
     const items = (await res.json()) as Array<{ id: string }>
     expect(items.map((item) => item.id)).toEqual(['e2e-inbox-2'])
   })

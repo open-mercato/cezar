@@ -72,9 +72,9 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
       })
       const override = overrides[`${method} ${path}`]
       if (override) return override()
-      if (method === 'GET' && path === '/api/runs/r1/diff') return new Response(DIFF, { status: 200 })
-      if (method === 'GET' && path === '/api/runs') return jsonResponse([])
-      if (method === 'GET' && path === '/api/providers/status') {
+      if (method === 'GET' && path === '/api/v1/runs/r1/diff') return new Response(DIFF, { status: 200 })
+      if (method === 'GET' && path === '/api/v1/runs') return jsonResponse([])
+      if (method === 'GET' && path === '/api/v1/providers/status') {
         return jsonResponse({
           providers: [
             { provider: 'claude', status: 'connected', enabled: true },
@@ -114,7 +114,7 @@ function renderWithProviders(ui: ReactElement) {
 }
 
 const diffFetches = (sent: SentRequest[]) =>
-  sent.filter((r) => r.method === 'GET' && r.path === '/api/runs/r1/diff').length
+  sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs/r1/diff').length
 
 describe('the review gate on the thread', () => {
   it('renders the violet banner + panel ONLY while the run rests at review', () => {
@@ -169,7 +169,7 @@ describe('the review gate on the thread', () => {
 
   it('a non-diff server answer ("(no worktree — …)") renders as its own words', async () => {
     stubFetch({
-      'GET /api/runs/r1/diff': () =>
+      'GET /api/v1/runs/r1/diff': () =>
         new Response('(no worktree — this task ran directly in the repo working tree)', { status: 200 }),
     })
     renderWithProviders(<ReviewPanel run={run('review')} />)
@@ -209,7 +209,7 @@ describe('the review gate on the thread', () => {
     fireEvent.click(sendBack)
 
     await waitFor(() => {
-      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/runs/r1/continue')).toMatchObject({
+      expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')).toMatchObject({
         body: { text: 'Review feedback:\nfix the port handling' },
       })
     })
@@ -225,17 +225,17 @@ describe('the review gate on the thread', () => {
     await waitFor(() => expect(sendBack.disabled).toBe(false))
     fireEvent.change(notes, { target: { value: 'more tests' } })
     fireEvent.keyDown(notes, { key: 'Enter' })
-    expect(sent.filter((r) => r.path === '/api/runs/r1/continue')).toHaveLength(0)
+    expect(sent.filter((r) => r.path === '/api/v1/runs/r1/continue')).toHaveLength(0)
 
     fireEvent.keyDown(notes, { key: 'Enter', metaKey: true })
     await waitFor(() => {
-      expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/runs/r1/continue')).toHaveLength(1)
+      expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')).toHaveLength(1)
     })
   })
 
   it('provider loss disables Send back and blocks forced click and keyboard submissions', async () => {
     const sent = stubFetch({
-      'GET /api/providers/status': () =>
+      'GET /api/v1/providers/status': () =>
         jsonResponse({
           providers: [
             { provider: 'claude', status: 'disconnected', enabled: true },
@@ -256,12 +256,12 @@ describe('the review gate on the thread', () => {
     fireEvent.click(sendBack)
     fireEvent.keyDown(notes, { key: 'Enter', ctrlKey: true })
     await act(() => Promise.resolve())
-    expect(sent.filter((request) => request.path === '/api/runs/r1/continue')).toHaveLength(0)
+    expect(sent.filter((request) => request.path === '/api/v1/runs/r1/continue')).toHaveLength(0)
   })
 
   it('Send back explicitly selects a connected fallback for a disconnected run provider', async () => {
     const sent = stubFetch({
-      'GET /api/providers/status': () =>
+      'GET /api/v1/providers/status': () =>
         jsonResponse({
           providers: [
             { provider: 'claude', status: 'disconnected', enabled: true },
@@ -279,7 +279,7 @@ describe('the review gate on the thread', () => {
     fireEvent.click(sendBack)
 
     await waitFor(() =>
-      expect(sent.find((request) => request.path === '/api/runs/r1/continue')?.body).toEqual({
+      expect(sent.find((request) => request.path === '/api/v1/runs/r1/continue')?.body).toEqual({
         text: 'Review feedback:\nuse the available provider',
         runner: 'codex',
       }),
@@ -300,7 +300,7 @@ describe('the review gate on the thread', () => {
 
   it('Draft PR success: POSTs /pr and the toast carries the returned URL', async () => {
     const sent = stubFetch({
-      'POST /api/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/x/y/pull/7', dryRun: true }, 201),
+      'POST /api/v1/runs/r1/pr': () => jsonResponse({ url: 'https://github.com/x/y/pull/7', dryRun: true }, 201),
     })
     renderWithProviders(<ReviewPanel run={run('review')} />)
 
@@ -310,12 +310,12 @@ describe('the review gate on the thread', () => {
         'Draft PR created — https://github.com/x/y/pull/7',
       )
     })
-    expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/runs/r1/pr')).toHaveLength(1)
+    expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toHaveLength(1)
   })
 
   it('Draft PR 409: the server message as a danger toast + the copyable manual merge line', async () => {
     stubFetch({
-      'POST /api/runs/r1/pr': () =>
+      'POST /api/v1/runs/r1/pr': () =>
         jsonResponse({ error: 'gh pr create failed: not logged in', manual: 'git merge cez/r1' }, 409),
     })
     renderWithProviders(<ReviewPanel run={run('review')} />)
@@ -349,7 +349,7 @@ describe('the review gate on the thread', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Accept/ }))
     await waitFor(() => {
-      expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/runs/r1/finish')).toHaveLength(1)
+      expect(sent.filter((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toHaveLength(1)
     })
   })
 })

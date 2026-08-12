@@ -7,7 +7,7 @@ import type { DiffFileChange } from './types'
 // Explicit rather than relying on RTL's auto-cleanup, which only runs when vitest `globals` is on.
 afterEach(cleanup)
 
-/** The server's `/api/runs/:id/changes` file shape — the facade's input contract. */
+/** The server's `/api/v1/runs/:id/changes` file shape — the facade's input contract. */
 const MODIFIED: DiffFileChange = {
   path: 'src/a.ts',
   status: 'modified',
@@ -167,12 +167,12 @@ describe('Diff facade — image previews (#365)', () => {
   const DELETED_IMAGE: DiffFileChange = { ...IMAGE, path: 'assets/gone.png', status: 'deleted' }
 
   it('renders an inline <img> from imageSrc instead of the binary note, tagged "image" not "binary"', async () => {
-    const imageSrc = vi.fn((path: string) => `/api/runs/r1/files?path=${path}&raw=1`)
+    const imageSrc = vi.fn((path: string) => `/api/v1/runs/r1/files?path=${path}&raw=1`)
     await renderDiff(<Diff files={[IMAGE]} imageSrc={imageSrc} />, 'assets/logo.png')
 
     const img = document.querySelector('[data-slot="diff-image-preview"] img')
     expect(img).not.toBeNull()
-    expect(img?.getAttribute('src')).toBe('/api/runs/r1/files?path=assets/logo.png&raw=1')
+    expect(img?.getAttribute('src')).toBe('/api/v1/runs/r1/files?path=assets/logo.png&raw=1')
     expect(imageSrc).toHaveBeenCalledWith('assets/logo.png')
     expect(screen.queryByText('Binary file — no text diff.')).toBeNull()
     // Status badge reads "image", not "binary".

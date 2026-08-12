@@ -66,7 +66,7 @@ type Answers = {
   /** Keyed by the `path` query value; `''` is the browse root. */
   browse?: Record<string, Response | (() => Response)>
   projects?: ProjectListEntry[]
-  /** What `POST /api/projects` answers. Receives the posted root. */
+  /** What `POST /api/v1/projects` answers. Receives the posted root. */
   register?: (root: string) => Response
 }
 
@@ -76,13 +76,13 @@ function serve({ browse = { '': json(HOME) }, projects = [], register }: Answers
   posted.length = 0
   fetchMock.mockImplementation(async (input, init) => {
     const url = new URL(String(input), 'http://localhost')
-    if (url.pathname === '/api/projects' && init?.method === 'POST') {
+    if (url.pathname === '/api/v1/projects' && init?.method === 'POST') {
       const root = (JSON.parse(String(init.body)) as { root: string }).root
       posted.push({ root })
       return register ? register(root) : json({ project: project({ id: 'added', root }) })
     }
-    if (url.pathname === '/api/projects') return json({ projects, bootProject: 'cezar', projectsDir: '~/cezar/projects' })
-    if (url.pathname === '/api/fs/browse') {
+    if (url.pathname === '/api/v1/projects') return json({ projects, bootProject: 'cezar', projectsDir: '~/cezar/projects' })
+    if (url.pathname === '/api/v1/fs/browse') {
       const answer = browse[url.searchParams.get('path') ?? '']
       if (answer === undefined) return json({ error: 'unexpected browse path' }, 500)
       return typeof answer === 'function' ? answer() : answer.clone()
@@ -247,7 +247,7 @@ describe('AddProjectDialog', () => {
     await waitFor(() => expect(addButton().disabled).toBe(false))
     const listCalls = () =>
       fetchMock.mock.calls.filter(
-        ([input, init]) => String(input) === '/api/projects' && init?.method !== 'POST',
+        ([input, init]) => String(input) === '/api/v1/projects' && init?.method !== 'POST',
       ).length
     const before = listCalls()
     fireEvent.click(addButton())

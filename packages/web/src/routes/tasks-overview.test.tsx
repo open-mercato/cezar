@@ -42,6 +42,7 @@ function LocationProbe() {
 function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {}) {
   const onViewChange = props.onViewChange ?? vi.fn()
   const onArchiveFinished = props.onArchiveFinished ?? vi.fn()
+  const onMarkAllRead = props.onMarkAllRead ?? vi.fn()
   const onRename = props.onRename ?? vi.fn()
   const utils = render(
     <MemoryRouter initialEntries={['/']}>
@@ -57,6 +58,7 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
               {...props}
               onViewChange={onViewChange}
               onArchiveFinished={onArchiveFinished}
+              onMarkAllRead={onMarkAllRead}
               onRename={onRename}
             />
           }
@@ -66,7 +68,7 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
       </Routes>
     </MemoryRouter>
   )
-  return { ...utils, onViewChange, onArchiveFinished, onRename }
+  return { ...utils, onViewChange, onArchiveFinished, onMarkAllRead, onRename }
 }
 
 const location = () => screen.getByTestId('location').textContent
@@ -109,6 +111,26 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
   })
 
+  it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
+    // The record is `failed`, but the task has an appointment (spec
+    // 2026-08-03-auto-resume-after-usage-limit): amber, still, and carrying the instant the way
+    // a queued row carries its position.
+    renderOverview({
+      runs: [
+        run({ id: 'sched', status: 'failed', autoResumeAt: new Date(NOW + 45 * 60_000).toISOString() }),
+        run({ id: 'broke', status: 'failed' }),
+      ],
+    })
+    const pillOf = (id: string) => tableRow(id)?.querySelector('[data-slot="pill"]')
+    expect(pillOf('sched')?.textContent).toContain('scheduled')
+    // The time itself, locale-formatted — assert it is there rather than its spelling.
+    expect(pillOf('sched')?.querySelector('.tabular-nums')?.textContent).toMatch(/\d{1,2}[:.]\d{2}/)
+    expect(pillOf('sched')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    // …and an ordinary failure is untouched.
+    expect(pillOf('broke')?.textContent).toBe('failed')
+    expect(pillOf('broke')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+  })
+
   it('shows a queued issue reference before the agent starts', () => {
     renderOverview({
       runs: [
@@ -136,6 +158,8 @@ describe('TasksOverview — the table', () => {
           branch: 'cez/8f31ab02',
           diffStat: { adds: 128, dels: 14, files: 6 },
           tokensUsed: 184_700,
+          inputTokens: 184_700,
+          outputTokens: 2_400,
           costUsd: 0.31,
           pullRequestUrl: 'https://github.com/o/r/pull/402',
           createdAt: ago(40 * 60_000),
@@ -145,7 +169,7 @@ describe('TasksOverview — the table', () => {
       ],
     })
 
-    // Status | Task | Workflow | Branch | ± | PR | Tokens | Cost | CPU | Mem | Started
+    // Status | Task | Workflow | Branch | ± | PR | IN/OUT | Cost | CPU | Mem | Started
     expect(cellsOf('full')).toEqual([
       'needs review',
       'Structured changes endpoint',
@@ -153,7 +177,7 @@ describe('TasksOverview — the table', () => {
       'cez/8f31ab02',
       '+128 −14', // the ± column (R2 #389) — adds and dels, the mockup's pair
       '#402',
-      '184.7k',
+      '184.7k / 2.4k',
       '$0.31',
       '—', // no live sample, CPU has no persisted peak
       '—',
@@ -162,12 +186,102 @@ describe('TasksOverview — the table', () => {
     // No branch, no PR, no diff recorded, no cost yet — dashes, not zeros (a pre-R2 record has
     // no diffStat, and `+0 −0` would claim a measurement that never happened). Started falls
     // back to createdAt.
-    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '0', '—', '—', '—', '26m'])
+    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '—', '—', '26m'])
     // The pair is two colored halves, not one string — green adds, red dels (design tokens).
     const diff = tableRow('full')?.querySelector('[data-slot="diff-stat"]')
     expect(diff?.querySelector('.text-success')?.textContent).toBe('+128')
     expect(diff?.querySelector('.text-danger')?.textContent).toBe('−14')
     expect(diff?.getAttribute('title')).toBe('+128 −14 across 6 files')
+    // Nothing was narrowed here, so nothing claims it was (#751).
+    expect(diff?.getAttribute('data-repointed')).toBeNull()
+  })
+
+  it('annotates the ± column when the stat covers uncommitted work only (#751)', () => {
+    renderOverview({
+      runs: [
+        run({
+          id: 'reviewer',
+          title: 'Review PR 694',
+          status: 'review',
+          branch: 'cez/d8ff6490',
+          diffStat: { adds: 1, dels: 0, files: 1, repointed: true },
+          createdAt: ago(20 * 60_000),
+        }),
+      ],
+    })
+
+    const diff = tableRow('reviewer')?.querySelector('[data-slot="diff-stat"]')
+    // The numbers stay the numbers — the column still reads as a diff pair.
+    expect(diff?.textContent).toBe('+1 −0')
+    expect(diff?.getAttribute('data-repointed')).toBe('true')
+    expect(diff?.getAttribute('title')).toBe(
+      "+1 −0 across 1 file — uncommitted changes only, measured with another branch checked out in this task's worktree"
+    )
+  })
+
+  it('removes token/cost headers and cells while preserving table and queue semantics', () => {
+    renderOverview({
+      showTokens: false,
+      showCost: false,
+      runs: [
+        run({ id: 'hidden', title: 'Hidden metrics', tokensUsed: 184_700, costUsd: 0.31 }),
+        run({ id: 'queued-hidden', status: 'queued', tokensUsed: 12_000, costUsd: 0.02 }),
+      ],
+    })
+
+    const headers = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
+      (cell) => cell.textContent,
+    )
+    expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Started'])
+    expect(cellsOf('hidden')).toEqual([
+      'done',
+      'Hidden metrics',
+      'default',
+      '—',
+      '—',
+      '—',
+      '—',
+      '—',
+      '1m',
+    ])
+
+    const queued = tableRow('queued-hidden') as HTMLElement
+    expect(queued.querySelectorAll('td')).toHaveLength(8)
+    expect(queued.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
+    expect(queued.textContent).not.toContain('12.0k')
+    expect(queued.textContent).not.toContain('$0.02')
+  })
+
+  it.each([
+    { name: 'both visible', showTokens: true, showCost: true, headers: ['IN / OUT', 'Cost'], tokens: true, cost: true },
+    { name: 'tokens only', showTokens: true, showCost: false, headers: ['IN / OUT'], tokens: true, cost: false },
+    { name: 'cost only', showTokens: false, showCost: true, headers: ['Cost'], tokens: false, cost: true },
+    { name: 'both hidden', showTokens: false, showCost: false, headers: [], tokens: false, cost: false },
+  ])('keeps desktop and mobile metrics independent when $name', ({ showTokens, showCost, headers, tokens, cost }) => {
+    renderOverview({
+      showTokens,
+      showCost,
+      runs: [
+        run({
+          id: 'visibility',
+          branch: 'cez/visibility',
+          inputTokens: 184_700,
+          outputTokens: 2_400,
+          costUsd: 0.31,
+        }),
+      ],
+    })
+
+    const allHeaders = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
+      (cell) => cell.textContent,
+    )
+    expect(allHeaders.filter((header) => header === 'IN / OUT' || header === 'Cost')).toEqual(headers)
+    const rowText = tableRow('visibility')?.textContent ?? ''
+    const cardText = card('visibility')?.textContent ?? ''
+    expect(rowText.includes('184.7k / 2.4k')).toBe(tokens)
+    expect(cardText.includes('IN 184.7k · OUT 2.4k')).toBe(tokens)
+    expect(rowText.includes('$0.31')).toBe(cost)
+    expect(cardText.includes('$0.31')).toBe(cost)
   })
 
   it('shows the auto-summary title once a turn produced one, falling back to the raw title', () => {
@@ -369,6 +483,7 @@ describe('TasksOverview — usage cells', () => {
               view="active"
               onViewChange={vi.fn()}
               onArchiveFinished={vi.fn()}
+              onMarkAllRead={vi.fn()}
               onRename={vi.fn()}
               now={NOW}
             />
@@ -439,6 +554,46 @@ describe('TasksOverview — header', () => {
     // Archived view → the sweep acts on the other tab; offering it here would be misleading.
     renderOverview({ runs: [run({ status: 'done' })], view: 'archived' })
     expect(screen.queryByRole('button', { name: /Archive finished/ })).toBeNull()
+  })
+
+  // Read/unread (#unread-done-items). The rule itself is table-tested in lib/read-state.test.ts;
+  // what these cover is the PAINT — that the table actually wears the marker the rule decides,
+  // and that the sweep control is offered exactly when there is unread history to sweep.
+  it('marks an unread done row with a violet dot and leaves read history unmarked', () => {
+    const FINISHED = ago(60_000)
+    renderOverview({
+      runs: [
+        run({ id: 'unread', status: 'done', finishedAt: FINISHED }),
+        run({ id: 'read', status: 'done', finishedAt: FINISHED, seenAt: ago(30_000) }),
+        // Cancelled is never unread — you stopped it yourself.
+        run({ id: 'cancelled', status: 'cancelled', finishedAt: FINISHED }),
+      ],
+    })
+    // Keyed on the aria-label, not on the violet tone alone: the attention pill's OWN dot is
+    // violet for the live states (running/waiting/review), so a tone-only selector would be
+    // matching two different signals and would quietly stop meaning what it says.
+    const unreadDot = (id: string) =>
+      tableRow(id)?.querySelector('[data-slot="status-dot"][aria-label="unread"]')
+    expect(unreadDot('unread')).not.toBeNull()
+    expect(unreadDot('unread')?.getAttribute('data-tone')).toBe('violet')
+    expect(unreadDot('read')).toBeNull()
+    expect(unreadDot('cancelled')).toBeNull()
+  })
+
+  it('offers Mark all read only while something is unread, and calls back on click', () => {
+    const FINISHED = ago(60_000)
+    const { onMarkAllRead, unmount } = renderOverview({
+      runs: [run({ status: 'done', finishedAt: FINISHED })],
+    })
+    fireEvent.click(screen.getByRole('button', { name: /Mark all read/ }))
+    expect(onMarkAllRead).toHaveBeenCalledTimes(1)
+    unmount()
+
+    // Everything already seen → nothing left to sweep, so no control.
+    renderOverview({
+      runs: [run({ status: 'done', finishedAt: FINISHED, seenAt: ago(30_000) })],
+    })
+    expect(screen.queryByRole('button', { name: /Mark all read/ })).toBeNull()
   })
 
   it('filters by title, branch and workflow through the search box', () => {
@@ -542,6 +697,9 @@ describe('TasksOverview — mobile cards and FAB', () => {
           branch: 'cez/8f31ab02',
           diffStat: { adds: 128, dels: 14, files: 6 },
           tokensUsed: 184_700,
+          inputTokens: 184_700,
+          outputTokens: 2_400,
+          costUsd: 0.31,
           pullRequestUrl: 'https://github.com/o/r/pull/402',
           createdAt: ago(40 * 60_000),
           finishedAt: ago(12 * 60_000),
@@ -558,9 +716,29 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(c.textContent).toContain('cez/8f31ab02')
     // The meta row carries the diff pair, like the mockup card (branch · ± · tokens).
     expect(c.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+128 −14')
-    expect(c.textContent).toContain('184.7k')
+    expect(c.textContent).toContain('IN 184.7k · OUT 2.4k')
+    expect(c.textContent).toContain('$0.31')
     expect(c.textContent).toContain('12m')
     expect(c.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/r/pull/402')
+  })
+
+  it('removes token text and its separator from cards when metrics are hidden', () => {
+    renderOverview({
+      showTokens: false,
+      showCost: false,
+      runs: [
+        run({
+          id: 'hidden-card',
+          branch: 'cez/hidden',
+          diffStat: { adds: 2, dels: 1, files: 1 },
+          tokensUsed: 184_700,
+        }),
+      ],
+    })
+    const hidden = card('hidden-card') as HTMLElement
+    expect(hidden.textContent).not.toContain('184.7k')
+    expect(hidden.textContent).toContain('cez/hidden')
+    expect(hidden.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+2 −1')
   })
 
   it('shows no diff pair on a card whose run recorded none', () => {
@@ -632,8 +810,8 @@ describe('TasksOverviewRoute — wired to the app', () => {
   function renderApp(runs: RunRecord[]) {
     fetchMock.mockImplementation(async (input) => {
       const url = String(input)
-      if (url === '/api/runs') return new Response(JSON.stringify(runs), { status: 200 })
-      if (url === '/api/runs/archive-finished')
+      if (url === '/api/v1/runs') return new Response(JSON.stringify(runs), { status: 200 })
+      if (url === '/api/v1/runs/archive-finished')
         return new Response(JSON.stringify({ archived: 1 }), { status: 200 })
       return new Response('[]', { status: 200 })
     })
@@ -676,22 +854,22 @@ describe('TasksOverviewRoute — wired to the app', () => {
     expect(tableRow('arc')).toBeNull()
   })
 
-  it('posts to /api/runs/archive-finished and refetches the authoritative list', async () => {
+  it('posts to /api/v1/runs/archive-finished and refetches the authoritative list', async () => {
     renderApp([run({ id: 'd1', status: 'done' })])
     fireEvent.click(await screen.findByRole('button', { name: /Archive finished/ }))
 
     await waitFor(() => {
-      const posted = fetchMock.mock.calls.find(([path]) => String(path) === '/api/runs/archive-finished')
+      const posted = fetchMock.mock.calls.find(([path]) => String(path) === '/api/v1/runs/archive-finished')
       expect(posted?.[1]?.method).toBe('POST')
     })
     // The doctrine: after the mutation, ask the endpoint again rather than trusting the cache.
     await waitFor(() => {
-      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/runs')
+      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/v1/runs')
       expect(listFetches.length).toBeGreaterThan(1)
     })
   })
 
-  it('PATCHes a table rename to /api/runs/:id and refetches the authoritative list', async () => {
+  it('PATCHes a table rename to /api/v1/runs/:id and refetches the authoritative list', async () => {
     renderApp([run({ id: 'rn1', title: 'Old name', status: 'done' })])
     await waitFor(() => expect(tableRow('rn1')).not.toBeNull())
 
@@ -701,13 +879,13 @@ describe('TasksOverviewRoute — wired to the app', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
 
     await waitFor(() => {
-      const patched = fetchMock.mock.calls.find(([path]) => String(path) === '/api/runs/rn1')
+      const patched = fetchMock.mock.calls.find(([path]) => String(path) === '/api/v1/runs/rn1')
       expect(patched?.[1]?.method).toBe('PATCH')
       expect(JSON.parse(String(patched?.[1]?.body))).toEqual({ title: 'New name' })
     })
     // Same doctrine as archive: the endpoint's answer is the truth — refetch, don't trust.
     await waitFor(() => {
-      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/runs')
+      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/v1/runs')
       expect(listFetches.length).toBeGreaterThan(1)
     })
   })

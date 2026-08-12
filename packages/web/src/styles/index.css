@@ -122,6 +122,12 @@
   --sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
 
+  /* reading measure — the max width of the task view's column (header, thread, changes,
+   * commits). The default is the shipped 820px reading column; Settings → Appearance → Reading
+   * width flips it to `wide` (see the `:root[data-width]` block). Consumed as
+   * `max-w-[var(--measure)]` so one token moves every column together. */
+  --measure: 820px;
+
   /* shiki syntax highlighting (dark) */
   --syn-key: #c4b5fd;
   --syn-str: #86efac;
@@ -207,6 +213,13 @@
  * lever as compact, just smaller; the type scale still stays untouched. */
 :root[data-density='ultra'] {
   --spacing: 0.1875rem;
+}
+
+/* Wide reading width (Settings → Appearance → Reading width): open the task-view column from the
+ * default 820px to 1180px so long transcripts, diffs and command output use more of the screen.
+ * One token, same `:root[…]` (unlayered) lever as density; narrow is the absence of the attribute. */
+:root[data-width='wide'] {
+  --measure: 1180px;
 }
 
 /* ---------- tokens: radius + shadow ----------
@@ -363,6 +376,67 @@
     animation: none;
     background: none;
     color: var(--muted-foreground);
+  }
+}
+
+/* ---------- ghost code (new-task hero backdrop) ----------
+ * The `/new` hero's "someone is quietly writing code" texture (ghost-code-backdrop.tsx).
+ * Character-by-character reveal is the classic CSS typewriter: the line clips at `width`,
+ * animated 0 → n·1ch in `steps(n)`, so glyphs appear whole; the reveal edge carries a 1px
+ * border that reads as the caret and a second animation blanks it shortly after the line
+ * lands. Everything is driven by per-line vars the component sets (`--n` chars, `--t` type
+ * duration, `--d` start delay, `--cycle` full loop length).
+ * Reduced motion: the base rules render every line fully typed, static, at the block's
+ * resting opacity — the animations only exist inside the motion-safe media block. */
+
+.ghost-code-line {
+  width: calc(var(--n) * 1ch);
+  overflow: hidden;
+  white-space: pre;
+}
+.ghost-code-block {
+  opacity: 0.3;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .ghost-code-block {
+    opacity: 0;
+    animation: ghost-block-fade var(--cycle) linear forwards;
+  }
+  .ghost-code-line {
+    width: 0;
+    border-right: 1px solid transparent;
+    animation:
+      ghost-type var(--t) steps(var(--n)) var(--d) forwards,
+      ghost-caret-off 1ms linear calc(var(--d) + var(--t) + 700ms) forwards;
+  }
+}
+@keyframes ghost-type {
+  from {
+    width: 0;
+    border-right-color: var(--primary);
+  }
+  to {
+    width: calc(var(--n) * 1ch);
+    border-right-color: var(--primary);
+  }
+}
+@keyframes ghost-caret-off {
+  to {
+    border-right-color: transparent;
+  }
+}
+@keyframes ghost-block-fade {
+  0% {
+    opacity: 0;
+  }
+  4% {
+    opacity: 0.3;
+  }
+  93% {
+    opacity: 0.3;
+  }
+  100% {
+    opacity: 0;
   }
 }
 

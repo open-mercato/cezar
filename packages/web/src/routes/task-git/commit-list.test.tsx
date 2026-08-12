@@ -37,9 +37,9 @@ const commits = (count: number): CommitListItem[] =>
     href: `/git/commits/sha${index}`,
   }))
 
-function renderList(count: number) {
+function renderList(count: number, route = '/') {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={[route]}>
       <CommitList slot="repo-commits" commits={commits(count)} />
     </MemoryRouter>,
   )
@@ -63,6 +63,37 @@ describe('CommitList', () => {
     expect(first.dataset.sha).toBe('sha0')
     expect(first.textContent).toContain('commit 0')
     expect(first.textContent).toContain('ada')
+  })
+
+  it('keeps task and repo commit links inside the active project', () => {
+    const scopedCommits: CommitListItem[] = [
+      {
+        sha: 'repo-sha',
+        shaLabel: 'repo-sha',
+        subject: 'repo commit',
+        author: 'ada',
+        when: '2h ago',
+        href: '/git/commits/repo-sha',
+      },
+      {
+        sha: 'task-sha',
+        shaLabel: 'task-sha',
+        subject: 'task commit',
+        author: 'ada',
+        when: '2h ago',
+        href: '/tasks/run-1/commits/task-sha',
+      },
+    ]
+
+    render(
+      <MemoryRouter initialEntries={['/p/secondary/tasks/run-1/commits']}>
+        <CommitList slot="task-commits" commits={scopedCommits} />
+      </MemoryRouter>,
+    )
+
+    const links = document.querySelectorAll<HTMLAnchorElement>('[data-slot="commit-row"]')
+    expect(links.item(0).getAttribute('href')).toBe('/p/secondary/git/commits/repo-sha')
+    expect(links.item(1).getAttribute('href')).toBe('/p/secondary/tasks/run-1/commits/task-sha')
   })
 
   it('switches to virtua past the threshold, bounding the DOM', () => {

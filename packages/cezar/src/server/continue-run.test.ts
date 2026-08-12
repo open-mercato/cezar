@@ -1,20 +1,20 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { RunStore } from '../runs/store.js';
-import type { RunManager } from '../workflows/run.js';
-import { apiRequest } from './loopback-request.testkit.js';
-import { createApp } from './server.js';
+import { RunStore } from '../runs/store.ts';
+import type { RunManager } from '../workflows/run.ts';
+import { apiRequest } from './loopback-request.testkit.ts';
+import { createApp } from './server.ts';
 
 /**
- * `POST /api/runs/:id/continue` runner/model override (#401) — the follow-up composer lets the
+ * `POST /api/v1/runs/:id/continue` runner/model override (#401) — the follow-up composer lets the
  * user pick which backend/model reopen the session. Contract: the parsed override is handed to
  * the manager verbatim; an empty POST omits both (the run's current backend is kept — backward
  * compat); a bad runner is a 400. A capturing stub is all the boundary needs (start-run pattern).
  */
-describe('POST /api/runs/:id/continue override', () => {
+describe('POST /api/v1/runs/:id/continue override', () => {
   let repoRoot: string;
   let store: RunStore;
   let app: Hono;
@@ -56,7 +56,7 @@ describe('POST /api/runs/:id/continue override', () => {
   });
 
   const post = (body: unknown) =>
-    apiRequest(app, `/api/runs/${runId}/continue`, {
+    apiRequest(app, `/api/v1/runs/${runId}/continue`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
@@ -83,6 +83,21 @@ describe('POST /api/runs/:id/continue override', () => {
     expect(captured?.opts.runner).toBe('opencode');
   });
 
+  it('rejects a model override while locked but still permits switching runners', async () => {
+    writeFileSync(
+      join(repoRoot, '.ai', 'cezar', 'config.json'),
+      JSON.stringify({ modelsLocked: true }),
+      'utf8',
+    );
+
+    expect((await post({ runner: 'codex', model: 'gpt-5.6-codex' })).status).toBe(409);
+    expect(captured).toBeUndefined();
+
+    expect((await post({ runner: 'codex' })).status).toBe(200);
+    expect(captured?.opts.runner).toBe('codex');
+    expect(captured?.opts.model).toBeUndefined();
+  });
+
   /** The follow-up composer is a full composer, so a screenshot pasted into it has to reach the
    *  reopened session — as content blocks, the same shape `POST /messages` hands the engine. */
   it('converts pasted images into content blocks for the manager', async () => {
@@ -107,7 +122,7 @@ describe('POST /api/runs/:id/continue override', () => {
   });
 
   it('404s for an unknown run before validating the body', async () => {
-    const res = await apiRequest(app, '/api/runs/missing/continue', {
+    const res = await apiRequest(app, '/api/v1/runs/missing/continue', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: '{}',

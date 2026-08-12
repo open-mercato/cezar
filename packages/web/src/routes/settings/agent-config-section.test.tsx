@@ -54,12 +54,12 @@ function serve(listing: AgentConfigListing, fileContent = '{"a":1}') {
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
-      if (url.endsWith('/api/health')) return json(HEALTH)
-      if (url.endsWith('/api/agent-config')) return json(listing)
-      if (url.includes('/api/agent-config/') && method === 'GET') {
+      if (url.endsWith('/api/v1/health')) return json(HEALTH)
+      if (url.endsWith('/api/v1/agent-config')) return json(listing)
+      if (url.includes('/api/v1/agent-config/') && method === 'GET') {
         return json({ id: 'x', path: '/repo/x', exists: true, content: fileContent, version: 'v1' })
       }
-      if (url.includes('/api/agent-config/') && method === 'PUT') {
+      if (url.includes('/api/v1/agent-config/') && method === 'PUT') {
         return json({ id: 'x', path: '/repo/x', exists: true, content: '{"a":2}', version: 'v2' })
       }
       return json({ error: 'unexpected' }, 500)

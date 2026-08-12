@@ -1,6 +1,6 @@
 import * as clack from '@clack/prompts';
-import { CANCEL, PreflightError, type Cancellable, type SpinnerHandle, type Ui } from './types.js';
-import { StepAborted } from './steps.js';
+import { CANCEL, PreflightError, type Cancellable, type SpinnerHandle, type Ui } from './types.ts';
+import { StepAborted } from './steps.ts';
 
 /**
  * The interactive surface, implemented over `@clack/prompts` — the one place

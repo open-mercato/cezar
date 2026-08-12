@@ -6,13 +6,13 @@ import type {
   AgentRunner,
   AgentToolCallRecord,
   ContentBlock,
-} from './agent-runner.js';
-import type { AgentSession, SessionOptions } from './agent-runner.js';
-import { prependSystemPrompt } from './agent-runner.js';
-import { buildChildEnv } from './agent-env.js';
-import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.js';
-import { parseModelIdentity } from './model-identity.js';
-import { V1TextCoalescer } from './v1-text-coalescer.js';
+} from './agent-runner.ts';
+import type { AgentSession, SessionOptions } from './agent-runner.ts';
+import { prependSystemPrompt } from './agent-runner.ts';
+import { buildChildEnv } from './agent-env.ts';
+import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
+import { parseModelIdentity } from './model-identity.ts';
+import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
   createOpencodeUiState,
   mapOpencodeEvent,
@@ -20,7 +20,7 @@ import {
   opencodeTurnStarted,
   type OpencodeUiMapperState,
   type OpencodeUiMapping,
-} from './opencode-ui-mapper.js';
+} from './opencode-ui-mapper.ts';
 
 export interface OpencodeRunnerOptions {
   /** Override the binary name/path; defaults to `opencode` on PATH. */
