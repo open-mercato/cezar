@@ -511,3 +511,9 @@
   font-size: 12px;
   line-height: 1.55;
 }
+/* Code cards sit on the raised card surface (white in light), not the page/muted tint —
+ * Streamdown's own utilities paint them with the page background, which stopped reading as a
+ * card once the light theme moved off pure white. */
+.thread-markdown :is([data-streamdown='code-block'], [data-streamdown='code-block-body'], [data-streamdown='code-block-actions']) {
+  background: var(--card);
+}
