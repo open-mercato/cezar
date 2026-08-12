@@ -1,34 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" shape-rendering="crispEdges">
-  <!-- Cezar, the grumpy violet pixel cat (the app icon). 16×16 grid, four violets + ink:
-       outline #2b1666, body #9146fb, shade #7a2ef0, inner-ear/light #b487fd, pupil #e9d5ff. -->
-  <!-- ears -->
-  <path fill="#2b1666" d="M2 0h2v1H2zM12 0h2v1h-2zM1 1h1v3H1zM4 1h1v1H4zM11 1h1v1h-1zM14 1h1v3h-1z"/>
-  <path fill="#b487fd" d="M2 1h2v2H2zM12 1h2v2h-2z"/>
-  <path fill="#2b1666" d="M5 2h1v1H5zM10 2h1v1h-1z"/>
-  <path fill="#9146fb" d="M4 2h1v1H4zM11 2h1v1h-1z"/>
-  <!-- brow bridge -->
-  <path fill="#2b1666" d="M5 3h6v1H5z"/>
-  <path fill="#9146fb" d="M2 3h3v1H2zM11 3h3v1h-3z"/>
-  <!-- head -->
-  <path fill="#2b1666" d="M1 4h1v5H1zM14 4h1v5h-1z"/>
-  <path fill="#9146fb" d="M2 4h12v2H2z"/>
-  <!-- eyes: heavy lids, light pupils -->
-  <path fill="#9146fb" d="M2 6h1v1H2zM6 6h4v1H6zM13 6h1v1h-1z"/>
-  <path fill="#2b1666" d="M3 6h1v1H3zM5 6h1v1H5zM10 6h1v1h-1zM12 6h1v1h-1z"/>
-  <path fill="#e9d5ff" d="M4 6h1v1H4zM11 6h1v1h-1z"/>
-  <!-- muzzle: nose + frown -->
-  <path fill="#9146fb" d="M2 7h5v1H2zM9 7h5v1H9z"/>
-  <path fill="#2b1666" d="M7 7h2v1H7z"/>
-  <path fill="#9146fb" d="M2 8h4v1H2zM7 8h2v1H7zM10 8h4v1h-4z"/>
-  <path fill="#2b1666" d="M6 8h1v1H6zM9 8h1v1H9z"/>
-  <!-- shoulders -->
-  <path fill="#2b1666" d="M0 9h1v6H0zM15 9h1v6h-1z"/>
-  <path fill="#9146fb" d="M1 9h14v1H1z"/>
-  <!-- chest with the diagonal sash (shade) -->
-  <path fill="#9146fb" d="M1 10h3v1H1zM7 10h8v1H7zM1 11h5v1H1zM9 11h6v1H9zM1 12h7v1H1zM11 12h4v1h-4zM1 13h9v1H1zM13 13h2v1h-2z"/>
-  <path fill="#7a2ef0" d="M4 10h3v1H4zM6 11h3v1H6zM8 12h3v1H8zM10 13h3v1h-3z"/>
-  <!-- base -->
-  <path fill="#2b1666" d="M0 15h16v1H0zM1 14h14v1H1z"/>
-  <path fill="#9146fb" d="M1 14h11v1H1z"/>
-  <path fill="#7a2ef0" d="M12 14h3v1h-3z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" shape-rendering="crispEdges">
+  <!-- Cezar the cat (app icon): grumpy violet pixel cat with a laurel crown and a toga.
+       24x24 ASCII-sprite build - outline #2e1065, body #7c3af5, laurel/toga #6526d9,
+       inner-ear #a78bfa, pupils #e4d7ff. -->
+  <path fill="#2e1065" d="M2 0h2v1H2zM20 0h2v1H20zM1 1h1v1H1zM4 1h1v1H4zM19 1h1v1H19zM22 1h1v1H22zM1 2h1v1H1zM5 2h1v1H5zM18 2h1v1H18zM22 2h1v1H22zM1 3h1v1H1zM6 3h2v1H6zM16 3h2v1H16zM22 3h1v1H22zM1 4h1v1H1zM8 4h1v1H8zM11 4h2v1H11zM15 4h1v1H15zM22 4h1v1H22zM1 5h1v1H1zM8 5h3v1H8zM13 5h3v1H13zM22 5h1v1H22zM1 6h1v1H1zM22 6h1v1H22zM1 7h1v1H1zM22 7h1v1H22zM0 8h1v1H0zM23 8h1v1H23zM0 9h1v1H0zM23 9h1v1H23zM0 10h1v1H0zM23 10h1v1H23zM0 11h1v1H0zM4 11h5v1H4zM15 11h5v1H15zM23 11h1v1H23zM0 12h1v1H0zM4 12h1v1H4zM7 12h2v1H7zM15 12h1v1H15zM18 12h2v1H18zM23 12h1v1H23zM0 13h1v1H0zM4 13h5v1H4zM15 13h5v1H15zM23 13h1v1H23zM0 14h1v1H0zM23 14h1v1H23zM0 15h1v1H0zM11 15h2v1H11zM23 15h1v1H23zM0 16h1v1H0zM11 16h2v1H11zM23 16h1v1H23zM0 17h1v1H0zM9 17h6v1H9zM23 17h1v1H23zM0 18h1v1H0zM23 18h1v1H23zM0 19h1v1H0zM23 19h1v1H23zM0 20h1v1H0zM23 20h1v1H23zM0 21h1v1H0zM23 21h1v1H23zM0 22h1v1H0zM23 22h1v1H23zM0 23h24v1H0z"/>
+  <path fill="#a78bfa" d="M2 1h2v1H2zM20 1h2v1H20zM2 2h3v1H2zM19 2h3v1H19zM2 3h3v1H2zM19 3h3v1H19zM2 4h2v1H2zM20 4h2v1H20z"/>
+  <path fill="#7c3af5" d="M5 3h1v1H5zM18 3h1v1H18zM4 4h2v1H4zM18 4h2v1H18zM2 5h3v1H2zM7 5h1v1H7zM16 5h1v1H16zM19 5h3v1H19zM2 6h4v1H2zM7 6h2v1H7zM11 6h2v1H11zM15 6h2v1H15zM18 6h4v1H18zM2 7h20v1H2zM1 8h22v1H1zM1 9h22v1H1zM1 10h22v1H1zM1 11h3v1H1zM9 11h6v1H9zM20 11h3v1H20zM1 12h3v1H1zM9 12h6v1H9zM20 12h3v1H20zM1 13h3v1H1zM9 13h6v1H9zM20 13h3v1H20zM1 14h22v1H1zM1 15h10v1H1zM13 15h10v1H13zM1 16h10v1H1zM13 16h10v1H13zM1 17h8v1H1zM15 17h8v1H15zM1 18h2v1H1zM8 18h15v1H8zM1 19h5v1H1zM11 19h12v1H11zM1 20h8v1H1zM14 20h9v1H14zM1 21h11v1H1zM17 21h6v1H17zM1 22h14v1H1zM20 22h3v1H20z"/>
+  <path fill="#6526d9" d="M6 4h2v1H6zM16 4h2v1H16zM5 5h2v1H5zM11 5h2v1H11zM17 5h2v1H17zM6 6h1v1H6zM9 6h2v1H9zM13 6h2v1H13zM17 6h1v1H17zM3 18h5v1H3zM6 19h5v1H6zM9 20h5v1H9zM12 21h5v1H12zM15 22h5v1H15z"/>
+  <path fill="#e4d7ff" d="M5 12h2v1H5zM16 12h2v1H16z"/>
 </svg>
