@@ -178,26 +178,27 @@
 .light {
   color-scheme: light;
 
-  /* THREE surface levels (design review): a near-neutral app canvas, a minimally darker
-   * sidebar, and near-white cards/inputs/code — the previous one-lavender-world flattened the
-   * screen. Borders sit between them. */
-  --background: #f6f6f9;
+  /* CRISP light ("soap dish" feedback + the ElevenLabs reference): the wash came from a violet
+   * cast on every neutral, not from the values being too light. Neutrals go truly NEUTRAL —
+   * white cards on a barely-gray page, structure from borders and dark text — and violet
+   * appears only where the brand or an action speaks (CTA, accents, the user bubble). */
+  --background: #f7f7f8;
   --foreground: #18171b;
   --card: #ffffff;
-  --card-2: #f2f1f8;
-  --sidebar: #f5f4f8;
-  --muted: #f2f1f8;
-  /* Selection surface — a violet-tinted neutral (the 200 of the accent), so a picked/active thing
-   * reads as the accent's quiet cousin, not plain grey. Overrides the shared `--accent: --muted`. */
-  --accent: #eee9fb;
-  --muted-foreground: #68666d;
+  --card-2: #f0f0f2;
+  --sidebar: #fafafa;
+  --muted: #f0f0f2;
+  /* Selection surface — the one violet-tinted neutral left (the accent's 200): a picked thing
+   * reads as the accent's quiet cousin. Overrides the shared `--accent: --muted`. */
+  --accent: #e9e2fa;
+  --muted-foreground: #5c5a63;
   /* AA-checked (audit 2026-08-08): ≥4.5:1 on every light surface incl. --muted; #a3a3a3 was
    * 2.52:1 on white across ~300 call sites. Don't lighten back above #6f6f6f — the review's
    * #96939C tertiary is 2.9:1 and would reopen finding A1. */
   --soft-foreground: #6f6f6f;
   /* violet-700-style ink: 6.5:1 on white / the pale soft-purple washes. */
   --violet-strong: #6d28d9;
-  --border: #e5e3ea;
+  --border: #e2e2e6;
   /* AA-checked (audit 2026-08-08, X1): the interactive field/control border, kept separate
    * from the decorative --border (#ebebeb) precisely so it can meet 1.4.11's 3:1 for UI
    * components. #ebebeb was 1.19:1 on white — the Search box had almost no boundary. Don't
@@ -488,8 +489,10 @@
  * silently lose the cascade and replies would render page-sized. `em`-based so the whole
  * scale keys off the message's own font size. */
 
+/* 1.75, up from 1.6 (user feedback): multi-line reasoning and replies were too dense to scan —
+ * chat text is read in long runs, and the extra leading is what keeps the eye on the line. */
 .thread-markdown {
-  line-height: 1.6;
+  line-height: 1.75;
 }
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
@@ -505,7 +508,7 @@
 }
 /* Flowing text is capped at the reading measure; tables and code (below) keep the full column. */
 .thread-markdown :is(p, ul, ol, blockquote) {
-  margin: 0.45em 0;
+  margin: 0.6em 0;
   max-width: var(--prose);
 }
 .thread-markdown table {

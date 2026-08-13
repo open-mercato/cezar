@@ -314,7 +314,9 @@ export function ReasoningItem({ text }: { text: string }) {
         />
       </div>
       <CollapsibleContent>
-        <div className="px-6 py-1.5 text-[13px] leading-[1.6] text-soft-foreground">
+        {/* leading-[1.8] (user feedback): reasoning runs long and soft-colored — without the
+            extra air the lines fuse and reading it is squint work. */}
+        <div className="px-6 py-1.5 text-[13px] leading-[1.8] text-soft-foreground">
           <Markdown>{text}</Markdown>
         </div>
       </CollapsibleContent>

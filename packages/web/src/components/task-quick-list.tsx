@@ -95,8 +95,10 @@ export function TaskQuickList({
           ) : null}
         </ViewRow>
         {view === 'active' ? expansion : null}
-        <ViewRow view="archived" current={view} onSelect={onViewChange} count={counts.archived}>
-          <ArchiveIcon aria-hidden="true" className="size-4 shrink-0" />
+        {/* Subdued on purpose (user feedback): the archive is visited almost never — a
+            mis-archive or a cleanup — so it must not weigh like a sibling of Active. */}
+        <ViewRow view="archived" current={view} onSelect={onViewChange} count={counts.archived} subdued>
+          <ArchiveIcon aria-hidden="true" className="size-3.5 shrink-0" />
           Archived
         </ViewRow>
         {view === 'archived' ? expansion : null}
@@ -175,6 +177,7 @@ function ViewRow({
   onSelect,
   count,
   unread = 0,
+  subdued = false,
   children,
 }: {
   view: ListView
@@ -183,6 +186,8 @@ function ViewRow({
   count: number
   /** Unread finished tasks (#unread-done-items) — the badge the Tasks nav item used to wear. */
   unread?: number
+  /** A lighter row for the rarely-visited view (Archived) — smaller, softer, shorter. */
+  subdued?: boolean
   children: React.ReactNode
 }) {
   const isActive = view === current
@@ -202,6 +207,7 @@ function ViewRow({
         // One row rhythm across the whole sidebar: 44px touch rows under md, 36px on desktop —
         // identical to the WORKSPACE nav, so every clickable line lands on the same grid.
         'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
+        subdued && 'h-10 text-xs text-soft-foreground md:h-8',
         isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
       )}
     >

@@ -74,3 +74,24 @@ Branch-tip run (rebased onto `origin/main`):
 ## Changelog
 
 - 2026-08-08 — v1, phase-1 scope after audit rounds 1–4 (+ accessibility cross-check).
+
+## Field feedback backlog (2026-08-13, Patryk via Oliwia — not yet issues)
+
+Raw needs from real usage, parked here until Patryk's own "what's missing" list lands and the
+team workshop happens. Do not implement without that discussion; recorded so nothing evaporates.
+
+1. **Follow-up task from a thread** — spawn a NEW task from inside a running/finished thread,
+   carrying the current conversation's reasoning as context, with a free agent choice (the
+   in-thread agent is fixed by then). The "side quest" flow: loosely related work that still
+   needs this conversation's context.
+2. **Many refs per task** — a task may reference several issues AND several PRs at once; the
+   meta chips assume one. Stacked-PR support is its own, separate topic.
+3. **Projects view at 20+ repos** — the switcher/groups must stay navigable at real fleet size;
+   current design unproven beyond a handful. Candidate workshop topic.
+4. **Repo switching vs global surfaces** — global Skills/Git/Workflows are liked; how they
+   behave when hopping between repos needs a pass.
+5. **Light-theme taste split** — one vote for dark-only density ("soap dish" reaction). Light
+   moved to crisp neutrals (EL-style: white cards, neutral grays, borders carry structure,
+   violet reserved for brand/action) — revisit after the team sees it.
+6. Process: Patryk keeps a personal gap-list (8 items) → will share → issues after discussion;
+   team workshop on how each person actually works in cezar (and when they bail to other tools).
