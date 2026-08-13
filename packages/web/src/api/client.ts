@@ -41,6 +41,7 @@ import type {
   GitCommitResponse,
   GitPushResponse,
   GithubChecksData,
+  GithubRefStatusData,
   GithubCommentsData,
   GithubData,
   GithubMergeMethod,
@@ -718,6 +719,38 @@ export async function getGithubChecks(
       init(opts),
     ),
     '/github/checks',
+  )
+}
+
+/**
+ * Batched status for the PR/issue chips on screen. Takes its project EXPLICITLY, like
+ * `getProjectRuns` and `archiveProjectRun` and for the same reason: the global Tasks page stands
+ * outside every `/p/:projectId`, and its rows belong to different projects — `queryScope()` would
+ * ask the boot project about another project's PR number and get a confident wrong answer.
+ * Callers standing in one project pass their own id.
+ *
+ * Degrades to `{ available: false, reason }` server-side; an absent number is "nothing known",
+ * which the chip renders exactly as it did before statuses existed.
+ */
+export async function getGithubRefStatus(
+  projectId: string,
+  refs: { prs?: readonly number[]; issues?: readonly number[] },
+  opts?: ReadOptions,
+): Promise<GithubRefStatusData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github['ref-status'].$get(
+      {
+        param: { projectId },
+        query: {
+          // Spread conditionally: the route reads an ABSENT key as "not asked for", and an empty
+          // string would be a malformed list (a 400) rather than a silent no-op.
+          ...(refs.prs?.length ? { prs: refs.prs.join(',') } : {}),
+          ...(refs.issues?.length ? { issues: refs.issues.join(',') } : {}),
+        },
+      },
+      init(opts),
+    ),
+    '/github/ref-status',
   )
 }
 

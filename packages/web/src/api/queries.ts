@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { useEffect } from 'react'
+import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
 
@@ -20,6 +20,7 @@ import {
   getGithubChecks,
   getGithubComments,
   getGithubPrChanges,
+  getGithubRefStatus,
   getGroup,
   getHealth,
   getLaunchKey,
@@ -69,8 +70,9 @@ import {
   putAgentConfigFile,
   retryProviderAuth,
 } from './client'
-import { queryScope, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
+import { isReferenceStatus } from '@/lib/reference-status'
 import { githubRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
@@ -85,7 +87,9 @@ import type {
   OpenAgentAccountFileInput,
   ProjectListEntry,
   ProjectsResponse,
+  GithubRefStatusData,
   ProviderStatusResponse,
+  ReferenceStatus,
   RunRecord,
   SelectAgentProfileInput,
   SetAgentConfigInput,
@@ -182,6 +186,17 @@ export const queryKeys = {
    *  same visible window de-dupes to one cache entry. */
   githubChecks: (prNumbers: readonly number[]) =>
     [queryScope(), 'github', 'checks', [...prNumbers].sort((a, b) => a - b).join(',')] as const,
+  /** Batched PR/issue chip status. Led by the EXPLICIT project rather than `queryScope()` —
+   *  the global Tasks page asks about several projects at once, and two of them may each have a
+   *  PR #42. Keyed by the sorted numbers, so the same window de-dupes to one cache entry. */
+  githubRefStatus: (projectId: string, prNumbers: readonly number[], issueNumbers: readonly number[]) =>
+    [
+      projectId,
+      'github',
+      'ref-status',
+      [...prNumbers].sort((a, b) => a - b).join(','),
+      [...issueNumbers].sort((a, b) => a - b).join(','),
+    ] as const,
   githubComments: (kind: 'issue' | 'pr', number: number) =>
     [queryScope(), 'github', 'comments', kind, number] as const,
   githubMergeState: (number: number) => [queryScope(), 'github', 'merge-state', number] as const,
@@ -754,12 +769,18 @@ export function useRunsIndex(enabled = true, refetchIntervalMs?: number) {
     enabled,
     staleTime: 30_000,
     // The cockpit's default is NO polling, because the run stream says when something changed
-    // (see `createQueryClient`). This index is the one list with no stream behind it: the run
-    // SSE is per-project, and a page showing forty projects cannot open forty of them. An
-    // interval here is therefore not papering over a broken stream — it is the only freshness
-    // mechanism there is, and only the global Tasks page (which is a live view rather than a
-    // glance) asks for one. The palette leaves it off and keeps its 30s staleness.
+    // (see `createQueryClient`). This index DOES hear the stream — the one `/workspace/events`
+    // connection carries every project's run news, and `global-events.tsx` debounces it into an
+    // invalidation here — so the interval is a backstop for what a stream cannot promise (a
+    // dropped socket, a frozen tab, a run that ended while the connection was down), not the only
+    // freshness mechanism. Only the global Tasks page (a live view rather than a glance) asks for
+    // one; the palette leaves it off and keeps its 30s staleness.
     ...(refetchIntervalMs === undefined ? {} : { refetchInterval: refetchIntervalMs }),
+    // No `refetchOnWindowFocus` here on purpose, though the tab-comes-back case is real (the
+    // interval above does not run in a hidden tab). `global-events.tsx` already reconciles this
+    // key on `visibilitychange`, which is the same event with better manners — one reconcile for
+    // every stale cache rather than a per-query refetch, and it fires on the visibility flip
+    // rather than on every window focus.
   })
 }
 
@@ -1354,6 +1375,364 @@ export function useGithubChecks(prNumbers: number[], enabled = true) {
     enabled: enabled && prNumbers.length > 0,
     staleTime: 60_000,
   })
+}
+
+/** How many numbers of one kind one project's ref-status request may carry. The server's cap,
+ *  imported rather than restated: the route 400s past it, so a second copy that drifted would turn
+ *  every chip on a busy project into an error instead of a neutral chip. */
+const REF_STATUS_MAX = REFERENCE_STATUS_MAX
+
+/**
+ * The numbers one request asks about, capped — **newest first, then sorted for the key**.
+ *
+ * Both halves matter. Sorting makes the truncation deterministic rather than render-order
+ * dependent (a row must not gain and lose its status as the table re-sorts), and taking the
+ * HIGHEST numbers puts the cap where it costs least: issue and PR numbers grow over a repository's
+ * life, so a project with more references on screen than the cap keeps the recent ones — the rows
+ * anybody is looking at — and drops the oldest, rather than the other way round. The result is
+ * re-sorted ascending because the query key is built from this list and two orderings of the same
+ * window must not be two cache entries.
+ */
+function cappedNumbers(numbers: Iterable<number>): number[] {
+  return [...numbers]
+    .sort((a, b) => b - a)
+    .slice(0, REF_STATUS_MAX)
+    .sort((a, b) => a - b)
+}
+
+/** One chip's identity: which project's forge to ask, and about what. */
+export interface ReferenceStatusRequest {
+  projectId: string
+  kind: 'PR' | 'Issue'
+  number: number
+}
+
+/**
+ * What is known about one chip — the status if we have ever learned it, AND what the request
+ * covering it is doing, which are genuinely different questions.
+ *
+ * They were one question at first (`status | undefined`), and that was the bug behind "the chips
+ * sometimes just go blank": `undefined` collapsed *still loading*, *GitHub is unreachable*, *there
+ * is no such number* and *we already know this one, the batch was merely re-keyed* into one silent
+ * neutral chip, with no way for the chip to say which of them had happened.
+ */
+export interface ReferenceStatusEntry {
+  /** The last status we ever learned for this reference. Kept across refetches, re-keyed batches
+   *  and forge failures — only ever REPLACED by a newer answer, never cleared by one that failed
+   *  to arrive. */
+  status?: ReferenceStatus
+  /**
+   * What the request covering this reference is doing right now:
+   *  - `idle` — nothing has asked about it (no provider, or past the per-project cap);
+   *  - `loading` — its request is in flight;
+   *  - `ready` — the forge answered, and `status` is that answer;
+   *  - `unknown` — the forge answered and does not have this number;
+   *  - `unavailable` — the forge could not be reached (`reason` says why).
+   */
+  state: 'idle' | 'loading' | 'ready' | 'unknown' | 'unavailable'
+  /** Only on `unavailable` — the server's human hint ("gh CLI not found…"). */
+  reason?: string
+}
+
+export type ReferenceStatusLookup = (ref: ReferenceStatusRequest) => ReferenceStatusEntry
+
+/**
+ * Every status this tab has ever learned, by reference — the memory that stops the chips
+ * flickering.
+ *
+ * The queries are keyed by the WHOLE batch (`…/ref-status/40,42/12`), because a batch is what one
+ * request covers. That makes the query cache exactly the wrong shape for DISPLAY: type one letter
+ * into the search box and the visible set changes, which is a different key, which is a cold cache
+ * entry — so every chip on screen blanked until the round trip finished, even though nothing about
+ * those pull requests had changed. The same fires on the global page's 15 s index poll the moment
+ * any task gains or loses a reference, and on every tab switch.
+ *
+ * So what is REMEMBERED is per reference, and outlives any one batch, surface or failure. Nothing
+ * here is ever invented: an entry appears only when the forge answered with a status for that
+ * exact number, and any later answer overwrites it. The cost is bounded staleness — a chip can
+ * show the last successful answer while a new one is in flight — which is the same 60 s staleness
+ * the cache already accepts, and is strictly better than blanking to a neutral chip that reads as
+ * "nothing to see here".
+ *
+ * Module-level rather than per-hook so the sidebar, the table and the run header share one memory:
+ * they routinely paint the same PR, and learning it three times would mean three flickers.
+ */
+const rememberedStatuses = new Map<string, ReferenceStatus>(restoreRememberedStatuses())
+/** Bounded like the server's own caches. Insertion-ordered, so the least recently learned goes. */
+const REMEMBERED_MAX = 1000
+
+function rememberStatus(key: string, status: ReferenceStatus): void {
+  if (rememberedStatuses.get(key) === status) return
+  // Re-inserted rather than overwritten, so a status still being looked at stays young in the
+  // eviction order.
+  rememberedStatuses.delete(key)
+  rememberedStatuses.set(key, status)
+  while (rememberedStatuses.size > REMEMBERED_MAX) {
+    const oldest = rememberedStatuses.keys().next().value
+    if (oldest === undefined) break
+    rememberedStatuses.delete(oldest)
+  }
+  scheduleRememberedSave()
+}
+
+/**
+ * …and the same memory across a RELOAD, in `sessionStorage`.
+ *
+ * Without it a refresh repaints every chip neutral and then colours them in a beat later, which is
+ * the "first we see the fallback, then it changes" flicker one level up from the one the in-memory
+ * map fixed. The statuses are already on this machine; making the user watch them arrive again is
+ * a choice, not a constraint.
+ *
+ * `sessionStorage`, not `localStorage`, and that is the safety bound: it dies with the tab, so the
+ * oldest thing this can paint is from earlier in the same sitting — never a status from last week
+ * shown with confidence on a cold morning. A live answer replaces it within one round trip either
+ * way, and the tooltip labels a value as `last known` whenever the forge cannot be reached.
+ *
+ * Everything here is best-effort: private-mode quota errors, a disabled storage, a payload from a
+ * future version — all degrade to the pre-persistence behaviour rather than breaking the cockpit.
+ */
+const REMEMBERED_STORAGE_KEY = 'cez.reference-statuses.v1'
+
+/** Exported for tests: it runs once at module load, which is not a moment a test can observe. */
+export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(REMEMBERED_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter(
+      (entry): entry is [string, ReferenceStatus] =>
+        // The status is checked against the vocabulary this bundle knows, not merely against
+        // `string`: the payload may have been written by a NEWER cockpit in this same tab (it
+        // survives reloads, and a server rollback does not clear it), and a value added after
+        // this bundle shipped must degrade to the neutral chip rather than be painted with a
+        // presentation that does not exist.
+        Array.isArray(entry) && entry.length === 2 && typeof entry[0] === 'string' && isReferenceStatus(entry[1]),
+    )
+  } catch {
+    return []
+  }
+}
+
+let rememberedSave: ReturnType<typeof setTimeout> | undefined
+function scheduleRememberedSave(): void {
+  // Coalesced: a table's worth of statuses arrives as one response and would otherwise stringify
+  // the whole map once per reference.
+  if (rememberedSave !== undefined) return
+  rememberedSave = setTimeout(() => {
+    rememberedSave = undefined
+    try {
+      globalThis.sessionStorage?.setItem(REMEMBERED_STORAGE_KEY, JSON.stringify([...rememberedStatuses]))
+    } catch {
+      // Quota, private mode, storage disabled — the in-memory map still works.
+    }
+  }, 250)
+}
+
+/**
+ * The project a surface's references belong to, named the way the REST of the cockpit names it.
+ *
+ * `useProjectScope()` answers `null` when unscoped, and the obvious fallback — the `'default'`
+ * alias every project-scoped route accepts — is a trap HERE specifically. The global Tasks page
+ * keys each chip by its run's real `projectId`, because its rows span the registry. A surface
+ * keying the same pull request as `default` remembers it under a second name: the two never see
+ * each other's answer, they fetch it twice, and a status updated on one stays stale on the other.
+ *
+ * Health knows which project `default` actually is. Undefined until it answers, which leaves
+ * chips neutral for that moment rather than writing an entry under a name nothing else uses.
+ */
+export function useReferenceProjectId(): string | undefined {
+  const scope = useProjectScope()
+  const health = useHealth()
+  return scope.projectId ?? health.data?.bootProject
+}
+
+/**
+ * Adopt statuses that arrived with something else — today, the cross-project run index, which
+ * ships whatever the server already had cached for the references its rows carry.
+ *
+ * This is the cheapest possible version of the whole feature: no request, no round trip, and the
+ * chips are coloured in the same paint as the rows rather than a beat later. What it does NOT do
+ * is replace the fetch — the index answers from cache only, so a reference the server has never
+ * looked up is simply absent here, and `useReferenceStatuses` still goes and asks.
+ *
+ * Seeding the memory rather than rendering from the payload directly, and that is the point: the
+ * memory is already what every chip reads, and every other path (a batch response, a re-key, a
+ * reload) writes to it. One place to look, one precedence — a later real answer overwrites a
+ * seeded one exactly as it overwrites any other.
+ */
+export function rememberReferenceStatuses(
+  byProject: Record<string, { prs: Record<number, ReferenceStatus>; issues: Record<number, ReferenceStatus> }>,
+): void {
+  for (const [projectId, buckets] of Object.entries(byProject)) {
+    for (const [number, status] of Object.entries(buckets.prs)) {
+      rememberStatus(refStatusKey({ projectId, kind: 'PR', number: Number(number) }), status)
+    }
+    for (const [number, status] of Object.entries(buckets.issues)) {
+      rememberStatus(refStatusKey({ projectId, kind: 'Issue', number: Number(number) }), status)
+    }
+  }
+}
+
+/** Test-only: the memory is module-level AND persisted, so one case's statuses would leak into
+ *  the next — and, without clearing the store, into the next run of the suite. */
+export function __clearRememberedStatusesForTests(): void {
+  rememberedStatuses.clear()
+  clearTimeout(rememberedSave)
+  rememberedSave = undefined
+  try {
+    globalThis.sessionStorage?.removeItem(REMEMBERED_STORAGE_KEY)
+  } catch {
+    // Nothing to clear.
+  }
+}
+
+/**
+ * When to ask about a batch again — the server's answer, obeyed.
+ *
+ * The cockpit deliberately has no opinion here. Whether a status can still move is forge
+ * semantics, and those live server-side next to the cache that decides whether asking would even
+ * reach GitHub; a second copy in the cockpit was two tables of constants that had to agree with
+ * nothing enforcing it. `null` means "nothing in this answer can change" — a table of merged pull
+ * requests schedules nothing at all.
+ *
+ * The fallback covers only the shapes where there is no answer to obey yet: still loading, or a
+ * transport error, where react-query's `retry` owns the immediate attempt and this is just the
+ * backstop that keeps the query from going silent forever.
+ */
+const REF_STATUS_FALLBACK_MS = 5 * 60_000
+
+export function refStatusRecheckAfter(data: GithubRefStatusData | undefined): number | null {
+  if (!data) return REF_STATUS_FALLBACK_MS
+  return data.recheckAfterMs
+}
+
+const refStatusKey = (ref: ReferenceStatusRequest) => `${ref.projectId}\u0000${ref.kind}#${ref.number}`
+
+/**
+ * Status for every PR/issue chip a surface is painting, in as few requests as there are projects
+ * on screen.
+ *
+ * The grouping is the point: a task table's references are spread across projects and kinds, and
+ * the route is project-scoped, so this collects them into one request per project (both kinds in
+ * the same request) rather than one per chip. The caller passes whatever it has and reads back a
+ * lookup — no surface has to know about batching, caps, or which project a row came from.
+ *
+ * `staleTime` matches the server's 60 s cache: re-rendering, re-sorting or paging back to the
+ * same window costs nothing. Nothing polls — a status changes on GitHub, not in the run stream,
+ * so it refreshes when the query is remounted or invalidated, exactly like the checks glyphs.
+ */
+export function useReferenceStatuses(
+  refs: readonly ReferenceStatusRequest[],
+  enabled = true,
+): ReferenceStatusLookup {
+  // The refs array is rebuilt every render; its CONTENT is what the queries depend on. One sorted
+  // signature string keeps the grouping (and therefore every query key) stable across repaints.
+  const signature = refs
+    .map(refStatusKey)
+    .sort()
+    .join('|')
+  const groups = useMemo(() => {
+    const byProject = new Map<string, { prs: Set<number>; issues: Set<number> }>()
+    for (const ref of refs) {
+      const bucket = byProject.get(ref.projectId) ?? { prs: new Set<number>(), issues: new Set<number>() }
+      bucket[ref.kind === 'PR' ? 'prs' : 'issues'].add(ref.number)
+      byProject.set(ref.projectId, bucket)
+    }
+    return [...byProject.entries()].map(([projectId, bucket]) => ({
+      projectId,
+      prs: cappedNumbers(bucket.prs),
+      issues: cappedNumbers(bucket.issues),
+    }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `signature` IS the content of `refs`
+  }, [signature])
+
+  const results = useQueries({
+    queries: groups.map((group) => ({
+      queryKey: queryKeys.githubRefStatus(group.projectId, group.prs, group.issues),
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getGithubRefStatus(group.projectId, { prs: group.prs, issues: group.issues }, { signal }),
+      enabled: enabled && group.prs.length + group.issues.length > 0,
+      // The one query family in the cockpit that legitimately polls. Everything else is told what
+      // changed by the run stream; GitHub is outside that stream and pushes the cockpit nothing,
+      // so a chip that says "checks running" has no other way to ever stop saying it. WHEN to ask
+      // is the server's call (`recheckAfterMs`), never a constant here.
+      staleTime: (query: { state: { data?: GithubRefStatusData } }) =>
+        refStatusRecheckAfter(query.state.data) ?? Infinity,
+      // `refetchIntervalInBackground` stays at its default, so a hidden tab schedules nothing.
+      refetchInterval: (query: { state: { data?: GithubRefStatusData } }) =>
+        refStatusRecheckAfter(query.state.data) ?? false,
+      // Coming back to the tab is the strongest "is this still true?" signal there is, and the
+      // staleTime above rate-limits it to the same cadence — an answer that can never change has
+      // an infinite staleTime and so ignores focus entirely. The global default is `false` for the
+      // streamed queries, which this is not.
+      refetchOnWindowFocus: true,
+    })),
+  })
+
+  const byRef = useMemo(() => {
+    const map = new Map<string, ReferenceStatusEntry>()
+    results.forEach((result, index) => {
+      const group = groups[index]
+      if (!group) return
+      // Walk the numbers we ASKED about, not the ones that came back: a number the forge does not
+      // have is absent from the answer, and that absence is exactly what `unknown` has to report.
+      const asked: ReferenceStatusRequest[] = [
+        ...group.prs.map((number) => ({ projectId: group.projectId, kind: 'PR' as const, number })),
+        ...group.issues.map((number) => ({ projectId: group.projectId, kind: 'Issue' as const, number })),
+      ]
+      const data = result.data
+      for (const ref of asked) {
+        const key = refStatusKey(ref)
+        // Whatever this request says, the last thing we learned about this reference stands until
+        // a NEWER answer replaces it.
+        const remembered = rememberedStatuses.get(key)
+        if (data?.available) {
+          // Either bucket. A repository numbers its issues and pull requests from one sequence, so
+          // #774 is exactly one of the two — and which one the cockpit GUESSED (`taskReferences`
+          // infers it from whichever field carried the number) can be wrong. The server files the
+          // answer under what the number really is; a chip labelled PR that turns out to name an
+          // issue still gets that issue's status, which beats reporting "not found".
+          const status = data.prs[ref.number] ?? data.issues[ref.number]
+          if (status) {
+            // Written during render on purpose: this is a cache, not state — the write is
+            // idempotent, derived solely from the response, and re-running it (StrictMode's
+            // double invoke) lands on the same value.
+            rememberStatus(key, status)
+            map.set(key, { state: 'ready', status })
+          } else {
+            map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}) })
+          }
+        } else if (data) {
+          map.set(key, { state: 'unavailable', reason: data.reason, ...(remembered ? { status: remembered } : {}) })
+        } else if (result.isError) {
+          // A transport failure, as opposed to the server's own "I could not reach gh" payload.
+          map.set(key, {
+            state: 'unavailable',
+            reason: result.error instanceof Error ? result.error.message : undefined,
+            ...(remembered ? { status: remembered } : {}),
+          })
+        } else {
+          map.set(key, { state: 'loading', ...(remembered ? { status: remembered } : {}) })
+        }
+      }
+    })
+    return map
+    // `results` is a fresh array identity every render; its DATA is what the map is built from.
+  }, [groups, results.map((result) => `${result.dataUpdatedAt}:${result.status}`).join(',')])
+
+  return useCallback(
+    (ref: ReferenceStatusRequest): ReferenceStatusEntry => {
+      const key = refStatusKey(ref)
+      const current = byRef.get(key)
+      if (current) return current
+      // Not in any batch on this surface — past the cap, or asked about by a different surface
+      // that has since unmounted. Whatever was learned then is still the best answer there is.
+      const remembered = rememberedStatuses.get(key)
+      return { state: 'idle', ...(remembered ? { status: remembered } : {}) }
+    },
+    [byRef],
+  )
 }
 
 /** The comment thread for one issue/PR (`/api/github/comments/…`, #499). Fetched only while a

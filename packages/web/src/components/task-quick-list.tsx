@@ -1,11 +1,12 @@
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useHealth, useRuns } from '@/api/queries'
+import { useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
@@ -464,21 +465,36 @@ export function TaskQuickListContainer() {
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
   const now = useNow(30_000)
+  // The sidebar's chips are the same chips as the tables', so they get their status the same way:
+  // one batched request for the whole list, mounted here where the list is.
+  const projectId = useReferenceProjectId()
+  const referenceRequests = React.useMemo(
+    () =>
+      projectId === undefined
+        ? []
+        : (runs.data ?? []).flatMap((run) => {
+            const reference = taskReference(run)
+            return reference ? [{ projectId, kind: reference.kind, number: reference.number }] : []
+          }),
+    [runs.data, projectId],
+  )
 
   // Nothing at all until the list has answered: a skeleton here would be inventing rows, and an
   // empty state would claim "No tasks yet" before we know whether there are any.
   if (!runs.data) return null
 
   return (
-    <TaskQuickList
-      runs={runs.data}
-      view={view}
-      onViewChange={setView}
-      // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
-      currentRunId={match?.params.id ?? exact?.params.id ?? null}
-      now={now}
-      showTokens={visibility.tokens}
-      showCost={visibility.cost}
-    />
+    <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <TaskQuickList
+        runs={runs.data}
+        view={view}
+        onViewChange={setView}
+        // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
+        currentRunId={match?.params.id ?? exact?.params.id ?? null}
+        now={now}
+        showTokens={visibility.tokens}
+        showCost={visibility.cost}
+      />
+    </ReferenceStatusProvider>
   )
 }

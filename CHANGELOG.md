@@ -1,6 +1,73 @@
 # Unreleased
 
+### 🐛 Fixes
+- 🐛 **The global Tasks page reacts to work happening in other projects.** Every event from a
+  project other than the one you were standing in was dropped before it reached any cache, so
+  `/tasks` — which is precisely the page that spans every project — heard nothing and ran on its
+  15-second poll alone. And that poll does not tick in a hidden tab, so coming back to one showed
+  whatever it last fetched: a task the auto-namer had renamed kept its old title, and a chip kept
+  the reference it had, until you reloaded the page. Those events now refresh the cross-project
+  index (debounced, so a busy workspace is one request per quiet moment rather than one per event),
+  a reconnect reconciles it like every other authoritative cache, and returning to the tab refetches
+  it. Scoped caches are untouched by the change — another project's run still never lands in this
+  project's list.
+- 🐛 **A reference's status is shared across every surface again.** The global Tasks page keys each
+  chip by its run's real project id, because its rows span the registry, while the sidebar, the run
+  header and the per-project table used the `default` alias — so the same pull request was
+  remembered under two names, and a status updated in **All tasks** left the sidebar and the task
+  page holding the old one. Every surface now names the project the same way.
+
 ## ✨ Features
+- ✨ **A task's PR or issue chip now says where that PR or issue stands.** Until now `#402` looked
+  the same whether it had merged, had been red for two days, was still a draft, or had been closed
+  without merging — and the only way to find out was to click through to GitHub, one task at a
+  time. Every reference chip in the cockpit (the sidebar rows, the per-project Tasks table, **All
+  tasks**, the run header) now carries the state of the thing it points at, in three channels:
+  colour — done is violet, fine is green, waiting on a reviewer is blue, a running build turns the
+  chip amber end to end rather than just its dot, and anything wrong is red — an icon borrowed from
+  GitHub's own vocabulary, and a tooltip that spells it out in words
+  — "Changes requested — a reviewer asked for edits before this can merge". Three rather than one,
+  because colour alone is invisible to a colourblind reader, an icon alone is a rebus until you
+  have learned it, and a tooltip alone is not there until you go looking for it; the status reaches
+  the chip's accessible name too. A pull request reads as merged, closed (without merging), draft,
+  changes requested, checks failing, checks running, waiting for review, or ready to merge. Which
+  one wins is decided by **whose move it is**, which is the question a row actually answers — and it
+  maps onto the colour: red is the author's move, blue is the reviewer's, amber is the machine's. A
+  merged PR whose last build went red still reads as merged. "Changes requested" stays red only
+  while it is still true: GitHub keeps reporting that decision long after the author has responded,
+  so cezar reads the pending review request (the re-request button) and the head commit's date, and
+  once either says the author has answered, the chip turns blue and reads "waiting for review"
+  instead of blaming them for edits they already made. A red build still outranks a waiting
+  reviewer, who could not approve it anyway. An issue reads as open, closed as completed, or closed as not planned — kept
+  apart deliberately, because a declined issue must not look like a delivered one. Statuses are
+  fetched in one batched request per project for a whole table rather than one per chip, cached for
+  60 s server-side, and remembered per reference for the lifetime of the tab — so filtering,
+  searching, archiving or a background refresh never blanks the chips that are already on screen.
+  When there IS nothing to show, the chip stays neutral (because "we could not ask" must never be
+  painted as "nothing is wrong") but now says which kind of nothing it is on hover: still checking,
+  GitHub unreachable and why, or no such number in this repository. A status kept from the last
+  successful fetch while GitHub is down keeps its colour and labels itself "last known". A reference
+  is resolved by NUMBER rather than by the kind the task inferred — issues and pull requests share
+  one numbering space, so a `#774` the cockpit filed as a pull request still gets the right answer
+  when it turns out to be an issue — and one number that no longer exists no longer costs every
+  other reference in the same batch its status. How often a status is rechecked follows how changeable it is, and the
+  server is what decides: every answer carries how long it holds, so a reference whose checks are
+  running is re-read every minute until they stop, an unreachable forge is retried every five, and
+  a table where everything has merged or closed schedules nothing at all — a merged pull request
+  cannot change again, so cezar stops asking. Returning to the tab refreshes what is still moving;
+  a hidden tab polls nothing. Every surface's chips are fetched together — one request per project
+  for the whole cockpit rather than one per sidebar group, table and header — and what has been
+  learned survives a reload, so a refresh repaints the statuses it already knew instead of flashing
+  neutral and colouring in a beat later. And the two changes cezar makes itself — merging a pull
+  request, and opening the review gate's draft one — no longer wait for a poll at all: what it
+  holds for that reference is dropped the moment the mutation succeeds, so a PR you just watched it
+  merge reads "merged" on the next glance instead of showing its pre-merge state for another
+  minute. The statuses also ride along with the rows on **All
+  tasks** — `GET /api/v1/workspace/runs-index` answers with whatever the server already had cached,
+  read from cache only so the route never touches `gh` — which means the chips are coloured in the
+  same paint as the table rather than a round trip later. Additive route:
+  `GET /api/v1/github/ref-status?prs=&issues=`.
+  Spec: `.ai/specs/2026-08-11-reference-status-chips.md`.
 - ✨ **One table for every project's tasks, grouped by the repos that belong together.** Work
   rarely stops at a repo boundary — a storefront is an API, a web app and a design system — but
   until now the cockpit could only ever show you one of them at a time. Two things change that.

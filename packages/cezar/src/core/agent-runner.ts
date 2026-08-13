@@ -94,6 +94,35 @@ export function isSignalTerminationExit(exitCode: number | null): boolean {
   return exitCode === 130 || exitCode === 137 || exitCode === 143;
 }
 
+/** The slice of `ChildProcess` a termination tracker needs — keeps the helper
+ *  usable from the transport layer and from test fakes alike. */
+export interface TrackableChild {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  once(event: 'exit', listener: () => void): unknown;
+}
+
+/**
+ * Returns a predicate that answers "has this child actually terminated?".
+ *
+ * `ChildProcess.killed` answers a different question — it flips as soon as a
+ * signal is *delivered*, whether or not the child dies from it. Every agent CLI
+ * installs its own SIGTERM handler, so gating a SIGTERM→SIGKILL watchdog on
+ * `!child.killed` disables the escalation for exactly the child it exists for:
+ * `killed` is true, `exitCode` stays null, and the process outlives the whole
+ * grace window (#844, same defect fixed for the discovery probe in #841).
+ *
+ * Seeded from `exitCode`/`signalCode` so a child that died before the watchdog
+ * was armed is recognized without waiting for an event that already fired.
+ */
+export function trackChildExit(child: TrackableChild): () => boolean {
+  let exited = child.exitCode != null || child.signalCode != null;
+  child.once('exit', () => {
+    exited = true;
+  });
+  return () => exited;
+}
+
 /** One content block of a user message — mirrors the Anthropic wire format
  *  so it can be written to the claude CLI's stdin verbatim. */
 export type ContentBlock =

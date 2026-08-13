@@ -25,7 +25,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
-import { queryKeys, useHealth, useRuns } from '@/api/queries'
+import { queryKeys, useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -34,6 +34,7 @@ import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
@@ -941,21 +942,40 @@ export function TasksOverviewRoute() {
   })
   const now = useNow(30_000)
   const taskTableColumns = useTaskTableColumns()
+  // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
+  // presentational component rendered directly (and without a query client) by its tests. The
+  // provider wraps it instead, so the chips deep in the table and the cards read their status
+  // from context and nothing in between has to relay it.
+  const projectId = useReferenceProjectId()
+  const referenceRequests = React.useMemo(
+    () =>
+      // `taskReference`, singular: this table paints exactly one chip per row (the strongest
+      // reference), so asking about the others would be a request for something never shown.
+      projectId === undefined
+        ? []
+        : (runs.data ?? []).flatMap((run) => {
+            const reference = taskReference(run)
+            return reference ? [{ projectId, kind: reference.kind, number: reference.number }] : []
+          }),
+    [runs.data, projectId],
+  )
 
   return (
-    <TasksOverview
-      runs={runs.data}
-      view={view}
-      onViewChange={setView}
-      onArchiveFinished={() => archive.mutate()}
-      onMarkAllRead={() => markAllRead.mutate()}
-      onRename={(id, title) => rename.mutate({ id, title })}
-      now={now}
-      showTokens={metricVisibility.tokens}
-      showCost={metricVisibility.cost}
-      expandedColumns={taskTableColumns.expandedColumns}
-      onToggleColumn={taskTableColumns.toggleColumn}
-      columnsPending={taskTableColumns.isPending}
-    />
+    <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <TasksOverview
+        runs={runs.data}
+        view={view}
+        onViewChange={setView}
+        onArchiveFinished={() => archive.mutate()}
+        onMarkAllRead={() => markAllRead.mutate()}
+        onRename={(id, title) => rename.mutate({ id, title })}
+        now={now}
+        showTokens={metricVisibility.tokens}
+        showCost={metricVisibility.cost}
+        expandedColumns={taskTableColumns.expandedColumns}
+        onToggleColumn={taskTableColumns.toggleColumn}
+        columnsPending={taskTableColumns.isPending}
+      />
+    </ReferenceStatusProvider>
   )
 }
