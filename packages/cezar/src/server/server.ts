@@ -5514,8 +5514,15 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
-  const automationCoordinator = new AutomationCoordinator({ listProjects });
   const bootProjectId = deps.bootProjectId ?? 'default';
+  // `pinned`: the boot project is served whether or not the registry holds it,
+  // and since boot registration became seed-once it usually does NOT — then
+  // `bootProjectId` is the `'default'` alias, which `listProjects()` can never
+  // name, so the coordinator's own refresh sweep would evict the store opened
+  // one line below and the boot folder's automations would silently stop being
+  // scheduled while the cockpit kept showing them enabled. Registered or not,
+  // pinning is the same statement: this process is serving that project.
+  const automationCoordinator = new AutomationCoordinator({ listProjects, pinned: bootProjectId });
   const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,

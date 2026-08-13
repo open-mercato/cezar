@@ -145,6 +145,13 @@
   `CEZ_SINGLE_PROJECT=1` deployments are exempt, since there the launch folder *is* the project.
 
 ## 🐛 Fixes
+- 🐛 **Automations in the folder cezar is serving keep running when that folder is not one of your
+  saved projects.** The workspace scheduler compares its live handles against the project registry
+  and drops anything the registry does not name — which the folder you started cezar in is not,
+  now that starting somewhere new no longer registers it. Its automations stayed listed and
+  switched on in the cockpit while nothing polled GitHub for them, and nothing said so. The boot
+  project is now pinned against that sweep: cezar is demonstrably serving it, registered or not.
+  Only affects deployments that opted into automations with `CEZ_AUTOMATIONS=1`. (#872)
 - 🐛 **Opening the cockpit on your phone no longer rearranges it on your desktop.** Which sidebar
   project groups are collapsed, and which page a bare `/` restores, were stored workspace-wide in
   `~/.cezar/ui-state.json` — so every open cockpit shared one answer: the last client to navigate

@@ -11,6 +11,18 @@ export interface AutomationProjectSource {
 export interface AutomationCoordinatorOptions {
   listProjects: () => Promise<readonly AutomationProjectSource[]>;
   warn?: (message: string) => void;
+  /**
+   * The boot project's id, which `refresh()` must never evict even though
+   * `listProjects()` (the REGISTRY) does not name it. The server serves the
+   * folder it was started in whether or not that folder is registered, and
+   * since boot registration became seed-once (`shouldAutoRegisterProject`)
+   * the unregistered case is the ordinary one — the store is then keyed on
+   * the `'default'` boot alias, which is never a registry id. Without this
+   * the sweep below drops that store on the first `reschedule()`, and the
+   * boot project's automations stay visible and editable in the cockpit
+   * while nothing ever polls for them.
+   */
+  pinned?: string;
 }
 
 /**
@@ -32,7 +44,11 @@ export class AutomationCoordinator {
       this.options.warn?.(`Unable to refresh GitHub automations: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
+    // The pinned boot id survives the sweep: it is a project this process is
+    // demonstrably serving, not a stale handle, and the registry it is being
+    // compared against is exactly the list that does not know about it.
     const present = new Set(projects.map((project) => project.id));
+    if (this.options.pinned !== undefined) present.add(this.options.pinned);
     for (const id of this.stores.keys()) {
       if (!present.has(id)) this.remove(id);
     }
