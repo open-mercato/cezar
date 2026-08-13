@@ -66,3 +66,12 @@ Land @patzick's `changes-requested` ask: stop steering `health-topic.test.ts` wi
 - [x] 3.2 Run `om-auto-review-pr 733 --autofix`, post the resume summary, and normalize labels (clear `changes-requested` only if the review clears it) — re-review submitted 2026-08-11
 
   No blocker, major or minor findings; one nit (`vi.restoreAllMocks()` now vestigial) declined with a reason, so the autofix loop had nothing actionable to do. Verified beyond the gate with two mutation probes against `server.ts` (ceiling disabled → 2 cases fail in 315 ms; stale revalidation awaited → 1 case fails in 622 ms), both reverted, tree clean. Pipeline label moved `changes-requested` → `review`. **@patzick's review is not dismissed — only he can do that.**
+
+### Phase 4: Is this coverage still needed on today's `main`? (resume of 2026-08-13)
+
+> Added by `om-auto-continue-pr` on 2026-08-13. @patzick's review closed with *"also not sure if this one will still be needed then"*. Phase 3.1 answered the narrow reading (do the **budgets** survive the fake-timer rewrite). This phase answers the broad one: does `health-topic.test.ts` still need this fix **on `main` as it stands today**, or has the PR been overtaken and should be closed?
+
+- [ ] 4.1 Establish whether the subject under test is still live on `main` and whether anyone else fixed the flake in the meantime
+- [ ] 4.2 A/B the focused suite on today's `main` against this branch merged with today's `main`
+- [ ] 4.3 Re-run the mutation probe on the merged head, so "it passes" is not confused with "it still catches regressions"
+- [ ] 4.4 Merge `origin/main`, re-run the configured validation gate, and answer @patzick explicitly on the PR
