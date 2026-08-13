@@ -71,7 +71,29 @@ Land @patzick's `changes-requested` ask: stop steering `health-topic.test.ts` wi
 
 > Added by `om-auto-continue-pr` on 2026-08-13. @patzick's review closed with *"also not sure if this one will still be needed then"*. Phase 3.1 answered the narrow reading (do the **budgets** survive the fake-timer rewrite). This phase answers the broad one: does `health-topic.test.ts` still need this fix **on `main` as it stands today**, or has the PR been overtaken and should be closed?
 
-- [ ] 4.1 Establish whether the subject under test is still live on `main` and whether anyone else fixed the flake in the meantime
-- [ ] 4.2 A/B the focused suite on today's `main` against this branch merged with today's `main`
-- [ ] 4.3 Re-run the mutation probe on the merged head, so "it passes" is not confused with "it still catches regressions"
-- [ ] 4.4 Merge `origin/main`, re-run the configured validation gate, and answer @patzick explicitly on the PR
+- [x] 4.1 Establish whether the subject under test is still live on `main` and whether anyone else fixed the flake in the meantime — 3c09046e
+
+  **Still live, and nobody fixed it.** On `main` at `f1c186ce`: `health-topic.test.ts` is byte-identical to this branch's merge-base `60650171` (`git diff 60650171 origin/main -- <file>` is empty), so no other PR touched the flake. The cache policy it guards is byte-identical too — `server.ts` changed by +168/−44 since the merge-base, but its hunks skip from `@@ -1069` to `@@ -1603`, and the whole health block (`HEALTH_TTL_MS`, `HEALTH_MAX_STALE_MS`, `refreshHealth`, `readHealth`, the boot pre-warm, the publisher interval) lives at 1427–1600. The topic still has a live consumer: `packages/web/src/api/queries.ts` keeps the one session-long `health` subscription — #688 disabled the health websocket only in *remote* mode, on the web side.
+
+  **The probe sweep the test waits on got heavier, not lighter.** #470 (the `pi` runner) added a sixth probe to `detectEnvironment()` — `pi --version`, a child process with a 10 s exec timeout — so every health snapshot now spawns one more process than when this PR opened.
+
+- [x] 4.2 A/B the focused suite on today's `main` against this branch merged with today's `main` — f93510ac
+
+  Same machine, same minute, load average ~40 on 11 cores:
+
+  | Tree | `npx vitest run --project server packages/cezar/src/server/health-topic.test.ts` |
+  |---|---|
+  | plain `origin/main` `f1c186ce` | ❌ **2 failed / 8 passed** (42.4 s) — `Test timed out in 5000ms` in the stale-window revalidation case and the publish-on-change case |
+  | this branch merged with the same `main` (`f93510ac`) | ✅ **10 passed** (49.2 s) |
+
+- [x] 4.3 Re-run the mutation probe on the merged head, so "it passes" is not confused with "it still catches regressions" — f93510ac
+
+  Staleness ceiling disabled in `server.ts` (`if (age > HEALTH_MAX_STALE_MS) return refreshHealth()` removed): **2 cases fail by `AssertionError` in 2268 ms / 1837 ms** — `expected 'claude' to be 'codex'` and `expected [] to have a length of 1`. Failure by assertion, not by timeout: the fake clock still reaches the server's `Date.now()`, and the generous budgets do not convert a real regression into a 30 s hang. Probe reverted, tree verified clean.
+
+- [x] 4.4 Merge `origin/main`, re-run the configured validation gate, and answer @patzick explicitly on the PR — f93510ac
+
+  `origin/main` `f1c186ce` merged cleanly (no conflict). Gate on the merged head: `typecheck` ✅, `test:unit` ✅, `build` ✅, `test:package` ✅, focused `health-topic` ✅ 10/10. `npm test` recorded below with its load caveat; GitHub Actions on the pushed head is the authoritative signal.
+
+## Verdict of Phase 4
+
+**Keep the PR — the coverage is still needed and still unfixed on today's `main`.** The answer to @patzick's *"not sure if this one will still be needed"* is: the file it fixes still fails on `main` (two 5 s timeouts, reproduced 2026-08-13), the policy it guards is unchanged, and the sweep it waits on gained a probe. Closing it would leave `main` with a suite that goes red under load and catches nothing extra when it does.
