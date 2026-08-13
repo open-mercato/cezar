@@ -1,6 +1,6 @@
-import { useConfig, useProviderStatus, useRunnerModels } from '@/api/queries'
+import { useAgentProfiles, useConfig, useProviderStatus, useRepo, useRunnerModels } from '@/api/queries'
 import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
-import { PickerPill, RunnerPill } from '@/components/picker-pill'
+import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
 import { usableRunners } from '@/lib/provider-status'
 import {
   modelsForRunner,
@@ -25,10 +25,18 @@ import {
  * needs, so the pick and the thing sent to the server can never disagree.
  */
 
-/** What the user actually touched. `null` on either field means "never touched". */
+/** What the user actually touched. `null` on any field means "never touched". */
 export interface EnginePick {
   runner: Runner | null
   model: string | null
+  /**
+   * Which login of that agent runs it (spec 2026-07-29-agent-profiles). Three states, and the
+   * first two are NOT the same thing: `null` follows the project's selection (and keeps following
+   * it if the setting changes before the task starts), `DEFAULT_AGENT_ACCOUNT_ID` names the
+   * discovered account *explicitly* — which beats the project selection server-side — and any
+   * other value is that account's id.
+   */
+  account: string | null
 }
 
 /** The effective backend, plus what the body rules need to decide what to send. */
@@ -47,6 +55,13 @@ export interface ResolvedEngine {
   modelsLocked?: boolean
   providerPending: boolean
   providerError: boolean
+  /** Every login for every runner. Empty on the zero-config host, which is why it renders as
+   *  the same single-row-per-agent list it always did. */
+  accounts: readonly RunnerAccountChoice[]
+  /** The per-task account override, already filtered to the RESOLVED runner — see the hook. */
+  account: string | null
+  /** What the project's setting resolves to per runner, i.e. the row selected until overridden. */
+  repoAccount?: Partial<Record<Runner, string>>
 }
 
 export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
@@ -60,6 +75,27 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   // Resolved first: each runner has its own host catalog (#794), so the fetch follows the pick.
   const catalog = useRunnerModels(runner)
   const modelsLocked = config.data?.modelsLocked === true
+  // Agent accounts (spec 2026-07-29-agent-profiles), resolved the same way the /new composer
+  // resolves them (new-task.tsx) so the two start surfaces cannot disagree about which login runs.
+  const profiles = useAgentProfiles()
+  const repo = useRepo()
+  const accounts = (profiles.data?.profiles ?? []).map((profile) => ({
+    provider: profile.provider as Runner,
+    id: profile.id,
+    label: profile.label,
+    configDir: profile.configDir,
+  }))
+  // An account belonging to ANOTHER runner is dropped rather than sent: switching runner must not
+  // silently carry the previous runner's login along. Same guard as the composer's.
+  const account = accounts.some((choice) => choice.provider === runner && choice.id === pick.account)
+    ? pick.account
+    : null
+  // Selections are keyed by the project's realpath'd ROOT — the key the store itself uses — and
+  // `useRepo` is project-scoped, so it already answers for the ACTIVE project.
+  const repoRoot = repo.data?.info?.root
+  const repoAccount = (repoRoot ? profiles.data?.selections[repoRoot] : undefined) as
+    | Partial<Record<Runner, string>>
+    | undefined
   return {
     runner,
     runnerExplicit: pick.runner !== null,
@@ -70,6 +106,9 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
     modelsLocked,
     providerPending: providers.isPending,
     providerError: providers.isError,
+    accounts,
+    account,
+    repoAccount,
   }
 }
 
@@ -97,31 +136,81 @@ export function engineBody(resolved: ResolvedEngine): Pick<CreateRunInput, 'runn
   }
 }
 
+/**
+ * `engineBody` plus the per-task agent account, for the start surfaces whose endpoint actually
+ * takes one (`POST /api/v1/runs`).
+ *
+ * A sibling rather than a widened `engineBody` on purpose: `inbox.tsx` SPREADS the result into
+ * `startTodo`, and TypeScript does not excess-property-check a spread — widening the shared return
+ * would compile there and ship an `agentProfile` that `POST /todos/:id/start` silently drops.
+ *
+ * Conditional spread, per the HTTP-API rule in AGENTS.md: `agentProfile: undefined` types the key
+ * as always-present while `JSON.stringify` drops it, which the contract-parity tests flag. An
+ * untouched pick must put no such key on the wire at all — that is what "follow the project's
+ * selection" means, and it is a different request from naming the default account explicitly.
+ */
+export function engineRunBody(
+  resolved: ResolvedEngine,
+): Pick<CreateRunInput, 'runner' | 'model' | 'agentProfile'> {
+  return {
+    ...engineBody(resolved),
+    ...(resolved.account ? { agentProfile: resolved.account } : {}),
+  }
+}
+
 export function EnginePills({
   pick,
   onChange,
   disabled = false,
+  accounts = false,
 }: {
   pick: EnginePick
   onChange: (pick: EnginePick) => void
   disabled?: boolean
+  /**
+   * Offer the agent ACCOUNT as rows of the runner pill. Opt-in per surface, because it must only
+   * be shown where the endpoint can honour it: rendering a picker whose choice the server drops on
+   * the floor is worse than not offering it. On today's surfaces that means the GitHub tab's
+   * hand-off (`POST /api/v1/runs`) but not the Inbox card (`POST /todos/:id/start`, which has no
+   * `agentProfile` field yet).
+   */
+  accounts?: boolean
 }) {
-  const { runner, model, runners, canRun, modelsLocked } = useResolvedEngine(pick)
+  const resolved = useResolvedEngine(pick)
+  const { runner, model, runners, canRun, modelsLocked } = resolved
   const config = useConfig()
   const catalog = useRunnerModels(runner)
   const models = modelsForRunner(runner, catalog.data, [pick.model, config.data?.defaultModels?.[runner]])
   const unavailable = disabled || !canRun
+  const accountChoices = accounts ? resolved.accounts : []
+  // Shown when there is a choice to make: more than one runner, or — where accounts are offered —
+  // more than one login for one of them. A host with neither sees no pill, exactly as before.
+  const showRunnerPill =
+    runners.length > 1
+    || runners.some((id) => accountChoices.filter((c) => c.provider === id).length > 1)
 
   return (
     <>
-      {runners.length > 1 ? (
+      {showRunnerPill ? (
         <RunnerPill
           runners={runners}
           value={runner}
+          accounts={accountChoices}
+          account={accounts ? resolved.account : null}
+          repoAccount={accounts ? resolved.repoAccount : undefined}
           disabled={unavailable}
-          // Switching backend drops the model pick: the presets are per-runner, so a kept
-          // model would be a preset the new runner does not have (composer rule).
-          onPick={(next) => onChange({ runner: next, model: null })}
+          // Changing the AGENT drops the model pick: the presets are per-runner, so a kept model
+          // would be a preset the new runner does not have (composer rule). Changing only the
+          // ACCOUNT keeps it — the catalog is identical across logins of the same runner.
+          // Without accounts every row IS an agent, so that surface keeps its unconditional
+          // reset rather than quietly gaining the re-pick-keeps-the-model behaviour.
+          onPick={(next, picked) =>
+            onChange(
+              accounts
+                ? { runner: next, account: picked, model: next === runner ? pick.model : null }
+                : { runner: next, account: null, model: null },
+            )
+          }
         />
       ) : null}
       <PickerPill

@@ -135,17 +135,17 @@ export function skillChainSteps(names: readonly string[]): WorkflowStepDef[] {
  *  - no workflow but skills toggled → the skills ARE the chain (spec 008);
  *  - nothing selected → quick-task.
  *
- * `backend` (#401) is the already-resolved runner/model pair — `engineBody(useResolvedEngine(…))`
- * from components/engine-pills. It arrives pre-shaped rather than raw on purpose: the omit rules
- * are subtle enough to be worth having in exactly one place, and this stays a pure body builder.
- * Omit it and the body is the pre-#401 one.
+ * `backend` (#401) is the already-resolved runner/model/account triple —
+ * `engineRunBody(useResolvedEngine(…))` from components/engine-pills. It arrives pre-shaped rather
+ * than raw on purpose: the omit rules are subtle enough to be worth having in exactly one place,
+ * and this stays a pure body builder. Omit it and the body is the pre-#401 one.
  */
 export function githubRunBody(
   item: GithubItem,
   workflow: string | null,
   skills: readonly string[],
   customPrompt?: string,
-  backend: Pick<CreateRunInput, 'model' | 'runner'> = {},
+  backend: Pick<CreateRunInput, 'model' | 'runner' | 'agentProfile'> = {},
 ): CreateRunInput {
   // A custom prompt EXTENDS the item context rather than replacing it (#524) — see
   // `composeGithubTask`. The workflow/skill routing and the #401 `backend` spread are unchanged;

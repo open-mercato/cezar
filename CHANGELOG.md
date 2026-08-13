@@ -1,6 +1,17 @@
 # Unreleased
 
 ### 🐛 Fixes
+- 🐛 **Handing an issue or PR to the agent can pick which agent account runs it.** Giving every
+  project its own agent account taught the /new composer, Settings and the run header to list a
+  runner's logins — `claude · Default`, `claude · Klaudiusz`, `codex` — but the GitHub tab was
+  missed, so delegating an issue always ran on whatever the project's selection resolved to, with
+  no way to override it for one task. Its "Hand this to the agent" panel now offers the same rows,
+  and the pick rides the run. The rules are the composer's: switching the agent drops the account
+  and the model pin rather than carrying a foreign login along, switching only the account keeps
+  the model, and an untouched pill still follows the project's selection instead of pinning it.
+  A host with one agent and one login sees no pill and sends exactly what it sent before. The
+  Inbox card's ▶ Run is unchanged — its endpoint cannot carry an account yet, and offering a
+  choice the server would drop is worse than not offering it.
 - 🐛 **The global Tasks page reacts to work happening in other projects.** Every event from a
   project other than the one you were standing in was dropped before it reached any cache, so
   `/tasks` — which is precisely the page that spans every project — heard nothing and ran on its
