@@ -7,6 +7,7 @@ import { loadServerState } from './state.ts';
 import { StepAborted } from './steps.ts';
 import { createAutoUi } from './ui.ts';
 import type { InstallStep, PlatformStrategy, Runner } from './types.ts';
+import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 
 const noRunner: Runner = { capture: async () => ({ code: 0, stdout: '', stderr: '' }), interactive: async () => 0 };
 
@@ -164,6 +165,39 @@ describe('engine', () => {
     expect(after.installed).toBe(false);
     // platform is cleared so the host can be re-installed with any platform
     expect(after.platform).toBeUndefined();
+  });
+
+  it('warns and cancels before uninstalling a server that serves registered projects', async () => {
+    await mergeWriteWorkspaceConfig((config) => {
+      config.projects = [
+        {
+          id: 'api',
+          root: '/srv/api',
+          name: 'API',
+          addedAt: '2026-07-20T00:00:00.000Z',
+          lastOpenedAt: '2026-07-20T00:00:00.000Z',
+          source: 'local',
+        },
+        {
+          id: 'web',
+          root: '/srv/web',
+          name: 'Web',
+          addedAt: '2026-07-20T00:00:00.000Z',
+          lastOpenedAt: '2026-07-20T00:00:00.000Z',
+          source: 'local',
+        },
+      ];
+    });
+    await runInstall(strategyOf([fakeStep('a')]), opts());
+    const undo = fakeStep('a');
+    const warn = vi.fn();
+    const ui = { ...createAutoUi(), warn, confirm: vi.fn(async () => false) };
+
+    const res = await runUninstall(strategyOf([undo]), opts({ ui, assumeYes: false }));
+
+    expect(res.status).toBe('cancelled');
+    expect(undo.undo).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith('2 projects are registered in ~/.cezar/config.json.');
   });
 
   it('after a full uninstall the host can be installed with a different platform', async () => {

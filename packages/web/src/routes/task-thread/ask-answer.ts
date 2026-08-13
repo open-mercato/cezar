@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 
 import { ApiError } from '@/api/client'
 import { useContinueRun, useSendMessage } from '@/api/queries'
@@ -28,6 +28,36 @@ export type AskDeliveryMode = 'live' | 'resume' | 'unavailable'
 /** Why an answer cannot be delivered right now — `provider` is recoverable from
  *  Settings, `no-session` is terminal for this run. */
 export type AskBlockedReason = 'provider' | 'no-session'
+
+/** The idle timer closes the backend before the RunManager has finished settling
+ *  the run record and releasing its active-run entry. A stale ask card can therefore
+ *  learn that `/messages` is closed, then reach `/continue` a few milliseconds too
+ *  early. Retry only that exact transitional refusal; every other 409 is actionable. */
+export const IDLE_TEARDOWN_RETRY_DELAYS_MS = [50, 100, 200, 400, 800, 1_000, 1_000, 1_000, 1_000] as const
+
+const delayIdleTeardownRetry = (delayMs: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+
+function isIdleTeardownRefusal(error: unknown): error is ApiError {
+  return error instanceof ApiError && error.status === 409 && error.message === 'run is still active'
+}
+
+/** Reopen once the old idle-closed session has left the RunManager's active map.
+ *  The injected wait keeps the bounded policy deterministic in unit tests. */
+export async function resumeAfterIdleTeardown<T>(
+  resume: () => Promise<T>,
+  wait: (delayMs: number) => Promise<void> = delayIdleTeardownRetry,
+): Promise<T> {
+  for (let retries = 0; ; retries += 1) {
+    try {
+      return await resume()
+    } catch (error) {
+      const delayMs = IDLE_TEARDOWN_RETRY_DELAYS_MS[retries]
+      if (!isIdleTeardownRefusal(error) || delayMs === undefined) throw error
+      await wait(delayMs)
+    }
+  }
+}
 
 /**
  * The delivery route for one ask answer, as a pure function of the run record — the
@@ -75,6 +105,8 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
   const activeProvider = useActiveProviderAvailability(run)
   const existingProvider = useExistingProviderAvailability(run)
   const [error, setError] = useState<string | undefined>(undefined)
+  const [delivering, setDelivering] = useState(false)
+  const deliveringRef = useRef(false)
 
   const mode = askDeliveryMode(run)
   const providerBlocked =
@@ -104,32 +136,36 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
   const send = async (text: string): Promise<void> => {
     // Defense in depth — every entry point is already disabled while blocked, and the card
     // renders `reason` on its own, so repeating it as an error would say the same thing twice.
-    if (blockedBy) return
+    if (blockedBy || deliveringRef.current) return
+    deliveringRef.current = true
+    setDelivering(true)
     setError(undefined)
-    if (mode === 'resume') {
-      try {
-        await resumeWith(text)
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err))
-      }
-      return
-    }
     try {
-      await sendMessage.mutateAsync({ text })
-    } catch (err) {
-      // The cached record said "live" but the session had already closed — resume instead
-      // of dropping the answer the user just gave. Only ever from the live path: a resume
-      // that answers 409 has already been refused on its own terms.
-      if (err instanceof ApiError && err.status === 409 && lastSessionId(run) !== undefined) {
-        try {
-          await resumeWith(text)
-          return
-        } catch (resumeErr) {
-          setError(resumeErr instanceof Error ? resumeErr.message : String(resumeErr))
+      if (mode === 'resume') {
+        await resumeAfterIdleTeardown(() => resumeWith(text))
+        return
+      }
+      try {
+        await sendMessage.mutateAsync({ text })
+      } catch (sendError) {
+        // The cached record said "live" but the session had already closed — resume instead
+        // of dropping the answer the user just gave. The old session can still be settling
+        // after the message 409, so the continuation helper owns that narrow retry window.
+        if (
+          sendError instanceof ApiError &&
+          sendError.status === 409 &&
+          lastSessionId(run) !== undefined
+        ) {
+          await resumeAfterIdleTeardown(() => resumeWith(text))
           return
         }
+        throw sendError
       }
+    } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      deliveringRef.current = false
+      setDelivering(false)
     }
   }
 
@@ -137,7 +173,7 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
     mode,
     blockedBy,
     reason,
-    isPending: sendMessage.isPending || resume.isPending,
+    isPending: delivering || sendMessage.isPending || resume.isPending,
     error,
     send,
   }

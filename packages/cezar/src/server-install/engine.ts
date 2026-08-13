@@ -1,6 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { cezarHomeDir } from '../paths.ts';
+import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { acquireLock, deleteServerState, isResolved, loadServerState, saveServerState } from './state.ts';
 import { StepAborted, StepCancelled, StepSkipped, defaultRunner } from './steps.ts';
 import { createAutoUi, createClackUi } from './ui.ts';
@@ -277,10 +275,13 @@ export async function runUninstall(strategy: PlatformStrategy, opts: RunOptions)
       );
     }
 
-    if (liveInstancesExist()) {
-      ctx.ui.warn('Other cezar instances are registered under ~/.cezar/instances/.');
+    const registeredProjects = (await loadWorkspaceConfig()).projects.length;
+    if (registeredProjects > 0) {
+      ctx.ui.warn(
+        `${registeredProjects} ${registeredProjects === 1 ? 'project is' : 'projects are'} registered in ~/.cezar/config.json.`,
+      );
       const proceed = await ctx.ui.confirm({
-        message: 'Removing the shared proxy/service will break them. Continue?',
+        message: 'Removing this server will make them unavailable. Continue?',
         initialValue: false,
       });
       if (proceed !== true) return { status: 'cancelled', state };
@@ -382,16 +383,5 @@ export async function runDeploy(strategy: PlatformStrategy, opts: RunOptions): P
     return { status: 'complete', state };
   } finally {
     release();
-  }
-}
-
-/** True when at least one repo instance is registered (multi-project registry). */
-function liveInstancesExist(): boolean {
-  const dir = join(cezarHomeDir(), 'instances');
-  if (!existsSync(dir)) return false;
-  try {
-    return readdirSync(dir).some((f) => f.endsWith('.json'));
-  } catch {
-    return false;
   }
 }

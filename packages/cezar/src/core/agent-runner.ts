@@ -4,21 +4,35 @@
  * no token-budget circuit breaker, no zod response schemas — one run is one
  * agent-CLI session streaming normalized events.
  *
- * Three interchangeable backends implement this seam, each as a persistent
+ * Four interchangeable backends implement this seam, each as a persistent
  * process so multi-turn follow-ups, `waiting`, interrupt and resume all work:
  *  - `claude`   — Claude Code CLI, stream-json over stdin/stdout;
  *  - `codex`    — `codex app-server`, JSON-RPC 2.0 (JSONL) over stdin/stdout;
- *  - `opencode` — `opencode serve`, HTTP + SSE.
+ *  - `opencode` — `opencode serve`, HTTP + SSE;
+ *  - `pi`       — pi coding CLI, RPC over JSONL stdin/stdout, selecting its
+ *                 model with `provider/model`.
  */
 
 import type { UiEvent } from './ui-events.ts';
 
-/** `claude-cli` is the legacy id kept so old run records still parse. */
-export type AgentBackend = 'claude' | 'codex' | 'opencode' | 'claude-cli';
+/**
+ * The user-selectable runners (what config/GUI expose), in display order — the SINGLE source of
+ * truth for the set. Every runtime enumeration derives from this tuple (zod schemas, the
+ * server-install "at least one agent CLI" gate, the CLI-handoff registry) rather than repeating
+ * the literals, so adding runner #5 is a one-line change here and typecheck finds the rest.
+ */
+export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
 
 /** The user-selectable runners (what config/GUI expose). */
-export type RunnerId = 'claude' | 'codex' | 'opencode';
-export const RUNNER_IDS: readonly RunnerId[] = ['claude', 'codex', 'opencode'];
+export type RunnerId = (typeof RUNNER_IDS)[number];
+
+/** `claude-cli` is the legacy id kept so old run records still parse. */
+export type AgentBackend = RunnerId | 'claude-cli';
+
+/** Narrow an arbitrary string (a config value, a check name) to a runner id. */
+export function isRunnerId(value: string): value is RunnerId {
+  return (RUNNER_IDS as readonly string[]).includes(value);
+}
 
 export interface AgentRunSpec {
   /** Appended to the CLI's default system prompt (`--append-system-prompt`). */
@@ -78,6 +92,35 @@ export function prependSystemPrompt(systemPrompt: string | undefined, userPrompt
  */
 export function isSignalTerminationExit(exitCode: number | null): boolean {
   return exitCode === 130 || exitCode === 137 || exitCode === 143;
+}
+
+/** The slice of `ChildProcess` a termination tracker needs — keeps the helper
+ *  usable from the transport layer and from test fakes alike. */
+export interface TrackableChild {
+  exitCode: number | null;
+  signalCode: NodeJS.Signals | null;
+  once(event: 'exit', listener: () => void): unknown;
+}
+
+/**
+ * Returns a predicate that answers "has this child actually terminated?".
+ *
+ * `ChildProcess.killed` answers a different question — it flips as soon as a
+ * signal is *delivered*, whether or not the child dies from it. Every agent CLI
+ * installs its own SIGTERM handler, so gating a SIGTERM→SIGKILL watchdog on
+ * `!child.killed` disables the escalation for exactly the child it exists for:
+ * `killed` is true, `exitCode` stays null, and the process outlives the whole
+ * grace window (#844, same defect fixed for the discovery probe in #841).
+ *
+ * Seeded from `exitCode`/`signalCode` so a child that died before the watchdog
+ * was armed is recognized without waiting for an event that already fired.
+ */
+export function trackChildExit(child: TrackableChild): () => boolean {
+  let exited = child.exitCode != null || child.signalCode != null;
+  child.once('exit', () => {
+    exited = true;
+  });
+  return () => exited;
 }
 
 /** One content block of a user message — mirrors the Anthropic wire format

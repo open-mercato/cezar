@@ -293,7 +293,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           queryClient.setQueryData(key, updated)
           return
         }
-        // An additive row cannot safely seed the complete three-provider cache. Discard an old
+        // An additive row cannot safely seed the complete provider cache. Discard an old
         // initial fetch and replace it after the server emitted this latch. Further valid rows
         // while that replacement is in flight coalesce into one trailing fetch.
         if (providerStatusRefetching) {

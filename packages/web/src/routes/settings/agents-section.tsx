@@ -10,7 +10,7 @@ import {
   useProjects,
   useProviderStatus,
   useRepo,
-  useRunnerModels,
+  useRunnerModelCatalogs,
   useSelectAgentProfile,
 } from '@/api/queries'
 import { useProjectScope } from '@/api/project-scope-context'
@@ -49,7 +49,9 @@ const SYSTEM_PROMPT_MAX = 20_000
 
 export function AgentsSection() {
   const config = useConfig()
-  const catalog = useRunnerModels()
+  // One row per runner here, so every runner's own host catalog is needed at once (#794) —
+  // unlike the composer, which only ever renders the runner the user picked.
+  const catalogs = useRunnerModelCatalogs()
   const providerStatus = useProviderStatus()
 
   if (config.isPending) {
@@ -70,16 +72,16 @@ export function AgentsSection() {
       />
     )
   }
-  return <AgentsForm config={config.data} catalog={catalog.data} providerStatus={providerStatus} />
+  return <AgentsForm config={config.data} catalogs={catalogs} providerStatus={providerStatus} />
 }
 
 function AgentsForm({
   config,
-  catalog,
+  catalogs,
   providerStatus,
 }: {
   config: ConfigResponse
-  catalog: ReturnType<typeof useRunnerModels>['data']
+  catalogs: ReturnType<typeof useRunnerModelCatalogs>
   providerStatus: ReturnType<typeof useProviderStatus>
 }) {
   const repo = useRepo()
@@ -153,7 +155,11 @@ function AgentsForm({
                 : providerConnected
                   ? undefined
                   : 'Connect this provider before selecting it.'
-            const modelOptions = modelsForRunner(runner.id, catalog, [config.defaultModels[runner.id]])
+            const catalog = catalogs[runner.id]
+            const catalogStatus = modelCatalogStatus(runner.id, catalog.data, catalog.isError)
+            const modelOptions = modelsForRunner(runner.id, catalog.data, [
+              config.defaultModels[runner.id],
+            ])
             const configuredModel = config.defaultModels[runner.id] ?? ''
             const configuredModelLabel =
               modelOptions.find((model) => model.id === configuredModel)?.label ??
@@ -194,9 +200,7 @@ function AgentsForm({
                         {model.id === '' ? 'auto (default)' : model.label}
                       </option>
                     ))}
-                    {modelCatalogStatus(runner.id, catalog) ? (
-                      <option disabled>{modelCatalogStatus(runner.id, catalog)}</option>
-                    ) : null}
+                    {catalogStatus ? <option disabled>{catalogStatus}</option> : null}
                   </select>
                 )}
               </label>

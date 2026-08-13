@@ -49,9 +49,6 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const queryClient = useQueryClient()
   const available = runActionFlags(run).continueRun
   const config = useConfig()
-  // Only a run that can actually be continued needs the model catalog — every other thread
-  // (running, queued, or closed with no session) would be fetching it to render nothing.
-  const catalog = useRunnerModels(available)
   // null = "not touched": the pills fall back to the run's current backend/model, so an
   // untouched Continue behaves exactly as before this feature existed.
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
@@ -59,6 +56,11 @@ export function useContinueAction(run: ApiRun): ContinueAction {
 
   const continuation = useContinuationProvider(run, pickedRunner)
   const { runners, canContinue, currentRunner, runner } = continuation
+  // The catalog belongs to the runner this continuation would use (#794), so switching the
+  // runner pill re-reads that backend's own models. Only a run that can actually be continued
+  // fetches at all — every other thread (running, queued, closed with no session) would be
+  // fetching it to render nothing.
+  const catalog = useRunnerModels(runner, available)
   const modelsLocked = config.data?.modelsLocked === true
   // While the runner is unchanged, the model pill starts on the run's own pin; switching the
   // runner invalidates that pin and falls back to the new backend's configured default / auto.
