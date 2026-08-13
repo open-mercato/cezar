@@ -1,18 +1,18 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { ChevronDownIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
-import { putWorkspaceUiState } from '@/api/client'
-import { useHealth, useProjectRuns, useWorkspaceUiState, workspaceQueryKeys } from '@/api/queries'
-import type { ProjectListEntry, WorkspaceUiState } from '@open-mercato/cezar-api-client'
+import { useHealth, useProjectRuns } from '@/api/queries'
+import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { QuickListBuckets } from '@/components/task-quick-list'
-import { toast } from '@/components/ui/toaster'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
+import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
+import { taskReference } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
@@ -32,93 +32,33 @@ import { cn } from '@/lib/utils'
  *  row, because it occupies one row of sidebar. */
 const RECENT_LIMIT = 10
 
-/** Collapse is a click-through-a-list gesture: a user opening three groups in a row should cost
- *  the server one write, not three. Short enough that a reload right after a toggle still finds
- *  the new state. */
-const COLLAPSE_WRITE_DEBOUNCE_MS = 400
-
 /**
- * Whether a group renders collapsed.
+ * Read + write of the per-project collapse map (`lib/sidebar-collapse.ts`), which lives in
+ * localStorage rather than `~/.cezar/ui-state.json`.
  *
- * The stored answer wins whenever there is one — including an explicit `false`, which is how a
- * user pins a non-active project open. With no entry the default is "the project you are
- * looking at is open, the rest are shut": the alternative (everything open) turns a 40-project
- * workspace into an unusable scroll on first boot, and costs a runs request per project.
- */
-export function isProjectCollapsed(
-  collapsed: Record<string, boolean> | undefined,
-  projectId: string,
-  activeProjectId: string | null,
-): boolean {
-  const stored = collapsed?.[projectId]
-  if (stored !== undefined) return stored
-  return projectId !== activeProjectId
-}
-
-/**
- * Read + write of `sidebar.collapsed` in `~/.cezar/ui-state.json`.
- *
- * The house pattern for ui-state (see `skills-import-panel.tsx`): apply optimistically to the query cache
- * so the chevron turns on the click, PUT behind a debounce, reconcile with the server's merged
- * answer, and on failure toast + invalidate rather than leave the cache asserting a collapse
- * that never persisted.
- *
- * The PUT always carries the WHOLE `sidebar` object (spread from whatever is cached, not just
- * the one key): the route merges shallowly at the top level, so sending `{ sidebar: { collapsed
- * } }` replaces `sidebar` outright and would drop any sibling key a future step puts there.
+ * Seeded once from storage at mount, so the first paint already carries the user's answer — no
+ * request to wait for, and no flash of the active-project default. React state is the live copy
+ * and every toggle mirrors the new map straight to storage, which is synchronous, so a reload
+ * immediately after a click still finds it. There is no debounce, no optimistic-then-reconcile
+ * dance and no failure toast left, because there is no server round trip left to fail.
  */
 function useSidebarCollapse(activeProjectId: string | null) {
-  const queryClient = useQueryClient()
-  const uiState = useWorkspaceUiState()
-  const collapsed = uiState.data?.sidebar?.collapsed
-
-  const pending = React.useRef<WorkspaceUiState['sidebar'] | null>(null)
-  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-
-  const flush = React.useCallback(() => {
-    timer.current = null
-    const sidebar = pending.current
-    if (!sidebar) return
-    pending.current = null
-    putWorkspaceUiState({ sidebar })
-      .then((merged) => queryClient.setQueryData(workspaceQueryKeys.uiState, merged))
-      .catch((error: unknown) => {
-        toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
-        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.uiState })
-      })
-  }, [queryClient])
-
-  // A toggle in the last few hundred milliseconds before unmount (a full page navigation, a
-  // closing tab) still lands: the cleanup sends it rather than dropping the timer on the floor.
-  React.useEffect(
-    () => () => {
-      if (timer.current === null) return
-      clearTimeout(timer.current)
-      flush()
-    },
-    [flush],
-  )
+  const [collapsed, setCollapsed] = React.useState(readStoredCollapsed)
+  // The map as of the last toggle, updated synchronously: two clicks inside one render pass must
+  // compose, and the second must see the first one's entry rather than the batched-away state.
+  const latest = React.useRef(collapsed)
 
   const toggle = React.useCallback(
     (projectId: string) => {
-      // Read the cache rather than close over `uiState.data`: two toggles inside one debounce
-      // window must compose, and the second must see the first one's optimistic write.
-      const current = queryClient.getQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState)
-      const currentCollapsed = current?.sidebar?.collapsed
-      const sidebar = {
-        ...current?.sidebar,
-        collapsed: {
-          ...currentCollapsed,
-          [projectId]: !isProjectCollapsed(currentCollapsed, projectId, activeProjectId),
-        },
+      const next = {
+        ...latest.current,
+        [projectId]: !isProjectCollapsed(latest.current, projectId, activeProjectId),
       }
-      queryClient.setQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState, { ...current, sidebar })
-
-      pending.current = sidebar
-      if (timer.current !== null) clearTimeout(timer.current)
-      timer.current = setTimeout(flush, COLLAPSE_WRITE_DEBOUNCE_MS)
+      latest.current = next
+      writeStoredCollapsed(next)
+      setCollapsed(next)
     },
-    [activeProjectId, flush, queryClient],
+    [activeProjectId],
   )
 
   return { collapsed, toggle }
@@ -128,6 +68,7 @@ export function ProjectGroups({
   projects,
   bootProjectId,
   inboxAvailable = false,
+  automationsAvailable = false,
   inboxCount = null,
   skillsUpdateAvailable = false,
 }: {
@@ -136,14 +77,26 @@ export function ProjectGroups({
    *  auto-expands before the user has navigated into any `/p/<id>` scope. */
   bootProjectId: string
   inboxAvailable?: boolean
+  /** `capabilities.automations` (#801) — workspace-wide, unlike the per-project forge gate:
+   *  the opt-in is one env var on the one server that serves every group. */
+  automationsAvailable?: boolean
   inboxCount?: number | null
   skillsUpdateAvailable?: boolean
 }) {
   const { pathname } = useLocation()
   // The shell renders outside the routes, so there is no `ProjectScopeProvider` above it — the
   // URL's own prefix is the scope, exactly as `project-router` resolves it for links.
-  const activeProjectId = pathnameProjectId(pathname) ?? bootProjectId
-  const { collapsed, toggle } = useSidebarCollapse(activeProjectId)
+  //
+  // `scopedProjectId` is null on the pages that belong to NO project — the global Tasks page and
+  // global settings. Nothing may be highlighted there: a `/p/` prefix is the only thing that
+  // makes a project the one you are standing in, and painting the boot project as selected while
+  // the user reads an all-projects table says the page is about that project when it is not.
+  const scopedProjectId = pathnameProjectId(pathname)
+  // Collapse defaults are a different question ("which group opens when you have never touched
+  // one?") and still want a project, so they keep the boot fallback: landing on a global page
+  // must not fold the whole sidebar shut.
+  const collapseAnchorId = scopedProjectId ?? bootProjectId
+  const { collapsed, toggle } = useSidebarCollapse(collapseAnchorId)
 
   // One filter for the whole cockpit (`ListViewProvider`): switching the Tasks table to Archived
   // switches every group with it, rather than leaving the sidebar answering a different question.
@@ -170,14 +123,15 @@ export function ProjectGroups({
           key={project.id}
           project={project}
           boot={project.id === bootProjectId}
-          active={project.id === activeProjectId}
-          collapsed={isProjectCollapsed(collapsed, project.id, activeProjectId)}
+          active={project.id === scopedProjectId}
+          collapsed={isProjectCollapsed(collapsed, project.id, collapseAnchorId)}
           onToggle={toggle}
           view={view}
           activeTo={activeTo}
           currentRunId={currentRunId}
           now={now}
           inboxAvailable={inboxAvailable}
+          automationsAvailable={automationsAvailable}
           inboxCount={inboxCount}
           skillsUpdateAvailable={skillsUpdateAvailable}
           showTokens={metricVisibility.tokens}
@@ -199,6 +153,7 @@ function ProjectGroup({
   currentRunId,
   now,
   inboxAvailable,
+  automationsAvailable,
   inboxCount,
   skillsUpdateAvailable,
   showTokens,
@@ -217,6 +172,7 @@ function ProjectGroup({
   currentRunId: string | null
   now: number
   inboxAvailable: boolean
+  automationsAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
   showTokens: boolean
@@ -231,6 +187,21 @@ function ProjectGroup({
 
   const waiting = runs.data ? listCounts(runs.data).waiting : 0
   const buckets = runs.data ? capBuckets(groupRuns(runs.data, view), RECENT_LIMIT) : []
+  // Only the rows this group actually paints: `buckets` is the capped list, so a project with
+  // four hundred runs asks about the handful on screen rather than all of them.
+  //
+  // Deliberately NOT memoized: `buckets` is rebuilt with a fresh identity on every render, so a
+  // `useMemo` keyed on it would recompute every time anyway while claiming otherwise. Nothing
+  // downstream needs a stable identity — `ReferenceStatusProvider` and `useReferenceStatuses` both
+  // key off the CONTENT of this list.
+  const referenceRequests = buckets.flatMap((bucket) =>
+    bucket.rows.flatMap((row) => {
+      // A collapsed variant group paints its FIRST member's chip, so that is the one to ask
+      // about — the others only become visible once the tile is expanded.
+      const reference = taskReference(row.kind === 'run' ? row.run : row.members[0]!)
+      return reference ? [{ projectId: project.id, kind: reference.kind, number: reference.number }] : []
+    }),
+  )
 
   // A missing project's panes all 409 (spec, "Registered project folder deleted/moved"), so
   // there is nothing behind the chevron — the row renders greyed and inert rather than
@@ -265,6 +236,11 @@ function ProjectGroup({
       data-project={project.id}
       data-status={project.status}
       data-collapsed={collapsed ? '' : undefined}
+      // "This is the project the URL names." Absent on the global pages, which name none — see
+      // `scopedProjectId` above. An attribute rather than only a class because the highlight is
+      // a fact about the group, and a `hover:bg-muted` in the class list makes the class an
+      // unreliable way to ask.
+      data-active={active ? '' : undefined}
       className="mb-1"
     >
       <button
@@ -323,7 +299,11 @@ function ProjectGroup({
                 group offers a GitHub tab — the boot folder's health-level forge answer says
                 nothing about the other projects in the workspace. Whether `gh` itself works
                 still surfaces inside the tab as its availability hint. */}
-            {visibleNavItems({ forge: project.forge === 'github', inbox: inboxAvailable }).map((item) => {
+            {visibleNavItems({
+              forge: project.forge === 'github',
+              inbox: inboxAvailable,
+              automations: automationsAvailable,
+            }).map((item) => {
               // Only the active group can own the current URL: the flat route map is
               // project-agnostic, so `/git` lights Git in exactly one project — the scoped one.
               const isActive = active && item.to === activeTo
@@ -365,14 +345,18 @@ function ProjectGroup({
             })}
           </nav>
 
-          <QuickListBuckets
-            buckets={buckets}
-            currentRunId={active ? currentRunId : null}
-            now={now}
-            scope={project.id}
-            showTokens={showTokens}
-            showCost={showCost}
-          />
+          {/* This group's own project, explicitly: a collapsed sidebar can show six projects at
+              once, and #42 means a different pull request in each of them. */}
+          <ReferenceStatusProvider projectId={project.id} requests={referenceRequests}>
+            <QuickListBuckets
+              buckets={buckets}
+              currentRunId={active ? currentRunId : null}
+              now={now}
+              scope={project.id}
+              showTokens={showTokens}
+              showCost={showCost}
+            />
+          </ReferenceStatusProvider>
 
           {/* Always present, not only past the cap: it is this group's door into the project's
               tasks pane (`/p/<id>/`), which is worth an affordance even with two tasks listed. */}

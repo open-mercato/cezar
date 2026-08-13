@@ -1,5 +1,18 @@
 # Restore the Last Project Location
 
+> **Superseded on storage (2026-08-04):** the remembered location moved from
+> `~/.cezar/ui-state.json` to the browser's own `localStorage`
+> (`packages/web/src/lib/last-location.ts`, key `cez-last-location`). The rejected
+> alternative below — "localStorage would give each browser a different answer" —
+> turned out to be the requirement, not the objection: a workspace-wide value let
+> whichever client navigated last decide where every *other* client's next launch
+> landed, so opening the cockpit on a phone moved the desktop. Everything else in
+> this spec still holds — the same validation against the live registry, the same
+> exact-bare-root-only restore, the same deep-link precedence and `replace`
+> semantics — minus the debounce, the write-ordering guard, and the wait on the
+> UI-state read, none of which a synchronous local write needs. The server keeps
+> accepting the `lastLocation` key for older cockpits.
+
 ## 📝 TLDR
 
 Cezar remembers the last valid project-scoped cockpit location in the existing

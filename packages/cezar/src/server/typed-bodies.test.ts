@@ -1,5 +1,7 @@
 import type { ExtractSchema } from 'hono/types';
 import { describe, expect, it } from 'vitest';
+import { setWorkspaceUiStateInputSchema } from '@open-mercato/cezar-contract';
+import type { z } from 'zod';
 import type { AppType } from './app-type.ts';
 
 /**
@@ -27,6 +29,7 @@ describe('every mutating route carries a typed body into AppType', () => {
     : false;
 
   type Assert<T extends true> = T;
+  type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
   // Project-scoped routes are asserted on their unscoped spelling; the `/api/v1/p/:projectId`
   // mount is the same sub-app, so it stands or falls with this one.
@@ -67,6 +70,11 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/check', '$post'>>,
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/apply', '$post'>>,
   ];
+
+  type WorkspaceUiStatePutBody = Schema['/api/v1/workspace/ui-state']['$put']['input']['json'];
+  type _WorkspaceUiStateInputCheck = Assert<
+    Mutual<z.infer<typeof setWorkspaceUiStateInputSchema>, WorkspaceUiStatePutBody>
+  >;
 
   /** Same idea for the routes that validate a path param or the query string. */
   type HasTypedInput<

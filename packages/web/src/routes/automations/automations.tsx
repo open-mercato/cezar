@@ -1,9 +1,11 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useParams } from 'react-router'
-import { ClockIcon, PlayIcon, PlusIcon, WorkflowIcon } from 'lucide-react'
+import { ClockIcon, PlayIcon, PlusIcon, WorkflowIcon, ZapIcon } from 'lucide-react'
 import type { AutomationDefinition, AutomationLogRecord, AutomationsResponse } from '@open-mercato/cezar-api-client'
 
 import { checkAutomation, createAutomation, getAutomationCheck, getAutomationLog, getAutomations, setAutomationEnabled, updateAutomation } from '@/api/client'
+import { useHealth } from '@/api/queries'
+import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -19,13 +21,49 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
   const [data, setData] = useState<AutomationsResponse>()
   const [error, setError] = useState('')
   const [checkStatus, setCheckStatus] = useState<Record<string, string>>({})
+  // GitHub automations are opt-in (#801). A bookmarked `/automations…` URL still routes here with
+  // the capability off, so the view says so rather than rendering an editor whose every request
+  // would 409. `!== true` deliberately: only a health payload that HAS answered switches this on.
+  const health = useHealth()
+  const healthKnown = health.data !== undefined
+  const automationsOff = healthKnown && health.data.capabilities?.automations !== true
   const refresh = () => getAutomations().then(setData).catch((cause) => setError(String(cause)))
-  useEffect(() => { void refresh() }, [])
+  // Waits for health rather than firing optimistically: a fetch made before the answer arrives
+  // would 409 on a gated server and paint an error over the disabled state below. The deps are
+  // two booleans, not `health.data`, so a health refetch does not re-request the list.
+  useEffect(() => { if (healthKnown && !automationsOff) void refresh() }, [healthKnown, automationsOff])
   useEffect(() => onWorkspaceEvent((name, payload) => {
     if (name !== 'automation-change') return
     const changed = payload as { project?: unknown }
     if (typeof changed.project === 'string' && (projectId === null || changed.project === projectId)) void refresh()
   }), [projectId])
+
+  // Every mode below needs the capability answer, so none of them renders before health has given
+  // it. Without this the list mode alone degraded honestly (it has a loading state of its own)
+  // while a cold deep link into `/automations/new` painted a full creation form on a gated
+  // server — and a submit inside that window POSTs straight into a 409.
+  if (!healthKnown) {
+    return (
+      <div data-route="automations" className="flex min-h-full flex-col p-3 md:p-5">
+        <PageState text="Loading automations…" />
+      </div>
+    )
+  }
+
+  // Before every mode branch, so all four `/automations*` routes degrade the same way.
+  if (automationsOff) {
+    return (
+      <div data-route="automations" className="flex min-h-full flex-col p-3 md:p-5">
+        <CenteredState
+          icon={<ZapIcon />}
+          tone="neutral"
+          title="GitHub automations are off"
+          subtitle="This server does not poll GitHub or launch tasks from it. Set CEZ_AUTOMATIONS=1 and restart cezar to turn automations on."
+          heading="h2"
+        />
+      </div>
+    )
+  }
 
   if (mode === 'new') return <AutomationEditor onSaved={() => { navigate('/automations'); void refresh() }} />
   if (mode === 'edit') {

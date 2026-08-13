@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './client'
 import { createQueryClient } from './query-client'
 import { setApiScope } from '@open-mercato/cezar-api-client'
+import { ProjectScopeContext } from './project-scope-context'
+import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
 import {
+  refStatusRecheckAfter,
+  useReferenceProjectId,
   queryKeys,
   useProviderStatus,
   useRefreshProviderStatus,
@@ -15,6 +19,7 @@ import {
   useHealthSubscription,
   useRunnerModels,
   useMarkRunSeen,
+  useMarkRunUnseen,
   usePatchRun,
   usePutAgentConfigFile,
   useRun,
@@ -67,7 +72,7 @@ const HEALTH = {
   repo: { root: '/home/me/cezar', branch: 'main' },
   checks: [],
   defaultRunner: 'claude',
-  capabilities: { localHandoff: true, followups: false, singleProject: false },
+  capabilities: { localHandoff: true, followups: false, singleProject: false, automations: false },
 }
 
 /** Just enough WebSocket for useHealth's topic subscription (api/ws.ts): records the frames the
@@ -118,10 +123,25 @@ class FakeHealthSocket {
 describe('useRunnerModels', () => {
   it('loads the workspace Codex catalog', async () => {
     fetchMock.mockResolvedValue(json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false }))
-    const { result } = renderHook(() => useRunnerModels(), { wrapper: wrapper() })
+    const { result } = renderHook(() => useRunnerModels('codex'), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(result.current.data?.models[0]?.id).toBe('gpt-future')
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=codex')
+  })
+
+  it('loads the OpenCode catalog from its own cache entry (#794)', async () => {
+    fetchMock.mockResolvedValue(json({ runner: 'opencode', models: [{ id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels('opencode'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.models[0]?.id).toBe('openai/gpt-5.4')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=opencode')
+  })
+
+  it('never asks the server about claude, which has no host catalog', async () => {
+    const { result } = renderHook(() => useRunnerModels('claude'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.fetchStatus).toBe('idle'))
+    expect(result.current.data).toBeUndefined()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 })
 
@@ -745,6 +765,32 @@ describe('useMarkRunSeen', () => {
     expect(list?.[0]?.seenAt).toBe('2026-08-03T19:23:14.000Z')
   })
 
+  it('marks the workspace run index stale, so the global Tasks page stops showing it unread', async () => {
+    // The bug this pins: the receipt patches the project-scoped list and detail, and the global
+    // page renders from a THIRD cache with a 30s staleTime. Opening an unread task from /tasks
+    // and coming straight back showed it still unread until a refresh.
+    fetchMock.mockResolvedValue(json({ ...RUN, seenAt: '2026-08-03T19:23:14.000Z' }))
+    const client = createQueryClient()
+    client.setQueryData(workspaceQueryKeys.runsIndex, {
+      runs: [{ projectId: 'api', id: 'run-1', title: 'x', status: 'done', createdAt: RUN.createdAt, archived: false, workflow: 'quick-task' }],
+      perProjectLimit: 200,
+      truncated: [],
+    })
+    expect(client.getQueryState(workspaceQueryKeys.runsIndex)?.isInvalidated).toBe(false)
+
+    const { result } = renderHook(() => useMarkRunSeen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+
+    // Stale, not refetched: nothing is observing the index from a task thread, so this costs no
+    // request — the global page's next mount reads the truth.
+    expect(client.getQueryState(workspaceQueryKeys.runsIndex)?.isInvalidated).toBe(true)
+  })
+
   it('still stamps a detail cache that arrived only with the answer', async () => {
     fetchMock.mockResolvedValue(json({ ...RUN, seenAt: '2026-08-03T19:23:14.000Z' }))
     const client = createQueryClient()
@@ -758,6 +804,74 @@ describe('useMarkRunSeen', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(client.getQueryData<typeof RUN & { seenAt: string }>(queryKeys.runs.detail('run-1'))?.seenAt)
       .toBe('2026-08-03T19:23:14.000Z')
+  })
+})
+
+describe('useMarkRunUnseen', () => {
+  const RUN = {
+    id: 'run-1',
+    title: 'mock:limit ship it',
+    workflow: 'quick-task',
+    task: 'mock:limit ship it',
+    status: 'done',
+    createdAt: '2026-08-03T19:23:00.000Z',
+    finishedAt: '2026-08-03T19:23:13.000Z',
+    seenAt: '2026-08-03T19:23:14.000Z',
+    tokensUsed: 0,
+    archived: false,
+    steps: [],
+  }
+
+  it('clears only the receipt, keeping fields the stream advanced meanwhile', async () => {
+    // The same trap as the read twin above, and the reason this hook cannot simply write its
+    // answer into the cache: `POST /runs/:id/unread` replies with the snapshot the server held
+    // while the request was in flight, so writing it wholesale reverts anything the run stream
+    // landed in that window — permanently, because nothing refetches afterwards. A finished run
+    // is quieter than a just-finished one but not silent: here the janitor discovers the task's
+    // PR link a beat after the click.
+    const deferred = deferredResponse()
+    fetchMock.mockReturnValue(deferred.promise)
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.runs.detail('run-1'), RUN)
+    client.setQueryData(queryKeys.runs.list(), [RUN])
+    const { result } = renderHook(() => useMarkRunUnseen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    const linked = { ...RUN, pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/776' }
+    client.setQueryData(queryKeys.runs.detail('run-1'), linked)
+    client.setQueryData(queryKeys.runs.list(), [linked])
+
+    // The answer is the pre-link snapshot the server had when it cleared the receipt.
+    await act(async () => deferred.resolve(json({ ...RUN, seenAt: undefined })))
+
+    const detail = client.getQueryData<typeof linked>(queryKeys.runs.detail('run-1'))
+    expect(detail?.pullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/776')
+    // Absent, not blanked — `isUnread` keys on the field being missing.
+    expect(detail && 'seenAt' in detail).toBe(false)
+    const list = client.getQueryData<Array<typeof linked>>(queryKeys.runs.list())
+    expect(list?.[0]?.pullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/776')
+    expect(list?.[0] && 'seenAt' in list[0]).toBe(false)
+  })
+
+  it('still falls back to the answer for a detail cache that arrived only with it', async () => {
+    fetchMock.mockResolvedValue(json({ ...RUN, seenAt: undefined }))
+    const client = createQueryClient()
+    const { result } = renderHook(() => useMarkRunUnseen(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+
+    act(() => result.current.mutate('run-1'))
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    const detail = client.getQueryData<typeof RUN>(queryKeys.runs.detail('run-1'))
+    expect(detail?.id).toBe('run-1')
+    expect(detail?.seenAt).toBeUndefined()
   })
 })
 
@@ -843,5 +957,93 @@ describe('query defaults', () => {
     expect(defaults?.refetchInterval).toBe(false)
     expect(defaults?.refetchOnWindowFocus).toBe(false)
     expect(defaults?.staleTime).toBeGreaterThanOrEqual(60_000)
+  })
+})
+
+/**
+ * The refresh policy for reference statuses — and specifically, that the cockpit no longer HAS
+ * one.
+ *
+ * Reference statuses are the one query family here that polls: everything else is told what
+ * changed by the run stream, and GitHub is outside that stream, so a chip reading "checks running"
+ * has no other way to ever stop saying it. But *when* to ask is forge semantics — a merged pull
+ * request can never change, a closed one can be reopened, a running check finishes in minutes —
+ * and those live server-side, next to the cache that decides whether asking would even reach
+ * GitHub. The cockpit obeys `recheckAfterMs` and holds no table of its own; a second copy here
+ * would be two sets of constants that must agree with nothing enforcing it.
+ */
+/**
+ * One project, one name.
+ *
+ * The bug this pins: the global Tasks page keys every chip by its run's real `projectId`, because
+ * its rows span the registry — while an unscoped surface (the sidebar, the run header, the
+ * per-project table) used the `'default'` alias the routes accept. The same pull request was then
+ * remembered under two names: a status learned on one surface never reached the other, and both
+ * fetched it separately. Reported as "the ref updated in All tasks but the sidebar still holds
+ * the old status".
+ */
+describe('useReferenceProjectId', () => {
+  /** `useProjectScope` reads React context — the module-level `setApiScope` is a different seam. */
+  const mounted = (scope: string | null, health?: unknown) => {
+    const client = createQueryClient()
+    if (health !== undefined) client.setQueryData(queryKeys.health, health)
+    return function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <QueryClientProvider client={client}>
+          <ProjectScopeContext.Provider value={{ projectId: scope, apiBase: '/api/v1' }}>
+            {children}
+          </ProjectScopeContext.Provider>
+        </QueryClientProvider>
+      )
+    }
+  }
+
+  it('uses the mounted scope when there is one', () => {
+    const { result } = renderHook(() => useReferenceProjectId(), {
+      wrapper: mounted('proj-a', { ...HEALTH, bootProject: 'boot-id' }),
+    })
+    expect(result.current).toBe('proj-a')
+  })
+
+  it('names the BOOT project when unscoped — never the `default` alias', () => {
+    // `default` would key the same reference differently from every cross-project surface.
+    const { result } = renderHook(() => useReferenceProjectId(), {
+      wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id' }),
+    })
+    expect(result.current).toBe('boot-id')
+  })
+
+  it('answers undefined until health says which project that is', () => {
+    // Better a neutral chip for a moment than an entry written under a name nothing else uses.
+    const { result } = renderHook(() => useReferenceProjectId(), { wrapper: mounted(null) })
+    expect(result.current).toBeUndefined()
+  })
+})
+
+describe('refStatusRecheckAfter', () => {
+  const answered = (recheckAfterMs: number | null): GithubRefStatusData =>
+    ({ available: true, prs: {}, issues: {}, recheckAfterMs }) as GithubRefStatusData
+
+  it('takes the cadence from the answer, whatever it says', () => {
+    expect(refStatusRecheckAfter(answered(60_000))).toBe(60_000)
+    expect(refStatusRecheckAfter(answered(24 * 60 * 60_000))).toBe(24 * 60 * 60_000)
+  })
+
+  it('passes null through — nothing here can change, so nothing is scheduled', () => {
+    // Becomes `refetchInterval: false` and an infinite staleTime, so a table of merged pull
+    // requests costs nothing on a loop and ignores window focus too.
+    expect(refStatusRecheckAfter(answered(null))).toBeNull()
+  })
+
+  it('obeys an unavailable answer as readily as a successful one', () => {
+    expect(
+      refStatusRecheckAfter({ available: false, reason: 'gh CLI not found', recheckAfterMs: 300_000 } as GithubRefStatusData),
+    ).toBe(300_000)
+  })
+
+  it('falls back only where there is no answer to obey', () => {
+    // Still loading, or errored out — `retry` owns the immediate attempt; this is the backstop
+    // that keeps the query from going silent forever.
+    expect(refStatusRecheckAfter(undefined)).toBeGreaterThan(0)
   })
 })

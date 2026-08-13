@@ -79,6 +79,51 @@ describe('buildChildEnv — least-privilege child env (#427)', () => {
     expect(env.PATH).toBe('/override');
   });
 
+  /**
+   * #785: the run's own temp directory is delivered as `extraEnv`, and it only
+   * works if it genuinely REPLACES the host's. The host copy must be gone, not
+   * merely shadowed — env names are matched case-insensitively (and Windows
+   * treats them that way), so a surviving `Temp`/`Tmp` beside our `TEMP`/`TMP`
+   * would hand the backend the exhausted host directory under another spelling.
+   */
+  describe('per-run temp directory replaces the host’s (#785)', () => {
+    it('overrides all three spellings when the host set all three', () => {
+      const env = buildChildEnv({
+        backend: 'claude',
+        source: { ...HOST, TMPDIR: '/tmp', TEMP: '/tmp', TMP: '/tmp' },
+        extraEnv: { TMPDIR: '/data/tmp/run-1', TEMP: '/data/tmp/run-1', TMP: '/data/tmp/run-1' },
+      });
+      expect(env.TMPDIR).toBe('/data/tmp/run-1');
+      expect(env.TEMP).toBe('/data/tmp/run-1');
+      expect(env.TMP).toBe('/data/tmp/run-1');
+    });
+
+    it('leaves no host-cased duplicate pointing back at the shared directory', () => {
+      const env = buildChildEnv({
+        backend: 'claude',
+        source: { ...HOST, Temp: 'C:\\Windows\\Temp', Tmp: 'C:\\Windows\\Temp' },
+        extraEnv: { TMPDIR: 'D:\\run-1', TEMP: 'D:\\run-1', TMP: 'D:\\run-1' },
+      });
+      const tempish = Object.entries(env).filter(([k]) => /^(tmpdir|temp|tmp)$/i.test(k));
+      expect(tempish.map(([, v]) => v)).toEqual(['D:\\run-1', 'D:\\run-1', 'D:\\run-1']);
+    });
+
+    it('the host value still comes through when the run overrides nothing', () => {
+      const env = buildChildEnv({ backend: 'claude', source: { ...HOST, TMPDIR: '/tmp' } });
+      expect(env.TMPDIR).toBe('/tmp');
+    });
+
+    it('the escape hatch does not resurrect the host value either', () => {
+      const env = buildChildEnv({
+        backend: 'claude',
+        source: { ...HOST, CEZ_AGENT_ENV_FULL: '1', Temp: 'C:\\Windows\\Temp' },
+        extraEnv: { TEMP: 'D:\\run-1' },
+      });
+      expect(env.Temp).toBeUndefined();
+      expect(env.TEMP).toBe('D:\\run-1');
+    });
+  });
+
   it('opt-in CEZ_ENV_PASSTHROUGH forwards named extras', () => {
     const src = { ...HOST, MY_TOOLCHAIN_DIR: '/opt/tc', CEZ_ENV_PASSTHROUGH: 'MY_TOOLCHAIN_DIR' };
     const env = buildChildEnv({ backend: 'claude', source: src });

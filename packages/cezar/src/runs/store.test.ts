@@ -1167,6 +1167,48 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
     expect(store.setRead('nope')).toBeUndefined();
   });
 
+  it('setUnread clears the receipt, round-trips, and returns the record (#775)', () => {
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'done');
+    store.setRead(id);
+    expect(store.getRun(id)?.seenAt).toBeDefined();
+
+    const updated = store.setUnread(id);
+    // Cleared, not blanked: `isUnread` and the store's own `markAllRead` both key on the
+    // field being ABSENT, so an empty-string receipt would read as "seen at the epoch".
+    expect(updated?.seenAt).toBeUndefined();
+    expect(Object.hasOwn(updated!, 'seenAt')).toBe(false);
+    store.flush();
+
+    expect(RunStore.open(dataDir).getRun(id)?.seenAt).toBeUndefined();
+  });
+
+  it('setUnread is idempotent on an already-unread run', () => {
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'done');
+
+    expect(store.setUnread(id)?.seenAt).toBeUndefined();
+    expect(store.setUnread(id)?.seenAt).toBeUndefined();
+  });
+
+  it('setUnread returns undefined for an unknown id', () => {
+    const store = RunStore.open(dataDir);
+    expect(store.setUnread('nope')).toBeUndefined();
+  });
+
+  it('a run put back to unread is counted again by the next markAllRead sweep', () => {
+    // The point of clearing rather than flagging: the run rejoins the unread population every
+    // other reader already computes, so the badge, the sweep and the marker all agree again.
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'done');
+    store.setRead(id);
+    expect(store.markAllRead()).toBe(0);
+
+    store.setUnread(id);
+    expect(store.markAllRead()).toBe(1);
+    expect(store.getRun(id)?.seenAt).toBeDefined();
+  });
+
   it('still loads an old runs.json with no seenAt (additive)', () => {
     writeFileSync(join(dataDir, 'runs.json'), JSON.stringify([LEGACY_RUN]), 'utf8');
     expect(RunStore.open(dataDir).getRun('legacy-1')?.seenAt).toBeUndefined();
@@ -1235,5 +1277,156 @@ describe('RunStore — read receipts (#unread-done-items)', () => {
     expect(store.markAllRead()).toBe(1);
     expect(store.getRun(active)?.seenAt).toBeDefined();
     expect(store.getRun(archived)?.seenAt).toBeUndefined();
+  });
+
+  it('markAllRead skips a run waiting out a usage limit, exactly as the cockpit rule does (#803)', () => {
+    // The drift this pins: `isUnread()` (web/src/lib/read-state.ts) gained an `isScheduledResume`
+    // exclusion with the auto-resume work — a `failed` run with a pending `autoResumeAt` is not a
+    // done item, so it wears no marker and the nav badge does not count it — and this sweep never
+    // gained the matching clause. The user-visible symptom: "Mark all read" silently stamped a
+    // task the UI never presented as unread, and reported a count larger than the badge showed.
+    const store = RunStore.open(dataDir);
+    const scheduled = finishedRun(store, 'failed');
+    store.updateRun(scheduled, { autoResumeAt: '2026-08-03T18:41:48.000Z', autoResumeAttempts: 1 });
+    const ordinary = finishedRun(store, 'done');
+
+    // The count is the badge's number: one, not two.
+    expect(store.markAllRead()).toBe(1);
+    expect(store.getRun(ordinary)?.seenAt).toBeDefined();
+    expect(store.getRun(scheduled)?.seenAt).toBeUndefined();
+  });
+
+  it('markAllRead stamps the same run once its resume is no longer pending (#803)', () => {
+    // The exclusion is about the APPOINTMENT, not the failure: clear the schedule and the run is
+    // an ordinary unread `failed` done item again. Without this, the clause above would be
+    // indistinguishable from "never stamp a failed run", which is a different (wrong) rule.
+    const store = RunStore.open(dataDir);
+    const id = finishedRun(store, 'failed');
+    store.updateRun(id, { autoResumeAt: '2026-08-03T18:41:48.000Z' });
+    expect(store.markAllRead()).toBe(0);
+
+    store.updateRun(id, { autoResumeAt: undefined });
+    expect(store.markAllRead()).toBe(1);
+    expect(store.getRun(id)?.seenAt).toBeDefined();
+  });
+});
+
+describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('loads a record carrying `claude-cli` and folds it to `claude`', () => {
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        {
+          ...LEGACY_RUN,
+          runner: 'claude-cli',
+          steps: [
+            {
+              id: 'task',
+              name: 'Do the task',
+              kind: 'agent',
+              status: 'done',
+              iterations: 1,
+              tokensUsed: 0,
+              sessionId: 'sess-1',
+              backend: 'claude-cli',
+            },
+          ],
+        },
+      ]),
+      'utf8',
+    );
+
+    const run = RunStore.open(dataDir).getRun('legacy-1');
+    // Parsed, not dropped — and normalized, so no consumer sees a fourth runner id.
+    expect(run?.runner).toBe('claude');
+    expect(run?.steps[0]?.backend).toBe('claude');
+  });
+
+  it('does not let one `claude-cli` record evict the rest of runs.json', () => {
+    // The regression this guards: the loader `safeParse`s the WHOLE array, so before #547 a
+    // single record carrying the legacy id took every other run in the file down with it —
+    // the exact failure mode BACKWARD_COMPATIBILITY.md §3 warns about.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: 'legacy-cli', runner: 'claude-cli' },
+        { ...LEGACY_RUN, id: 'modern', runner: 'codex' },
+      ]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('legacy-cli')?.runner).toBe('claude');
+    expect(store.getRun('modern')?.runner).toBe('codex');
+  });
+
+  it('rewrites the folded id on the next save, so the narrowing is one-way', () => {
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, runner: 'claude-cli' }]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    store.updateRun('legacy-1', { title: 'touched' });
+    store.flush();
+
+    // The index is re-serialized from the PARSED records, so `claude-cli` is gone from disk.
+    const onDisk = readFileSync(join(dataDir, 'runs.json'), 'utf8');
+    expect(onDisk).not.toContain('claude-cli');
+    expect(JSON.parse(onDisk)[0].runner).toBe('claude');
+  });
+
+  it('persists and reloads a `pi` run, index and step alike (#387)', () => {
+    // `storedRunnerSchema` derives from `RUNNER_IDS` rather than re-listing the ids, so a new
+    // runner is readable the moment it is registered. Without this, a completed pi run would
+    // fail the whole-array parse on the next boot and take every other run down with it.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        {
+          ...LEGACY_RUN,
+          runner: 'pi',
+          steps: [
+            {
+              id: 'task',
+              name: 'Do the task',
+              kind: 'agent',
+              status: 'done',
+              iterations: 1,
+              tokensUsed: 0,
+              sessionId: 'pi-sess-1',
+              backend: 'pi',
+            },
+          ],
+        },
+      ]),
+      'utf8',
+    );
+
+    const run = RunStore.open(dataDir).getRun('legacy-1');
+    expect(run?.runner).toBe('pi');
+    expect(run?.steps[0]?.backend).toBe('pi');
+  });
+
+  it('still rejects a runner id that is not a legacy spelling of a real backend', () => {
+    // Widening the READ side is not an invitation to accept anything: an unknown id is still
+    // a parse failure, which is what keeps the enum meaningful.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, runner: 'gemini' }]),
+      'utf8',
+    );
+    expect(RunStore.open(dataDir).getRun('legacy-1')).toBeUndefined();
   });
 });

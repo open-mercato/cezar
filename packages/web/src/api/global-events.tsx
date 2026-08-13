@@ -93,6 +93,46 @@ export function onWorkspaceEvent(
 }
 
 /**
+ * The cross-project index behind the global Tasks page, refreshed from ANY project's run news.
+ *
+ * Invalidated rather than patched, and debounced. Patching would mean synthesizing a
+ * `RunIndexEntry` from a `RunRecord` — a slim row from a fat one, including the `usage` the server
+ * attaches per poll — and inventing a row is exactly what the reducers in `events.ts` refuse to
+ * do. Invalidation asks the authoritative endpoint instead, and costs nothing at all unless the
+ * page is actually mounted: `invalidateQueries` refetches what is rendered and only marks the rest
+ * stale.
+ *
+ * The debounce is what keeps that honest. One run emits many events (started, step, usage,
+ * finished), and a workspace of forty projects emits them from everywhere at once; without it a
+ * busy minute would be a refetch per event. One request per quiet moment is the whole point.
+ */
+const RUNS_INDEX_REFRESH_DEBOUNCE_MS = 400
+
+/** Built per mount, not module-level: a pending timer holds the `queryClient` it will write to,
+ *  and one that outlives its provider would invalidate a cache nobody is reading. `cancel` runs
+ *  in the effect cleanup. */
+function createRunsIndexRefresher(queryClient: QueryClient): {
+  onEvent: (event: GlobalEvent) => void
+  cancel: () => void
+} {
+  let pending: ReturnType<typeof setTimeout> | undefined
+  return {
+    onEvent(event) {
+      if (event.type !== 'run' && event.type !== 'run-deleted') return
+      if (pending !== undefined) return
+      pending = setTimeout(() => {
+        pending = undefined
+        void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.runsIndex })
+      }, RUNS_INDEX_REFRESH_DEBOUNCE_MS)
+    },
+    cancel() {
+      clearTimeout(pending)
+      pending = undefined
+    },
+  }
+}
+
+/**
  * Refetch the authoritative endpoints.
  *
  * These are the endpoints the stream can leave stale:
@@ -113,6 +153,9 @@ export function onWorkspaceEvent(
  */
 function reconcile(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+  // Events happened while we were disconnected, and the index is cross-project — nothing else
+  // here covers it.
+  void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.runsIndex })
   void queryClient.invalidateQueries({ queryKey: queryKeys.todos })
   void queryClient.invalidateQueries({ queryKey: queryKeys.health })
   // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
@@ -201,6 +244,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     if (typeof Source !== 'function') return
 
     let source: EventSource | null = null
+    const runsIndexRefresher = createRunsIndexRefresher(queryClient)
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let everOpened = false
     let disposed = false
@@ -250,7 +294,13 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         source.addEventListener(name, (event) => {
           const parsed = parseWorkspaceEvent(name, (event as MessageEvent<string>).data)
           if (!parsed) return
-          // Another project's news patches nothing here: this scope's caches hold this
+          // The cross-project index first, and BEFORE the scope filter below — it is the one
+          // cache that spans every project, so another project's news is exactly what it is news
+          // for. Dropping those events left the global Tasks page entirely poll-driven: a title
+          // the namer had rewritten stayed stale until the next tick, and the tick does not run
+          // in a background tab, so coming back to one showed yesterday's rows until a reload.
+          runsIndexRefresher.onEvent(parsed.event)
+          // Another project's news patches nothing SCOPED: this scope's caches hold this
           // project's data only, and the reconcile-on-switch (3.2's provider swap) refetches
           // the rest. `ping` (project null) always passes — liveness is not project-owned.
           if (parsed.project !== null && parsed.project !== activeProject(queryClient)) return
@@ -293,7 +343,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           queryClient.setQueryData(key, updated)
           return
         }
-        // An additive row cannot safely seed the complete three-provider cache. Discard an old
+        // An additive row cannot safely seed the complete provider cache. Discard an old
         // initial fetch and replace it after the server emitted this latch. Further valid rows
         // while that replacement is in flight coalesce into one trailing fetch.
         if (providerStatusRefetching) {
@@ -353,6 +403,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     return () => {
       disposed = true
       clearTimeout(reopenTimer)
+      runsIndexRefresher.cancel()
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)

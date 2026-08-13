@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { isSafeSessionId, resumeCommand } from './server.ts';
 
 /**
@@ -14,6 +15,14 @@ describe('resumeCommand — session id validation', () => {
     expect(resumeCommand(undefined, id)).toBe(`claude --resume ${id}`);
     expect(resumeCommand('codex', id)).toBe(`codex resume ${id}`);
     expect(resumeCommand('opencode', id)).toBe(`opencode --session ${id}`);
+    expect(resumeCommand('pi', id)).toBe(`pi --session ${id}`);
+  });
+
+  // Every runner id must map to a command — an id that fell through to the `claude` default
+  // would hand the user a `claude --resume` for a session claude does not own (#387).
+  it.each(RUNNER_IDS)('maps %s to its own CLI, never silently to claude', (runner) => {
+    const id = '9f8e7d6c-1234-4abc-9def-0123456789ab';
+    expect(resumeCommand(runner, id)?.startsWith(`${runner} `)).toBe(true);
   });
 
   it('never emits a quote character — a POSIX quote would reach cmd.exe literally on win32', () => {

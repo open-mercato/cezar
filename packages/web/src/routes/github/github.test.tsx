@@ -230,6 +230,10 @@ function stubFetch(
           steps: [],
         })
       }
+      // The tab reads `capabilities.automations` (#801). The catch-all below answers `{}`, which
+      // is not a health payload at all — a reader would crash on it rather than degrade — so the
+      // default here is a real one, with automations off exactly as a default server reports.
+      if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(['claude']))
       return jsonResponse({})
     }),
   )
@@ -312,6 +316,25 @@ describe('the GitHub tab lists', () => {
     // No URL selection → the first item's detail renders (legacy parity), marked current.
     expect(rows()[0]?.getAttribute('aria-current')).toBe('page')
     await waitFor(() => expect(detail()?.textContent).toContain('Login form drops session'))
+  })
+
+  // #801: the tab's only cross-link into automations follows the capability — advertising
+  // "Set up automations" on a server that answers 409 would be a dead end.
+  it('offers the automations shortcut only while the capability is on', async () => {
+    stubFetch()
+    renderAt('/github')
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-header"]')).not.toBeNull())
+    expect(screen.queryByRole('link', { name: 'Set up automations' })).toBeNull()
+
+    cleanup()
+    stubFetch({
+      'GET /api/v1/health': () => jsonResponse({
+        ...health(['claude']),
+        capabilities: { ...health(['claude']).capabilities, automations: true },
+      }),
+    })
+    renderAt('/github')
+    expect(await screen.findByRole('link', { name: 'Set up automations' })).not.toBeNull()
   })
 
   it('/github/prs lists pull requests', async () => {
@@ -1085,7 +1108,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */
@@ -1096,8 +1119,14 @@ const SINGLE_BACKEND = () => jsonResponse(health(['claude']))
 /** Open a pill's dropdown and choose an option by label (Radix opens on pointerDown). */
 async function pickPill(slot: string, label: string) {
   fireEvent.pointerDown(document.querySelector(`[data-slot="${slot}"]`)!)
-  const options = await screen.findAllByRole('menuitemradio')
-  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+  // A discovery runner's options arrive with its catalog (#794), so wait for the labelled
+  // option rather than merely for the menu to open.
+  let option: HTMLElement | undefined
+  await waitFor(() => {
+    option = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes(label))
+    expect(option).toBeDefined()
+  })
+  fireEvent.click(option as HTMLElement)
 }
 
 const postedRun = (sent: readonly SentRequest[]) =>

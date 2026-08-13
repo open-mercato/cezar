@@ -3,11 +3,13 @@ import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync,
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { loadWorkspaceConfig } from './config.ts';
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from './config.ts';
 import {
   allocateProjectSlug,
   clearProjectProbeCache,
   listProjects,
+  normalizeProjectTags,
   registerProject,
   removeProject,
   shouldRegisterProject,
@@ -266,5 +268,90 @@ describe('workspace projects', () => {
       expect(await shouldRegisterProject(homedir())).toBe(false);
       expect(await shouldRegisterProject(`${homedir()}/`)).toBe(false);
     });
+  });
+
+  it('exposes the remote as a credential-free web root', async () => {
+    const root = makeRepo('linked');
+    execFileSync('git', ['remote', 'add', 'origin', 'https://tok3n:x@github.com/acme/linked.git'], {
+      cwd: root,
+    });
+    await registerProject(root);
+    clearProjectProbeCache();
+
+    const listed = (await listProjects())[0];
+    // Rebuilt from the parsed remote, so the token in it cannot reach the cockpit.
+    expect(listed?.repoUrl).toBe('https://github.com/acme/linked');
+    expect(listed?.forge).toBe('github');
+  });
+
+  it('omits the web root for a repo with no forge remote', async () => {
+    const root = makeRepo('local-only');
+    execFileSync('git', ['remote', 'add', 'origin', '/srv/git/local-only.git'], { cwd: root });
+    await registerProject(root);
+    clearProjectProbeCache();
+
+    const listed = (await listProjects())[0];
+    expect(listed?.repoUrl).toBeUndefined();
+    expect(listed?.forge).toBeUndefined();
+  });
+
+  /**
+   * The one spelling rule for grouping tags. Case-insensitive dedupe is the load-bearing part:
+   * tags exist to be a GROUPING key on the global Tasks page, and `API` beside `api` splitting
+   * one group in two is exactly the failure this prevents.
+   */
+  describe('normalizeProjectTags', () => {
+    it('trims, drops empties, and sorts', () => {
+      expect(normalizeProjectTags([' web ', 'api', '', '   '])).toEqual(['api', 'web']);
+    });
+
+    it('dedupes case-insensitively, keeping the first spelling', () => {
+      expect(normalizeProjectTags(['Storefront', 'storefront', 'STOREFRONT'])).toEqual([
+        'Storefront',
+      ]);
+    });
+
+    it('truncates an over-long tag rather than dropping it', () => {
+      const long = 'x'.repeat(PROJECT_TAG_MAX_LENGTH + 10);
+      expect(normalizeProjectTags([long])).toEqual(['x'.repeat(PROJECT_TAG_MAX_LENGTH)]);
+    });
+
+    it('caps the list', () => {
+      const many = Array.from({ length: PROJECT_TAGS_MAX + 5 }, (_, i) => `tag-${i}`);
+      expect(normalizeProjectTags(many)).toHaveLength(PROJECT_TAGS_MAX);
+    });
+
+    it('answers undefined — never [] — for nothing to store', () => {
+      expect(normalizeProjectTags(undefined)).toBeUndefined();
+      expect(normalizeProjectTags(null)).toBeUndefined();
+      expect(normalizeProjectTags([])).toBeUndefined();
+      expect(normalizeProjectTags(['  '])).toBeUndefined();
+    });
+  });
+
+  it('round-trips tags through the registry', async () => {
+    const root = makeDir('tagged');
+    const entry = await registerProject(root);
+    await mergeWriteWorkspaceConfig((config) => {
+      const stored = config.projects.find((p) => p.id === entry.id);
+      if (stored) stored.tags = ['api', 'storefront'];
+    });
+    clearProjectProbeCache();
+    const listed = (await listProjects()).find((p) => p.id === entry.id);
+    expect(listed?.tags).toEqual(['api', 'storefront']);
+  });
+
+  it('drops a malformed tag list per key, keeping the rest of the entry', async () => {
+    const root = makeDir('bad-tags');
+    const entry = await registerProject(root);
+    await mergeWriteWorkspaceConfig((config) => {
+      const stored = config.projects.find((p) => p.id === entry.id);
+      // A hand-edited config. The per-key `.catch` must degrade the tags to "untagged"
+      // rather than evicting the whole project from the registry.
+      if (stored) (stored as { tags?: unknown }).tags = 'storefront';
+    });
+    const listed = (await listProjects()).find((p) => p.id === entry.id);
+    expect(listed).toBeDefined();
+    expect(listed?.tags).toBeUndefined();
   });
 });

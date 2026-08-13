@@ -1,11 +1,12 @@
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useHealth, useRuns } from '@/api/queries'
+import { useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
@@ -14,15 +15,17 @@ import { directionalUsageText } from '@/components/directional-usage'
 import {
   groupRuns,
   listCounts,
+  refPrefixMatches,
   runTitle,
+  splitRefPrefix,
   type ListView,
   type QuickListBucket,
   type QuickListRow,
 } from '@/lib/task-groups'
-import { formatCost, prNumber, taskPrUrl } from '@/lib/tasks-table'
+import { formatCost, taskReference } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
-import { cn, isHttpUrl } from '@/lib/utils'
+import { cn } from '@/lib/utils'
 
 /**
  * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
@@ -232,7 +235,9 @@ function Row({
             className={cn('size-3 shrink-0 text-soft-foreground transition-transform', !expanded && '-rotate-90')}
             aria-hidden="true"
           />
-          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{row.title}</span>
+          {/* Same width-priority rule as `RunRow`: the shared title has a floor, and the `×N`
+              badge and the compare link give way before it does. */}
+          <span className="min-w-[7rem] flex-1 truncate text-[13px] font-medium">{row.title}</span>
           <span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground">
             ×{row.members.length}
           </span>
@@ -269,8 +274,25 @@ function Row({
 /**
  * One run.
  *
- * The row is a `<Link>` and the PR chip is its flex *sibling*, not its child: an anchor inside an
- * anchor is invalid, and both targets are real — the row opens the task, the chip opens the PR.
+ * The row is a `<Link>` and the reference chip is its flex *sibling*, not its child: an anchor
+ * inside an anchor is invalid, and both targets are real — the row opens the task, the chip opens
+ * the PR or issue. The status dot is a sibling too, so the reading order can be dot → chip →
+ * title rather than a chip wedged in front of the status it is not about.
+ *
+ * WIDTH-PRIORITY RULE (#788, option C) — read this before adding anything to this row.
+ * The column is 264px by default and the title is the ONLY thing here a person scans for, so:
+ *
+ *  1. The title is the only element allowed to GROW (`flex-1`) and it has a floor
+ *     (`min-w-[7rem]`, replacing the `min-w-0` that let it be squeezed to nothing) that no other
+ *     element may push it below.
+ *  2. Every other element is metadata and must be DROPPABLE beneath that floor. The mechanism is
+ *     the `@container/sidebar` the app shell declares: metadata that does not fit a narrow column
+ *     is hidden by a container query and comes back when the user drags the column wider.
+ *  3. Anything a dropped element was the only carrier of has to survive somewhere reachable —
+ *     the diff numbers keep their `title` tooltip, the reference keeps its own chip.
+ *
+ * Before this rule the title was the sole compressible item in a row of `shrink-0` metadata, so
+ * it absorbed 100% of any deficit — which is how `775: i…` happened.
  */
 function RunRow({
   run,
@@ -296,7 +318,14 @@ function RunRow({
 }) {
   const attention = deriveAttention(run)
   const isActive = run.id === currentRunId
-  const prUrl = taskPrUrl(run)
+  // The strongest tracker reference the run knows about — the PR once one exists, else the issue
+  // it was opened on. It is the row's leading chip AND the reason the title may drop its `NNN: `
+  // prefix (#788, option C): the number is painted once, as a link, instead of twice as digits.
+  const reference = taskReference(run)
+  const title = runTitle(run)
+  // Only when the two numbers are the same number — see `refPrefixMatches`. A run opened on issue
+  // #788 that shipped as PR #790 keeps its prefix, because the chip is no longer saying it.
+  const displayTitle = refPrefixMatches(title, reference?.number) ? splitRefPrefix(title).rest : title
   // Read/unread (#unread-done-items, "Option B"): an unread done item is promoted (bright +
   // semibold) and wears a trailing violet dot; a read one dims so the history steps back. Both
   // are orthogonal to the leading status dot, which keeps saying done/failed.
@@ -314,44 +343,86 @@ function RunRow({
     <div
       data-slot="task-row"
       data-run-id={run.id}
-      // The row's highlight is a wrapper concern (the PR chip sits outside the Link), so the
-      // active state has to be readable here rather than only from the Link's `aria-current`.
+      // The row's highlight is a wrapper concern (the dot and the reference chip sit outside the
+      // Link), so the active state has to be readable here rather than only from the Link's
+      // `aria-current`.
       data-active={isActive ? 'true' : undefined}
       className={cn(
-        'flex items-center rounded-sm hover:bg-muted',
+        'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
         isActive && 'bg-muted',
-        variant && 'pl-4'
+        // The indent a member row wears under an expanded group tile. One padding declaration,
+        // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
+        // to it — 26px = the row's own 10px plus the 16px indent.
+        variant && 'pl-[26px]'
       )}
     >
+      {/* Outside the Link so it can lead the reference chip. The dot is a status indicator, not a
+          navigation target, and the wrapper still owns the row's hover surface. */}
+      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      {/* The reference, ONCE (#788, option C): the number that used to be both a `775: ` title
+          prefix and a trailing `PR ↗` chip is now one leading chip that is itself the link. */}
+      {reference ? (
+        <ReferenceChip
+          reference={reference}
+          taskTitle={title}
+          compact
+          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+        />
+      ) : null}
       <Link
         to={scopeTo(scope, `/tasks/${run.id}`)}
-        // The row's accessible name is the title; `title` gives the full text back when the CSS
-        // truncates it, which for a one-line 264px column is most of the time.
-        title={runTitle(run)}
+        // `title` carries the FULL stored title — including a `NNN: ` prefix the chip let the
+        // visible text drop — so hover always gives back everything the column could not show.
+        title={title}
         aria-current={isActive ? 'page' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-[7px]"
+        className="flex min-w-0 flex-1 items-center gap-2 py-[7px] pr-2.5"
       >
         {variant ? (
           <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
             {run.variant ?? '?'}
           </span>
         ) : null}
-        <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
         <span
+          data-slot="task-row-title"
           className={cn(
-            'min-w-0 flex-1 truncate text-[13px]',
+            // `min-w-[7rem]`: the floor of the width-priority rule above. The title never gives
+            // way past ~17 characters; metadata drops instead.
+            'min-w-[7rem] flex-1 truncate text-[13px]',
             unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
           )}
         >
-          {variant ? variantLabel(run, showTokens, showCost) : runTitle(run)}
+          {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
         </span>
         {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
-            sidebar row has no column to hold an em dash open for. */}
-        {run.diffStat ? <DiffStatLabel stat={run.diffStat} className="shrink-0 text-[10.5px]" /> : null}
-        {/* The PR chip takes the age's slot when there is one — same as the mockup. */}
-        {prUrl || !age ? null : (
+            sidebar row has no column to hold an em dash open for.
+
+            Droppable metadata, per the width-priority rule: `+59514 −12160` is ~82px, which a
+            264px column cannot spend and still name the task, and its exact numbers stay in the
+            `title` tooltip and in the Tasks table's ± column either way.
+
+            23rem is not the width at which the pair merely *fits* — it is the width at which it
+            fits AND the name is still at least as long as it was in the default 264px column
+            (measured: 146px of title at 23rem vs 132px at 264px). Anything narrower buys the
+            numbers back by making the task names shorter than they were before the drag, which
+            is precisely the bargain this issue exists to stop making. */}
+        {run.diffStat ? (
+          <DiffStatLabel
+            stat={run.diffStat}
+            className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
+          />
+        ) : null}
+        {/* The reference chip takes the AGE's slot when there is one — same as the mockup, and
+            the same trade as before: a row that knows its PR or issue number is identified by
+            that, not by how long ago it finished.
+
+            It never takes the QUEUE POSITION's slot. `#2` is not an age, it is where the engine
+            will pick this run up, it is carried nowhere else in the row, and a queued run is
+            exactly the kind that has an issue reference and no PR yet — so keying this on "has a
+            reference" alone would have silently deleted the queue position from every
+            issue-driven queued row. */}
+        {age && (queuePosition !== null || !reference) ? (
           <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
-        )}
+        ) : null}
         {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
             different hue from the leading status dot, so the two read as two signals. */}
         {unread ? (
@@ -364,19 +435,6 @@ function RunRow({
           />
         ) : null}
       </Link>
-      {/* href protocol guard (#431): link only for http(s) URLs. */}
-      {prUrl && isHttpUrl(prUrl) ? (
-        <ReferenceChip
-          reference={{
-            kind: 'PR',
-            ...(prNumber(prUrl) ? { number: Number(prNumber(prUrl)) } : {}),
-            url: prUrl,
-          }}
-          taskTitle={runTitle(run)}
-          compact
-          className="mr-2.5 h-auto shrink-0 gap-[3px] px-1.5 py-px text-[10.5px]"
-        />
-      ) : null}
     </div>
   )
 }
@@ -407,21 +465,36 @@ export function TaskQuickListContainer() {
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
   const now = useNow(30_000)
+  // The sidebar's chips are the same chips as the tables', so they get their status the same way:
+  // one batched request for the whole list, mounted here where the list is.
+  const projectId = useReferenceProjectId()
+  const referenceRequests = React.useMemo(
+    () =>
+      projectId === undefined
+        ? []
+        : (runs.data ?? []).flatMap((run) => {
+            const reference = taskReference(run)
+            return reference ? [{ projectId, kind: reference.kind, number: reference.number }] : []
+          }),
+    [runs.data, projectId],
+  )
 
   // Nothing at all until the list has answered: a skeleton here would be inventing rows, and an
   // empty state would claim "No tasks yet" before we know whether there are any.
   if (!runs.data) return null
 
   return (
-    <TaskQuickList
-      runs={runs.data}
-      view={view}
-      onViewChange={setView}
-      // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
-      currentRunId={match?.params.id ?? exact?.params.id ?? null}
-      now={now}
-      showTokens={visibility.tokens}
-      showCost={visibility.cost}
-    />
+    <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <TaskQuickList
+        runs={runs.data}
+        view={view}
+        onViewChange={setView}
+        // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
+        currentRunId={match?.params.id ?? exact?.params.id ?? null}
+        now={now}
+        showTokens={visibility.tokens}
+        showCost={visibility.cost}
+      />
+    </ReferenceStatusProvider>
   )
 }

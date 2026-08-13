@@ -8,12 +8,13 @@ import {
   CopyIcon,
   EllipsisVerticalIcon,
   FileTextIcon,
+  MailIcon,
   PencilIcon,
   PlayIcon,
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -22,9 +23,11 @@ import {
   useAgentProfiles,
   useConfig,
   useHealth,
+  useMarkRunUnseen,
   useOpenTargets,
   usePatchRun,
   useProjectRepoBase,
+  useReferenceProjectId,
   useProviderStatus,
   useRunHandoff,
   useRuns,
@@ -34,6 +37,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { TabLink } from '@/components/tab-link'
 import {
   AlertDialog,
@@ -60,7 +64,14 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
-import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
+import {
+  formatCost,
+  prNumber,
+  taskIssueUrl,
+  taskPrUrl,
+  taskReferences,
+  workflowLabel,
+} from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { isHttpUrl } from '@/lib/utils'
 
@@ -91,16 +102,21 @@ export function RunHeader({
   run,
   planTally,
   tab = 'session',
+  onMarkedUnread,
 }: {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
+  /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
+   *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
+   *  the three `task-git` tabs render this same header and run no such effect. */
+  onMarkedUnread?: () => void
 }) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)
   const [notesOpen, setNotesOpen] = useState(false)
-  const actions = useRunActions(run)
+  const actions = useRunActions(run, onMarkedUnread)
 
   // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
@@ -139,6 +155,11 @@ export function RunHeader({
           run={run}
           showTokens={metricVisibility.tokens}
           showCost={metricVisibility.cost}
+          // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
+          // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
+          // own test), so every capability read here tolerates an absent object. Absent stays
+          // fail-closed — the chip degrades to text rather than linking into a disabled view.
+          automationsAvailable={health.data?.capabilities?.automations === true}
         />
         <MonitoringSchedule run={run} />
 
@@ -187,6 +208,18 @@ export function RunHeader({
               <FileTextIcon aria-hidden="true" />
               Notes
             </Button>
+            {flags.markUnread ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                title="Put this task back in the unread list"
+                disabled={actions.markUnread.isPending}
+                onClick={() => actions.markUnread.mutate()}
+              >
+                <MailIcon aria-hidden="true" />
+                Mark unread
+              </Button>
+            ) : null}
             {flags.archive ? (
               <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
                 {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
@@ -313,7 +346,7 @@ function OpenInMenuForRun({
 
 /** The mutations + confirm state, bundled so the desktop bar and the mobile kebab drive the
  *  exact same behavior. Every failure surfaces the server's own words as a danger toast. */
-function useRunActions(run: ApiRun) {
+function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [confirming, setConfirming] = useState<'cancel' | 'delete' | null>(null)
@@ -340,6 +373,20 @@ function useRunActions(run: ApiRun) {
     onSuccess: invalidate,
     onError,
   })
+  // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
+  // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in
+  // queries.ts, and no `invalidate` is wanted here — an invalidation would refetch the list
+  // and reinstate the receipt before the server's own answer lands.
+  const markUnreadMutation = useMarkRunUnseen()
+  const markUnread = {
+    isPending: markUnreadMutation.isPending,
+    mutate: () => {
+      // Before the mutation, so the Session tab's suppression is in place by the time the
+      // optimistic write re-renders the thread and re-evaluates its auto-mark-read effect.
+      onMarkedUnread?.()
+      markUnreadMutation.mutate(run.id, { onError })
+    },
+  }
   const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
   const deleteMutation = useMutation({
     mutationFn: () => deleteRun(run.id),
@@ -368,6 +415,7 @@ function useRunActions(run: ApiRun) {
     continuation,
     continueRun: continueMutation,
     archive,
+    markUnread,
     cancel,
     delete: deleteMutation,
     terminal,
@@ -431,14 +479,34 @@ function MetaRow({
   run,
   showTokens,
   showCost,
+  automationsAvailable,
 }: {
   run: ApiRun
   showTokens: boolean
   showCost: boolean
+  /** `capabilities.automations` (#801). A run launched while automations were on keeps its
+   *  `run.automation` provenance forever, so the chip must survive the flag going off — as
+   *  plain text, because the route it used to link to is disabled. */
+  automationsAvailable: boolean
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
+  // At most two references here, so this is a batch of one or two rather than of a table — but it
+  // goes through the same seam, which is what keeps the header's chip and the table's chip
+  // answering identically for the same PR.
+  const projectId = useReferenceProjectId()
+  const referenceRequests = useMemo(
+    () =>
+      projectId === undefined
+        ? []
+        : taskReferences(run, repoBase).map((reference) => ({
+            projectId,
+            kind: reference.kind,
+            number: reference.number,
+          })),
+    [run, repoBase, projectId],
+  )
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
@@ -479,14 +547,28 @@ function MetaRow({
   }
   if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
   if (run.automation) {
+    // Provenance is history and is always shown; only the LINK is gated. Following it with the
+    // capability off would land on the disabled `/automations` state, which says nothing about
+    // this task.
     parts.push(
-      <Link
-        key="automation"
-        to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-        className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
-      >
-        Automation
-      </Link>,
+      automationsAvailable ? (
+        <Link
+          key="automation"
+          to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+        >
+          Automation
+        </Link>
+      ) : (
+        <span
+          key="automation"
+          data-slot="automation-origin"
+          title="Automations are off on this server (CEZ_AUTOMATIONS)"
+          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
+        >
+          Automation
+        </span>
+      ),
     )
   }
 
@@ -509,22 +591,12 @@ function MetaRow({
   }
 
   return (
-    <div
-      data-slot="run-meta"
-      className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
-    >
-      {parts.map((part, index) => (
-        <Fragment key={index}>
-          {index > 0 ? (
-            <span className="text-soft-foreground" aria-hidden="true">
-              ·
-            </span>
-          ) : null}
-          {part}
-        </Fragment>
-      ))}
-      <span className="ml-auto flex shrink-0 items-center gap-1.5">
-        {usage.map((part, index) => (
+    <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <div
+        data-slot="run-meta"
+        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+      >
+        {parts.map((part, index) => (
           <Fragment key={index}>
             {index > 0 ? (
               <span className="text-soft-foreground" aria-hidden="true">
@@ -534,9 +606,21 @@ function MetaRow({
             {part}
           </Fragment>
         ))}
-        <AgentBadge run={run} />
-      </span>
-    </div>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {usage.map((part, index) => (
+            <Fragment key={index}>
+              {index > 0 ? (
+                <span className="text-soft-foreground" aria-hidden="true">
+                  ·
+                </span>
+              ) : null}
+              {part}
+            </Fragment>
+          ))}
+          <AgentBadge run={run} />
+        </span>
+      </div>
+    </ReferenceStatusProvider>
   )
 }
 
@@ -572,11 +656,18 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
   )
 }
 
-/** The agent icon by the token counter (#416): hover/focus reveals the runner, account and model —
- *  the answer to "what am I actually running here?" — without turning them into permanent text next
- *  to the live status pill. Always rendered (a run always has an effective runner, `model`
- *  reads "auto" when the runner picks it), and reuses the same click/keyboard-accessible
- *  `DropdownMenu` as the rest of this header instead of inventing a hover-only affordance. */
+/** The agent icon by the token counter (#416): hover/focus reveals the runner, account, model and
+ *  canonical model identity — the answer to "what am I actually running here?" — without turning
+ *  them into permanent text next to the live status pill. Always rendered (a run always has an
+ *  effective runner, `model` reads "auto" when the runner picks it), and reuses the same
+ *  click/keyboard-accessible `DropdownMenu` as the rest of this header instead of inventing a
+ *  hover-only affordance.
+ *
+ *  This is the production reader for `RunRecord.modelIdentity` (#546): the field was persisted by
+ *  #405 for cost attribution and replay and had none, which is how a persisted field rots into
+ *  something nobody can tell is load-bearing. The menu is the right home for it — it answers a
+ *  question only a user debugging "which provider actually served this?" asks, so it belongs
+ *  behind the same disclosure as the account rather than in the truncating summary line. */
 function AgentBadge({ run }: { run: ApiRun }) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
   // `runner` (`src/runs/store.ts`), while the run actually executes as
@@ -602,6 +693,14 @@ function AgentBadge({ run }: { run: ApiRun }) {
       // A deleted account still names the folder this run's sessions live in, so the id is shown
       // rather than swallowed — "gone" is the useful half of that answer.
       : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
+  // The canonical `provider/model` the run actually resolved to (#405), shown only when it says
+  // something `model` does not (#546). `model` is the free-text the caller ASKED for — `opus`,
+  // `auto`, a gateway id — so on a repo whose Claude runner points at a custom endpoint the two
+  // genuinely differ, and "which provider served this?" is a question only this field answers.
+  // Absent on pre-#405 records and skipped when it merely repeats `model`, following the same
+  // omitted-not-guessed rule as the account line below: an identity nothing wrote down is not
+  // one this header may invent.
+  const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
   const summary = [runner, account, model].filter(Boolean).join(' · ')
   return (
     <DropdownMenu>
@@ -641,6 +740,14 @@ function AgentBadge({ run }: { run: ApiRun }) {
         <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
           model: {model}
         </DropdownMenuLabel>
+        {identity ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-identity"
+            className="font-mono text-[11px] font-normal text-muted-foreground"
+          >
+            identity: {identity}
+          </DropdownMenuLabel>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -688,6 +795,14 @@ function ActionsKebab({
         <DropdownMenuItem onSelect={onToggleNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>
+        {flags.markUnread ? (
+          <DropdownMenuItem
+            disabled={actions.markUnread.isPending}
+            onSelect={() => actions.markUnread.mutate()}
+          >
+            <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
         {flags.archive ? (
           <DropdownMenuItem onSelect={() => actions.archive.mutate()}>
             {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}

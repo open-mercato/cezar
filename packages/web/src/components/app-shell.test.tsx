@@ -1,13 +1,18 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { MemoryRouter, useLocation } from 'react-router'
+import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { AppShell, type AppShellProps } from './app-shell'
+import { AppShell, routeOwnsScrollArrival, type AppShellProps } from './app-shell'
 import { NAV_ITEMS } from './nav-items'
 import { ThemeProvider } from './theme-provider'
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  // The sidebar width is a real localStorage preference (#788) — one test's drag must not be the
+  // next test's starting width.
+  localStorage.clear()
+})
 
 // jsdom ships no `matchMedia`; the ThemeProvider wrapping the footer toggle needs one.
 beforeEach(() => {
@@ -62,6 +67,40 @@ describe('AppShell', () => {
     expect(main.scrollTop).toBe(0)
   })
 
+  it('leaves task-to-task arrival to the destination transcript owner (#761)', () => {
+    renderShell(
+      '/tasks/source',
+      {},
+      <RouterLink to="/tasks/destination">Switch task</RouterLink>,
+    )
+    const main = screen.getByRole('main')
+    main.scrollTop = 640
+
+    fireEvent.click(within(main).getByRole('link', { name: 'Switch task' }))
+
+    expect(screen.getByTestId('location').textContent).toBe('/tasks/destination')
+    expect(main.scrollTop).toBe(640)
+  })
+
+  it('restores the generic top reset when leaving a task thread (#761)', () => {
+    renderShell('/tasks/source')
+    const main = screen.getByRole('main')
+    main.scrollTop = 640
+
+    fireEvent.click(within(nav()).getByRole('link', { name: 'GitHub' }))
+
+    expect(screen.getByTestId('location').textContent).toBe('/github')
+    expect(main.scrollTop).toBe(0)
+  })
+
+  it('grants scroll ownership only to exact scoped and unscoped main task routes', () => {
+    expect(routeOwnsScrollArrival('/tasks/run-1')).toBe(true)
+    expect(routeOwnsScrollArrival('/p/cezar/tasks/run-1')).toBe(true)
+    expect(routeOwnsScrollArrival('/tasks/run-1/changes')).toBe(false)
+    expect(routeOwnsScrollArrival('/p/cezar/tasks/run-1/files')).toBe(false)
+    expect(routeOwnsScrollArrival('/tasks')).toBe(false)
+  })
+
   it('renders the whole nav as real router links', () => {
     renderShell()
     const links = within(nav()).getAllByRole('link')
@@ -95,6 +134,21 @@ describe('AppShell', () => {
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
     expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge).length)
+  })
+
+  // #801: same degradation for the opt-in automations capability — the item disappears, it does
+  // not render disabled. The two gates on that item are independent: a forge alone is not enough.
+  it('drops the Automations item when the capability is off', () => {
+    renderShell('/', { automationsAvailable: false })
+    const links = within(nav()).getAllByRole('link')
+    expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.automations).length)
+  })
+
+  it('shows the Automations item once the capability is on', () => {
+    renderShell('/', { automationsAvailable: true })
+    expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href')))
+      .toContain('/automations')
   })
 
   describe('active nav state follows the current route', () => {
@@ -296,6 +350,38 @@ describe('AppShell', () => {
   })
 
   /** The global banner slot (#391). */
+  describe('All tasks link (multi-project only)', () => {
+    const allTasks = () => document.querySelector('[data-slot="all-tasks-link"]') as HTMLElement | null
+
+    it('is absent without project groups — one project needs no "all projects" door', () => {
+      renderShell()
+      expect(allTasks()).toBeNull()
+    })
+
+    it('links out of every project scope', () => {
+      renderShell('/p/shop/git', { projectGroups: <p>groups</p> })
+      // A PLAIN target: the scope-aware Link would prefix it with `/p/shop`, which is no route.
+      expect(allTasks()!.getAttribute('href')).toBe('/tasks')
+    })
+
+    it('stays put while the project groups scroll', () => {
+      // It is about every group rather than a peer of them, and a workspace with enough
+      // projects to want this page is exactly the one that scrolls it out of sight.
+      renderShell('/', { projectGroups: <p>groups</p> })
+      const scroller = document.querySelector('[data-slot="project-groups"]') as HTMLElement
+      expect(scroller.contains(allTasks())).toBe(false)
+      expect(scroller.className).toContain('overflow-y-auto')
+    })
+
+    it('marks itself the current page only on /tasks', () => {
+      renderShell('/tasks', { projectGroups: <p>groups</p> })
+      expect(allTasks()!.getAttribute('aria-current')).toBe('page')
+      cleanup()
+      renderShell('/p/shop/', { projectGroups: <p>groups</p> })
+      expect(allTasks()!.getAttribute('aria-current')).toBeNull()
+    })
+  })
+
   describe('banner slot', () => {
     it('renders the banner when one is passed', () => {
       renderShell('/', { banner: <p>banner content</p> })
@@ -356,6 +442,142 @@ describe('AppShell', () => {
       expect(within(bar).getByText('Skills')).toBeTruthy()
     })
 
+  })
+
+  /** The resizable desktop column (#788, option C). jsdom has no layout engine, so these assert
+   *  the state machine and the accessibility contract; the drag itself is exercised for real in
+   *  `e2e/sidebar-resize.e2e.ts`. */
+  describe('resizable sidebar', () => {
+    const handle = () => document.querySelector('[data-slot="sidebar-resize-handle"]') as HTMLElement
+
+    /** jsdom implements neither pointer capture nor `PointerEvent`'s coordinates on the synthetic
+     *  events React dispatches, so the capture calls are stubbed and the moves are fired as the
+     *  mouse events jsdom does construct — React routes `onPointerDown`/`onPointerMove` from
+     *  them, which is exactly what a real pointer produces. */
+    function drag(from: number, to: number) {
+      const el = handle()
+      el.setPointerCapture = vi.fn()
+      el.releasePointerCapture = vi.fn()
+      el.hasPointerCapture = vi.fn(() => true)
+      fireEvent.pointerDown(el, { button: 0, pointerId: 1, clientX: from })
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: to })
+      fireEvent.pointerUp(el, { pointerId: 1, clientX: to })
+    }
+
+    it('starts at the shipped 264px when nothing has been stored', () => {
+      renderShell()
+      expect(sidebar().style.width).toBe('264px')
+      // No Tailwind width class left behind to fight the inline one.
+      expect(sidebar().className).not.toContain('w-[264px]')
+    })
+
+    it('restores the width the browser remembers', () => {
+      localStorage.setItem('cez-sidebar-width', '350')
+      renderShell()
+      // First paint, not an effect: a jump from 264 to 350 would be visible on every load.
+      expect(sidebar().style.width).toBe('350px')
+    })
+
+    it('is a keyboard-operable separator that reports its range', () => {
+      renderShell()
+      const el = handle()
+      expect(el.getAttribute('role')).toBe('separator')
+      expect(el.getAttribute('aria-orientation')).toBe('vertical')
+      expect(el.getAttribute('aria-label')).toBe('Resize the sidebar')
+      expect(el.tabIndex).toBe(0)
+      expect(el.getAttribute('aria-valuenow')).toBe('264')
+      expect(el.getAttribute('aria-valuemin')).toBe('264')
+      expect(el.getAttribute('aria-valuemax')).toBe('420')
+    })
+
+    it('widens on drag and persists what it landed on', () => {
+      renderShell()
+      drag(264, 344)
+      expect(sidebar().style.width).toBe('344px')
+      expect(handle().getAttribute('aria-valuenow')).toBe('344')
+      expect(localStorage.getItem('cez-sidebar-width')).toBe('344')
+    })
+
+    it('clamps a drag at both bounds rather than letting the column collapse or take over', () => {
+      renderShell()
+      drag(264, 3000)
+      expect(sidebar().style.width).toBe('420px')
+      drag(420, -3000)
+      expect(sidebar().style.width).toBe('264px')
+    })
+
+    it('takes focus on grab, so the arrow keys work right after a mouse drag', () => {
+      // `preventDefault()` on pointerdown (which stops the drag selecting the sidebar's text)
+      // also suppresses the focus a press would otherwise give a tabIndex=0 element.
+      renderShell()
+      drag(264, 320)
+      expect(document.activeElement).toBe(handle())
+      fireEvent.keyDown(handle(), { key: 'ArrowRight' })
+      expect(sidebar().style.width).toBe('336px')
+    })
+
+    it('opts out of browser touch panning, so a touch drag resizes instead of scrolling', () => {
+      renderShell()
+      expect(handle().className).toContain('touch-none')
+    })
+
+    it('ignores a non-primary button, so a right-click on the border resizes nothing', () => {
+      renderShell()
+      const el = handle()
+      el.setPointerCapture = vi.fn()
+      fireEvent.pointerDown(el, { button: 2, pointerId: 1, clientX: 264 })
+      fireEvent.pointerMove(el, { pointerId: 1, clientX: 400 })
+      expect(sidebar().style.width).toBe('264px')
+      expect(el.setPointerCapture).not.toHaveBeenCalled()
+    })
+
+    it('steps with the arrow keys and jumps to the bounds with Home/End', () => {
+      renderShell()
+      fireEvent.keyDown(handle(), { key: 'ArrowRight' })
+      expect(sidebar().style.width).toBe('280px')
+      fireEvent.keyDown(handle(), { key: 'ArrowLeft' })
+      expect(sidebar().style.width).toBe('264px')
+      fireEvent.keyDown(handle(), { key: 'End' })
+      expect(sidebar().style.width).toBe('420px')
+      fireEvent.keyDown(handle(), { key: 'Home' })
+      expect(sidebar().style.width).toBe('264px')
+      expect(localStorage.getItem('cez-sidebar-width')).toBe('264')
+    })
+
+    it('leaves every other key to the browser — Tab must still move focus', () => {
+      renderShell()
+      const event = createEvent.keyDown(handle(), { key: 'Tab' })
+      fireEvent(handle(), event)
+      expect(event.defaultPrevented).toBe(false)
+      expect(sidebar().style.width).toBe('264px')
+    })
+
+    it('resets to the default on double-click', () => {
+      localStorage.setItem('cez-sidebar-width', '400')
+      renderShell()
+      expect(sidebar().style.width).toBe('400px')
+      fireEvent.doubleClick(handle())
+      expect(sidebar().style.width).toBe('264px')
+      expect(localStorage.getItem('cez-sidebar-width')).toBe('264')
+    })
+
+    it('does not follow the drawer: the `<md` overlay keeps its fixed 264px and no handle', () => {
+      localStorage.setItem('cez-sidebar-width', '400')
+      renderShell('/', { taskQuickList: <p>list</p> })
+      fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+      const drawer = document.querySelector('[data-slot="mobile-nav-drawer"]') as HTMLElement
+      expect(drawer.className).toContain('w-[264px]')
+      expect(drawer.style.width).toBe('')
+      expect(within(drawer).queryByRole('separator', { name: 'Resize the sidebar' })).toBeNull()
+    })
+
+    it('declares the container the rows size their metadata against', () => {
+      // The width-priority rule in `task-quick-list.tsx` drops metadata with an
+      // `@min-[…]/sidebar:` query; without this container it has nothing to query.
+      renderShell()
+      const content = sidebar().querySelector('[data-slot="sidebar-content"]') as HTMLElement
+      expect(content.className).toContain('@container/sidebar')
+    })
   })
 
   /** The layout contract from the spec. These classes are the whole reason the cockpit does not

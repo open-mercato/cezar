@@ -6,19 +6,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
-import { isProjectCollapsed, ProjectGroups } from '@/components/project-groups'
+import { ProjectGroups } from '@/components/project-groups'
+import { SIDEBAR_COLLAPSED_STORAGE_KEY } from '@/lib/sidebar-collapse'
 
 const fetchMock = vi.fn<typeof fetch>()
 
 beforeEach(() => {
+  localStorage.clear()
   vi.stubGlobal('fetch', fetchMock)
 })
 
 afterEach(() => {
   cleanup()
   fetchMock.mockReset()
+  localStorage.clear()
   vi.unstubAllGlobals()
 })
+
+/** Seed the per-browser collapse map the sidebar reads at mount. */
+function storeCollapsed(collapsed: Record<string, boolean>): void {
+  localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, JSON.stringify(collapsed))
+}
+
+function storedCollapsed(): unknown {
+  const raw = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY)
+  return raw === null ? null : JSON.parse(raw)
+}
 
 function project(over: Partial<ProjectListEntry> = {}): ProjectListEntry {
   return {
@@ -61,30 +74,29 @@ function json(body: unknown, status = 200): Response {
  * Answer each endpoint the sidebar reads; anything else 404s loudly rather than silently
  * resolving and making a broken wiring look fine.
  *
- * A PUT is served the way the real ui-state route serves one — shallow top-level merge into the
- * stored document, answering the merged result — so a collapse test is a real round trip rather
- * than an assertion about one outgoing request.
+ * Collapse is deliberately NOT among those endpoints — it is per-browser state (localStorage),
+ * so a group toggle must cost this map zero requests.
  */
 function serve(routes: Record<string, unknown>): void {
-  fetchMock.mockImplementation(async (input, init) => {
-    const path = String(input)
-    if (init?.method === 'PUT') {
-      const merged = { ...(routes[path] as Record<string, unknown>), ...JSON.parse(String(init.body)) }
-      routes[path] = merged
-      return json(merged)
-    }
-    const body = routes[path]
+  fetchMock.mockImplementation(async (input) => {
+    const body = routes[String(input)]
     if (body === undefined) return json({ error: 'not found' }, 404)
     return json(body)
   })
 }
 
-function renderGroups(projects: ProjectListEntry[], entry = '/p/cezar/') {
+function renderGroups(
+  projects: ProjectListEntry[],
+  entry = '/p/cezar/',
+  // #801: workspace-wide, unlike the per-project forge gate — one env var on the one server that
+  // serves every group. Off by default here, exactly as a default server reports it.
+  { automations = false }: { automations?: boolean } = {},
+) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
         <ListViewProvider>
-          <ProjectGroups projects={projects} bootProjectId="cezar" />
+          <ProjectGroups projects={projects} bootProjectId="cezar" automationsAvailable={automations} />
         </ListViewProvider>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -105,24 +117,10 @@ function taskLinks(id: string): HTMLAnchorElement[] {
   ) as HTMLAnchorElement[]
 }
 
-describe('isProjectCollapsed', () => {
-  it('defaults to expanding the active project and collapsing the rest', () => {
-    expect(isProjectCollapsed(undefined, 'cezar', 'cezar')).toBe(false)
-    expect(isProjectCollapsed(undefined, 'shop', 'cezar')).toBe(true)
-  })
-
-  it('lets a stored answer override the default in both directions', () => {
-    // An explicit `false` is how a user pins a non-active project open — it must not be
-    // mistaken for "no entry" and collapsed back on the next render.
-    expect(isProjectCollapsed({ shop: false }, 'shop', 'cezar')).toBe(false)
-    expect(isProjectCollapsed({ cezar: true }, 'cezar', 'cezar')).toBe(true)
-  })
-})
-
 describe('ProjectGroups', () => {
   it('caps an expanded group at 10 rows and links More… at that project’s tasks pane', async () => {
     const runs = Array.from({ length: 15 }, () => run())
-    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': runs })
+    serve({ '/api/v1/p/cezar/runs': runs })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
     await waitFor(() => expect(taskLinks('cezar').length).toBeGreaterThan(0))
@@ -134,7 +132,7 @@ describe('ProjectGroups', () => {
   })
 
   it('orders groups by lastOpenedAt and only fetches the expanded one', async () => {
-    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': [] })
+    serve({ '/api/v1/p/cezar/runs': [] })
     renderGroups([
       project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-18T00:00:00.000Z' }),
       project(),
@@ -153,7 +151,8 @@ describe('ProjectGroups', () => {
   })
 
   it('renders each group’s nav scoped to that project', async () => {
-    serve({ '/api/v1/workspace/ui-state': { sidebar: { collapsed: { shop: false } } }, '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
+    storeCollapsed({ shop: false })
+    serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
     await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
@@ -162,7 +161,6 @@ describe('ProjectGroups', () => {
       '/p/shop/',
       '/p/shop/git',
       '/p/shop/github',
-      '/p/shop/automations',
       '/p/shop/skills',
       '/p/shop/workflows',
       '/p/shop/settings',
@@ -178,8 +176,8 @@ describe('ProjectGroups', () => {
     // Two expanded groups, one with a GitHub remote and one without: the GitHub nav item must
     // follow each entry's own `forge` field, not one workspace-wide answer — the exact failure
     // was every group hiding (or showing) GitHub based on the folder cezar was LAUNCHED in.
+    storeCollapsed({ plain: false })
     serve({
-      '/api/v1/workspace/ui-state': { sidebar: { collapsed: { plain: false } } },
       '/api/v1/p/cezar/runs': [],
       '/api/v1/p/plain/runs': [],
     })
@@ -195,40 +193,55 @@ describe('ProjectGroups', () => {
     expect(within(plainNav).queryByRole('link', { name: 'GitHub' })).toBeNull()
   })
 
-  it('round-trips a collapse through the workspace ui-state', async () => {
-    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': [] })
+  // #801: every group reads ONE workspace capability, so no group can offer Automations while
+  // another hides it — and with the opt-in off, none of them offers it at all.
+  it("gates every group's Automations tab on the workspace capability (#801)", async () => {
+    storeCollapsed({ shop: false })
+    serve({ '/api/v1/p/cezar/runs': [], '/api/v1/p/shop/runs': [] })
+    const shop = project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })
+    const view = renderGroups([project(), shop], '/p/cezar/', { automations: true })
+
+    await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
+    for (const id of ['cezar', 'shop']) {
+      const nav = within(group(id)).getByRole('navigation', { name: `${id} navigation` })
+      expect(within(nav).getByRole('link', { name: 'Automations' }).getAttribute('href'))
+        .toBe(`/p/${id}/automations`)
+    }
+
+    view.unmount()
+    renderGroups([project(), shop])
+    await waitFor(() => expect(header('shop').getAttribute('aria-expanded')).toBe('true'))
+    for (const id of ['cezar', 'shop']) {
+      const nav = within(group(id)).getByRole('navigation', { name: `${id} navigation` })
+      expect(within(nav).queryByRole('link', { name: 'Automations' })).toBeNull()
+    }
+  })
+
+  it('round-trips a collapse through this browser’s storage, never the server', async () => {
+    serve({ '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
 
     await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('true'))
 
-    // Optimistic: the group shuts from the local cache write, before any PUT has been sent.
     fireEvent.click(header('cezar'))
     await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('false'))
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(0)
+    expect(storedCollapsed()).toEqual({ cezar: true })
 
-    const put = await waitFor(() => {
-      const call = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT')
-      if (!call) throw new Error('no PUT yet')
-      return call
-    })
-    expect(String(put[0])).toBe('/api/v1/workspace/ui-state')
-    // The WHOLE `sidebar` object: the route merges shallowly at the top level, so a leaf-only
-    // patch would replace `sidebar` and drop its siblings.
-    expect(JSON.parse(String(put[1]?.body))).toEqual({ sidebar: { collapsed: { cezar: true } } })
-
-    // …and expanding it again writes the other way, composing with what the server merged back.
+    // …and expanding it again writes the other way, composing with the entry already stored.
     fireEvent.click(header('cezar'))
     await waitFor(() => expect(header('cezar').getAttribute('aria-expanded')).toBe('true'))
-    await waitFor(() => {
-      const puts = fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')
-      expect(puts).toHaveLength(2)
-      expect(JSON.parse(String(puts[1]?.[1]?.body))).toEqual({ sidebar: { collapsed: { cezar: false } } })
-    })
+    expect(storedCollapsed()).toEqual({ cezar: false })
+
+    // Not one request either way: the collapse map never leaves this browser.
+    expect(fetchMock.mock.calls.map(([, init]) => init?.method)).not.toContain('PUT')
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain(
+      '/api/v1/workspace/ui-state',
+    )
   })
 
   it('starts from the stored collapse rather than the active-project default', async () => {
+    storeCollapsed({ cezar: true })
     serve({
-      '/api/v1/workspace/ui-state': { sidebar: { collapsed: { cezar: true } } },
       '/api/v1/p/cezar/runs': [],
     })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
@@ -239,7 +252,6 @@ describe('ProjectGroups', () => {
 
   it('badges a group with its needs-you count', async () => {
     serve({
-      '/api/v1/workspace/ui-state': {},
       '/api/v1/p/cezar/runs': [run({ status: 'waiting' }), run({ status: 'review' }), run()],
     })
     renderGroups([project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })])
@@ -256,7 +268,7 @@ describe('ProjectGroups', () => {
     // live under the 'default' scope key. The boot group must share that entry, or its list and
     // needs-you badge freeze at whatever the expand-time fetch answered.
     const client = createQueryClient()
-    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': [] })
+    serve({ '/api/v1/p/cezar/runs': [] })
     render(
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={['/p/cezar/']}>
@@ -280,7 +292,7 @@ describe('ProjectGroups', () => {
   })
 
   it('renders a missing project greyed and inert, with no nav behind it', async () => {
-    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/cezar/runs': [] })
+    serve({ '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'gone', name: 'old-spike', status: 'missing', lastOpenedAt: '2026-07-01T00:00:00.000Z' })])
 
     await waitFor(() => expect(group('gone')).not.toBeNull())
@@ -292,5 +304,43 @@ describe('ProjectGroups', () => {
     expect(within(group('gone')).queryByRole('button')).toBeNull()
     expect(within(group('gone')).queryAllByRole('link')).toHaveLength(0)
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain('/api/v1/p/gone/runs')
+  })
+
+  /**
+   * A `/p/` prefix is the ONLY thing that makes a project the one you are standing in. On the
+   * global pages — `/tasks` and `/settings/global` — there is no such prefix and no selected
+   * project, so nothing may be painted as selected: highlighting the boot project while the
+   * user reads an all-projects table says the page is about that project when it is not.
+   */
+  it('marks no project as selected on a page that belongs to none', async () => {
+    serve({ '/api/v1/p/cezar/runs': [] })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/tasks',
+    )
+
+    await waitFor(() => expect(group('cezar')).not.toBeNull())
+    for (const id of ['cezar', 'shop']) {
+      expect(group(id).hasAttribute('data-active')).toBe(false)
+      expect(group(id).querySelector('[aria-current="page"]')).toBeNull()
+    }
+    // The boot group still OPENS by default: landing on a global page must not fold the whole
+    // sidebar shut — that is a different question from which one is selected.
+    expect(header('cezar').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('still marks the scoped project on a project page', async () => {
+    serve({ '/api/v1/p/shop/runs': [] })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/git',
+    )
+
+    await waitFor(() => expect(group('shop')).not.toBeNull())
+    expect(group('shop').hasAttribute('data-active')).toBe(true)
+    expect(group('cezar').hasAttribute('data-active')).toBe(false)
+    // …and the nav row for the URL's own area is the current page inside that group only.
+    expect(group('shop').querySelector('[aria-current="page"]')?.textContent).toBe('Git')
+    expect(group('cezar').querySelector('[aria-current="page"]')).toBeNull()
   })
 })

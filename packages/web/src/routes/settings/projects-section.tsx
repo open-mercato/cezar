@@ -1,29 +1,28 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { FoldersIcon } from 'lucide-react'
-import { useState } from 'react'
+import { FoldersIcon, XIcon } from 'lucide-react'
+import { useMemo, useRef, useState } from 'react'
 
 import { putWorkspaceConfig } from '@/api/client'
 import {
   useProjects,
-  useRemoveProject,
   useUpdateProject,
   useWorkspaceConfig,
   workspaceQueryKeys,
 } from '@/api/queries'
-import type { ProjectListEntry, ProjectsResponse, WorkspaceConfigResponse } from '@open-mercato/cezar-api-client'
-import { CenteredState } from '@/components/centered-state'
 import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
+  PROJECT_TAGS_MAX,
+  PROJECT_TAG_MAX_LENGTH,
+  type ProjectListEntry,
+  type ProjectsResponse,
+  type WorkspaceConfigResponse,
+} from '@open-mercato/cezar-api-client'
+import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
+import { allProjectTags, suggestTags } from '@/lib/project-tags'
+import { cn } from '@/lib/utils'
+import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
 import { SettingsField } from './settings-field'
 
 /**
@@ -60,8 +59,9 @@ const MAX_PARALLEL_MIN = 1
 const MAX_PARALLEL_MAX = 16
 
 /** Human wording for a registry status probe. `not-git` is fully usable (single-queue
- *  degraded mode), so it reads as a note rather than a fault; only `missing` is a problem. */
-const STATUS_LABEL: Record<ProjectListEntry['status'], string> = {
+ *  degraded mode), so it reads as a note rather than a fault; only `missing` is a problem.
+ *  Exported because the project's own General page states the same status about itself. */
+export const STATUS_LABEL: Record<ProjectListEntry['status'], string> = {
   ok: 'ok',
   'not-git': 'no git repo',
   missing: 'folder not found',
@@ -110,7 +110,11 @@ function ProjectsPane({
   return (
     <div
       data-slot="projects-section"
-      className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
+      // `max-w-4xl`, not the `max-w-2xl` the other settings panes use: this is the one section
+      // whose content is a six-column TABLE rather than a stack of form fields, and 2xl left the
+      // Tags cell narrow enough to break `open-mercato` across two lines. The fields above keep
+      // their own `max-w-sm`, so widening the column costs them nothing.
+      className="mx-auto flex w-full max-w-4xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
       <WorkspaceRootField
         configKey="browseRoot"
@@ -248,25 +252,22 @@ function RegistryTable({
   workspaceMax: number
 }) {
   const [confirming, setConfirming] = useState<Confirming>(null)
-  const remove = useRemoveProject()
+  const remove = useProjectRemoval()
+  // One computation for the whole table: the vocabulary is a property of the WORKSPACE, and
+  // every row's autocomplete offers the same list.
+  const vocabulary = useMemo(() => allProjectTags(registry.projects), [registry.projects])
 
   const confirmRemoval = () => {
     if (!confirming) return
-    const { id, name } = confirming
+    const project = confirming
     setConfirming(null)
-    remove.mutate(id, {
-      // "Removed from the workspace", not "Deleted": the toast is the last word the user reads
-      // about a button they may have pressed nervously.
-      onSuccess: () => toast(`${name} removed from the workspace — its files are untouched`),
-      // The 409s (running tasks, the boot project) explain themselves; show the server's words.
-      onError: (error: Error) => toast(error.message, { tone: 'danger' }),
-    })
+    remove.confirm(project)
   }
 
   return (
     <SettingsField
       title="Registered projects"
-      hint={`Every folder cezar has run in, plus the ones added from the GUI. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
+      hint={`Every folder cezar has run in, plus the ones added from the GUI. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
     >
       {registry.projects.length === 0 ? (
         <p data-slot="projects-empty" className="text-[13px] text-soft-foreground">
@@ -276,10 +277,22 @@ function RegistryTable({
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full border-collapse text-sm">
             <caption className="sr-only">Projects registered in this workspace</caption>
+            {/* Explicit widths rather than letting the browser distribute them by content: Tags
+                is the one cell whose content GROWS with use, and auto-layout kept giving it
+                whatever the fixed-size controls left over — which was not enough for one chip. */}
+            <colgroup>
+              <col />
+              <col style={{ width: '104px' }} />
+              <col style={{ width: '260px' }} />
+              <col style={{ width: '150px' }} />
+              <col style={{ width: '72px' }} />
+              <col style={{ width: '92px' }} />
+            </colgroup>
             <thead>
               <tr className="border-b border-border text-left text-[12px] text-soft-foreground">
                 <th scope="col" className="px-3 py-2 font-medium">Project</th>
                 <th scope="col" className="px-3 py-2 font-medium">Status</th>
+                <th scope="col" className="px-3 py-2 font-medium">Tags</th>
                 <th scope="col" className="px-3 py-2 font-medium">Max parallel</th>
                 <th scope="col" className="px-3 py-2 font-medium">Added</th>
                 <th scope="col" className="px-3 py-2 font-medium text-right">Actions</th>
@@ -292,6 +305,7 @@ function RegistryTable({
                   project={project}
                   isBoot={project.id === registry.bootProject}
                   workspaceMax={workspaceMax}
+                  vocabulary={vocabulary}
                   disabled={remove.isPending}
                   onRemove={() => setConfirming(project)}
                 />
@@ -301,31 +315,11 @@ function RegistryTable({
         </div>
       )}
 
-      <AlertDialog open={confirming !== null} onOpenChange={(open) => !open && setConfirming(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove {confirming?.name} from the workspace?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This only unregisters the project — <strong>nothing on disk is deleted</strong>. The
-              folder, its git history and its task history all stay exactly where they are, and
-              opening it again re-registers it with everything intact.
-              <span className="mt-1 block truncate font-mono text-[11px] text-foreground" title={confirming?.root}>
-                {confirming?.root}
-              </span>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep it</AlertDialogCancel>
-            <AlertDialogAction
-              data-action="projects-confirm-remove"
-              className="bg-danger text-danger-foreground hover:brightness-[0.96]"
-              onClick={confirmRemoval}
-            >
-              Remove from list
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <RemoveProjectDialog
+        project={confirming}
+        onOpenChange={(open) => !open && setConfirming(null)}
+        onConfirm={confirmRemoval}
+      />
     </SettingsField>
   )
 }
@@ -334,18 +328,20 @@ function ProjectRow({
   project,
   isBoot,
   workspaceMax,
+  vocabulary,
   disabled,
   onRemove,
 }: {
   project: ProjectListEntry
   isBoot: boolean
   workspaceMax: number
+  vocabulary: readonly string[]
   disabled: boolean
   onRemove: () => void
 }) {
   return (
     <tr data-slot="project-row" data-project={project.id} className="border-b border-border last:border-0">
-      <th scope="row" className="max-w-[260px] px-3 py-2 text-left font-normal">
+      <th scope="row" className="max-w-0 px-3 py-2 text-left font-normal">
         <span className="block truncate text-foreground">{project.name}</span>
         <span className="block truncate font-mono text-[11px] text-soft-foreground" title={project.root}>
           {project.root}
@@ -363,6 +359,9 @@ function ProjectRow({
         ) : null}
       </td>
       <td className="px-3 py-2">
+        <ProjectTagsEditor project={project} vocabulary={vocabulary} />
+      </td>
+      <td className="px-3 py-2">
         <MaxParallelSelect project={project} workspaceMax={workspaceMax} />
       </td>
       <td className="px-3 py-2 tabular-nums text-soft-foreground">{shortDate(project.addedAt)}</td>
@@ -373,8 +372,10 @@ function ProjectRow({
           size="sm"
           data-action="project-remove"
           // Names the gesture precisely for a screen reader, where the row context that makes a
-          // bare "Remove" safe-sounding isn't read out with it.
-          aria-label={`Unregister ${project.name} (no files are deleted)`}
+          // bare "Remove" safe-sounding isn't read out with it — but LEADS with the button's own
+          // word, so the accessible name contains the visible one (WCAG 2.5.3 Label in Name) and
+          // speech input still reaches the control. Same shape as the General page's button.
+          aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
           // The boot project is refused server-side too (it re-registers itself at every start);
           // disabling here means the user gets the explanation before the click, not after.
           title={isBoot ? 'cezar is serving this project — it re-registers itself at every start' : undefined}
@@ -389,6 +390,251 @@ function ProjectRow({
 }
 
 /**
+ * Per-project tags — the labels that group CONNECTED repositories.
+ *
+ * The point is cross-repo work: tag the API, the web app and the design system `storefront` and
+ * the global Tasks page (`/tasks`) can show all three as one list, or split every project's tasks
+ * by tag. Nothing else in cezar reads them, deliberately — a tag is a lens, not a permission, a
+ * queue or a routing rule.
+ *
+ * Bound to the server value with no local mirror of the list: the chips render `project.tags`
+ * and every gesture sends the WHOLE new list through `PATCH /api/projects/:id`, whose answer the
+ * hook invalidates the registry with. A failed save therefore reverts by simply not changing
+ * anything, and two settings tabs cannot drift into two different tag sets. The only local state
+ * is the text being typed, which is not a fact about the project until it is committed.
+ *
+ * Committing on Enter AND on comma, because both are what people type; blur does NOT commit, on
+ * purpose — tabbing out of a half-typed word should not persist it.
+ *
+ * The field AUTOCOMPLETES from the tags already used anywhere in the registry, and that is not a
+ * convenience — it is what makes the feature work. Tags only group anything if two projects spell
+ * one the same way, and free text does not converge on its own: `storefront`, `store-front` and
+ * `Storefront` are three groups that were meant to be one. The server can only deduplicate within
+ * a single project's list; offering the existing vocabulary is what keeps the second repo landing
+ * on the same word as the first. Focusing the empty field shows the whole vocabulary, because
+ * "which tags exist here?" is the first question someone tagging a second repo has.
+ */
+export function ProjectTagsEditor({
+  project,
+  vocabulary,
+}: {
+  project: ProjectListEntry
+  /** Every tag already in use ANYWHERE in the registry — the autocomplete list. Passed in
+   *  rather than derived here so all rows share one computation of the workspace's vocabulary. */
+  vocabulary: readonly string[]
+}) {
+  const update = useUpdateProject()
+  const [draft, setDraft] = useState('')
+  const [open, setOpen] = useState(false)
+  // Which suggestion the arrow keys are on; -1 = none, and Enter then commits the typed text.
+  const [highlight, setHighlight] = useState(-1)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const tags = project.tags ?? []
+  const suggestions = suggestTags(vocabulary, tags, draft)
+  const listOpen = open && suggestions.length > 0
+
+  const save = (next: string[], message: string) => {
+    update.mutate(
+      { id: project.id, tags: next },
+      {
+        onSuccess: () => toast(message),
+        onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+      },
+    )
+  }
+
+  const add = (raw: string) => {
+    const tag = raw.trim().slice(0, PROJECT_TAG_MAX_LENGTH)
+    setHighlight(-1)
+    if (!tag) return
+    // Refused locally rather than sent and bounced: the server would normalize the duplicate
+    // away and answer 200, which would look like it worked and quietly do nothing.
+    if (tags.some((existing) => existing.toLowerCase() === tag.toLowerCase())) {
+      setDraft('')
+      return
+    }
+    if (tags.length >= PROJECT_TAGS_MAX) {
+      toast(`${project.name} already has the maximum of ${PROJECT_TAGS_MAX} tags`, { tone: 'danger' })
+      return
+    }
+    setDraft('')
+    save([...tags, tag], `${project.name} tagged \u201c${tag}\u201d`)
+  }
+
+  const remove = (tag: string) => {
+    save(
+      tags.filter((existing) => existing !== tag),
+      `\u201c${tag}\u201d removed from ${project.name}`,
+    )
+  }
+
+  const listId = `project-tag-suggestions-${project.id}`
+
+  return (
+    <div data-slot="project-tags" className="flex flex-wrap items-center gap-1">
+      {tags.map((tag) => (
+        <span
+          key={tag}
+          data-slot="project-tag"
+          // `whitespace-nowrap`: a hyphenated tag (`open-mercato`) was wrapping mid-word into a
+          // two-line chip, which read as two tags.
+          className="inline-flex max-w-full items-center gap-1 rounded-full bg-violet/15 py-px pr-1 pl-2 text-[11px] font-medium whitespace-nowrap text-violet"
+        >
+          {tag}
+          <button
+            type="button"
+            data-action="project-tag-remove"
+            // Names the project as well as the tag: in a table of rows that all offer a bare
+            // "\u00d7", the row context a sighted reader has is not read out with the control.
+            aria-label={`Remove tag ${tag} from ${project.name}`}
+            disabled={update.isPending}
+            onClick={() => remove(tag)}
+            className="rounded-full p-0.5 hover:bg-violet/25 disabled:opacity-50"
+          >
+            <XIcon className="size-3" aria-hidden="true" />
+          </button>
+        </span>
+      ))}
+      {/* A Radix popover rather than an absolutely-positioned div: the registry table sits inside
+          `overflow-x-auto`, which would clip an in-flow dropdown. The content is portalled, so it
+          escapes that box; the input stays the anchor and keeps focus throughout. */}
+      <Popover open={listOpen} onOpenChange={setOpen}>
+        <PopoverAnchor asChild>
+          <input
+            ref={inputRef}
+            type="text"
+            data-slot="project-tag-input"
+            aria-label={`Add a tag to ${project.name}`}
+            // Combobox semantics, hand-wired because the listbox is a sibling rather than a
+            // child: a screen reader needs to know this input owns a list and which row is active.
+            role="combobox"
+            aria-expanded={listOpen}
+            aria-controls={listOpen ? listId : undefined}
+            aria-autocomplete="list"
+            aria-activedescendant={
+              listOpen && highlight >= 0 ? `${listId}-${highlight}` : undefined
+            }
+            placeholder={tags.length === 0 ? 'Add tag\u2026' : '+'}
+            value={draft}
+            maxLength={PROJECT_TAG_MAX_LENGTH}
+            disabled={update.isPending}
+            onFocus={() => setOpen(true)}
+            // Safe BECAUSE the suggestion buttons commit on `mousedown` with the default
+            // prevented: picking one never moves focus, so a real blur always means "left the
+            // field". This is the only thing that closes the list on an outside click now — see
+            // the `onInteractOutside` note below.
+            onBlur={() => setOpen(false)}
+            onChange={(event) => {
+              setOpen(true)
+              setHighlight(-1)
+              // A comma is a separator everywhere else tags are typed; treating it as one here
+              // means pasting `api, web` does the obvious thing instead of one absurd tag.
+              if (event.target.value.includes(',')) {
+                setDraft(event.target.value.replace(/,/g, ''))
+                return
+              }
+              setDraft(event.target.value)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                if (suggestions.length === 0) return
+                event.preventDefault()
+                setOpen(true)
+                const step = event.key === 'ArrowDown' ? 1 : -1
+                // Wraps through -1, which is "the text I typed" — so arrowing past the end of
+                // the list returns to the draft rather than trapping you in the suggestions.
+                const next = highlight + step
+                setHighlight(next >= suggestions.length ? -1 : next < -1 ? suggestions.length - 1 : next)
+                return
+              }
+              if (event.key === 'Escape' && listOpen) {
+                // Closes the list only. The draft survives, because dismissing a suggestion
+                // list is not the same gesture as abandoning what you typed.
+                event.preventDefault()
+                setOpen(false)
+                setHighlight(-1)
+                return
+              }
+              if (event.key === 'Enter' || event.key === ',') {
+                event.preventDefault()
+                add(highlight >= 0 ? (suggestions[highlight] ?? draft) : draft)
+                return
+              }
+              if (event.key === 'Tab') {
+                setOpen(false)
+                return
+              }
+              // Backspace on an empty field deletes the last chip \u2014 the standard token-field
+              // gesture, and the only way to remove a tag from the keyboard without tabbing back
+              // through every \u00d7.
+              if (event.key === 'Backspace' && draft === '' && tags.length > 0) {
+                event.preventDefault()
+                const last = tags[tags.length - 1]
+                if (last !== undefined) remove(last)
+              }
+            }}
+            className="h-6 w-16 min-w-0 flex-1 rounded-md border border-input bg-card px-1.5 text-[12px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          />
+        </PopoverAnchor>
+        <PopoverContent
+          align="start"
+          sideOffset={4}
+          id={listId}
+          role="listbox"
+          data-slot="project-tag-suggestions"
+          className="w-56 p-1"
+          // Focus never leaves the input: this list is an accessory to it, not a place to be.
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+          // THE fix for "the list blinks and vanishes on click".
+          //
+          // The list opens on the input's `focus`, and Radix's DismissableLayer adds its
+          // document-level `focusin`/`pointerdown` listeners when the layer mounts — which is
+          // during that very same focus dispatch, before it has finished bubbling to the
+          // document. The layer therefore saw the focus that OPENED it as an interaction
+          // outside itself and dismissed on the spot.
+          //
+          // Radix cannot distinguish those cases for us here, because the thing being focused
+          // (the input) is deliberately outside the layer: this is an anchored listbox, not a
+          // popover you move into. So the layer stops owning dismissal entirely and this
+          // component owns it — `onBlur` for clicking away, Escape and Tab for the keyboard,
+          // and picking a suggestion for the happy path.
+          onInteractOutside={(event) => event.preventDefault()}
+        >
+          <p className="px-2 pt-1 pb-1.5 text-[10.5px] text-soft-foreground">
+            Tags used in this workspace
+          </p>
+          {suggestions.map((tag, index) => (
+            <button
+              key={tag}
+              type="button"
+              id={`${listId}-${index}`}
+              role="option"
+              aria-selected={index === highlight}
+              data-slot="project-tag-suggestion"
+              // `onMouseDown` + preventDefault so the press never blurs the input first, and the
+              // field keeps focus for the next tag you want to add.
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => {
+                add(tag)
+                inputRef.current?.focus()
+              }}
+              onMouseEnter={() => setHighlight(index)}
+              className={cn(
+                'flex w-full items-center rounded-sm px-2 py-1 text-left text-[12px] font-medium text-violet',
+                index === highlight && 'bg-muted',
+              )}
+            >
+              {tag}
+            </button>
+          ))}
+        </PopoverContent>
+      </Popover>
+    </div>
+  )
+}
+
+/**
  * Per-project "Max parallel tasks" selector (spec 2026-07-22). `Inherit
  * workspace (N)` is the unset default; `1..16` pins a per-project ceiling.
  * Bound directly to the server value (`project.maxParallel`) and saved on
@@ -397,7 +643,7 @@ function ProjectRow({
  * hook invalidates the projects query so a success re-renders the row. The
  * workspace cap still clamps at runtime, which the section hint explains.
  */
-function MaxParallelSelect({
+export function MaxParallelSelect({
   project,
   workspaceMax,
 }: {

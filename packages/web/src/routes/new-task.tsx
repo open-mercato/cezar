@@ -79,6 +79,7 @@ import {
 } from './new-task-autostart'
 import {
   clearDraftText,
+  composerRunModeNote,
   readDraft,
   resolveComposerRunMode,
   writeDraft,
@@ -214,7 +215,7 @@ export function NewTaskRoute() {
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
-  const catalog = useRunnerModels()
+  const catalog = useRunnerModels(displayRunner)
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
@@ -264,7 +265,11 @@ export function NewTaskRoute() {
   }, [providersReady])
 
   // Parallel variants need a worktree per variant, hence git (the server 409s without it).
-  const hasGit = health.data === undefined || health.data.repo !== null
+  // Read it from the PROJECT-scoped `/repo` above, never from `/api/health.repo`: health is bound
+  // to the boot folder, so booting outside a git repo hid the worktree controls for every
+  // registered project (#791) — the same per-project sweep as #700 (forge) and #699 (runner
+  // defaults). Loading still assumes git so the controls do not flicker.
+  const hasGit = repo.data === undefined || repo.data.info !== null
   const variants = hasGit ? draft.variants : 1
 
   // Worktree opt-out (#worktree-toggle): any ordinary run in a git repo may use the current
@@ -558,8 +563,11 @@ export function NewTaskRoute() {
           <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
             What should the agent work on?
           </h1>
-          <p className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
-            Runs in an isolated worktree — review everything before it lands.
+          {/* Follows the resolved run mode (#793). Printing the isolation promise
+              unconditionally made this line false for every run the user opted out of — and
+              for a non-git folder, where there is no worktree to opt into. */}
+          <p data-slot="run-mode-note" className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
+            {composerRunModeNote({ worktree: worktreeOn, hasGit })}
           </p>
         </header>
 
