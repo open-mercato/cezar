@@ -92,7 +92,9 @@ Land @patzick's `changes-requested` ask: stop steering `health-topic.test.ts` wi
 
 - [x] 4.4 Merge `origin/main`, re-run the configured validation gate, and answer @patzick explicitly on the PR — f93510ac
 
-  `origin/main` `f1c186ce` merged cleanly (no conflict). Gate on the merged head: `typecheck` ✅, `test:unit` ✅, `build` ✅, `test:package` ✅, focused `health-topic` ✅ 10/10. `npm test` recorded below with its load caveat; GitHub Actions on the pushed head is the authoritative signal.
+  `origin/main` `f1c186ce` merged cleanly (no conflict). Gate on the merged head: `typecheck` ✅, `test:unit` ✅, `build` ✅, `test:package` ✅, focused `health-topic` ✅ 10/10.
+
+  `npm test` on the merged head: **39 files / 186 tests red out of 319 / 5932**, in 538 s, on a machine sitting at load average 26–42 for the whole run. Reported as-is rather than as green — but `health-topic.test.ts` is **not among the 39**, and the 39 are the known #701 family this PR does not claim to fix (`git-worktree`, `run-lease`, `run-isolation`, `autosave-*`, `worktrees-api`, `pasted-attachments`, …), all failing on 5 s / 20 s timeouts in suites that spawn real `git` and child processes. The same command on this same tree came back 0 red in 88 s on a quiet machine two days ago. GitHub Actions on the pushed head is the authoritative signal.
 
 ## Verdict of Phase 4
 
