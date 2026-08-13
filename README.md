@@ -169,22 +169,47 @@ CLIs you are already logged into, `claude` by default.
 > instead of the real CLI — the whole cockpit works with no `claude` login, so
 > you can explore runs, diffs, variants and the review gate offline.
 
+### Nightly builds — help us shape cezar 🌙
+
+Every night we publish the trunk to npm, so the features landing in the next
+release are one command away:
+
+```bash
+npx cezar-cli@nightly      # everything merged as of last night
+```
+
+**Come build this with us.** cezar is shaped by the people who run it on real
+repos: if you try a nightly and something feels wrong — a workflow that stalls, a
+diff that reads badly, a runner that should exist — [open an
+issue](https://github.com/open-mercato/cezar/issues) and tell us. That feedback,
+early, is worth more than a bug report six weeks after a release, and it is how
+most of the features here got their final shape.
+
+**Know what you're installing.** A nightly is verified (typecheck, unit suites,
+packaged-CLI e2e — the same gate a release runs) but it is *not* a release: it
+can be rough, a flag or a screen may change under you, and something occasionally
+breaks in a way no test caught. Nothing is at risk beyond your patience — every
+task runs in its own git worktree and cezar never auto-merges — but if you need a
+boring day, stay on the stable release. Pin a nightly you liked with its exact
+version (`npx cezar-cli@0.9.2-nightly.20260813.126` — the cockpit prints the
+version it booted, and the date in it tells you how old the build is), and drop
+back to stable any time with a plain `npx cezar-cli`.
+
 ### Preview builds
 
-Every green CI run publishes an installable npm snapshot
-([how it works](docs/publishing.md)), so you can try unreleased code without
-cloning anything:
+Every green CI run also publishes an installable npm snapshot
+([how it works](docs/publishing.md)), so you can try code that has not even
+merged yet:
 
 ```bash
 npx cezar-cli@develop      # current develop head
-npx cezar-cli@main         # current main head (ahead of the latest stable release)
 ```
 
 Every pull request gets its own preview too — the CI bot posts a sticky comment
 on the PR with the exact pinned version to copy-paste
-(`npx cezar-cli@<version>-pr<N>.<run>`). Previews are prerelease versions under
-their own dist-tags; a plain `npx cezar-cli` always resolves to the latest
-stable release.
+(`npx cezar-cli@<version>-pr<N>.<run>`). Nightlies and previews are all
+prerelease versions under their own dist-tags; a plain `npx cezar-cli` always
+resolves to the latest stable release.
 
 ---
 
