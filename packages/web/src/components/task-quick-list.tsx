@@ -1,24 +1,20 @@
-import { ChevronDownIcon, CircleDotIcon, ScaleIcon } from 'lucide-react'
+import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useHealth, useRuns } from '@/api/queries'
-import { Link, scopeTo, useNavigate, useProjectMatch } from '@/lib/project-router'
+import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { useSidebarNavigate } from '@/components/app-shell'
-import { useListView } from '@/components/list-view'
 import { ReferenceChip } from '@/components/reference-chip'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
-import { isReadDoneItem, isUnread, unreadDoneCount } from '@/lib/read-state'
+import { isReadDoneItem, isUnread } from '@/lib/read-state'
 import { directionalUsageText } from '@/components/directional-usage'
 import {
   groupRuns,
-  listCounts,
   refPrefixMatches,
   runTitle,
   splitRefPrefix,
-  type ListView,
   type QuickListBucket,
   type QuickListRow,
 } from '@/lib/task-groups'
@@ -28,8 +24,9 @@ import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
 /**
- * The sidebar's task quick-list (spec, "App shell & navigation"): Active/Archived tabs, then the
- * runs grouped Needs you / Working / Recent, with variant groups collapsed into one tile.
+ * The sidebar's task quick-list (spec, "App shell & navigation"): the live runs as ONE flat,
+ * Claude-sessions-style list — ordered needs-you → working → recent, status carried by each
+ * row's dot, variant groups collapsed into one tile. The archive lives only on the Tasks page.
  *
  * Presentational — every decision it paints (which bucket, which order, which dot, whether a
  * group collapses) is made by `lib/task-groups.ts` and `lib/attention.ts`, which are pure and
@@ -37,16 +34,12 @@ import { cn } from '@/lib/utils'
  */
 export function TaskQuickList({
   runs,
-  view,
-  onViewChange,
   currentRunId = null,
   now = Date.now(),
   showTokens = true,
   showCost = true,
 }: {
   runs: RunRecord[]
-  view: ListView
-  onViewChange: (view: ListView) => void
   /** The run open at `/tasks/:id`, so its row can show as active. */
   currentRunId?: string | null
   /** Injected so the ages are not racing the clock in tests. */
@@ -55,45 +48,30 @@ export function TaskQuickList({
   showTokens?: boolean
   showCost?: boolean
 }) {
-  const counts = listCounts(runs)
-  // ALWAYS the active view (user decision): the sidebar is a quick list of live work — the
-  // archive lives only behind the Tasks page's own Archived tab now, so the rail never flips
-  // to archaeology even while that tab is open.
+  // ONE flat list, Claude-sessions style (user decision): no Active row, no RECENT label, no
+  // bucket headings — just the live tasks under a small TASKS cap. The grouping still ORDERS
+  // the rows (needs-you first, then working, then recent) and each row's status dot carries
+  // what the headings used to say. The archive lives only behind the Tasks page's own tab.
   const buckets = groupRuns(runs, 'active')
-  const unread = unreadDoneCount(runs)
-
-  // The selected view's rows render as the EXPANSION of its own row (Active or Archived) — one
-  // outline-style list, not a separate RECENT section further down.
-  const expansion =
-    buckets.length === 0 ? (
-      <p className="px-3 py-2 text-xs text-soft-foreground">No tasks yet — describe one.</p>
-    ) : (
-      <div data-slot="quick-list-expansion" className="my-1 ml-4 border-l border-border pl-1.5">
-        <QuickListBuckets
-          buckets={buckets}
-          currentRunId={currentRunId}
-          now={now}
-          showTokens={showTokens}
-          showCost={showCost}
-        />
-      </div>
-    )
 
   return (
     <div data-slot="quick-list">
       <div className="flex flex-col gap-0.5 pt-2 pb-0.5">
-        {/* Section headers: small but DARK, tight to their rows (review) — hierarchy from
-            contrast and rhythm, not from size. */}
         <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
           Tasks
         </h2>
-        {/* No Archived row (user decision): the archive is reachable only via the Tasks page's
-            own tab — the rail carries live work and nothing else. */}
-        <ViewRow view="active" current={view} onSelect={onViewChange} count={counts.active} unread={unread}>
-          <CircleDotIcon aria-hidden="true" className="size-4 shrink-0" />
-          Active
-        </ViewRow>
-        {expansion}
+        {buckets.length === 0 ? (
+          <p className="px-3 py-2 text-xs text-soft-foreground">No tasks yet — describe one.</p>
+        ) : (
+          <QuickListBuckets
+            buckets={buckets}
+            currentRunId={currentRunId}
+            now={now}
+            showTokens={showTokens}
+            showCost={showCost}
+            headings={false}
+          />
+        )}
       </div>
     </div>
   )
@@ -113,6 +91,7 @@ export function QuickListBuckets({
   scope = null,
   showTokens = true,
   showCost = true,
+  headings = true,
 }: {
   buckets: QuickListBucket[]
   currentRunId?: string | null
@@ -120,6 +99,9 @@ export function QuickListBuckets({
   scope?: string | null
   showTokens?: boolean
   showCost?: boolean
+  /** `false` renders the buckets as ONE continuous flat list (the boot sidebar's
+   *  Claude-sessions style) — the grouping still orders the rows, it just stops labelling. */
+  headings?: boolean
 }) {
   // Which variant groups are open. Local: it is view state about this list, nothing else reads it.
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
@@ -138,12 +120,14 @@ export function QuickListBuckets({
           data-slot="quick-list-bucket"
           data-bucket={bucket.label}
           // Uniform rhythm: the group separator supplies the space above the FIRST bucket;
-          // siblings space themselves identically.
-          className="mt-3 first:mt-0"
+          // siblings space themselves identically. Flat mode drops the gaps with the labels.
+          className={cn(headings && 'mt-3 first:mt-0')}
         >
-          <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
-            {bucket.label}
-          </h2>
+          {headings ? (
+            <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
+              {bucket.label}
+            </h2>
+          ) : null}
           {bucket.rows.map((row) => (
             <Row
               key={row.kind === 'group' ? row.groupId : row.run.id}
@@ -163,71 +147,6 @@ export function QuickListBuckets({
   )
 }
 
-function ViewRow({
-  view,
-  current,
-  onSelect,
-  count,
-  unread = 0,
-  children,
-}: {
-  view: ListView
-  current: ListView
-  onSelect: (view: ListView) => void
-  count: number
-  /** Unread finished tasks (#unread-done-items) — the badge the Tasks nav item used to wear. */
-  unread?: number
-  children: React.ReactNode
-}) {
-  const isActive = view === current
-  return (
-    <button
-      type="button"
-      data-slot="view-tab"
-      data-view={view}
-      // Toggle buttons rather than a real tablist: these filter one list in place, they do not
-      // switch between panels — `aria-pressed` is what that actually is.
-      aria-pressed={isActive}
-      onClick={() => onSelect(view)}
-      // Selected = a WHITE surface + the slim purple indicator (review): another lavender tint
-      // was what kept dyeing the whole sidebar — purple stays a signal, never a surface. Hover
-      // lifts rows onto the same card white.
-      className={cn(
-        // One row rhythm across the whole sidebar: 44px touch rows under md, 36px on desktop —
-        // identical to the WORKSPACE nav, so every clickable line lands on the same grid.
-        'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
-        isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
-      )}
-    >
-      {isActive ? (
-        // A purple CARET glued to the browser edge (not an inset bar): -left-2.5 cancels the
-        // list's own padding so the triangle touches the window; borders draw the ▶.
-        <span
-          aria-hidden="true"
-          className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
-        />
-      ) : null}
-      {children}
-      <span className="ml-auto flex shrink-0 items-center gap-1.5">
-        {unread > 0 ? (
-          <span
-            data-slot="quick-list-unread-badge"
-            title={`${unread} unread finished ${unread === 1 ? 'task' : 'tasks'}`}
-            className="rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
-          >
-            {unread}
-          </span>
-        ) : null}
-        {/* No "0": an empty bucket says so by being empty. A circled badge, not floating digits. */}
-        {count > 0 ? (
-          <span className="flex size-5 items-center justify-center rounded-full bg-muted font-mono text-[10.5px] font-semibold tabular-nums">
-            {count}
-          </span>
-        ) : null}
-      </span>
-    </button>
-  )
-}
 
 function Row({
   row,
@@ -507,9 +426,6 @@ export function TaskQuickListContainer() {
   const runs = useRuns()
   const health = useHealth()
   const visibility = usageMetricVisibility(health.data)
-  const [view, setView] = useListView()
-  const navigate = useNavigate()
-  const onSidebarNavigate = useSidebarNavigate()
   // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
@@ -522,15 +438,6 @@ export function TaskQuickListContainer() {
   return (
     <TaskQuickList
       runs={runs.data}
-      view={view}
-      // The TASKS rows replaced the Tasks nav item (sidebar redesign), so picking one also
-      // lands on the tasks overview — the filter and the view arrive together.
-      onViewChange={(next) => {
-        setView(next)
-        navigate('/')
-        // Same-path clicks can't trip the drawer's route-change close — close it ourselves.
-        onSidebarNavigate?.()
-      }}
       // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
       currentRunId={match?.params.id ?? exact?.params.id ?? null}
       now={now}

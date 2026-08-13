@@ -31,13 +31,11 @@ function run(over: Partial<RunRecord> = {}): RunRecord {
 }
 
 function renderList(props: Partial<Parameters<typeof TaskQuickList>[0]> = {}, route = '/') {
-  const onViewChange = props.onViewChange ?? vi.fn()
-  const utils = render(
+  return render(
     <MemoryRouter initialEntries={[route]}>
-      <TaskQuickList runs={[]} view="active" now={NOW} {...props} onViewChange={onViewChange} />
+      <TaskQuickList runs={[]} now={NOW} {...props} />
     </MemoryRouter>
   )
-  return { ...utils, onViewChange }
 }
 
 const bucket = (label: string): HTMLElement => {
@@ -67,8 +65,12 @@ describe('TaskQuickList', () => {
       ],
     })
 
-    const headers = [...document.querySelectorAll('[data-slot="quick-list-bucket"] h2')].map((h) => h.textContent)
-    expect(headers).toEqual(['Needs you', 'Working', 'Recent'])
+    // Flat list: the buckets still ORDER the rows but paint no headings of their own.
+    const order = [...document.querySelectorAll('[data-slot="quick-list-bucket"]')].map((el) =>
+      el.getAttribute('data-bucket'),
+    )
+    expect(order).toEqual(['Needs you', 'Working', 'Recent'])
+    expect(document.querySelectorAll('[data-slot="quick-list-bucket"] h2')).toHaveLength(0)
     expect(rowsIn('Needs you')).toEqual(['Structured changes endpoint1m'])
     expect(rowsIn('Working')).toEqual(['Normalize agent-event protocol1m'])
     expect(rowsIn('Recent')).toEqual(['README parallel-agents tagline1m'])
@@ -505,46 +507,37 @@ describe('TaskQuickList', () => {
     })
   })
 
-  describe('the Active row (the archive lives only on the Tasks page now)', () => {
+  describe('the flat list (Claude-sessions style: no view rows, no bucket headings)', () => {
     const runs = () => [
       run({ id: 'a', status: 'running' }),
       run({ id: 'b', status: 'waiting' }),
       run({ id: 'c', status: 'done', archived: true }),
     ]
 
-    it('shows the active count and no Archived row at all', () => {
-      renderList({ runs: runs(), view: 'active' })
-      const active = screen.getByRole('button', { name: /Active/ })
-      expect(active.textContent).toBe('Active2')
-      expect(active.getAttribute('aria-pressed')).toBe('true')
+    it('renders the live tasks only — the archive lives behind the Tasks page tab', () => {
+      renderList({ runs: runs() })
+      expect(row('a')).not.toBeNull()
+      expect(row('b')).not.toBeNull()
+      expect(row('c')).toBeNull()
+      expect(screen.queryByRole('button', { name: /Active/ })).toBeNull()
       expect(screen.queryByRole('button', { name: /Archived/ })).toBeNull()
     })
 
-    it('reports the pick — Active is the only view on offer', () => {
-      const { onViewChange } = renderList({ runs: runs(), view: 'archived' })
-      fireEvent.click(screen.getByRole('button', { name: /Active/ }))
-      expect(onViewChange).toHaveBeenCalledWith('active')
-    })
-
-    it('renders no count for an empty bucket', () => {
-      renderList({ runs: [run({ status: 'done', archived: true })], view: 'active' })
-      // "Active 0" is noise — an empty bucket says so by being empty.
-      expect(screen.getByRole('button', { name: /Active/ }).textContent).toBe('Active')
-    })
-
-    it('stays pinned to ACTIVE work even while the shared view sits on archived', () => {
-      renderList({ runs: runs(), view: 'archived' })
-      // The rail is a quick list of live work — the archived run never appears here.
-      expect(row('a')).not.toBeNull()
-      expect(row('c')).toBeNull()
-      // No aggregate waiting-dot either: the live rows themselves carry their attention dots.
-      expect(document.querySelector('[data-slot="waiting-dot"]')).toBeNull()
+    it('shows no bucket headings — order and the status dots carry the grouping', () => {
+      renderList({ runs: runs() })
+      // The bucket wrappers survive (order comes from them) but their labels do not render.
+      expect(document.querySelectorAll('[data-slot="quick-list-bucket"] h2')).toHaveLength(0)
+      // Needs-you ordering still leads: the waiting run's bucket precedes the working one's.
+      const order = [...document.querySelectorAll('[data-slot="quick-list-bucket"]')].map(
+        (el) => el.getAttribute('data-bucket'),
+      )
+      expect(order[0]).toBe('Needs you')
     })
   })
 
   describe('empty states', () => {
     it('says there are no tasks, without inventing any', () => {
-      renderList({ runs: [], view: 'active' })
+      renderList({ runs: [] })
       expect(screen.getByText('No tasks yet — describe one.')).not.toBeNull()
       expect(document.querySelectorAll('[data-slot="task-row"]')).toHaveLength(0)
     })

@@ -371,8 +371,7 @@ function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }
   if (!cta) return null
   const resumes = cta.kind === 'retry' || cta.kind === 'reopen'
   const disabled = resumes && (actions.continueRun.isPending || !actions.continuation.canContinue)
-  // On the solid near-black calm states the ICON carries the violet — brand wink on chrome.
-  const iconClass = cta.tone === 'neutral' ? 'text-violet' : undefined
+  const iconClass = undefined
   const icon =
     cta.kind === 'stop' ? <CircleStopIcon aria-hidden="true" className={iconClass} />
     : cta.kind === 'reply' ? <SendHorizontalIcon aria-hidden="true" className={iconClass} />

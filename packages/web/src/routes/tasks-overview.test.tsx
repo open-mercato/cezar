@@ -834,23 +834,21 @@ describe('TasksOverviewRoute — wired to the app', () => {
     document.querySelector(`[data-slot="overview-tab"][data-view="${view}"]`) as HTMLElement
   const sidebarRow = (id: string) => document.querySelector(`[data-slot="task-row"][data-run-id="${id}"]`)
 
-  it('shares the view with the sidebar — the rail stays pinned to active, its row flips back', async () => {
+  it('the rail is a flat live list — the overview tabs flip only the table', async () => {
     renderApp([run({ id: 'act', status: 'running' }), run({ id: 'arc', status: 'done', archived: true })])
     await waitFor(() => expect(tableRow('act')).not.toBeNull())
     expect(sidebarRow('act')).not.toBeNull()
 
-    // Flip in the table header: the TABLE shows the archive; the rail (a quick list of live
-    // work — the archive lives only behind this tab now) keeps its active rows and merely
-    // un-presses its Active row.
+    // Flip in the table header: the TABLE shows the archive; the rail (a flat quick list of
+    // live work — the archive lives only behind this tab now) keeps its rows untouched.
     fireEvent.click(overviewTab('archived'))
-    expect(sidebarTab('active').getAttribute('aria-pressed')).toBe('false')
     expect(tableRow('arc')).not.toBeNull()
     expect(tableRow('act')).toBeNull()
     expect(sidebarRow('act')).not.toBeNull()
     expect(sidebarRow('arc')).toBeNull()
 
-    // Flip back via the sidebar's Active row → the table follows.
-    fireEvent.click(sidebarTab('active'))
+    // And back.
+    fireEvent.click(overviewTab('active'))
     expect(overviewTab('active').getAttribute('aria-pressed')).toBe('true')
     expect(tableRow('act')).not.toBeNull()
     expect(tableRow('arc')).toBeNull()

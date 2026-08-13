@@ -116,7 +116,7 @@ export function UserBubble({
       <div
         data-slot="user-bubble"
         data-editing="true"
-        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-accent px-[15px] py-2.5 text-[15px] leading-[1.65] md:max-w-[70%]"
+        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-contrast px-[15px] py-2.5 text-[15px] leading-[1.65] text-contrast-foreground md:max-w-[70%]"
       >
         <textarea
           autoFocus
@@ -161,8 +161,10 @@ export function UserBubble({
 
   return (
     <div
+      // Chrome-dark (user decision): the user's own words sit on the same near-black surface as
+      // the chrome CTAs — light theme gets a dark bubble, dark theme its pale inverse.
       data-slot="user-bubble"
-      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-accent px-[15px] py-2.5 text-[15px] leading-[1.65] md:max-w-[70%]"
+      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-contrast px-[15px] py-2.5 text-[15px] leading-[1.65] text-contrast-foreground md:max-w-[70%]"
     >
       {onEdit || onRemove ? (
         <span

@@ -528,6 +528,11 @@
   padding-left: 0.9em;
   color: var(--muted-foreground);
 }
+/* Links in the deep indigo ink (--violet-strong), not the bright brand violet Streamdown's
+ * text-primary utilities would paint — readable at paragraph size, still clearly a link. */
+.thread-markdown a {
+  color: var(--violet-strong);
+}
 .thread-markdown [data-streamdown='inline-code'] {
   border-radius: 5px;
   background: var(--muted);
