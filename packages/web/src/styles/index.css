@@ -93,9 +93,11 @@
   --card: #171717;
   --card-2: #1c1c1c;
   /* The sidebar's surface. Its own token because the two themes disagree about what it is:
-   * dark wants the card step, light wants a tint *below* the white card so the rail reads as
-   * chrome rather than page. See the `.light` block. */
-  --sidebar: var(--card);
+   * light wants a tint below the white card so the rail reads as chrome rather than page, and
+   * dark wants a step BELOW the card too — the selection language lifts rows onto --card, and
+   * with the rail sitting on the card step itself (the old `var(--card)`) a selected or
+   * hovered row was card-on-card: invisible. */
+  --sidebar: #121212;
   --muted: #262626;
   --muted-foreground: #a3a3a3;
   /* AA-checked (audit 2026-08-08): ≥4.5:1 on --background, --card and --card-2 — the three
