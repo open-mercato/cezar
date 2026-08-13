@@ -799,6 +799,15 @@ function CommandPaletteHint() {
  * The footer's `v{version}` chip. When the server's npm-registry check found something newer
  * (`latestVersion`, #368), the chip grows a pulsing pending-tone dot and names the version in
  * its tooltip — an affordance, not an alert: updating is optional, so the chrome stays quiet.
+ *
+ * The chip is the controls row's ONE elastic item, and that is load-bearing. Every other control
+ * there is `shrink-0` (the icon buttons inherit it from the button base class), so whatever a
+ * version string costs beyond the column's width has to come out of somewhere — and while this
+ * chip was `shrink-0` too, there was nowhere for it to come from: a nightly version (#876's
+ * dist-tag, some 173px of it) shoved the gear and the theme toggle clean outside the sidebar
+ * rather than clipping anything. Truncating from the tail keeps the half that carries meaning,
+ * the semver, and the `title` keeps the whole string — which is why the tooltip is now there
+ * even with no update to announce.
  */
 function VersionChip({ version, latestVersion }: { version: string; latestVersion: string | null }) {
   const updateAvailable = Boolean(latestVersion && latestVersion !== version)
@@ -806,11 +815,11 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
     <span
       data-slot="version-chip"
       data-update-available={updateAvailable ? 'true' : undefined}
-      title={updateAvailable ? `update available: v${latestVersion}` : undefined}
-      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground"
+      title={updateAvailable ? `v${version} — update available: v${latestVersion}` : `v${version}`}
+      className="flex min-w-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground"
     >
-      {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px]" /> : null}
-      v{version}
+      {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px] shrink-0" /> : null}
+      <span className="truncate">v{version}</span>
     </span>
   )
 }

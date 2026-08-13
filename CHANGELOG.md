@@ -1,6 +1,12 @@
 # Unreleased
 
 ### 🐛 Fixes
+- 🐛 **The settings gear and the theme toggle stay inside the sidebar on a nightly build.** A
+  nightly's version is long — `v0.9.2-nightly.20260813.1`, where a release is `v0.9.2` — and the
+  footer chip that shows it refused to give up a single pixel, so on the nightly channel it simply
+  pushed the two buttons beside it out of the sidebar and over the page. The chip now yields the
+  space instead, showing as much of the version as fits and the whole of it on hover, which is what
+  keeps the row inside the column whatever a future version string looks like.
 - 🐛 **The global Tasks page reacts to work happening in other projects.** Every event from a
   project other than the one you were standing in was dropped before it reached any cache, so
   `/tasks` — which is precisely the page that spans every project — heard nothing and ran on its
