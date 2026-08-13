@@ -91,11 +91,12 @@ import { useFinishRun } from './use-finish-run'
 export type RunTab = 'session' | 'changes' | 'commits' | 'files'
 
 /** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
- *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx): the four task routes
- *  share a single mounted header, so an expand would otherwise be thrown away on a Session →
- *  Changes hop. Keyed by run id rather than held in plain `useState` because that same sharing
- *  means the header does NOT remount when the reader moves to another run — the docks below it key
- *  themselves by `run.id` for exactly this reason — so unkeyed state would carry run A's expansion
+ *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
+ *  module-level and run-keyed, because the two navigations a reader makes here remount the header
+ *  in opposite ways. A Session → Changes hop resolves a different route element, so it DOES remount
+ *  and plain `useState` would throw the expand away; run A → run B stays on `/tasks/:id`, so React
+ *  reconciles the same element and does NOT remount — the docks below it key themselves by `run.id`
+ *  for exactly this reason — so even lazily-initialized `useState` would carry run A's expansion
  *  into run B. Session-lifetime only; no server persistence invented for it. */
 const detailsOpenByRun = new Map<string, boolean>()
 
@@ -164,7 +165,9 @@ export function RunHeader({
             </Pill>
             {/* Phone-width only: above `md` the meta row never collapses, so a control to expand
                 it would be a permanently disabled-looking chevron next to always-visible content.
-                The slot it costs in this row is the one the plan mirror just gave back. */}
+                On the Session tab of a run with a plan, the slot it costs is the one the plan
+                mirror just gave back; on the three `task-git` tabs no tally is passed at all, so
+                there the row does grow by one control — the price of the collapse. */}
             <Button
               variant="ghost"
               size="icon-sm"
