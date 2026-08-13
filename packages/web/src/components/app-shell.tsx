@@ -534,7 +534,9 @@ function SidebarContent({
       </div>
 
       <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
-        <Button asChild variant="primary" className="relative min-w-0 flex-1 justify-center">
+        {/* contrast (near-black / near-white), not primary: a full-width purple slab out-shouted
+            everything — purple stays for in-flow actions, the CTA reads as solid chrome. */}
+        <Button asChild variant="contrast" className="relative min-w-0 flex-1 justify-center">
           {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
               New task affordances stay inside the SPA. Full document loads of /new (the
               bookmarklet contract) land on the shell like any route (static-ui.ts) — the
@@ -547,7 +549,7 @@ function SidebarContent({
                 reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
             <kbd
               aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-primary-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-primary-foreground/60"
+              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-contrast-foreground/60"
             >
               C
             </kbd>
@@ -661,9 +663,8 @@ function SidebarContent({
        *  line 2. `flex-col` rather than `flex-wrap` on purpose — the previous single wrapping row
        *  overflowed the 264px column and silently stranded the theme toggle on a line of its own,
        *  and a column cannot regress into that no matter what a future control's width is. */}
-      {/* Search sits ABOVE the bottom bar, its own element — a utility within reach, not part
-          of the bordered strip. */}
-      <div className="px-3.5 pb-2">
+      {/* Search moved to the app bar on desktop; the drawer (no app bar below md) keeps it. */}
+      <div className="px-3.5 pb-2 md:hidden">
         <CommandPaletteHint />
       </div>
 
@@ -866,6 +867,11 @@ function ProjectBar({
         ) : null)}
       {addProject}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
+        {/* Search lives on the app bar (user decision) — global reach, right where the other
+            global utilities sit. The drawer keeps its own copy below md. */}
+        <span className="w-56">
+          <CommandPaletteHint />
+        </span>
         {/* Settings beside Tools — both are utilities of the workspace this bar names. */}
         <Link
           to="/settings"

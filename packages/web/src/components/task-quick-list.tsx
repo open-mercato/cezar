@@ -1,4 +1,4 @@
-import { ArchiveIcon, ChevronDownIcon, CircleDotIcon, ScaleIcon } from 'lucide-react'
+import { ChevronDownIcon, CircleDotIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useHealth, useRuns } from '@/api/queries'
 import { Link, scopeTo, useNavigate, useProjectMatch } from '@/lib/project-router'
@@ -56,16 +56,17 @@ export function TaskQuickList({
   showCost?: boolean
 }) {
   const counts = listCounts(runs)
-  const buckets = groupRuns(runs, view)
+  // ALWAYS the active view (user decision): the sidebar is a quick list of live work — the
+  // archive lives only behind the Tasks page's own Archived tab now, so the rail never flips
+  // to archaeology even while that tab is open.
+  const buckets = groupRuns(runs, 'active')
   const unread = unreadDoneCount(runs)
 
   // The selected view's rows render as the EXPANSION of its own row (Active or Archived) — one
   // outline-style list, not a separate RECENT section further down.
   const expansion =
     buckets.length === 0 ? (
-      <p className="px-3 py-2 text-xs text-soft-foreground">
-        {view === 'archived' ? 'Nothing archived yet.' : 'No tasks yet — describe one.'}
-      </p>
+      <p className="px-3 py-2 text-xs text-soft-foreground">No tasks yet — describe one.</p>
     ) : (
       <div data-slot="quick-list-expansion" className="my-1 ml-4 border-l border-border pl-1.5">
         <QuickListBuckets
@@ -86,22 +87,13 @@ export function TaskQuickList({
         <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
           Tasks
         </h2>
+        {/* No Archived row (user decision): the archive is reachable only via the Tasks page's
+            own tab — the rail carries live work and nothing else. */}
         <ViewRow view="active" current={view} onSelect={onViewChange} count={counts.active} unread={unread}>
           <CircleDotIcon aria-hidden="true" className="size-4 shrink-0" />
           Active
-          {/* The one reason to look at a row you are not on. */}
-          {counts.waiting > 0 && view !== 'active' ? (
-            <StatusDot tone="pending" pulse data-slot="waiting-dot" aria-label="needs you" />
-          ) : null}
         </ViewRow>
-        {view === 'active' ? expansion : null}
-        {/* Subdued on purpose (user feedback): the archive is visited almost never — a
-            mis-archive or a cleanup — so it must not weigh like a sibling of Active. */}
-        <ViewRow view="archived" current={view} onSelect={onViewChange} count={counts.archived} subdued>
-          <ArchiveIcon aria-hidden="true" className="size-3.5 shrink-0" />
-          Archived
-        </ViewRow>
-        {view === 'archived' ? expansion : null}
+        {expansion}
       </div>
     </div>
   )
@@ -177,7 +169,6 @@ function ViewRow({
   onSelect,
   count,
   unread = 0,
-  subdued = false,
   children,
 }: {
   view: ListView
@@ -186,8 +177,6 @@ function ViewRow({
   count: number
   /** Unread finished tasks (#unread-done-items) — the badge the Tasks nav item used to wear. */
   unread?: number
-  /** A lighter row for the rarely-visited view (Archived) — smaller, softer, shorter. */
-  subdued?: boolean
   children: React.ReactNode
 }) {
   const isActive = view === current
@@ -207,7 +196,6 @@ function ViewRow({
         // One row rhythm across the whole sidebar: 44px touch rows under md, 36px on desktop —
         // identical to the WORKSPACE nav, so every clickable line lands on the same grid.
         'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
-        subdued && 'h-10 text-xs text-soft-foreground md:h-8',
         isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
       )}
     >
@@ -230,8 +218,12 @@ function ViewRow({
             {unread}
           </span>
         ) : null}
-        {/* No "0": an empty bucket says so by being empty. */}
-        {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+        {/* No "0": an empty bucket says so by being empty. A circled badge, not floating digits. */}
+        {count > 0 ? (
+          <span className="flex size-5 items-center justify-center rounded-full bg-muted font-mono text-[10.5px] font-semibold tabular-nums">
+            {count}
+          </span>
+        ) : null}
       </span>
     </button>
   )
