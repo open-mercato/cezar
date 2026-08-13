@@ -371,12 +371,14 @@ function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }
   if (!cta) return null
   const resumes = cta.kind === 'retry' || cta.kind === 'reopen'
   const disabled = resumes && (actions.continueRun.isPending || !actions.continuation.canContinue)
+  // On the solid near-black calm states the ICON carries the violet — brand wink on chrome.
+  const iconClass = cta.tone === 'neutral' ? 'text-violet' : undefined
   const icon =
-    cta.kind === 'stop' ? <CircleStopIcon aria-hidden="true" />
-    : cta.kind === 'reply' ? <SendHorizontalIcon aria-hidden="true" />
-    : cta.kind === 'review' ? <ScanEyeIcon aria-hidden="true" />
-    : cta.kind === 'retry' ? <RotateCcwIcon aria-hidden="true" />
-    : <PlayIcon aria-hidden="true" />
+    cta.kind === 'stop' ? <CircleStopIcon aria-hidden="true" className={iconClass} />
+    : cta.kind === 'reply' ? <SendHorizontalIcon aria-hidden="true" className={iconClass} />
+    : cta.kind === 'review' ? <ScanEyeIcon aria-hidden="true" className={iconClass} />
+    : cta.kind === 'retry' ? <RotateCcwIcon aria-hidden="true" className={iconClass} />
+    : <PlayIcon aria-hidden="true" className={iconClass} />
   const title =
     cta.kind === 'stop' ? 'Stop the run'
     : cta.kind === 'reply' ? 'Reply to the agent'
@@ -397,19 +399,14 @@ function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }
     <Button
       data-slot="primary-cta"
       data-cta={cta.kind}
-      variant={cta.tone === 'primary' ? 'primary' : 'outline'}
+      variant={cta.tone === 'primary' ? 'primary' : cta.tone === 'neutral' ? 'contrast' : 'outline'}
       size="sm"
       title={title}
       disabled={disabled}
       onClick={onClick}
-      className={cn(
-        // Soft-purple, not a plain outline (review): even the calmer lifecycle states are THE
-        // contextual action and must not dress like Open in — pale wash, purple-200 border,
-        // text-safe purple ink. The urgent states keep full purple; failure keeps danger.
-        cta.tone === 'neutral' &&
-          'border-violet/25 bg-violet/8 text-violet-strong hover:bg-violet/15 hover:text-violet-strong',
-        cta.tone === 'danger' && 'border-danger/40 text-danger hover:bg-danger/10',
-      )}
+      // Calm states (Reopen, Stop) go SOLID contrast with a violet icon — chrome-black with the
+      // brand wink; urgent states keep full purple; failure keeps danger on an outline.
+      className={cn(cta.tone === 'danger' && 'border-danger/40 text-danger hover:bg-danger/10')}
     >
       {icon}
       {cta.label}

@@ -768,20 +768,20 @@ function AddProjectMenu() {
  */
 function CommandPaletteHint() {
   return (
+    // A BUTTON that looks like one (user feedback): the input costume promised in-place typing,
+    // but the control opens the ⌘K palette — so it dresses like its neighbours (Settings, Tools).
     <button
       type="button"
       data-slot="command-palette-hint"
       title="Search — command palette (⌘K / Ctrl+K)"
       onClick={() => openCommandPalette()}
-      // h-9 + 13px: an input-sized launcher (it sits under the CTA now, where a tiny strip read
-      // as an afterthought), matching the composer pickers' control height.
-      className="flex h-9 w-full items-center gap-2 rounded-md border border-border bg-card px-2.5 text-left text-[13px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:w-auto"
     >
-      <SearchIcon className="size-4 shrink-0" aria-hidden="true" />
-      <span className="truncate">Search…</span>
+      <SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
+      Search
       <kbd
         aria-hidden="true"
-        className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
+        className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground md:ml-0.5"
       >
         {commandShortcutHint('k')}
       </kbd>
@@ -869,9 +869,7 @@ function ProjectBar({
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
         {/* Search lives on the app bar (user decision) — global reach, right where the other
             global utilities sit. The drawer keeps its own copy below md. */}
-        <span className="w-56">
-          <CommandPaletteHint />
-        </span>
+        <CommandPaletteHint />
         {/* Settings beside Tools — both are utilities of the workspace this bar names. */}
         <Link
           to="/settings"
