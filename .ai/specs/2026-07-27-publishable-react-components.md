@@ -199,8 +199,8 @@ fixes that the public package is meant to centralize.
   renderer.
 - The current cockpit URL scheme and visual behavior remain compatibility baselines for the
   private reference application.
-- Light, dark, system, accent, density, mobile safe-area, keyboard, focus, and reduced-motion
-  behavior remain supported.
+- Light, dark, system, accent, density, reading-width, mobile safe-area, keyboard, focus, and
+  reduced-motion behavior remain supported.
 
 ## Goals
 
@@ -329,7 +329,7 @@ The private reference application. Its responsibilities shrink to:
 - create the service client for the bundled same-origin case;
 - select the standard storage, notifications, and browser-router adapters;
 - mount `CezarCockpit`;
-- retain the static document and pre-paint boot script;
+- retain the static document and the pre-paint adapter that stamps the public provider boundary;
 - produce `packages/cezar/web/dist` for the server package.
 
 Application-specific redirects and backward-compatible top-level URLs may live here or in the
@@ -429,6 +429,8 @@ export interface CezarProviderProps {
   theme?: 'light' | 'dark' | 'system'
   accent?: 'lime' | 'violet'
   density?: 'comfortable' | 'compact' | 'ultra'
+  width?: 'narrow' | 'wide'
+  rootElement?: HTMLElement | null
   className?: string
   onError?: (error: ApiError) => void
   onAuthRequired?: (error: ApiError) => void
@@ -445,8 +447,14 @@ The provider creates an isolated `QueryClient` when none is supplied. It creates
 module-global cache or transport. Cache keys include a stable client identity and project
 scope so two services or projects cannot collide inside a supplied cache.
 
-The provider renders a `.cezar-root` element and a descendant portal container. It owns the
-appearance attributes only for that subtree.
+By default, the provider renders a `.cezar-root` element and a descendant portal container. It
+owns the appearance attributes only for that subtree. `rootElement` is the explicit adoption
+path for a host whose mount element exists before React starts: the supplied element must be the
+container that already contains the provider output and must carry `.cezar-root`. While mounted,
+the provider applies the same appearance, `className`, and portal behavior to that element instead
+of nesting a second root. This lets the reference cockpit and another host pre-stamp appearance
+without requiring every embed to hand-author a wrapper. The element is supplied by the host;
+package import and server rendering never query `document` to discover one.
 
 ### Client construction
 
@@ -631,19 +639,27 @@ import '@open-mercato/cezar-react/styles.css'
 They do not install Tailwind, add Cezar source paths to a scanner, or copy a token file. The
 published stylesheet contains the styles needed by every public entry point.
 
-The library stylesheet uses a build-time selector transformation, not CSS `@scope` and not a
-Tailwind class-name prefix:
+The library stylesheet uses build-time selector and identifier transformations, not CSS `@scope`
+and not a Tailwind class-name prefix:
 
 1. Tailwind v4 is imported as its theme and utility layers without `preflight.css`.
 2. A small Cezar-owned base/reset layer is authored explicitly for `.cezar-root`, its descendants,
    and their pseudo-elements. It never normalizes the host document.
-3. A deterministic PostCSS selector pass prefixes every ordinary emitted selector with
+3. The same deterministic PostCSS AST pipeline rewrites every Tailwind-internal custom-property
+   identifier from `--tw-*` to the private `--cezar-tw-*` namespace. The rewrite covers
+   `@property` parameters, declaration names, declaration values and `var()` fallbacks, keyframe
+   bodies, feature-query parameters, and generated fallback layers; no emitted reference can keep
+   the original name.
+4. A selector pass prefixes every ordinary emitted selector with
    `.cezar-root`. Selectors already targeting the root are normalized rather than double-prefixed.
    At-rules such as `@font-face` and `@keyframes` are preserved, and their public names use a
    `cezar-` namespace.
-4. A post-build verifier parses the published CSS and fails if an ordinary selector can match
+5. A post-build verifier parses selectors, declarations, and at-rules in the published CSS. It
+   fails if an ordinary selector can match
    outside `.cezar-root`, or if `html`, `body`, `:root`, an unscoped universal selector, or a
-   document-level appearance/reset rule escapes the boundary.
+   document-level appearance/reset rule escapes the boundary. It also fails on any remaining
+   `--tw-*` identifier, any `@property` registration outside the `--cezar-*` namespace, or a
+   non-namespaced keyframe or font family.
 
 The root prefix intentionally contributes specificity, so an unrelated host `.flex` or `.grid`
 utility does not override Cezar's generated utility merely because the host stylesheet loaded
@@ -654,6 +670,13 @@ selector pass provides the required containment and lets existing feature markup
 a class-string rewrite. CSS `@scope` is not used because the supported self-hosted browser range
 cannot make it the sole isolation boundary.
 
+CSS custom-property registrations are document-global even when their declarations appear near a
+scoped rule. Renaming Tailwind's registrations and every reference is therefore mandatory rather
+than treating `@property` as selector-scoped. A host's own Tailwind build continues to use
+`--tw-*`, while Cezar uses only `--cezar-tw-*`; neither registration changes the other's syntax,
+inheritance, initial value, or computed styles. `--cezar-tw-*` is reserved for generated private
+implementation state and is not part of the documented theming or semver contract.
+
 All ordinary selectors, generated utility selectors, reset rules, typography, scrollbars, and
 animations are therefore scoped beneath `.cezar-root`. No selector targets the host's `html`,
 `body`, application root, or unscoped element tree.
@@ -661,10 +684,14 @@ animations are therefore scoped beneath `.cezar-root`. No selector targets the h
 `@font-face` rules use Cezar-specific family names and packaged font assets. They do not change
 the host's font-family.
 
-### Theme contract
+### Appearance contract
 
-The provider boundary carries `data-cezar-theme`, `data-cezar-accent`, and
-`data-cezar-density`. System theme observation updates only that boundary.
+The provider boundary carries `data-cezar-theme`, `data-cezar-accent`,
+`data-cezar-density`, and `data-cezar-width`. The theme attribute contains the resolved `light` or
+`dark` value when the input is `system`; system-theme observation and `color-scheme` updates touch
+only that boundary. Width defaults to `narrow` and changes the reading measure without taking over
+the host layout. Until persisted or controlled state supplies another value, the public defaults
+match the current cockpit: `dark`, `lime`, `comfortable`, and `narrow`.
 
 Documented custom properties use the `--cezar-*` namespace:
 
@@ -673,11 +700,34 @@ Documented custom properties use the `--cezar-*` namespace:
   --cezar-primary: var(--host-brand);
   --cezar-background: var(--host-surface);
   --cezar-radius-md: 6px;
+  --cezar-measure: 960px;
 }
 ```
 
-The public token list covers color roles, typography families, radii, shadows, and density.
-Private intermediate tokens may change without semver impact.
+The public token list covers color roles, typography families, radii, shadows, density, and the
+reading measure. The built-in `--cezar-measure` value is `820px` for `narrow` and `1180px` for
+`wide`. Private intermediate tokens, including `--cezar-tw-*`, may change without semver impact.
+
+### Pre-paint root adoption
+
+The reference cockpit preserves its no-flash behavior through the same public boundary rather than
+through a document-level appearance implementation:
+
+1. Its static body declares `<div id="root" class="cezar-root"></div>` before the module script.
+2. A small inline adapter runs after that element is parsed and before the React module. It reads
+   the existing theme and appearance mirrors, resolves system theme, and stamps
+   `data-cezar-theme`, `data-cezar-accent`, `data-cezar-density`, `data-cezar-width`, and
+   `color-scheme` on that element only. It never mutates `document.documentElement` or `body`.
+3. The React entry passes the same element as `rootElement`. `CezarProvider` adopts it and
+   reconciles the stamped values with authoritative provider/server state once available.
+
+The inline code remains in private `packages/web` because it must execute before the published
+bundle, but it is only a boot adapter for the public appearance contract. Its storage keys,
+normalization defaults, resolved values, attribute names, and color-scheme behavior have parity
+tests against the exported appearance helpers and provider behavior; it is not an alternative
+rendering or state implementation. An ordinary embed can use the provider-generated wrapper. A
+host that also needs appearance before React may predeclare and stamp its own `.cezar-root`, then
+pass it through `rootElement` using the same documented values.
 
 ### Portals
 
@@ -884,7 +934,8 @@ surface or a compatibility promise.
 
 - Add `packages/react` as a private workspace.
 - Add provider, adapters, cache-key namespace, live runtime, public types, export map, build,
-  test, and scoped-style pipeline.
+  test, and scoped-style pipeline, including deterministic `--tw-*` to `--cezar-tw-*` rewriting
+  and at-rule verification.
 - Add dependency-direction checks that reject imports from `packages/web`.
 - Add cold-consumer fixtures while the package remains private in release metadata.
 
@@ -913,7 +964,9 @@ Each family:
 
 - Reduce `packages/web/src/app.tsx` to client/adapters/router creation and public composition.
 - Remove private feature implementations and alternate render paths.
-- Keep legacy URL redirects and bundled same-origin boot behavior.
+- Keep legacy URL redirects and bundled same-origin boot behavior. Move the existing pre-paint
+  script from document-level attributes to the predeclared `.cezar-root`, then have the public
+  provider adopt that element.
 - Run visual and E2E parity for every cockpit area.
 
 ### Phase 4 — Publish
@@ -923,7 +976,6 @@ Each family:
   build, and render a composed host fixture.
 - Remove `private` from `packages/contract`, `packages/api-client`, and `packages/react` if any
   gate remains, then publish them in that dependency order before server/CLI.
-- Publish in dependency order.
 - Document installation, provider setup, individual feature composition, controlled cockpit,
   router integration, theming, auth, and version compatibility.
 
@@ -937,9 +989,11 @@ Each family:
 - Public type tests compile documented examples and reject invalid identifiers, locations,
   slots, callbacks, and provider props.
 - Exhaustive switches cover `CezarLocation` and public discriminated unions.
+- Provider tests cover generated roots, adopted `rootElement` containers, portal placement, all
+  four appearance dimensions, and cleanup without mutating the host document.
 - Import-boundary tests reject references from `packages/react` to `packages/web`, reject direct
-  React imports from `@open-mercato/cezar-contract`, and reject Node imports in contract and
-  API-client.
+  `@open-mercato/cezar-contract` imports from `packages/react`, and reject Node imports in contract
+  and API-client.
 
 ### Integration tests
 
@@ -955,15 +1009,20 @@ Each family:
 
 ### Styling and composition tests
 
-- Build a host fixture with conflicting global element rules, Tailwind-like utility class names,
-  light/dark styles, fonts, scrolling, and overlay z-index.
+- Build a host fixture with conflicting global element rules, its own independently compiled
+  Tailwind stylesheet, Tailwind-like utility class names, light/dark styles, fonts, scrolling,
+  and overlay z-index. Exercise at least one supported host Tailwind minor different from the one
+  used to build Cezar.
 - Assert the host remains unchanged and Cezar renders with its scoped defaults.
 - Parse the built stylesheet and reject selectors outside `.cezar-root`, forbidden document
-  selectors, unscoped resets, and non-namespaced keyframes/font families.
+  selectors, unscoped resets, raw `--tw-*` identifiers, non-Cezar `@property` registrations, and
+  non-namespaced keyframes/font families.
 - Assert documented `--cezar-*` overrides retheme only the provider subtree.
 - Render two differently themed providers on one page.
 - Render feature components in constrained panels and responsive containers.
 - Verify portal content remains inside the correct theme/root boundary.
+- In a real browser, compare host computed styles before and after loading Cezar CSS so
+  document-global custom-property registration regressions fail even when selector checks pass.
 
 ### Packed-consumer tests
 
@@ -984,6 +1043,8 @@ Each family:
 - Run the existing typecheck, Vitest, `node:test`, build, package, and package-install gates.
 - Run the real-browser cockpit E2E suite across tasks, new task, session, git, GitHub, workflows,
   skills, inbox, settings, project switching, theme, mobile navigation, and live updates.
+- Verify the static root has its resolved theme, accent, density, width, and color scheme before
+  the React module executes, and that provider adoption does not insert a second `.cezar-root`.
 - Preserve current route behavior and visual baselines unless a separate approved spec changes
   them.
 
@@ -1024,8 +1085,10 @@ preventing two long-lived versions.
 ### CSS leakage or host overrides break embeds
 
 Mitigation: omit Tailwind preflight, author a root-scoped base layer, wrap emitted selectors in
-`.cezar-root` through PostCSS, namespace tokens/at-rules, own portals beneath the root, test hostile
-host CSS, and fail the build when a document-level selector escapes the published stylesheet.
+`.cezar-root` through PostCSS, rewrite Tailwind custom-property registrations and references into
+the private `--cezar-tw-*` namespace, namespace other tokens/at-rules, own portals beneath the root,
+test hostile host CSS, and fail the build when a selector or global identifier escapes the
+published stylesheet contract.
 
 ### Bundle size grows when all features are available
 
@@ -1055,12 +1118,15 @@ The work is complete when:
    without React Router.
 4. A React Router host can mount the optional adapter beneath a non-root base path and deep-link
    to project, task, repository, GitHub, workflow, skill, inbox, and settings locations.
-5. Host document styles, typography, scrolling, theme, and portals remain unchanged outside
-   `.cezar-root`.
-6. Two providers can render different services/projects/themes on one page without cache,
-   connection, storage, credential, or CSS leakage.
+5. Host document styles, typography, scrolling, theme, Tailwind custom properties, and portals
+   remain unchanged outside `.cezar-root`, including when the host uses a different Tailwind
+   version.
+6. Two providers can render different services, projects, themes, accents, densities, and reading
+   widths on one page without cache, connection, storage, credential, or CSS leakage.
 7. `@open-mercato/cezar-web` contains no private alternative implementation of a published
-   feature and builds the standard cockpit entirely from public component exports.
+   feature and builds the standard cockpit entirely from public component exports. Its pre-paint
+   adapter stamps and adopts the public root contract without mutating the host document or
+   flashing the wrong appearance.
 8. The server/CLI package still ships and serves the cockpit, headless operation still works,
    and local zero-config behavior is unchanged.
 9. A task-list-only consumer does not bundle unrelated markdown/highlighter or workflow
