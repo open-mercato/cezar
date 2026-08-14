@@ -101,15 +101,17 @@ Each step leaves the app working and is independently testable.
 
 ## Progress
 
+PR: #885
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Linked-PR chips
 
-- [x] 1.1 Contract shape (`linkedPrSchema`, `githubIssuePrsDataSchema`) + contract-parity assertion — df12ee5b
-- [x] 1.2 Forge fetcher (`fetchGithubIssuePrs`, cache, dry-run mock, test seam) + unit test — df12ee5b
-- [x] 1.3 Server route (`GET /github/issue-prs`) + BC §2 inventory + route test — 40c40b23
-- [x] 1.4 Typed client (`getGithubIssuePrs`) + client test — c4643923
-- [x] 1.5 Query hook (`useGithubIssuePrs`, `queryKeys.githubIssuePrs`) — c4643923
-- [x] 1.6 Row chip + window wiring + stretched-link restructure + component tests — 9f6de959
-- [x] 1.7 E2E assertion on an issue row
-- [x] 1.8 Full validation gate green
+- [x] 1.1 Contract shape (`linkedPrSchema`, `githubIssuePrsDataSchema`) + contract-parity assertion — 1a3a8b74
+- [x] 1.2 Forge fetcher (`fetchGithubIssuePrs`, cache, dry-run mock, test seam) + unit test — 1a3a8b74
+- [x] 1.3 Server route (`GET /github/issue-prs`) + BC §2 inventory + route test — 41453186
+- [x] 1.4 Typed client (`getGithubIssuePrs`) + client test — af534b20
+- [x] 1.5 Query hook (`useGithubIssuePrs`, `queryKeys.githubIssuePrs`) — af534b20
+- [x] 1.6 Row chip + window wiring + stretched-link restructure + component tests — c216fe24
+- [x] 1.7 E2E assertion on an issue row — e9c0007d
+- [x] 1.8 Full validation gate green — no commit (gate run, not a code change)
