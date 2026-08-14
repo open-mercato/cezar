@@ -12,6 +12,7 @@ import {
   finishRun,
   getGithub,
   getGithubChecks,
+  getGithubIssuePrs,
   getGithubRefStatus,
   getGroup,
   getHealth,
@@ -167,6 +168,25 @@ describe('request shapes', () => {
       name: 'getGithubChecks (#664)',
       call: () => getGithubChecks([7, 12]),
       path: '/api/v1/github/checks?prs=7%2C12',
+      method: 'GET',
+    },
+    {
+      name: 'getGithubIssuePrs (#816)',
+      call: () => getGithubIssuePrs([142, 135]),
+      path: '/api/v1/github/issue-prs?issues=142%2C135',
+      method: 'GET',
+    },
+    {
+      name: 'getGithubIssuePrs (refresh)',
+      call: () => getGithubIssuePrs([142], { refresh: true }),
+      path: '/api/v1/github/issue-prs?issues=142&refresh=1',
+      method: 'GET',
+    },
+    // Same rule as `getGithub`: a `refresh: false` must not become `refresh=0` on the wire.
+    {
+      name: 'getGithubIssuePrs (refresh false)',
+      call: () => getGithubIssuePrs([142], { refresh: false }),
+      path: '/api/v1/github/issue-prs?issues=142',
       method: 'GET',
     },
     {

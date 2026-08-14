@@ -18,6 +18,7 @@ import {
   getConfig,
   getGithub,
   getGithubChecks,
+  getGithubIssuePrs,
   getGithubComments,
   getGithubPrChanges,
   getGithubRefStatus,
@@ -186,6 +187,10 @@ export const queryKeys = {
    *  same visible window de-dupes to one cache entry. */
   githubChecks: (prNumbers: readonly number[]) =>
     [queryScope(), 'github', 'checks', [...prNumbers].sort((a, b) => a - b).join(',')] as const,
+  /** Lazy linked-PR chips for issue rows (`GET /api/github/issue-prs`, #816), keyed by the sorted
+   *  issue numbers so the same visible window de-dupes to one cache entry. */
+  githubIssuePrs: (issueNumbers: readonly number[]) =>
+    [queryScope(), 'github', 'issue-prs', [...issueNumbers].sort((a, b) => a - b).join(',')] as const,
   /** Batched PR/issue chip status. Led by the EXPLICIT project rather than `queryScope()` —
    *  the global Tasks page asks about several projects at once, and two of them may each have a
    *  PR #42. Keyed by the sorted numbers, so the same window de-dupes to one cache entry. */
@@ -1373,6 +1378,20 @@ export function useGithubChecks(prNumbers: number[], enabled = true) {
     queryKey: queryKeys.githubChecks(prNumbers),
     queryFn: ({ signal }) => getGithubChecks(prNumbers, { signal }),
     enabled: enabled && prNumbers.length > 0,
+    staleTime: 60_000,
+  })
+}
+
+/** Lazy linked-PR chips for issue rows (`/api/github/issue-prs`, #816). The list call carries no
+ *  issue↔PR relationship at all, so each row's chips are hydrated here for the on-screen rows only.
+ *  `enabled` gates it to the Issues view with a non-empty window; `staleTime` matches the 60 s
+ *  server cache so re-visiting the same window doesn't re-hit gh. Degrade is silent — an
+ *  unavailable payload just leaves rows without chips. */
+export function useGithubIssuePrs(issueNumbers: number[], enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.githubIssuePrs(issueNumbers),
+    queryFn: ({ signal }) => getGithubIssuePrs(issueNumbers, {}, { signal }),
+    enabled: enabled && issueNumbers.length > 0,
     staleTime: 60_000,
   })
 }
