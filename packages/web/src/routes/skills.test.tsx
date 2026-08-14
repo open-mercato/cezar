@@ -291,7 +291,7 @@ describe('the Manage skills panel (opt-out OM skills)', () => {
     renderAt('/skills?skill=__import')
     await waitFor(() => expect(document.querySelector('[data-action="skills-update-apply"]')?.textContent).toContain('Update now'))
     const card = document.querySelector('[data-slot="skills-update-card"]')!
-    expect(card.textContent).toContain('Project installation · 1 tracked')
+    expect(card.textContent).toContain('Project installation: 1 tracked')
     expect(card.textContent).not.toContain('/home/')
     expect(document.querySelector('[data-slot="skills-upgrade-notes"]')?.textContent).toContain('/om-apply-upgrade-notes')
     expect(document.body.textContent).toContain('checkboxes choose what cezar shows')

@@ -370,7 +370,7 @@ describe('usageCells', () => {
     expect(cells.mem).toEqual({
       text: 'peak 401 MB',
       kind: 'peak',
-      title: 'peak — run finished · 7 procs',
+      title: 'peak — run finished (7 procs)',
     })
   })
 

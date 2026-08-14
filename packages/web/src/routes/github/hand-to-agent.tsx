@@ -516,7 +516,7 @@ function SkillsPicker({
             className={cn(chipClass, selected.length > 0 && 'border-foreground/60 font-semibold text-foreground')}
           >
             <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
-            skills{selected.length > 0 ? ` · ${selected.length}` : ''}
+            skills{selected.length > 0 ? ` (${selected.length})` : ''}
             <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
           </button>
         </PopoverTrigger>

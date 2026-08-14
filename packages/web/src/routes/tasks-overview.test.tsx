@@ -279,7 +279,7 @@ describe('TasksOverview — the table', () => {
     const rowText = tableRow('visibility')?.textContent ?? ''
     const cardText = card('visibility')?.textContent ?? ''
     expect(rowText.includes('184.7k / 2.4k')).toBe(tokens)
-    expect(cardText.includes('IN 184.7k · OUT 2.4k')).toBe(tokens)
+    expect(cardText.includes('IN 184.7k / OUT 2.4k')).toBe(tokens)
     expect(rowText.includes('$0.31')).toBe(cost)
     expect(cardText.includes('$0.31')).toBe(cost)
   })
@@ -519,7 +519,7 @@ describe('TasksOverview — usage cells', () => {
     expect(usageCell('done1', 'cpu')?.textContent).toBe('—')
     expect(usageCell('done1', 'mem')?.textContent).toBe('peak 401 MB')
     expect(usageCell('done1', 'mem')?.getAttribute('data-usage-kind')).toBe('peak')
-    expect(usageCell('done1', 'mem')?.getAttribute('title')).toBe('peak — run finished · 7 procs')
+    expect(usageCell('done1', 'mem')?.getAttribute('title')).toBe('peak — run finished (7 procs)')
   })
 })
 
@@ -716,7 +716,7 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(c.textContent).toContain('cez/8f31ab02')
     // The meta row carries the diff pair, like the mockup card (branch · ± · tokens).
     expect(c.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+128 −14')
-    expect(c.textContent).toContain('IN 184.7k · OUT 2.4k')
+    expect(c.textContent).toContain('IN 184.7k / OUT 2.4k')
     expect(c.textContent).toContain('$0.31')
     expect(c.textContent).toContain('12m')
     expect(c.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/r/pull/402')

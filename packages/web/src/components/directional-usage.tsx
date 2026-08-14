@@ -26,7 +26,7 @@ export function directionalUsageText(
 ): string {
   const input = inputTokens === undefined ? '—' : compactTokens(inputTokens)
   const output = outputTokens === undefined ? '—' : compactTokens(outputTokens)
-  return variant === 'table' ? `${input} / ${output}` : `IN ${input} · OUT ${output}`
+  return variant === 'table' ? `${input} / ${output}` : `IN ${input} / OUT ${output}`
 }
 
 /** One honest input/output rendering shared by header, table, cards, quick lists, and variants. */

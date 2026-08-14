@@ -549,8 +549,8 @@ describe('the agents form', () => {
 
       await waitFor(() => expect(rows()).toHaveLength(4))
       expect(rows().map((r) => r.textContent)).toEqual([
-        'claude · Default/home/u/.claude',
-        'claude · Klaudiusz~/.claude-klaudiusz',
+        'claude (Default)/home/u/.claude',
+        'claude (Klaudiusz)~/.claude-klaudiusz',
         'codexOpenAI Codex (app-server)',
         'opencodeOpenCode (serve)',
       ])

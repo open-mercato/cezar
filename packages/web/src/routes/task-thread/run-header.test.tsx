@@ -722,7 +722,7 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
     expect(badge.textContent).toContain('codex')
     expect(footer.textContent).toContain('gpt-5.2-codex')
-    expect(footer.textContent).toContain('IN 24.6k · OUT 2.4k')
+    expect(footer.textContent).toContain('IN 24.6k / OUT 2.4k')
     expect(footer.textContent).toContain('$0.04')
     // No context gauge: RunRecord carries no context-window data to draw one from.
     expect(footer.querySelector('[data-slot="context-gauge"]')).toBeNull()

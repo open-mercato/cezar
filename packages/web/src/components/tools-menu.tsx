@@ -43,7 +43,7 @@ export function conciseToolVersion(version: string): string {
 export function toolsTooltip(health: HealthResponse): string {
   const missing = health.checks.filter((check) => !check.available).map((check) => check.name)
   const base = `cezar v${health.version}`
-  return missing.length ? `${base} · needs attention: ${missing.join(', ')}` : base
+  return missing.length ? `${base} (needs attention: ${missing.join(', ')})` : base
 }
 
 /**

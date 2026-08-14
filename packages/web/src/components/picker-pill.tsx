@@ -194,7 +194,7 @@ export function RunnerPill({
       if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id, icon }]
       return logins.map((login) => ({
         value: choiceValue(runner.id, login.id),
-        label: `${runner.id} · ${login.label}`,
+        label: `${runner.id} (${login.label})`,
         // The folder, because the label is cezar's invention and the folder is the account.
         desc: login.configDir,
         icon,

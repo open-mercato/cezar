@@ -414,7 +414,7 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
   }
   const cost = formatCost(run.costUsd)
   if (showCost && cost) parts.push(cost)
-  return parts.join(' · ')
+  return parts.join(', ')
 }
 
 /**

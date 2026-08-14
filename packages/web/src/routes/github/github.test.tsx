@@ -300,8 +300,8 @@ describe('the GitHub tab lists', () => {
       current: a.getAttribute('aria-current'),
     }))
     expect(tabs).toEqual([
-      { text: 'Issues · 2', href: '/github', current: 'page' },
-      { text: 'Pull requests · 1', href: '/github/prs', current: null },
+      { text: 'Issues (2)', href: '/github', current: 'page' },
+      { text: 'Pull requests (1)', href: '/github/prs', current: null },
     ])
 
     await waitFor(() => expect(rows()).toHaveLength(2))
@@ -408,7 +408,7 @@ describe('the GitHub tab lists', () => {
 
     await waitFor(() => expect(document.querySelector('[data-slot="gh-tabs"]')).not.toBeNull())
     await waitFor(() =>
-      expect(document.querySelector('[data-slot="gh-tabs"] a')?.textContent).toBe('Issues · 45'),
+      expect(document.querySelector('[data-slot="gh-tabs"] a')?.textContent).toBe('Issues (45)'),
     )
   })
 
@@ -675,7 +675,7 @@ describe('the comment thread', () => {
     // Retitled by #525: heading a twenty-row list `Comments · 2` would be incoherent once events
     // render, so the section is "Activity" and the comment count becomes a secondary.
     expect(document.querySelector('[data-slot="gh-thread-header"]')?.textContent).toBe(
-      'Activity · 2 comments',
+      'Activity (2 comments)',
     )
     expect(entries()).toHaveLength(2)
     expect(entries()[0]?.textContent).toContain('maya')
@@ -797,7 +797,7 @@ describe('the comment thread', () => {
     expect(events()).toHaveLength(2)
     expect(entries()).toHaveLength(0)
     expect(document.querySelector('[data-slot="gh-thread-header"]')?.textContent).toBe(
-      'Activity · 0 comments',
+      'Activity (0 comments)',
     )
   })
 
@@ -1386,7 +1386,7 @@ describe('the hand-to-agent pickers (#385)', () => {
         ),
       ).toEqual(['om-fix', 'g-review']),
     )
-    expect(document.querySelector('[data-slot="gh-skills-trigger"]')?.textContent).toContain('· 2')
+    expect(document.querySelector('[data-slot="gh-skills-trigger"]')?.textContent).toContain('(2)')
 
     // The filter narrows the list but can never hide the selection — the chips live outside.
     fireEvent.change(screen.getByPlaceholderText('search skills…'), { target: { value: 'team' } })
@@ -1737,7 +1737,7 @@ describe('a remembered pick the catalog no longer has (#408)', () => {
       [...document.querySelectorAll<HTMLElement>('[data-slot="gh-skill-chip"]')].map((chip) => chip.dataset.skill),
     ).toEqual(['om-fix'])
     // The counter must agree with the chips and the POST — not report the phantom.
-    expect(document.querySelector('[data-slot="gh-skills-trigger"]')?.textContent).toContain('· 1')
+    expect(document.querySelector('[data-slot="gh-skills-trigger"]')?.textContent).toContain('(1)')
 
     fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
     await waitFor(() =>

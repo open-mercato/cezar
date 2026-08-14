@@ -101,7 +101,7 @@ describe('toolsTooltip', () => {
       ...HEALTH,
       checks: [...HEALTH.checks, { name: 'opencode', available: false, hint: 'optional: install OpenCode' }],
     }
-    expect(toolsTooltip(twoDown)).toBe('cezar v0.1.3 · needs attention: codex, opencode')
+    expect(toolsTooltip(twoDown)).toBe('cezar v0.1.3 (needs attention: codex, opencode)')
   })
 })
 
@@ -122,7 +122,7 @@ describe('ToolsMenu', () => {
     renderMenu(HEALTH)
     expect(trigger().getAttribute('data-attention')).toBe('true')
     expect(triggerWrench().getAttribute('class')).toContain('text-violet')
-    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 · needs attention: codex')
+    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 (needs attention: codex)')
   })
 
   it('lists exactly the checks the server sent, in order — nothing invented', async () => {

@@ -38,7 +38,7 @@ export function agentPickerRows(profiles: readonly AgentProfile[]): AgentPickerR
     return logins.map((login) => ({
       runner,
       account: login.isDefault ? null : login.id,
-      label: `${runner.label} · ${login.label}`,
+      label: `${runner.label} (${login.label})`,
       // The folder, because the labels are cezar's invention and the folder is the account. A
       // folder the CLI has not written yet is called out rather than left looking fine: a run under
       // it fails on auth BY DESIGN — it must not quietly fall back to another login — so the place

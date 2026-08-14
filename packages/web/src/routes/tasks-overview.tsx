@@ -642,9 +642,10 @@ function Dash() {
 }
 
 function Sep() {
+  // A slash divider, not a middot (house style: no '·' separators).
   return (
     <span className="text-soft-foreground" aria-hidden="true">
-      ·
+      /
     </span>
   )
 }

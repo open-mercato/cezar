@@ -54,7 +54,7 @@ export function SkillDetailBody({
       </div>
       <p data-slot="skill-path" className="mt-1 font-mono text-[10.5px] break-all text-soft-foreground">
         {skill.path}
-        {skill.team ? ` · from ${skill.team.repo}` : ''}
+        {skill.team ? ` (from ${skill.team.repo})` : ''}
       </p>
       {skill.description ? (
         <p data-slot="skill-description" className="mt-2.5 text-[13px] text-muted-foreground">

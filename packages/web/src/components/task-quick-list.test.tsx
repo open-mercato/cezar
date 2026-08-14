@@ -470,8 +470,8 @@ describe('TaskQuickList', () => {
       expect(screen.getByRole('button', { expanded: true })).not.toBeNull()
 
       // The letter chip, its own dot, and what actually differs between the variants.
-      expect(row('va')?.textContent).toBe('Aclaude · IN 92.0k · OUT 4.2k · $0.31')
-      expect(row('vb')?.textContent).toBe('Bcodex · IN 40.0k · OUT 1.8k · $0.12')
+      expect(row('va')?.textContent).toBe('Aclaude, IN 92.0k / OUT 4.2k, $0.31')
+      expect(row('vb')?.textContent).toBe('Bcodex, IN 40.0k / OUT 1.8k, $0.12')
       expect(dotOf('va')?.getAttribute('data-tone')).toBe('violet')
       // Each variant is still its own deep link.
       expect(row('vb')?.querySelector('a')?.getAttribute('href')).toBe('/tasks/vb')
@@ -496,14 +496,14 @@ describe('TaskQuickList', () => {
         ),
       })
       fireEvent.click(screen.getByRole('button', { expanded: false }))
-      expect(row('va')?.textContent).toBe('Aclaude · $0.31')
+      expect(row('va')?.textContent).toBe('Aclaude, $0.31')
     })
 
     it('gates variant token directions and cost independently', () => {
       renderList({ runs: variants(), showTokens: false, showCost: true })
       fireEvent.click(screen.getByRole('button', { expanded: false }))
-      expect(row('va')?.textContent).toBe('Aclaude · $0.31')
-      expect(row('vb')?.textContent).toBe('Bcodex · $0.12')
+      expect(row('va')?.textContent).toBe('Aclaude, $0.31')
+      expect(row('vb')?.textContent).toBe('Bcodex, $0.12')
     })
   })
 

@@ -477,7 +477,7 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
         Waiting for a free agent slot{position !== undefined ? ` — #${position} in queue` : ''}
       </p>
       <p className="text-xs text-soft-foreground">
-        {run.workflow} · starts automatically when a slot frees up
+        {run.workflow}, starts automatically when a slot frees up
       </p>
     </div>
   )

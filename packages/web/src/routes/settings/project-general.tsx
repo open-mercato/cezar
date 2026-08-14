@@ -149,7 +149,7 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
         <dd className="text-foreground">
           {fullDate(project.addedAt)}
           <span className="text-soft-foreground">
-            {project.source === 'checkout' ? ' · cloned from GitHub' : ' · opened locally'}
+            {project.source === 'checkout' ? ' (cloned from GitHub)' : ' (opened locally)'}
           </span>
         </dd>
 

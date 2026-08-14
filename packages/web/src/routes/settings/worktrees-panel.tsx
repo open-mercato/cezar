@@ -119,8 +119,8 @@ export function WorktreesPanel() {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p data-slot="worktrees-footer" className="text-[12px] text-soft-foreground">
           {rows.length} worktree{rows.length === 1 ? '' : 's'}
-          {totalBytes !== null ? ` · ${formatMem(totalBytes) || '0 kB'} on disk` : ' · size unavailable'}
-          {' · '}
+          {totalBytes !== null ? ` (${formatMem(totalBytes) || '0 kB'} on disk)` : ' (size unavailable)'}
+          {', '}
           {keep === 0 ? 'keeping all (unlimited)' : `keeping the last ${keep}`}
         </p>
         <Button

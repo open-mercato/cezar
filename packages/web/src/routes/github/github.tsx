@@ -359,10 +359,10 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
           </div>
           <div data-slot="gh-tabs" className="mt-2.5 flex items-end gap-1">
             <TabLink to="/github" active={view === 'issues'} onClick={() => saveGithubView('issues')}>
-              Issues · {countLabel(gh.issues.length)}
+              Issues ({countLabel(gh.issues.length)})
             </TabLink>
             <TabLink to="/github/prs" active={view === 'prs'} onClick={() => saveGithubView('prs')}>
-              Pull requests · {countLabel(gh.prs.length)}
+              Pull requests ({countLabel(gh.prs.length)})
             </TabLink>
           </div>
           <div className="mt-2.5 flex items-center gap-2 pb-3">
@@ -587,7 +587,7 @@ function LabelFilter({
           )}
         >
           <TagIcon aria-hidden="true" className="size-3.5" />
-          {selected.length > 0 ? `Labels · ${selected.length}` : 'Labels'}
+          {selected.length > 0 ? `Labels (${selected.length})` : 'Labels'}
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className="w-60 p-0">
@@ -665,23 +665,21 @@ function GithubDetail({
       </Link>
 
       <p data-slot="gh-meta" className="flex flex-wrap items-center gap-x-1.5 font-mono text-[10.5px] text-soft-foreground">
-        <span>#{item.number}</span>·<span>{kindWord}</span>·<span>opened by {item.author}</span>·
+        <span>#{item.number}</span><span>{kindWord}</span><span>opened by {item.author}</span>
         <span>{shortAge(item.createdAt)} ago</span>
         {item.comments ? (
           <>
-            ·<CommentCount count={item.comments} />
+            <CommentCount count={item.comments} />
           </>
         ) : null}
         {hasDiffStat ? (
           <>
-            ·
             <span data-slot="gh-diffstat">
               <span className="text-success">+{item.additions ?? 0}</span>{' '}
               <span className="text-danger">−{item.deletions ?? 0}</span>
             </span>
           </>
         ) : null}
-        ·
         {/* href protocol guard (#431): link only for http(s) URLs. */}
         {isHttpUrl(item.url) ? (
           <a
@@ -865,7 +863,7 @@ function GithubMergeBox({ number }: { number: number }) {
               <li key={check.name} className="flex items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-2">
                   <MergeRequirementIcon state={check.state} />
-                  <span>{check.name} · {check.state}{check.required === true ? ' · required' : check.required === null ? ' · requiredness unknown' : ''}</span>
+                  <span>{check.name}: {check.state}{check.required === true ? ' (required)' : check.required === null ? ' (requiredness unknown)' : ''}</span>
                 </span>
                 {check.url && isHttpUrl(check.url) ? <a href={check.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline">details</a> : null}
               </li>
@@ -978,7 +976,7 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
             {files.map((file) => <option key={file.path}>{file.path}</option>)}
           </select>
           <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">
-            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left text-xs', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status} · {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
+            {files.map((file) => <li key={file.path}><button type="button" onClick={() => setSelected(file.path)} className={cn('min-h-11 w-full truncate rounded px-2 text-left text-xs', selected === file.path && 'bg-muted font-medium')} title={file.path}>{file.status} {file.path} <span className="text-success">+{file.additions}</span> <span className="text-danger">−{file.deletions}</span></button></li>)}
           </ul>
         </aside>
         <div className="min-w-0">
@@ -1076,7 +1074,7 @@ function GithubThread({ item, colors }: { item: GithubItem; colors: Record<strin
         {/* "Activity", not "Comments": heading a twenty-row list `Comments · 2` would be
             incoherent once events render. The comment count stays as a secondary. This is a
             different surface from the row badge, which still counts comments only. */}
-        Activity · {data.comments.length} comment{data.comments.length === 1 ? '' : 's'}
+        Activity ({data.comments.length} comment{data.comments.length === 1 ? '' : 's'})
       </h3>
       <ul className="flex flex-col gap-5">
         {groupCommitRuns(entries).map((grouped) =>

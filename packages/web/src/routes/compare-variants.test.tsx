@@ -134,7 +134,7 @@ describe('the compare columns', () => {
     expect(b?.querySelector('[data-slot="pill"]')?.textContent).toContain('done')
 
     // Directional tokens and cost per column.
-    expect(a?.textContent).toContain('IN 92.0k · OUT 4.2k')
+    expect(a?.textContent).toContain('IN 92.0k / OUT 4.2k')
     expect(a?.textContent).toContain('$0.31')
 
     // The legacy `git diff --stat` text verbatim in the mono block, labeled as git's own words.

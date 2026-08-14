@@ -1934,8 +1934,8 @@ describe('the composer runner pill carries the account', () => {
     fireEvent.pointerDown(runnerPill()!)
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.map((o) => o.textContent?.replace(/\s+/g, ' '))).toEqual([
-      'claude · Default/home/u/.claude'.replace(/\s+/g, ' '),
-      'claude · Klaudiusz~/.claude-klaudiusz'.replace(/\s+/g, ' '),
+      'claude (Default)/home/u/.claude'.replace(/\s+/g, ' '),
+      'claude (Klaudiusz)~/.claude-klaudiusz'.replace(/\s+/g, ' '),
     ])
     // Each row names its folder: the labels are cezar's invention, the folder is the account.
     expect(options[1]?.textContent).toContain('~/.claude-klaudiusz')
@@ -1948,7 +1948,7 @@ describe('the composer runner pill carries the account', () => {
     renderNewTask()
     await pillReady()
     // The repo's choice IS the initial selection — no "repo default" abstraction to decode.
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Klaudiusz)'))
 
     fireEvent.change(textarea(), { target: { value: 'do the thing' } })
     await startTask()
@@ -1958,16 +1958,16 @@ describe('the composer runner pill carries the account', () => {
 
   it('sends `default` explicitly when the repo points elsewhere — not an absent key', async () => {
     // The one case where "follow the repo" and "the discovered account" differ. An absent key would
-    // run the task on Klaudiusz, which is the opposite of what picking `claude · Default` says.
+    // run the task on Klaudiusz, which is the opposite of what picking `claude (Default)` says.
     serve({
       agentProfiles: { ...ACCOUNTS, selections: { '/repo': { claude: 'klaudiusz' } } },
     })
     renderNewTask()
     await pillReady()
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Klaudiusz)'))
 
     await pickFrom(runnerPill()!, 'Default')
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Default'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Default)'))
     fireEvent.change(textarea(), { target: { value: 'do the thing' } })
     await startTask()
 
@@ -1982,7 +1982,7 @@ describe('the composer runner pill carries the account', () => {
 
     await pickFrom(runnerPill()!, 'Klaudiusz')
     // The pill says which login the task will really use, not just which agent.
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Klaudiusz)'))
     fireEvent.change(textarea(), { target: { value: 'do the thing' } })
     await startTask()
 
@@ -2008,9 +2008,9 @@ describe('the composer runner pill carries the account', () => {
     await waitFor(() => expect(runnerPill()).not.toBeNull())
 
     await pickFrom(runnerPill()!, 'Klaudiusz')
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Klaudiusz)'))
     await pickFrom(runnerPill()!, 'Default')
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Default'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Default)'))
 
     fireEvent.change(textarea(), { target: { value: 'do the thing' } })
     await startTask()

@@ -69,7 +69,7 @@ export function AgentsDock({
         <BotIcon aria-hidden className="size-3.5 shrink-0 text-soft-foreground" />
         <span className="shrink-0 font-semibold">Agents</span>
         <span data-slot="agents-count" className="shrink-0 text-muted-foreground tabular-nums">
-          · {done}/{total}
+          ({done}/{total})
         </span>
         {!open && active !== undefined ? (
           <span data-slot="agents-current" className="min-w-0 truncate text-muted-foreground">

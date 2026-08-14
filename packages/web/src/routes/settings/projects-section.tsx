@@ -324,7 +324,7 @@ function ProjectRow({
           {STATUS_LABEL[project.status]}
         </span>
         {project.status !== 'missing' ? (
-          <span className="ml-1 text-[11px] text-soft-foreground">· {project.source}</span>
+          <span className="ml-1 text-[11px] text-soft-foreground">({project.source})</span>
         ) : null}
       </td>
       <td className="px-3 py-2">

@@ -777,7 +777,7 @@ describe('ThreadView', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread([])} />)
     const placeholder = document.querySelector('[data-slot="queued-state"]')
     expect(placeholder?.textContent).toContain('Waiting for a free agent slot')
-    expect(placeholder?.textContent).toContain('quick-task · starts automatically')
+    expect(placeholder?.textContent).toContain('quick-task, starts automatically')
     expect(document.querySelector('[data-slot="thread-empty"]')).toBeNull()
   })
 
