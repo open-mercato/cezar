@@ -1,0 +1,95 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "ses_01J8ZE00MAIN",
+    "backend": "opencode"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "prt_01J8ZE11RSN1",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "prt_01J8ZE11RSN1",
+    "field": "reasoning",
+    "delta": "The redirect loop points at the router guard."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "prt_01J8ZE11RSN1",
+      "text": "The redirect loop points at the router guard."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "prt_01J8ZE12TXT1",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "prt_01J8ZE12TXT1",
+    "field": "text",
+    "delta": "The fix"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "prt_01J8ZE12TXT1",
+    "field": "text",
+    "delta": " is in the router guard"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "prt_01J8ZE12TXT1",
+    "field": "text",
+    "delta": " — one null check was missing."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "prt_01J8ZE12TXT1",
+      "role": "assistant",
+      "text": "The fix is in the router guard — one null check was missing."
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 2100,
+      "output": 180,
+      "total": 3244,
+      "cacheRead": 900,
+      "cacheWrite": 0,
+      "reasoning": 64
+    },
+    "costUsd": 0.0042
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 2100,
+      "output": 180,
+      "total": 3244,
+      "cacheRead": 900,
+      "cacheWrite": 0,
+      "reasoning": 64
+    },
+    "costUsd": 0.0042
+  }
+]

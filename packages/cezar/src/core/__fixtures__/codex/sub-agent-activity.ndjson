@@ -1,0 +1,4 @@
+{"method":"turn/started","params":{"threadId":"th_parent","turn":{"id":"turn_activity","status":"inProgress","items":[]}}}
+{"method":"item/completed","params":{"threadId":"th_parent","turnId":"turn_activity","item":{"type":"subAgentActivity","id":"activity_started","kind":"started","agentThreadId":"th_child","agentPath":"/root/scope_review"}}}
+{"method":"item/completed","params":{"threadId":"th_parent","turnId":"turn_activity","item":{"type":"subAgentActivity","id":"activity_interacted","kind":"interacted","agentThreadId":"th_parent","agentPath":"/root"}}}
+{"method":"item/completed","params":{"threadId":"th_parent","turnId":"turn_activity","item":{"type":"collabAgentToolCall","id":"wait_empty","tool":"wait","status":"completed","receiverThreadIds":[],"agentsStates":{}}}}

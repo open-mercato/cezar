@@ -1,0 +1,72 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "ses_01J8ZE00MAIN",
+    "backend": "opencode"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "prt_01J8ZE41PTCH",
+      "name": "patch",
+      "toolKind": "edit",
+      "title": "Edit src/server/router.ts",
+      "status": "completed",
+      "diffs": [
+        {
+          "path": "src/server/router.ts",
+          "oldText": null,
+          "unified": "--- a/src/server/router.ts\n+++ b/src/server/router.ts\n@@ -10,6 +10,7 @@\n export function guard(session) {\n+  if (!session) return null;\n   return session.user;\n }\n"
+        }
+      ],
+      "locations": [
+        {
+          "path": "src/server/router.ts"
+        }
+      ]
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 1500,
+      "output": 220,
+      "total": 2440,
+      "cacheRead": 600,
+      "cacheWrite": 120,
+      "reasoning": 0
+    },
+    "costUsd": 0.0031
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 1500,
+      "output": 240,
+      "total": 2460,
+      "cacheRead": 600,
+      "cacheWrite": 120,
+      "reasoning": 0
+    },
+    "costUsd": 0.0035
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 1500,
+      "output": 240,
+      "total": 2460,
+      "cacheRead": 600,
+      "cacheWrite": 120,
+      "reasoning": 0
+    },
+    "costUsd": 0.0035
+  }
+]

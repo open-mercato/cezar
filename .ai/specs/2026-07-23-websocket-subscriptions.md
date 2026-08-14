@@ -35,9 +35,13 @@ bus is that a tab pays for exactly the streams it is looking at and **nothing el
     is exactly the "we unsubscribed from health" churn to avoid.
   - **Health is the worked example.** It feeds the shell's repo/branch chip, version chip, nav
     gating and Tools menu, so its demand *is* the whole session. One `useHealthSubscription()` at
-    the root (`GlobalEventsProvider`) holds it live continuously; `useHealth()` is a pure cache
-    **read** that any component may call without touching the socket. Separate the subscription
-    (once, at the demand scope) from the read (anywhere).
+    the root (`GlobalEventsProvider`) holds it live continuously in local mode; `useHealth()` is a
+    pure cache **read** that any component may call without touching the socket. In remote mode the
+    authenticated HTTP bootstrap reports `localHandoff: false`, and the hook deliberately opens no
+    WebSocket: browser WebSocket has no credentials option, so a Basic Auth proxy can otherwise
+    challenge every reconnect forever. Remote health uses HTTP bootstrap plus the workspace SSE's
+    reconnect/visibility reconciliation. Separate the subscription (once, at the demand scope)
+    from the read (anywhere), and fail closed to HTTP until deployment mode is known.
 - **Always return the unsubscribe.** In React that means `useEffect(() => subscribeTopic(...),
   [])` — the effect returns the unsubscribe so unmount releases it. An unsubscribe that never
   runs is a memory leak on the client (a listener retained) **and** a resource leak on the server
@@ -186,9 +190,10 @@ useEffect(
 
 Health is the reference consumer, and it shows the split every session-global topic should use:
 
-- `useHealthSubscription()` — the ONE subscription, called once from `GlobalEventsProvider` (the
-  root that is mounted for the app's whole life, alongside the SSE stream). It folds pushed
-  payloads into the TanStack Query cache in place.
+- `useHealthSubscription()` — the ONE subscription controller, called once from
+  `GlobalEventsProvider` (the root that is mounted for the app's whole life, alongside the SSE
+  stream). After authenticated health bootstrap it subscribes only when `localHandoff` is true and
+  folds pushed payloads into the TanStack Query cache in place. Remote mode opens no WebSocket.
 - `useHealth()` — a pure `useQuery` **read** with no side effect, called by the ~15 components
   that show health. They share one cache and none of them touches the socket, so mounting and
   unmounting them never subscribes or unsubscribes anything.

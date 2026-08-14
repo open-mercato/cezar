@@ -16,10 +16,10 @@ Two config changes are not obvious from reading the tsconfigs:
 - **`"types": ["node"]` is now mandatory in `tsconfig.json`.** TypeScript 7 defaults `types` to
   `[]` instead of "every package under `@types`". Without it the build fails with `TS2591:
   Cannot find name 'process'` even though `@types/node` is installed.
-- **`baseUrl` was removed from `web/app/tsconfig.json`.** TypeScript 7 removed the option
+- **`baseUrl` was removed from `packages/web/tsconfig.json`.** TypeScript 7 removed the option
   (`TS5102`). `paths` now resolves relative to the tsconfig's own directory, so the existing
   `"@/*": ["./src/*"]` mapping kept working unchanged. The bundler-side alias is unaffected —
-  it is declared explicitly in `web/app/vite.config.ts`, and the tsconfig `paths` entry only
+  it is declared explicitly in `packages/web/vite.config.ts`, and the tsconfig `paths` entry only
   mirrors it for typechecking.
 
 **This decision commits us to oxlint over typescript-eslint for linting.** typescript-eslint
