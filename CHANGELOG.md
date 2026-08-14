@@ -1,164 +1,207 @@
 # Unreleased
 
-### 🐛 Fixes
-- 🐛 **Handing an issue or PR to the agent can pick which agent account runs it.** Giving every
-  project its own agent account taught the /new composer, Settings and the run header to list a
-  runner's logins — `claude · Default`, `claude · Klaudiusz`, `codex` — but the GitHub tab was
-  missed, so delegating an issue always ran on whatever the project's selection resolved to, with
-  no way to override it for one task. Its "Hand this to the agent" panel now offers the same rows,
-  and the pick rides the run. The rules are the composer's: switching the agent drops the account
-  and the model pin rather than carrying a foreign login along, switching only the account keeps
-  the model, and an untouched pill still follows the project's selection instead of pinning it.
-  A host with one agent and one login sees no pill and sends exactly what it sent before. The
-  Inbox card's ▶ Run is unchanged — its endpoint cannot carry an account yet, and offering a
-  choice the server would drop is worse than not offering it.
-- 🐛 **The settings gear and the theme toggle stay inside the sidebar on a nightly build.** A
-  nightly's version is long — `v0.9.2-nightly.20260813.1`, where a release is `v0.9.2` — and the
-  footer chip that shows it refused to give up a single pixel, so on the nightly channel it simply
-  pushed the two buttons beside it out of the sidebar and over the page. The chip now yields the
-  space instead, showing as much of the version as fits and the whole of it on hover, which is what
-  keeps the row inside the column whatever a future version string looks like.
-- 🐛 **The global Tasks page reacts to work happening in other projects.** Every event from a
-  project other than the one you were standing in was dropped before it reached any cache, so
-  `/tasks` — which is precisely the page that spans every project — heard nothing and ran on its
-  15-second poll alone. And that poll does not tick in a hidden tab, so coming back to one showed
-  whatever it last fetched: a task the auto-namer had renamed kept its old title, and a chip kept
-  the reference it had, until you reloaded the page. Those events now refresh the cross-project
-  index (debounced, so a busy workspace is one request per quiet moment rather than one per event),
-  a reconnect reconciles it like every other authoritative cache, and returning to the tab refetches
-  it. Scoped caches are untouched by the change — another project's run still never lands in this
-  project's list.
-- 🐛 **A reference's status is shared across every surface again.** The global Tasks page keys each
-  chip by its run's real project id, because its rows span the registry, while the sidebar, the run
-  header and the per-project table used the `default` alias — so the same pull request was
-  remembered under two names, and a status updated in **All tasks** left the sidebar and the task
-  page holding the old one. Every surface now names the project the same way.
+<!-- Nothing yet. -->
+
+# 0.10.0 (2026-08-14)
+
+## Highlights
+The cockpit stops being one-project-at-a-time: **All tasks** shows every registered repo's work
+in a single filterable table, grouped by tags you give your repositories, and every PR or issue
+chip in cezar now says where that PR or issue stands. Alongside that, **agent accounts** let one
+project run on your work login and another on your personal one, `pi` joins claude, codex and
+opencode as a runner, and a task killed by a provider usage limit resumes itself when the window
+reopens.
+
+## ⚠️ Breaking
+- **GitHub Automations are now opt-in via `CEZ_AUTOMATIONS=1`.** They previously ran for any
+  project with a GitHub remote, with no way to switch them off. Off — the default — every
+  automations route answers `409` naming the flag and the scheduler never starts, so nothing
+  polls GitHub and no run is launched on your behalf. `GET /api/v1/health` reports the new
+  required `capabilities.automations`. (#801, #802)
 
 ## ✨ Features
-- ✨ **A task's PR or issue chip now says where that PR or issue stands.** Until now `#402` looked
-  the same whether it had merged, had been red for two days, was still a draft, or had been closed
-  without merging — and the only way to find out was to click through to GitHub, one task at a
-  time. Every reference chip in the cockpit (the sidebar rows, the per-project Tasks table, **All
-  tasks**, the run header) now carries the state of the thing it points at, in three channels:
-  colour — done is violet, fine is green, waiting on a reviewer is blue, a running build turns the
-  chip amber end to end rather than just its dot, and anything wrong is red — an icon borrowed from
-  GitHub's own vocabulary, and a tooltip that spells it out in words
-  — "Changes requested — a reviewer asked for edits before this can merge". Three rather than one,
-  because colour alone is invisible to a colourblind reader, an icon alone is a rebus until you
-  have learned it, and a tooltip alone is not there until you go looking for it; the status reaches
-  the chip's accessible name too. A pull request reads as merged, closed (without merging), draft,
-  changes requested, checks failing, checks running, waiting for review, or ready to merge. Which
-  one wins is decided by **whose move it is**, which is the question a row actually answers — and it
-  maps onto the colour: red is the author's move, blue is the reviewer's, amber is the machine's. A
-  merged PR whose last build went red still reads as merged. "Changes requested" stays red only
-  while it is still true: GitHub keeps reporting that decision long after the author has responded,
-  so cezar reads the pending review request (the re-request button) and the head commit's date, and
-  once either says the author has answered, the chip turns blue and reads "waiting for review"
-  instead of blaming them for edits they already made. A red build still outranks a waiting
-  reviewer, who could not approve it anyway. An issue reads as open, closed as completed, or closed as not planned — kept
-  apart deliberately, because a declined issue must not look like a delivered one. Statuses are
-  fetched in one batched request per project for a whole table rather than one per chip, cached for
-  60 s server-side, and remembered per reference for the lifetime of the tab — so filtering,
-  searching, archiving or a background refresh never blanks the chips that are already on screen.
-  When there IS nothing to show, the chip stays neutral (because "we could not ask" must never be
-  painted as "nothing is wrong") but now says which kind of nothing it is on hover: still checking,
-  GitHub unreachable and why, or no such number in this repository. A status kept from the last
-  successful fetch while GitHub is down keeps its colour and labels itself "last known". A reference
-  is resolved by NUMBER rather than by the kind the task inferred — issues and pull requests share
-  one numbering space, so a `#774` the cockpit filed as a pull request still gets the right answer
-  when it turns out to be an issue — and one number that no longer exists no longer costs every
-  other reference in the same batch its status. How often a status is rechecked follows how changeable it is, and the
-  server is what decides: every answer carries how long it holds, so a reference whose checks are
-  running is re-read every minute until they stop, an unreachable forge is retried every five, and
-  a table where everything has merged or closed schedules nothing at all — a merged pull request
-  cannot change again, so cezar stops asking. Returning to the tab refreshes what is still moving;
-  a hidden tab polls nothing. Every surface's chips are fetched together — one request per project
-  for the whole cockpit rather than one per sidebar group, table and header — and what has been
-  learned survives a reload, so a refresh repaints the statuses it already knew instead of flashing
-  neutral and colouring in a beat later. And the two changes cezar makes itself — merging a pull
-  request, and opening the review gate's draft one — no longer wait for a poll at all: what it
-  holds for that reference is dropped the moment the mutation succeeds, so a PR you just watched it
-  merge reads "merged" on the next glance instead of showing its pre-merge state for another
-  minute. The statuses also ride along with the rows on **All
-  tasks** — `GET /api/v1/workspace/runs-index` answers with whatever the server already had cached,
-  read from cache only so the route never touches `gh` — which means the chips are coloured in the
-  same paint as the table rather than a round trip later. Additive route:
-  `GET /api/v1/github/ref-status?prs=&issues=`.
-  Spec: `.ai/specs/2026-08-11-reference-status-chips.md`.
-- ✨ **One table for every project's tasks, grouped by the repos that belong together.** Work
-  rarely stops at a repo boundary — a storefront is an API, a web app and a design system — but
-  until now the cockpit could only ever show you one of them at a time. Two things change that.
-  **Tag your repositories** in **Settings → Projects**: type a label into the Tags cell
-  (`storefront`, `infra`, `client-acme`), press Enter, and a project carries it; a repo can carry
-  several, because a repo can belong to more than one piece of work. The field autocompletes from
-  the tags already used in the workspace — which is not a convenience but the thing that makes
-  tags work at all, since a group only exists if the second repo lands on the first one's
-  spelling rather than inventing `store-front` beside `storefront`. And **All tasks** — the new
-  top item in the sidebar, `/tasks`, or `⌘K → All tasks` — shows every registered project's work
-  in one table, each with its PR or issue chip and an archive button. Filter it by tag, status
-  and workflow: every facet is multi-select and ORs inside itself while ANDing across, so
-  "anything running or waiting in storefront or infra" is one set of clicks, and each option
-  shows how many tasks it would leave so a filter that would empty the table says so before you
-  click it. Group by tag and three repos become one section — a repo tagged twice appears under
-  both, because it genuinely belongs to both. There is deliberately no project *filter*: picking
-  a project **leaves** for its own Tasks page, which is a better version of that same answer
-  (live updates, the full column set, the composer). Every title, project name and project group
-  heading links into that project, so the thread, its diff and its worktree are exactly where
-  they were. The filters, the grouping and the Active/Archived tab live in the URL, so a filtered
-  view survives a refresh and pastes into a chat as a link to exactly what you were looking at —
-  and only what you changed appears in it, since Active and "ungrouped" are the bare defaults.
-  Tags are trimmed and deduplicated case-insensitively (`API` and `api` are one
-  tag) and live in `~/.cezar/config.json` beside the rest of the registry, so they are yours and
-  this machine's — nothing is added to the repo, and an older cezar round-trips them untouched.
-  Nothing else in cezar reads them, on purpose: a tag is a lens, not a permission, a queue or a
-  routing rule. The page reads one workspace-wide index capped at the newest 200 tasks per
-  project, and names the projects it capped rather than showing a short list as if it were
-  complete. `PATCH /api/v1/projects/:id` grew an optional `tags` alongside `maxParallel`, each
-  key applied only when the body names it, so a pre-tags client's `{ maxParallel }` still means
-  exactly what it always did. Over ssh, `cezar projects tag <id> [<tag>…]` does the same thing
-  with no cockpit. Spec: `.ai/specs/2026-08-10-global-tasks-and-project-tags.md`.
+- ✨ **All tasks: one table for every project, grouped by the repos that belong together.** Tag
+  your repositories in **Settings → Projects** (`storefront`, `infra`, `client-acme`; the field
+  autocompletes from tags already in use), then open **All tasks** — the new top sidebar item,
+  `/tasks`, or `⌘K → All tasks` — to see every registered project's work in one table with its
+  PR/issue chip and an archive button. Filter by tag, status and workflow (multi-select, ORed
+  inside a facet and ANDed across, each option showing how many tasks it would leave), group by
+  tag, and share the view: filters, grouping and the Active/Archived tab live in the URL. Tags
+  are stored in `~/.cezar/config.json`, deduplicated case-insensitively, and read by nothing else
+  in cezar — a tag is a lens, not a permission or a routing rule. `PATCH /api/v1/projects/:id`
+  gained an optional `tags`; over ssh, `cezar projects tag <id> [<tag>…]` does the same thing.
+  Spec: `.ai/specs/2026-08-10-global-tasks-and-project-tags.md`. (#845)
+- ✨ **A task's PR or issue chip now says where that PR or issue stands.** Every reference chip
+  in the cockpit — sidebar rows, the per-project Tasks table, All tasks, the run header — carries
+  the state of the thing it points at in three channels: colour (violet done, green fine, blue
+  waiting on a reviewer, amber for a running build, red for anything wrong), a GitHub-vocabulary
+  icon, and a tooltip that spells it out; the status reaches the chip's accessible name too. A PR
+  reads as merged, closed, draft, changes requested, checks failing, checks running, waiting for
+  review, or ready to merge — decided by *whose move it is*, which is what the colour encodes.
+  "Changes requested" turns blue once the author has answered (cezar reads the pending
+  re-request and the head commit's date) instead of blaming them for edits they already made.
+  References resolve by number, so a `#774` filed as a PR still gets the right answer if it is an
+  issue. Statuses are batched per project, cached server-side, remembered per reference for the
+  tab's lifetime and across reloads, refreshed at a cadence the server sets (a merged PR is never
+  re-asked; a hidden tab polls nothing), and dropped the moment cezar merges a PR itself. When
+  there is nothing to show the chip stays neutral and says which kind of nothing on hover.
+  Additive route: `GET /api/v1/github/ref-status?prs=&issues=`.
+  Spec: `.ai/specs/2026-08-11-reference-status-chips.md`. (#871)
+- ✨ **Agent accounts: run one project on your work login and another on your personal one.** The
+  same CLI logged in twice (`CLAUDE_CONFIG_DIR=~/.claude-klaudiusz claude`, or `CODEX_HOME` for
+  Codex) is now something cezar can address. Add the config folder under **Settings → Agent
+  accounts**, pick which account each project uses under **Settings → Agents**, and override it
+  per task from the composer. Each account reports its own connection state and **Connect**, and
+  "Open in → Claude CLI" hands the terminal the account that actually ran the work so `--resume`
+  lands on the right conversation. **Show details** reveals the email, organization and plan, and
+  opens that account's own `settings.json` / `CLAUDE.md` / `config.toml` / `AGENTS.md`. Identity
+  is opt-in: nothing fetches an email until you expand a row. Zero-config is untouched — with one
+  login there is no new control anywhere. Accounts live in `~/.cezar/agent-accounts.json`, so
+  downgrading and upgrading cezar cannot lose them, and cezar never silently falls back to
+  another account when the chosen one is unavailable. OpenCode is not supported yet: it keeps
+  credentials outside its config folder. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+- ✨ **Handing an issue or PR to the agent can pick which account runs it.** The GitHub tab's
+  "Hand this to the agent" panel was the one start surface the agent-accounts work missed, so
+  delegating an issue always ran on whatever the project's selection resolved to. It now offers
+  the same runner/login rows as the composer, under the composer's rules: switching the agent
+  drops the account and the model pin rather than carrying a foreign login along, switching only
+  the account keeps the model, and an untouched pill still follows the project's selection
+  instead of pinning it. One agent with one login sees no pill and sends exactly what it sent
+  before. The Inbox card's ▶ Run is deliberately unchanged — its endpoint cannot carry an account
+  yet, and offering a choice the server would drop is worse than not offering one. (#878)
+- ✨ **`pi` is a fourth agent backend.** It drives a Claude-compatible headless stream-json
+  session, so it reuses the proven session machinery (multi-turn stdin, EOF watchdog, wall-clock
+  kill switch, normalized events) and differs only in the binary it spawns. Like opencode, it
+  selects models with the canonical `provider/model` identity and has no default provider, so a
+  bare model id fails loudly rather than silently defaulting. (#470)
+- ✨ **A task killed by a provider usage limit resumes itself.** cezar reads the reset instant
+  from the provider's own marker, parks the run with `autoResumeAt` = reset + 30s, and resumes it
+  through the ordinary queued-continuation path — durable across restarts and self-healing if a
+  timer is lost. With no instant to read, nothing is scheduled: guessing a window is a retry loop
+  against a provider still refusing. (#778)
+- ✨ **Long sessions load progressively.** History is paged from the server with bounded reads and
+  hydrated as you scroll, instead of a long transcript blocking the thread on one giant payload.
+  (#739)
+- ✨ **Foldable task table columns.** Choose which columns the Tasks table shows; the choice is
+  persisted per workspace. (#743)
+- ✨ **A General page for the project you are inside** (`/p/<id>/settings`). Where the checkout
+  is (with Copy and "Open with" for this machine's editors, file manager and terminal), what
+  state its folder is in, how many of its tasks may run at once, and how to remove it — the last
+  two previously reachable only from the global registry table in another settings area. (#772)
+- ✨ **Readable task names in the sidebar quick-list.** The reference number is painted once, as a
+  leading PR/issue chip that is itself the link, and the title has a width floor — metadata drops
+  before the title truncates. (#789)
+- ✨ **The agent badge shows the canonical model identity.** The normalized `provider/model` a run
+  actually resolved to is now readable in the session header's agent disclosure, next to runner
+  and account, and only when it says something the plain model name does not. (#546, #833)
+- ✨ **Toasts animate in and out from the top right.** They no longer land on the thread's action
+  row, and dismissal is two-phase so the exit transition actually runs. (#820)
 - ✨ **Advanced users can opt out of repository-root run serialization.** Set the exact value
-  `CEZ_DISABLE_REPO_LOCK=1` to let runs executing in the shared checkout overlap, including
-  explicit `worktree=false` runs, non-Git degradation, and continuations whose worktree cannot be
+  `CEZ_DISABLE_REPO_LOCK=1` to let runs in the shared checkout overlap, including explicit
+  `worktree=false` runs, non-Git degradation, and continuations whose worktree cannot be
   restored. The safe default is unchanged and isolated worktree runs are unaffected. This escape
-  hatch is intentionally dangerous: concurrent agents can overwrite each other's files or Git
-  state, so cezar emits a visible unsafe-mode note whenever it is active. (#762)
-- ✨ **Agent accounts: run one project on your work login and another on your personal one.**
-  The same CLI logged in twice — `CLAUDE_CONFIG_DIR=~/.claude-klaudiusz claude`, or `CODEX_HOME` for
-  Codex — is now something cezar can address. Add the extra config folder under **Settings → Agent
-  accounts**, pick which account each project uses in **Settings → Agents**, and override it for a
-  single task from the composer. Each account reports its own connection state and gets its own
-  **Connect**, and "Open in → Claude CLI" hands the terminal the account that actually ran the
-  work, so `--resume` lands on the right conversation instead of silently starting a fresh one.
-  Each agent gets its own tab, showing whether it is installed, its version, and its logins.
-  **Show details** on a login reveals the email, organization and plan it is signed in as, and
-  opens any of that account's own config files — `settings.json`, `CLAUDE.md`, `config.toml`,
-  `AGENTS.md` — resolved inside *that* folder rather than the default account's, through the same
-  **Open in…** menu the task thread uses, so you can pick the system default or any editor the
-  machine has. Identity is opt-in
-  by construction: it has its own request, made only when you expand a row, so nothing carries an
-  email until you ask.
-  Zero-config is untouched: with one login there is no new control anywhere, and no new variable in
-  any spawned process. Accounts live in their own `~/.cezar/agent-accounts.json` rather than a key
-  in `config.json`, so switching to an older cezar and back cannot lose them — a version that has
-  never heard of accounts does not open that file. cezar does not go looking for accounts (a folder
-  is one because you said so, and you can type a path that does not exist yet), and it never
-  silently falls back to another account when the one you chose is unavailable,
-  because that would bill the wrong subscription while the UI said otherwise. OpenCode is not
-  supported yet: it keeps credentials outside its config folder, so a second folder would change
-  settings without changing the account. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+  hatch is intentionally dangerous — concurrent agents can overwrite each other's files or Git
+  state — so cezar shows a visible unsafe-mode note whenever it is active. (#762)
 
 ## 🐛 Fixes
-- 🐛 **Opening the cockpit on your phone no longer rearranges it on your desktop.** Which sidebar
-  project groups are collapsed, and which page a bare `/` restores, were stored workspace-wide in
-  `~/.cezar/ui-state.json` — so every open cockpit shared one answer: the last client to navigate
-  decided where the next launch landed on every other client, and a group collapsed on a narrow
-  screen collapsed everywhere. Both now live in each browser's own storage, which is also what they
-  always described. Each toggle costs zero requests, the sidebar paints its real state on the first
-  frame instead of after a fetch, and the bare-root restore no longer waits on the UI-state read.
-  The server keys stay accepted and round-tripped for older cockpits; existing collapse state and a
-  remembered location are workspace-wide values with no per-browser answer yet, so each browser
-  starts from the defaults once and remembers from there.
+- 🐛 **`npx cezar-cli` starts again.** The alias imported a subpath the scoped package's exports
+  map does not expose, so Node rejected it with `ERR_PACKAGE_PATH_NOT_EXPORTED` and every launch
+  died on startup. It imports the bare specifier now. (#851, #852)
+- 🐛 **Killing a run really kills it.** `ChildProcess.killed` reports that a signal was
+  *delivered*, not that the child died, and every agent CLI installs its own SIGTERM handler — so
+  the SIGKILL escalation, gated on `!child.killed`, was skipped for exactly the child it exists
+  for, and the process outlived teardown. Fixed in the agent-runner watchdogs and in OpenCode's.
+  (#844, #857, #858, #867)
+- 🐛 **The sidebar's Tools dot is green when cezar can actually start a task.** It went amber
+  whenever any probed tool was missing, so a healthy host with only the optional codex/opencode
+  runners absent looked permanently degraded and the tooltip asked for attention to tools nobody
+  wanted. Amber now means no agent CLI at all, or the configured `defaultRunner` is the missing
+  one; anything else is a choice not taken, which the per-row dot in the open menu already says.
+  (#884)
+- 🐛 **The settings gear and the theme toggle stay inside the sidebar on a nightly build.** A
+  nightly's version string is long (`v0.9.2-nightly.20260813.1` against a release's `v0.9.2`) and
+  the footer chip refused to give up a pixel, pushing the two buttons beside it out of the
+  sidebar and over the page. The chip now yields: it shows as much of the version as fits and the
+  whole of it on hover. (#879)
+- 🐛 **A malformed history response degrades instead of throwing mid-render.** The two history
+  fetchers returned an unvalidated body typed as if the server had been checked, so a 200 with an
+  unexpected shape reached the hook, which iterated `page.events` and threw an uncaught
+  `TypeError` — the documented full-replay fallback only fires on a rejected query, so it never
+  ran. Both calls now validate at the client boundary. (#827, #863)
+- 🐛 **A task's diff stat means something again.** The base was a branch *name* resolved once at
+  worktree creation, which drifted, producing five-figure diffs for small changes
+  (`+59514 −12160 / 927 files` for an 18-file change). It is now anchored at the freshest base
+  and at the branch the task actually found. (#782)
+- 🐛 **The global Tasks page reacts to work happening in other projects.** Events from other
+  projects were dropped before reaching any cache, so `/tasks` — the one page that spans every
+  project — ran on its 15-second poll alone, and that poll does not tick in a hidden tab. Those
+  events now refresh the cross-project index (debounced), a reconnect reconciles it, and
+  returning to the tab refetches. Scoped caches are untouched: another project's run still never
+  lands in this project's list.
+- 🐛 **A reference's status is shared across every surface again.** All tasks keyed each chip by
+  its run's real project id while the sidebar, run header and per-project table used the
+  `default` alias, so one pull request was remembered under two names. Every surface now names
+  the project the same way.
+- 🐛 **Opening the cockpit on your phone no longer rearranges it on your desktop.** Sidebar group
+  collapse and the page a bare `/` restores were stored workspace-wide in `~/.cezar/ui-state.json`,
+  so every open cockpit shared one answer. Both now live in each browser's own storage — zero
+  requests per toggle, and the sidebar paints its real state on the first frame. The server keys
+  stay accepted and round-tripped for older cockpits. (#786)
+- 🐛 **Each task gets its own `TMPDIR`, preflighted.** Every agent inherited the host's temp
+  directory, so all runs on a machine shared one — and when it stopped accepting writes the
+  failure was silent (under `EDQUOT` the inode is allocated while the write fails, so a Bash
+  command runs, lands its side effects, and the agent reads back nothing). (#785, #787)
+- 🐛 **The composer reads git state from the project, not the folder cezar booted in.** Booting
+  outside a git repo reported `repo: null` for every registered project: the Worktree chip
+  vanished, variants were pinned to 1, every run posted `worktree: false`, and Push went dark.
+  (#791, #792)
+- 🐛 **The `/new` header follows the run mode the composer resolved**, instead of always claiming
+  the run happens in an isolated worktree. (#793, #835)
+- 🐛 **A `CEZ:MONITORING` run resumes on its own again**, and `/skill` expands on continuations.
+  (#810, #811, #812)
+- 🐛 **"Mark all read" no longer stamps a run that is waiting out a usage limit**, so the count it
+  returns is the number the unread badge was showing. (#803, #834)
+- 🐛 **A legacy `claude-cli` runner id in `runs.json` stays parseable.** The persisted enum had
+  dropped it, and because the loader validates the whole array, one legacy record would have
+  dropped every run in the file — the exact failure `BACKWARD_COMPATIBILITY.md` §3 warns about.
+  (#547, #832)
+- 🐛 **OpenCode models are discovered, not hard-coded.** cezar parses `opencode models` — strict
+  `provider/model` matching so a banner never becomes a picker entry, an empty listing meaning
+  "no provider configured" rather than a failure, and bounded output, size and deadline. (#799)
+- 🐛 **Answers to an Ask reach the agent through idle teardown.** (#758)
+- 🐛 **`server-install` refuses to uninstall a registered project again.** (#535, #790)
+- 🐛 **`npm test` no longer opens a real Terminal window.** Every launcher now goes through its
+  injectable seam. (#824, #825)
+
+## 🔧 Changed
+- Dropped the unused `KNOWN_PROVIDERS` export. (#548, #831)
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 **`npx cezar-cli@nightly` is always the trunk.** A nightly workflow verifies main (typecheck,
+  unit suites, build, packaged-CLI e2e) at 03:17 UTC and publishes it under the `nightly`
+  dist-tag; a scheduled run skips itself when main has not moved in 24h. The channel is reachable
+  only by asking for it by name, and only from main. (#876)
+- 🚀 Allow releasing from `release/*` branches. (#780)
+- 🚀 Synchronize the repository-root lease test instead of racing a timer. (#797, #800)
+- 🚀 Stop the JetBrains launcher case racing a real process. (#823, #862)
+- 🚀 Give the health-topic probe waits a realistic budget. (#701, #733)
+
+## 📝 Specs & Documentation
+- 📝 Design spec for publishable Cezar React components. (#710)
+- 📝 Spec for linked-PR chips on the GitHub Issues list. (#816)
+- 📝 Disambiguate cezar (OSS) from the hosted team SaaS. (#883)
+- 📝 Add the missing root `LICENSE` file (MIT). (#796)
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @patzick
+- @pkarw
+- @wojciechszyjka
+- @andrzejewsky
+- @sheeerth
+- @sapersky
+- @dominikpalatynski
 
 # 0.9.2 (2026-08-04)
 
