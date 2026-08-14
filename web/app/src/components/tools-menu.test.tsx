@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HealthResponse } from '@/api/types'
 import { AppShell } from './app-shell'
 import { ThemeProvider } from './theme-provider'
-import { ToolsMenu, forgeNote, toolsTooltip } from './tools-menu'
+import { ToolsMenu, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
 
 afterEach(cleanup)
 
@@ -52,6 +52,18 @@ const ALL_GOOD: HealthResponse = {
   checks: HEALTH.checks.filter((check) => check.available),
 }
 
+/** Flip one probed tool to missing, keeping the row (and its hint) in place. */
+const unavailableIf =
+  (name: string) =>
+  (check: HealthResponse['checks'][number]): HealthResponse['checks'][number] =>
+    check.name === name ? { ...check, available: false, version: undefined } : check
+
+/** `claude` is installed, `codex` is not — and `codex` is the configured default. */
+const DEFAULT_DOWN: HealthResponse = { ...HEALTH, defaultRunner: 'codex' }
+
+/** Neither agent CLI is on the host — nothing can run at all. */
+const NO_RUNNER: HealthResponse = { ...HEALTH, checks: HEALTH.checks.map(unavailableIf('claude')) }
+
 function renderMenu(health: HealthResponse | undefined) {
   return render(
     <MemoryRouter initialEntries={['/']}>
@@ -83,12 +95,31 @@ describe('toolsTooltip', () => {
     expect(toolsTooltip(ALL_GOOD)).toBe('cezar v0.1.3')
   })
 
-  it('names every tool needing attention', () => {
+  it('names the missing alternatives as optional while the default runner works', () => {
     const twoDown: HealthResponse = {
       ...HEALTH,
       checks: [...HEALTH.checks, { name: 'opencode', available: false, hint: 'optional: install OpenCode' }],
     }
-    expect(toolsTooltip(twoDown)).toBe('cezar v0.1.3 · needs attention: codex, opencode')
+    expect(toolsTooltip(twoDown)).toBe('cezar v0.1.3 · optional: codex, opencode not installed')
+  })
+
+  it('names the default runner when it is the missing one', () => {
+    expect(toolsTooltip(DEFAULT_DOWN)).toBe('cezar v0.1.3 · default runner (codex) not found')
+  })
+
+  it('says so when no agent CLI is present at all', () => {
+    expect(toolsTooltip(NO_RUNNER)).toBe('cezar v0.1.3 · no agent CLI found — install one to run tasks')
+  })
+})
+
+describe('toolsBlocker', () => {
+  it('is null while the default runner works, whatever else is missing', () => {
+    expect(toolsBlocker(HEALTH)).toBeNull()
+    expect(toolsBlocker({ ...HEALTH, checks: HEALTH.checks.map(unavailableIf('gh')) })).toBeNull()
+  })
+
+  it('stays quiet when an older server never probed the default runner', () => {
+    expect(toolsBlocker({ ...HEALTH, defaultRunner: 'opencode' })).toBeNull()
   })
 })
 
@@ -104,10 +135,21 @@ describe('ToolsMenu', () => {
     expect(trigger().getAttribute('title')).toBe('cezar v0.1.3')
   })
 
-  it('shows a pending aggregate dot and names the tool in the tooltip when one is missing', () => {
+  it('stays green while the default runner works and only an optional tool is missing', () => {
     renderMenu(HEALTH)
+    expect(triggerDot().getAttribute('data-tone')).toBe('success')
+    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 · optional: codex not installed')
+  })
+
+  it('goes amber when the default runner is the missing one', () => {
+    renderMenu(DEFAULT_DOWN)
     expect(triggerDot().getAttribute('data-tone')).toBe('pending')
-    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 · needs attention: codex')
+    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 · default runner (codex) not found')
+  })
+
+  it('goes amber when no agent CLI is installed at all', () => {
+    renderMenu(NO_RUNNER)
+    expect(triggerDot().getAttribute('data-tone')).toBe('pending')
   })
 
   it('lists exactly the checks the server sent, in order — nothing invented', async () => {
