@@ -267,6 +267,31 @@ describe('AppShell', () => {
       expect(chip.getAttribute('data-update-available')).toBe('true')
       expect(chip.querySelector('[data-slot="status-dot"]')).not.toBeNull()
     })
+
+    /* The two-row footer holds only while something in the controls row can give: every icon
+     * button is `shrink-0` (button base class), so a long version string — `0.9.2-nightly.…`,
+     * the nightly dist-tag of #876 — used to push the gear and the toggle outside the 264px
+     * column entirely. jsdom still measures nothing; what it can pin is which item yields. */
+    it('makes the version chip the one control that gives, so a nightly version cannot push the row out', () => {
+      renderShell('/', {
+        version: '0.9.2-nightly.20260813.1',
+        toolsMenu: <button type="button">Tools</button>,
+      })
+      const chip = controls().querySelector('[data-slot="version-chip"]') as HTMLElement
+      expect(chip.className).not.toContain('shrink-0')
+      expect(chip.className).toContain('min-w-0')
+      // The text truncates inside the pill rather than widening it past what the row can hold.
+      const label = chip.querySelector('span:not([data-slot])') as HTMLElement
+      expect(label.className).toContain('truncate')
+      expect(label.textContent).toBe('v0.9.2-nightly.20260813.1')
+      // …and the full string stays legible on hover, since the visible one may be clipped.
+      expect(chip.getAttribute('title')).toBe('v0.9.2-nightly.20260813.1')
+      // Everything else in the row still refuses to shrink — that is what keeps them readable.
+      for (const slot of ['tools-menu', 'global-settings-link', 'theme-toggle']) {
+        const el = controls().querySelector(`[data-slot="${slot}"]`) as HTMLElement
+        expect(el.className).toContain('shrink-0')
+      }
+    })
   })
 
   describe('data slots stay empty rather than showing invented data', () => {
@@ -290,7 +315,9 @@ describe('AppShell', () => {
       it('stays plain while the registry has nothing newer', () => {
         renderShell('/', { version: '1.2.3' })
         expect(chip().getAttribute('data-update-available')).toBeNull()
-        expect(chip().getAttribute('title')).toBeNull()
+        // A tooltip, but one that claims nothing: the chip truncates, so the full version has to
+        // stay reachable on hover even when there is no update to announce.
+        expect(chip().getAttribute('title')).toBe('v1.2.3')
         expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
       })
 
@@ -303,7 +330,7 @@ describe('AppShell', () => {
       it('pulses and names the newer version when one exists', () => {
         renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
         expect(chip().getAttribute('data-update-available')).toBe('true')
-        expect(chip().getAttribute('title')).toBe('update available: v1.3.0')
+        expect(chip().getAttribute('title')).toBe('v1.2.3 — update available: v1.3.0')
         const dot = chip().querySelector('[data-slot="status-dot"]') as HTMLElement
         expect(dot.getAttribute('data-tone')).toBe('pending')
         expect(dot.className).toContain('animate-pulse')

@@ -831,17 +831,6 @@ Every module is meant to be read in one sitting.
 
 ---
 
-## Relationship to cezar (the SaaS)
-
-cez is the radically-simple, single-user sibling of
-[**cezar**](https://github.com/comerito/cezar) — the team SaaS cockpit for
-running agents across the whole GitHub issue lifecycle (auto-triage, webhooks,
-Supabase, multi-repo). Same core ideas — agent runner, skills, declarative
-workflows, a live run cockpit — with none of the accounts, database or cloud.
-Start here; graduate to cezar when a team needs shared visibility.
-
----
-
 ## License
 
 **MIT** © Patryk Lewczuk — full text in [LICENSE](LICENSE).
