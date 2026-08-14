@@ -105,11 +105,11 @@ Each step leaves the app working and is independently testable.
 
 ### Phase 1: Linked-PR chips
 
-- [ ] 1.1 Contract shape (`linkedPrSchema`, `githubIssuePrsDataSchema`) + contract-parity assertion
-- [ ] 1.2 Forge fetcher (`fetchGithubIssuePrs`, cache, dry-run mock, test seam) + unit test
-- [ ] 1.3 Server route (`GET /github/issue-prs`) + BC §2 inventory + route test
-- [ ] 1.4 Typed client (`getGithubIssuePrs`) + client test
-- [ ] 1.5 Query hook (`useGithubIssuePrs`, `queryKeys.githubIssuePrs`)
-- [ ] 1.6 Row chip + window wiring + stretched-link restructure + component tests
-- [ ] 1.7 E2E assertion on an issue row
-- [ ] 1.8 Full validation gate green
+- [x] 1.1 Contract shape (`linkedPrSchema`, `githubIssuePrsDataSchema`) + contract-parity assertion — df12ee5b
+- [x] 1.2 Forge fetcher (`fetchGithubIssuePrs`, cache, dry-run mock, test seam) + unit test — df12ee5b
+- [x] 1.3 Server route (`GET /github/issue-prs`) + BC §2 inventory + route test — 40c40b23
+- [x] 1.4 Typed client (`getGithubIssuePrs`) + client test — c4643923
+- [x] 1.5 Query hook (`useGithubIssuePrs`, `queryKeys.githubIssuePrs`) — c4643923
+- [x] 1.6 Row chip + window wiring + stretched-link restructure + component tests — 9f6de959
+- [x] 1.7 E2E assertion on an issue row
+- [x] 1.8 Full validation gate green
