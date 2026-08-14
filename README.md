@@ -17,6 +17,9 @@ and a run never stops to ask; it just finishes. Leave it on a VPS and you get
 a dev team that's *always on* — a mobile-friendly cockpit you can check from
 your phone, working your backlog while you're away.
 
+*This is **cezar** — the open-source, single-user, local-first cockpit you run
+yourself (`npx cezar-cli`) — **not** `<SAAS_NAME>`, the separate hosted team SaaS.*
+
 [A look inside](#a-look-inside) · [What cezar does best](#what-cezar-does-best) · [What it solves](#what-it-solves) · [Who it's for](#who-its-for) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Core concepts](#core-concepts) · [Cockpit tour](#cockpit-tour) · [Agent backends](#coding-agent-backends) · [Remote access](#remote-access-host-cezar-on-a-server)
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
@@ -831,14 +834,20 @@ Every module is meant to be read in one sitting.
 
 ---
 
-## Relationship to cezar (the SaaS)
+## cezar (this repo) vs. `<SAAS_NAME>` (the team SaaS)
 
-cez is the radically-simple, single-user sibling of
-[**cezar**](https://github.com/comerito/cezar) — the team SaaS cockpit for
-running agents across the whole GitHub issue lifecycle (auto-triage, webhooks,
-Supabase, multi-repo). Same core ideas — agent runner, skills, declarative
-workflows, a live run cockpit — with none of the accounts, database or cloud.
-Start here; graduate to cezar when a team needs shared visibility.
+**This repo is cezar** — the open-source, single-user, local-first cockpit you
+just installed as `cezar-cli`. It runs entirely on your own machine, under your
+own CLI logins: no accounts, no database, no cloud.
+
+`<SAAS_NAME>` is a different product: a hosted, multi-user team SaaS cockpit that
+runs agents across the whole GitHub issue lifecycle (auto-triage, webhooks,
+Supabase, multi-repo). It shares cezar's core ideas — agent runner, skills,
+declarative workflows, a live run cockpit — but it is a team service rather than
+a local tool, and it has no public repository to link to at the time of writing.
+
+Start with cezar; look at `<SAAS_NAME>` when a team needs shared, hosted
+visibility.
 
 ---
 
