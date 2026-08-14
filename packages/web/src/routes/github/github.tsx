@@ -22,11 +22,12 @@ import { useParams } from 'react-router'
 
 import { Link, Navigate } from '@/lib/project-router'
 
-import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
-import { queryKeys, useGithub, useGithubChecks, useGithubComments, useGithubPrChanges, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { getGithub, getGithubComments, getGithubIssuePrs, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
+import { queryKeys, useGithub, useGithubChecks, useGithubIssuePrs, useGithubComments, useGithubPrChanges, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
+  LinkedPr,
   GithubTimelineEvent,
   GithubTimelineEventKind,
   GithubMergeMethod,
@@ -79,6 +80,13 @@ import { readFollowupSelection, writeFollowupSelection } from './hand-to-agent-d
  * item is usually instant. (Cursor pagination + "Load more"/infinite scroll + row virtualization
  * are the Phase 2 follow-up.)
  *
+ * Issue rows carry the same treatment for their linked pull requests (#816, spec
+ * `.ai/specs/2026-08-09-issue-linked-pr-chip.md`): `useGithubIssuePrs`
+ * (`GET /api/github/issue-prs`) hydrates the on-screen issue window and each row paints a
+ * state-tinted `↗ PR #n` chip, so a triager can see an issue is already being worked before
+ * handing it to an agent. That chip is why the row is a stretched link rather than one big
+ * `<Link>` — see `GithubRow`.
+ *
  * Gating: the nav item is hidden by the shell when health reports no forge — but the URL
  * stays reachable (pasted links), so an unavailable payload renders the honest explainer
  * with the server's own reason, never an error.
@@ -93,6 +101,16 @@ const LIST_LIMIT = 1000
  *  The visible window is hydrated first; without virtualization (Phase 2) rows past this stay
  *  glyph-less, exactly as a PR with no CI would. */
 const CHECKS_WINDOW = 100
+
+/** How many on-screen ISSUE rows one linked-PR request covers (matches the server's
+ *  `GH_ISSUE_PRS_MAX`, #816). Same window and pinning model as `CHECKS_WINDOW`; rows past it stay
+ *  chip-less, exactly as an issue with no linked PR would. */
+const ISSUE_PRS_WINDOW = 100
+
+/** How many linked-PR chips a row shows inline before collapsing the rest into `+N` (#816). Most
+ *  issues have one; three is the smallest surface that still handles the rare many-PR issue
+ *  without introducing an expander component the meta line has no room for. */
+const LINKED_PR_CHIPS_INLINE = 3
 
 export type GithubView = 'issues' | 'prs'
 
@@ -144,6 +162,32 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   const checksQuery = useGithubChecks(checkPrNumbers, view === 'prs')
   const checksMap = checksQuery.data?.available ? checksQuery.data.checks : undefined
 
+  // Lazy linked-PR chips for the on-screen ISSUE window (#816) — the same shape as the checks
+  // window above, and for the same reason: the one-shot list call carries no issue↔PR
+  // relationship, so it is hydrated per visible row rather than paid for on every list fetch.
+  // The URL-selected issue is pinned in so a deep-linked row past the cap still hydrates.
+  const issuePrNumbers = useMemo(() => {
+    if (!gh?.available) return []
+    const nums = new Set<number>()
+    if (view === 'issues' && selectedNumber !== null && Number.isInteger(selectedNumber)) {
+      nums.add(selectedNumber)
+    }
+    for (const issue of gh.issues) {
+      if (nums.size >= ISSUE_PRS_WINDOW) break
+      nums.add(issue.number)
+    }
+    return [...nums]
+  }, [gh, view, selectedNumber])
+  const issuePrsQuery = useGithubIssuePrs(issuePrNumbers, view === 'issues')
+  const issuePrsMap = issuePrsQuery.data?.available ? issuePrsQuery.data.links : undefined
+  // Which linked PRs can be opened INSIDE the cockpit: only those in the loaded open set, since
+  // `/github/prs/:n` renders from this very list. Merged and closed PRs are not in it — and on a
+  // repo where most linked PRs are merged, that is the majority — so they link out to GitHub.
+  const openPrNumbers = useMemo(
+    () => new Set((gh?.available ? gh.prs : []).map((pr) => pr.number)),
+    [gh],
+  )
+
   const queryClient = useQueryClient()
 
   // Persist the tab choice (#417), mirroring the appearance provider's read-then-write
@@ -179,6 +223,22 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
       // so glyphs track the fresh rows (they carry their own ≤60 s cache server-side).
       queryClient.setQueryData(queryKeys.github({ limit: LIST_LIMIT }), data)
       void queryClient.invalidateQueries({ queryKey: queryKeys.githubChecks(checkPrNumbers) })
+
+      // The linked-PR window must be re-fetched WITH `refresh: true` (#816) for the same reason
+      // the open thread is below: a bare invalidate re-requests `/api/v1/github/issue-prs` without
+      // the flag, and the route only busts its ≤60 s per-issue cache when the flag is present — so
+      // the client would dutifully refetch and be handed the same stale answer. The whole point of
+      // pressing Refresh here is "an agent just opened a PR for this issue"; without this it would
+      // not show for up to a minute. Fire-and-forget: a chip fetch that fails must not discard an
+      // already-successful list refresh.
+      if (issuePrNumbers.length > 0) {
+        const issuePrsKey = queryKeys.githubIssuePrs(issuePrNumbers)
+        void getGithubIssuePrs(issuePrNumbers, { refresh: true })
+          .then((links) => queryClient.setQueryData(issuePrsKey, links))
+          .catch(() => {
+            /* the list refresh still landed; leave the chips showing what they have */
+          })
+      }
 
       // The open thread must be re-fetched with `refresh: true` (#525). Invalidating its key is
       // NOT enough, and was the bug in the first attempt: an invalidate re-requests
@@ -419,6 +479,8 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
                 active={selected?.url === item.url}
                 queued={queued.has(item.url)}
                 checks={item.kind === 'pr' ? checksMap?.[item.number] ?? item.checks : item.checks}
+                linkedPrs={item.kind === 'issue' ? issuePrsMap?.[item.number] : undefined}
+                openPrNumbers={openPrNumbers}
               />
             ))}
           </ul>
@@ -487,6 +549,8 @@ function GithubRow({
   active,
   queued,
   checks,
+  linkedPrs,
+  openPrNumbers,
 }: {
   item: GithubItem
   view: GithubView
@@ -495,6 +559,12 @@ function GithubRow({
   queued: boolean
   /** Resolved checks glyph — the lazily-hydrated value overrides the list's `null` (#664). */
   checks?: GithubItem['checks']
+  /** Lazily-hydrated linked pull requests, issue rows only (#816). Absent while the window is
+   *  still loading, and absent for an issue with none — both render no chip. */
+  linkedPrs?: readonly LinkedPr[]
+  /** The PR numbers this cockpit has loaded, so a chip can decide between an in-cockpit route and
+   *  a link out to GitHub (#816). */
+  openPrNumbers?: ReadonlySet<number>
 }) {
   const Icon = item.kind === 'issue' ? CircleDotIcon : GitPullRequestIcon
   const queryClient = useQueryClient()
@@ -520,8 +590,24 @@ function GithubRow({
     }
   }
 
+  const inlineLinks = (linkedPrs ?? []).slice(0, LINKED_PR_CHIPS_INLINE)
+  const overflow = (linkedPrs?.length ?? 0) - inlineLinks.length
+
+  /**
+   * Stretched-link row (#816). The row used to be one `<Link>` wrapping everything, which the
+   * linked-PR chips cannot live inside: an `<a>` within an `<a>` is invalid HTML and a WCAG 4.1.2
+   * (nested interactive) failure, and because this SPA has no SSR there is no parser to reject it
+   * — React would simply emit the nested pair and ship it broken-but-silent.
+   *
+   * So the `<li>` becomes the positioning context, the row link becomes an `absolute inset-0`
+   * overlay carrying the navigation, the drag payload and the row's accessible name, and the
+   * content sits above it in normal flow. The content is `pointer-events-none` so hovering and
+   * clicking anywhere on the row still reaches the overlay; the chips opt back in with
+   * `pointer-events-auto` and are *siblings* of the overlay rather than descendants — which is
+   * what makes `stopPropagation` unnecessary and keeps exactly one interactive element per region.
+   */
   return (
-    <li>
+    <li data-slot="gh-row-item" data-number={item.number} className="relative">
       <Link
         to={`${view === 'issues' ? '/github/issues' : '/github/prs'}/${item.number}`}
         draggable
@@ -531,12 +617,16 @@ function GithubRow({
         data-slot="gh-row"
         data-number={item.number}
         aria-current={active ? 'page' : undefined}
+        // The overlay has no text of its own, so it states its name rather than inheriting the
+        // whole row's — which is also less to hear than every meta glyph read out in sequence.
+        aria-label={`${item.kind === 'issue' ? 'Issue' : 'Pull request'} #${item.number}: ${item.title}`}
         title="Drag into the composer to prefill a task"
         className={cn(
-          'flex flex-col gap-1 rounded-md px-2.5 py-2 transition-colors hover:bg-muted',
+          'absolute inset-0 rounded-md transition-colors hover:bg-muted',
           active && 'bg-muted',
         )}
-      >
+      />
+      <div className="pointer-events-none relative flex flex-col gap-1 rounded-md px-2.5 py-2">
         <span className="flex min-w-0 items-center gap-2">
           <Icon
             aria-hidden="true"
@@ -552,6 +642,10 @@ function GithubRow({
           <span>{shortAge(item.createdAt)}</span>
           <CommentCount count={item.comments} />
           {checks ? <ChecksGlyph checks={checks} /> : null}
+          {inlineLinks.map((link) => (
+            <LinkedPrChip key={link.number} link={link} inOpenSet={openPrNumbers?.has(link.number) ?? false} />
+          ))}
+          {overflow > 0 ? <LinkedPrOverflowChip count={overflow} issueUrl={item.url} /> : null}
           {queued ? (
             <span data-slot="gh-queued-flag" className="font-sans font-medium text-violet">
               ↗ run queued
@@ -565,8 +659,104 @@ function GithubRow({
             ))}
           </span>
         ) : null}
-      </Link>
+      </div>
     </li>
+  )
+}
+
+/** The chip tints. `open` is the "someone is on this" signal, so it takes the same green the issue
+ *  icon uses; `merged` reuses the violet the tab already spends on merged/PR affordances; a PR
+ *  closed WITHOUT merging is the abandoned outcome and reads danger — the same open/merged/closed
+ *  vocabulary and tone split `referenceStatusSchema` documents server-side. */
+const LINKED_PR_TONE: Record<LinkedPr['state'], string> = {
+  open: 'text-success',
+  merged: 'text-violet',
+  closed: 'text-danger',
+}
+
+/**
+ * One linked pull request on an issue row (#816).
+ *
+ * A **draft** open PR renders a muted variant of the open tint: it is a materially weaker "someone
+ * is on this" signal than a ready PR, and flattening the two would tell a triager the issue is
+ * covered when the author has said themselves that it is not.
+ *
+ * The link target is the in-cockpit `/github/prs/:n` whenever the PR is in the loaded open set —
+ * instant, no new fetch — and the PR's own GitHub URL otherwise, since merged and closed PRs are
+ * not in that set. The URL is `isHttpUrl`-guarded: a link whose href came back malformed renders
+ * as plain text rather than as an anchor to nowhere.
+ */
+function LinkedPrChip({ link, inOpenSet }: { link: LinkedPr; inOpenSet: boolean }) {
+  const draft = link.state === 'open' && link.isDraft === true
+  const words = draft ? 'draft' : link.state
+  const className = cn(
+    'pointer-events-auto relative z-10 shrink-0 font-medium hover:underline',
+    LINKED_PR_TONE[link.state],
+    draft && 'opacity-60',
+  )
+  const shared = {
+    'data-slot': 'gh-row-linked-pr',
+    'data-number': link.number,
+    'data-state': draft ? 'draft' : link.state,
+    title: `pull request #${link.number} — ${words}`,
+    'aria-label': `Pull request #${link.number}, ${words}`,
+    className,
+  } as const
+
+  const body = (
+    <>
+      <span aria-hidden="true">↗ </span>
+      PR #{link.number}
+    </>
+  )
+
+  if (inOpenSet) {
+    return (
+      <Link to={`/github/prs/${link.number}`} {...shared}>
+        {body}
+      </Link>
+    )
+  }
+  if (!isHttpUrl(link.url)) {
+    // Nowhere honest to point — keep the signal, drop the affordance.
+    return (
+      <span {...shared} className={cn(className, 'hover:no-underline')}>
+        {body}
+      </span>
+    )
+  }
+  return (
+    <a href={link.url} target="_blank" rel="noopener noreferrer" {...shared}>
+      {body}
+    </a>
+  )
+}
+
+/** The `+N` collapse past `LINKED_PR_CHIPS_INLINE` (#816). It points at the issue on GitHub rather
+ *  than expanding in place: the full list of an issue's pull requests is what that page already
+ *  is, and an expander would cost the meta line a stateful component for the rare case. */
+function LinkedPrOverflowChip({ count, issueUrl }: { count: number; issueUrl: string }) {
+  const className = 'pointer-events-auto relative z-10 shrink-0 font-medium text-muted-foreground hover:underline'
+  const label = `${count} more linked pull request${count === 1 ? '' : 's'}`
+  if (!isHttpUrl(issueUrl)) {
+    return (
+      <span data-slot="gh-row-linked-pr-overflow" aria-label={label} className={className}>
+        +{count}
+      </span>
+    )
+  }
+  return (
+    <a
+      href={issueUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      data-slot="gh-row-linked-pr-overflow"
+      title={label}
+      aria-label={label}
+      className={className}
+    >
+      +{count}
+    </a>
   )
 }
 

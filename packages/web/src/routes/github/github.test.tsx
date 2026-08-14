@@ -205,6 +205,11 @@ function stubFetch(
       if (method === 'GET' && path.startsWith('/api/v1/github/checks')) {
         return jsonResponse({ available: true, checks: {} })
       }
+      // Lazy linked-PR chips (#816) default to no links, so every existing row assertion keeps
+      // measuring a chip-less row — a test overrides the exact window key to paint chips.
+      if (method === 'GET' && path.startsWith('/api/v1/github/issue-prs')) {
+        return jsonResponse({ available: true, links: {} })
+      }
       // The GitHub list is one fast fetch now (#664): `/api/v1/github` with an optional `?limit=…`
       // and/or `?refresh=1`. Sub-resources (`/api/v1/github/comments`, `/prs`, `/checks`) never match
       // `=== '/api/v1/github'` or `startsWith('/api/v1/github?')`, so this stays scoped to the list.
@@ -360,8 +365,10 @@ describe('the GitHub tab lists', () => {
     renderAt('/github/prs')
 
     await waitFor(() => expect(rows()).toHaveLength(4))
+    // Scoped from the row's `<li>`: the row link is a stretched-link OVERLAY since #816, so the
+    // meta glyphs are its siblings rather than its descendants.
     const glyph = (number: string) =>
-      document.querySelector(`[data-slot="gh-row"][data-number="${number}"] [data-slot="gh-row-checks"]`)
+      document.querySelector(`[data-slot="gh-row-item"][data-number="${number}"] [data-slot="gh-row-checks"]`)
 
     // The glyph appears a beat later, once the lazy checks query resolves.
     await waitFor(() => expect(glyph('137')?.getAttribute('data-checks')).toBe('failing'))
@@ -408,7 +415,7 @@ describe('the GitHub tab lists', () => {
 
     await waitFor(() => expect(rows()).toHaveLength(2))
     const badge = (number: string) =>
-      document.querySelector(`[data-slot="gh-row"][data-number="${number}"] [data-slot="gh-comment-count"]`)
+      document.querySelector(`[data-slot="gh-row-item"][data-number="${number}"] [data-slot="gh-comment-count"]`)
 
     // #142 has 3 comments → a labelled badge; #139 has 0 → none, so quiet rows look untouched.
     expect(badge('142')?.getAttribute('data-count')).toBe('3')
@@ -466,6 +473,197 @@ describe('the GitHub tab lists', () => {
       expect.stringContaining('Fix GitHub issue #142: Login form drops session on refresh'),
     )
     expect(setData.mock.calls[0]?.[1]).toContain(ISSUE_142.url)
+  })
+})
+
+/**
+ * Linked-PR chips on the Issues list (#816, spec `.ai/specs/2026-08-09-issue-linked-pr-chip.md`).
+ *
+ * The signal the tab exists to give a triager: does this issue already have a pull request, so
+ * handing it to an agent would waste a run? The links are hydrated lazily for the on-screen issue
+ * window, the same way #664 hydrates the PR rows' checks glyphs.
+ */
+describe('the linked-PR chips on issue rows (#816)', () => {
+  /** The exact window key the Issues view asks for with the two-issue `GITHUB` fixture. */
+  const WINDOW = 'GET /api/v1/github/issue-prs?issues=142%2C139'
+  const chips = (number: string) => [
+    ...document.querySelectorAll<HTMLElement>(
+      `[data-slot="gh-row-item"][data-number="${number}"] [data-slot="gh-row-linked-pr"]`,
+    ),
+  ]
+
+  it('paints one state-tinted chip per linked PR, ordered as the server sent them', async () => {
+    stubFetch({
+      [WINDOW]: () =>
+        jsonResponse({
+          available: true,
+          links: {
+            142: [
+              { number: 900, url: 'https://github.com/acme/demo/pull/900', state: 'open', isDraft: false },
+              { number: 850, url: 'https://github.com/acme/demo/pull/850', state: 'merged' },
+              { number: 800, url: 'https://github.com/acme/demo/pull/800', state: 'closed' },
+            ],
+          },
+        }),
+    })
+    renderAt('/github')
+
+    // The chips fill in a beat later, exactly like the checks glyph — the row paints first.
+    await waitFor(() => expect(chips('142')).toHaveLength(3))
+    expect(chips('142').map((c) => c.textContent)).toEqual(['↗ PR #900', '↗ PR #850', '↗ PR #800'])
+    expect(chips('142').map((c) => c.dataset.state)).toEqual(['open', 'merged', 'closed'])
+    expect(chips('142').map((c) => c.className.includes('text-success'))).toEqual([true, false, false])
+    expect(chips('142')[1]?.className).toContain('text-violet')
+    expect(chips('142')[2]?.className).toContain('text-danger')
+    expect(chips('142')[0]?.getAttribute('aria-label')).toBe('Pull request #900, open')
+
+    // #139 has no linked PR in the payload — a quiet row stays exactly as it looked before.
+    expect(chips('139')).toHaveLength(0)
+  })
+
+  it('renders a draft PR as a muted variant of the open tint, and says "draft"', async () => {
+    // A draft is a materially weaker "someone is on this" signal than a ready PR; flattening the
+    // two would tell a triager the issue is covered when the author has said it is not.
+    stubFetch({
+      [WINDOW]: () =>
+        jsonResponse({
+          available: true,
+          links: { 142: [{ number: 900, url: 'https://github.com/acme/demo/pull/900', state: 'open', isDraft: true }] },
+        }),
+    })
+    renderAt('/github')
+
+    await waitFor(() => expect(chips('142')).toHaveLength(1))
+    const chip = chips('142')[0]!
+    expect(chip.dataset.state).toBe('draft')
+    expect(chip.className).toContain('text-success')
+    expect(chip.className).toContain('opacity-60')
+    expect(chip.getAttribute('aria-label')).toBe('Pull request #900, draft')
+  })
+
+  it('links in-cockpit when the PR is in the loaded open set, out to GitHub when it is not', async () => {
+    // PR_137 is the only PR in the loaded list, so #137 routes internally; a merged PR is never in
+    // the open set — the majority case on a real repo — and must open on GitHub instead.
+    stubFetch({
+      [WINDOW]: () =>
+        jsonResponse({
+          available: true,
+          links: {
+            142: [
+              { number: 137, url: 'https://github.com/acme/demo/pull/137', state: 'open' },
+              { number: 850, url: 'https://github.com/acme/demo/pull/850', state: 'merged' },
+            ],
+          },
+        }),
+    })
+    renderAt('/github')
+
+    await waitFor(() => expect(chips('142')).toHaveLength(2))
+    expect(chips('142')[0]?.getAttribute('href')).toBe('/github/prs/137')
+    expect(chips('142')[0]?.hasAttribute('target')).toBe(false)
+    expect(chips('142')[1]?.getAttribute('href')).toBe('https://github.com/acme/demo/pull/850')
+    expect(chips('142')[1]?.getAttribute('target')).toBe('_blank')
+    expect(chips('142')[1]?.getAttribute('rel')).toBe('noopener noreferrer')
+  })
+
+  it('clicking a chip opens the PR, NOT the row’s issue — the chip is a sibling, not a child', async () => {
+    // The whole reason the row became a stretched link: an `<a>` inside the row `<Link>` would be
+    // invalid HTML and a WCAG 4.1.2 failure, and would need `stopPropagation` to behave. As
+    // siblings, the chip simply wins its own click.
+    stubFetch({
+      [WINDOW]: () =>
+        jsonResponse({
+          available: true,
+          links: { 142: [{ number: 137, url: 'https://github.com/acme/demo/pull/137', state: 'open' }] },
+        }),
+    })
+    renderAt('/github')
+
+    await waitFor(() => expect(chips('142')).toHaveLength(1))
+    fireEvent.click(chips('142')[0]!)
+    await waitFor(() => expect(detail()?.textContent).toContain('Stream tokens over SSE'))
+    expect(detail()?.textContent).not.toContain('Login form drops session on refresh')
+  })
+
+  it('the chips are not nested inside the row link — one interactive element per region', async () => {
+    stubFetch({
+      [WINDOW]: () =>
+        jsonResponse({
+          available: true,
+          links: { 142: [{ number: 900, url: 'https://github.com/acme/demo/pull/900', state: 'open' }] },
+        }),
+    })
+    renderAt('/github')
+
+    await waitFor(() => expect(chips('142')).toHaveLength(1))
+    // The structural invariant, asserted directly: no anchor in this list has an anchor ancestor.
+    for (const anchor of document.querySelectorAll('[data-slot="gh-rows"] a')) {
+      expect(anchor.parentElement?.closest('a')).toBeNull()
+    }
+  })
+
+  it('collapses past three chips into a +N link to the issue on GitHub', async () => {
+    stubFetch({
+      [WINDOW]: () =>
+        jsonResponse({
+          available: true,
+          links: {
+            142: [900, 850, 800, 750, 700].map((n) => ({
+              number: n,
+              url: `https://github.com/acme/demo/pull/${n}`,
+              state: 'open',
+            })),
+          },
+        }),
+    })
+    renderAt('/github')
+
+    await waitFor(() => expect(chips('142')).toHaveLength(3))
+    const overflow = document.querySelector<HTMLElement>('[data-slot="gh-row-linked-pr-overflow"]')!
+    expect(overflow.textContent).toBe('+2')
+    expect(overflow.getAttribute('href')).toBe(ISSUE_142.url)
+    expect(overflow.getAttribute('aria-label')).toBe('2 more linked pull requests')
+  })
+
+  it('renders no chip when the payload is unavailable, and never asks on the PRs view', async () => {
+    const sent = stubFetch({
+      [WINDOW]: () => jsonResponse({ available: false, reason: 'gh CLI not found' }),
+    })
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    await waitFor(() => expect(sent.some((r) => r.path.startsWith('/api/v1/github/issue-prs'))).toBe(true))
+    expect(document.querySelector('[data-slot="gh-row-linked-pr"]')).toBeNull()
+
+    // The PRs view has no issue rows to chip, so it must not pay for the window at all.
+    cleanup()
+    const prSent = stubFetch()
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+    expect(prSent.some((r) => r.path.startsWith('/api/v1/github/issue-prs'))).toBe(false)
+  })
+
+  it('pins the URL-selected issue into the window so a deep-linked row still hydrates', async () => {
+    const sent = stubFetch()
+    renderAt('/github/issues/139')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    await waitFor(() =>
+      expect(sent.some((r) => r.path === '/api/v1/github/issue-prs?issues=139%2C142')).toBe(true),
+    )
+  })
+
+  it('the header refresh re-fetches the window WITH refresh=1, or the chip lags a minute behind', async () => {
+    // A bare invalidate would re-request without the flag and be handed the same ≤60 s server
+    // cache — and the flagship case for this feature is a PR an agent opened seconds ago.
+    const sent = stubFetch({
+      'GET /api/v1/github?refresh=1&limit=1000': () => jsonResponse(GITHUB),
+    })
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+
+    fireEvent.click(document.querySelector('[data-slot="gh-refresh"]')!)
+    await waitFor(() =>
+      expect(sent.some((r) => r.path === '/api/v1/github/issue-prs?issues=142%2C139&refresh=1')).toBe(true),
+    )
   })
 })
 
