@@ -12,6 +12,7 @@ import {
   finishRun,
   getGithub,
   getGithubChecks,
+  getGithubRefStatus,
   getGroup,
   getHealth,
   getProviderStatus,
@@ -20,6 +21,8 @@ import {
   getRun,
   getRunDiff,
   getRunHandoff,
+  getRunHistory,
+  getRunHistoryContext,
   getRuns,
   getSkills,
   getSkillsWhenReady,
@@ -126,7 +129,8 @@ describe('request shapes', () => {
       method: 'POST',
       body: { authFailureId: 'incident-1' },
     },
-    { name: 'getRunnerModels', call: () => getRunnerModels(), path: '/api/v1/models?runner=codex', method: 'GET' },
+    { name: 'getRunnerModels', call: () => getRunnerModels('codex'), path: '/api/v1/models?runner=codex', method: 'GET' },
+    { name: 'getRunnerModels(opencode)', call: () => getRunnerModels('opencode'), path: '/api/v1/models?runner=opencode', method: 'GET' },
     { name: 'getRuns', call: () => getRuns(), path: '/api/v1/runs', method: 'GET' },
     { name: 'getRun', call: () => getRun('run-1'), path: '/api/v1/runs/run-1', method: 'GET' },
     { name: 'getRunDiff', call: () => getRunDiff('run-1'), path: '/api/v1/runs/run-1/diff', method: 'GET' },
@@ -165,6 +169,22 @@ describe('request shapes', () => {
       name: 'getGithubChecks (#664)',
       call: () => getGithubChecks([7, 12]),
       path: '/api/v1/github/checks?prs=7%2C12',
+      method: 'GET',
+    },
+    {
+      name: 'getGithubRefStatus (both kinds)',
+      call: () => getGithubRefStatus('api', { prs: [7, 12], issues: [3] }),
+      // The project is EXPLICIT, not the active scope: the global Tasks page asks about rows
+      // belonging to projects it is not standing in.
+      path: '/api/v1/p/api/github/ref-status?prs=7%2C12&issues=3',
+      method: 'GET',
+    },
+    {
+      name: 'getGithubRefStatus (one kind — the empty list is not sent)',
+      // An empty `prs=` is a malformed list to the route (a 400), where an ABSENT key means
+      // "not asked for". The difference has to survive the client.
+      call: () => getGithubRefStatus('api', { issues: [3] }),
+      path: '/api/v1/p/api/github/ref-status?issues=3',
       method: 'GET',
     },
     {
@@ -550,5 +570,81 @@ describe('errors', () => {
     const error = (await getRunDiff('nope').catch((e: unknown) => e)) as ApiError
     expect(error.status).toBe(404)
     expect(error.message).toBe('not found')
+  })
+})
+
+/**
+ * The history routes are the two whose 200 is VALIDATED, not merely cast (#827).
+ *
+ * `useRunHistory` iterates `page.events`, so a body that is not a page would throw a `TypeError`
+ * mid-render instead of rejecting the query — and the hook's full-replay fallback only triggers
+ * on a rejection. These pin that a malformed 200 becomes an `ApiError`, which is what routes it
+ * into that fallback.
+ */
+describe('history responses are validated at the boundary (#827)', () => {
+  const PAGE = {
+    events: [{ seq: 1, ts: '2026-01-01T00:00:00.000Z', type: 'assistant', text: 'hi' }],
+    itemCount: 1,
+    liveCursor: 'cursor-live',
+    asOfSeq: 1,
+    hasOlder: false,
+  }
+  const CONTEXT = {
+    contextEvents: [{ seq: 1, ts: '2026-01-01T00:00:00.000Z', type: 'assistant' }],
+    asOfSeq: 1,
+  }
+
+  it('passes a well-formed page through unchanged, additive event keys included', async () => {
+    reply({ ...PAGE, olderCursor: 'cursor-older' })
+    const page = await getRunHistory('run-1')
+    expect(page.itemCount).toBe(1)
+    expect(page.olderCursor).toBe('cursor-older')
+    expect(page.newerCursor).toBeUndefined()
+    // The event schema is open (append-only vocabulary) — payload keys must survive validation.
+    expect(page.events[0]).toMatchObject({ seq: 1, type: 'assistant', text: 'hi' })
+  })
+
+  it('passes a well-formed context through unchanged', async () => {
+    reply(CONTEXT)
+    const context = await getRunHistoryContext('run-1')
+    expect(context.asOfSeq).toBe(1)
+    expect(context.contextEvents).toHaveLength(1)
+  })
+
+  it('rejects a 200 whose page body is the catch-all empty object', async () => {
+    reply({})
+    const error = (await getRunHistory('run-1').catch((e: unknown) => e)) as ApiError
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.status).toBe(200)
+    expect(error.message).toBe('the cezar server answered /runs/run-1/history with an unexpected body')
+  })
+
+  it('rejects a 200 whose page carries a non-array `events`', async () => {
+    reply({ ...PAGE, events: 'nope' })
+    const error = (await getRunHistory('run-1').catch((e: unknown) => e)) as ApiError
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.message).toContain('unexpected body')
+  })
+
+  it('rejects a 200 whose context body is the catch-all empty object', async () => {
+    reply({})
+    const error = (await getRunHistoryContext('run-1').catch((e: unknown) => e)) as ApiError
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.status).toBe(200)
+    expect(error.message).toBe(
+      'the cezar server answered /runs/run-1/history-context with an unexpected body',
+    )
+  })
+
+  it('still reports a real HTTP failure with the server\'s own words', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'run not found' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const error = (await getRunHistory('nope').catch((e: unknown) => e)) as ApiError
+    expect(error.status).toBe(404)
+    expect(error.message).toBe('run not found')
   })
 })

@@ -1,0 +1,150 @@
+[
+  { "type": "turn.started", "turnId": "turn_1" },
+  {
+    "type": "session.started",
+    "sessionId": "pi-session-1",
+    "backend": "pi",
+    "model": "anthropic/claude-sonnet-5"
+  },
+  {
+    "type": "item.started",
+    "item": { "kind": "message", "id": "turn_1_text_0", "role": "assistant", "text": "" }
+  },
+  { "type": "item.delta", "itemId": "turn_1_text_0", "field": "text", "delta": "Hello" },
+  {
+    "type": "item.completed",
+    "item": { "kind": "message", "id": "turn_1_text_0", "role": "assistant", "text": "Hello" }
+  },
+  {
+    "type": "item.started",
+    "item": { "kind": "reasoning", "id": "turn_1_reasoning_1", "text": "" }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_reasoning_1",
+    "field": "reasoning",
+    "delta": "Inspect first"
+  },
+  {
+    "type": "item.completed",
+    "item": { "kind": "reasoning", "id": "turn_1_reasoning_1", "text": "Inspect first" }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "task-1",
+      "name": "task",
+      "toolKind": "task",
+      "title": "Task: Review implementation",
+      "status": "running",
+      "input": { "description": "Review implementation" }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "task-1",
+      "name": "task",
+      "toolKind": "task",
+      "title": "Task: Review implementation",
+      "status": "completed",
+      "input": { "description": "Review implementation" },
+      "output": "done"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "edit-1",
+      "name": "edit",
+      "toolKind": "edit",
+      "title": "Edit src/a.ts",
+      "status": "running",
+      "input": { "path": "src/a.ts", "oldText": "old", "newText": "new" },
+      "diffs": [{ "path": "src/a.ts", "oldText": "old", "newText": "new" }]
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "edit-1",
+      "name": "edit",
+      "toolKind": "edit",
+      "title": "Edit src/a.ts",
+      "status": "completed",
+      "input": { "path": "src/a.ts", "oldText": "old", "newText": "new" },
+      "diffs": [{ "path": "src/a.ts", "oldText": "old", "newText": "new" }],
+      "output": "updated"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "todo-1",
+      "name": "todowrite",
+      "toolKind": "plan",
+      "title": "Update plan",
+      "status": "running",
+      "input": { "todos": [{ "content": "Implement RPC", "status": "in_progress" }] }
+    }
+  },
+  {
+    "type": "plan.updated",
+    "entries": [{ "content": "Implement RPC", "status": "in_progress" }]
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "todo-1",
+      "name": "todowrite",
+      "toolKind": "plan",
+      "title": "Update plan",
+      "status": "completed",
+      "input": { "todos": [{ "content": "Implement RPC", "status": "in_progress" }] },
+      "output": "saved"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "bash-1",
+      "name": "bash",
+      "toolKind": "execute",
+      "title": "Ran npm test",
+      "status": "running",
+      "input": { "command": "npm test" }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "bash-1",
+      "name": "bash",
+      "toolKind": "execute",
+      "title": "Ran npm test",
+      "status": "failed",
+      "input": { "command": "npm test" },
+      "error": "failed"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": { "input": 10, "output": 5, "total": 18, "cacheRead": 2, "cacheWrite": 1 },
+    "costUsd": 0.01
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": { "input": 10, "output": 5, "total": 18, "cacheRead": 2, "cacheWrite": 1 },
+    "costUsd": 0.01
+  }
+]

@@ -22,13 +22,17 @@ describe('workspace model catalog API', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  const app = (discover: () => Promise<Array<{ id: string; label: string; description: string }>>) =>
+  type Discover = () => Promise<Array<{ id: string; label: string; description: string }>>;
+
+  const app = (discover: Discover, opencodeDiscover: Discover = discover) =>
     createApp({
       repoRoot: root,
       store,
       manager: {} as RunManager,
       version: 'test',
-      modelCatalog: new RunnerModelCatalog({ adapters: { codex: { discover } } }),
+      modelCatalog: new RunnerModelCatalog({
+        adapters: { codex: { discover }, opencode: { discover: opencodeDiscover } },
+      }),
     });
 
   it('returns the discovered catalog and reuses its cache', async () => {
@@ -59,10 +63,34 @@ describe('workspace model catalog API', () => {
     });
   });
 
+  it('answers the OpenCode catalog too — the runner that used to have no discovery path (#794)', async () => {
+    const server = app(
+      async () => [{ id: 'gpt-future', label: 'GPT Future', description: 'Newly available' }],
+      async () => [{ id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' }],
+    );
+    const response = await apiRequest(server, '/api/v1/models?runner=opencode');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runner: 'opencode',
+      models: [{ id: 'openai/gpt-5.4', description: 'via openai' }],
+      source: 'live',
+    });
+  });
+
+  it('degrades an OpenCode discovery failure the same way', async () => {
+    const server = app(async () => [], async () => { throw new Error('secret detail'); });
+    const response = await apiRequest(server, '/api/v1/models?runner=opencode');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      runner: 'opencode', models: [], source: 'unavailable', stale: false,
+      reason: 'OpenCode model discovery is temporarily unavailable',
+    });
+  });
+
   it.each(['/api/v1/models', '/api/v1/models?runner=claude'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'runner must be codex' });
+    expect(await response.json()).toEqual({ error: 'runner must be codex or opencode' });
   });
 
   it('is workspace-level rather than project-scoped', async () => {

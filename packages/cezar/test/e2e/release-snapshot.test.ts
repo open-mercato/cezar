@@ -162,6 +162,52 @@ test('a missing NPM token forces a dry run instead of failing the job', { timeou
   }
 });
 
+test('the nightly channel stamps a dated version and publishes under the nightly tag', { timeout: 120_000 }, async () => {
+  const root = await makeFixture();
+  try {
+    await writeFile(join(root, 'github-output.txt'), '');
+    await runScript(
+      root,
+      {
+        GITHUB_EVENT_NAME: 'schedule',
+        GITHUB_REF_NAME: 'main',
+        GITHUB_REPOSITORY: 'open-mercato/cezar',
+        GITHUB_RUN_NUMBER: '12',
+        CEZ_RELEASE_CHANNEL: 'nightly',
+        // Pinned so the assertion below is not a race with the wall clock.
+        NIGHTLY_DATE: '20260813',
+      },
+      ['--dry-run'],
+    );
+
+    const aliasPkg = await readPkg(root, 'alias-cezar');
+    assert.equal(aliasPkg.version, '0.9.9-nightly.20260813.12');
+    assert.deepEqual(aliasPkg.dependencies, { '@scope/fake-root': '0.9.9-nightly.20260813.12' });
+    const output = await readFile(join(root, 'github-output.txt'), 'utf8');
+    assert.match(output, /^attempted=true$/m);
+    assert.match(output, /"distTag":"nightly"/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the same schedule event without the channel request publishes nothing', { timeout: 60_000 }, async () => {
+  const root = await makeFixture();
+  try {
+    await writeFile(join(root, 'github-output.txt'), '');
+    await runScript(root, {
+      GITHUB_EVENT_NAME: 'schedule',
+      GITHUB_REF_NAME: 'main',
+      GITHUB_REPOSITORY: 'open-mercato/cezar',
+      GITHUB_RUN_NUMBER: '13',
+    });
+    assert.equal((await readPkg(root, 'packages', 'cezar')).version, '0.9.9');
+    assert.match(await readFile(join(root, 'github-output.txt'), 'utf8'), /^attempted=false$/m);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a non-publishable event exits 0 without touching the manifests', { timeout: 60_000 }, async () => {
   const root = await makeFixture();
   try {

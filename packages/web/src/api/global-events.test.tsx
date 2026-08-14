@@ -314,6 +314,50 @@ describe('useGlobalEvents — run events', () => {
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: queryKeys.runs.changes('r2') })
   })
 
+  it('refreshes the cross-project index from ANOTHER project\u2019s run event', async () => {
+    // The bug this covers: every non-active project's event was dropped before it touched
+    // anything, so the global Tasks page — which spans the whole registry — heard nothing and ran
+    // on its poll alone. A renamed or finished task in a project you were not standing in stayed
+    // stale on screen until the next tick, and the tick does not run in a hidden tab.
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    source.emit('run', stampedRun(runRecord('r9', { status: 'done' }), 'some-other-project'))
+
+    // Debounced: one run emits many events, and a busy workspace emits from everywhere at once.
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: workspaceQueryKeys.runsIndex })
+    await vi.waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeys.runsIndex }),
+    )
+  })
+
+  it('still refuses to write another project\u2019s run into THIS scope\u2019s list', async () => {
+    // The index is cross-project; the scoped caches are not. Widening one must not widen the other.
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
+    const { source } = mount()
+
+    source.emit('run', stampedRun(runRecord('r9', { status: 'done' }), 'some-other-project'))
+
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())).toEqual([])
+  })
+
+  it('coalesces a burst of run events into ONE index refresh', async () => {
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    for (const status of ['queued', 'running', 'done'] as const) {
+      source.emit('run', stampedRun(runRecord('r1', { status })))
+    }
+
+    await vi.waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeys.runsIndex }),
+    )
+    const indexRefreshes = invalidate.mock.calls.filter(
+      (call) => (call[0] as { queryKey: unknown[] }).queryKey?.[1] === 'runs-index',
+    )
+    expect(indexRefreshes).toHaveLength(1)
+  })
+
   it('ignores a malformed frame and keeps serving the next one', () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
     const { source } = mount()
@@ -689,6 +733,9 @@ describe('useGlobalEvents — reconcile doctrine', () => {
 
     expect(invalidatedKeys(invalidate)).toEqual([
       queryKeys.runs.all, // covers the list and every detail under it
+      // The cross-project index behind the global Tasks page. Nothing else here covers it: the
+      // scoped caches hold one project, and this spans the workspace.
+      workspaceQueryKeys.runsIndex,
       queryKeys.todos,
       queryKeys.health, // the repo/branch chip — health is not on the stream (#369)
       queryKeys.worktrees, // the Resources panel's list/total (#483)
@@ -709,6 +756,8 @@ describe('useGlobalEvents — reconcile doctrine', () => {
     setVisibility('visible')
     expect(invalidatedKeys(invalidate)).toEqual([
       queryKeys.runs.all,
+      // The cross-project index behind the global Tasks page — nothing else here covers it.
+      workspaceQueryKeys.runsIndex,
       queryKeys.todos,
       queryKeys.health,
       queryKeys.worktrees,

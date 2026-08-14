@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { runnerSchema } from './health.ts';
+import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
@@ -277,7 +278,7 @@ export type ApiRun = z.infer<typeof apiRunSchema>;
 
 /**
  * One run in the WORKSPACE-level index (`GET /api/v1/workspace/runs-index`) — the ⌘K palette's
- * "find a task in any project" list.
+ * "find a task in any project" list, and the global Tasks page's rows.
  *
  * Deliberately a separate, slim shape rather than `ApiRun`. The index answers for every
  * registered project at once, and `runRecordSchema` carries `steps[]` and `workflowDef` — a fat
@@ -315,6 +316,52 @@ export const runIndexEntrySchema = z.object({
    *  it, so without it here a cross-project row would show a red "failed" dot and land in
    *  Recently finished for work that is simply waiting for its appointment. */
   autoResumeAt: z.string().optional(),
+  /** The workflow the run executes — the global Tasks page shows it in a column and groups by
+   *  it. Always present on the record (`RunRecord.workflow`), so required here; the display
+   *  refinement `workflowLabel` applies needs `steps[]`, which this row deliberately omits, so
+   *  a `(planned)` chain reads as itself here rather than as its first agent's name. */
+  workflow: z.string(),
+  /** The task's branch, when it has one — a column on the global page, and the one field that
+   *  makes a cross-project row identifiable at a glance without opening it. */
+  branch: z.string().optional(),
+  /** When the agent actually started, as opposed to when the task was created. The global page's
+   *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
+  startedAt: z.string().optional(),
+  /**
+   * The six fields `taskReference()` (`web/src/lib/tasks-table.ts`) reads to decide a task's PR
+   * or issue chip. Carried verbatim rather than pre-resolved into a `{kind, number, url}` on the
+   * server, because the rule that picks between them is subtle (#407, #526: a run that REVIEWED
+   * a PR must not claim it as its own, an issue-subject run must not adopt an incidental
+   * transcript PR) and it already exists, tested, on the client. Resolving it a second time
+   * server-side would be a second rule, and the two would drift.
+   *
+   * Six scalars is still the slim row this schema exists to keep: `steps[]` and `workflowDef`,
+   * the expensive half, stay off it.
+   */
+  pullRequestUrl: z.string().optional(),
+  referencedPullRequestUrl: z.string().optional(),
+  prNumber: z.number().optional(),
+  issueNumber: z.number().optional(),
+  referencedIssueUrl: z.string().optional(),
+  markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),
+  /** What the run has cost so far. Absent means nothing was recorded, which is NOT `$0` — the
+   *  cockpit prints an em dash rather than claiming a measurement that never happened. */
+  costUsd: z.number().optional(),
+  /** The persisted high-water marks a FINISHED run leaves behind. `usage` below stops existing
+   *  the moment the process tree does, so without these a finished row could say nothing at all
+   *  about what it took to run. */
+  peakRssBytes: z.number().optional(),
+  peakProcCount: z.number().optional(),
+  /**
+   * The live CPU/RSS sample of this run's process tree, attached on the way out exactly as
+   * `GET /runs` attaches it (`withUsage`) — never persisted.
+   *
+   * It can ride a WORKSPACE-level answer because the sampler is process-wide: one cezar process
+   * runs every project's agents, so `currentUsage(runId)` knows about a run whatever project it
+   * belongs to. That is what lets a cross-project table show live usage without opening one
+   * event stream per project (it could not — the run stream is project-scoped).
+   */
+  usage: processUsageSchema.optional(),
 });
 export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
 
@@ -325,11 +372,31 @@ export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
  * that says nothing reads as "your task is not here" when the honest answer is "not in the
  * newest N". Naming the projects that hit the cap is what lets a consumer say so.
  */
+/**
+ * Everything the SERVER already knew about the references its rows carry, per project — the
+ * statuses that would otherwise cost a second round trip a beat after the table paints.
+ *
+ * Read from cache only: this never asks the forge, so a cold entry is simply absent and
+ * `GET /github/ref-status` stays the route that actually goes and looks. That makes it free, and
+ * being free is what lets it be a superset — the server looks up every number a run mentions
+ * rather than re-deriving which one the cockpit will display (#407, #526 live client-side, and
+ * duplicating that rule is how the two would drift).
+ */
+export const referenceStatusesByProjectSchema = z.record(
+  z.string(),
+  z.object({
+    prs: z.record(z.number(), referenceStatusSchema),
+    issues: z.record(z.number(), referenceStatusSchema),
+  }),
+);
+
 export const runsIndexResponseSchema = z.object({
   /** Newest first, across every registered project. Archived runs are included — `GET /runs`
    *  carries them for the project you are standing in, and a finder that dropped them elsewhere
    *  would make a task vanish the moment you left its project. */
   runs: z.array(runIndexEntrySchema),
+  /** Additive: absent statuses mean "nothing warm", never "nothing to show". */
+  referenceStatuses: referenceStatusesByProjectSchema,
   /** The per-project cap that produced this list. */
   perProjectLimit: z.number(),
   /** Ids of the projects that had more runs than the cap allowed. */

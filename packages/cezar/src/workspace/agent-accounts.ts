@@ -124,6 +124,7 @@ const selectionSchema = z
     claude: z.string().max(64).optional().catch(undefined),
     codex: z.string().max(64).optional().catch(undefined),
     opencode: z.string().max(64).optional().catch(undefined),
+    pi: z.string().max(64).optional().catch(undefined),
   })
   .passthrough();
 

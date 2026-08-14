@@ -4,6 +4,10 @@
 // `publish-snapshot` job after `npm run build` (spec
 // .ai/specs/2026-07-18-npm-preview-publish.md, #482).
 //
+// Also the engine behind the nightly channel (.github/workflows/nightly.yml):
+// same stamping and same publish order, reached by setting CEZ_RELEASE_CHANNEL=nightly
+// rather than by the event — see resolveChannel in src/release/snapshot.ts.
+//
 // Reads the CI facts from GitHub Actions' env, decides via computeSnapshot,
 // stamps every manifest in the release set (intra-release dependencies pinned
 // exact), publishes the non-`private` ones in DEPENDENCY ORDER — api-client,
@@ -76,9 +80,14 @@ const manifests = {
 };
 
 const prNumberRaw = process.env.PR_NUMBER ?? '';
+// The nightly channel is named after the UTC day it was cut. Overridable via env so
+// the e2e suite can assert an exact version instead of the wall clock.
+const nightlyDate = process.env.NIGHTLY_DATE || new Date().toISOString().slice(0, 10).replaceAll('-', '');
 const plan = computeSnapshot({
   eventName: process.env.GITHUB_EVENT_NAME ?? '',
   refName: process.env.GITHUB_REF_NAME ?? '',
+  requestedChannel: process.env.CEZ_RELEASE_CHANNEL || undefined,
+  nightlyDate,
   prNumber: /^\d+$/.test(prNumberRaw) ? Number(prNumberRaw) : undefined,
   headRepo: process.env.PR_HEAD_REPO || undefined,
   repo: process.env.GITHUB_REPOSITORY || undefined,

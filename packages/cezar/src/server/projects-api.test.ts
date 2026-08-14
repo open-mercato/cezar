@@ -12,6 +12,7 @@ import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { allocateProjectSlug, clearProjectProbeCache, listProjects, registerProject } from '../workspace/projects.ts';
@@ -636,6 +637,68 @@ describe('workspace projects API', () => {
         expect(status, JSON.stringify(bad)).toBe(400);
       }
       expect((await getProjects()).projects.find((p) => p.id === other.id)?.maxParallel).toBeUndefined();
+    });
+
+    it('sets tags, normalized, and leaves maxParallel alone', async () => {
+      await registerProject(otherRoot);
+      await mergeWriteWorkspaceConfig((config) => {
+        const entry = config.projects.find((p) => p.root === realpathSync(otherRoot));
+        if (entry) entry.maxParallel = 3;
+      });
+      const other = (await getProjects()).projects.find((p) => p.root === realpathSync(otherRoot))!;
+
+      const { status, body } = await patch(other.id, {
+        tags: [' Storefront ', 'api', 'STOREFRONT'],
+      });
+
+      expect(status).toBe(200);
+      // Trimmed by the schema, then deduped case-insensitively (first spelling wins) and
+      // sorted by the normalizer.
+      expect(body.project.tags).toEqual(['api', 'Storefront']);
+      // A body that says nothing about maxParallel must not clear it.
+      expect(body.project.maxParallel).toBe(3);
+      const listed = await getProjects();
+      expect(listed.projects.find((p) => p.id === other.id)?.tags).toEqual(['api', 'Storefront']);
+    });
+
+    it('clears tags on null and on [], storing no key at all', async () => {
+      const other = await registerProject(otherRoot);
+      await patch(other.id, { tags: ['api'] });
+      for (const cleared of [null, []]) {
+        await patch(other.id, { tags: ['api'] });
+        const { status, body } = await patch(other.id, { tags: cleared });
+        expect(status, JSON.stringify(cleared)).toBe(200);
+        expect(body.project.tags, JSON.stringify(cleared)).toBeUndefined();
+        // Absent, not `[]`: an untagged project costs nothing in the registry file.
+        const raw = JSON.parse(readFileSync(workspaceConfigPath(), 'utf8')) as {
+          projects: { id: string; tags?: unknown }[];
+        };
+        expect(Object.keys(raw.projects.find((p) => p.id === other.id)!)).not.toContain('tags');
+      }
+    });
+
+    it('leaves tags alone for a maxParallel-only body (the pre-tags client)', async () => {
+      const other = await registerProject(otherRoot);
+      await patch(other.id, { tags: ['storefront'] });
+      const { status, body } = await patch(other.id, { maxParallel: 2 });
+      expect(status).toBe(200);
+      expect(body.project.tags).toEqual(['storefront']);
+      expect(body.project.maxParallel).toBe(2);
+    });
+
+    it('rejects a tag list the registry could not hold, and persists nothing', async () => {
+      const other = await registerProject(otherRoot);
+      const bodies = [
+        { tags: ['x'.repeat(PROJECT_TAG_MAX_LENGTH + 1)] },
+        { tags: Array.from({ length: PROJECT_TAGS_MAX + 1 }, (_, i) => `t${i}`) },
+        { tags: [''] },
+        { tags: 'storefront' },
+      ];
+      for (const bad of bodies) {
+        const { status } = await patch(other.id, bad);
+        expect(status, JSON.stringify(bad)).toBe(400);
+      }
+      expect((await getProjects()).projects.find((p) => p.id === other.id)?.tags).toBeUndefined();
     });
 
     it('404s an unknown id and a malformed one, and rewrites nothing (read-first, like DELETE)', async () => {

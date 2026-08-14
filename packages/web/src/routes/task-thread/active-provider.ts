@@ -6,6 +6,7 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  pi: 'pi',
 }
 
 /** Mirrors the server's providerForActiveRun for POST /runs/:id/messages. */

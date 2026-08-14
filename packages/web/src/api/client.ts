@@ -42,6 +42,7 @@ import type {
   GitPushResponse,
   GithubChecksData,
   GithubSearchData,
+  GithubRefStatusData,
   GithubCommentsData,
   GithubData,
   GithubMergeMethod,
@@ -75,8 +76,11 @@ import type {
   RepoBranchResponse,
   RepoCommitPayload,
   RunCommitsResponse,
+  RunHistoryContext,
+  RunHistoryPage,
   RepoResponse,
   Runner,
+  ModelDiscoveryRunner,
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
@@ -106,6 +110,8 @@ import {
   getApiBaseUrl,
   getApiScope,
   queryScope,
+  runHistoryContextSchema,
+  runHistoryPageSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -296,6 +302,45 @@ async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>
 }
 
 /**
+ * The `safeParse` half of a contract schema, spelled structurally.
+ *
+ * Keeps this package free of a direct `zod` dependency: the schemas arrive through the
+ * api-client barrel as runtime values (`contract-pipeline.test.ts` pins that), and this is the
+ * only part of them `unwrapValidated` uses.
+ */
+type ResponseValidator<T> = {
+  safeParse: (value: unknown) => { success: true; data: T } | { success: false }
+}
+
+/**
+ * `unwrap`, plus the shape check its cast cannot make.
+ *
+ * `unwrap` ends in `parsed as OkJson<R>` — a compile-time claim about a body the server sent at
+ * runtime. For most routes the claim is harmless: a caller reading a missing field gets
+ * `undefined` and renders nothing. The history routes are different — `useRunHistory` iterates
+ * `page.events`, so a 200 whose body is not a page throws a `TypeError` mid-render and takes the
+ * session view down with it, bypassing the hook's own full-replay fallback (which only triggers
+ * on a REJECTED query). Validating here turns that body into the same `ApiError` a non-JSON body
+ * already produces, so the malformed case degrades exactly like the unreachable one.
+ *
+ * Its own server cannot produce such a body (`contract-parity.test.ts` pins both response types
+ * to these schemas) — this guards the boundary against a proxy, a stale server, or a stub.
+ */
+async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>>(
+  res: R,
+  label: string,
+  schema: ResponseValidator<OkJson<R>>,
+): Promise<OkJson<R>> {
+  const status = res.status
+  const parsed = await unwrap(res, label)
+  const result = schema.safeParse(parsed)
+  if (!result.success) {
+    throw new ApiError(status, `the cezar server answered ${label} with an unexpected body`)
+  }
+  return result.data
+}
+
+/**
  * The one `fetch` both request paths go through — hand-written and typed alike.
  *
  * Shared rather than duplicated because the two behaviours below are the contract, and a
@@ -351,9 +396,13 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** Host-local Codex catalog. Workspace-level: one CLI/account serves every project. */
-export async function getRunnerModels(opts?: ReadOptions): Promise<RunnerModelCatalogResponse> {
-  return unwrap(await cez.api.v1.models.$get({ query: { runner: 'codex' } }, init(opts)), '/models')
+/** Host-local catalog for one discovery runner (`codex`, `opencode` — #794). Workspace-level:
+ *  one CLI/account serves every project. */
+export async function getRunnerModels(
+  runner: ModelDiscoveryRunner,
+  opts?: ReadOptions,
+): Promise<RunnerModelCatalogResponse> {
+  return unwrap(await cez.api.v1.models.$get({ query: { runner } }, init(opts)), '/models')
 }
 
 /** Host-local authentication state shared by every project. */
@@ -453,6 +502,38 @@ export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
       init(opts),
     ),
     runPath(id),
+  )
+}
+
+/** One reverse-paged history page. Validated (not merely cast) because `useRunHistory` iterates
+ *  `events`: see `unwrapValidated`. */
+export async function getRunHistory(
+  id: string,
+  cursor?: string,
+  opts?: ReadOptions,
+): Promise<RunHistoryPage> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].runs[':id'].history.$get(
+      {
+        param: { projectId: queryScope(), id: encodeURIComponent(id) },
+        query: { ...(cursor !== undefined ? { cursor } : {}) },
+      },
+      init(opts),
+    ),
+    `${runPath(id)}/history`,
+    runHistoryPageSchema,
+  )
+}
+
+/** The compact current-state context for a run. Validated for the same reason as the page above. */
+export async function getRunHistoryContext(id: string, opts?: ReadOptions): Promise<RunHistoryContext> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].runs[':id']['history-context'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `${runPath(id)}/history-context`,
+    runHistoryContextSchema,
   )
 }
 
@@ -709,6 +790,38 @@ export async function getGithubSearch(
       init(opts),
     ),
     '/github/search',
+  )
+}
+
+/**
+ * Batched status for the PR/issue chips on screen. Takes its project EXPLICITLY, like
+ * `getProjectRuns` and `archiveProjectRun` and for the same reason: the global Tasks page stands
+ * outside every `/p/:projectId`, and its rows belong to different projects — `queryScope()` would
+ * ask the boot project about another project's PR number and get a confident wrong answer.
+ * Callers standing in one project pass their own id.
+ *
+ * Degrades to `{ available: false, reason }` server-side; an absent number is "nothing known",
+ * which the chip renders exactly as it did before statuses existed.
+ */
+export async function getGithubRefStatus(
+  projectId: string,
+  refs: { prs?: readonly number[]; issues?: readonly number[] },
+  opts?: ReadOptions,
+): Promise<GithubRefStatusData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github['ref-status'].$get(
+      {
+        param: { projectId },
+        query: {
+          // Spread conditionally: the route reads an ABSENT key as "not asked for", and an empty
+          // string would be a malformed list (a 400) rather than a silent no-op.
+          ...(refs.prs?.length ? { prs: refs.prs.join(',') } : {}),
+          ...(refs.issues?.length ? { issues: refs.issues.join(',') } : {}),
+        },
+      },
+      init(opts),
+    ),
+    '/github/ref-status',
   )
 }
 
@@ -998,6 +1111,50 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
       json: { archived },
     }),
     runPath(id, '/archive'),
+  )
+}
+
+/**
+ * The same route by EXPLICIT project — the twin of `getProjectRuns`, and for the same reason:
+ * the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would send the
+ * BOOT project's id for a row that belongs to another project, and the archive would either 404
+ * or (with a colliding id) land on the wrong task. Every caller that is already standing in the
+ * run's own project keeps using `archiveRun`.
+ */
+export async function archiveProjectRun(
+  projectId: string,
+  id: string,
+  archived = true,
+): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { archived },
+    }),
+    runPath(id, '/archive'),
+  )
+}
+
+/**
+ * The read receipt by EXPLICIT project — the twin of `archiveProjectRun`, and for the same
+ * reason: the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would
+ * stamp the receipt on the boot project. `read: false` is the inverse route (#775).
+ */
+export async function setProjectRunRead(
+  projectId: string,
+  id: string,
+  read: boolean,
+): Promise<RunRecord> {
+  const route = read ? 'read' : 'unread'
+  return unwrap(
+    await (read
+      ? cez.api.v1.p[':projectId'].runs[':id'].read.$post({
+          param: { projectId, id: encodeURIComponent(id) },
+        })
+      : cez.api.v1.p[':projectId'].runs[':id'].unread.$post({
+          param: { projectId, id: encodeURIComponent(id) },
+        })),
+    runPath(id, `/${route}`),
   )
 }
 
