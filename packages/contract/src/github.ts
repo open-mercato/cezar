@@ -74,6 +74,34 @@ export const githubChecksDataSchema = z.discriminatedUnion('available', [
 ]);
 export type GithubChecksData = z.infer<typeof githubChecksDataSchema>;
 
+/** One pull request linked to an issue (GitHub timeline: connected or cross-referenced). */
+export const linkedPrSchema = z.object({
+  number: z.number(),
+  url: z.string(),
+  state: z.enum(['open', 'merged', 'closed']),
+  /** Open PRs only, and only when the forge says so — a draft is a materially weaker signal. */
+  isDraft: z.boolean().optional(),
+});
+export type LinkedPr = z.infer<typeof linkedPrSchema>;
+
+/**
+ * `GET /api/v1/github/issue-prs?issues=…` — lazy issue→linked-PR map, `number → LinkedPr[]`,
+ * hydrated for the on-screen issue rows only (sibling of `/github/checks`, #664). An absent
+ * number means "no linked PRs / not found". Links are deduped by PR number and ordered
+ * open → merged → closed, then by descending number.
+ */
+export const githubIssuePrsDataSchema = z.discriminatedUnion('available', [
+  z.object({
+    available: z.literal(true),
+    links: z.record(z.number(), z.array(linkedPrSchema)),
+  }),
+  z.object({
+    available: z.literal(false),
+    reason: z.string(),
+  }),
+]);
+export type GithubIssuePrsData = z.infer<typeof githubIssuePrsDataSchema>;
+
 /**
  * Where a referenced PR or issue STANDS — the vocabulary a task's tracker chip paints.
  *

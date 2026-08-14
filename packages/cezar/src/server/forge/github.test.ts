@@ -15,10 +15,13 @@ vi.mock('node:child_process', async (importOriginal) => {
 
 import {
   __clearCommentsCacheForTests,
+  __clearIssuePrsCacheForTests,
   __clearRepoHandleCacheForTests,
   resolveRepoHandle,
   detectGithubCached,
   fetchGithubComments,
+  fetchGithubIssuePrs,
+  fetchIssuePrLinks,
   fetchTimelinePages,
   fetchCommentCounts,
   fetchCommitChecks,
@@ -32,6 +35,7 @@ import {
   refNumberFromUrl,
   fetchGithub,
   GH_CHECKS_MAX,
+  GH_ISSUE_PRS_MAX,
   ghCheckRunSchema,
   ghTimelineEventSchema,
   mergeThread,
@@ -1477,6 +1481,292 @@ describe('fetchPrChecks (#664)', () => {
     // The route caps the request at GH_CHECKS_MAX; the default chunk size matches so one query
     // never exceeds it. A defensive guard so raising one constant without the other is caught.
     expect(GH_CHECKS_MAX).toBe(100);
+  });
+});
+
+/** `fetchIssuePrLinks` (#816) hydrates the Issues row's linked-PR chips lazily, keyed by issue
+ *  number. It mirrors `fetchPrChecks` — aliased so N issues cost one subprocess, each alias
+ *  resolves independently, any failure degrades to absent links — and adds the three rules the
+ *  timeline itself forces: dedupe a PR seen twice, subtract an explicit disconnection, and drop
+ *  every non-`PullRequest` reference. */
+describe('fetchIssuePrLinks (#816)', () => {
+  type Node =
+    | { kind: 'connected' | 'disconnected' | 'cross'; number: number; state?: string; isDraft?: boolean }
+    | { kind: 'issue-cross' };
+
+  const node = (n: Node) => {
+    if (n.kind === 'issue-cross') {
+      // A real timeline is full of these — an issue mentioning another issue. It must parse and
+      // be dropped, not throw and cost the whole window its chips.
+      return { __typename: 'CrossReferencedEvent', source: { __typename: 'Issue', number: 999 } };
+    }
+    const pr = {
+      __typename: 'PullRequest',
+      number: n.number,
+      url: `https://github.com/o/n/pull/${n.number}`,
+      state: n.state ?? 'OPEN',
+      ...(n.isDraft === undefined ? {} : { isDraft: n.isDraft }),
+    };
+    if (n.kind === 'cross') return { __typename: 'CrossReferencedEvent', source: pr };
+    if (n.kind === 'disconnected') {
+      return { __typename: 'DisconnectedEvent', subject: { __typename: 'PullRequest', number: n.number } };
+    }
+    return { __typename: 'ConnectedEvent', subject: pr };
+  };
+
+  /** One aliased `issue` node per requested number; `'missing'` → the alias resolved null. */
+  const reply = (issues: Array<Node[] | 'missing'>) =>
+    JSON.stringify({
+      data: {
+        repository: Object.fromEntries(
+          issues.map((nodes, i) => [
+            `i${i}`,
+            nodes === 'missing' ? null : { timelineItems: { nodes: nodes.map(node) } },
+          ]),
+        ),
+      },
+    });
+
+  it('maps each alias back to its issue number and carries the PR fields through', async () => {
+    const runGraphql = vi.fn(async () =>
+      reply([[{ kind: 'connected', number: 51, state: 'OPEN', isDraft: false }], [{ kind: 'cross', number: 62, state: 'MERGED' }]]),
+    );
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7, 12]);
+    expect(links).toEqual({
+      7: [{ number: 51, url: 'https://github.com/o/n/pull/51', state: 'open', isDraft: false }],
+      12: [{ number: 62, url: 'https://github.com/o/n/pull/62', state: 'merged' }],
+    });
+  });
+
+  it('omits isDraft entirely when the forge did not send it — an undefined key drops on the wire', async () => {
+    const runGraphql = vi.fn(async () => reply([[{ kind: 'connected', number: 51, state: 'MERGED' }]]));
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect('isDraft' in links[7]![0]!).toBe(false);
+  });
+
+  it('maps OPEN/MERGED/CLOSED, and an unknown state falls back to closed', async () => {
+    const runGraphql = vi.fn(async () =>
+      reply([
+        [
+          { kind: 'connected', number: 10, state: 'OPEN' },
+          { kind: 'connected', number: 11, state: 'MERGED' },
+          { kind: 'connected', number: 12, state: 'CLOSED' },
+          { kind: 'connected', number: 13, state: 'SOMETHING_NEW' },
+        ],
+      ]),
+    );
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect(links[7]!.map((l) => [l.number, l.state])).toEqual([
+      [10, 'open'],
+      [11, 'merged'],
+      [13, 'closed'],
+      [12, 'closed'],
+    ]);
+  });
+
+  it('dedupes a PR that appears as BOTH a connected event and a cross-reference', async () => {
+    const runGraphql = vi.fn(async () =>
+      reply([[{ kind: 'connected', number: 51, state: 'OPEN' }, { kind: 'cross', number: 51, state: 'OPEN' }]]),
+    );
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect(links[7]).toHaveLength(1);
+  });
+
+  it('subtracts a PR carried by a DisconnectedEvent — the ConnectedEvent never leaves the timeline', async () => {
+    const runGraphql = vi.fn(async () =>
+      reply([
+        [
+          { kind: 'connected', number: 51, state: 'OPEN' },
+          { kind: 'connected', number: 52, state: 'OPEN' },
+          { kind: 'disconnected', number: 51 },
+        ],
+      ]),
+    );
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect(links[7]!.map((l) => l.number)).toEqual([52]);
+  });
+
+  it('drops issue↔issue references — only PullRequest subjects/sources become chips', async () => {
+    const runGraphql = vi.fn(async () => reply([[{ kind: 'issue-cross' }, { kind: 'issue-cross' }]]));
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect(7 in links).toBe(false);
+  });
+
+  it('still finds the PR behind 29 issue cross-references — this is why the query asks for `last`', async () => {
+    // The window bound is TOTAL connected/disconnected/cross-referenced events, not linked-PR
+    // count. `last: 30` keeps the newest references, so a just-opened PR is always in scope; the
+    // reply here is what the forge returns once that ordering has been applied.
+    const noise = Array.from({ length: 29 }, () => ({ kind: 'issue-cross' }) as Node);
+    const runGraphql = vi.fn(async () => reply([[...noise, { kind: 'connected', number: 51, state: 'OPEN' }]]));
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect(links[7]!.map((l) => l.number)).toEqual([51]);
+  });
+
+  it('asks for the newest timeline items, never the oldest', async () => {
+    let sent = '';
+    const runGraphql = vi.fn(async (q: string) => {
+      sent = q;
+      return reply([[]]);
+    });
+    await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect(sent).toContain('timelineItems(last: 30');
+    expect(sent).not.toContain('timelineItems(first:');
+    expect(sent).toContain('i0: issue(number: 7)');
+  });
+
+  it('orders open → merged → closed, then by descending number', async () => {
+    const runGraphql = vi.fn(async () =>
+      reply([
+        [
+          { kind: 'connected', number: 20, state: 'CLOSED' },
+          { kind: 'connected', number: 30, state: 'MERGED' },
+          { kind: 'connected', number: 10, state: 'OPEN' },
+          { kind: 'connected', number: 40, state: 'OPEN' },
+        ],
+      ]),
+    );
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect(links[7]!.map((l) => l.number)).toEqual([40, 10, 30, 20]);
+  });
+
+  it('leaves an unknown issue, and one with no linked PRs, absent', async () => {
+    const runGraphql = vi.fn(async () => reply(['missing', []]));
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7, 8]);
+    expect(links).toEqual({});
+  });
+
+  it('chunks at the given size, and a failed chunk costs only its own issues', async () => {
+    const runGraphql = vi.fn(async (q: string) => {
+      if (q.includes('issue(number: 3)')) throw new Error('HTTP 502');
+      return reply([[{ kind: 'connected', number: 51, state: 'OPEN' }], [{ kind: 'connected', number: 52, state: 'OPEN' }]]);
+    });
+    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [1, 2, 3, 4], 2);
+    expect(runGraphql).toHaveBeenCalledTimes(2); // [1,2] then [3,4]
+    expect(1 in links).toBe(true);
+    expect(2 in links).toBe(true);
+    expect(3 in links).toBe(false);
+    expect(4 in links).toBe(false);
+  });
+
+  it('degrades to an empty map when every chunk fails, never throwing', async () => {
+    const runGraphql = vi.fn(async () => { throw new Error('offline'); });
+    await expect(fetchIssuePrLinks(runGraphql, 'o', 'n', [7])).resolves.toEqual({});
+  });
+
+  it('spawns nothing for an empty issue list', async () => {
+    const runGraphql = vi.fn();
+    expect(await fetchIssuePrLinks(runGraphql, 'o', 'n', [])).toEqual({});
+    expect(runGraphql).not.toHaveBeenCalled();
+  });
+
+  it('caps a single query at GH_ISSUE_PRS_MAX aliases', () => {
+    // The route caps the request at GH_ISSUE_PRS_MAX; the default chunk size matches so one query
+    // never exceeds it. A defensive guard so raising one constant without the other is caught.
+    expect(GH_ISSUE_PRS_MAX).toBe(100);
+  });
+});
+
+/** The route-facing half: the handle resolve, the per-issue cache and its `refresh` bypass, and
+ *  the in-payload degrade. Driven through `execFileMock` because that is the only seam between
+ *  `fetchGithubIssuePrs` and `gh`. */
+describe('fetchGithubIssuePrs cache and degrade (#816)', () => {
+  const ROOT = '/repo/issue-prs';
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', ''); // dry-run would short-circuit the gh path under test
+    execFileMock.mockReset();
+    __clearIssuePrsCacheForTests();
+    __clearRepoHandleCacheForTests();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** `gh repo view` for the handle, then `gh api graphql` for the window. */
+  const ghReplies = (graphql: string) => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      cb(null, { stdout: argv[0] === 'repo' ? 'o/n\n' : graphql, stderr: '' });
+    });
+  };
+
+  const linkReply = JSON.stringify({
+    data: {
+      repository: {
+        i0: {
+          timelineItems: {
+            nodes: [
+              {
+                __typename: 'ConnectedEvent',
+                subject: { __typename: 'PullRequest', number: 51, url: 'u', state: 'OPEN', isDraft: false },
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  it('resolves the handle and returns the window', async () => {
+    ghReplies(linkReply);
+    await expect(fetchGithubIssuePrs(ROOT, [7])).resolves.toEqual({
+      available: true,
+      links: { 7: [{ number: 51, url: 'u', state: 'open', isDraft: false }] },
+    });
+  });
+
+  it('serves the second identical window from cache without re-querying', async () => {
+    ghReplies(linkReply);
+    await fetchGithubIssuePrs(ROOT, [7]);
+    const afterFirst = execFileMock.mock.calls.length;
+    await expect(fetchGithubIssuePrs(ROOT, [7])).resolves.toEqual({
+      available: true,
+      links: { 7: [{ number: 51, url: 'u', state: 'open', isDraft: false }] },
+    });
+    expect(execFileMock.mock.calls.length).toBe(afterFirst);
+  });
+
+  it('caches "no linked PRs" too, so a chip-less issue is not re-queried', async () => {
+    ghReplies(JSON.stringify({ data: { repository: { i0: { timelineItems: { nodes: [] } } } } }));
+    await expect(fetchGithubIssuePrs(ROOT, [7])).resolves.toEqual({ available: true, links: {} });
+    const afterFirst = execFileMock.mock.calls.length;
+    await fetchGithubIssuePrs(ROOT, [7]);
+    expect(execFileMock.mock.calls.length).toBe(afterFirst);
+  });
+
+  it('refresh=true bypasses the cache — the point of the flag is "an agent JUST opened a PR"', async () => {
+    ghReplies(JSON.stringify({ data: { repository: { i0: { timelineItems: { nodes: [] } } } } }));
+    await fetchGithubIssuePrs(ROOT, [7]);
+    const afterFirst = execFileMock.mock.calls.length;
+    ghReplies(linkReply);
+    await expect(fetchGithubIssuePrs(ROOT, [7], true)).resolves.toEqual({
+      available: true,
+      links: { 7: [{ number: 51, url: 'u', state: 'open', isDraft: false }] },
+    });
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(afterFirst);
+  });
+
+  it('degrades in the payload when the repository handle is unavailable — never a throw', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      cb(new Error('spawn gh ENOENT'), null);
+    });
+    await expect(fetchGithubIssuePrs(ROOT, [7])).resolves.toEqual({
+      available: false,
+      reason: 'repository handle unavailable',
+    });
+  });
+
+  it('CEZ_DRY_RUN=1 paints chips from the mock catalog so the offline demo and e2e show them', async () => {
+    vi.stubEnv('CEZ_DRY_RUN', '1');
+    const data = await fetchGithubIssuePrs(ROOT, [142, 139, 135]);
+    expect(data.available).toBe(true);
+    if (!data.available) return;
+    expect(data.links[142]!.map((l) => l.state)).toEqual(['open', 'merged']);
+    expect(data.links[135]!.map((l) => l.state)).toEqual(['closed']);
+    expect(139 in data.links).toBe(false); // no linked PR — the row simply carries no chip
+    expect(execFileMock).not.toHaveBeenCalled();
   });
 });
 
