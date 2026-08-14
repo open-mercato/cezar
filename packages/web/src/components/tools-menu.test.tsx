@@ -66,6 +66,21 @@ const DEFAULT_DOWN: HealthResponse = { ...HEALTH, defaultRunner: 'codex' }
 /** Neither agent CLI is on the host — nothing can run at all. */
 const NO_RUNNER: HealthResponse = { ...HEALTH, checks: HEALTH.checks.map(unavailableIf('claude')) }
 
+/** The host's only agent CLI is `pi`, the fourth runner (#470) — `detectEnvironment()` probes it
+ *  beside the other three, so a runner set that forgets it calls a working host broken. */
+const PI_ONLY: HealthResponse = {
+  ...HEALTH,
+  defaultRunner: 'pi',
+  checks: [...HEALTH.checks.map(unavailableIf('claude')), { name: 'pi', available: true, version: '0.4.0' }],
+}
+
+/** `claude` runs, but `pi` — the configured default — is the one that is not installed. */
+const PI_DEFAULT_DOWN: HealthResponse = {
+  ...HEALTH,
+  defaultRunner: 'pi',
+  checks: [...HEALTH.checks, { name: 'pi', available: false, hint: 'optional: install the pi CLI' }],
+}
+
 function renderMenu(health: HealthResponse | undefined) {
   return render(
     <MemoryRouter initialEntries={['/']}>
@@ -122,6 +137,15 @@ describe('toolsBlocker', () => {
 
   it('stays quiet when an older server never probed the default runner', () => {
     expect(toolsBlocker({ ...HEALTH, defaultRunner: 'opencode' })).toBeNull()
+  })
+
+  it('counts every runner the contract knows — a `pi`-only host can start tasks', () => {
+    expect(toolsBlocker(PI_ONLY)).toBeNull()
+    expect(toolsTooltip(PI_ONLY)).toBe('cezar v0.1.3 · optional: claude, codex not installed')
+  })
+
+  it('names `pi` when it is the configured default and the missing one', () => {
+    expect(toolsBlocker(PI_DEFAULT_DOWN)).toBe('default runner (pi) not found')
   })
 })
 
