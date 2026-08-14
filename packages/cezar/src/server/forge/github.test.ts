@@ -1514,14 +1514,26 @@ describe('fetchIssuePrLinks (#816)', () => {
     return { __typename: 'ConnectedEvent', subject: pr };
   };
 
-  /** One aliased `issue` node per requested number; `'missing'` → the alias resolved null. */
-  const reply = (issues: Array<Node[] | 'missing'>) =>
+  /**
+   * One aliased `issueOrPullRequest` node per requested number.
+   *
+   * `'missing'` → the alias resolved null. `'is-a-pr'` → the number is a PULL request, which the
+   * union resolves to a bare `{ __typename: 'PullRequest' }` because the document only selects the
+   * timeline `... on Issue`. That second shape is the whole point of using the union: with the
+   * plain `issue(number:)` the same number produced a `NOT_FOUND` error instead, `gh` exited
+   * non-zero for the entire batch, and every issue in the window silently lost its chips.
+   */
+  const reply = (issues: Array<Node[] | 'missing' | 'is-a-pr'>) =>
     JSON.stringify({
       data: {
         repository: Object.fromEntries(
           issues.map((nodes, i) => [
             `i${i}`,
-            nodes === 'missing' ? null : { timelineItems: { nodes: nodes.map(node) } },
+            nodes === 'missing'
+              ? null
+              : nodes === 'is-a-pr'
+                ? { __typename: 'PullRequest' }
+                : { __typename: 'Issue', timelineItems: { nodes: nodes.map(node) } },
           ]),
         ),
       },
@@ -1531,7 +1543,7 @@ describe('fetchIssuePrLinks (#816)', () => {
     const runGraphql = vi.fn(async () =>
       reply([[{ kind: 'connected', number: 51, state: 'OPEN', isDraft: false }], [{ kind: 'cross', number: 62, state: 'MERGED' }]]),
     );
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7, 12]);
+    const { links } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7, 12]);
     expect(links).toEqual({
       7: [{ number: 51, url: 'https://github.com/o/n/pull/51', state: 'open', isDraft: false }],
       12: [{ number: 62, url: 'https://github.com/o/n/pull/62', state: 'merged' }],
@@ -1540,7 +1552,7 @@ describe('fetchIssuePrLinks (#816)', () => {
 
   it('omits isDraft entirely when the forge did not send it — an undefined key drops on the wire', async () => {
     const runGraphql = vi.fn(async () => reply([[{ kind: 'connected', number: 51, state: 'MERGED' }]]));
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    const { links } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
     expect('isDraft' in links[7]![0]!).toBe(false);
   });
 
@@ -1555,7 +1567,7 @@ describe('fetchIssuePrLinks (#816)', () => {
         ],
       ]),
     );
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    const { links } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
     expect(links[7]!.map((l) => [l.number, l.state])).toEqual([
       [10, 'open'],
       [11, 'merged'],
@@ -1568,7 +1580,7 @@ describe('fetchIssuePrLinks (#816)', () => {
     const runGraphql = vi.fn(async () =>
       reply([[{ kind: 'connected', number: 51, state: 'OPEN' }, { kind: 'cross', number: 51, state: 'OPEN' }]]),
     );
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    const { links } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
     expect(links[7]).toHaveLength(1);
   });
 
@@ -1582,13 +1594,13 @@ describe('fetchIssuePrLinks (#816)', () => {
         ],
       ]),
     );
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    const { links } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
     expect(links[7]!.map((l) => l.number)).toEqual([52]);
   });
 
   it('drops issue↔issue references — only PullRequest subjects/sources become chips', async () => {
     const runGraphql = vi.fn(async () => reply([[{ kind: 'issue-cross' }, { kind: 'issue-cross' }]]));
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    const { links } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
     expect(7 in links).toBe(false);
   });
 
@@ -1598,7 +1610,7 @@ describe('fetchIssuePrLinks (#816)', () => {
     // reply here is what the forge returns once that ordering has been applied.
     const noise = Array.from({ length: 29 }, () => ({ kind: 'issue-cross' }) as Node);
     const runGraphql = vi.fn(async () => reply([[...noise, { kind: 'connected', number: 51, state: 'OPEN' }]]));
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    const { links } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
     expect(links[7]!.map((l) => l.number)).toEqual([51]);
   });
 
@@ -1611,7 +1623,7 @@ describe('fetchIssuePrLinks (#816)', () => {
     await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
     expect(sent).toContain('timelineItems(last: 30');
     expect(sent).not.toContain('timelineItems(first:');
-    expect(sent).toContain('i0: issue(number: 7)');
+    expect(sent).toContain('i0: issueOrPullRequest(number: 7)');
   });
 
   it('orders open → merged → closed, then by descending number', async () => {
@@ -1625,37 +1637,71 @@ describe('fetchIssuePrLinks (#816)', () => {
         ],
       ]),
     );
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    const { links } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
     expect(links[7]!.map((l) => l.number)).toEqual([40, 10, 30, 20]);
   });
 
-  it('leaves an unknown issue, and one with no linked PRs, absent', async () => {
+  it('leaves an unknown number, and an issue with no linked PRs, absent — and neither is a failure', async () => {
     const runGraphql = vi.fn(async () => reply(['missing', []]));
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7, 8]);
+    const { links, failed } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7, 8]);
     expect(links).toEqual({});
+    expect(failed).toEqual([]); // absent ≠ unanswered
   });
 
-  it('chunks at the given size, and a failed chunk costs only its own issues', async () => {
+  /**
+   * The regression this whole query shape exists for. Issues and pull requests share one numbering
+   * space, so a number pinned from the URL (`/github/issues/<n>`) can turn out to be a PR. With the
+   * old `issue(number:)` GitHub answered NOT_FOUND *as an error*, `gh` exited non-zero for the
+   * whole batch, and every issue in the window lost its chips. `issueOrPullRequest` resolves it to
+   * a bare `PullRequest` instead, which is skipped like any other number with no timeline.
+   */
+  it('skips a number that is a PULL request without costing its neighbours their chips', async () => {
+    const runGraphql = vi.fn(async () =>
+      reply([[{ kind: 'connected', number: 51, state: 'OPEN' }], 'is-a-pr', [{ kind: 'connected', number: 53, state: 'MERGED' }]]),
+    );
+    const { links, failed } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [7, 885, 9]);
+    expect(links[7]!.map((l) => l.number)).toEqual([51]);
+    expect(885 in links).toBe(false);
+    expect(links[9]!.map((l) => l.number)).toEqual([53]);
+    expect(failed).toEqual([]); // a PR number is an absent answer, not a failed one
+  });
+
+  it('asks the union, never the issue-only field — the whole batch used to die on one bad number', async () => {
+    let sent = '';
+    const runGraphql = vi.fn(async (q: string) => { sent = q; return reply([[]]); });
+    await fetchIssuePrLinks(runGraphql, 'o', 'n', [7]);
+    expect(sent).toContain('i0: issueOrPullRequest(number: 7)');
+    expect(sent).toContain('... on Issue {');
+    expect(sent).not.toMatch(/i\d+: issue\(number:/);
+  });
+
+  it('chunks at the given size, and a failed chunk is REPORTED, not silently empty', async () => {
     const runGraphql = vi.fn(async (q: string) => {
-      if (q.includes('issue(number: 3)')) throw new Error('HTTP 502');
+      if (q.includes('(number: 3)')) throw new Error('HTTP 502');
       return reply([[{ kind: 'connected', number: 51, state: 'OPEN' }], [{ kind: 'connected', number: 52, state: 'OPEN' }]]);
     });
-    const links = await fetchIssuePrLinks(runGraphql, 'o', 'n', [1, 2, 3, 4], 2);
+    const { links, failed, reason } = await fetchIssuePrLinks(runGraphql, 'o', 'n', [1, 2, 3, 4], 2);
     expect(runGraphql).toHaveBeenCalledTimes(2); // [1,2] then [3,4]
     expect(1 in links).toBe(true);
     expect(2 in links).toBe(true);
-    expect(3 in links).toBe(false);
-    expect(4 in links).toBe(false);
+    // The surviving chunk keeps its answers; the dead one names its numbers so the caller can tell
+    // "we could not ask" from "there is nothing here".
+    expect(failed).toEqual([3, 4]);
+    expect(reason).toBe('HTTP 502');
   });
 
-  it('degrades to an empty map when every chunk fails, never throwing', async () => {
+  it('reports every number as failed when every chunk fails, never throwing', async () => {
     const runGraphql = vi.fn(async () => { throw new Error('offline'); });
-    await expect(fetchIssuePrLinks(runGraphql, 'o', 'n', [7])).resolves.toEqual({});
+    await expect(fetchIssuePrLinks(runGraphql, 'o', 'n', [7])).resolves.toEqual({
+      links: {},
+      failed: [7],
+      reason: 'offline',
+    });
   });
 
   it('spawns nothing for an empty issue list', async () => {
     const runGraphql = vi.fn();
-    expect(await fetchIssuePrLinks(runGraphql, 'o', 'n', [])).toEqual({});
+    expect(await fetchIssuePrLinks(runGraphql, 'o', 'n', [])).toEqual({ links: {}, failed: [] });
     expect(runGraphql).not.toHaveBeenCalled();
   });
 
@@ -1695,6 +1741,7 @@ describe('fetchGithubIssuePrs cache and degrade (#816)', () => {
     data: {
       repository: {
         i0: {
+          __typename: 'Issue',
           timelineItems: {
             nodes: [
               {
@@ -1706,6 +1753,10 @@ describe('fetchGithubIssuePrs cache and degrade (#816)', () => {
         },
       },
     },
+  });
+
+  const emptyReply = JSON.stringify({
+    data: { repository: { i0: { __typename: 'Issue', timelineItems: { nodes: [] } } } },
   });
 
   it('resolves the handle and returns the window', async () => {
@@ -1728,7 +1779,7 @@ describe('fetchGithubIssuePrs cache and degrade (#816)', () => {
   });
 
   it('caches "no linked PRs" too, so a chip-less issue is not re-queried', async () => {
-    ghReplies(JSON.stringify({ data: { repository: { i0: { timelineItems: { nodes: [] } } } } }));
+    ghReplies(emptyReply);
     await expect(fetchGithubIssuePrs(ROOT, [7])).resolves.toEqual({ available: true, links: {} });
     const afterFirst = execFileMock.mock.calls.length;
     await fetchGithubIssuePrs(ROOT, [7]);
@@ -1736,7 +1787,7 @@ describe('fetchGithubIssuePrs cache and degrade (#816)', () => {
   });
 
   it('refresh=true bypasses the cache — the point of the flag is "an agent JUST opened a PR"', async () => {
-    ghReplies(JSON.stringify({ data: { repository: { i0: { timelineItems: { nodes: [] } } } } }));
+    ghReplies(emptyReply);
     await fetchGithubIssuePrs(ROOT, [7]);
     const afterFirst = execFileMock.mock.calls.length;
     ghReplies(linkReply);
@@ -1747,6 +1798,63 @@ describe('fetchGithubIssuePrs cache and degrade (#816)', () => {
     expect(execFileMock.mock.calls.length).toBeGreaterThan(afterFirst);
   });
 
+  /**
+   * A failed query must NOT come back as `{ available: true, links: {} }`. That shape means "we
+   * asked, and none of these issues has a linked pull request" — the opposite of what happened —
+   * and BACKWARD_COMPATIBILITY.md §2 promises `{ available: false, reason }` for a failure.
+   */
+  it('answers available:false when the query fails, rather than a confident empty map', async () => {
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (argv[0] === 'repo') cb(null, { stdout: 'o/n\n', stderr: '' });
+      else cb(new Error('API rate limit exceeded'), null);
+    });
+    await expect(fetchGithubIssuePrs(ROOT, [7])).resolves.toEqual({
+      available: false,
+      reason: expect.stringContaining('rate limit'),
+    });
+  });
+
+  /**
+   * And it must not remember the failure as an answer. Caching `[]` for a number whose chunk died
+   * would freeze "no linked PRs" in for the full 60 s TTL, so the chips stay missing long after
+   * the forge recovered.
+   */
+  it('does not cache a failed number — the next call asks again', async () => {
+    let failNext = true;
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      if (argv[0] === 'repo') return cb(null, { stdout: 'o/n\n', stderr: '' });
+      if (failNext) {
+        failNext = false;
+        return cb(new Error('offline'), null);
+      }
+      cb(null, { stdout: linkReply, stderr: '' });
+    });
+    expect((await fetchGithubIssuePrs(ROOT, [7])).available).toBe(false);
+    // No `refresh` here on purpose: recovery must not depend on the user pressing anything.
+    await expect(fetchGithubIssuePrs(ROOT, [7])).resolves.toEqual({
+      available: true,
+      links: { 7: [{ number: 51, url: 'u', state: 'open', isDraft: false }] },
+    });
+  });
+
+  it('a number that is a PULL request is absent, and does not fail the window', async () => {
+    ghReplies(
+      JSON.stringify({
+        data: {
+          repository: {
+            i0: { __typename: 'Issue', timelineItems: { nodes: [] } },
+            i1: { __typename: 'PullRequest' },
+          },
+        },
+      }),
+    );
+    await expect(fetchGithubIssuePrs(ROOT, [7, 885])).resolves.toEqual({ available: true, links: {} });
+  });
+
   it('degrades in the payload when the repository handle is unavailable — never a throw', async () => {
     execFileMock.mockImplementation((...args: unknown[]) => {
       const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
@@ -1754,7 +1862,7 @@ describe('fetchGithubIssuePrs cache and degrade (#816)', () => {
     });
     await expect(fetchGithubIssuePrs(ROOT, [7])).resolves.toEqual({
       available: false,
-      reason: 'repository handle unavailable',
+      reason: 'repository handle unavailable — is `gh` installed and authenticated?',
     });
   });
 

@@ -169,8 +169,14 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   const issuePrNumbers = useMemo(() => {
     if (!gh?.available) return []
     const nums = new Set<number>()
+    // Pin the URL-selected issue so a deep-linked row past the cap still hydrates — but only when
+    // the list actually holds it. A `:n` the user typed can be anything: a PR number, or a number
+    // GitHub has never issued. Both are answerable only by asking the forge about them, and a
+    // number the forge cannot resolve costs the WHOLE batch its answer (`gh` exits non-zero on any
+    // GraphQL `errors` entry). Pinning an absent number also buys nothing — with no row on screen
+    // there is no chip to hydrate. So the pin is restricted to numbers the list vouches for.
     if (view === 'issues' && selectedNumber !== null && Number.isInteger(selectedNumber)) {
-      nums.add(selectedNumber)
+      if (gh.issues.some((issue) => issue.number === selectedNumber)) nums.add(selectedNumber)
     }
     for (const issue of gh.issues) {
       if (nums.size >= ISSUE_PRS_WINDOW) break

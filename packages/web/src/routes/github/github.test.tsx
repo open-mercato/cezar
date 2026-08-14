@@ -651,6 +651,22 @@ describe('the linked-PR chips on issue rows (#816)', () => {
     )
   })
 
+  it('never pins a :n the list does not hold — one unresolvable number costs the whole batch', async () => {
+    // `/github/issues/<anything>` is reachable by typing, and the number can be a PR's or one
+    // GitHub never issued. Asking the forge about it makes `gh` exit non-zero for the entire
+    // query, so every row would lose its chips; and with no row on screen there is nothing to
+    // hydrate anyway. The window must therefore carry only numbers the list vouches for.
+    const sent = stubFetch()
+    renderAt('/github/issues/999999')
+    await waitFor(() => expect(rows()).toHaveLength(2))
+    await waitFor(() =>
+      expect(sent.some((r) => r.path.startsWith('/api/v1/github/issue-prs'))).toBe(true),
+    )
+    const asked = sent.filter((r) => r.path.startsWith('/api/v1/github/issue-prs'))
+    expect(asked.every((r) => !r.path.includes('999999'))).toBe(true)
+    expect(asked.some((r) => r.path === '/api/v1/github/issue-prs?issues=142%2C139')).toBe(true)
+  })
+
   it('the header refresh re-fetches the window WITH refresh=1, or the chip lags a minute behind', async () => {
     // A bare invalidate would re-request without the flag and be handed the same ≤60 s server
     // cache — and the flagship case for this feature is a PR an agent opened seconds ago.

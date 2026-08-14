@@ -1171,9 +1171,20 @@ export const GH_ISSUE_PRS_MAX = 100;
 const ISSUE_PRS_TIMELINE_DEPTH = 30;
 
 /**
- * One aliased `issue(number:)` per requested number, so a whole window costs one round-trip —
- * exactly as `prChecksQuery` batches its PRs. A bare repeated `issue` field is not a runnable
- * document; the `i0`, `i1`, … aliases are what make it one.
+ * One alias per requested number, so a whole window costs one round-trip — exactly as
+ * `prChecksQuery` batches its PRs. A bare repeated field is not a runnable document; the `i0`,
+ * `i1`, … aliases are what make it one.
+ *
+ * **`issueOrPullRequest`, NOT `issue`.** Issues and pull requests share one numbering space, and
+ * `issue(number:)` asked about a pull request — or about a number that no longer exists — is a
+ * question with no answer, which GitHub reports as a `NOT_FOUND` entry in an `errors` array rather
+ * than as a null alias. `gh api graphql` exits non-zero the moment that array is present, *even
+ * when `data` carries a perfectly good answer for every other alias*, so a single bad number used
+ * to cost the entire window its chips. That is reachable in one click: the on-screen window pins
+ * the URL-selected number, so `/github/issues/<a PR number>` — a pasted or stale link — poisoned
+ * every row. `refStatusQuery` below hit this exact trap first and documents it at length; this
+ * query takes the same cure. A number that turns out to be a pull request now simply comes back
+ * as `{ __typename: 'PullRequest' }` with no `timelineItems`, and is skipped.
  *
  * **`last:`, not `first:`.** `timelineItems` is a single stream of all three requested event types,
  * so `first` would take the OLDEST thirty — and on a long-lived, heavily cross-referenced issue
@@ -1191,7 +1202,7 @@ function issuePrsQuery(numbers: number[]): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    i${i}: issue(number: ${n}) { timelineItems(last: ${ISSUE_PRS_TIMELINE_DEPTH}, itemTypes: [CONNECTED_EVENT, DISCONNECTED_EVENT, CROSS_REFERENCED_EVENT]) { nodes { __typename ... on ConnectedEvent { subject { __typename ... on PullRequest { number url state isDraft } } } ... on DisconnectedEvent { subject { __typename ... on PullRequest { number } } } ... on CrossReferencedEvent { source { __typename ... on PullRequest { number url state isDraft } } } } } }`,
+        `    i${i}: issueOrPullRequest(number: ${n}) { __typename ... on Issue { timelineItems(last: ${ISSUE_PRS_TIMELINE_DEPTH}, itemTypes: [CONNECTED_EVENT, DISCONNECTED_EVENT, CROSS_REFERENCED_EVENT]) { nodes { __typename ... on ConnectedEvent { subject { __typename ... on PullRequest { number url state isDraft } } } ... on DisconnectedEvent { subject { __typename ... on PullRequest { number } } } ... on CrossReferencedEvent { source { __typename ... on PullRequest { number url state isDraft } } } } } } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -1209,19 +1220,25 @@ const ghTimelinePrRefSchema = z
   })
   .nullish();
 
+/** `timelineItems` is optional because `issueOrPullRequest` also resolves PULL requests, and the
+ *  document only selects the timeline `... on Issue` — a pull-request alias comes back as a bare
+ *  `{ __typename: 'PullRequest' }`, which the parser skips. */
 const ghIssuePrsSchema = z.record(
   z.string(),
   z
     .object({
-      timelineItems: z.object({
-        nodes: z.array(
-          z.object({
-            __typename: z.string(),
-            subject: ghTimelinePrRefSchema,
-            source: ghTimelinePrRefSchema,
-          }),
-        ),
-      }),
+      __typename: z.string(),
+      timelineItems: z
+        .object({
+          nodes: z.array(
+            z.object({
+              __typename: z.string(),
+              subject: ghTimelinePrRefSchema,
+              source: ghTimelinePrRefSchema,
+            }),
+          ),
+        })
+        .nullish(),
     })
     .nullish(),
 );
@@ -1247,13 +1264,25 @@ function orderLinkedPrs(links: LinkedPr[]): LinkedPr[] {
   );
 }
 
+/** What one windowed fetch learned. `failed` names the numbers whose chunk did not answer at all —
+ *  recorded rather than left absent, because "we could not ask" and "this issue has no linked pull
+ *  requests" are opposite facts and collapsing them lets a network blip render as a confident
+ *  "nothing here". Mirrors `fetchRefStatuses`, which keeps a `failed` list for the same reason. */
+export type IssuePrLinksResult = {
+  links: Record<number, LinkedPr[]>;
+  failed: number[];
+  /** The first chunk failure's message, for the route's `reason`. */
+  reason?: string;
+};
+
 /**
- * Linked pull requests per issue number, as a `number → LinkedPr[]` map.
+ * Linked pull requests per issue number, as a `number → LinkedPr[]` map plus the numbers that
+ * could not be answered.
  *
  * Batched and aliased so a 100-issue window costs one subprocess. Each alias resolves
- * independently and an unknown number comes back null (left absent), so partial results degrade
- * cleanly; a failed chunk costs only its own issues. Exported for tests, with `runGraphql`
- * injected so this is testable without shelling out.
+ * independently, so partial results degrade cleanly and a failed chunk costs only its own issues —
+ * but those issues land in `failed` instead of silently looking empty. Exported for tests, with
+ * `runGraphql` injected so this is testable without shelling out.
  */
 export async function fetchIssuePrLinks(
   runGraphql: GraphqlRunner,
@@ -1261,8 +1290,8 @@ export async function fetchIssuePrLinks(
   name: string,
   numbers: number[],
   chunkSize = GH_ISSUE_PRS_MAX,
-): Promise<Record<number, LinkedPr[]>> {
-  const out: Record<number, LinkedPr[]> = {};
+): Promise<IssuePrLinksResult> {
+  const out: IssuePrLinksResult = { links: {}, failed: [] };
   if (numbers.length === 0) return out;
 
   for (let i = 0; i < numbers.length; i += chunkSize) {
@@ -1274,7 +1303,10 @@ export async function fetchIssuePrLinks(
       const repository = ghIssuePrsSchema.parse(raw?.data?.repository ?? {});
       chunk.forEach((number, index) => {
         const node = repository[`i${index}`];
-        if (!node) return; // unknown issue → alias resolved null; leave the entry absent
+        // No timeline: either the alias resolved null, or the number is a PULL request rather than
+        // an issue (`issueOrPullRequest` answers both, the document only selects the timeline
+        // `... on Issue`). Neither is a failure — the entry is simply absent.
+        if (!node?.timelineItems) return;
         // Deduped by PR number: one pull request routinely appears as BOTH a connected event and
         // a cross-reference, and two chips for one PR is the obvious wrong answer. Which copy
         // wins does not matter — GraphQL resolves `state`/`isDraft` off the pull request NOW, not
@@ -1304,10 +1336,13 @@ export async function fetchIssuePrLinks(
         // `ConnectedEvent` is still sitting in the timeline.
         for (const number_ of disconnected) byNumber.delete(number_);
         const links = orderLinkedPrs([...byNumber.values()]);
-        if (links.length > 0) out[number] = links;
+        if (links.length > 0) out.links[number] = links;
       });
-    } catch {
-      // A failed chunk costs only its own issues; the rest still resolve.
+    } catch (err) {
+      // A failed chunk costs only its own issues; the rest still resolve. The numbers are recorded
+      // as FAILED rather than left absent, so nothing downstream reads them as "no linked PRs".
+      out.failed.push(...chunk);
+      out.reason ??= firstLine(err instanceof Error ? err.message : String(err));
     }
   }
   return out;
@@ -1355,17 +1390,34 @@ export async function fetchGithubIssuePrs(
   }
   if (misses.length === 0) return { available: true, links };
   try {
+    // `resolveRepoHandle` swallows its own cause (a missing `gh`, an unauthenticated one, or a
+    // slug that is not a clean owner/name), so the reason names the possibilities rather than
+    // guessing one — an unreachable `/ENOENT/` test here would have been worse than no test.
     const ownerName = await resolveRepoHandle(repoRoot);
-    if (!ownerName) return { available: false, reason: 'repository handle unavailable' };
+    if (!ownerName) {
+      return { available: false, reason: 'repository handle unavailable — is `gh` installed and authenticated?' };
+    }
     const runGraphql: GraphqlRunner = (query, variables) => {
       const args = ['api', 'graphql', '-f', `query=${query}`];
       for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
       return gh(repoRoot, args);
     };
     const fetched = await fetchIssuePrLinks(runGraphql, ownerName.owner, ownerName.name, misses);
+    // Nothing came back at all: say so. Answering `{ available: true, links: {} }` here would tell
+    // the cockpit "we asked, and none of these issues has a linked pull request" — the opposite of
+    // what happened — and the 60 s cache would keep repeating it. `available: false` is the shape
+    // BACKWARD_COMPATIBILITY.md §2 promises for exactly this case.
+    if (fetched.failed.length === misses.length) {
+      return { available: false, reason: describeGhFailure(fetched.reason) };
+    }
+    const failed = new Set(fetched.failed);
     for (const n of misses) {
-      // Absent (no links, unknown issue) caches as `[]` so a chip-less issue isn't re-queried.
-      const found = fetched[n] ?? [];
+      // A number whose chunk failed is neither returned nor cached — re-asking is the only honest
+      // thing to do, and caching `[]` would freeze the wrong answer in for a minute.
+      if (failed.has(n)) continue;
+      // Absent (no links, unknown number, or a number that is a pull request) caches as `[]` so a
+      // chip-less issue isn't re-queried.
+      const found = fetched.links[n] ?? [];
       if (found.length > 0) links[n] = found;
       issuePrsCache.delete(`${repoRoot}\0${n}`); // re-insert so this key becomes the newest
       issuePrsCache.set(`${repoRoot}\0${n}`, { at: now, links: found });
@@ -1377,14 +1429,18 @@ export async function fetchGithubIssuePrs(
     }
     return { available: true, links };
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      available: false,
-      reason: /ENOENT/.test(message)
-        ? 'gh CLI not found — install it and run `gh auth login`'
-        : firstLine(message),
-    };
+    // Defensive: `fetchIssuePrLinks` handles its own chunk failures, so reaching here means
+    // something above it broke.
+    return { available: false, reason: describeGhFailure(err instanceof Error ? err.message : String(err)) };
   }
+}
+
+/** A missing `gh` is the one failure with an obvious remedy, so it gets told rather than described.
+ *  It is reachable here even though `resolveRepoHandle` runs first: that handle is memoized for the
+ *  life of the process, so a `gh` that disappears from PATH afterwards fails at the query instead. */
+function describeGhFailure(message: string | undefined): string {
+  if (!message) return 'linked pull requests unavailable';
+  return /ENOENT/.test(message) ? 'gh CLI not found — install it and run `gh auth login`' : firstLine(message);
 }
 
 /** CEZ_DRY_RUN=1 — links synthesised from the mock catalog so the offline demo (and the e2e suite,
