@@ -1276,9 +1276,9 @@ export async function fetchIssuePrLinks(
         const node = repository[`i${index}`];
         if (!node) return; // unknown issue → alias resolved null; leave the entry absent
         // Deduped by PR number: one pull request routinely appears as BOTH a connected event and
-        // a cross-reference, and two chips for one PR is the obvious wrong answer. First writer
-        // wins — `last:` already put the newest references at the end of the stream, and both
-        // copies carry the same state.
+        // a cross-reference, and two chips for one PR is the obvious wrong answer. Which copy
+        // wins does not matter — GraphQL resolves `state`/`isDraft` off the pull request NOW, not
+        // as of the event, so every occurrence of a number carries identical fields.
         const byNumber = new Map<number, LinkedPr>();
         const disconnected = new Set<number>();
         for (const item of node.timelineItems.nodes) {
