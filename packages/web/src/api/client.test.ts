@@ -21,6 +21,8 @@ import {
   getRun,
   getRunDiff,
   getRunHandoff,
+  getRunHistory,
+  getRunHistoryContext,
   getRuns,
   getSkills,
   getSkillsWhenReady,
@@ -568,5 +570,81 @@ describe('errors', () => {
     const error = (await getRunDiff('nope').catch((e: unknown) => e)) as ApiError
     expect(error.status).toBe(404)
     expect(error.message).toBe('not found')
+  })
+})
+
+/**
+ * The history routes are the two whose 200 is VALIDATED, not merely cast (#827).
+ *
+ * `useRunHistory` iterates `page.events`, so a body that is not a page would throw a `TypeError`
+ * mid-render instead of rejecting the query — and the hook's full-replay fallback only triggers
+ * on a rejection. These pin that a malformed 200 becomes an `ApiError`, which is what routes it
+ * into that fallback.
+ */
+describe('history responses are validated at the boundary (#827)', () => {
+  const PAGE = {
+    events: [{ seq: 1, ts: '2026-01-01T00:00:00.000Z', type: 'assistant', text: 'hi' }],
+    itemCount: 1,
+    liveCursor: 'cursor-live',
+    asOfSeq: 1,
+    hasOlder: false,
+  }
+  const CONTEXT = {
+    contextEvents: [{ seq: 1, ts: '2026-01-01T00:00:00.000Z', type: 'assistant' }],
+    asOfSeq: 1,
+  }
+
+  it('passes a well-formed page through unchanged, additive event keys included', async () => {
+    reply({ ...PAGE, olderCursor: 'cursor-older' })
+    const page = await getRunHistory('run-1')
+    expect(page.itemCount).toBe(1)
+    expect(page.olderCursor).toBe('cursor-older')
+    expect(page.newerCursor).toBeUndefined()
+    // The event schema is open (append-only vocabulary) — payload keys must survive validation.
+    expect(page.events[0]).toMatchObject({ seq: 1, type: 'assistant', text: 'hi' })
+  })
+
+  it('passes a well-formed context through unchanged', async () => {
+    reply(CONTEXT)
+    const context = await getRunHistoryContext('run-1')
+    expect(context.asOfSeq).toBe(1)
+    expect(context.contextEvents).toHaveLength(1)
+  })
+
+  it('rejects a 200 whose page body is the catch-all empty object', async () => {
+    reply({})
+    const error = (await getRunHistory('run-1').catch((e: unknown) => e)) as ApiError
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.status).toBe(200)
+    expect(error.message).toBe('the cezar server answered /runs/run-1/history with an unexpected body')
+  })
+
+  it('rejects a 200 whose page carries a non-array `events`', async () => {
+    reply({ ...PAGE, events: 'nope' })
+    const error = (await getRunHistory('run-1').catch((e: unknown) => e)) as ApiError
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.message).toContain('unexpected body')
+  })
+
+  it('rejects a 200 whose context body is the catch-all empty object', async () => {
+    reply({})
+    const error = (await getRunHistoryContext('run-1').catch((e: unknown) => e)) as ApiError
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error.status).toBe(200)
+    expect(error.message).toBe(
+      'the cezar server answered /runs/run-1/history-context with an unexpected body',
+    )
+  })
+
+  it('still reports a real HTTP failure with the server\'s own words', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'run not found' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    const error = (await getRunHistory('nope').catch((e: unknown) => e)) as ApiError
+    expect(error.status).toBe(404)
+    expect(error.message).toBe('run not found')
   })
 })

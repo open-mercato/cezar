@@ -1,0 +1,151 @@
+name: Nightly
+
+# Publishes `main`'s tip to npm under the `nightly` dist-tag, every day.
+#
+# A third channel alongside the two in docs/publishing.md: previews follow a PR or
+# `develop`, stable `latest` is owner-driven and manual — neither gives you "what is
+# on the trunk right now" without hunting for a run number. `npx cezar-cli@nightly`
+# does. Like every snapshot it publishes a PRERELEASE version under an explicit
+# dist-tag, so it can never become the default install.
+on:
+  schedule:
+    # 03:17 UTC — off the hour, where Actions' scheduled-run queue is least congested.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: 'Publish even if main has not moved since the last nightly'
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel mid-publish: an interrupted run could leave the scoped package on
+  # the registry without its alias.
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  nightly:
+    name: Publish nightly to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # A scheduled run always uses the default branch; this also pins the manual
+    # dispatch to main, so a nightly can never be cut from a feature branch.
+    if: github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      id-token: write # npm provenance attestation
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Full history: the default shallow clone has no commit dates to compare,
+          # so the "did main move?" check below would see an empty log every night.
+          fetch-depth: 0
+
+      # Nothing merged since yesterday's run means tonight's build is byte-identical
+      # to the one already tagged `nightly` — publishing it again would only add a
+      # version nobody can tell apart. A manual dispatch skips this check by default:
+      # if someone asked for a nightly from the Actions tab, they want one.
+      - name: Decide whether to publish
+        id: decide
+        env:
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force }}
+        run: |
+          if [ "$FORCE" = "true" ]; then
+            echo "Forced by manual dispatch — publishing."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          COMMITS=$(git log --since="24 hours ago" --oneline HEAD | wc -l | tr -d ' ')
+          if [ "$COMMITS" -eq 0 ]; then
+            echo "No commits on main in the last 24h — skipping tonight's publish."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "$COMMITS commit(s) on main in the last 24h — publishing."
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # `lts/*` like every other workflow here: a nightly is built and verified on
+      # the Node release line users are actually on that day (see ci.yml).
+      - name: Set up Node.js
+        if: steps.decide.outputs.publish == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: lts/*
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        if: steps.decide.outputs.publish == 'true'
+        run: npm ci
+
+      # A nightly is an installable build, not a preview of a proposal — it carries
+      # the same gate as a release. main is protected and every commit on it passed
+      # ci.yml already, but the trunk can still go red through the calendar alone (a
+      # dependency's new major, an expired fixture), and a broken `@nightly` is worse
+      # than a missing one.
+      - name: Verify before publishing
+        if: steps.decide.outputs.publish == 'true'
+        run: |
+          npm run typecheck
+          npm run test:unit
+          npm test
+
+      - name: Build application
+        if: steps.decide.outputs.publish == 'true'
+        run: npm run build
+
+      - name: Run packaged CLI E2E tests
+        if: steps.decide.outputs.publish == 'true'
+        run: npm run test:package
+
+      - name: Publish nightly
+        id: nightly
+        if: steps.decide.outputs.publish == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # The channel is requested BY NAME, never inferred from the event — that is
+          # what keeps any other workflow_dispatch from cutting a nightly by accident.
+          CEZ_RELEASE_CHANNEL: nightly
+        run: node scripts/release-snapshot.mjs
+
+      # `always()` so a skipped night still explains itself, but only once the
+      # decision actually ran — a job that died before it has nothing to report.
+      - name: Write workflow summary
+        if: always() && steps.decide.outputs.publish != ''
+        env:
+          PUBLISH: ${{ steps.decide.outputs.publish }}
+          ATTEMPTED: ${{ steps.nightly.outputs.attempted }}
+          RESULT: ${{ steps.nightly.outputs.result }}
+        run: |
+          if [ "$PUBLISH" != "true" ]; then
+            {
+              echo "## 🌙 Nightly skipped"
+              echo ""
+              echo "\`main\` has not moved in the last 24 hours — the current \`nightly\` tag is already this build."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$ATTEMPTED" != "true" ]; then
+            echo "## 🌙 Nightly did not publish (see the job log)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          node - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          const r = JSON.parse(process.env.RESULT);
+          console.log(`## 🌙 Nightly ${r.dryRun ? 'dry run (NPM_TOKEN not configured)' : 'published'}`);
+          console.log('');
+          console.log(`- Version: \`${r.version}\``);
+          console.log(`- Dist-tag: \`${r.distTag}\``);
+          console.log(`- Packages: \`${r.aliasName}\` → \`${r.rootName}\` → \`${r.apiClientName}\``);
+          console.log('');
+          console.log('```bash');
+          console.log(`npx ${r.aliasName}@nightly          # always the latest nightly`);
+          for (const line of r.installLines) console.log(line);
+          console.log('```');
+          EOF

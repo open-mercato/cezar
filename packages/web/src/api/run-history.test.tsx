@@ -169,4 +169,44 @@ describe('useRunHistory', () => {
     expect(FakeEventSource.instances.length).toBeGreaterThanOrEqual(2)
     vi.unstubAllGlobals()
   })
+
+  /**
+   * The compaction call is fire-and-forget, so it has no query to carry a rejection (#827).
+   * Since the client now REJECTS a malformed history page instead of casting it, this path can
+   * be reached by a bad body as well as by a transport error — and must stay a silent no-op
+   * rather than an unhandled rejection that fails the surrounding render.
+   */
+  it('survives a failed compaction: the live transcript stands and the guard reopens', async () => {
+    FakeEventSource.instances = []
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    mockHistory
+      .mockResolvedValueOnce(page(100))
+      .mockRejectedValue(new Error('the cezar server answered /runs/run-1/history with an unexpected body'))
+    mockContext.mockResolvedValue(context())
+    const { wrapper } = harness()
+    const { result } = renderHook(() => useRunHistory('run-1'), { wrapper })
+    await waitFor(() => expect(FakeEventSource.instances).toHaveLength(1))
+
+    act(() => {
+      for (let seq = 101; seq <= 300; seq += 1) {
+        FakeEventSource.instances[0]!.emit(
+          'run-event',
+          JSON.stringify({ seq, ts: '2026-07-30T00:00:00.000Z', type: 'note', message: `event-${seq}` }),
+        )
+      }
+    })
+
+    await waitFor(() => expect(mockHistory).toHaveBeenCalledTimes(2))
+    // Nothing was compacted, so the events the SSE already delivered are still what renders.
+    expect(result.current.visibleEvents.at(-1)?.seq).toBe(300)
+    // A failed compaction is not a load failure: the transcript must NOT drop to full replay.
+    expect(result.current.fallback).toBe(false)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(unhandled).not.toHaveBeenCalled()
+
+    process.off('unhandledRejection', unhandled)
+    vi.unstubAllGlobals()
+  })
 })
