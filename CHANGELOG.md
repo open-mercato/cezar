@@ -20,7 +20,12 @@
   now that starting somewhere new no longer registers it. Its automations stayed listed and
   switched on in the cockpit while nothing polled GitHub for them, and nothing said so. The boot
   project is now pinned against that sweep: cezar is demonstrably serving it, registered or not.
-  Only affects deployments that opted into automations with `CEZ_AUTOMATIONS=1`. (#872)
+  And saving that folder with **Add project** no longer splits its automations in two: the folder
+  briefly answered to both the boot alias and its new registry slug, which opened two independent
+  handles on one `.ai/cezar` — so switching an automation off in the cockpit left the copy the
+  scheduler polls untouched, and it went on launching runs until you restarted cezar. Automation
+  state is now keyed by folder, so a folder addressed twice is still one automation set, scheduled
+  once. Only affects deployments that opted into automations with `CEZ_AUTOMATIONS=1`. (#872)
 
 # 0.10.0 (2026-08-14)
 

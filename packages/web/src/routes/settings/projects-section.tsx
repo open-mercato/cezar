@@ -281,7 +281,10 @@ function RegistryTable({
       ) : (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full border-collapse text-sm">
-            <caption className="sr-only">Projects registered in this workspace</caption>
+            {/* Not "registered": this table also renders the folder cezar is serving without
+                having saved it, whose only action is Add project. A screen-reader user was told
+                the list was registered projects and then met a row that is the opposite. */}
+            <caption className="sr-only">Projects in this workspace</caption>
             {/* Explicit widths rather than letting the browser distribute them by content: Tags
                 is the one cell whose content GROWS with use, and auto-layout kept giving it
                 whatever the fixed-size controls left over — which was not enough for one chip. */}
