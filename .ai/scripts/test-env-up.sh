@@ -101,7 +101,7 @@ port_free() {
 
 http_ok() { curl -fsS --max-time 5 "$1" >/dev/null 2>&1; }
 
-# ---- identity — whose instance is this? -------------------------------------
+# ---- identity — whose instance is this? (#898) ------------------------------
 # A PID number and a port say only that *something* is alive and answering; neither
 # says it is OURS. A descriptor outlives reboots (it is gitignored and only ever
 # rewritten, never deleted), so its PID number is routinely recycled onto an unrelated
@@ -425,9 +425,12 @@ write_descriptor() {
       startedByThisRepo: true,
       startScript: ".ai/scripts/test-env-up.sh",
       stopScript: ".ai/scripts/test-env-down.sh",
-      // `repoRoot` is the identity a bare PID number and a port never carry: it is what
-      // the reuse and teardown guards compare against so a recycled PID or a port taken
-      // by another worktree cannot be mistaken for this instance.
+      // `repoRoot` records which checkout this instance belongs to — the one thing a bare
+      // PID number and a port never carry — for descriptor consumers and for debugging.
+      // The guards deliberately do NOT read it back (#898): the descriptor is the artifact
+      // that goes stale, so both derive $REPO_ROOT themselves and compare against that.
+      // Comparing the file against itself would be a no-op, since the same script at the
+      // same path always writes the same value.
       app: { startCommand: cmd, port: Number(port), healthPath: "/api/v1/health", pid: Number(pid), repoRoot },
       services: [],
       credentials: [],
