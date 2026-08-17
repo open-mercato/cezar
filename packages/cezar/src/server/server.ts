@@ -88,7 +88,8 @@ import {
   runHistoryQuerySchema,
   runIdParamSchema,
 } from '@open-mercato/cezar-contract';
-import type { RunManager } from '../workflows/run.ts';
+import type { PersistedAttachment, RunManager } from '../workflows/run.ts';
+import { pastedAttachmentsText } from '../workflows/run.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
@@ -605,6 +606,18 @@ const startRunSchema = z
       )
       .max(4)
       .optional(),
+    // Non-image attachments from the new-task form (#file-attachments) — materialized
+    // to disk by `startRun`, path-listed in the first agent step's opening prompt.
+    files: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(200),
+          mediaType: z.string().max(100).optional(),
+          data: z.string().min(1).max(7_000_000),
+        }),
+      )
+      .max(4)
+      .optional(),
     // Inbox follow-up (#374): the todo the composer was prefilled from
     // (`/new?skill=&ref=&todo=t1`). On a successful start the entry is marked
     // started — the same bookkeeping POST /api/todos/:id/start does, so the
@@ -785,13 +798,22 @@ const imageInputSchema = z.object({
   data: z.string().min(1).max(7_000_000),
 });
 
+// Non-image attachment (#file-attachments) — same size bounds as an image; `mediaType`
+// is advisory (the disk name's extension is what matters downstream).
+const fileInputSchema = z.object({
+  name: z.string().min(1).max(200),
+  mediaType: z.string().max(100).optional(),
+  data: z.string().min(1).max(7_000_000),
+});
+
 const messageSchema = z
   .object({
     text: z.string().max(100_000).default(''),
     images: z.array(imageInputSchema).max(4).default([]),
+    files: z.array(fileInputSchema).max(4).default([]),
   })
-  .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+  .refine((m) => m.text.trim().length > 0 || m.images.length > 0 || m.files.length > 0, {
+    message: 'message needs text, an image or a file',
   });
 
 // PATCH semantics are load-bearing here: an omitted field keeps its current value.
@@ -832,6 +854,7 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
   images: z.array(imageInputSchema).max(4).optional(),
+  files: z.array(fileInputSchema).max(4).optional(),
   runner: z.enum(RUNNER_IDS).optional(),
   model: z.string().max(200).optional(),
 });
@@ -3557,6 +3580,9 @@ export function createApp(deps: ServerDeps) {
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
         images,
+        // Raw base64 by design (#file-attachments): `startRun` materializes these to
+        // disk and records `taskFiles`; execution reads the record, not this field.
+        files: parsed.data.files,
         systemPrompt: parsed.data.systemPrompt,
         worktree: parsed.data.worktree,
         autonomous: parsed.data.autonomous,
@@ -3694,12 +3720,25 @@ export function createApp(deps: ServerDeps) {
         const blocked = await providerActionError([providerForActiveRun(run)]);
         if (blocked) return c.json({ error: blocked }, 409);
       }
+      // Non-image attachments (#file-attachments) are materialized up front and ride the
+      // delivery ladder inside the TEXT: the path note survives live delivery, the queued
+      // fold and the starting-state buffer without any rung learning a new field, and a
+      // restart recovers it from the folded text like any other prompt.
+      const persistedFiles = parsed.data.files
+        .map((f) => manager.persistUserFile(id, f.name, f.data))
+        .filter((saved): saved is PersistedAttachment => saved !== null);
+      if (parsed.data.files.length > 0 && persistedFiles.length === 0) {
+        return c.json({ error: 'attachments could not be saved to disk' }, 500);
+      }
+      const text = persistedFiles.length
+        ? [parsed.data.text.trim(), pastedAttachmentsText(persistedFiles)].filter(Boolean).join('\n\n')
+        : parsed.data.text;
       const content: ContentBlock[] = [
         ...parsed.data.images.map((img): ContentBlock => ({
           type: 'image',
           source: { type: 'base64', media_type: img.mediaType, data: img.data },
         })),
-        ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
+        ...(text.trim() ? [{ type: 'text', text } satisfies ContentBlock] : []),
       ];
       // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
       // than a status read here: the handler cannot observe the dequeue safely
@@ -3723,7 +3762,7 @@ export function createApp(deps: ServerDeps) {
         if (stackedImages + parsed.data.images.length > MAX_QUEUED_IMAGES) {
           return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
         }
-        const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
+        const prospective = foldedLength(currentRun.task, [...stack, { text }]);
         if (prospective > MAX_FOLDED_TASK_CHARS) {
           return c.json(
             {
@@ -3825,8 +3864,19 @@ export function createApp(deps: ServerDeps) {
       }
       const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
       if (blocked) return c.json({ error: blocked }, 409);
+      // Same up-front materialization as `/messages` (#file-attachments): the path note
+      // rides in the continuation text, so the reopened session needs no new field.
+      const persistedFiles = (parsed.data.files ?? [])
+        .map((f) => manager.persistUserFile(id, f.name, f.data))
+        .filter((saved): saved is PersistedAttachment => saved !== null);
+      if ((parsed.data.files?.length ?? 0) > 0 && persistedFiles.length === 0) {
+        return c.json({ error: 'attachments could not be saved to disk' }, 500);
+      }
+      const continueText = persistedFiles.length
+        ? [parsed.data.text?.trim(), pastedAttachmentsText(persistedFiles)].filter(Boolean).join('\n\n')
+        : parsed.data.text;
       const result = manager.continueRun(id, {
-        text: parsed.data.text,
+        text: continueText,
         images: parsed.data.images?.map((img): ContentBlock => ({
           type: 'image',
           source: { type: 'base64', media_type: img.mediaType, data: img.data },

@@ -220,7 +220,7 @@ describe('images — attach, paste, thumbnails, caps (legacy parity)', () => {
     paste(textarea, ['a', 'b', 'c', 'd'].map((n) => pngFile(`${n}.png`)))
     await screen.findByLabelText('Remove d.png')
     paste(textarea, [pngFile('e.png')])
-    expect(await screen.findByText('e.png skipped — max 4 images per message')).toBeTruthy()
+    expect(await screen.findByText('e.png skipped — max 4 attachments per message')).toBeTruthy()
     expect(screen.queryByLabelText('Remove e.png')).toBeNull()
   })
 
@@ -457,7 +457,7 @@ describe('disabled state', () => {
     expect(textarea.disabled).toBe(true)
     expect(textarea.placeholder).toBe('Session closed — no session to resume.')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByLabelText('Attach images') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Attach files') as HTMLButtonElement).disabled).toBe(true)
   })
 
   /** `allowEmptySubmit` is the thread's Continue: an empty draft is a meaningful action there

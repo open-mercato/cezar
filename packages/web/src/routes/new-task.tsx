@@ -30,6 +30,7 @@ import {
   useWorkflows,
 } from '@/api/queries'
 import type {
+  FileInput,
   ImageInput,
   ProjectListEntry,
   RepoResponse,
@@ -416,7 +417,7 @@ export function NewTaskRoute() {
       ?.focus()
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = async (text: string, images: ImageInput[]) => {
+  const submit = async (text: string, images: ImageInput[], files?: FileInput[]) => {
     if (!providersReady || runner === null) {
       throw new Error(
         providers.isPending
@@ -437,7 +438,7 @@ export function NewTaskRoute() {
       // overlay is deliberate: it's where steps are edited and saved as a reusable chain.
       setPlanning(true)
       try {
-        setPlan(pendingPlanOf(text, images, await postPlan(text)))
+        setPlan(pendingPlanOf(text, images, await postPlan(text), files))
         update({ text })
       } finally {
         setPlanning(false)
@@ -456,6 +457,7 @@ export function NewTaskRoute() {
         defaultRunner,
         variants,
         images,
+        files,
         worktree: worktreeOn,
         autonomous: autonomousOn,
         generateFollowups: generateFollowupsOn,
@@ -507,6 +509,7 @@ export function NewTaskRoute() {
           defaultRunner,
           variants,
           images: plan.images,
+          files: plan.files,
           generateFollowups: generateFollowupsOn,
           todoId: deepLink.todo, // #374: planning first must not lose the inbox entry
         }),

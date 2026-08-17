@@ -1,5 +1,6 @@
 import type {
   CreateRunInput,
+  FileInput,
   ImageInput,
   PlanResponse,
   Runner,
@@ -25,12 +26,15 @@ export interface PendingPlan {
   rationale: string
   fallback: boolean
   images: ImageInput[]
+  /** Non-image attachments (#file-attachments) carried through plan review to the run. */
+  files?: FileInput[]
 }
 
 export function pendingPlanOf(
   task: string,
   images: readonly ImageInput[],
   response: PlanResponse,
+  files?: readonly FileInput[],
 ): PendingPlan {
   return {
     task,
@@ -38,6 +42,7 @@ export function pendingPlanOf(
     rationale: response.rationale,
     fallback: response.fallback,
     images: [...images],
+    ...(files && files.length > 0 ? { files: [...files] } : {}),
   }
 }
 
@@ -97,10 +102,11 @@ export function buildPlannedRunBody(opts: {
   defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
+  files?: readonly FileInput[]
   generateFollowups?: boolean
   todoId?: string
 }): CreateRunInput {
-  const { task, steps, model, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId } =
+  const { task, steps, model, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, files, generateFollowups, todoId } =
     opts
   return {
     task,
@@ -109,6 +115,7 @@ export function buildPlannedRunBody(opts: {
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
+    files: files && files.length > 0 ? [...files] : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
   }

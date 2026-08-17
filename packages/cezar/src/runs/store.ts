@@ -137,6 +137,11 @@ export const runRecordSchema = z.object({
   /** URLs of images attached to the initial task prompt, for the thread's first bubble
    *  (#image-display) — persisted like agent screenshots, served from `/images/`. */
   taskImages: z.array(z.string()).optional(),
+  /** URLs of non-image file attachments on the initial task prompt (#file-attachments).
+   *  Kept separate from `taskImages` on purpose: hydration re-encodes `taskImages` into
+   *  inline image blocks at dequeue, which must never happen to a CSV. These only feed
+   *  the on-disk path note in the opening prompt. */
+  taskFiles: z.array(z.string()).optional(),
   model: z.string().optional(),
   /** Canonical provider/model identity (#405) — the normalised `provider/model`
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the

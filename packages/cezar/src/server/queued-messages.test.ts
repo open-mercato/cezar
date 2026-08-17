@@ -76,6 +76,13 @@ describe('queued prompt stack routes (#472)', () => {
         return true;
       },
       deferMessage: () => rung === 'starting',
+      // #file-attachments: the route materializes non-image files through the manager and
+      // rides the resulting path note in the message text; the fake answers a stable path.
+      persistUserFile: (id: string, name: string) => ({
+        name,
+        url: `/api/v1/runs/${id}/images/${name}`,
+        path: `/abs/${id}/${name}`,
+      }),
     } as unknown as RunManager;
 
     app = createApp({
@@ -122,6 +129,29 @@ describe('queued prompt stack routes (#472)', () => {
     expect(body.queued).toBe(true);
     expect(body.message.text).toBe('stack me');
     expect(store.getRun(record.id)?.queuedMessages?.map((m) => m.text)).toEqual(['stack me']);
+  });
+
+  it('a file attachment (#file-attachments) rides the stacked text as an on-disk path note', async () => {
+    const res = await post({
+      text: 'analyze this',
+      files: [{ name: 'export.csv', mediaType: 'text/csv', data: Buffer.from('a;b').toString('base64') }],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { queued: boolean; message: QueuedMessage };
+    expect(body.queued).toBe(true);
+    expect(body.message.text).toContain('analyze this');
+    expect(body.message.text).toContain('The user attached 1 pasted file, also saved on disk at:');
+    expect(body.message.text).toContain(`- /abs/${record.id}/export.csv`);
+  });
+
+  it('a file-only message (no text, no images) passes the emptiness refine', async () => {
+    const res = await post({
+      files: [{ name: 'log.txt', data: Buffer.from('boom').toString('base64') }],
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { queued: boolean; message: QueuedMessage };
+    expect(body.queued).toBe(true);
+    expect(body.message.text).toContain('- /abs/');
   });
 
   it('does not probe or require provider credentials to amend a queued prompt', async () => {
@@ -247,10 +277,10 @@ describe('queued prompt stack routes (#472)', () => {
     expect(((await over.json()) as { error: string }).error).toContain('would be 200001');
   });
 
-  it('rejects a whitespace-only message with no images', async () => {
+  it('rejects a whitespace-only message with no images and no files', async () => {
     const res = await post({ text: '   ' });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain('needs text or at least one image');
+    expect(((await res.json()) as { error: string }).error).toContain('needs text, an image or a file');
   });
 
   // ---- PATCH / DELETE a stacked message -------------------------------------

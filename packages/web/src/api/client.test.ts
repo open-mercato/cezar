@@ -292,16 +292,16 @@ describe('request shapes', () => {
       call: () => sendMessage('run-1', { text: 'hi' }),
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
-      // The server's schema defaults both, but an absent `images` and `[]` are the same
-      // request — send the shape the endpoint documents rather than half of it.
-      body: { text: 'hi', images: [] },
+      // The server's schema defaults all three, but absent `images`/`files` and `[]` are the
+      // same request — send the shape the endpoint documents rather than a slice of it.
+      body: { text: 'hi', images: [], files: [] },
     },
     {
       name: 'sendMessage (images only)',
       call: () => sendMessage('run-1', { images: [{ mediaType: 'image/png', data: 'AAA' }] }),
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
-      body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }] },
+      body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }], files: [] },
     },
   ]
 
