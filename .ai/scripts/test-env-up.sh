@@ -15,6 +15,9 @@
 #             imports as missing/unknown and a cached build cannot start without node_modules.
 #   2026-07-30 execute the compound preparation chain through sh -c and stop requiring an
 #             api-client dist artifact that this source-aliased workspace does not produce.
+#   2026-08-17 reuse and teardown prove the instance's identity (process argv + the health
+#             endpoint's repoRoot) instead of trusting a recorded PID number and port, which
+#             a long-lived descriptor outlives and another worktree can inherit (#898).
 set -eu
 
 # ---- project-specific parameters -------------------------------------------
@@ -98,6 +101,48 @@ port_free() {
 
 http_ok() { curl -fsS --max-time 5 "$1" >/dev/null 2>&1; }
 
+# ---- identity — whose instance is this? -------------------------------------
+# A PID number and a port say only that *something* is alive and answering; neither
+# says it is OURS. A descriptor outlives reboots (it is gitignored and only ever
+# rewritten, never deleted), so its PID number is routinely recycled onto an unrelated
+# process, and its port is routinely taken by another worktree's instance. Every kill
+# and every reuse therefore has to prove identity first.
+
+# The process fingerprint: start_app launches `node packages/cezar/dist/index.js …
+# --repo $REPO_ROOT`, which names this worktree and no other. Anchored at the end of
+# argv (or at a space) because an unanchored match would let the main checkout claim a
+# worktree's server — `<root>` is a prefix of `<root>/.ai/cezar/worktrees/<id>`.
+is_our_server() {
+  [ -n "${1:-}" ] || return 1
+  cmd=$(ps -ww -o command= -p "$1" 2>/dev/null || true)
+  case "$cmd" in
+    *"packages/cezar/dist/index.js"*"--repo $REPO_ROOT") return 0 ;;
+    *"packages/cezar/dist/index.js"*"--repo $REPO_ROOT "*) return 0 ;;
+  esac
+  return 1
+}
+
+# The HTTP fingerprint: GET $HEALTH_PATH reports `repoRoot`, the checkout the answering
+# instance was booted with. Compared through realpath because the server derives its root
+# from git (`getRepoInfo`) while this script derives it from its own path, and the two can
+# disagree on symlinked components. Under CEZ_REMOTE health trims the value to a basename
+# (the test env never sets it, but degrade to a basename comparison rather than a false
+# mismatch). Any non-absolute or unreadable answer is a mismatch, never a pass.
+health_repo_root_matches() {
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const [body, expected] = process.argv.slice(1);
+    let root;
+    try { root = JSON.parse(body).repoRoot; } catch { process.exit(1); }
+    if (typeof root !== "string" || root === "") process.exit(1);
+    const real = (p) => { try { return fs.realpathSync(p); } catch { return p; } };
+    const ok = path.isAbsolute(root)
+      ? real(root) === real(expected)
+      : root === path.basename(expected);
+    process.exit(ok ? 0 : 1);
+  ' "$1" "$REPO_ROOT" 2>/dev/null
+}
+
 json_get() { node -e '
   const fs = require("fs");
   try {
@@ -167,12 +212,19 @@ try_reuse() {
   [ "${CEZ_SINGLE_PROJECT:-}" = 1 ] && requested_single_project=true
   [ "$(json_get "$ENV_DESCRIPTOR" environment.singleProject)" = "$requested_single_project" ] || return 1
   [ -n "$pid" ] && [ -n "$url" ] || return 1
-  # A state file is a claim, not proof: the PID must still be alive…
+  # A state file is a claim, not proof: the PID must still be alive and must still be
+  # THIS worktree's server. `kill -0` alone passes on any recycled PID number, which
+  # would then be handed to the teardown/stop path as a kill target.
   kill -0 "$pid" 2>/dev/null || return 1
+  is_our_server "$pid" || { log "descriptor pid $pid is not this worktree's server — rebooting"; return 1; }
   # …and the app must actually answer. Health first (deep: reads config + git),
   # then the app shell, which is what the e2e specs actually load.
-  http_ok "$url$HEALTH_PATH" || return 1
+  health=$(curl -fsS --max-time 5 "$url$HEALTH_PATH" 2>/dev/null) || return 1
   http_ok "$url/" || return 1
+  # An answer on the recorded port is not an answer from OUR instance: another
+  # worktree may have taken the port meanwhile, and attaching to it would test a
+  # different branch's build while reporting it as verified.
+  health_repo_root_matches "$health" || { log "$url serves a different checkout — rebooting"; return 1; }
 
   # Fresh: within TTL and no tracked source newer than startedAt.
   if [ -n "$started" ]; then
@@ -190,15 +242,22 @@ try_reuse() {
 
 teardown_stale() {
   [ -f "$ENV_DESCRIPTOR" ] || return 0
+  # A descriptor already marked stopped has nothing to tear down; its PID field is
+  # only a record of what used to run, so acting on it is pure hazard.
+  [ "$(json_get "$ENV_DESCRIPTOR" status)" = running ] || return 0
   pid=$(json_get "$ENV_DESCRIPTOR" app.pid)
-  own=$(json_get "$ENV_DESCRIPTOR" startedByThisRepo)
-  # Only ever kill what this repo started.
-  if [ -n "$pid" ] && [ "$own" = true ] && kill -0 "$pid" 2>/dev/null; then
-    log "stopping stale instance (pid $pid)"
-    kill "$pid" 2>/dev/null || true
-    sleep 1
-    kill -9 "$pid" 2>/dev/null || true
+  [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null || return 0
+  # Only ever kill what this repo started — proven from the live process, not from
+  # `startedByThisRepo`, which write_descriptor hard-writes as true on every boot and
+  # so can never be false.
+  if ! is_our_server "$pid"; then
+    log "descriptor pid $pid is not this worktree's server — leaving it alone"
+    return 0
   fi
+  log "stopping stale instance (pid $pid)"
+  kill "$pid" 2>/dev/null || true
+  sleep 1
+  kill -9 "$pid" 2>/dev/null || true
 }
 
 # ---- 4. build cache ---------------------------------------------------------
@@ -356,7 +415,7 @@ write_descriptor() {
   [ "${CEZ_SINGLE_PROJECT:-}" = 1 ] && SINGLE_PROJECT=true
   node -e '
     const fs = require("fs");
-    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, desc, singleProject, platform] = process.argv.slice(1);
+    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, desc, singleProject, platform, repoRoot] = process.argv.slice(1);
     fs.writeFileSync(out, JSON.stringify({
       version: 1,
       runId: "cezar-" + new Date().toISOString().slice(0, 10) + "-" + pid,
@@ -366,7 +425,10 @@ write_descriptor() {
       startedByThisRepo: true,
       startScript: ".ai/scripts/test-env-up.sh",
       stopScript: ".ai/scripts/test-env-down.sh",
-      app: { startCommand: cmd, port: Number(port), healthPath: "/api/v1/health", pid: Number(pid) },
+      // `repoRoot` is the identity a bare PID number and a port never carry: it is what
+      // the reuse and teardown guards compare against so a recycled PID or a port taken
+      // by another worktree cannot be mistaken for this instance.
+      app: { startCommand: cmd, port: Number(port), healthPath: "/api/v1/health", pid: Number(pid), repoRoot },
       services: [],
       credentials: [],
       environment: { singleProject: singleProject === "true" },
@@ -384,9 +446,10 @@ write_descriptor() {
       notes: "Booted from a production build after npm ci with CEZ_DRY_RUN=1, so workspace links/runtime dependencies are present, the agent CLIs are mocked, and no agent login/network is needed. No backing services. Stop with .ai/scripts/test-env-down.sh. App log: .ai/qa/test-env-app.log.",
     }, null, 2) + "\n");
   ' "$ENV_DESCRIPTOR" "$BASE_URL" "$PORT" "$APP_PID" \
-    "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node packages/cezar/dist/index.js --port $PORT --no-open" \
+    "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node packages/cezar/dist/index.js --port $PORT --no-open --repo $REPO_ROOT" \
     "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_NOTES" "$BROWSER_DESCRIPTOR" \
-    "$SINGLE_PROJECT" "$(uname -s 2>/dev/null | grep -qi Linux && { grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && echo wsl2 || echo linux; } || echo darwin)"
+    "$SINGLE_PROJECT" "$(uname -s 2>/dev/null | grep -qi Linux && { grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && echo wsl2 || echo linux; } || echo darwin)" \
+    "$REPO_ROOT"
 }
 
 # ---- main -------------------------------------------------------------------
