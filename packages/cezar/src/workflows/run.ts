@@ -3377,16 +3377,20 @@ export class RunManager {
       // the read of the counter and the write. The exclusive-create flag is the
       // belt-and-braces guard for a stale seed: it degrades to a renamed file rather
       // than a silent overwrite.
+      const bytes = Buffer.from(data, 'base64');
       for (let attempt = 0; attempt < 100; attempt += 1) {
         seq += 1;
         const name = `${namePrefix}-${seq}.${ext}`;
         const path = join(dir, name);
         try {
-          writeFileSync(path, Buffer.from(data, 'base64'), { flag: 'wx' });
+          writeFileSync(path, bytes, { flag: 'wx' });
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
           throw err;
         }
+        // Only what the USER uploaded belongs in the library — `pasted` marks user
+        // attachments; agent screenshots (`screenshot`) are working output, not uploads.
+        if (namePrefix === 'pasted') this.copyToAttachmentsLibrary(name, bytes);
         this.queuedImageSeq.set(runId, seq);
         // Versioned, because that is the only surface served now. The cockpit still upgrades
         // the unversioned URLs sitting in OLD transcripts when it renders them
@@ -3396,6 +3400,43 @@ export class RunManager {
       return null;
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Best-effort per-project attachments library (#attachments-library): every file the
+   * user uploads — non-image files and pasted images alike, but never the agent's own
+   * screenshots — also lands as a copy under `.ai/cezar/attachments/`, one flat folder
+   * per project. Uploads then survive run cleanup and are browsable in one place.
+   * Written, never required (AGENTS.md): a failure degrades silently (the run-dir
+   * original is the source of truth), and deleting the folder loses only duplicates.
+   * Same-name collisions get a `-2`, `-3`… suffix — unless the existing bytes are
+   * identical, in which case the file is already archived and nothing is written.
+   */
+  private copyToAttachmentsLibrary(name: string, data: Buffer): void {
+    try {
+      const dir = join(this.dataDir, 'attachments');
+      mkdirSync(dir, { recursive: true });
+      const dot = name.lastIndexOf('.');
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : '';
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const candidate = attempt === 0 ? name : `${stem}-${attempt + 1}${ext}`;
+        const path = join(dir, candidate);
+        try {
+          writeFileSync(path, data, { flag: 'wx' });
+          return;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+          try {
+            if (readFileSync(path).equals(data)) return;
+          } catch {
+            // Unreadable existing file — fall through to the next suffix.
+          }
+        }
+      }
+    } catch {
+      // Best-effort copy — never let the library break the upload itself.
     }
   }
 
@@ -3417,15 +3458,19 @@ export class RunManager {
       const dot = base.lastIndexOf('.');
       const stem = (dot > 0 ? base.slice(0, dot) : base).slice(0, 120) || 'attachment';
       const ext = dot > 0 ? base.slice(dot, dot + 12) : '';
+      const bytes = Buffer.from(data, 'base64');
       for (let attempt = 0; attempt < 100; attempt += 1) {
         const name = attempt === 0 ? `${stem}${ext}` : `${stem}-${attempt + 1}${ext}`;
         const path = join(dir, name);
         try {
-          writeFileSync(path, Buffer.from(data, 'base64'), { flag: 'wx' });
+          writeFileSync(path, bytes, { flag: 'wx' });
         } catch (err) {
           if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
           throw err;
         }
+        // The library keeps the PRE-collision name: re-attaching the same file to another
+        // task then dedupes by content instead of piling up `-2`, `-3` copies.
+        this.copyToAttachmentsLibrary(`${stem}${ext}`, bytes);
         return { name, url: `/api/v1/runs/${runId}/images/${name}`, path };
       }
       return null;

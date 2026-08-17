@@ -317,7 +317,33 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     // The base64 payload never enters the event log.
     const ndjson = readFileSync(join(dataDir, 'runs', `${record.id}.ndjson`), 'utf8');
     expect(ndjson).not.toContain(csv);
+
+    // #attachments-library: the upload also lands as a per-project copy.
+    expect(readFileSync(join(dataDir, 'attachments', 'bing-export-sierpien-.csv'), 'utf8')).toBe(
+      'url;clicks\n/a;1\n',
+    );
   }, 30_000);
+
+  it('the attachments library dedupes identical re-uploads and never breaks the upload itself', () => {
+    const record = store.createRun({ title: 'lib', workflow: '(planned)', task: 'library', steps: [] });
+    const data = Buffer.from('same bytes', 'utf8').toString('base64');
+
+    // Same file attached twice (a run-dir collision suffixes the second copy) — the
+    // library keeps ONE file, matched by pre-collision name + identical content.
+    expect(manager.persistUserFile(record.id, 'dedupe.csv', data)?.name).toBe('dedupe.csv');
+    expect(manager.persistUserFile(record.id, 'dedupe.csv', data)?.name).toBe('dedupe-2.csv');
+    const library = readdirSync(join(dataDir, 'attachments')).filter((n) => n.startsWith('dedupe'));
+    expect(library).toEqual(['dedupe.csv']);
+
+    // Same name, DIFFERENT content — archived alongside, not overwritten.
+    const other = Buffer.from('other bytes', 'utf8').toString('base64');
+    manager.persistUserFile(record.id, 'dedupe.csv', other);
+    expect(readdirSync(join(dataDir, 'attachments')).filter((n) => n.startsWith('dedupe')).sort()).toEqual([
+      'dedupe-2.csv',
+      'dedupe.csv',
+    ]);
+    expect(readFileSync(join(dataDir, 'attachments', 'dedupe-2.csv'), 'utf8')).toBe('other bytes');
+  });
 
   it('persistUserFile strips paths, sanitizes hostile characters and suffixes collisions', () => {
     const record = store.createRun({ title: 'p', workflow: '(planned)', task: 'persist', steps: [] });
