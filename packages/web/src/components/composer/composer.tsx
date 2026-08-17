@@ -17,7 +17,7 @@ import {
 
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
-import type { ImageInput } from '@open-mercato/cezar-api-client'
+import type { FileInput, ImageInput } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -32,6 +32,7 @@ import {
   fileToPendingImage,
   MAX_IMAGES,
   screenFiles,
+  splitAttachments,
   type PendingImage,
 } from './composer-images'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
@@ -49,8 +50,10 @@ import { formatElapsed, useDictation } from './dictation'
  */
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
-   *  and restores the draft (nothing the user typed is ever lost). */
-  onSubmit: (text: string, images: ImageInput[]) => Promise<unknown>
+   *  and restores the draft (nothing the user typed is ever lost). `files` carries non-image
+   *  attachments (#file-attachments) — omitted entirely when there are none, so hosts that
+   *  predate the field keep working unchanged. */
+  onSubmit: (text: string, images: ImageInput[], files?: FileInput[]) => Promise<unknown>
   /**
    * Controlled text (pass BOTH or neither): the /new host owns the draft so it survives
    * navigation (spec: "Queued form state survives navigation"). Every internal edit — typing,
@@ -313,10 +316,10 @@ export function Composer({
       if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
       setBusy(true)
       try {
-        await onSubmit(
-          body,
-          messageImages.map(({ mediaType, data }) => ({ mediaType, data })),
-        )
+        // Two-arg call when there are no files — hosts (and their tests) that predate
+        // the third parameter keep observing the exact legacy signature.
+        const { images: inlineImages, files } = splitAttachments(messageImages)
+        await (files.length ? onSubmit(body, inlineImages, files) : onSubmit(body, inlineImages))
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         if (restoreOnError) {
@@ -437,21 +440,38 @@ export function Composer({
         >
           {images.length > 0 ? (
             <div data-slot="composer-thumbs" className="flex flex-wrap gap-2 px-4 pt-3">
-              {images.map((image, index) => (
-                <button
-                  key={`${image.name}-${index}`}
-                  type="button"
-                  aria-label={`Remove ${image.name}`}
-                  title="Click to remove"
-                  className="group relative size-12 overflow-hidden rounded-md border border-border"
-                  onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
-                >
-                  <img src={image.preview} alt="" className="size-full object-cover" />
-                  <span className="absolute inset-0 hidden items-center justify-center bg-background/70 group-hover:flex group-focus-visible:flex">
-                    <XIcon aria-hidden="true" className="size-4" />
-                  </span>
-                </button>
-              ))}
+              {images.map((image, index) =>
+                image.preview ? (
+                  <button
+                    key={`${image.name}-${index}`}
+                    type="button"
+                    aria-label={`Remove ${image.name}`}
+                    title="Click to remove"
+                    className="group relative size-12 overflow-hidden rounded-md border border-border"
+                    onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
+                  >
+                    <img src={image.preview} alt="" className="size-full object-cover" />
+                    <span className="absolute inset-0 hidden items-center justify-center bg-background/70 group-hover:flex group-focus-visible:flex">
+                      <XIcon aria-hidden="true" className="size-4" />
+                    </span>
+                  </button>
+                ) : (
+                  // Non-image attachment (#file-attachments): no pixels to preview, so a named
+                  // chip — same click-to-remove contract as the thumbnails beside it.
+                  <button
+                    key={`${image.name}-${index}`}
+                    type="button"
+                    aria-label={`Remove ${image.name}`}
+                    title="Click to remove"
+                    className="group flex h-12 max-w-48 items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 text-xs text-muted-foreground"
+                    onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
+                  >
+                    <PaperclipIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                    <span className="truncate">{image.name}</span>
+                    <XIcon aria-hidden="true" className="hidden size-3.5 shrink-0 group-hover:block group-focus-visible:block" />
+                  </button>
+                ),
+              )}
             </div>
           ) : null}
 
@@ -608,8 +628,8 @@ function AttachButton({
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label="Attach images"
-        title="Attach an image (or paste a screenshot)"
+        aria-label="Attach files"
+        title="Attach a file (or paste a screenshot)"
         disabled={disabled}
         className="size-8 text-muted-foreground"
         onClick={() => inputRef.current?.click()}
@@ -619,7 +639,6 @@ function AttachButton({
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
         multiple
         className="hidden"
         aria-hidden="true"

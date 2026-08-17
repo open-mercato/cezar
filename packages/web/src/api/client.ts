@@ -47,6 +47,7 @@ import type {
   GithubMergeMethod,
   GithubMergeResponse,
   GithubPrMergeStateResponse,
+  FileInput,
   GithubPrChangesData,
   GroupResponse,
   HealthResponse,
@@ -1206,6 +1207,7 @@ export async function finishRun(id: string): Promise<FinishResponse> {
 export interface ContinueOptions {
   text?: string
   images?: ImageInput[]
+  files?: FileInput[]
   runner?: Runner
   model?: string
 }
@@ -1217,6 +1219,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
   const body = {
     ...(opts.text !== undefined ? { text: opts.text } : {}),
     ...(opts.images !== undefined ? { images: opts.images } : {}),
+    ...(opts.files !== undefined ? { files: opts.files } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
   }
@@ -1411,12 +1414,13 @@ export async function pushRun(id: string): Promise<GitPushResponse> {
   )
 }
 
-/** Deliver text and/or pasted screenshots into a run's live session. 409 once it has closed. */
+/** Deliver text, pasted screenshots and/or file attachments into a run's live session.
+ *  409 once it has closed. */
 export async function sendMessage(id: string, message: MessageInput): Promise<MessageResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: { text: message.text ?? '', images: message.images ?? [] },
+      json: { text: message.text ?? '', images: message.images ?? [], files: message.files ?? [] },
     }),
     runPath(id, '/messages'),
   )

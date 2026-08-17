@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   parseAskMarkerResult,
   stripAskMarker,
@@ -337,6 +337,11 @@ export interface StartRunInput {
    *  and make the task bubble render the stack's images as its own. In-memory
    *  only: rebuilt from the record on every hydration, never persisted. */
   stackedImages?: ContentBlock[];
+  /** Non-image attachments from the new-task form (#file-attachments), base64.
+   *  `startRun()` materializes them to disk next to pasted images and records
+   *  their URLs in `taskFiles`; execution reads the record, never this field,
+   *  so a restart recovers them without re-persisting. */
+  files?: Array<{ name: string; data: string }>;
 }
 
 /**
@@ -758,6 +763,17 @@ export class RunManager {
         .filter((saved): saved is PersistedAttachment => saved !== null);
       if (persisted.length) {
         this.store.updateRun(run.id, { taskImages: persisted.map((saved) => saved.url) });
+      }
+    }
+    // Non-image attachments (#file-attachments): materialized once, here — execution and
+    // restart recovery both read `taskFiles` from the record, so the base64 payload never
+    // needs to survive in memory or be re-encoded the way task images are.
+    if (input.files?.length) {
+      const persistedFiles = input.files
+        .map((f) => this.persistFile(run.id, f.name, f.data))
+        .filter((saved): saved is PersistedAttachment => saved !== null);
+      if (persistedFiles.length) {
+        this.store.updateRun(run.id, { taskFiles: persistedFiles.map((saved) => saved.url) });
       }
     }
     // Step-0 reference extraction (task auto-naming spec): the regex layer's
@@ -2606,8 +2622,14 @@ export class RunManager {
     let runError: string | null = null;
     // `startRun` already persisted task images so a queued bubble can render them
     // (#612). Reuse those files for the agent-facing path note instead of minting
-    // duplicate pasted files when execution finally begins.
-    let startAttachments: PersistedAttachment[] = (this.store.getRun(runId)?.taskImages ?? [])
+    // duplicate pasted files when execution finally begins. Non-image attachments
+    // (#file-attachments) join the same note; they are deliberately NOT in
+    // `taskImages`, because hydration re-encodes that list into image blocks.
+    const startRecord = this.store.getRun(runId);
+    let startAttachments: PersistedAttachment[] = [
+      ...(startRecord?.taskImages ?? []),
+      ...(startRecord?.taskFiles ?? []),
+    ]
       .map((url): PersistedAttachment | null => {
         const name = url.split('/').pop();
         if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) return null;
@@ -2796,11 +2818,13 @@ export class RunManager {
         stepId: step.id,
         message: `${images.length} screenshot${images.length > 1 ? 's' : ''} attached to the task`,
       });
-      // Point the agent at the on-disk files for the pasted subset (#357) — the
-      // base64 blocks above still let it *view* the images; this is what lets it
-      // *use* them as files (save, attach to an issue/PR, copy into the repo).
-      if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
     }
+    // Point the agent at the on-disk files for the pasted subset (#357) — the
+    // base64 blocks above still let it *view* the images; this is what lets it
+    // *use* them as files (save, attach to an issue/PR, copy into the repo).
+    // Independent of `images`: a task whose only attachments are non-image files
+    // (#file-attachments) carries no image blocks, yet still needs the note.
+    if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
 
     const sessionId = randomUUID();
     const backend = step.runner ?? taskBackend;
@@ -3373,6 +3397,51 @@ export class RunManager {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Materialize a non-image attachment (#file-attachments) into the run's shared
+   * attachment dir. Unlike `persistImage` the ORIGINAL filename is the value here
+   * (a `bing-export.csv` must stay recognizable on disk and in the path note), so
+   * the name is sanitized to a URL-routable charset instead of being replaced by
+   * a sequence number; collisions get a `-2`, `-3`… suffix via the same exclusive
+   * -create guard. Returns null on any failure — callers degrade, never throw.
+   */
+  private persistFile(runId: string, rawName: string, data: string): PersistedAttachment | null {
+    try {
+      const dir = join(this.dataDir, 'runs', `${runId}-images`);
+      mkdirSync(dir, { recursive: true });
+      // basename() first — a path-carrying name must never navigate; then a strict
+      // charset so the serving route's `:file` param round-trips without encoding.
+      const base = basename(rawName).replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^[.-]+/, '');
+      const dot = base.lastIndexOf('.');
+      const stem = (dot > 0 ? base.slice(0, dot) : base).slice(0, 120) || 'attachment';
+      const ext = dot > 0 ? base.slice(dot, dot + 12) : '';
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        const name = attempt === 0 ? `${stem}${ext}` : `${stem}-${attempt + 1}${ext}`;
+        const path = join(dir, name);
+        try {
+          writeFileSync(path, Buffer.from(data, 'base64'), { flag: 'wx' });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'EEXIST') continue;
+          throw err;
+        }
+        return { name, url: `/api/v1/runs/${runId}/images/${name}`, path };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Route-facing wrapper (#file-attachments): the messages/continue endpoints persist
+   * the payload up front and ride the resulting path note inside the message TEXT, so
+   * the whole delivery ladder (live session, queued fold, starting-state buffer) and
+   * restart recovery inherit the attachment without learning a new field.
+   */
+  persistUserFile(runId: string, name: string, data: string): PersistedAttachment | null {
+    return this.persistFile(runId, name, data);
   }
 
   private armIdleTimer(runId: string, state: ActiveRun): void {

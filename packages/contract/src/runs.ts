@@ -601,6 +601,21 @@ export const imageInputSchema = z.object({
 export type ImageInput = z.input<typeof imageInputSchema>;
 
 /**
+ * A non-image attachment (CSV, log, export…), base64 — ≤4 per request, ~5 MB each once
+ * decoded, same bounds as `imageInputSchema`. Unlike images it is never inlined into the
+ * model conversation: the server materializes it under `.ai/cezar/runs/<runId>-images/`
+ * and appends the absolute path to the message text, so the agent operates on the real
+ * file (#357 extended). `name` keeps the original filename (sanitized server-side);
+ * `mediaType` is advisory only.
+ */
+export const fileInputSchema = z.object({
+  name: z.string().min(1).max(200),
+  mediaType: z.string().max(100).optional(),
+  data: z.string().min(1).max(7_000_000),
+});
+export type FileInput = z.input<typeof fileInputSchema>;
+
+/**
  * The KEYS of `POST /runs`' body, before the XOR refinement that `createRunInputSchema` adds.
  *
  * Split out for one reason: `./automations.ts` builds an automation's task on top of this shape
@@ -640,6 +655,9 @@ export const createRunInputBaseSchema = z
       .transform((s) => (s ? s : undefined)),
     /** Screenshots pasted into the new-task form; delivered with the first agent step. */
     images: z.array(imageInputSchema).max(4).optional(),
+    /** Non-image attachments from the new-task form — saved to disk, path-listed in the
+     *  first agent step's opening prompt. */
+    files: z.array(fileInputSchema).max(4).optional(),
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
@@ -658,17 +676,18 @@ export const createRunInputSchema = createRunInputBaseSchema.refine(
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
 
 /**
- * `POST /runs/:id/messages` — text and/or pasted screenshots for a live session. Both keys have
- * server-side defaults, so an omitted `text` is `''` and an omitted `images` is `[]`; the refine
- * is what rejects a message that is empty in both.
+ * `POST /runs/:id/messages` — text, pasted screenshots and/or file attachments for a live
+ * session. All keys have server-side defaults, so an omitted `text` is `''` and omitted
+ * `images`/`files` are `[]`; the refine is what rejects a message that is empty in all three.
  */
 export const messageInputSchema = z
   .object({
     text: z.string().max(100_000).default(''),
     images: z.array(imageInputSchema).max(4).default([]),
+    files: z.array(fileInputSchema).max(4).default([]),
   })
-  .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+  .refine((m) => m.text.trim().length > 0 || m.images.length > 0 || m.files.length > 0, {
+    message: 'message needs text, an image or a file',
   });
 export type MessageInput = z.input<typeof messageInputSchema>;
 

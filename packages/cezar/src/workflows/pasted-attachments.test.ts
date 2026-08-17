@@ -277,4 +277,65 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
 
     manager.finish(record.id);
   }, 40_000);
+
+  it('a task-start FILE attachment (#file-attachments) keeps its name on disk and its path lands in the opening prompt', async () => {
+    writeFileSync(argsFile, '', 'utf8');
+    writeFileSync(stdinFile, '', 'utf8');
+    const csv = Buffer.from('url;clicks\n/a;1\n', 'utf8').toString('base64');
+    const workflow: WorkflowDef = {
+      name: 'file-attachment-start-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const record = manager.startRun(workflow, {
+      task: 'analyze the export',
+      files: [{ name: 'bing export (sierpien).csv', data: csv }],
+      worktree: false,
+    });
+
+    // Materialized under a sanitized-but-recognizable name, recorded on the run —
+    // and deliberately NOT in `taskImages`, which hydration re-encodes as image blocks.
+    const queued = store.getRun(record.id);
+    expect(queued?.taskFiles).toEqual([`/api/v1/runs/${record.id}/images/bing-export-sierpien-.csv`]);
+    expect(queued?.taskImages).toBeUndefined();
+    const filePath = join(dataDir, 'runs', `${record.id}-images`, 'bing-export-sierpien-.csv');
+    expect(existsSync(filePath)).toBe(true);
+    expect(readFileSync(filePath, 'utf8')).toBe('url;clicks\n/a;1\n');
+
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+
+    // The opening prompt carries the path note even though there are no image blocks.
+    const lines = readStdinLines();
+    expect(lines.length).toBeGreaterThan(0);
+    expect(lines[0]?.userText).toContain('The user attached 1 pasted file, also saved on disk at:');
+    expect(lines[0]?.userText).toContain(`- ${filePath}`);
+    expect((lines[0]?.imageCount ?? 0)).toBe(0);
+
+    // The base64 payload never enters the event log.
+    const ndjson = readFileSync(join(dataDir, 'runs', `${record.id}.ndjson`), 'utf8');
+    expect(ndjson).not.toContain(csv);
+  }, 30_000);
+
+  it('persistUserFile strips paths, sanitizes hostile characters and suffixes collisions', () => {
+    const record = store.createRun({ title: 'p', workflow: '(planned)', task: 'persist', steps: [] });
+    const data = Buffer.from('x', 'utf8').toString('base64');
+
+    const traversal = manager.persistUserFile(record.id, '../../etc/passwd', data);
+    expect(traversal?.name).toBe('passwd');
+    expect(traversal?.path).toBe(join(dataDir, 'runs', `${record.id}-images`, 'passwd'));
+
+    const first = manager.persistUserFile(record.id, 'raport.csv', data);
+    const second = manager.persistUserFile(record.id, 'raport.csv', data);
+    expect(first?.name).toBe('raport.csv');
+    expect(second?.name).toBe('raport-2.csv');
+    expect(existsSync(first?.path ?? '')).toBe(true);
+    expect(existsSync(second?.path ?? '')).toBe(true);
+
+    // A dotfile must not survive as one, and an all-hostile name still yields something usable.
+    expect(manager.persistUserFile(record.id, '.env', data)?.name).toBe('env');
+    expect(manager.persistUserFile(record.id, '???', data)?.name).toBe('attachment');
+  });
 });

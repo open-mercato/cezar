@@ -451,8 +451,8 @@ export function ThreadView({
           <Composer
             onSubmit={
               continuable
-                ? (text, images) => continueAction.continueWith(text, images)
-                : (text, images) => sendMessage.mutateAsync({ text, images })
+                ? (text, images, files) => continueAction.continueWith(text, images, files)
+                : (text, images, files) => sendMessage.mutateAsync({ text, images, files })
             }
             disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
             // Only reachable now by a closed run with NO session to resume — which is exactly

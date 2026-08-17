@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { fileToPendingImage, MAX_IMAGE_BYTES, screenFiles } from './composer-images'
+import { fileToPendingImage, MAX_IMAGE_BYTES, screenFiles, splitAttachments } from './composer-images'
 
 /** screenFiles reads only `type`, `size`, `name` — a structural stand-in keeps the 5MB cases
  *  from allocating 5MB buffers. */
@@ -14,9 +14,9 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
     expect(intake.rejected).toEqual([])
   })
 
-  it('ignores non-images silently — a dropped text file is not an error', () => {
+  it('accepts a non-image file — it becomes an on-disk attachment (#file-attachments)', () => {
     const intake = screenFiles([fakeFile({ type: 'text/plain', name: 'notes.txt' })], 0)
-    expect(intake.accepted).toEqual([])
+    expect(intake.accepted.map((f) => f.name)).toEqual(['notes.txt'])
     expect(intake.rejected).toEqual([])
   })
 
@@ -30,10 +30,19 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
     expect(screenFiles([fakeFile({ size: MAX_IMAGE_BYTES })], 0).accepted).toHaveLength(1)
   })
 
-  it('enforces the 4-image cap against what is already attached', () => {
+  it('enforces the 4-attachment cap against what is already attached', () => {
     const intake = screenFiles([fakeFile({ name: 'a.png' }), fakeFile({ name: 'b.png' })], 3)
     expect(intake.accepted).toHaveLength(1)
-    expect(intake.rejected).toEqual(['b.png skipped — max 4 images per message'])
+    expect(intake.rejected).toEqual(['b.png skipped — max 4 attachments per message'])
+  })
+
+  it('non-image files count against the same cap as images', () => {
+    const intake = screenFiles(
+      [fakeFile({ name: 'a.png' }), fakeFile({ name: 'data.csv', type: 'text/csv' })],
+      3,
+    )
+    expect(intake.accepted.map((f) => f.name)).toEqual(['a.png'])
+    expect(intake.rejected).toEqual(['data.csv skipped — max 4 attachments per message'])
   })
 
   it('a batch mixing every failure mode reports each file by name', () => {
@@ -45,13 +54,13 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
       ],
       0,
     )
-    expect(intake.accepted.map((f) => f.name)).toEqual(['ok.png'])
+    expect(intake.accepted.map((f) => f.name)).toEqual(['ok.png', 'doc.pdf'])
     expect(intake.rejected).toEqual(['big.png is too large (max 5 MB)'])
   })
 
   it('an unnamed paste still reads humanly in the rejection', () => {
     const intake = screenFiles([fakeFile({ name: '', size: MAX_IMAGE_BYTES + 1 })], 0)
-    expect(intake.rejected).toEqual(['image is too large (max 5 MB)'])
+    expect(intake.rejected).toEqual(['attachment is too large (max 5 MB)'])
   })
 })
 
@@ -63,5 +72,35 @@ describe('fileToPendingImage', () => {
     expect(image.name).toBe('tiny.png')
     expect(image.data).toBe(btoa(String.fromCharCode(137, 80, 78, 71)))
     expect(image.preview).toBe(`data:image/png;base64,${image.data}`)
+  })
+
+  it('a non-image file gets no preview — the row renders a chip from `name` instead', async () => {
+    const file = new File(['a;b;c'], 'export.csv', { type: 'text/csv' })
+    const pending = await fileToPendingImage(file)
+    expect(pending.mediaType).toBe('text/csv')
+    expect(pending.name).toBe('export.csv')
+    expect(pending.preview).toBe('')
+  })
+
+  it('a file the browser cannot type still ships a truthy advisory mediaType', async () => {
+    const file = new File(['{}'], 'events.ndjson', { type: '' })
+    const pending = await fileToPendingImage(file)
+    expect(pending.mediaType).toBe('application/octet-stream')
+    expect(pending.preview).toBe('')
+  })
+})
+
+describe('splitAttachments — one pending array, two wire fields', () => {
+  it('routes images to `images` (name dropped) and the rest to `files` (name kept)', () => {
+    const { images, files } = splitAttachments([
+      { mediaType: 'image/png', data: 'AAA', preview: 'data:image/png;base64,AAA', name: 'shot.png' },
+      { mediaType: 'text/csv', data: 'BBB', preview: '', name: 'export.csv' },
+    ])
+    expect(images).toEqual([{ mediaType: 'image/png', data: 'AAA' }])
+    expect(files).toEqual([{ name: 'export.csv', mediaType: 'text/csv', data: 'BBB' }])
+  })
+
+  it('answers empty arrays for an empty pending list', () => {
+    expect(splitAttachments([])).toEqual({ images: [], files: [] })
   })
 })
