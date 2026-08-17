@@ -3,8 +3,8 @@
 ## 📝 TLDR
 
 Let a project run its own setup script — submodules, `.env`, `pnpm install`, docker
-ports — every time cezar materializes a task worktree, and its teardown script when
-the run ends.
+ports — every time cezar hands an agent an unprovisioned task worktree, and its teardown
+script when the run ends.
 
 cezar materializes a task worktree with `git worktree add` and nothing else. Projects
 whose checkout needs more than that get a half-prepared tree and must burn agent
@@ -12,35 +12,34 @@ tokens on deterministic script work. This spec adds **session lifecycle hooks**:
 `hooks` map in `.ai/cezar/config.json` binding lifecycle events to shell commands that
 cezar itself runs, in the session's cwd, **runner-agnostic** (identical under claude /
 codex / opencode / pi), with output streamed into the session event log. Two events —
-`worktree-created` (fail-closed, fires at **every** worktree materialization) and
-`run-end` (best-effort, fires on **every** terminal transition via one store-bus
-observer) — and one action kind, `run: "<shell command>"`. One phase, no follow-up: the
-deterministic script is the whole feature.
+`worktree-created` (fail-closed, fires whenever a worktree is **unprovisioned and about to
+be used**, which includes a Continue after teardown already ran) and `run-end`
+(best-effort, fires on **every** terminal transition via one store-bus observer, plus the
+two routes that destroy a worktree without one) — and one action kind,
+`run: "<shell command>"`. The pair is a bracket, and both sides must be idempotent. One
+phase, no follow-up: the deterministic script is the whole feature.
 
 ## 📝 Open Questions
 
-⚠️ **One question left, and it is an internals call the reporter cannot make — it needs a
-maintainer who knows `RunManager`.** The design below is written as though the answer is
-"yes"; the decision is contained to a single method's trigger, so flipping it is a local
-edit rather than a redesign.
+**None left.** Q1 — the anchor for teardown — was the one open question and it was settled
+in review.
 
-- **Q1 — is the store-bus anchor acceptable?** Subscribing `RunManager` to `RunStore`'s
-  `('run')` event (`packages/cezar/src/runs/store.ts:1060`) is the manager's first
-  non-SSE use of that bus. The alternative is wiring teardown into `dropActive()`
-  (`run.ts:1140`), which introduces no new coupling but is **verified** to skip the
-  review-gate exits. Two sites flip a review-resting run to `done` — `finish()`
-  (`run.ts:1951`) and the create-draft-PR route (`server.ts:4206`) — and neither can
-  reach `dropActive`, because a run at `review` has already left the active registry. The
-  PR route proves it in its own guard: it returns `409 run is still active` unless
-  `manager.isActive(id)` is false (`server.ts:4182`). So this is not a near-miss to be
-  patched carefully; it is unreachable by construction, and it is the state a task sits in
-  longest while holding containers and ports. If the new coupling is unwanted, the honest
-  fallback is `dropActive()` **plus** explicit teardown calls at those two sites,
-  accepting that a third review exit added later will silently miss it. Either way the
-  change is confined to `maybeRunEndHooks`'s trigger and nothing else in this spec moves.
-  *Recommendation: the store bus* — "Risks & Impact Review" lists the four structural
-  controls (latch, `setImmediate`, `try/catch`, `dispose()` handle) that make the coupling
-  safe, each with a precedent already in the manager's constructor.
+- **Q1 (settled): the store bus is the anchor.** Subscribing `RunManager` to `RunStore`'s
+  `('run')` event (`packages/cezar/src/runs/store.ts:1060`) beats wiring teardown into
+  `dropActive()` (`run.ts:1140`), for two reasons. The first is the one this spec argued and
+  review verified independently: `dropActive` is **unreachable** from both review-gate
+  exits. Two sites flip a review-resting run to `done` — `finish()` (`run.ts:1951`), which
+  writes `status: 'done'` without ever touching `this.active`, and the create-draft-PR route
+  (`server.ts:4206`), which guards its own entry with `if (manager.isActive(id)) return …
+  409` (`server.ts:4182`) and so *refuses to run* unless the run has already left the active
+  registry. Not a near-miss to be patched carefully — unreachable by construction, and it is
+  the state a task sits in longest while holding containers and ports. The second reason is
+  one this spec understated: the fallback it offered — `dropActive()` **plus** explicit
+  teardown calls at those two sites — would put a teardown trigger inside an HTTP handler in
+  `server.ts`, next to `createDraftPr`. That is a layering inversion this design would not
+  accept anywhere else. "Risks & Impact Review" lists the structural controls that make the
+  coupling safe; the load-bearing one is the **latch**, not the absence of a cycle — see the
+  correction recorded there.
 
 *Settled during review.* The teardown event is named **`run-end`**, not `session-end`: a
 worktree is created once and outlives many sessions — every Continue opens a new one — so
@@ -178,12 +177,19 @@ the whole issue:
 
 | Event | Fires | cwd | Default `onFail` |
 |---|---|---|---|
-| `worktree-created` | every time a worktree **directory is materialized**, before the session that will use it spawns | the worktree | `fail` |
-| `run-end` | on the run's transition into a terminal status (`done` / `failed` / `cancelled`), when its worktree directory still exists | the worktree | `warn` |
+| `worktree-created` | every time a worktree becomes **unprovisioned-and-in-use**: the directory was just materialized, *or* the run is being continued after its teardown already ran | the worktree | `fail` |
+| `run-end` | on the run's transition into a terminal status (`done` / `failed` / `cancelled`), and on the two routes that destroy a worktree without any status transition, whenever the worktree directory still exists | the worktree | `warn` |
 
 *Materialized* throughout this spec means "the worktree directory got created on disk
 just now" — a checkout with no `node_modules`, no `.env`, no submodule contents — as
 opposed to an existing directory being reused.
+
+**The pair is a bracket, and the bracket is what the trigger keys off.** Materialization is
+*not* the same question as provisioning: a run that finished (teardown fired, containers
+gone) and is then Continued still owns its directory, so nothing was re-materialized — but
+it is unprovisioned all the same, and setup must run again. Both events therefore key off a
+`hooksProvisioned` bit on the run record rather than off directory freshness alone; see
+"Setup fires on provisioning, not on materialization" below.
 
 `worktree-created` is **fail-closed by default**: a hook exiting non-zero fails the run,
 with the hook's output on the event stream. A silently half-provisioned worktree that
@@ -251,35 +257,89 @@ this.offRunSettled = this.store.on('run', (run) => void this.maybeRunEndHooks(ru
 ```
 
 `RunStore` is an `EventEmitter` whose private `touch()` emits `('run', RunRecord)` on
-every `updateRun` (`packages/cezar/src/runs/store.ts:1060`) — today consumed only by SSE.
-`appendEvent` does **not** call `touch()` (it emits `'event'` instead,
-`store.ts:786-797`), so the observer wakes on status writes only, not on every agent
-event. A single subscription there covers all four paths, every review-gate exit, and
-every terminal path added in future, with no obligation on the author of that path to
-remember a hook. Edge detection lives in a `Map<runId, status>`; the hook fires only on a
-transition **into** `{done, failed, cancelled}` from a non-terminal status, so `review`
-and `waiting` never trigger it and a repeated `updateRun` carrying the same status cannot
-double-fire.
+every `updateRun` (`packages/cezar/src/runs/store.ts:1060`). A single subscription there
+covers all four paths, every review-gate exit, and every terminal path added in future,
+with no obligation on the author of that path to remember a hook. Edge detection lives in a
+`Map<runId, status>`; the hook fires only on a transition **into** `{done, failed,
+cancelled}` from a non-terminal status, so `review` and `waiting` never trigger it and a
+repeated `updateRun` carrying the same status cannot double-fire.
 
-**Fires once per materialization, not per turn.** `createWorktree` is idempotent and
-already returns an existing worktree on restart/Continue. Hooks must not re-run
-`pnpm install` on every Continue, so `WorktreeInfo` (`git-worktree.ts:87`) grows a
-`fresh` flag: true for the `worktree add -b` path **and** the reattach path
-(`git-worktree.ts:~204`), false only when an already-registered worktree at the path is
-reused as-is (`git-worktree.ts:~198`). On the continuation path no new signal is needed —
-`rematerializeReclaimedWorktree` already returns `true` *only* when it re-materialized
-(`retention.ts:73-80`), which is exactly this freshness bit; the callsite at
-`run.ts:2106` currently discards that boolean and must start capturing it.
+That last clause is the whole safety story, because the observer wakes on **more than
+status writes**. `appendEvent` mostly emits `'event'` (`store.ts:797`), but past that its
+"janitor trick" block scans every event's text for PR and issue URLs and writes what it
+finds back onto the record — `this.updateRun(runId, { pullRequestUrl: created })`
+(`store.ts:809`), `if (changed) this.touch(run)` (`store.ts:823`). So any agent event whose
+text carries a PR or issue URL *does* wake the observer. The map latch is what makes that
+harmless, and it is the primary control rather than a backstop; see the correction in
+"Risks & Impact Review".
 
-**Teardown needs no `setupStarted` bookkeeping.** Because `run-end`'s trigger is
-"terminal status **and** the worktree directory exists", a run whose setup failed
-half-way — hook 1 allocated a port and started a container, hook 2 failed — is a terminal
-run with an existing worktree, so teardown fires. Same for a cancel landing mid-setup. No
-in-memory flag to track, and nothing to lose across a cezar restart. The price is a
-contract term, stated in the docs and worth stating anyway: **teardown hooks must be
-idempotent** (`docker compose down` against nothing is already a no-op), because they may
-run for a worktree whose setup never completed, and they run again if the run is
-continued and re-finished.
+### Two routes destroy a worktree with no status transition at all
+
+The store bus catches every *status* edge. It does not catch these, because neither writes
+a status:
+
+- `POST /api/v1/runs/:id/remove-worktree` (`packages/cezar/src/server/server.ts:4218`) — the
+  explicit "🧹 Remove worktree" cleanup — calls `removeWorktree(...)` and then
+  `store.updateRun(id, { worktreePath: undefined, branch: undefined })`. Not a status edge,
+  so the observer no-ops; and because it clears `worktreePath`, nothing downstream can find
+  the worktree afterwards either.
+- `DELETE /api/v1/runs/:id` (`server.ts:4237`) — `store.deleteRun(id)` drops the record
+  whose `worktreePath` was the only handle on the directory.
+
+A user tidying up a finished task in the cockpit — the natural thing to do — would silently
+accumulate orphaned containers. Both routes therefore **fire `run-end` explicitly, before
+they remove anything**: each already holds the `run` record with its `worktreePath` in hand
+one line earlier, so this is one call site apiece and no new mechanism. The call is awaited
+rather than fire-and-forget, because the alternative races the teardown script against the
+directory being deleted out from under it; the cost is that a slow teardown delays the
+route's response up to the hook's own `timeoutMs`, which is the project's script being slow
+and is reported honestly. Both routes are protected surfaces in `BACKWARD_COMPATIBILITY.md`
+§2 — no request or response shape changes, only the side effect.
+
+### Setup fires on provisioning, not on materialization
+
+`createWorktree` is idempotent and already returns an existing worktree on
+restart/Continue. Hooks must not re-run `pnpm install` on every Continue, so `WorktreeInfo`
+(`git-worktree.ts:87`) grows a `fresh` flag: true for the `worktree add -b` path **and** the
+reattach path (`git-worktree.ts:~204`), false only when an already-registered worktree at
+the path is reused as-is (`git-worktree.ts:~198`). On the continuation path no new signal is
+needed — `rematerializeReclaimedWorktree` already returns `true` *only* when it
+re-materialized (`retention.ts:73-80`); the callsite at `run.ts:2106` currently discards
+that boolean and must start capturing it.
+
+**But freshness alone is the wrong trigger, and on the mainline path it is broken.** Take
+the motivating flow: the run reaches `done` (the user clicks Finish at the review gate),
+`run-end` fires, `docker compose down -v` removes the containers and releases the ports. The
+worktree **directory survives** — `enforceRetention` reclaims only *over-limit* worktrees
+(`run.ts:1502`) and this run's is the newest. The user then clicks Continue.
+`rematerializeReclaimedWorktree` returns `false` because the directory is still there
+(`retention.ts:74`), so on a freshness trigger setup does not re-run, and the agent spawns
+into a tree whose containers are gone, whose ports are unbound, and whose database no longer
+exists. That is the exact failure named in the Problem Statement, reached by the most
+ordinary sequence in the product.
+
+So the run record carries a `hooksProvisioned?: boolean`: **set** after `worktree-created`
+completes successfully, **cleared** by `run-end`. Setup fires when the worktree is fresh
+**or** the run is not currently provisioned. Freshness still matters — it is what keeps
+`pnpm install` from re-running on an ordinary mid-run Continue, where the bracket never
+closed — but provisioning is what closes the finish-then-continue hole.
+
+This makes idempotency a **two-sided** contract term, stated in the docs and worth stating
+here:
+
+- **Teardown hooks must be idempotent** (`docker compose down` against nothing is already a
+  no-op), because they may run for a worktree whose setup never completed, and they run
+  again if the run is continued and re-finished.
+- **Setup hooks must be idempotent too**, because on the finish-then-continue path they
+  re-run against a directory that still holds `node_modules`, `.env` and submodule contents.
+  A setup script that appends to `.env`, or that assumes a clean tree, breaks here. The
+  worked example below is written to survive a second run.
+
+Because `run-end`'s trigger is "terminal status **and** the worktree directory exists", a
+run whose setup failed half-way — hook 1 allocated a port and started a container, hook 2
+failed — is still a terminal run with an existing worktree, so teardown fires. Same for a
+cancel landing mid-setup. `hooksProvisioned` is a hint for the setup side, never a guard on
+the teardown side, so a partial setup is never stranded.
 
 **One action kind: `run`, a shell command.** This is where the spec disagrees with [R2],
 so it states the reasoning rather than hedging with a second phase. For every case [R1]
@@ -322,22 +382,29 @@ checkout.
 ```bash
 #!/usr/bin/env bash
 # scripts/cezar-setup-worktree.sh — cwd is $CEZ_WORKTREE.
+# MUST be idempotent: it runs again when a finished task is Continued, against a
+# directory that already holds node_modules, .env and submodule contents.
 set -euo pipefail
 
 # Port block derived from the run id, NOT scanned: two tasks starting at the same
 # moment cannot pick the same block, so no lock is needed. A collision between two
 # LIVE worktrees is possible (~1 in 1000 per pair) and surfaces honestly as a
-# compose port-bind error, not as silent cross-talk.
+# compose port-bind error, not as silent cross-talk. Deriving it also means a
+# re-run picks the same ports rather than migrating a live task onto new ones.
 offset=$(( 0x${CEZ_TASK_ID:0:4} % 1000 ))
 app_port=$(( 20000 + offset * 10 ))
 
 git submodule update --init --recursive
-cp "$CEZ_REPO_ROOT/.env.example" .env
-cat >> .env <<EOF
+
+# Written once. Not clobbered on re-run: by then the agent may have edited it.
+if [ ! -f .env ]; then
+  cp "$CEZ_REPO_ROOT/.env.example" .env
+  cat >> .env <<EOF
 APP_PORT=$app_port
 DB_PORT=$(( app_port + 1 ))
 COMPOSE_PROJECT_NAME=cez-${CEZ_TASK_ID:0:8}
 EOF
+fi
 
 pnpm install --frozen-lockfile
 docker compose up -d --wait
@@ -405,13 +472,14 @@ the file the hook already has to write is the channel.
 **What is reused, not rebuilt:**
 
 - `loadConfig(repoRoot)` (`packages/cezar/src/config.ts:147`) — already read once per run
-  at `run.ts:2461`, already merges machine defaults, already degrades to defaults on
+  at `run.ts:2459`, already merges machine defaults, already degrades to defaults on
   malformed JSON. The hook table is one more additive key.
 - The `runCheckStep` spawn shape (`run.ts:3477`) — `spawn('bash', ['-lc', cmd], { cwd, env })`,
   capped output collection, `state.interrupt` wiring for cancel. Extracted, not copied
   (below).
 - `RunStore`'s existing `('run', RunRecord)` bus (`store.ts:1060`) — no new emitter, no
-  new event type.
+  new event type, and not a novel consumption pattern either: `index.ts:436` already
+  subscribes to it outside SSE.
 - `rematerializeReclaimedWorktree`'s existing `boolean` return as the continuation-path
   freshness signal — no signature change, only a callsite that stops discarding it.
 - **Secret redaction — already free.** `appendEvent` runs every event through
@@ -466,10 +534,14 @@ the file the hook already has to write is the channel.
    }): Promise<{ code: number; output: string; timedOut: boolean }>
    ```
 
-   `runCheckStep` is rewritten on top of it with no behavior change (its existing tests are
-   the regression gate). New behavior lives only in the new options: `timeoutMs` (SIGTERM,
-   then SIGKILL after 5 s — the escalation pattern from the OpenCode watchdogs, #858) and
-   the `timedOut` flag.
+   `runCheckStep` is rewritten on top of it with no behavior change. **There is no existing
+   suite to gate that rewrite** — nothing under `packages/cezar` tests `runCheckStep`'s own
+   behaviour; the workflow-level tests that use check steps all run a command that succeeds
+   and assert on the workflow, not on the primitive. Characterization tests are therefore
+   written against today's behaviour *first*, as their own step, before the extraction (see
+   Implementation Plan step 2). New behavior lives only in the new options: `timeoutMs`
+   (SIGTERM, then SIGKILL after 5 s — the escalation pattern from the OpenCode watchdogs,
+   #858) and the `timedOut` flag.
 
 3. **`runLifecycleHooks(...)`** in a new `packages/cezar/src/workflows/hooks.ts`:
 
@@ -495,34 +567,65 @@ the file the hook already has to write is the channel.
    the `worktree add -b` and reattach paths, `false` on registered-path reuse. Purely
    additive on a type the store does not persist.
 
-5. **Two setup callsites in `packages/cezar/src/workflows/run.ts`** — one per
-   materialization path:
+5. **Two setup callsites in `packages/cezar/src/workflows/run.ts`** — one per path that
+   puts an agent into a worktree. Both set `hooksProvisioned: true` on success.
 
    - `execute()`, after `seedAgentConfigLocalLayer` (`~:2546`) and inside the existing
-     `try`: `if (wt.fresh) { const err = await runLifecycleHooks({event: 'worktree-created', …}); if (err) throw new Error(err); }`.
-     Reusing the surrounding catch means the fail-closed path is the one already written
-     and already tested.
+     `try`: `if (wt.fresh) { const err = await runLifecycleHooks({event: 'worktree-created', …}); if (err) throw new Error(\`worktree setup hook failed: ${err}\`); }`.
+     Reusing the surrounding catch keeps the fail-closed path to the one already written,
+     but that catch unconditionally builds `worktree creation failed: ${message}`
+     (`run.ts:2551`) — which would blame git for a worktree that was in fact created
+     perfectly. So the catch's template gains one guard:
+     `const error = message.startsWith('worktree setup hook') ? message : \`worktree creation failed: ${message}\``.
+     One line, the tested path stays intact, and the run's error reads
+     `worktree setup hook failed: hook 1/2 "bash scripts/setup.sh" exited 1` — the string
+     Edge Cases promises. (The alternative, moving the hook outside the shared `try`, buys
+     the same accuracy at the cost of the "already tested" claim; not taken.)
    - `runContinuation()`, capturing the return of `rematerializeReclaimedWorktree`
      (`~:2106`, today discarded) and firing after the `cwd` resolution and before the
-     session spawn: fire when that call returned `true` **and** the resolved `cwd` is the
-     worktree (it falls back to `repoRoot` when re-materialization failed). A failure
-     settles the run `failed` with `continue failed: worktree setup hook …` rather than
-     spawning an agent into an unprovisioned tree.
+     session spawn, when the resolved `cwd` is the worktree (it falls back to `repoRoot`
+     when re-materialization failed) **and** either that call returned `true` *or*
+     `run.hooksProvisioned !== true`. The second disjunct is the finish-then-continue case:
+     the directory survived, so nothing was re-materialized, but teardown already tore the
+     environment down. A failure settles the run `failed` with
+     `continue failed: worktree setup hook …` rather than spawning an agent into an
+     unprovisioned tree.
 
 6. **One teardown observer** — `maybeRunEndHooks(run)` in `RunManager`, subscribed to the
    store's `('run')` event in the constructor:
    - keeps `Map<runId, RunStatus>` for edge detection; acts only on a transition **into**
      `{done, failed, cancelled}`;
-   - no-ops unless `hooks['run-end']` is configured, `run.worktreePath` is set and the
-     directory still exists;
-   - emits through `this.store.appendEvent(runId, …)` — it runs outside `execute()`, so
-     there is no `emit` closure to borrow, and this is also what buys the redaction;
-   - runs a cheap, try/catch'd sync status comparison on the emitter's stack and hands the
-     hook execution to `setImmediate`, wrapped like `enforceRetention` so it can never
-     delay or throw into the lifecycle;
+   - no-ops unless `hooks['run-end']` is configured, `run.hooksSkipped !== true`,
+     `run.worktreePath` is set and the directory still exists. `hooksSkipped` is on the list
+     because the observer runs outside the run and has no other way to know the task opted
+     out — without it, a bare task would still get `docker compose down`. `hooksProvisioned`
+     is deliberately **not** a guard here: teardown must still fire for a run whose setup
+     died half-way;
+   - reads its own config. It cannot borrow the run's: it runs outside `execute()`, where
+     the config read at `run.ts:2459` lives, which is the same reason it has no `emit`
+     closure to borrow. So it calls `loadConfig(this.repoRoot)` itself — async, and
+     deliberately uncached (`config.ts:143`) — **inside the `setImmediate`, never on the
+     emitter's stack**, which the control below requires. One consequence worth stating:
+     if an operator edits `config.json` mid-run, the table used for teardown may differ from
+     the one used for setup. That is accepted rather than fixed — the alternative is
+     snapshotting config per run, which is the staleness bug `loadConfig` avoids on purpose
+     — but it means a teardown script is not guaranteed to be the counterpart of the setup
+     script that ran;
+   - emits through `this.store.appendEvent(runId, …)`, which is also what buys the
+     redaction;
+   - runs a cheap, try/catch'd sync status comparison on the emitter's stack and hands
+     everything else — the config read and the hook execution — to `setImmediate`, wrapped
+     like `enforceRetention` so it can never delay or throw into the lifecycle;
+   - clears `hooksProvisioned` on the run record after teardown completes, which is what
+     re-arms setup for a later Continue;
    - drops the map entry on `deleteRun` (the store already emits `'deleted'`);
    - stores its unsubscribe handle as `offRunSettled`, released in `dispose()` beside
      `offUsage`/`offSemaphore` (`run.ts:588`).
+
+   The same `maybeRunEndHooks` body is called directly — awaited, bypassing the status-edge
+   check — by `POST /api/v1/runs/:id/remove-worktree` (`server.ts:4218`) and
+   `DELETE /api/v1/runs/:id` (`server.ts:4237`), before either destroys the directory or the
+   record. See "Two routes destroy a worktree with no status transition at all".
 
 7. **`cez hooks run <event> [--worktree <path>]`** (`packages/cezar/src/index.ts`) —
    executes the project's hooks for an event against a worktree (default: the cwd),
@@ -546,16 +649,28 @@ type LifecycleEvent = 'worktree-created' | 'run-end';
 type CezConfig = { /* … */ hooks?: Partial<Record<LifecycleEvent, HookDef[]>> };
 
 type StartRunInput = { /* … */ hooks?: boolean };     // false = bare worktree, this task only
-type RunRecord = { /* … */ hooksSkipped?: boolean };  // echoes that choice for the teardown observer
+type RunRecord = {
+  /* … */
+  hooksSkipped?: boolean;                             // echoes that choice for the teardown observer
+  hooksProvisioned?: boolean;                         // set by worktree-created, cleared by run-end
+};
 type WorktreeInfo = { /* … */ fresh: boolean };       // not persisted
 ```
 
-One optional run-record field (`hooksSkipped`) and no new state files: hooks otherwise
-leave their trace as session events, which are already persisted per run. The teardown
-observer's status map is in-memory only — a cezar restart re-seeds it from the first
-`('run')` emission per run, and a run that reached its terminal status while cezar was
-down simply does not get a late teardown (documented; teardown is best-effort by
-definition).
+Two optional run-record fields and no new state files: hooks otherwise leave their trace as
+session events, which are already persisted per run.
+
+`hooksProvisioned` **must** be on the record rather than in memory. It is read on the
+continuation path, which can be days after the run finished and across a cezar restart; an
+in-memory bit would be lost exactly when the finish-then-continue case needs it, and losing
+it defaults to re-running setup on every Continue — the `pnpm install`-per-turn cost this
+design exists to avoid. It is optional and absent-means-false, so every run that predates
+the feature reads as unprovisioned and simply gets setup on its next Continue.
+
+The teardown observer's status map, by contrast, is in-memory only — a cezar restart
+re-seeds it from the first `('run')` emission per run, and a run that reached its terminal
+status while cezar was down simply does not get a late teardown (documented; teardown is
+best-effort by definition).
 
 **Hook environment** — `{ ...process.env }` plus:
 
@@ -565,8 +680,12 @@ definition).
 | `CEZ_TASK_ID` | the run id |
 | `CEZ_WORKTREE` | absolute worktree path (equals cwd) |
 | `CEZ_REPO_ROOT` | absolute main-checkout root — where shared caches/registries live |
-| `CEZ_BRANCH` | `cez/<id8>` |
-| `CEZ_BASE_BRANCH` | resolved fork point |
+| `CEZ_BRANCH` | `cez/<id8>` — may be **empty** under `cez hooks run` outside a task worktree |
+| `CEZ_BASE_BRANCH` | resolved fork point — same caveat |
+
+All six are always *set*; the two branch vars are the only ones that can be empty, and only
+on the `cez hooks run` path. Scripts must not assume non-empty (`${CEZ_BRANCH:-}` under
+`set -u`).
 
 Agent-session vars (`CEZ_HANDOFF_FILE`, `CEZ_TODOS_FILE`, `TMPDIR` override) are
 deliberately **not** exported: a hook is not an agent, and handing it the handoff/inbox
@@ -600,10 +719,13 @@ gitignored and local, so a branch cannot introduce a hook — see Risks.
 ## 📝 API Contracts
 
 Only what changes. Everything is additive; no request or response field is removed or
-retyped.
+retyped. **Every path below is `/api/v1`** — the unversioned `/api/*` surface was removed
+(`BACKWARD_COMPATIBILITY.md:21`), and `versioned-surface.test.ts` fails if any route appears
+outside `/api/v1` (§2, "No unversioned twin"). Project-scoped routes also answer at
+`/api/v1/p/<projectId>/<path>`.
 
-**`GET /api/config` → `200`, `PUT /api/config`** — the config surface gains one optional
-key, carried through the existing raw-file merge:
+**`GET /api/v1/config` → `200`, `PUT /api/v1/config`** — the config surface gains one
+optional key, carried through the existing raw-file merge:
 
 ```jsonc
 {
@@ -620,7 +742,7 @@ entries. A `PUT` carrying a malformed `hooks` value is rejected with the route's
 `400` shape; a malformed value already **on disk** degrades the key to `undefined` on read
 rather than failing the whole config.
 
-**`POST /api/runs`** — request body gains `hooks?: boolean`, beside the existing
+**`POST /api/v1/runs`** — request body gains `hooks?: boolean`, beside the existing
 `worktree?: boolean`:
 
 ```jsonc
@@ -628,10 +750,17 @@ rather than failing the whole config.
 ```
 
 `false` skips both lifecycle hooks for this run; `true`/absent keeps the project default.
-The value is persisted on the run record as `hooksSkipped?: boolean` and echoed by every
-route that returns a `RunRecord` (`GET /api/runs`, `GET /api/runs/:id`, the SSE run
-frames) via the contract schema in `packages/contract/src/runs.ts` — optional, in the
-established style of `worktreeReclaimedAt` (`runs.ts:233`).
+The value is persisted on the run record as `hooksSkipped?: boolean` and echoed, together
+with `hooksProvisioned?: boolean`, by every route that returns a `RunRecord`
+(`GET /api/v1/runs`, `GET /api/v1/runs/:id`, the SSE run frames) via the contract schema in
+`packages/contract/src/runs.ts` — both optional, in the established style of
+`worktreeReclaimedAt` (`runs.ts:233`).
+
+**`POST /api/v1/runs/:id/remove-worktree` and `DELETE /api/v1/runs/:id`** — no request or
+response shape changes. Both gain one side effect: they fire `run-end` against the run's
+worktree, awaited, before removing the directory or the record. Both are protected surfaces
+in `BACKWARD_COMPATIBILITY.md` §2; a slow teardown delays the response up to the hook's
+`timeoutMs`.
 
 **Session events** — two shapes, both already rendered by the cockpit, no new event type:
 
@@ -652,7 +781,12 @@ Neither carries `stepId`; verified harmless at `thread-state.ts:556`.
   no hooks for that event (printing `no <event> hooks configured` — "nothing to do" is not
   an error); `1` on the first `onFail: 'fail'` failure or a timeout. A synthetic
   `CEZ_TASK_ID` is used when the path is not a task worktree, so a script that keys off it
-  still runs. Honors `CEZ_DISABLE_HOOKS=1` (prints that it was skipped, exits `0`).
+  still runs. `CEZ_BRANCH` and `CEZ_BASE_BRANCH` are derived from the target worktree's own
+  git state (`git rev-parse --abbrev-ref HEAD` and the configured base) and are **the empty
+  string** when that fails — outside a task worktree there is no `cez/<id8>` to report, and
+  inventing one would be worse than an empty value. Hook scripts must therefore tolerate
+  both being empty; the env table below says so too. Honors `CEZ_DISABLE_HOOKS=1` (prints
+  that it was skipped, exits `0`).
 
 **Environment**
 
@@ -683,7 +817,7 @@ so no new accessibility surface beyond the checkbox's own label.
 skipped` note in its thread, so a later "why doesn't this build" is traceable to the
 choice rather than only to the run record.
 
-**Where hooks are edited.** The config file, and `GET/PUT /api/config` for anything that
+**Where hooks are edited.** The config file, and `GET/PUT /api/v1/config` for anything that
 already edits it. No Settings screen: the table is four lines of JSON written once per
 checkout, sitting beside `maxParallel` and `defaultRunner`, which have no dedicated editor
 either. Building one now would be UI for a mechanism nobody has run yet.
@@ -723,9 +857,18 @@ default: no `hooks` key (project), `hooks: false` on the task (one run),
 - **Run rests at `review`, user clicks Finish / Create PR / Discard** → `review → done`
   (or `cancelled`) on the store bus fires `run-end`. This is the path a `dropActive`-based
   design silently skips.
-- **Run continued after finishing** → `done → running` is not a terminal edge, so the map
-  simply updates; the next terminal transition fires `run-end` again. Teardown idempotency
-  is the contract term that makes this safe.
+- **Run continued after finishing** → the mainline case, and the one a materialization-only
+  trigger gets wrong. Teardown already fired at `done` and cleared `hooksProvisioned`, but
+  the worktree **directory survived** (`enforceRetention` reclaims only over-limit
+  worktrees, `run.ts:1502`, and this one is the newest), so
+  `rematerializeReclaimedWorktree` returns `false` (`retention.ts:74`). Setup fires anyway,
+  on the `hooksProvisioned !== true` disjunct, rebuilding the containers and ports teardown
+  removed. On the way out, `done → running` is not a terminal edge so the map simply
+  updates, and the next terminal transition fires `run-end` again. Setup **and** teardown
+  idempotency are the contract terms that make this safe.
+- **Run continued mid-run, without having finished** → nothing was torn down,
+  `hooksProvisioned` is still `true`, and the worktree is not fresh, so setup does **not**
+  re-run. This is what keeps `pnpm install` off the per-Continue path.
 - **Task opts out (`hooks: false`)** → no setup, and `hooksSkipped` on the record
   suppresses teardown too. A `bare worktree — setup hooks skipped` note lands in the thread
   so a failing build is traceable to the choice.
@@ -736,7 +879,19 @@ default: no `hooks` key (project), `hooks: false` on the task (one run),
   worktree-exists guard fails, and the run is in the user's own working tree — a teardown
   paired with a setup that never ran is a footgun). Documented; revisit if asked for.
 - **Continue / restart on an existing worktree** → `fresh === false` /
-  `rematerializeReclaimedWorktree` returns `false`, no re-run of setup.
+  `rematerializeReclaimedWorktree` returns `false`, so setup re-runs **only if** the run is
+  no longer provisioned (`hooksProvisioned !== true`, i.e. teardown has already fired for
+  it). Otherwise no re-run.
+- **`POST /api/v1/runs/:id/remove-worktree`** (`server.ts:4218`) → fires `run-end` against
+  the still-present worktree, awaited, *before* `removeWorktree(...)` and before the
+  `updateRun` that clears `worktreePath`. Ordering is the whole point: after that
+  `updateRun` there is no handle left to tear anything down with.
+- **`DELETE /api/v1/runs/:id`** (`server.ts:4237`) → same, before `store.deleteRun(id)`
+  drops the record carrying `worktreePath`.
+- **Teardown fails on either destructive route** → `onFail: 'warn'` semantics as everywhere
+  else: the failure is a note on the event stream and the removal proceeds. A user asking to
+  remove a worktree gets it removed; a teardown that cannot clean up is not a reason to
+  refuse.
 - **Reclaimed then continued** → reattach re-materializes, setup re-runs, which is correct:
   the untracked half of the tree is gone.
 - **Retention reclaims the worktree while teardown runs** → the teardown observer and
@@ -762,7 +917,11 @@ default: no `hooks` key (project), `hooks: false` on the task (one run),
 - **Two `RunManager`s for one project** (a rebuilt project context,
   `project-context.ts:216`) → the second subscription would fire teardown twice.
   `dispose()` must release `offRunSettled`; `store.setMaxListeners(100)` (`store.ts:494`)
-  means a leaked listener would surface no warning, so this is a test, not a hope.
+  means a leaked listener would surface no warning, so this is a test, not a hope. A second,
+  independent guard already exists: context teardown at `project-context.ts:243` calls
+  `ctx.manager.dispose()` **and** `ctx.store.removeAllListeners()`, so even a missed
+  `offRunSettled` is swept on rebuild. The test still belongs — the sweep is incidental to
+  this design, not a contract it can rely on.
 - **Windows** → `bash -lc`, same as `check` steps today. No new gap; WSL users are already
   served by the existing `packages/cezar/src/server/wsl.ts` path.
 
@@ -770,17 +929,26 @@ default: no `hooks` key (project), `hooks: false` on the task (one run),
 
 - **risk-high per `SDLC.md`** — the change lands on worktree/branch handling and executes
   commands unattended before an agent starts. It touches `run.ts`'s `execute()` and
-  `runContinuation()`, `git-worktree.ts`, and adds the manager's first non-SSE subscription
+  `runContinuation()`, `git-worktree.ts`, two server routes, and adds a manager subscription
   to the store bus.
 - **The store subscription is a new coupling**, mitigated structurally rather than by
   discipline — each control has a precedent in the manager's constructor:
-  - *No cycle through the listened channel.* `updateRun` → `touch()` emits `'run'`
-    (`store.ts:1060`); `appendEvent` emits `'event'` (`store.ts:797`) and does **not** call
-    `touch()`. The observer's only outputs are `'event'` emissions and a child process.
-  - *The edge map is a latch.* It fires only on a transition **into** terminal from
-    non-terminal, then records terminal — so any later `'run'` emission for that run,
-    including one the observer somehow caused, is a no-op rather than a loop. Recursion
-    cannot amplify.
+  - *The edge map is a latch* — **the primary control.** It fires only on a transition
+    **into** terminal from non-terminal, then records terminal, so any later `'run'`
+    emission for that run — including one the observer caused — is a no-op rather than a
+    loop. Recursion cannot amplify.
+  - *The listened channel does carry a cycle, and the latch is what closes it.* An earlier
+    draft of this spec claimed there was no cycle at all, on the grounds that `appendEvent`
+    emits `'event'` (`store.ts:797`) and never calls `touch()`. That is **false**, and the
+    correction matters more to the risk analysis than to the design. Past the line range that
+    draft cited, `appendEvent`'s "janitor trick" scans every event's text for PR and issue
+    URLs and writes what it finds back: `this.updateRun(runId, { pullRequestUrl: created })`
+    (`store.ts:809`), `if (changed) this.touch(run)` (`store.ts:823`). So hook output
+    containing a PR or issue URL — entirely plausible; a teardown script echoing a CI link
+    would do it — routes through `appendEvent` and *does* re-enter the observer. It does not
+    loop, because the latch already records terminal for that run. The design is unchanged;
+    what changes is that the latch is load-bearing rather than one of four redundant
+    controls, and that the "observer never calls `updateRun`" test below is a real gate.
   - *Nothing slow or throwable runs on the emitter's stack.* `EventEmitter.emit` is
     synchronous, so the listener runs inside `updateRun`'s own call and anything it throws
     lands on `updateRun`'s caller — which could break a status write (e.g. inside
@@ -790,8 +958,10 @@ default: no `hooks` key (project), `hooks: false` on the task (one run),
     (`run.ts:573`).
   - *An unsubscribe handle released in `dispose()`*, exactly like `offUsage` and
     `offSemaphore` (`run.ts:588`).
-  - The "observer never calls `updateRun`" test stays, now as belt-and-braces rather than
-    the primary control.
+  - The "observer never calls `updateRun`" test is a **primary gate**, not belt-and-braces,
+    and it must exercise the real path: hook output carrying a PR or issue URL, routed
+    through `appendEvent`, must not produce a second teardown. That is the concrete way
+    re-entrancy is reachable on today's `store.ts`.
 
   Edge detection lives in the manager, not the store: `onRunSettled(cb)` on the store would
   be a cleaner boundary but is an interface with one consumer. Move it there if a second
@@ -815,20 +985,27 @@ default: no `hooks` key (project), `hooks: false` on the task (one run),
   `maxParallel` caps concurrent installs. The docs should point at the real fix — a shared
   store/cache under `$CEZ_REPO_ROOT`, the Gitpod-prebuild answer scaled down — rather than
   pretend it away.
-- **`runCheckStep` refactor.** The one behavior-preserving edit to a hot path; its existing
-  tests are the gate, and `spawnShell`'s new options default to today's behavior (no
-  timeout).
+- **`runCheckStep` refactor.** The one behavior-preserving edit to a hot path — and the one
+  step with **no gate today**. Nothing under `packages/cezar` tests `runCheckStep`'s own
+  behaviour; every workflow-level test that uses a check step runs a command that succeeds
+  and asserts on the workflow. So characterization tests are written first (step 2), against
+  today's behaviour, or the refactor lands unguarded on a path every workflow uses.
+  `spawnShell`'s new options default to today's behavior (no timeout).
 - **Rollback.** Three levels, all instant and none requiring a redeploy: delete the `hooks`
   key (project), uncheck the composer box (one run), `CEZ_DISABLE_HOOKS=1` (machine). A bad
   release is backed out by the env var without touching anyone's config.
 - **Backward compatibility.** Additive. No `hooks` key → no hook, no spawn, no event, no
   subscription work, identical run flow. `WorktreeInfo.fresh` is additive on a
-  non-persisted type. No route changes beyond `POST /api/runs` accepting one
-  optional field and `GET/PUT /api/config` carrying one more key through its existing
-  raw-merge. Add the config key and the `hooksSkipped` record field to
-  `BACKWARD_COMPATIBILITY.md`, the new env var to `.env.example` and the README env table,
-  and the feature to the README configuration section (`README.md:691`) and worktree
-  section.
+  non-persisted type; `hooksSkipped` and `hooksProvisioned` are optional record fields whose
+  absence reads as `false`. No request or response shape changes beyond
+  `POST /api/v1/runs` accepting one optional field and `GET/PUT /api/v1/config` carrying one
+  more key through its existing raw-merge; `POST /api/v1/runs/:id/remove-worktree` and
+  `DELETE /api/v1/runs/:id` gain a side effect but no shape change. **All paths are
+  `/api/v1`** — the unversioned surface was removed and `versioned-surface.test.ts` fails on
+  any route outside it (`BACKWARD_COMPATIBILITY.md:21`, §2). Add the config key and both
+  record fields to `BACKWARD_COMPATIBILITY.md`, the new env var to `.env.example` and the
+  README env table, and the feature to the README configuration section (`README.md:691`)
+  and worktree section.
 
 ## 📋 Non-goals
 
@@ -858,10 +1035,12 @@ default: no `hooks` key (project), `hooks: false` on the task (one run),
 
 ## 📋 Phasing
 
-**One phase, and that is the whole feature.** `hooks` config key, `spawnShell` extraction,
-`runLifecycleHooks`, the `fresh` flag, two setup callsites, the terminal observer, the
-per-task opt-out, `cez hooks run`, docs. It ships the deterministic setup [R1] asks for,
-tears the worktree down again, and keeps bare worktrees one checkbox away.
+**One phase, and that is the whole feature.** `hooks` config key, `spawnShell` extraction
+(with its characterization tests first), `runLifecycleHooks`, the `fresh` flag and the
+`hooksProvisioned` bit, two setup callsites, the terminal observer plus the two destructive
+routes, the per-task opt-out, `cez hooks run`, docs. It ships the deterministic setup [R1]
+asks for, tears the worktree down again, brings it back up when the task is continued, and
+keeps bare worktrees one checkbox away.
 
 There is deliberately no phase two. An earlier draft parked [R2]'s prompt hooks, a
 hook→session env channel and a Settings editor in one — three capabilities that share
@@ -873,64 +1052,96 @@ is what a deferred idea is worth.
 
 ## 📋 Implementation Plan
 
-Eleven steps. Each leaves the application working and is verifiable by a test; steps 1–5
+Thirteen steps. Each leaves the application working and is verifiable by a test; steps 1–6
 are self-contained units that land before anything is wired, so a bisect lands on a small
 diff.
 
-1. **`packages/cezar/src/workflows/shell.ts` — `spawnShell`.** `timeoutMs` / `timedOut`,
+1. **Characterization tests for `runCheckStep`** (`run.ts:3477`), written against today's
+   behaviour **before** anything is extracted. There is no existing suite to lean on — no
+   `*.test.ts` under `packages/cezar` exercises `runCheckStep` at all, and the workflow-level
+   tests that use check steps (`run.test.ts:799`, `workspace-semaphore.test.ts:55`,
+   `run-isolation.test.ts:62` and the rest) all run a command that succeeds and assert on the
+   workflow around it. Without this step the refactor in step 3 lands unguarded on a path
+   every workflow uses.
+   *Tests (`check-step.test.ts`):* exit code propagated to the step result; the 20 000-char
+   output cap enforced at its exact boundary; a spawn error (nonexistent binary) resolves
+   with `exitCode: -1` rather than throwing; `state.interrupt` SIGTERM-kills the child and
+   settles the step. Step 2's `shell.test.ts` is a superset of these at the primitive level;
+   this step pins the *caller's* observed behaviour so the extraction is provably neutral.
+2. **`packages/cezar/src/workflows/shell.ts` — `spawnShell`.** `timeoutMs` / `timedOut`,
    SIGTERM→SIGKILL after 5 s, capped output, `onSpawn` passthrough.
    *Tests (`shell.test.ts`):* exit code propagated, output cap enforced, timeout kills and
    sets `timedOut`, spawn error resolves rather than throws.
-2. **Rewrite `runCheckStep` on `spawnShell`** (`run.ts:3477`). No behavior change.
-   *Test:* the existing check-step suite passes untouched — that is the gate.
-3. **`packages/cezar/src/config.ts` — `hookSchema` / `hooksSchema`.**
+3. **Rewrite `runCheckStep` on `spawnShell`** (`run.ts:3477`). No behavior change.
+   *Test:* step 1's characterization suite passes untouched — that is the gate.
+4. **`packages/cezar/src/config.ts` — `hookSchema` / `hooksSchema`.**
    *Tests (`config.test.ts`):* valid table parses with defaults applied; malformed `hooks`
    degrades to `undefined` while the rest of the config survives; an 11-entry array is
    rejected; out-of-range `timeoutMs` is rejected.
-4. **`packages/cezar/src/git-worktree.ts` — `fresh` on `WorktreeInfo`.**
+5. **`packages/cezar/src/git-worktree.ts` — `fresh` on `WorktreeInfo`.**
    *Tests (`git-worktree.test.ts`):* fresh `worktree add -b` → `true`; registered-path
    reuse → `false`; reattach-after-reclaim → `true`.
-5. **`packages/cezar/src/workflows/hooks.ts` — `runLifecycleHooks`.** Sequential, per-hook
+6. **`packages/cezar/src/workflows/hooks.ts` — `runLifecycleHooks`.** Sequential, per-hook
    `onFail`, env contract, `CEZ_DISABLE_HOOKS`, never throws.
    *Tests (`hooks.test.ts`, injected env + temp dir):* sequential order; stop at first
    `fail`; `warn` continues and emits a note; the six `CEZ_*` vars are present and the
-   agent-session vars are absent; `CEZ_DISABLE_HOOKS=1` returns `null` without spawning;
+   agent-session vars are absent; `CEZ_BRANCH`/`CEZ_BASE_BRANCH` are set-but-empty rather
+   than missing when unresolvable; `CEZ_DISABLE_HOOKS=1` returns `null` without spawning;
    an empty/absent array returns `null` without spawning.
-6. **Wire the two setup callsites** — `execute()` (`~:2546`) and `runContinuation()`
-   (`~:2106`, capturing the previously discarded boolean).
+7. **Wire the two setup callsites and the provisioning bit** — `execute()` (`~:2546`, with
+   the `worktree setup hook` prefix guard on the catch at `run.ts:2551`) and
+   `runContinuation()` (`~:2106`, capturing the previously discarded boolean and reading
+   `hooksProvisioned`). Both set `hooksProvisioned: true` on success.
    *Tests (`hooks-wiring.test.ts`, modeled on `retention-wiring.test.ts`):* setup fires
    once on a fresh worktree and not on reuse; **setup fires on a Continue that
-   re-materialized a reclaimed worktree** and not on a Continue that reused an existing
-   one; a non-zero setup hook fails the run on **both** paths and no session spawns.
-7. **Wire the terminal observer** — `maybeRunEndHooks` + `offRunSettled` in `dispose()`.
+   re-materialized a reclaimed worktree** and not on a Continue that reused a
+   still-provisioned one; a non-zero setup hook fails the run on **both** paths, no session
+   spawns, and the persisted error reads `worktree setup hook failed: …` rather than
+   `worktree creation failed: …`.
+8. **Wire the terminal observer** — `maybeRunEndHooks` + `offRunSettled` in `dispose()`,
+   clearing `hooksProvisioned` after teardown, plus the two explicit calls from
+   `POST /api/v1/runs/:id/remove-worktree` and `DELETE /api/v1/runs/:id`.
    *Tests (same file):* `run-end` fires for `done`, `failed` and `cancelled` from
    `execute()`, from `runContinuation()`, and from **`review → done` via `finish()`**; it
-   fires after a *partial* setup failure (hook 1 ok, hook 2 fails); it does **not** fire
-   for `review`, `waiting`, or a requeue to `queued`, and not twice for one transition; a
-   failing `run-end` hook leaves the run's status untouched; the observer performs no
-   `updateRun`; a hook that throws synchronously does not propagate into the `updateRun`
+   fires after a *partial* setup failure (hook 1 ok, hook 2 fails); it fires on both
+   destructive routes, **before** the worktree or record is gone, and its output is not lost
+   when the record is deleted; it does **not** fire for `review`, `waiting`, or a requeue to
+   `queued`, not twice for one transition, and not at all when `hooksSkipped` is set; a
+   failing `run-end` hook leaves the run's status untouched and does not block either
+   destructive route; the observer performs no `updateRun` **even when hook output contains
+   a PR or issue URL routed through `appendEvent`** (the re-entrancy path on today's
+   `store.ts:809`); a hook that throws synchronously does not propagate into the `updateRun`
    caller; a disposed manager fires no teardown and a rebuilt project context does not
    double-fire.
-8. **Per-task opt-out.** `hooks?: boolean` on `StartRunInput` (`run.ts:306`),
-   `hooksSkipped` on the run record and `packages/contract/src/runs.ts`, `POST /api/runs`
-   passthrough, `cez run --no-hooks`.
-   *Tests:* a task with `hooks: false` runs neither setup nor teardown; the skip survives a
-   Continue; the field round-trips through the contract schema.
-9. **Composer checkbox** beside the worktree toggle, hidden when the project configures no
-   hooks.
-   *Test:* the control is absent with an empty `hooks` config and posts `hooks: false` when
-   unchecked.
-10. **`cez hooks run <event> [--worktree <path>]`** in `packages/cezar/src/index.ts`.
+9. **The finish-then-continue regression gate** — its own step because it is the hole this
+   revision closes and it spans both wirings.
+   *Test (`hooks-wiring.test.ts`):* a run that reached `done` (teardown fired, worktree
+   directory still present, `hooksProvisioned` cleared) and is then Continued **does** re-run
+   `worktree-created`, and the second setup runs against the existing directory. Paired with
+   the negative: a mid-run Continue on a still-provisioned worktree does not.
+10. **Per-task opt-out.** `hooks?: boolean` on `StartRunInput` (`run.ts:306`),
+    `hooksSkipped` and `hooksProvisioned` on the run record and
+    `packages/contract/src/runs.ts`, `POST /api/v1/runs` passthrough, `cez run --no-hooks`.
+    *Tests:* a task with `hooks: false` runs neither setup nor teardown; the skip survives a
+    Continue; both fields round-trip through the contract schema.
+11. **Composer checkbox** beside the worktree toggle, hidden when the project configures no
+    hooks.
+    *Test:* the control is absent with an empty `hooks` config and posts `hooks: false` when
+    unchecked.
+12. **`cez hooks run <event> [--worktree <path>]`** in `packages/cezar/src/index.ts`.
     *Tests (package test):* exits `0` with no hooks configured and prints
     `no <event> hooks configured`; exits `1` on a failing hook; synthesizes `CEZ_TASK_ID`
-    outside a task worktree; honors `CEZ_DISABLE_HOOKS=1`.
-11. **Docs.** README configuration section (`README.md:691`) and worktree section,
-    including git's `post-checkout` named as the zero-feature alternative; the
-    `CEZ_DISABLE_HOOKS` entry in **`.env.example`** and the README env table (required by
-    `AGENTS.md` in the same commit); `BACKWARD_COMPATIBILITY.md` entries for the config key
-    and the record field; the two scripts from "Worked example" shipped as copy-pasteable
-    docs.
+    outside a task worktree; sets `CEZ_BRANCH`/`CEZ_BASE_BRANCH` empty rather than unset
+    there; honors `CEZ_DISABLE_HOOKS=1`.
+13. **Docs.** README configuration section (`README.md:691`) and worktree section,
+    including git's `post-checkout` named as the zero-feature alternative and the
+    two-sided idempotency contract stated for both events; the `CEZ_DISABLE_HOOKS` entry in
+    **`.env.example`** and the README env table (required by `AGENTS.md` in the same commit);
+    `BACKWARD_COMPATIBILITY.md` entries for the config key, both record fields, and the new
+    side effect on the two destructive routes; the two scripts from "Worked example" shipped
+    as copy-pasteable docs.
 
 QA: `needs-qa` — a real project with a `worktree-created` hook, one passing and one
-failing, plus a Continue after retention reclaim and a review-gate Finish, verified in the
-cockpit event stream.
+failing, plus a Continue after retention reclaim, a review-gate Finish, a **Finish then
+Continue** (the environment must come back), and a "🧹 Remove worktree" on a finished task
+(the containers must go away), all verified in the cockpit event stream.
