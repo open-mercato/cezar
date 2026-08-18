@@ -106,14 +106,10 @@ export type RunTab = 'session' | 'changes' | 'commits' | 'files'
 export function RunHeader({
   run,
   tab = 'session',
-  planTally,
   onMarkedUnread,
 }: {
   run: ApiRun
   tab?: RunTab
-  /** The plan dock's compact mirror (spec: "mirrored as a compact progress line in the run
-   *  header") — supplied by the Session tab, absent on the git tabs where no thread is parsed. */
-  planTally?: { done: number; total: number }
   /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
@@ -143,13 +139,8 @@ export function RunHeader({
           <PixelHammerIcon className="size-[18px] shrink-0 text-violet" />
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
-            {planTally ? (
-              // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
-              // the run header").
-              <span data-slot="plan-mirror" className="text-[11px] text-soft-foreground tabular-nums">
-                Plan {planTally.done}/{planTally.total}
-              </span>
-            ) : null}
+            {/* No plan mirror here (user decision): the PLAN chip by the composer already carries
+                the tally, and the title row stays actions-only. */}
             {/* The run's actions ride the title row now — Finish/Continue/Open in…/overflow on the
                 right at the title's height; mobile still folds them into the kebab. */}
             <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
