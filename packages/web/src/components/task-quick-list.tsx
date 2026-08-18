@@ -1,7 +1,7 @@
 import { ChevronDownIcon, ChevronRightIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
-import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
+import { useHealth, useProjects, useReferenceProjectId, useRuns, useRunsIndex } from '@/api/queries'
+import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { ReferenceChip } from '@/components/reference-chip'
@@ -432,13 +432,93 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
   return parts.join(', ')
 }
 
+/** A cross-project row is worth sidebar space only while it can still ask for a human:
+ *  live, waiting, or failed. Finished work in other repos belongs to the All-tasks page. */
+function needsSupervision(entry: { status: RunRecord['status'] }): boolean {
+  return entry.status !== 'done' && entry.status !== 'cancelled'
+}
+
+/** Needs-you outranks merely-running; a usage-limit `failed` with an appointment is parked,
+ *  not broken, so it sorts with the live ones (same rule as `deriveAttention`). */
+function needsYou(entry: { status: RunRecord['status']; autoResumeAt?: string }): boolean {
+  if (entry.status === 'waiting' || entry.status === 'review') return true
+  return entry.status === 'failed' && !entry.autoResumeAt
+}
+
+/**
+ * The parallel-work band (user decision, 25-repo review follow-up): tasks from OTHER projects
+ * that are live or waiting on a human, under the active project's own list. This is what makes
+ * supervising agents across repos possible without switching — the sidebar names every place
+ * that needs eyes, and a click lands in that project's thread.
+ *
+ * Renders nothing when every other project is quiet: the band is a signal, not a fixture.
+ */
+export function CrossProjectTasks({ activeProjectId, now = Date.now() }: { activeProjectId: string | null; now?: number }) {
+  const index = useRunsIndex(true)
+  const registry = useProjects().data
+  // An unscoped URL still MEANS the boot project — its runs are the quick list above, so they
+  // must not repeat here as "other".
+  const excludedId = activeProjectId ?? registry?.bootProject ?? null
+  const rows = React.useMemo(() => {
+    const entries = (index.data?.runs ?? []).filter(
+      (entry) => entry.projectId !== excludedId && !entry.archived && needsSupervision(entry),
+    )
+    return entries.sort((a, b) => {
+      const attention = Number(needsYou(b)) - Number(needsYou(a))
+      if (attention !== 0) return attention
+      return (b.startedAt ?? b.createdAt).localeCompare(a.startedAt ?? a.createdAt)
+    })
+  }, [index.data, excludedId])
+
+  if (rows.length === 0) return null
+  const projectName = (id: string) => registry?.projects.find((project) => project.id === id)?.name ?? id
+
+  return (
+    <div data-slot="cross-project-tasks">
+      <hr aria-hidden="true" className="mx-2.5 mt-3 mb-2 border-border" />
+      <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
+        Other projects
+      </h2>
+      <div className="flex flex-col gap-0.5">
+        {rows.map((entry) => {
+          const attention = deriveAttention(entry)
+          return (
+            <Link
+              key={`${entry.projectId}/${entry.id}`}
+              to={scopeTo(entry.projectId, `/tasks/${entry.id}`)}
+              data-slot="cross-project-row"
+              data-project-id={entry.projectId}
+              title={`${projectName(entry.projectId)}: ${runTitle(entry)}`}
+              className="flex min-h-11 items-center gap-2 rounded-md py-[7px] pr-2.5 pl-3 transition-colors hover:bg-card md:min-h-9"
+            >
+              <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+              {/* The project is the row's leading identifier here — which repo needs you is the
+                  question this band answers; the task title elaborates. */}
+              <span className="max-w-[9ch] shrink-0 truncate font-mono text-[10.5px] font-medium text-soft-foreground">
+                {projectName(entry.projectId)}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted-foreground">
+                {runTitle(entry)}
+              </span>
+              <span className="shrink-0 text-[10.5px] text-soft-foreground tabular-nums">
+                {shortAge(entry.startedAt ?? entry.createdAt, now)}
+              </span>
+            </Link>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 /**
  * The quick-list wired to live data: `useRuns()` for the list (kept fresh by the global SSE
  * stream, Step 3.2), the router for which row is open, and the shared Active/Archived context so
  * the sidebar and the Tasks table (Step 3.4) always show the same filter.
  */
-export function TaskQuickListContainer() {
+export function TaskQuickListContainer({ crossProject = false }: { crossProject?: boolean } = {}) {
   const runs = useRuns()
+  const activeProjectId = useActiveProjectId()
   const health = useHealth()
   const visibility = usageMetricVisibility(health.data)
   // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
@@ -473,6 +553,9 @@ export function TaskQuickListContainer() {
         showTokens={visibility.tokens}
         showCost={visibility.cost}
       />
+      {/* The parallel-work band (multi-project only): what OTHER repos need eyes on, under this
+          project's own list. */}
+      {crossProject ? <CrossProjectTasks activeProjectId={activeProjectId} now={now} /> : null}
     </ReferenceStatusProvider>
   )
 }

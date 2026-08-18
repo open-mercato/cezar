@@ -155,7 +155,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
           ) : undefined
         }
         singleProject={health.data?.capabilities.singleProject === true}
-        taskQuickList={<TaskQuickListContainer />}
+        taskQuickList={<TaskQuickListContainer crossProject={multiProject} />}
         multiProject={multiProject}
         toolsMenu={<ToolsMenu health={health.data} />}
       >

@@ -343,6 +343,63 @@ describe('sidebar wiring', () => {
     expect(repoChip()?.textContent).toBe('cezar')
   })
 
+  it('surfaces other projects’ live and waiting tasks in the cross-project band', async () => {
+    // The parallel-work answer (25-repo follow-up): supervising agents across repos must not
+    // require switching — the band names every OTHER project that needs eyes. Finished work
+    // stays off it; the boot project's runs are the quick list above, never repeated here.
+    const indexRun = {
+      projectId: 'shop',
+      id: 'r-shop-1',
+      title: 'Fix the checkout',
+      status: 'waiting' as const,
+      createdAt: '2026-07-20T11:00:00.000Z',
+      archived: false,
+      workflow: 'default',
+    }
+    serve({
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
+        projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' }],
+        bootProject: 'cezar',
+        projectsDir: '/home/me/cezar/projects',
+      },
+      '/api/v1/workspace/ui-state': {},
+      // The unscoped URL reads the legacy unscoped runs route — the quick-list container
+      // (which hosts the band) stays unmounted until it answers.
+      '/api/v1/runs': [],
+      '/api/v1/workspace/runs-index': {
+        runs: [
+          indexRun,
+          // Done elsewhere: the All-tasks page's business, not the sidebar's.
+          { ...indexRun, id: 'r-shop-2', title: 'Old news', status: 'done' as const },
+          // The boot project's own run must not echo under "Other projects".
+          { ...indexRun, projectId: 'cezar', id: 'r-boot-1', status: 'running' as const },
+        ],
+        perProjectLimit: 200,
+        truncated: false,
+        // #871: batched reference statuses ride the index answer; none of these rows carries one.
+        referenceStatuses: {},
+      },
+    })
+    renderShell()
+
+    // 3s: two dependent queries (projects, then the index) must land before the band mounts,
+    // and the full-suite worker pool makes the default 1s a coin flip.
+    await waitFor(
+      () => expect(document.querySelector('[data-slot="cross-project-tasks"]')).not.toBeNull(),
+      { timeout: 3000 },
+    )
+    const rows = [...document.querySelectorAll('[data-slot="cross-project-row"]')]
+    expect(rows).toHaveLength(1)
+    const row = rows[0] as HTMLElement
+    expect(row.getAttribute('href')).toBe('/p/shop/tasks/r-shop-1')
+    expect(row.textContent).toContain('shop')
+    expect(row.textContent).toContain('Fix the checkout')
+    // The dot says what the row asks for — waiting is the amber "needs you".
+    expect(row.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+  })
+
   it('shows the version chip even outside a git repo', async () => {
     serve({ '/api/v1/health': { ...HEALTH, repo: null }, '/api/v1/todos': [] })
     renderShell()
