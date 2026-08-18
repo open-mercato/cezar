@@ -1,6 +1,6 @@
 import { hc } from 'hono/client'
 import type { Hono } from 'hono'
-import type { ClientRequestOptions, ClientResponse } from 'hono/client'
+import type { ClientResponse } from 'hono/client'
 import type { SuccessStatusCode } from 'hono/utils/http-status'
 
 /**
@@ -39,10 +39,59 @@ export interface CezarClientOptions {
    * opt-in remote-access mode that issues tokens.
    */
   token?: string
+  /** Resolve a bearer token for every request, so refreshed credentials are used immediately. */
+  auth?: {
+    getToken: () => string | undefined | Promise<string | undefined>
+  }
   /** Extra headers merged into every request (after the auth header, so they can override). */
   headers?: Record<string, string>
+  /** Browser credential policy. Defaults to `'same-origin'`. */
+  credentials?: RequestCredentials
   /** Custom fetch — for tests (dispatch straight into a Hono app) or a wrapped transport. */
-  fetch?: ClientRequestOptions['fetch']
+  fetch?: typeof globalThis.fetch
+}
+
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    readonly path: string,
+    message: string,
+    readonly body?: unknown,
+  ) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
+export interface CezarClient<TApp extends Hono<any, any, any> = Hono<any, any, any>> {
+  readonly identity: string
+  readonly baseUrl: string
+  readonly rpc: ReturnType<typeof hc<TApp>>
+}
+
+type UntypedCezarClient = Omit<CezarClient, 'rpc'> & {
+  readonly rpc: Record<string, any>
+}
+
+let nextClientIdentity = 0
+
+function createClientTransport(options: CezarClientOptions) {
+  const baseUrl = options.baseUrl?.replace(/\/+$/, '') ?? ''
+  const fetcher = options.fetch ?? globalThis.fetch
+  const credentials = options.credentials ?? 'same-origin'
+
+  return {
+    baseUrl,
+    fetch: async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const headers = new Headers(input instanceof Request ? input.headers : undefined)
+      new Headers(init?.headers).forEach((value, name) => headers.set(name, value))
+      const token = (await options.auth?.getToken()) ?? options.token
+      if (token) headers.set('Authorization', `Bearer ${token}`)
+      for (const [name, value] of Object.entries(options.headers ?? {})) headers.set(name, value)
+
+      return fetcher(input, { ...init, credentials: init?.credentials ?? credentials, headers })
+    },
+  }
 }
 
 /**
@@ -52,20 +101,23 @@ export interface CezarClientOptions {
  * consumer that does not want the server package installed, still gets a working (untyped)
  * client instead of a type error.
  */
+export function createCezarClient(options?: CezarClientOptions): UntypedCezarClient
+export function createCezarClient<T extends Hono<any, any, any>>(
+  options?: CezarClientOptions,
+): CezarClient<T>
 export function createCezarClient<
   // The three `any`s are Hono's own constraint on `hc` (Env, Schema, BasePath) — narrowing
   // them here would reject perfectly good app types. `Hono` as the default is the untyped
   // fallback: `createCezarClient()` with no type argument still returns a working client.
-  T extends Hono<any, any, any> = Hono,
->(options: CezarClientOptions = {}): ReturnType<typeof hc<T>> {
-  const { baseUrl = '', token, headers, fetch } = options
-  return hc<T>(baseUrl, {
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
-    ...(fetch ? { fetch } : {}),
-  })
+  T extends Hono<any, any, any> = Hono<any, any, any>,
+>(options: CezarClientOptions = {}): CezarClient<T> {
+  const transport = createClientTransport(options)
+  const identity = `cezar-client-${++nextClientIdentity}`
+  return {
+    identity,
+    baseUrl: transport.baseUrl,
+    rpc: hc<T>(transport.baseUrl, { fetch: transport.fetch }),
+  }
 }
 
 /**

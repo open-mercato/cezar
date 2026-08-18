@@ -14,7 +14,9 @@
     "packages/web"
   ],
   "scripts": {
-    "build": "npm run build:server && npm run build:web && npm run check:pack",
+    "build": "npm run build:contract && npm run build:client && npm run build:server && npm run build:web && npm run check:pack",
+    "build:contract": "npm run build -w @open-mercato/cezar-contract",
+    "build:client": "npm run build -w @open-mercato/cezar-api-client",
     "build:server": "npm run build -w @open-mercato/cezar",
     "build:web": "npm run build -w @open-mercato/cezar-web",
     "check:pack": "npm run check:pack -w @open-mercato/cezar",

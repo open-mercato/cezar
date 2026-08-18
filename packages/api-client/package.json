@@ -5,17 +5,23 @@
   "license": "MIT",
   "private": true,
   "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
-    "src"
+    "dist"
   ],
   "engines": {
     "node": ">=20"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.test.json"
