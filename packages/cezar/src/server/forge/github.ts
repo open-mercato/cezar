@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
+import { REFERENCE_STATUS_MAX } from '@open-mercato/cezar-contract';
 import { autosaveCommit } from '../../git-worktree.ts';
 import type {
   DraftPrInput,
@@ -1134,6 +1135,611 @@ function mockGithubChecks(numbers: number[]): GithubChecksData {
   const checks: Record<number, ChecksGlyph> = {};
   for (const n of numbers) checks[n] = byNumber.get(n) ?? null;
   return { available: true, checks };
+}
+
+// ---- reference status (task chips) -----------------------------------------
+// The task tables paint a PR/issue chip per row and, until this seam existed, had nothing to
+// paint it WITH: `RunRecord` stores the number and the URL, never the state, so a merged PR and
+// an abandoned one looked identical. This is the batched read behind those chips — one aliased
+// GraphQL query for a whole table, mirroring `fetchPrChecks` in shape, cache and degrade.
+//
+// Deliberately NOT `prMergeState`: that answers "may I press Merge on THIS one" and costs a
+// request (plus a merge-policy lookup) per PR. A table needs a glyph per row, not a merge gate.
+
+/** Where a referenced PR or issue stands. Mirrored by `referenceStatusSchema` in the contract —
+ *  see there for why PR `closed` and issue `completed` are separate words. */
+export type ReferenceStatus =
+  | 'draft'
+  | 'review-required'
+  | 'changes-requested'
+  | 'checks-pending'
+  | 'checks-failing'
+  | 'ready'
+  | 'merged'
+  | 'closed'
+  | 'open'
+  | 'completed'
+  | 'not-planned';
+
+export type GithubRefStatusData =
+  | {
+      available: true;
+      prs: Record<number, ReferenceStatus>;
+      issues: Record<number, ReferenceStatus>;
+      /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
+       *  contract for why the SERVER answers this. */
+      recheckAfterMs: number | null;
+    }
+  | { available: false; reason: string; recheckAfterMs: number | null };
+
+/** Numbers per kind in one ref-status query — the same bound, and for the same reasons, as
+ *  `GH_CHECKS_MAX`: aliases resolve independently, and the query size stays finite. Taken from the
+ *  contract rather than restated, because the cockpit caps its batches by the same number and a
+ *  client that guessed high would have every chip in a batch 400 instead of losing its tail. */
+export const GH_REF_STATUS_MAX = REFERENCE_STATUS_MAX;
+
+const ghRefStatusPrSchema = z
+  .object({
+    state: z.string(),
+    isDraft: z.boolean().nullish(),
+    reviewDecision: z.string().nullish(),
+    commits: z
+      .object({
+        nodes: z.array(
+          z.object({
+            commit: z.object({
+              committedDate: z.string().nullish(),
+              statusCheckRollup: z.object({ state: z.string().nullish() }).nullish(),
+            }),
+          }),
+        ),
+      })
+      .nullish(),
+    reviews: z.object({ nodes: z.array(z.object({ submittedAt: z.string().nullish() })) }).nullish(),
+    reviewRequests: z.object({ totalCount: z.number() }).nullish(),
+  })
+  .nullish();
+
+const ghRefStatusIssueSchema = z.object({ state: z.string(), stateReason: z.string().nullish() }).nullish();
+
+// The aliases hold two DIFFERENT shapes, so the record stays unvalidated here and each alias is
+// parsed by its own schema below. A union at this level would be wrong, not merely loose: zod
+// strips unknown keys, so a PR node matched by the issue arm would come back with `isDraft` and
+// `commits` silently removed.
+const ghRefStatusSchema = z.record(z.string(), z.unknown());
+
+/**
+ * One alias per NUMBER, asking `issueOrPullRequest` rather than `pullRequest`/`issue`.
+ *
+ * Issues and pull requests share one numbering space in a repository, so a number is exactly one
+ * of the two and asking which is a question the forge can answer — where asking `issue(number:)`
+ * about a pull request is a question with no answer, and GitHub says so with a NOT_FOUND *error*
+ * rather than a null. That mattered far more than it looks: `gh api graphql` exits non-zero the
+ * moment a response carries an `errors` array, so one mis-guessed kind used to fail the whole
+ * batch and report every reference in it as "not found" (see `refStatusGraphql`).
+ *
+ * It also fixes the reference whose kind the cockpit guessed wrong — `taskReferences` infers it
+ * from which field carried the number, and a bare `#774` can land in either — because the answer
+ * carries `__typename` and is filed under what the number REALLY is.
+ *
+ * `committedDate` and the last CHANGES_REQUESTED review's `submittedAt` cost nothing extra, riding
+ * the same node, and are what let the precedence tell a review the author has already responded to
+ * from one still about the code on screen.
+ */
+function refStatusQuery(numbers: number[]): string {
+  const aliases = numbers
+    .map(
+      (n, i) =>
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 1) { totalCount } } ... on Issue { state stateReason } }`,
+    )
+    .join('\n');
+  return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
+}
+
+/**
+ * The one place a PR's signals collapse into a single word.
+ *
+ * The question the chip answers is "what is this waiting on RIGHT NOW", so the ranking is by
+ * freshness of the signal, not by how heavy a blocker it is:
+ *
+ * Read the ranking as **whose move is it**, which is the question a table is scanned for:
+ *
+ *  1. `merged` / `closed` — nobody's. Terminal, whatever checks or reviews say.
+ *  2. `draft` — the author's, and they have said so themselves.
+ *  3. `checks-pending` — the machine's. CI running means a commit was JUST pushed, the newest
+ *     thing that has happened to this PR, so it outranks a requested change unconditionally.
+ *  4. `changes-requested` — the AUTHOR's, and only while that is still true: the review must be
+ *     about the code that is there now, with no re-review already asked for.
+ *  5. `checks-failing` — the author's again. A reviewer cannot approve a red PR anyway.
+ *  6. `review-required` — the REVIEWER's: they have been asked, or the author has answered and
+ *     the merge is now blocked on someone coming back to look.
+ *  7. `ready` — open, not a draft, nothing failing, nothing running, nobody waited on.
+ *
+ * The subtle one is (4) → (6), and it is not a preference but a data finding. `reviewDecision`
+ * stays `CHANGES_REQUESTED` after the author has responded — GitHub does not clear it until a
+ * reviewer submits again — so on its own it points at the author forever. Two signals say the ball
+ * has moved back:
+ *
+ *  - **a pending review request** (`reviewRequests.totalCount`), which is the author clicking
+ *    re-request. Authoritative, and observed live alongside a stale `CHANGES_REQUESTED` and an
+ *    EMPTY `latestReviews` — the case that has no other tell.
+ *  - **a commit newer than the review**, the fallback for an author who pushed without clicking
+ *    anything.
+ *
+ * Either way the words change from "you owe edits" to "they owe a look", and so does the colour:
+ * danger is the author's move, info is the reviewer's.
+ *
+ * Both timestamps are optional and their ABSENCE is conservative: with no dates to compare and no
+ * re-request, a review counts as current, and the chip keeps pointing at the author.
+ *
+ * `reviewDecision` is null on a repo with no review policy, which is exactly why `ready` is not
+ * spelled "approved": on such a repo a green PR IS ready, and no approval will ever arrive — but a
+ * requested reviewer still moves it to `review-required`, because someone was explicitly asked.
+ */
+export function derivePrReferenceStatus(pr: {
+  state: string;
+  isDraft?: boolean | null;
+  reviewDecision?: string | null;
+  checks: ChecksGlyph;
+  /** ISO-8601 commit date of the head commit. `committedDate`, not a push time: GitHub's
+   *  `pushedDate` is deprecated and comes back null on new PRs. */
+  headCommittedAt?: string | null;
+  /** ISO-8601 `submittedAt` of the most recent CHANGES_REQUESTED review, when there is one. */
+  changesRequestedAt?: string | null;
+  /** Is a reviewer currently ON THE HOOK — `reviewRequests.totalCount > 0`? True after the author
+   *  clicks re-request, which is the one thing that says so while `reviewDecision` still reads
+   *  `CHANGES_REQUESTED`. */
+  reviewRequested?: boolean | null;
+}): ReferenceStatus {
+  const state = pr.state.toUpperCase();
+  if (state === 'MERGED') return 'merged';
+  if (state === 'CLOSED') return 'closed';
+  if (pr.isDraft) return 'draft';
+  if (pr.checks === 'pending') return 'checks-pending';
+
+  const decision = (pr.reviewDecision ?? '').toUpperCase();
+  const changesRequested = decision === 'CHANGES_REQUESTED';
+  // Has the author already answered the review — by asking for another look, or by pushing?
+  const answered = pr.reviewRequested === true || pushedSince(pr.headCommittedAt, pr.changesRequestedAt);
+  if (changesRequested && !answered) return 'changes-requested';
+  if (pr.checks === 'failing') return 'checks-failing';
+  // `APPROVED` is the forge saying the review requirement IS MET, and it outranks a pending
+  // request: a reviewer left on the list after someone else approved is a courtesy ask, not an
+  // unmet gate. (A repo needing two approvals reports `REVIEW_REQUIRED` until it has both, so
+  // `APPROVED` never arrives early.) Without this, an approved, green, mergeable pull request
+  // reads "waiting for review" for as long as anyone stays listed — which is indefinitely.
+  if (decision === 'APPROVED') return 'ready';
+  if (changesRequested || decision === 'REVIEW_REQUIRED' || pr.reviewRequested === true) {
+    return 'review-required';
+  }
+  return 'ready';
+}
+
+/** Did a commit land AFTER the review? Unparseable or missing dates answer `false` — the
+ *  conservative direction, since it keeps a review current rather than silently demoting one. */
+function pushedSince(headCommittedAt?: string | null, reviewedAt?: string | null): boolean {
+  if (!headCommittedAt || !reviewedAt) return false;
+  const head = Date.parse(headCommittedAt);
+  const reviewed = Date.parse(reviewedAt);
+  return Number.isFinite(head) && Number.isFinite(reviewed) && head > reviewed;
+}
+
+/**
+ * An issue's two signals as one word. `NOT_PLANNED` is kept apart from `completed` because they
+ * are opposite outcomes — "we did it" vs "we won't" — and a task whose issue was declined must
+ * not read as a task that landed.
+ */
+export function deriveIssueReferenceStatus(issue: {
+  state: string;
+  stateReason?: string | null;
+}): ReferenceStatus {
+  if (issue.state.toUpperCase() !== 'CLOSED') return 'open';
+  return (issue.stateReason ?? '').toUpperCase() === 'NOT_PLANNED' ? 'not-planned' : 'completed';
+}
+
+/** What one number turned out to be, and where it stands. `kind` is the forge's answer, not the
+ *  caller's guess — see `refStatusQuery`. */
+export interface ResolvedReference {
+  kind: 'pr' | 'issue';
+  status: ReferenceStatus;
+}
+
+/**
+ * The outcome of one batched lookup. `failed` is what separates *this number is not in the
+ * repository* from *we could not ask about this number* — an absence and a failure, which look
+ * identical in a `number → status` map and mean opposite things to a reader ("that reference is
+ * bogus" vs "GitHub is down"). Keeping them apart is what stops a transient error being cached,
+ * and shown, as "not found".
+ */
+export interface RefStatusBatch {
+  resolved: Record<number, ResolvedReference>;
+  /** Numbers whose chunk threw. Nothing is known about them either way. */
+  failed: number[];
+  /** First failure's message, for the payload's `reason`. */
+  reason?: string;
+}
+
+/**
+ * Status per NUMBER, resolved to whatever that number actually is.
+ *
+ * Batched and aliased like `fetchPrChecks`: one subprocess per chunk, each alias resolving
+ * independently, and a number the forge does not have simply staying absent from `resolved` (its
+ * chip then renders neutral, as it did before this seam existed). A failed chunk costs only its
+ * own numbers, and says so rather than letting them look absent. Exported for tests; `runGraphql`
+ * is injected so this is testable without shelling out.
+ */
+export async function fetchRefStatuses(
+  runGraphql: GraphqlRunner,
+  owner: string,
+  name: string,
+  numbers: number[],
+  chunkSize = GH_REF_STATUS_MAX,
+): Promise<RefStatusBatch> {
+  const out: RefStatusBatch = { resolved: {}, failed: [] };
+  if (numbers.length === 0) return out;
+
+  for (let i = 0; i < numbers.length; i += chunkSize) {
+    const chunk = numbers.slice(i, i + chunkSize);
+    try {
+      const raw = JSON.parse(await runGraphql(refStatusQuery(chunk), { owner, name })) as {
+        data?: { repository?: unknown };
+      };
+      const repository = ghRefStatusSchema.parse(raw?.data?.repository ?? {});
+      chunk.forEach((number, index) => {
+        const node = repository[`r${index}`] as { __typename?: string } | null | undefined;
+        // Absent alias → the number is not in this repository at all. Left out of the map, which
+        // is what the route reports as "not found" and the chip paints as neutral.
+        if (!node) return;
+        if (node.__typename === 'PullRequest') {
+          const pr = ghRefStatusPrSchema.parse(node);
+          if (!pr) return;
+          const head = pr.commits?.nodes[0]?.commit;
+          const rollup = head?.statusCheckRollup;
+          out.resolved[number] = {
+            kind: 'pr',
+            status: derivePrReferenceStatus({
+              state: pr.state,
+              isDraft: pr.isDraft,
+              reviewDecision: pr.reviewDecision,
+              // Adapt the single rollup state into the array shape `rollupToChecks` expects,
+              // reusing the FAILURE/PENDING/SUCCESS vocabulary rather than duplicating it.
+              checks: rollup ? rollupToChecks([{ state: rollup.state, status: null, conclusion: null }]) ?? null : null,
+              headCommittedAt: head?.committedDate,
+              // `reviews(last: 1, states: CHANGES_REQUESTED)` — the timestamp only. WHETHER changes
+              // are requested stays `reviewDecision`'s answer, which is the one that accounts for
+              // dismissed and superseded reviews.
+              changesRequestedAt: pr.reviews?.nodes[0]?.submittedAt,
+            reviewRequested: (pr.reviewRequests?.totalCount ?? 0) > 0,
+            }),
+          };
+        } else if (node.__typename === 'Issue') {
+          const issue = ghRefStatusIssueSchema.parse(node);
+          if (!issue) return;
+          out.resolved[number] = { kind: 'issue', status: deriveIssueReferenceStatus(issue) };
+        }
+      });
+    } catch (err) {
+      // A failed chunk costs only its own numbers; the rest still resolve. They are recorded as
+      // FAILED rather than left absent, so nothing downstream mistakes them for "no such number".
+      out.failed.push(...chunk);
+      out.reason ??= firstLine(err instanceof Error ? err.message : String(err));
+    }
+  }
+  return out;
+}
+
+// Per-reference cache: keyed `repoRoot␀number` — by NUMBER, not by kind, because the kind is now
+// something the forge answers rather than something the caller asserts. Same 60 s TTL and bounded
+// shape as the checks cache; `null` is a cached "this repository has no such number", so a
+// transcript-scraped number from another repo is not re-queried on every table repaint.
+const refStatusCache = new Map<string, { at: number; resolved: ResolvedReference | null }>();
+const REF_STATUS_CACHE_MAX = 500;
+
+/** Test-only: drop the per-reference cache so cases don't leak state into each other. */
+export function __clearRefStatusCacheForTests(): void {
+  refStatusCache.clear();
+}
+
+/** Test-only: warm the cache the way the lazy route would have, so a reader can be tested
+ *  without a forge behind it. */
+export function __seedRefStatusCacheForTests(
+  repoRoot: string,
+  entries: Array<[number, ResolvedReference]>,
+): void {
+  for (const [number, resolved] of entries) {
+    refStatusCache.set(refStatusKey(repoRoot, number), { at: Date.now(), resolved });
+  }
+}
+
+/**
+ * Forget what we knew about one reference, so the next read asks GitHub again.
+ *
+ * Called where cezar itself CHANGES a pull request — it merges one, it opens one — because those
+ * are the only forge changes this process can know about without asking. Everything else has to
+ * be polled (GitHub cannot push to a cockpit with no public endpoint), but waiting out a TTL to
+ * notice our own merge is a self-inflicted staleness: for up to a minute every chip would keep
+ * showing the pre-merge status of a pull request the user watched this server merge.
+ *
+ * Deleting rather than overwriting with a guessed `merged`: the forge is the authority on what a
+ * reference is, and a mutation that reports success is still not the same as having read the
+ * result. The next reader pays one query and gets the truth — after which the answer is `merged`,
+ * `recheckAfterMs` goes null, and the cockpit stops polling that batch entirely. Invalidating here
+ * therefore REDUCES long-run traffic rather than adding to it.
+ */
+export function forgetRefStatus(repoRoot: string, number: number): void {
+  refStatusCache.delete(refStatusKey(repoRoot, number));
+}
+
+/**
+ * Everything the cache ALREADY knows about these numbers. Never spawns `gh`, never awaits.
+ *
+ * This is what lets a status ride along with the rows that carry the references, instead of the
+ * cockpit fetching it separately a moment later: the run index reads whatever is warm and ships
+ * it, and a cold entry is simply absent — the lazy `/github/ref-status` route stays the thing that
+ * actually goes and asks.
+ *
+ * Because it cannot cost anything, the caller may pass a SUPERSET of the numbers it will really
+ * display. That matters: deciding which of a run's references a chip shows is the cockpit's rule
+ * (#407, #526), deliberately not duplicated server-side, and a cache read does not need to know —
+ * it can look up every number a run mentions and let the client pick.
+ */
+export function readCachedRefStatuses(
+  repoRoot: string,
+  numbers: Iterable<number>,
+): { prs: Record<number, ReferenceStatus>; issues: Record<number, ReferenceStatus> } {
+  const out = { prs: {} as Record<number, ReferenceStatus>, issues: {} as Record<number, ReferenceStatus> };
+  const now = Date.now();
+  for (const number of new Set(numbers)) {
+    const hit = refStatusCache.get(refStatusKey(repoRoot, number));
+    if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved)) continue;
+    out[hit.resolved.kind === 'pr' ? 'prs' : 'issues'][number] = hit.resolved.status;
+  }
+  return out;
+}
+
+/** The `#N` in a forge URL — `…/pull/774` → 774. Null when the tail is not a number, so a URL
+ *  shape we do not recognise invalidates nothing rather than inventing a key. */
+export function refNumberFromUrl(url: string): number | null {
+  const last = /\/(\d+)\/?$/.exec(url.trim());
+  const parsed = last ? Number(last[1]) : Number.NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+/** A closed issue or an abandoned PR can be REOPENED, so this is long rather than forever — but
+ *  it is the rare event, and re-asking a hundred settled references every minute to catch it is
+ *  the wrong trade. */
+const REF_STATUS_CLOSED_TTL = 10 * 60_000;
+/** A merged pull request is merged forever: GitHub has no un-merge. Capped at a day only so a
+ *  long-lived server eventually re-reads rather than trusting a value from another era. */
+const REF_STATUS_MERGED_TTL = 24 * 60 * 60_000;
+
+/**
+ * How long a cached answer stays fresh — by how changeable that answer IS.
+ *
+ * One TTL for everything gets both ends wrong: it re-asks about a merged PR (which cannot change)
+ * every minute, and it is the only thing standing between a running CI job and a stale chip. What
+ * a reader wants rechecked is precisely what is still moving.
+ *
+ * A number the repository does not have keeps the short TTL: it is usually a wrong number, but it
+ * is also what a reference to a not-yet-created PR looks like, and re-asking is cheap.
+ */
+function refStatusTtl(entry: ResolvedReference | null): number {
+  if (!entry) return CACHE_MS;
+  switch (entry.status) {
+    case 'merged':
+      return REF_STATUS_MERGED_TTL;
+    case 'closed':
+    case 'completed':
+    case 'not-planned':
+      return REF_STATUS_CLOSED_TTL;
+    default:
+      return CACHE_MS;
+  }
+}
+
+/** How long a status can be trusted to stay put — `null` when it can never change again. The
+ *  cadence half of `refStatusTtl`, and deliberately the same table: a value the cache would still
+ *  be serving is a value there is no point asking for. */
+function refStatusRecheckAfter(entry: ResolvedReference | null): number | null {
+  if (entry?.status === 'merged') return null; // GitHub has no un-merge
+  return refStatusTtl(entry);
+}
+
+/** How long the WHOLE answer holds — the soonest any single reference in it could differ. `null`
+ *  only when every one of them is immutable, which is what tells the cockpit to stop scheduling. */
+function batchRecheckAfter(entries: (ResolvedReference | null)[]): number | null {
+  let soonest: number | null = null;
+  for (const entry of entries) {
+    const after = refStatusRecheckAfter(entry);
+    if (after === null) continue;
+    soonest = soonest === null ? after : Math.min(soonest, after);
+  }
+  return soonest;
+}
+
+/** A forge that could not be reached is worth retrying, and worth not hammering: a workspace with
+ *  no `gh` installed would otherwise spawn a subprocess a minute, forever, to be told the same
+ *  thing. Five minutes is the same order as the cockpit's own reconnect cadence. */
+const REF_STATUS_RETRY_MS = 5 * 60_000;
+
+/**
+ * GraphQL through `gh`, tolerating a PARTIALLY failed response.
+ *
+ * `gh api graphql` exits non-zero whenever the reply carries an `errors` array — even when `data`
+ * is fully populated for every alias that DID resolve. With one alias per reference that is not an
+ * edge case, it is the normal case: a single number that no longer exists (or never did, having
+ * been scraped from a transcript that named another repository) makes GitHub answer
+ * `{data: {...everything else...}, errors: [NOT_FOUND]}` and `gh` exit 1.
+ *
+ * `execFile` rejects on a non-zero exit, so that used to throw away a whole batch's worth of
+ * perfectly good statuses and report every reference in it as "not found" — including, in the bug
+ * that produced this function, an open pull request in the project's own repository.
+ *
+ * So: a non-zero exit whose stdout still carries a usable `data.repository` is a partial success
+ * and is used as-is. Anything else — no stdout, unparseable stdout, or a null `repository`, which
+ * means the repo handle itself did not resolve — rethrows, so a real failure still degrades to
+ * `{available: false}` instead of masquerading as "none of these exist".
+ */
+function refStatusGraphql(repoRoot: string): GraphqlRunner {
+  return async (query, variables) => {
+    const args = ['api', 'graphql', '-f', `query=${query}`];
+    for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
+    try {
+      return await gh(repoRoot, args);
+    } catch (err) {
+      const stdout = (err as { stdout?: unknown }).stdout;
+      if (typeof stdout === 'string' && hasResolvedRepository(stdout)) return stdout;
+      throw err;
+    }
+  };
+}
+
+/**
+ * The repo handle, memoized in the same map `resolveRepoHandle` uses — but rethrowing instead of
+ * answering `null`.
+ *
+ * The memo is the point: without it every recheck tick spawned a second subprocess to re-learn an
+ * `owner/name` that changes approximately never, doubling the cost of the one query that actually
+ * carries information. The difference from `resolveRepoHandle` is the failure: this route turns a
+ * `gh` error into the payload's `reason` — "gh CLI not found — install it and run `gh auth login`"
+ * is what the chip's tooltip now shows a user — and a `null` would erase which failure it was.
+ */
+async function resolveRepoHandleStrict(repoRoot: string): Promise<{ owner: string; name: string } | null> {
+  const memo = repoHandleCache.get(repoRoot);
+  if (memo !== undefined) return memo;
+  // A throw here is transient and deliberately NOT memoized, exactly as in `resolveRepoHandle`.
+  const handle = parseOwnerName(
+    await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner', '--jq', '.nameWithOwner']),
+  );
+  repoHandleCache.set(repoRoot, handle); // includes the permanent negative
+  return handle;
+}
+
+/** Is this a reply we can still read aliases out of? `repository: null` says the handle did not
+ *  resolve, which is a real failure and must not be read as "the numbers are all missing". */
+function hasResolvedRepository(stdout: string): boolean {
+  try {
+    const parsed = JSON.parse(stdout) as { data?: { repository?: unknown } };
+    const repository = parsed?.data?.repository;
+    return typeof repository === 'object' && repository !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Route-facing reference status. Resolves the repo handle once, serves fresh cache entries,
+ * queries only the misses, and degrades to `{ available: false, reason }` when `gh` or the handle
+ * is unavailable — never a throw, never a 5xx.
+ *
+ * The two request lists are merged into ONE set of numbers: issues and pull requests share a
+ * repository's numbering space, so a number is one thing and asking about it twice would be asking
+ * the same question twice. What comes back is filed by what each number turned out to BE, which is
+ * why a chip whose kind the cockpit guessed wrong still gets the right status.
+ */
+export async function fetchGithubRefStatus(
+  repoRoot: string,
+  input: { prs?: number[]; issues?: number[] },
+): Promise<GithubRefStatusData> {
+  const asPrs = sanitizeRefNumbers(input.prs);
+  const asIssues = sanitizeRefNumbers(input.issues);
+  if (process.env.CEZ_DRY_RUN === '1') return mockGithubRefStatus(asPrs, asIssues);
+  const wanted = [...new Set([...asPrs, ...asIssues])];
+
+  const resolved = { prs: {} as Record<number, ReferenceStatus>, issues: {} as Record<number, ReferenceStatus> };
+  // Every reference in the answer, resolved or not — what the recheck cadence is computed from.
+  const entries: (ResolvedReference | null)[] = [];
+  const file = (number: number, entry: ResolvedReference | null) => {
+    entries.push(entry);
+    if (entry) resolved[entry.kind === 'pr' ? 'prs' : 'issues'][number] = entry.status;
+  };
+  const misses: number[] = [];
+  const now = Date.now();
+  for (const n of wanted) {
+    const hit = refStatusCache.get(refStatusKey(repoRoot, n));
+    if (!hit || now - hit.at >= refStatusTtl(hit.resolved)) misses.push(n);
+    else file(n, hit.resolved);
+  }
+  if (misses.length === 0) {
+    return { available: true, prs: resolved.prs, issues: resolved.issues, recheckAfterMs: batchRecheckAfter(entries) };
+  }
+  try {
+    const ownerName = await resolveRepoHandleStrict(repoRoot);
+    if (!ownerName) {
+      return { available: false, reason: 'repository handle unavailable', recheckAfterMs: REF_STATUS_RETRY_MS };
+    }
+    const batch = await fetchRefStatuses(refStatusGraphql(repoRoot), ownerName.owner, ownerName.name, misses);
+    const failed = new Set(batch.failed);
+    // Stamped when the answer ARRIVED, not when the request was assembled: `now` above predates
+    // the round trip, and dating an entry by it would age a slow query's results by its own
+    // duration — shortening the TTL of exactly the answers that cost the most to get.
+    const storedAt = Date.now();
+    for (const n of misses) {
+      // A number we could not ask about is NOT cached: caching it would pin "this repository has
+      // no such number" for a minute on the strength of a network blip.
+      if (failed.has(n)) continue;
+      const entry = batch.resolved[n] ?? null;
+      file(n, entry);
+      refStatusCache.set(refStatusKey(repoRoot, n), { at: storedAt, resolved: entry });
+    }
+    while (refStatusCache.size > REF_STATUS_CACHE_MAX) {
+      const oldest = refStatusCache.keys().next().value;
+      if (oldest === undefined) break;
+      refStatusCache.delete(oldest);
+    }
+    // Anything unasked makes the whole answer `unavailable`, deliberately. The alternative is a
+    // payload where a number we could not reach is indistinguishable from one that does not exist,
+    // and the cockpit would paint "not found on this repository" over a perfectly good PR — the
+    // exact defect this route was reported for. The successes are cached either way, so the next
+    // request costs only the numbers that failed and usually answers in full.
+    if (failed.size > 0) {
+      return {
+        available: false,
+        reason: batch.reason ?? 'GitHub could not be reached',
+        recheckAfterMs: REF_STATUS_RETRY_MS,
+      };
+    }
+    return { available: true, prs: resolved.prs, issues: resolved.issues, recheckAfterMs: batchRecheckAfter(entries) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      available: false,
+      reason: /ENOENT/.test(message)
+        ? 'gh CLI not found — install it and run `gh auth login`'
+        : firstLine(message),
+      recheckAfterMs: REF_STATUS_RETRY_MS,
+    };
+  }
+}
+
+/** NUL separator, as everywhere else here: two projects each having a #42 must not collide. */
+function refStatusKey(repoRoot: string, number: number): string {
+  return `${repoRoot}\0#${number}`;
+}
+
+function sanitizeRefNumbers(numbers: number[] | undefined): number[] {
+  return [...new Set(numbers ?? [])].filter((n) => Number.isInteger(n) && n > 0).slice(0, GH_REF_STATUS_MAX);
+}
+
+/** CEZ_DRY_RUN=1 — statuses derived from the mock catalog so the offline demo paints real chips. */
+function mockGithubRefStatus(prs: number[], issues: number[]): GithubRefStatusData {
+  const catalog = mockGithub();
+  const byPr = new Map(catalog.prs.map((p) => [p.number, p]));
+  const byIssue = new Set(catalog.issues.map((i) => i.number));
+  const out: GithubRefStatusData = { available: true, prs: {}, issues: {}, recheckAfterMs: CACHE_MS };
+  for (const n of prs) {
+    const pr = byPr.get(n);
+    if (pr) {
+      out.prs[n] = derivePrReferenceStatus({
+        state: 'OPEN',
+        isDraft: pr.isDraft,
+        reviewDecision: null,
+        checks: (pr.checks ?? null) as ChecksGlyph,
+      });
+    }
+  }
+  for (const n of issues) if (byIssue.has(n)) out.issues[n] = 'open';
+  return out;
 }
 
 /**

@@ -23,7 +23,7 @@ import { useParams } from 'react-router'
 import { Link, Navigate } from '@/lib/project-router'
 
 import { getGithub, getGithubComments, getGithubPrChanges, getGithubPrMergeState, mergeGithubPr, putUiState } from '@/api/client'
-import { queryKeys, useGithub, useGithubChecks, useGithubComments, useGithubPrChanges, useSkills, useUiState, useWorkflows } from '@/api/queries'
+import { queryKeys, useGithub, useGithubChecks, useGithubComments, useGithubPrChanges, useHealth, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import type {
   GithubComment,
   GithubItem,
@@ -117,6 +117,11 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   const { n } = useParams()
   // One fast shot now that the list dropped `statusCheckRollup` (#664) — no more fast/full swap.
   const list = useGithub({ limit: LIST_LIMIT })
+  // #801: automations are opt-in, so the cross-link into them exists exactly while the server
+  // says the feature does — otherwise this tab would advertise a page that only says "off".
+  // `capabilities?.` because this tab renders against minimal health payloads too; absent is
+  // fail-closed, which is the honest answer while the server has not spoken.
+  const automationsAvailable = useHealth().data?.capabilities?.automations === true
   const gh = list.data
 
   // Lazy checks glyphs for the on-screen PR window (#664). Hooks must run before the early
@@ -218,7 +223,9 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   )
   // The backend choice (#401) is a way of working too, so it lives here beside the pickers —
   // and it must, because HandToAgent is keyed by item and would otherwise reset on every hop.
-  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null })
+  // The agent account rides along on the same footing: a per-hand-off choice, route state rather
+  // than a persisted one, exactly like the runner and the model beside it.
+  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null, account: null })
   useEffect(() => {
     writeFollowupSelection({ workflow, skills: [...selectedSkills] })
   }, [workflow, selectedSkills])
@@ -336,19 +343,26 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
                 {gh.repo}
               </span>
             ) : null}
-            <Link
-              to="/automations/new"
-              className="ml-auto shrink-0 text-[10px] font-medium text-primary hover:underline"
-            >
-              Set up automations
-            </Link>
+            {automationsAvailable ? (
+              <Link
+                to="/automations/new"
+                className="ml-auto shrink-0 text-[10px] font-medium text-primary hover:underline"
+              >
+                Set up automations
+              </Link>
+            ) : null}
             <button
               type="button"
               data-slot="gh-refresh"
               title="Refresh from GitHub"
               disabled={refresh.isPending}
               onClick={() => refresh.mutate()}
-              className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55"
+              // The automations link owns the `ml-auto` that pushes this cluster right; with the
+              // link gated away this button inherits it, so the header does not re-flow.
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px text-[10px] font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-55',
+                !automationsAvailable && 'ml-auto',
+              )}
             >
               <RefreshCwIcon
                 aria-hidden="true"

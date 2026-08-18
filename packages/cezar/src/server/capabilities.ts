@@ -20,6 +20,15 @@
  * Like the other opt-in capabilities, activation is strict: no other spelling
  * enables it.
  *
+ * `automations` (spec 2026-07-25-github-automations, #801): GitHub automations
+ * are **opt-in** via `CEZ_AUTOMATIONS=1` and off by default. Off, the
+ * `Automations` nav item is gone everywhere it is rendered, the
+ * `/automations*` endpoints refuse, and the workspace scheduler never polls
+ * GitHub — the flag removes the behavior, not only the UI. Activation is
+ * strict, like the two capabilities above. Nothing on disk is touched:
+ * definitions, receipts and high-watermarks survive the flag being off, so
+ * unsetting it and restarting restores the feature wholesale.
+ *
  * Usage presentation: token counts and monetary cost stay visible by default.
  * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
  * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
@@ -118,12 +127,17 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
 
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
  *  `CEZ_FOLLOWUPS=1` ⇒ the follow-up inbox exists (#471).
+ *  `CEZ_AUTOMATIONS=1` ⇒ GitHub automations exist (#801).
  *
  *  Read per request — cheap, and tests/ops can flip `CEZ_REMOTE` live. `followups` is honest
  *  per request too, but flipping it ON at runtime is only half a switch: the per-dataDir
  *  todos watch (step 2.3) is created by an SSE subscription, so connections opened while the
  *  flag was off never subscribed and get no live inbox updates until they reconnect. Hence
- *  the UI's "set CEZ_FOLLOWUPS=1 and restart cezar" wording — treat it as a boot-time flag. */
+ *  the UI's "set CEZ_FOLLOWUPS=1 and restart cezar" wording — treat it as a boot-time flag.
+ *
+ *  `automations` carries the same caveat and for the same reason: the workspace scheduler is
+ *  started once, on the server's `listening` event, so flipping the flag on afterwards gates
+ *  the routes open without ever starting the poller. Boot-time flag, same wording. */
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
@@ -134,6 +148,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
+    automations: env.CEZ_AUTOMATIONS === '1',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,
     costMetrics,

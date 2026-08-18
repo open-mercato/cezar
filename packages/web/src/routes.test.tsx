@@ -49,7 +49,7 @@ const HEALTH = {
   checks: [],
   defaultRunner: 'claude',
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, followups: true, singleProject: false, automations: false },
   projects: [{ id: BOOT, name: 'cezar' }],
   bootProject: BOOT,
 }
@@ -348,6 +348,30 @@ describe('the global settings area (/settings/global)', () => {
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe(title)
     })
   }
+
+  // #801: a bookmarked deep link into any of the four `/automations*` routes still resolves — the
+  // route map is unchanged — but the view says the feature is off instead of rendering an editor
+  // whose every request would 409.
+  for (const path of ['automations', 'automations/new', 'automations/a-1', 'automations/a-1/log']) {
+    it(`/${path} renders the disabled state while the capability is off`, async () => {
+      renderAt(`/p/${BOOT}/${path}`)
+      expect(currentPathname()).toBe(`/p/${BOOT}/${path}`)
+      expect(routeName()).toBe('automations')
+      expect(await screen.findByText('GitHub automations are off')).not.toBeNull()
+      expect(screen.getByText(/CEZ_AUTOMATIONS=1/)).not.toBeNull()
+    })
+  }
+
+  // The window before health answers is the one that bites: `/automations/new` used to paint a
+  // full creation form optimistically, so a cold deep link on a gated server offered a submit
+  // that POSTs into a 409. No mode renders until the capability is known.
+  it('holds every /automations mode on a loading state until health answers', () => {
+    renderAt(`/p/${BOOT}/automations/new`, { health: null })
+    expect(routeName()).toBe('automations')
+    expect(screen.getByText('Loading automations…')).not.toBeNull()
+    expect(document.querySelector('#automation-name')).toBeNull()
+    expect(screen.queryByText('GitHub automations are off')).toBeNull()
+  })
 
   it('omits the Projects route when single-project mode is active', () => {
     renderAt('/settings/global/projects', {

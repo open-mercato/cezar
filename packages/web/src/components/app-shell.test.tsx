@@ -1,9 +1,9 @@
 import { cleanup, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ReactNode } from 'react'
-import { MemoryRouter, useLocation } from 'react-router'
+import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { AppShell, useSidebarNavigate, type AppShellProps } from './app-shell'
+import { AppShell, routeOwnsScrollArrival, useSidebarNavigate, type AppShellProps } from './app-shell'
 import { NAV_ITEMS } from './nav-items'
 import { ThemeProvider } from './theme-provider'
 
@@ -67,6 +67,40 @@ describe('AppShell', () => {
     expect(main.scrollTop).toBe(0)
   })
 
+  it('leaves task-to-task arrival to the destination transcript owner (#761)', () => {
+    renderShell(
+      '/tasks/source',
+      {},
+      <RouterLink to="/tasks/destination">Switch task</RouterLink>,
+    )
+    const main = screen.getByRole('main')
+    main.scrollTop = 640
+
+    fireEvent.click(within(main).getByRole('link', { name: 'Switch task' }))
+
+    expect(screen.getByTestId('location').textContent).toBe('/tasks/destination')
+    expect(main.scrollTop).toBe(640)
+  })
+
+  it('restores the generic top reset when leaving a task thread (#761)', () => {
+    renderShell('/tasks/source')
+    const main = screen.getByRole('main')
+    main.scrollTop = 640
+
+    fireEvent.click(within(nav()).getByRole('link', { name: 'GitHub' }))
+
+    expect(screen.getByTestId('location').textContent).toBe('/github')
+    expect(main.scrollTop).toBe(0)
+  })
+
+  it('grants scroll ownership only to exact scoped and unscoped main task routes', () => {
+    expect(routeOwnsScrollArrival('/tasks/run-1')).toBe(true)
+    expect(routeOwnsScrollArrival('/p/cezar/tasks/run-1')).toBe(true)
+    expect(routeOwnsScrollArrival('/tasks/run-1/changes')).toBe(false)
+    expect(routeOwnsScrollArrival('/p/cezar/tasks/run-1/files')).toBe(false)
+    expect(routeOwnsScrollArrival('/tasks')).toBe(false)
+  })
+
   it('renders the WORKSPACE nav as real router links — Tasks lives in the quick-list rows, Settings in the footer', () => {
     renderShell()
     const links = within(nav()).getAllByRole('link')
@@ -101,6 +135,24 @@ describe('AppShell', () => {
     expect(links).toHaveLength(
       NAV_ITEMS.filter((item) => !item.forge && item.to !== '/' && item.to !== '/settings').length,
     )
+  })
+
+  // #801: same degradation for the opt-in automations capability — the item disappears, it does
+  // not render disabled. The two gates on that item are independent: a forge alone is not enough.
+  it('drops the Automations item when the capability is off', () => {
+    renderShell('/', { automationsAvailable: false })
+    const links = within(nav()).getAllByRole('link')
+    expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
+    // Minus the gated item, the Tasks item (quick-list rows) and Settings (footer).
+    expect(links).toHaveLength(
+      NAV_ITEMS.filter((item) => !item.automations && item.to !== '/' && item.to !== '/settings').length,
+    )
+  })
+
+  it('shows the Automations item once the capability is on', () => {
+    renderShell('/', { automationsAvailable: true })
+    expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href')))
+      .toContain('/automations')
   })
 
   describe('active nav state follows the current route', () => {
@@ -227,6 +279,31 @@ describe('AppShell', () => {
       // Violet text, not a dot — the label is plain text now (no border, no button cosplay).
       expect(chip.className).toContain('text-violet')
     })
+
+    /* The two-row footer holds only while something in the controls row can give: every icon
+     * button is `shrink-0` (button base class), so a long version string — `0.9.2-nightly.…`,
+     * the nightly dist-tag of #876 — used to push the gear and the toggle outside the 264px
+     * column entirely. jsdom still measures nothing; what it can pin is which item yields. */
+    it('makes the version chip the one control that gives, so a nightly version cannot push the row out', () => {
+      renderShell('/', {
+        version: '0.9.2-nightly.20260813.1',
+        toolsMenu: <button type="button">Tools</button>,
+      })
+      const chip = controls().querySelector('[data-slot="version-chip"]') as HTMLElement
+      expect(chip.className).not.toContain('shrink-0')
+      expect(chip.className).toContain('min-w-0')
+      // The label truncates in place rather than widening past what the row can hold — the
+      // plain-text label IS the truncating element (no inner pill structure).
+      expect(chip.className).toContain('truncate')
+      expect(chip.textContent).toBe('v0.9.2-nightly.20260813.1')
+      // …and the full string stays legible on hover, since the visible one may be clipped.
+      expect(chip.getAttribute('title')).toBe('v0.9.2-nightly.20260813.1')
+      // Everything else in the row still refuses to shrink — that is what keeps them readable.
+      for (const slot of ['tools-menu', 'theme-toggle']) {
+        const el = controls().querySelector(`[data-slot="${slot}"]`) as HTMLElement
+        expect(el.className).toContain('shrink-0')
+      }
+    })
   })
 
   describe('data slots stay empty rather than showing invented data', () => {
@@ -251,7 +328,9 @@ describe('AppShell', () => {
       it('stays plain while the registry has nothing newer', () => {
         renderShell('/', { version: '1.2.3' })
         expect(chip().getAttribute('data-update-available')).toBeNull()
-        expect(chip().getAttribute('title')).toBeNull()
+        // A tooltip, but one that claims nothing: the chip truncates, so the full version has to
+        // stay reachable on hover even when there is no update to announce.
+        expect(chip().getAttribute('title')).toBe('v1.2.3')
         expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
       })
 
@@ -264,7 +343,7 @@ describe('AppShell', () => {
       it('turns violet and names the newer version when one exists', () => {
         renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
         expect(chip().getAttribute('data-update-available')).toBe('true')
-        expect(chip().getAttribute('title')).toBe('update available: v1.3.0')
+        expect(chip().getAttribute('title')).toBe('v1.2.3 (update available: v1.3.0)')
         // Violet text is the affordance — the dot went with the button-shaped border.
         expect(chip().className).toContain('text-violet')
         expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
@@ -311,6 +390,38 @@ describe('AppShell', () => {
   })
 
   /** The global banner slot (#391). */
+  describe('All tasks link (multi-project only)', () => {
+    const allTasks = () => document.querySelector('[data-slot="all-tasks-link"]') as HTMLElement | null
+
+    it('is absent without project groups — one project needs no "all projects" door', () => {
+      renderShell()
+      expect(allTasks()).toBeNull()
+    })
+
+    it('links out of every project scope', () => {
+      renderShell('/p/shop/git', { projectGroups: <p>groups</p> })
+      // A PLAIN target: the scope-aware Link would prefix it with `/p/shop`, which is no route.
+      expect(allTasks()!.getAttribute('href')).toBe('/tasks')
+    })
+
+    it('stays put while the project groups scroll', () => {
+      // It is about every group rather than a peer of them, and a workspace with enough
+      // projects to want this page is exactly the one that scrolls it out of sight.
+      renderShell('/', { projectGroups: <p>groups</p> })
+      const scroller = document.querySelector('[data-slot="project-groups"]') as HTMLElement
+      expect(scroller.contains(allTasks())).toBe(false)
+      expect(scroller.className).toContain('overflow-y-auto')
+    })
+
+    it('marks itself the current page only on /tasks', () => {
+      renderShell('/tasks', { projectGroups: <p>groups</p> })
+      expect(allTasks()!.getAttribute('aria-current')).toBe('page')
+      cleanup()
+      renderShell('/p/shop/', { projectGroups: <p>groups</p> })
+      expect(allTasks()!.getAttribute('aria-current')).toBeNull()
+    })
+  })
+
   describe('banner slot', () => {
     it('renders the banner when one is passed', () => {
       renderShell('/', { banner: <p>banner content</p> })

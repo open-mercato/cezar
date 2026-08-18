@@ -3,7 +3,7 @@ import { Link } from '@/lib/project-router'
 import { chipClass, chevron } from '@/components/picker-pill'
 import { cn } from '@/lib/utils'
 
-import type { BackendCheck, HealthResponse } from '@open-mercato/cezar-api-client'
+import type { BackendCheck, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import {
   DropdownMenu,
@@ -38,12 +38,44 @@ export function conciseToolVersion(version: string): string {
   return version.split(/[\s(]/, 1)[0] || version
 }
 
-/** The trigger's hover tooltip: the cezar version, plus whichever tools need attention.
- *  Exported for the tests — the string is a small contract of its own. */
+/** The agent CLIs among `checks[]` — the tools a task actually needs one of. `gh` and `git` are
+ *  the other rows; neither picks a runner. Spelled as an exhaustive `Record<Runner, true>` rather
+ *  than a hand-kept list: the contract's runner enum is what `defaultRunner` is drawn from, so a
+ *  fifth runner joining it (as `pi` did, #470) must fail the typecheck here instead of quietly
+ *  dropping out of the trigger's idea of what can start a task. A type-level set, so no zod schema —
+ *  and no zod — is pulled into the cockpit bundle for it. */
+const RUNNER_NAMES: Record<Runner, true> = { claude: true, codex: true, opencode: true, pi: true }
+
+const isRunner = (check: BackendCheck): boolean => Object.hasOwn(RUNNER_NAMES, check.name)
+
+/**
+ * What (if anything) keeps the aggregate trigger from resting quiet. Only two things do: having
+ * no agent CLI at all, and the configured default runner being the missing one — those are what
+ * stop a task from starting. An uninstalled *alternative* runner (or `gh`, "only needed for PR
+ * creation") is a choice not taken, not a problem: the per-row red dot already says so.
+ * Exported for the tests — the wording is a small contract of its own.
+ */
+export function toolsBlocker(health: HealthResponse): string | null {
+  const runners = health.checks.filter(isRunner)
+  if (runners.length && !runners.some((check) => check.available)) {
+    return 'no agent CLI found, install one to run tasks'
+  }
+  // Absent from `checks[]` (an older server) means unprobed, not broken: nothing to claim.
+  const preferred = runners.find((check) => check.name === health.defaultRunner)
+  if (preferred && !preferred.available) {
+    return `default runner (${health.defaultRunner}) not found`
+  }
+  return null
+}
+
+/** The trigger's hover tooltip: the cezar version, then the blocker if there is one — else
+ *  the optional tools still worth knowing about. Exported for the tests. */
 export function toolsTooltip(health: HealthResponse): string {
-  const missing = health.checks.filter((check) => !check.available).map((check) => check.name)
   const base = `cezar v${health.version}`
-  return missing.length ? `${base} (needs attention: ${missing.join(', ')})` : base
+  const blocker = toolsBlocker(health)
+  if (blocker) return `${base} (${blocker})`
+  const missing = health.checks.filter((check) => !check.available).map((check) => check.name)
+  return missing.length ? `${base} (optional: ${missing.join(', ')} not installed)` : base
 }
 
 /**
@@ -62,9 +94,9 @@ export function forgeNote(health: HealthResponse): string | null {
 export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
   if (!health) return null
 
-  // Green only when nothing needs attention. `pending` (amber), not `danger`: a missing
-  // optional tool is "worth a look", not an outage — the per-row dot is where red lives.
-  const allAvailable = health.checks.every((check) => check.available)
+  // Quiet when cez can actually work: at least one agent CLI is present and the default runner
+  // is among them. Violet on the wrench otherwise — per-row dots are where red lives.
+  const blocker = toolsBlocker(health)
 
   return (
     <DropdownMenu>
@@ -73,16 +105,18 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
           type="button"
           data-slot="tools-menu-trigger"
           // The aggregate state rides the WRENCH (a dot next to "Tools" symbolized nothing):
-          // quiet when every tool answered, violet — the cockpit's "needs a human" hue, same as
-          // the unread badges — when something is missing. The tooltip names the stragglers.
+          // quiet when a task can start, violet — the cockpit's "needs a human" hue, same as
+          // the unread badges — only on a real BLOCKER (#884: no agent CLI, or the default
+          // runner missing). A merely-optional missing tool keeps the trigger quiet; its own
+          // row's red dot says so. The tooltip names whichever is the case.
           // `chipClass`: the same pill grammar as the composer's runner/model pickers.
-          data-attention={allAvailable ? undefined : 'true'}
+          data-attention={blocker ? 'true' : undefined}
           title={toolsTooltip(health)}
           className={chipClass}
         >
           <WrenchIcon
             aria-hidden="true"
-            className={cn('size-3.5 shrink-0', allAvailable ? 'text-soft-foreground' : 'text-violet')}
+            className={cn('size-3.5 shrink-0', blocker ? 'text-violet' : 'text-soft-foreground')}
           />
           Tools
           {chevron}

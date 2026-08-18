@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/cezar",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "description": "Local cockpit for running and tracking AI agent tasks in your repo. Uses your logged-in `claude` CLI and `gh` — zero config, zero database.",
   "license": "MIT",
   "type": "module",
@@ -51,8 +51,8 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@open-mercato/cezar-api-client": "^0.9.2",
-    "@open-mercato/cezar-contract": "^0.9.2",
+    "@open-mercato/cezar-api-client": "^0.10.0",
+    "@open-mercato/cezar-contract": "^0.10.0",
     "@types/node": "^20.14.0",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.1",

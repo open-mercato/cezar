@@ -21,7 +21,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useState, type ReactNode } from 'react'
+import { Fragment, useMemo, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -34,6 +34,7 @@ import {
   useOpenTargets,
   usePatchRun,
   useProjectRepoBase,
+  useReferenceProjectId,
   useProviderStatus,
   useRunHandoff,
 } from '@/api/queries'
@@ -42,6 +43,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { PixelHammerIcon, RunnerLogo } from '@/components/icons'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { TabLink } from '@/components/tab-link'
 import {
   AlertDialog,
@@ -67,7 +69,14 @@ import { toast } from '@/components/ui/toaster'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
-import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
+import {
+  formatCost,
+  prNumber,
+  taskIssueUrl,
+  taskPrUrl,
+  taskReferences,
+  workflowLabel,
+} from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { chipClass, chevron } from '@/components/picker-pill'
 import { cn, isHttpUrl } from '@/lib/utils'
@@ -97,10 +106,14 @@ export type RunTab = 'session' | 'changes' | 'commits' | 'files'
 export function RunHeader({
   run,
   tab = 'session',
+  planTally,
   onMarkedUnread,
 }: {
   run: ApiRun
   tab?: RunTab
+  /** The plan dock's compact mirror (spec: "mirrored as a compact progress line in the run
+   *  header") — supplied by the Session tab, absent on the git tabs where no thread is parsed. */
+  planTally?: { done: number; total: number }
   /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
@@ -108,6 +121,7 @@ export function RunHeader({
 }) {
   const flags = runActionFlags(run)
   const [notesOpen, setNotesOpen] = useState(false)
+  const health = useHealth()
   const actions = useRunActions(run, onMarkedUnread)
 
   return (
@@ -129,6 +143,13 @@ export function RunHeader({
           <PixelHammerIcon className="size-[18px] shrink-0 text-violet" />
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
+            {planTally ? (
+              // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
+              // the run header").
+              <span data-slot="plan-mirror" className="text-[11px] text-soft-foreground tabular-nums">
+                Plan {planTally.done}/{planTally.total}
+              </span>
+            ) : null}
             {/* The run's actions ride the title row now — Finish/Continue/Open in…/overflow on the
                 right at the title's height; mobile still folds them into the kebab. */}
             <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
@@ -150,7 +171,10 @@ export function RunHeader({
 
         {/* The stat strip left the header: Plan is the context tab, Status duplicated the paused
             hint, and Cost/Agent/Mode moved to a meta row UNDER the composer (task-thread.tsx). */}
-        <MetaRow run={run} />
+        {/* `capabilities?.` fail-closed (#801): this header renders against minimal health
+            payloads, and with automations off the chip degrades to text rather than linking
+            into a disabled view. */}
+        <MetaRow run={run} automationsAvailable={health.data?.capabilities?.automations === true} />
         <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-5 flex items-end gap-1">
@@ -483,6 +507,12 @@ function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['r
       : accountId === DEFAULT_AGENT_ACCOUNT_ID
         ? 'default'
         : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
+  // The canonical `provider/model` the run actually resolved to (#405), shown only when it says
+  // something `model` does not (#546): `model` is the free text the caller ASKED for, so on a
+  // runner pointed at a custom endpoint the two genuinely differ, and "which provider served
+  // this?" is a question only this field answers. Absent on pre-#405 records and skipped when it
+  // merely repeats `model` — an identity nothing wrote down is not one this menu may invent.
+  const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -512,6 +542,14 @@ function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['r
         <DropdownMenuLabel className="font-mono text-xs font-normal text-muted-foreground">
           model: {model}
         </DropdownMenuLabel>
+        {identity ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-identity"
+            className="font-mono text-xs font-normal text-muted-foreground"
+          >
+            identity: {identity}
+          </DropdownMenuLabel>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   )
@@ -573,13 +611,39 @@ function FooterStat({ label, children }: { label: string; children: ReactNode })
   )
 }
 
-/** workflow · branch chip · ± on the left; the labelled stat strip on the right (mockup
+/** workflow, branch chip, ± on the left; the labelled stat strip on the right (mockup
  *  `.meta-row`). Each part renders only when the record carries it — absence is absence,
  *  not a placeholder. */
-function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
+function MetaRow({
+  run,
+  trailing,
+  automationsAvailable = false,
+}: {
+  run: ApiRun
+  trailing?: ReactNode
+  /** `capabilities.automations` (#801). A run launched while automations were on keeps its
+   *  `run.automation` provenance forever, so the chip must survive the flag going off — as
+   *  plain text, because the route it used to link to is disabled. */
+  automationsAvailable?: boolean
+}) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
+  // At most two references here, so this is a batch of one or two rather than of a table — but it
+  // goes through the same seam, which is what keeps the header's chip and the table's chip
+  // answering identically for the same PR.
+  const projectId = useReferenceProjectId()
+  const referenceRequests = useMemo(
+    () =>
+      projectId === undefined
+        ? []
+        : taskReferences(run, repoBase).map((reference) => ({
+            projectId,
+            kind: reference.kind,
+            number: reference.number,
+          })),
+    [run, repoBase, projectId],
+  )
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [
@@ -637,28 +701,46 @@ function MetaRow({ run, trailing }: { run: ApiRun; trailing?: ReactNode }) {
       />,
     )
   if (run.automation) {
+    // Provenance is history and is always shown; only the LINK is gated. Following it with the
+    // capability off would land on the disabled `/automations` state, which says nothing about
+    // this task.
     parts.push(
-      <Link
-        key="automation"
-        to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs font-medium hover:text-foreground"
-      >
-        Automation
-      </Link>,
+      automationsAvailable ? (
+        <Link
+          key="automation"
+          to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
+          className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs font-medium hover:text-foreground"
+        >
+          Automation
+        </Link>
+      ) : (
+        <span
+          key="automation"
+          data-slot="automation-origin"
+          title="Automations are off on this server (CEZ_AUTOMATIONS)"
+          className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs font-medium"
+        >
+          Automation
+        </span>
+      ),
     )
   }
 
+  // The provider (#871) is what lets the header's PR/issue chips carry live status — the
+  // same seam the task tables hydrate through, so the two surfaces answer identically.
   return (
-    <div
-      data-slot="run-meta"
-      className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-2.5 text-xs text-muted-foreground"
-    >
-      {/* Identity chips on the left, spaced by the row gap — no middot separators (house rule). */}
-      {parts.map((part, index) => (
-        <Fragment key={index}>{part}</Fragment>
-      ))}
-      {trailing ? <div className="ml-auto shrink-0">{trailing}</div> : null}
-    </div>
+    <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <div
+        data-slot="run-meta"
+        className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-2.5 text-xs text-muted-foreground"
+      >
+        {/* Identity chips on the left, spaced by the row gap — no middot separators (house rule). */}
+        {parts.map((part, index) => (
+          <Fragment key={index}>{part}</Fragment>
+        ))}
+        {trailing ? <div className="ml-auto shrink-0">{trailing}</div> : null}
+      </div>
+    </ReferenceStatusProvider>
   )
 }
 

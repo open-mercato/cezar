@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 
 /**
  * A workflow is an ordered list of steps. Two step kinds:
@@ -17,8 +18,16 @@ export const workflowStepSchema = z
     prompt: z.string().optional(),
     skill: z.string().optional(),
     model: z.string().optional(),
-    /** Per-step agent backend override (falls back to the task / config default). */
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    /** Per-step agent backend override (falls back to the task / config default).
+     *
+     *  Deliberately NOT widened to the legacy `claude-cli` the way the run store's
+     *  `runner`/`backend` were (#547). This enum validates two things a user AUTHORS —
+     *  workflow YAML, and the inline chain on `POST /runs` — so the selectable set is the
+     *  right one, and rejecting `claude-cli` here is a loud load-time error rather than
+     *  data loss. It also gates the persisted `workflowDef` (`runs/store.ts`), but nothing
+     *  has ever been able to write the legacy id THERE either, because this same enum was
+     *  the only way in: there is no legacy shape to keep parseable. */
+    runner: z.enum(RUNNER_IDS).optional(),
     allowedTools: z.array(z.string()).optional(),
     bashAllowlist: z.array(z.string()).optional(),
     // check step

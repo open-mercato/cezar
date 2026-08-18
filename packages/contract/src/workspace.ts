@@ -63,6 +63,7 @@ export const workspaceConfigResponseSchema = z.object({
       claude: z.string().optional(),
       codex: z.string().optional(),
       opencode: z.string().optional(),
+      pi: z.string().optional(),
     }).optional(),
   }),
 });
@@ -95,6 +96,7 @@ export const setWorkspaceConfigInputSchema = z.object({
           claude: z.string().trim().min(1).max(200).nullable().optional(),
           codex: z.string().trim().min(1).max(200).nullable().optional(),
           opencode: z.string().trim().min(1).max(200).nullable().optional(),
+          pi: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),
     })
@@ -114,10 +116,16 @@ export type SetWorkspaceConfigInput = z.infer<typeof setWorkspaceConfigInputSche
 
 // ---- GUI prefs — the two open bags ----------------------------------------------------------
 
-/** Settings → Appearance: accent + density. ONE shape for both ui-state files. */
+/** Settings → Appearance: accent + density + reading width. ONE shape for both ui-state files. */
 const appearanceSchema = z.object({
   accent: z.enum(['lime', 'violet']).optional(),
   density: z.enum(['comfortable', 'compact', 'ultra']).optional(),
+  width: z.enum(['narrow', 'wide']).optional(),
+});
+
+const taskTableUiStateSchema = z.looseObject({
+  /** Explicit user choices only. Missing ids keep the registry-owned default. */
+  expandedColumns: z.record(z.string(), z.boolean()).optional(),
 });
 
 /**
@@ -208,6 +216,7 @@ export const workspaceUiStateSchema = z.looseObject({
       claude: z.string().optional(),
       codex: z.string().optional(),
       opencode: z.string().optional(),
+      pi: z.string().optional(),
     })
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
@@ -216,6 +225,8 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Settings → Notifications, GLOBAL since step 3.5 — one answer for the whole workspace, since
    *  the delivering browser is one browser whichever project you are looking at. */
   notifications: z.looseObject({ enabled: z.boolean().optional() }).optional(),
+  /** Desktop Tasks-table density, shared across every project in this workspace. */
+  taskTable: taskTableUiStateSchema.optional(),
   /** LEGACY, exactly like `sidebar` above — the last settled project-scoped page, restored when
    *  entering at the exact bare root. The shape is unchanged and still accepted, but the current
    *  cockpit keeps it in localStorage (`packages/web/src/lib/last-location.ts`): stored here, the
@@ -228,6 +239,60 @@ export const workspaceUiStateSchema = z.looseObject({
 });
 export type WorkspaceUiState = z.infer<typeof workspaceUiStateSchema>;
 
+const WORKSPACE_UI_STATE_MAX_KEYS = 200;
+const TASK_TABLE_MAX_COLUMNS = 50;
+
+/**
+ * `PUT /api/v1/workspace/ui-state` body. The response remains an open, tolerant bag so data from
+ * a newer cockpit survives an older server; this write-side schema adds bounded known fields so
+ * the current cockpit cannot grow the user-owned file without limit.
+ */
+export const setWorkspaceUiStateInputSchema = z
+  .looseObject({
+    ...workspaceUiStateSchema.shape,
+    sidebar: z
+      .looseObject({
+        collapsed: z
+          .record(z.string().min(1).max(64), z.boolean())
+          .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
+            message: `sidebar.collapsed must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
+          })
+          .optional(),
+      })
+      .optional(),
+    dismissedProviderAuthFailures: z
+      .strictObject({
+        claude: z.string().min(1).max(128).optional(),
+        codex: z.string().min(1).max(128).optional(),
+        opencode: z.string().min(1).max(128).optional(),
+        pi: z.string().min(1).max(128).optional(),
+      })
+      .optional(),
+    importedSkills: z
+      .array(z.string().min(1).max(200))
+      .max(WORKSPACE_UI_STATE_MAX_KEYS)
+      .optional(),
+    taskTable: taskTableUiStateSchema
+      .extend({
+        expandedColumns: z
+          .record(z.string().min(1).max(64), z.boolean())
+          .refine((map) => Object.keys(map).length <= TASK_TABLE_MAX_COLUMNS, {
+            message: `taskTable.expandedColumns must have at most ${TASK_TABLE_MAX_COLUMNS} entries`,
+          })
+          .optional(),
+      })
+      .optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (Object.keys(data).length > WORKSPACE_UI_STATE_MAX_KEYS) {
+      ctx.addIssue({
+        code: 'custom',
+        message: `ui-state has too many keys (max ${WORKSPACE_UI_STATE_MAX_KEYS})`,
+      });
+    }
+  });
+export type SetWorkspaceUiStateInput = z.infer<typeof setWorkspaceUiStateInputSchema>;
+
 // ---- per-repo agent knobs (`GET/PUT /api/v1/config`) ----------------------------------------
 
 /** Per-runner default model preset (Settings → Agents): the composer preselects this model id for
@@ -238,6 +303,7 @@ export const runnerModelsSchema = z.object({
   claude: z.string().optional(),
   codex: z.string().optional(),
   opencode: z.string().optional(),
+  pi: z.string().optional(),
 });
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
@@ -284,6 +350,7 @@ export const setConfigInputSchema = z.object({
       claude: z.string().trim().max(200).nullable().optional(),
       codex: z.string().trim().max(200).nullable().optional(),
       opencode: z.string().trim().max(200).nullable().optional(),
+      pi: z.string().trim().max(200).nullable().optional(),
     })
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
@@ -391,6 +458,22 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
 
 // ---- host model catalog (`GET /api/v1/models`) -----------------------------------------------
 
+/**
+ * The runners whose model list is discovered from the host rather than hard-coded: Codex
+ * through its app-server protocol, OpenCode through its own `models` listing (#794). Claude has
+ * no equivalent local source, so its picker keeps static presets and `GET /api/v1/models`
+ * rejects it. One definition, used by the route's query validator and by the cockpit's picker.
+ */
+export const modelDiscoveryRunnerSchema = z.enum(['codex', 'opencode']);
+export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
+export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
+  modelDiscoveryRunnerSchema.options;
+
+/** True when `runner` has a host-discovered catalog (and therefore a `/models` answer). */
+export function runnerDiscoversModels(runner: Runner): runner is ModelDiscoveryRunner {
+  return (MODEL_DISCOVERY_RUNNERS as readonly string[]).includes(runner);
+}
+
 export const runnerModelOptionSchema = z.object({
   id: z.string(),
   label: z.string(),
@@ -398,8 +481,9 @@ export const runnerModelOptionSchema = z.object({
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
-/** `GET /api/v1/models?runner=codex` — discovered models, plus how fresh the answer is. Never an
- *  error: an unavailable CLI degrades to `source: 'unavailable'` with a `reason`. */
+/** `GET /api/v1/models?runner=codex|opencode` — the models discovered from that runner's own
+ *  host installation, plus how fresh the answer is. Never an error: an unavailable CLI degrades
+ *  to `source: 'unavailable'` with a `reason`. Claude has no host-local catalog and is rejected. */
 export const runnerModelCatalogResponseSchema = z.object({
   runner: runnerSchema,
   models: z.array(runnerModelOptionSchema),

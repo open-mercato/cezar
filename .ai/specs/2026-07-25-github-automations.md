@@ -326,7 +326,7 @@ This field is optional in `RunRecord`, redacted/sanitized on writes, exposed add
 - New `.ai/cezar/` files follow existing optional, salvageable, atomic persistence rules and are added to `.ai/cezar/.gitignore` maintenance.
 - Existing workflow YAML and `POST /api/runs` contracts are reused, not narrowed.
 - Removing/rolling back the feature means stopping schedulers and ignoring the new optional files/fields. Existing launched runs remain ordinary runs; deleting automation state is safe and rebuilds empty.
-- No new `CEZ_*` variable is proposed. Enabling is stored per automation and user initiated; the zero-config default performs no GitHub polling until the first automation is explicitly enabled.
+- ~~No new `CEZ_*` variable is proposed. Enabling is stored per automation and user initiated; the zero-config default performs no GitHub polling until the first automation is explicitly enabled.~~ **Amended by #801 (2026-08-07):** per-automation `enabled` plus a zero-config default turned out not to be gating enough — the whole surface, including the sidebar entry, had to be hideable, and every project with a GitHub remote saw the tab. The feature is now opt-in behind `CEZ_AUTOMATIONS=1` (strict activation, off by default, surfaced as `capabilities.automations` on `/api/v1/health`): off, the nav item is absent everywhere, the `/automations*` routes answer `409`, and the workspace scheduler never starts. The per-automation `enabled` toggle and the no-backfill baseline described in this spec are unchanged and still apply once the flag is on. See `BACKWARD_COMPATIBILITY.md` §"GitHub automations — opt-in gating".
 
 ## Observability
 

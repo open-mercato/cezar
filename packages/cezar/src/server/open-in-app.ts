@@ -3,7 +3,8 @@ import { accessSync, constants, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { openInTerminal } from './open-in-terminal.ts';
+import type { RunnerId } from '../core/agent-runner.ts';
+import { openInTerminal, refuseSpawnUnderTest } from './open-in-terminal.ts';
 import { isWsl, translateToWindowsPath } from './wsl.ts';
 
 /**
@@ -125,14 +126,15 @@ function editorAvailable(editor: EditorDef): boolean {
 /** Coding-agent CLIs a session can be handed off to (#cli-handoff). Selecting one opens a
  *  terminal that resumes THIS run's session when the runner matches, or launches a fresh CLI in
  *  the worktree otherwise. The actual command is built server-side (needs the run's session). */
-const AGENT_CLIS: Array<{ runner: 'claude' | 'codex' | 'opencode'; label: string; icon: string; bin: string; envBin?: string }> = [
+const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: string; envBin?: string }> = [
   { runner: 'claude', label: 'Claude CLI', icon: 'claude', bin: 'claude', envBin: process.env.CEZ_CLAUDE_BIN },
   { runner: 'codex', label: 'Codex CLI', icon: 'codex', bin: 'codex', envBin: process.env.CEZ_CODEX_BIN },
   { runner: 'opencode', label: 'OpenCode', icon: 'opencode', bin: 'opencode', envBin: process.env.CEZ_OPENCODE_BIN },
+  { runner: 'pi', label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: process.env.CEZ_PI_BIN },
 ];
 
 /** The runner behind a `cli:<runner>` open target, or null when the id isn't a CLI handoff. */
-export function agentCliRunner(targetId: string): 'claude' | 'codex' | 'opencode' | null {
+export function agentCliRunner(targetId: string): RunnerId | null {
   const match = AGENT_CLIS.find((c) => `cli:${c.runner}` === targetId);
   return match ? match.runner : null;
 }
@@ -238,6 +240,7 @@ function pickInstalledMacApp(names: string | string[]): string {
 /** Spawn detached; success = no error within a short settle window (mirrors open-in-terminal). */
 function runDetached(bin: string, args: string[]): Promise<boolean> {
   return new Promise((resolve) => {
+    refuseSpawnUnderTest(bin, args);
     let child;
     try {
       child = spawn(bin, args, { stdio: 'ignore', detached: true });

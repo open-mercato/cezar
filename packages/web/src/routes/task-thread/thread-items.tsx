@@ -251,6 +251,7 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  pi: 'pi',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */

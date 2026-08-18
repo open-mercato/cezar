@@ -230,6 +230,10 @@ function stubFetch(
           steps: [],
         })
       }
+      // The tab reads `capabilities.automations` (#801). The catch-all below answers `{}`, which
+      // is not a health payload at all — a reader would crash on it rather than degrade — so the
+      // default here is a real one, with automations off exactly as a default server reports.
+      if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(['claude']))
       return jsonResponse({})
     }),
   )
@@ -312,6 +316,25 @@ describe('the GitHub tab lists', () => {
     // No URL selection → the first item's detail renders (legacy parity), marked current.
     expect(rows()[0]?.getAttribute('aria-current')).toBe('page')
     await waitFor(() => expect(detail()?.textContent).toContain('Login form drops session'))
+  })
+
+  // #801: the tab's only cross-link into automations follows the capability — advertising
+  // "Set up automations" on a server that answers 409 would be a dead end.
+  it('offers the automations shortcut only while the capability is on', async () => {
+    stubFetch()
+    renderAt('/github')
+    await waitFor(() => expect(document.querySelector('[data-slot="gh-header"]')).not.toBeNull())
+    expect(screen.queryByRole('link', { name: 'Set up automations' })).toBeNull()
+
+    cleanup()
+    stubFetch({
+      'GET /api/v1/health': () => jsonResponse({
+        ...health(['claude']),
+        capabilities: { ...health(['claude']).capabilities, automations: true },
+      }),
+    })
+    renderAt('/github')
+    expect(await screen.findByRole('link', { name: 'Set up automations' })).not.toBeNull()
   })
 
   it('/github/prs lists pull requests', async () => {
@@ -1085,7 +1108,7 @@ const health = (backends: readonly Runner[]): HealthResponse => ({
   checks: backends.map((name) => ({ name, available: true })),
   defaultRunner: backends[0] ?? 'claude',
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false },
 })
 
 /** More than one installed backend — the only state that shows the runner pill. */
@@ -1096,8 +1119,14 @@ const SINGLE_BACKEND = () => jsonResponse(health(['claude']))
 /** Open a pill's dropdown and choose an option by label (Radix opens on pointerDown). */
 async function pickPill(slot: string, label: string) {
   fireEvent.pointerDown(document.querySelector(`[data-slot="${slot}"]`)!)
-  const options = await screen.findAllByRole('menuitemradio')
-  fireEvent.click(options.find((o) => o.textContent?.includes(label)) as HTMLElement)
+  // A discovery runner's options arrive with its catalog (#794), so wait for the labelled
+  // option rather than merely for the menu to open.
+  let option: HTMLElement | undefined
+  await waitFor(() => {
+    option = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes(label))
+    expect(option).toBeDefined()
+  })
+  fireEvent.click(option as HTMLElement)
 }
 
 const postedRun = (sent: readonly SentRequest[]) =>
@@ -1305,6 +1334,189 @@ describe('the hand-to-agent backend pills (#401)', () => {
 
     await waitFor(() => expect(postedRun(sent)).toBeDefined())
     expect(postedRun(sent)).toMatchObject({ runner: 'codex', workflow: 'quick-task' })
+  })
+})
+
+/**
+ * The agent ACCOUNT on the hand-off (spec 2026-07-29-agent-profiles). #750 taught the /new
+ * composer to list a runner's logins as rows of the runner pill and to post `agentProfile`; the
+ * GitHub tab was the surface it missed, so a delegation here always ran on whatever the project's
+ * selection resolved to. The endpoint (`POST /api/v1/runs`) already accepted the field.
+ */
+describe('the hand-to-agent agent account', () => {
+  const agentProfiles = (profiles: unknown[], selections: unknown = {}) => () =>
+    jsonResponse({
+      editable: true,
+      profiles,
+      profileCapableProviders: ['claude', 'codex'],
+      selections,
+      defaults: {},
+    })
+
+  const login = (provider: Runner, id: string, label: string) => ({
+    id,
+    provider,
+    label,
+    configDir: `~/.${provider}-${id}`,
+    path: `/home/u/.${provider}-${id}`,
+    exists: true,
+    looksValid: true,
+    isDefault: id === 'default',
+  })
+
+  const TWO_CLAUDE_LOGINS = [
+    login('claude', 'default', 'Default'),
+    login('claude', 'klaudiusz', 'Klaudiusz'),
+  ]
+
+  it('lists a runner’s logins as rows once there is more than one', async () => {
+    stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/workspace/agent-profiles': agentProfiles(TWO_CLAUDE_LOGINS),
+    })
+    await openDetail()
+
+    // One runner would normally hide the pill — a second LOGIN is a choice too, so it shows.
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    fireEvent.pointerDown(document.querySelector('[data-slot="runner-pill"]')!)
+
+    const menu = await screen.findByTestId('runner-pill-menu')
+    await waitFor(() =>
+      expect(
+        within(menu).getAllByRole('menuitemradio').map((o) => o.textContent),
+      ).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('claude (Default)'),
+          expect.stringContaining('claude (Klaudiusz)'),
+        ]),
+      ),
+    )
+  })
+
+  it('posts the picked account as agentProfile', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/workspace/agent-profiles': agentProfiles(TWO_CLAUDE_LOGINS),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    await pickPill('runner-pill', 'claude (Klaudiusz)')
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ workflow: 'quick-task', agentProfile: 'klaudiusz' })
+  })
+
+  /**
+   * `'default'` is the discovered account named EXPLICITLY, which beats the project's selection
+   * server-side — so it must ride the request, unlike an untouched pill. The project here selects
+   * `klaudiusz`; picking the Default row is a real override and has to be sent to undo it.
+   */
+  it('sends the discovered account explicitly when it is picked over the project’s selection', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/repo': () => jsonResponse({ info: { root: '/repo' } }),
+      'GET /api/v1/workspace/agent-profiles': agentProfiles(TWO_CLAUDE_LOGINS, {
+        '/repo': { claude: 'klaudiusz' },
+      }),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    // The project's row is the selected one until overridden.
+    expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('Klaudiusz')
+    await pickPill('runner-pill', 'claude (Default)')
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ agentProfile: 'default' })
+  })
+
+  it('an untouched pill posts no agentProfile — the run follows the project’s selection', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/repo': () => jsonResponse({ info: { root: '/repo' } }),
+      'GET /api/v1/workspace/agent-profiles': agentProfiles(TWO_CLAUDE_LOGINS, {
+        '/repo': { claude: 'klaudiusz' },
+      }),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    await waitForAgentRunEnabled()
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    // The KEY, not merely its value: an absent field is what "follow the selection" means.
+    expect('agentProfile' in (postedRun(sent) as object)).toBe(false)
+  })
+
+  /** Switching the AGENT must not carry the previous agent's login along — that would bill the
+   *  wrong subscription. The model pin goes with it; the account does too. */
+  it('drops the account when the agent changes', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/health': MULTI_BACKEND,
+      'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+      'GET /api/v1/workspace/agent-profiles': agentProfiles(TWO_CLAUDE_LOGINS),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    await pickPill('runner-pill', 'claude (Klaudiusz)')
+    await pickPill('runner-pill', 'codex')
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
+    expect('agentProfile' in (postedRun(sent) as object)).toBe(false)
+  })
+
+  /** Changing only the ACCOUNT keeps the model pin: the catalog is identical across logins of
+   *  the same runner, so there is nothing for a switch to invalidate. */
+  it('keeps the model pin when only the account changes', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/workspace/agent-profiles': agentProfiles(TWO_CLAUDE_LOGINS),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="runner-pill"]')).not.toBeNull())
+    await pickPill('model-pill', 'opus')
+    await pickPill('runner-pill', 'claude (Klaudiusz)')
+    await waitForAgentRunEnabled()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).toMatchObject({ model: 'opus', agentProfile: 'klaudiusz' })
+  })
+
+  /**
+   * The zero-config guard, and the one that passes both before and after this change: one runner
+   * with one login must see no pill and send byte-for-byte the request it always sent.
+   */
+  it('a host with one runner and one login is unchanged — no pill, no agentProfile', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/workspace/agent-profiles': agentProfiles([login('claude', 'default', 'Default')]),
+    })
+    await openDetail()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+
+    await waitForAgentRunEnabled()
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect('agentProfile' in (postedRun(sent) as object)).toBe(false)
   })
 })
 

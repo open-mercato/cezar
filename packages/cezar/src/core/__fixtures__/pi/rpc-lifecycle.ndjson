@@ -1,0 +1,17 @@
+{"id":"state","type":"response","command":"get_state","success":true,"data":{"sessionId":"pi-session-1","model":{"id":"anthropic/claude-sonnet-5"}}}
+{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_start","contentIndex":0,"partial":{}}}
+{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hello","partial":{}}}
+{"type":"message_update","message":{},"assistantMessageEvent":{"type":"text_end","contentIndex":0,"content":"Hello","partial":{}}}
+{"type":"message_update","message":{},"assistantMessageEvent":{"type":"thinking_start","contentIndex":1,"partial":{}}}
+{"type":"message_update","message":{},"assistantMessageEvent":{"type":"thinking_delta","contentIndex":1,"delta":"Inspect first","partial":{}}}
+{"type":"message_update","message":{},"assistantMessageEvent":{"type":"thinking_end","contentIndex":1,"content":"Inspect first","partial":{}}}
+{"type":"tool_execution_start","toolCallId":"task-1","toolName":"task","args":{"description":"Review implementation"}}
+{"type":"tool_execution_end","toolCallId":"task-1","toolName":"task","result":{"content":[{"type":"text","text":"done"}]},"isError":false}
+{"type":"tool_execution_start","toolCallId":"edit-1","toolName":"edit","args":{"path":"src/a.ts","oldText":"old","newText":"new"}}
+{"type":"tool_execution_end","toolCallId":"edit-1","toolName":"edit","result":{"content":[{"type":"text","text":"updated"}]},"isError":false}
+{"type":"tool_execution_start","toolCallId":"todo-1","toolName":"todowrite","args":{"todos":[{"content":"Implement RPC","status":"in_progress"}]}}
+{"type":"tool_execution_end","toolCallId":"todo-1","toolName":"todowrite","result":{"content":[{"type":"text","text":"saved"}]},"isError":false}
+{"type":"tool_execution_start","toolCallId":"bash-1","toolName":"bash","args":{"command":"npm test"}}
+{"type":"tool_execution_end","toolCallId":"bash-1","toolName":"bash","result":{"content":[{"type":"text","text":"failed"}]},"isError":true}
+{"type":"message_end","message":{"role":"assistant","usage":{"input":10,"output":5,"cacheRead":2,"cacheWrite":1,"totalTokens":18,"cost":{"total":0.01}}}}
+{"type":"agent_settled"}

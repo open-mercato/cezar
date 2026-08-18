@@ -728,6 +728,56 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(footer.querySelector('[data-slot="context-gauge"]')).toBeNull()
   })
 
+  // #801: automation provenance is history — a run launched while automations were on keeps it
+  // forever — so the chip stays, but it only LINKS while the capability is on. Following it with
+  // automations off would land on the disabled `/automations` state, which says nothing about
+  // this task.
+  const automated = () => run('done', {
+    automation: {
+      automationId: 'a-1',
+      automationRevision: 1,
+      receiptId: 'r-1',
+      event: 'issue.opened',
+      githubUrl: 'https://github.com/open-mercato/cezar/issues/801',
+    },
+  })
+
+  it('links the automation chip to its log while automations are on', async () => {
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true, followups: false, singleProject: false, automations: true,
+            tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          },
+        }),
+    })
+    renderHeader(automated())
+
+    const link = await screen.findByRole('link', { name: 'Automation' })
+    expect(link.getAttribute('href')).toBe('/automations/a-1/log')
+  })
+
+  it('degrades the automation chip to plain text while automations are off', async () => {
+    stubFetch({
+      '/api/v1/health': () =>
+        jsonResponse({
+          capabilities: {
+            localHandoff: true, followups: false, singleProject: false, automations: false,
+            tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true,
+          },
+        }),
+    })
+    renderHeader(automated())
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() =>
+      expect(meta.querySelector('[data-slot="automation-origin"]')).not.toBeNull(),
+    )
+    expect(meta.textContent).toContain('Automation')
+    expect(screen.queryByRole('link', { name: 'Automation' })).toBeNull()
+  })
+
   it('omits token and cost text when health disables token metrics', async () => {
     stubFetch({
       '/api/v1/health': () =>
@@ -890,6 +940,58 @@ describe('meta line, tabs, pill and resume hint', () => {
       }))
       const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
       await within(footer).findByRole('button', { name: /account deleted-one \(removed\)/ })
+    })
+  })
+
+  describe('the canonical model identity (#546)', () => {
+    /** Opens the agent badge's menu — `DropdownMenuContent` is not in the DOM until it does.
+     *  The badge lives on the meta FOOTER (under the composer), not the header's chip row. */
+    const openAgentMenu = async () => {
+      const meta = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+      const badge = within(meta).getByRole('button', { name: /^Agent:/ })
+      fireEvent.pointerDown(badge, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+      await waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
+      return document.querySelector('[role="menu"]') as HTMLElement
+    }
+
+    it('shows the provider/model the run actually resolved to', async () => {
+      // The reader `modelIdentity` was missing (#546): #405 persisted it for cost attribution and
+      // replay and nothing read it, so the field could rot without anyone noticing.
+      stubFetch()
+      renderHeader(run('done', {
+        runner: 'claude',
+        model: 'opus',
+        modelIdentity: 'anthropic/claude-opus-4-8',
+      }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')?.textContent)
+        .toBe('identity: anthropic/claude-opus-4-8')
+      // It ADDS to the asked-for model rather than replacing it — `model` is still the free-text
+      // the caller typed, and losing that would make the badge answer a different question.
+      expect(menu.textContent).toContain('model: opus')
+    })
+
+    it('says nothing for a run from before the identity was recorded', async () => {
+      // Same omitted-not-guessed rule as the account line: resolving it now would attribute a
+      // provider to a run that never wrote one down.
+      stubFetch()
+      renderHeader(run('done', { runner: 'claude', model: 'opus' }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
+    })
+
+    it('omits the line when it would only repeat the model', async () => {
+      // A gateway id is already in provider/model form, so echoing it would be noise in a menu
+      // whose whole value is that every line answers something.
+      stubFetch()
+      renderHeader(run('done', {
+        runner: 'claude',
+        model: 'anthropic/claude-opus-4-8',
+        modelIdentity: 'anthropic/claude-opus-4-8',
+      }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
+      expect(menu.textContent).toContain('model: anthropic/claude-opus-4-8')
     })
   })
 

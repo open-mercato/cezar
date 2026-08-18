@@ -26,6 +26,7 @@ let baseUrl: string
 
 let forgeAvailable = false
 let followupsAvailable = false
+let automationsAvailable = false
 let bootProject: string
 
 /** A flat route target under the shared env's project prefix (multi-project spec, step 3.2):
@@ -37,21 +38,24 @@ beforeAll(async () => {
   browser = AgentBrowser.open(runId)
   const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
     forge: { available: boolean } | null
-    capabilities: { followups: boolean }
+    capabilities: { followups: boolean; automations: boolean }
   }
   forgeAvailable = health.forge?.available === true
   followupsAvailable = health.capabilities.followups
+  automationsAvailable = health.capabilities.automations
   bootProject = await bootProjectId(baseUrl)
 })
 
-/** The nav the shell renders — GitHub and Inbox both gate on live health capabilities, so the
- *  expectation must too. */
+/** The nav the shell renders — GitHub, Inbox and Automations all gate on live health
+ *  capabilities, so the expectation must too. Automations carries BOTH gates (#801): it needs a
+ *  forge to poll AND the operator's opt-in to exist at all. */
 function expectedNavLabels(): string[] {
   return [
     'Tasks',
     ...(followupsAvailable ? ['Inbox'] : []),
     'Git',
-    ...(forgeAvailable ? ['GitHub', 'Automations'] : []),
+    ...(forgeAvailable ? ['GitHub'] : []),
+    ...(forgeAvailable && automationsAvailable ? ['Automations'] : []),
     'Skills',
     'Workflows',
     'Settings',
@@ -165,6 +169,31 @@ describe('cockpit app shell', () => {
     expect(Math.abs(footerRows.theme - footerRows.gear)).toBeLessThanOrEqual(1)
     // Exactly two rows — every other footer control shares the controls row's centerline.
     expect(footerRows.rowCount).toBe(2)
+  })
+
+  it('keeps the footer controls inside the 264px column even on a nightly-length version', () => {
+    browser.goto(baseUrl + scoped('/'))
+    browser.waitForFunction(`document.querySelector('[data-slot="version-chip"]') !== null`)
+
+    // The e2e server reports this checkout's own (short) semver, which never overflowed. The
+    // string that DID is the nightly dist-tag of #876 — so write it into the chip and measure
+    // what the real layout engine does with it. Every control in the row but the chip is
+    // `shrink-0`, so before the chip could give, this pushed the gear and the theme toggle
+    // bodily outside the sidebar's right edge instead of clipping anything.
+    const overflow = browser.evaluate(`(() => {
+      const chip = document.querySelector('[data-slot="version-chip"]')
+      const label = chip.querySelector('span:not([data-slot])')
+      label.textContent = 'v0.9.2-nightly.20260813.1'
+      const sidebarRight = document.querySelector('[data-slot="sidebar"]').getBoundingClientRect().right
+      const escaped = [...document.querySelectorAll('[data-slot="sidebar-footer-controls"] > *')]
+        .filter((el) => el.getBoundingClientRect().right > sidebarRight)
+        .map((el) => el.dataset.slot)
+      return { escaped, truncated: label.scrollWidth > Math.ceil(label.getBoundingClientRect().width) }
+    })()`) as { escaped: string[]; truncated: boolean }
+
+    expect(overflow.escaped).toEqual([])
+    // …and the chip absorbed it by clipping its own label, which is where the `title` earns its keep.
+    expect(overflow.truncated).toBe(true)
   })
 
   it('fills the repo and version chips from the live /api/v1/health', async () => {

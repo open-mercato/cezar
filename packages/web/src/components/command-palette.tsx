@@ -1,5 +1,6 @@
-import { CheckIcon, FolderOpenIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon } from 'lucide-react'
+import { CheckIcon, FolderOpenIcon, LayersIcon, MonitorIcon, MoonIcon, PlusIcon, SunIcon } from 'lucide-react'
 import * as React from 'react'
+import { useNavigate as useRouterNavigate } from 'react-router'
 import { useHealth, useProjects, useRuns, useRunsIndex, useSkills, useUiState } from '@/api/queries'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
@@ -135,6 +136,9 @@ export function mergeTasks(
     seenAt: run.seenAt,
     archived: run.archived,
     autoResumeAt: run.autoResumeAt,
+    workflow: run.workflow,
+    branch: run.branch,
+    startedAt: run.startedAt,
   }))
   const live = new Set(mine.map(taskKey))
   const theirs = (indexed ?? [])
@@ -317,6 +321,8 @@ function TaskItem({
 
 function PaletteContent({ close }: { close: () => void }) {
   const navigate = useNavigate()
+  // The UNSCOPED twin, for the handful of targets that live outside every project (`/tasks`).
+  const routerNavigate = useRouterNavigate()
   // Controlled so the body can tell the default view from a search. cmdk still owns filtering and
   // ranking (`paletteScore`); this only decides which SECTIONS exist.
   const [search, setSearch] = React.useState('')
@@ -376,6 +382,12 @@ function PaletteContent({ close }: { close: () => void }) {
   const go = (to: string) => {
     close()
     navigate(to)
+  }
+  /** A target OUTSIDE every project (`/tasks`, and anything else global that lands later). The
+   *  scope-wrapping navigate would prefix it with the active `/p/<id>`, which is not a route. */
+  const goGlobal = (to: string) => {
+    close()
+    routerNavigate(to)
   }
   // An explicit `/p/<id>/…` target, which the scoping wrapper passes through untouched — the
   // whole point of this group is landing in a project that is NOT the active one. `/` is that
@@ -457,9 +469,25 @@ function PaletteContent({ close }: { close: () => void }) {
           heading="Views"
           className="[&_[cmdk-group-items]]:flex [&_[cmdk-group-items]]:flex-wrap [&_[cmdk-group-items]]:gap-1.5 [&_[cmdk-group-items]]:px-0.5 [&_[cmdk-group-items]]:pb-1"
         >
+          {/* The one GLOBAL view, listed first because it is the only chip here that is not
+              about the project you are standing in. Multi-project only, matching the sidebar:
+              with one project it would be that project's own Tasks page under another name. */}
+          {multiProject ? (
+            <CommandItem
+              value="view All tasks"
+              data-slot="palette-view"
+              data-chip
+              data-nav-to="/tasks"
+              onSelect={() => goGlobal('/tasks')}
+            >
+              <LayersIcon aria-hidden="true" />
+              All tasks
+            </CommandItem>
+          ) : null}
           {visibleNavItems({
             forge: health.data?.forge?.available === true,
             inbox: health.data?.capabilities.followups === true,
+            automations: health.data?.capabilities.automations === true,
           }).map((item) => {
             const Icon = item.icon
             return (
