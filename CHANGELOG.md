@@ -1,6 +1,30 @@
 # Unreleased
 
 ## 🐛 Fixes
+- 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
+  answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
+  of that stays true of a branch GitHub is refusing to merge, so a conflicted PR sat there in
+  ready-green with nothing on screen saying otherwise. Mergeability is now carried as its own axis
+  (it rides the same batched GraphQL query, so it costs no extra request) and paints the chip that
+  links to the PR in its own colour: orange, not the red that already means "checks failed" and
+  "changes requested", with a warning glyph and a tooltip that leads with the conflict and still
+  spells out the status underneath. Only a forge that actually answers `CONFLICTING` paints it —
+  GitHub's still-computing `UNKNOWN`, an unreachable forge and a server too old to send the field
+  all leave the chip exactly as it was, because none of them is an answer — and `UNKNOWN`, which
+  is what GitHub says for the first seconds after every push while it computes the merge base, is
+  now cached as the non-answer it is: such a reference is re-asked within seconds instead of being
+  held for the usual minute, so a conflict shows up on its own rather than on a page reload. A
+  push made through cezar drops what the forge told us about that task's pull requests for the
+  same reason — it is the event that changes the answer. Every reference chip everywhere now opens
+  the SAME panel (a hover card rather than a tooltip, so it can hold a control), and a conflicting
+  one carries a **Resolve conflicts** button that sends the agent `Merge head branch and resolve
+  conflicts in PR number N` on whichever seam the task's state allows — a live message, or a
+  continue for a task parked at review, which is where a conflicting PR usually hangs. The number
+  is in the words because a task can point at several pull requests, and each chip's button names
+  its own. Offered on the task page, the Tasks table and cards, the sidebar, and the cross-project
+  All tasks page alike — that last one fetches the task's record when the panel opens (its index
+  row is deliberately too slim to say whether a finished task can be reopened) and sends through
+  the run's OWN project rather than whichever one the page happens to be standing in.
 - 🐛 **A task that opens its own PR keeps the chip for the PR it was working on.** A task started
   on someone else's PR that pushed a follow-up of its own showed only the new one: the agent
   re-declares `CEZ:PR` with the number it just opened, as the marker contract asks it to, and

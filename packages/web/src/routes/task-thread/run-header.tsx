@@ -37,6 +37,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { TabLink } from '@/components/tab-link'
 import {
@@ -540,6 +541,10 @@ function MetaRow({
         reference={reference}
         taskTitle={runTitle(run)}
         className="h-5"
+        // Shown only on a chip that IS conflicting — the chip decides that, being the thing that
+        // knows — and mounted only while its panel is open. The same component the Tasks table
+        // hands its chips, so both send the same prompt on the same seam.
+        conflictAction={<ResolveConflictsButton run={run} prNumber={reference.number} />}
       />,
     )
   }

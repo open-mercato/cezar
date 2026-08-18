@@ -3,8 +3,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
 
-import { ReferenceChip } from './reference-chip'
-import { REFERENCE_STATUS } from '@/lib/reference-status'
+import { ReferenceChip, useCloseReferenceCard } from './reference-chip'
+import { REFERENCE_CONFLICT, REFERENCE_STATUS } from '@/lib/reference-status'
 
 beforeAll(() => {
   // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has none and never lays
@@ -22,6 +22,9 @@ beforeAll(() => {
 afterEach(cleanup)
 
 const PR = { kind: 'PR' as const, number: 402, url: 'https://github.com/o/r/pull/402' }
+
+/** The one panel every chip opens — a hover card since it had to be able to hold a button. */
+const panelText = () => document.querySelector('[data-slot="reference-status-card"]')?.textContent ?? ''
 
 function chipOf(ui: React.ReactElement) {
   const { container } = render(ui)
@@ -116,9 +119,7 @@ describe('ReferenceChip with a status', () => {
     fireEvent.focus(screen.getByRole('link'))
 
     await waitFor(() => {
-      expect(screen.getAllByRole('tooltip')[0]?.textContent).toContain(
-        REFERENCE_STATUS['changes-requested'].hint,
-      )
+      expect(panelText()).toContain(REFERENCE_STATUS['changes-requested'].hint)
     })
   })
 
@@ -151,5 +152,131 @@ describe('ReferenceChip with a status', () => {
     )
     expect(chip.tagName).toBe('SPAN')
     expect(chip.getAttribute('data-status')).toBe('completed')
+  })
+})
+
+describe('ReferenceChip on a pull request that will not merge', () => {
+  it('takes the chip over — its own colour, not a second chip and not a shade of red', () => {
+    // The reported case: `ready` is still the honest answer to "whose move is it on the review",
+    // and it was painting green next to a pull request GitHub was refusing to merge. The chip that
+    // LINKS to the PR is the one that has to say so, in a colour no other status wears.
+    const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status="ready" conflicting />)
+
+    expect(chip.className).toContain('text-conflict')
+    expect(chip.className).not.toContain('text-success')
+    // Not red either: `danger` already means "checks failed" and "changes requested" here.
+    expect(chip.className).not.toContain('text-danger')
+    expect(chip.getAttribute('data-conflicting')).toBe('true')
+    expect(chip.getAttribute('aria-label')).toContain(REFERENCE_CONFLICT.label)
+  })
+
+  it('keeps the status it painted over, in the attribute and in the tooltip', async () => {
+    // Both axes are true at once. The colour can only carry one, so the other is still said —
+    // losing "the checks are green" would be the same defect one level down.
+    const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status="ready" conflicting />)
+    expect(chip.getAttribute('data-status')).toBe('ready')
+
+    fireEvent.focus(screen.getByRole('link'))
+    await waitFor(() => {
+      expect(panelText()).toContain(REFERENCE_CONFLICT.hint)
+      expect(panelText()).toContain(REFERENCE_STATUS.ready.hint)
+    })
+  })
+
+  it('swaps the glyph too, including the pulsing dot of a PR whose checks are still running', () => {
+    // Colour is invisible to a colourblind reader, so the icon has to move with it — and a branch
+    // that will not merge is not a state that is still moving.
+    const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status="checks-pending" conflicting />)
+
+    expect(chip.querySelector('[data-slot="status-dot"]')).toBeNull()
+    expect(chip.querySelector('svg')).not.toBeNull()
+  })
+
+  it('says nothing at all until the forge says CONFLICTING', () => {
+    // Absent is not `false` (contract: a missing `conflicts` means "nothing is known about
+    // mergeability"). A chip that coloured itself on silence would invent the one answer this
+    // axis must never invent.
+    for (const conflicting of [undefined, false]) {
+      const chip = chipOf(<ReferenceChip reference={PR} taskTitle="t" status="ready" conflicting={conflicting} />)
+      expect(chip.className).toContain('text-success')
+      expect(chip.getAttribute('data-conflicting')).toBeNull()
+      cleanup()
+    }
+  })
+
+  it('never speaks for an issue, which has no base branch to conflict with', () => {
+    const chip = chipOf(
+      <ReferenceChip reference={{ kind: 'Issue', number: 12 }} taskTitle="t" status="open" conflicting />,
+    )
+    expect(chip.className).not.toContain('text-conflict')
+    expect(chip.getAttribute('data-conflicting')).toBeNull()
+  })
+})
+
+describe('the conflict chip’s offered action', () => {
+  /** A stand-in for whatever a surface hands the panel — the chip is not supposed to know. */
+  function Probe({ onMount }: { onMount?: () => void }) {
+    const close = useCloseReferenceCard()
+    onMount?.()
+    return (
+      <button type="button" onClick={close}>
+        Resolve conflicts
+      </button>
+    )
+  }
+
+  const openPanel = async () => {
+    // Focus, not hover: it is the trigger every input method shares, and it is what makes the
+    // button reachable from the keyboard at all.
+    fireEvent.focus(screen.getByRole('link'))
+    return waitFor(() => screen.getByRole('button', { name: 'Resolve conflicts' }))
+  }
+
+  it('offers it in a panel the pointer can actually reach', async () => {
+    // A tooltip closes the moment the pointer leaves the chip and takes any control with it, so a
+    // chip with something to press has to open a hover CARD instead. Everything the tooltip said
+    // is still in it.
+    render(<ReferenceChip reference={PR} taskTitle="t" status="ready" conflicting conflictAction={<Probe />} />)
+    await openPanel()
+
+    const card = document.querySelector('[data-slot="reference-status-card"]')
+    expect(card?.textContent).toContain(REFERENCE_CONFLICT.hint)
+    expect(card?.textContent).toContain(REFERENCE_STATUS.ready.hint)
+    expect(document.querySelector('[data-slot="reference-status-tooltip"]')).toBeNull()
+  })
+
+  it('lets the action shut the panel once its work is done', async () => {
+    // Left open, a panel whose button is spent invites a second press of something that has
+    // already happened. The chip owns the panel, so it is the chip that offers the way out.
+    render(<ReferenceChip reference={PR} taskTitle="t" status="ready" conflicting conflictAction={<Probe />} />)
+    fireEvent.click(await openPanel())
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Resolve conflicts' })).toBeNull())
+  })
+
+  it('mounts it only when the panel opens — never just because a row was painted', async () => {
+    // Load-bearing, not an optimisation: the action carries a run delivery with it, and a
+    // hundred-row table that built one per row would need a react-query client to paint chips
+    // nobody has hovered.
+    const onMount = vi.fn()
+    render(
+      <ReferenceChip reference={PR} taskTitle="t" status="ready" conflicting conflictAction={<Probe onMount={onMount} />} />,
+    )
+    expect(onMount).not.toHaveBeenCalled()
+
+    await openPanel()
+    expect(onMount).toHaveBeenCalled()
+  })
+
+  it('leaves a chip that is NOT conflicting with the panel and nothing in it', async () => {
+    // The action is offered by the surface, not by the state: a green PR gets the same panel every
+    // chip gets, and no button — the surface would have had one ready if it had gone red.
+    const onMount = vi.fn()
+    render(<ReferenceChip reference={PR} taskTitle="t" status="ready" conflictAction={<Probe onMount={onMount} />} />)
+    fireEvent.focus(screen.getByRole('link'))
+
+    await waitFor(() => expect(panelText()).toContain(REFERENCE_STATUS.ready.hint))
+    expect(screen.queryByRole('button', { name: 'Resolve conflicts' })).toBeNull()
+    expect(onMount).not.toHaveBeenCalled()
   })
 })

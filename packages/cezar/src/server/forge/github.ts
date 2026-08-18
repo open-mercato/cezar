@@ -1166,6 +1166,10 @@ export type GithubRefStatusData =
       available: true;
       prs: Record<number, ReferenceStatus>;
       issues: Record<number, ReferenceStatus>;
+      /** The OPEN pull requests among them that do not merge into their base — the second axis,
+       *  never folded into a status. Optional on the wire, and absent means "nothing is known"
+       *  rather than "no conflicts"; see `conflicts` in the contract. */
+      conflicts?: number[];
       /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
        *  contract for why the SERVER answers this. */
       recheckAfterMs: number | null;
@@ -1183,6 +1187,9 @@ const ghRefStatusPrSchema = z
     state: z.string(),
     isDraft: z.boolean().nullish(),
     reviewDecision: z.string().nullish(),
+    /** `MERGEABLE` | `CONFLICTING` | `UNKNOWN` — GitHub computes it in the background, so
+     *  `UNKNOWN` is normal on a PR that was just pushed and must never read as "clean". */
+    mergeable: z.string().nullish(),
     commits: z
       .object({
         nodes: z.array(
@@ -1225,12 +1232,16 @@ const ghRefStatusSchema = z.record(z.string(), z.unknown());
  * `committedDate` and the last CHANGES_REQUESTED review's `submittedAt` cost nothing extra, riding
  * the same node, and are what let the precedence tell a review the author has already responded to
  * from one still about the code on screen.
+ *
+ * `mergeable` rides it too, and is the reason the batch can answer "this one conflicts" without
+ * the per-PR probe `prMergeState` runs for the merge box. It is NOT folded into the status: see
+ * `conflicts` in the contract for why the two stay separate axes.
  */
 function refStatusQuery(numbers: number[]): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 1) { totalCount } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 1) { totalCount } } ... on Issue { state stateReason } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -1315,6 +1326,37 @@ export function derivePrReferenceStatus(pr: {
   return 'ready';
 }
 
+/**
+ * Whether this pull request's branch merges into its base — the OTHER axis, kept out of
+ * `derivePrReferenceStatus` on purpose (see `conflicts` in the contract).
+ *
+ * Three values, and the third is the one that matters. GitHub does not store mergeability; it
+ * COMPUTES it when asked, and answers `UNKNOWN` while the background job runs — which is the
+ * normal answer for the first seconds after every push, and therefore for exactly the moment a
+ * cockpit is most likely to be looking. `UNKNOWN` means *we were not told*, never *it is clean*,
+ * and the caller must be able to tell those apart: it is what decides how soon to ask again
+ * (`refStatusTtl`), and answering it as "not conflicting" with a one-minute TTL is precisely how a
+ * conflicting pull request came to sit there wearing "Ready to merge".
+ *
+ * `undefined` for anything the question does not apply to: an issue, and a merged or closed pull
+ * request (GitHub says `UNKNOWN` for those too, forever, and a terminal PR has no conflict left to
+ * resolve — a merged PR wearing a conflict chip is a lie the state alone rules out).
+ */
+export type Mergeability = 'mergeable' | 'conflicting' | 'unknown';
+
+export function mergeabilityOf(state: string, mergeable: string | null | undefined): Mergeability | undefined {
+  if (state.toUpperCase() !== 'OPEN') return undefined;
+  switch (mergeable?.toUpperCase()) {
+    case 'MERGEABLE':
+      return 'mergeable';
+    case 'CONFLICTING':
+      return 'conflicting';
+    default:
+      // Includes a field GitHub omitted entirely: not being told is not being told.
+      return 'unknown';
+  }
+}
+
 /** Did a commit land AFTER the review? Unparseable or missing dates answer `false` — the
  *  conservative direction, since it keeps a review current rather than silently demoting one. */
 function pushedSince(headCommittedAt?: string | null, reviewedAt?: string | null): boolean {
@@ -1342,6 +1384,12 @@ export function deriveIssueReferenceStatus(issue: {
 export interface ResolvedReference {
   kind: 'pr' | 'issue';
   status: ReferenceStatus;
+  /** Where this pull request stands on the OTHER axis, or absent when the question does not
+   *  apply (an issue, a merged or closed PR). Deliberately not folded into `status`; see
+   *  `mergeabilityOf`, and `conflicts` in the contract. `unknown` is kept as a value rather than
+   *  collapsed into "not conflicting", because it is the difference between an answer and a
+   *  question GitHub has not finished answering. */
+  mergeable?: Mergeability;
 }
 
 /**
@@ -1395,6 +1443,7 @@ export async function fetchRefStatuses(
           if (!pr) return;
           const head = pr.commits?.nodes[0]?.commit;
           const rollup = head?.statusCheckRollup;
+          const mergeability = mergeabilityOf(pr.state, pr.mergeable);
           out.resolved[number] = {
             kind: 'pr',
             status: derivePrReferenceStatus({
@@ -1411,6 +1460,9 @@ export async function fetchRefStatuses(
               changesRequestedAt: pr.reviews?.nodes[0]?.submittedAt,
             reviewRequested: (pr.reviewRequests?.totalCount ?? 0) > 0,
             }),
+            // The tri-state, not a boolean: `unknown` has to survive as far as the cache, which
+            // is what decides to ask again in seconds rather than in a minute.
+            ...(mergeability ? { mergeable: mergeability } : {}),
           };
         } else if (node.__typename === 'Issue') {
           const issue = ghRefStatusIssueSchema.parse(node);
@@ -1432,7 +1484,14 @@ export async function fetchRefStatuses(
 // something the forge answers rather than something the caller asserts. Same 60 s TTL and bounded
 // shape as the checks cache; `null` is a cached "this repository has no such number", so a
 // transcript-scraped number from another repo is not re-queried on every table repaint.
-const refStatusCache = new Map<string, { at: number; resolved: ResolvedReference | null }>();
+//
+// `unknownSince` is when this reference FIRST came back with its mergeability still being
+// computed, carried across refreshes so the fast recheck below is bounded to that first window
+// rather than restarting on every answer that is still `unknown`.
+const refStatusCache = new Map<
+  string,
+  { at: number; resolved: ResolvedReference | null; unknownSince?: number }
+>();
 const REF_STATUS_CACHE_MAX = 500;
 
 /** Test-only: drop the per-reference cache so cases don't leak state into each other. */
@@ -1491,7 +1550,7 @@ export function readCachedRefStatuses(
   const now = Date.now();
   for (const number of new Set(numbers)) {
     const hit = refStatusCache.get(refStatusKey(repoRoot, number));
-    if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved)) continue;
+    if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) continue;
     out[hit.resolved.kind === 'pr' ? 'prs' : 'issues'][number] = hit.resolved.status;
   }
   return out;
@@ -1523,8 +1582,21 @@ const REF_STATUS_MERGED_TTL = 24 * 60 * 60_000;
  * A number the repository does not have keeps the short TTL: it is usually a wrong number, but it
  * is also what a reference to a not-yet-created PR looks like, and re-asking is cheap.
  */
-function refStatusTtl(entry: ResolvedReference | null): number {
+function refStatusTtl(entry: ResolvedReference | null, unknownSince?: number, now = Date.now()): number {
   if (!entry) return CACHE_MS;
+  // Mergeability GitHub has not finished computing is not an answer to cache for a minute. It is
+  // the normal reply for the first seconds after a push, and holding it that long is what let a
+  // conflicting pull request read "Ready to merge" until the page was reloaded. Ask again in
+  // seconds instead — and only while it is still plausibly being computed, so a repository that
+  // answers `UNKNOWN` indefinitely settles back to the ordinary cadence rather than spawning `gh`
+  // every few seconds forever.
+  if (
+    entry.mergeable === 'unknown' &&
+    unknownSince !== undefined &&
+    now - unknownSince < MERGEABILITY_UNKNOWN_WINDOW_MS
+  ) {
+    return MERGEABILITY_UNKNOWN_TTL_MS;
+  }
   switch (entry.status) {
     case 'merged':
       return REF_STATUS_MERGED_TTL;
@@ -1538,24 +1610,38 @@ function refStatusTtl(entry: ResolvedReference | null): number {
 }
 
 /** How long a status can be trusted to stay put — `null` when it can never change again. The
- *  cadence half of `refStatusTtl`, and deliberately the same table: a value the cache would still
- *  be serving is a value there is no point asking for. */
-function refStatusRecheckAfter(entry: ResolvedReference | null): number | null {
+ *  cadence half of `refStatusTtl`, and deliberately the same function: a value the cache would
+ *  still be serving is a value there is no point asking for, and a value it would NOT serve —
+ *  mergeability still being computed — is one the cockpit should come back for just as soon. */
+function refStatusRecheckAfter(entry: ResolvedReference | null, unknownSince?: number, now = Date.now()): number | null {
   if (entry?.status === 'merged') return null; // GitHub has no un-merge
-  return refStatusTtl(entry);
+  return refStatusTtl(entry, unknownSince, now);
 }
 
 /** How long the WHOLE answer holds — the soonest any single reference in it could differ. `null`
- *  only when every one of them is immutable, which is what tells the cockpit to stop scheduling. */
-function batchRecheckAfter(entries: (ResolvedReference | null)[]): number | null {
+ *  only when every one of them is immutable, which is what tells the cockpit to stop scheduling.
+ *  Taking the per-reference values rather than the entries, because one of them may be on the fast
+ *  mergeability cadence and the batch has to travel at the speed of its most impatient member. */
+function batchRecheckAfter(rechecks: (number | null)[]): number | null {
   let soonest: number | null = null;
-  for (const entry of entries) {
-    const after = refStatusRecheckAfter(entry);
+  for (const after of rechecks) {
     if (after === null) continue;
     soonest = soonest === null ? after : Math.min(soonest, after);
   }
   return soonest;
 }
+
+/**
+ * How long a still-computing mergeability holds, and for how long that fast cadence applies.
+ *
+ * Five seconds because that is the shape of the thing being waited for: GitHub kicks off the
+ * merge-base computation when asked and usually has it by the next request. Bounded to a minute
+ * because a value that is STILL unknown after that is not a computation in flight any more — it is
+ * a repository that will not answer, and re-asking it every five seconds forever costs a `gh`
+ * subprocess a second for nothing.
+ */
+const MERGEABILITY_UNKNOWN_TTL_MS = 5_000;
+const MERGEABILITY_UNKNOWN_WINDOW_MS = 60_000;
 
 /** A forge that could not be reached is worth retrying, and worth not hammering: a workspace with
  *  no `gh` installed would otherwise spawn a subprocess a minute, forever, to be told the same
@@ -1647,21 +1733,34 @@ export async function fetchGithubRefStatus(
   const wanted = [...new Set([...asPrs, ...asIssues])];
 
   const resolved = { prs: {} as Record<number, ReferenceStatus>, issues: {} as Record<number, ReferenceStatus> };
-  // Every reference in the answer, resolved or not — what the recheck cadence is computed from.
-  const entries: (ResolvedReference | null)[] = [];
-  const file = (number: number, entry: ResolvedReference | null) => {
-    entries.push(entry);
-    if (entry) resolved[entry.kind === 'pr' ? 'prs' : 'issues'][number] = entry.status;
+  // How soon each reference in the answer could differ — what the batch's cadence is the minimum
+  // of. Per reference rather than per batch because mergeability still being computed is worth
+  // coming back for in seconds while everything else holds for a minute.
+  const rechecks: (number | null)[] = [];
+  // The second axis, and a list rather than a map because it is nearly always empty: only the
+  // pull requests the forge actively called CONFLICTING are named (see `mergeabilityOf`).
+  const conflicts: number[] = [];
+  const file = (number: number, entry: ResolvedReference | null, unknownSince?: number) => {
+    rechecks.push(refStatusRecheckAfter(entry, unknownSince));
+    if (!entry) return;
+    resolved[entry.kind === 'pr' ? 'prs' : 'issues'][number] = entry.status;
+    if (entry.mergeable === 'conflicting') conflicts.push(number);
   };
   const misses: number[] = [];
   const now = Date.now();
   for (const n of wanted) {
     const hit = refStatusCache.get(refStatusKey(repoRoot, n));
-    if (!hit || now - hit.at >= refStatusTtl(hit.resolved)) misses.push(n);
-    else file(n, hit.resolved);
+    if (!hit || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) misses.push(n);
+    else file(n, hit.resolved, hit.unknownSince);
   }
   if (misses.length === 0) {
-    return { available: true, prs: resolved.prs, issues: resolved.issues, recheckAfterMs: batchRecheckAfter(entries) };
+    return {
+      available: true,
+      prs: resolved.prs,
+      issues: resolved.issues,
+      conflicts,
+      recheckAfterMs: batchRecheckAfter(rechecks),
+    };
   }
   try {
     const ownerName = await resolveRepoHandleStrict(repoRoot);
@@ -1679,8 +1778,19 @@ export async function fetchGithubRefStatus(
       // no such number" for a minute on the strength of a network blip.
       if (failed.has(n)) continue;
       const entry = batch.resolved[n] ?? null;
-      file(n, entry);
-      refStatusCache.set(refStatusKey(repoRoot, n), { at: storedAt, resolved: entry });
+      // Kept from the previous answer, not restarted: the fast cadence is bounded from when this
+      // reference FIRST came back still-computing, so a forge that never resolves it cannot hold
+      // the batch on a five-second poll indefinitely.
+      const unknownSince =
+        entry?.mergeable === 'unknown'
+          ? (refStatusCache.get(refStatusKey(repoRoot, n))?.unknownSince ?? storedAt)
+          : undefined;
+      file(n, entry, unknownSince);
+      refStatusCache.set(refStatusKey(repoRoot, n), {
+        at: storedAt,
+        resolved: entry,
+        ...(unknownSince === undefined ? {} : { unknownSince }),
+      });
     }
     while (refStatusCache.size > REF_STATUS_CACHE_MAX) {
       const oldest = refStatusCache.keys().next().value;
@@ -1699,7 +1809,13 @@ export async function fetchGithubRefStatus(
         recheckAfterMs: REF_STATUS_RETRY_MS,
       };
     }
-    return { available: true, prs: resolved.prs, issues: resolved.issues, recheckAfterMs: batchRecheckAfter(entries) };
+    return {
+      available: true,
+      prs: resolved.prs,
+      issues: resolved.issues,
+      conflicts,
+      recheckAfterMs: batchRecheckAfter(rechecks),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {

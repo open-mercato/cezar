@@ -79,13 +79,13 @@ function renderChip(requests: readonly ReferenceStatusRequest[] = REQUESTS) {
 
 const chip = () => document.querySelector('[data-slot="pr-chip"]')!
 
-/** Opens the tooltip (focus is the one trigger every input method shares) and returns its text
- *  once it has said something. Focus is idempotent, so calling this twice is safe. */
+/** Opens the hover panel (focus is the one trigger every input method shares) and returns its
+ *  text once it has said something. Focus is idempotent, so calling this twice is safe. */
 async function tooltipText(): Promise<string> {
   fireEvent.focus(screen.getByRole('link'))
   const content = await waitFor(() => {
-    const node = screen.getAllByRole('tooltip')[0]
-    if (!node?.textContent) throw new Error('tooltip not open yet')
+    const node = document.querySelector('[data-slot="reference-status-card"]')
+    if (!node?.textContent) throw new Error('panel not open yet')
     return node
   })
   return content.textContent ?? ''
@@ -159,6 +159,71 @@ describe('a chip under a ReferenceStatusProvider', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="pr-chip"]')).not.toBeNull())
     expect(chip().getAttribute('data-status')).toBe('ready')
     await waitFor(async () => expect(await tooltipText()).toContain('last known'))
+  })
+})
+
+describe('the conflict axis, from the wire to the chip', () => {
+  it('paints the conflict over the status the same answer carried', async () => {
+    // The reported case, end to end: green and unmergeable at once. `ready` is still what the
+    // server said and stays on the element; what changes is the colour the chip is scanned by.
+    answers = [{ available: true, prs: { 774: 'ready' }, issues: {}, conflicts: [774] }]
+    renderChip()
+
+    await waitFor(() => expect(chip().getAttribute('data-conflicting')).toBe('true'))
+    expect(chip().getAttribute('data-status')).toBe('ready')
+    expect(chip().className).toContain('text-conflict')
+  })
+
+  it('reads an absent `conflicts` as nothing known, not as "merges cleanly"', async () => {
+    // What a server from before the field answers. The chip must look exactly as it did then.
+    answers = [{ available: true, prs: { 774: 'ready' }, issues: {} }]
+    renderChip()
+
+    await waitFor(() => expect(chip().getAttribute('data-status')).toBe('ready'))
+    expect(chip().getAttribute('data-conflicting')).toBeNull()
+  })
+
+  it('drops the conflict the moment the forge stops listing it', async () => {
+    // Resolved conflicts are the common exit from this state, and a remembered flag that only ever
+    // switched ON would leave the chip orange until the tab was closed.
+    answers = [
+      { available: true, prs: { 774: 'ready' }, issues: {}, conflicts: [774] },
+      { available: true, prs: { 774: 'ready' }, issues: {}, conflicts: [] },
+    ]
+    const { rerender } = renderChip()
+    await waitFor(() => expect(chip().getAttribute('data-conflicting')).toBe('true'))
+
+    // A second surface asks about a wider set — a fresh key, a fresh answer, the same PR.
+    rerender(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceStatusProvider projectId="api" requests={[...REQUESTS, { projectId: 'api', kind: 'Issue', number: 1 }]}>
+          <ReferenceChip reference={PR} taskTitle="Add checkout" />
+        </ReferenceStatusProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(() => expect(chip().getAttribute('data-conflicting')).toBeNull())
+    expect(chip().getAttribute('data-status')).toBe('ready')
+  })
+
+  it('keeps the conflict while the forge is unreachable, exactly as it keeps the status', async () => {
+    answers = [
+      { available: true, prs: { 774: 'ready' }, issues: {}, conflicts: [774] },
+      { available: false, reason: 'gh CLI not found' },
+    ]
+    const { rerender } = renderChip()
+    await waitFor(() => expect(chip().getAttribute('data-conflicting')).toBe('true'))
+
+    rerender(
+      <QueryClientProvider client={createQueryClient()}>
+        <ReferenceStatusProvider projectId="api" requests={[...REQUESTS, { projectId: 'api', kind: 'Issue', number: 1 }]}>
+          <ReferenceChip reference={PR} taskTitle="Add checkout" />
+        </ReferenceStatusProvider>
+      </QueryClientProvider>,
+    )
+
+    await waitFor(async () => expect(await tooltipText()).toContain('last known'))
+    expect(chip().getAttribute('data-conflicting')).toBe('true')
   })
 })
 

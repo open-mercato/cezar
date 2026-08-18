@@ -9,15 +9,18 @@ import {
   GitPullRequestDraftIcon,
   GitPullRequestIcon,
   MessageSquareWarningIcon,
+  TriangleAlertIcon,
   type LucideIcon,
 } from 'lucide-react'
+import { createContext, useCallback, useContext, useState, type ReactNode } from 'react'
 import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
 
 import { useReferenceStatus } from '@/components/reference-status'
 import type { ReferenceStatusEntry } from '@/api/queries'
 import { StatusDot } from '@/components/status-dot'
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
+import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card'
 import {
+  REFERENCE_CONFLICT,
   referenceStatusPresentation,
   type ReferenceStatusPresentation,
   type ReferenceStatusTone,
@@ -37,6 +40,9 @@ const TONE_CLASS: Record<ReferenceStatusTone, string> = {
   // as neutral at a glance. `text-pending-strong`, not `text-pending` — the dot's amber-400 is a
   // fill colour and fails contrast as ink on the light theme, so the ink token darkens per theme.
   pending: 'border-pending-strong/45 text-pending-strong',
+  // Orange, and its own token: this is the mergeability axis, not a shade of failure. See
+  // `REFERENCE_CONFLICT`.
+  conflict: 'border-conflict/45 text-conflict',
 }
 
 /** The hover wash, per tone — a LINK chip only; the inert one has nothing to hover into. It
@@ -49,6 +55,7 @@ const TONE_HOVER: Record<ReferenceStatusTone, string> = {
   info: 'hover:bg-info/10',
   neutral: 'hover:bg-muted',
   pending: 'hover:bg-pending-strong/10',
+  conflict: 'hover:bg-conflict/10',
 }
 
 /** One glyph per status, borrowed from the vocabulary GitHub itself uses, so the icon is legible
@@ -83,6 +90,8 @@ export function ReferenceChip({
   reference,
   taskTitle,
   status: explicitStatus,
+  conflicting: explicitConflicting,
+  conflictAction,
   projectId,
   className,
   compact = false,
@@ -92,6 +101,14 @@ export function ReferenceChip({
   /** Absent = nothing known (not fetched, forge unreachable, number not found) — NOT "fine".
    *  Normally left unset: the chip reads its own status from `ReferenceStatusProvider`. */
   status?: ReferenceStatus
+  /** The mergeability axis, same escape hatch as `status` and the same rule: absent means nothing
+   *  is known, never "merges cleanly". Only `true` paints. */
+  conflicting?: boolean
+  /** What to offer the user about a conflict — rendered INSIDE the panel, and only when this
+   *  chip is conflicting, so it is mounted only while the panel is open. Passed by the surfaces
+   *  that have something to offer (the task page and the tasks tables, which can send the agent
+   *  a prompt); everywhere else the panel stays a plain tooltip. */
+  conflictAction?: ReactNode
   /** Only the global Tasks page needs this: its rows come from different projects, and two of
    *  them may each have a #42. Elsewhere the provider's own project is right. */
   projectId?: string
@@ -118,13 +135,21 @@ export function ReferenceChip({
   // That is what the vocabulary being ADDITIVE means in practice (BACKWARD_COMPATIBILITY.md):
   // a value added server-side after this bundle shipped, or restored from a `sessionStorage`
   // payload a newer bundle wrote, must not be able to take a table down.
-  const presentation = referenceStatusPresentation(status)
+  const statusPresentation = referenceStatusPresentation(status)
+  // The second axis, and it takes the chip over when it is true. A pull request that will not
+  // merge is the thing to say about it first — `ready` next to a PR GitHub is refusing is the
+  // exact reading this fixes — and it is only ever a PR: an issue has no base branch. `true`
+  // alone paints; `undefined` (never asked, unreachable, a server from before the field) means
+  // nothing is known, and nothing known must never colour a chip.
+  const conflicting = kind === 'PR' && (explicitConflicting ?? entry.conflicting) === true
+  const presentation = conflicting ? REFERENCE_CONFLICT : statusPresentation
   const chipClass = cn(
     'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-[11px] font-semibold',
     TONE_CLASS[presentation?.tone ?? 'violet'],
     className,
   )
-  const tooltip = statusTooltip(entry, presentation)
+  // The overridden status rides along into the tooltip whenever the conflict took the chip.
+  const tooltip = statusTooltip(entry, presentation, conflicting ? statusPresentation : undefined)
   const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind
   const kindWord = kind === 'PR' ? 'pull request' : 'issue'
   // The accessible name carries the status too — a screen reader gets what the color says.
@@ -133,8 +158,14 @@ export function ReferenceChip({
   const body = (
     <>
       {/* `presentation ? status : undefined` — one gate for every status channel, so an unknown
-          value cannot paint a glyph either. */}
-      <StatusGlyph status={presentation ? status : undefined} />
+          value cannot paint a glyph either. The conflict overrides the glyph as it overrides the
+          colour, including `checks-pending`'s pulsing dot: a branch that will not merge is not a
+          state that is still moving. */}
+      {conflicting ? (
+        <TriangleAlertIcon className="size-2.5 shrink-0" aria-hidden="true" />
+      ) : (
+        <StatusGlyph status={presentation ? status : undefined} />
+      )}
       {label}
     </>
   )
@@ -144,7 +175,11 @@ export function ReferenceChip({
     !url || !isHttpUrl(url) ? (
       <span
         data-slot={kind === 'PR' ? 'pr-chip' : 'issue-chip'}
+        // The STATUS stays here even when the conflict has taken the paint: it is still what the
+        // forge answered, and a test or a stylesheet keying off it must not lose it because a
+        // second axis turned true. What the conflict adds is its own attribute.
         data-status={status}
+        {...(conflicting ? { 'data-conflicting': 'true' } : {})}
         aria-label={presentation ? `${kindWord} ${label} — ${presentation.label}` : undefined}
         className={chipClass}
       >
@@ -154,11 +189,12 @@ export function ReferenceChip({
       <a
         data-slot={kind === 'PR' ? 'pr-chip' : 'issue-chip'}
         data-status={status}
+        {...(conflicting ? { 'data-conflicting': 'true' } : {})}
         href={url}
         target="_blank"
         rel="noopener noreferrer"
-        // The native `title` is the URL only while there is no richer tooltip to show. Once the
-        // Radix tooltip below owns the hover it carries the URL itself, and two tooltips on one
+        // The native `title` is the URL only while there is no richer panel to show. Once the
+        // hover card below owns the hover it carries the URL itself, and two tooltips on one
         // element is a browser popup fighting a designed one.
         title={tooltip ? undefined : url}
         aria-label={ariaLabel}
@@ -170,28 +206,100 @@ export function ReferenceChip({
     )
 
   if (!tooltip) return chip
+
+  const panel = (
+    <>
+      <span className="block font-medium">
+        {kind === 'PR' ? 'Pull request' : 'Issue'}
+        {number ? ` #${number}` : ''} · {tooltip.headline}
+      </span>
+      <span className="block">{tooltip.detail}</span>
+      {/* The status the conflict painted over. It is still true — a conflicting PR can also be
+          green and approved — and burying it would trade one hidden fact for another. */}
+      {tooltip.also ? <span className="block opacity-70">{tooltip.also}</span> : null}
+      {/* The URL the native `title` used to carry. Worth keeping: a reference can name a
+          DIFFERENT repository than the project on screen (#526), and the host is the only
+          thing that says so. */}
+      {url && isHttpUrl(url) ? (
+        <span className="block opacity-70">{url.replace(/^https?:\/\//, '')}</span>
+      ) : null}
+    </>
+  )
+
+  // ONE panel, for every chip on every surface. It was a tooltip until a conflict needed a button
+  // in it, and then briefly both — which is how the same `#5196` came to behave differently
+  // depending on which page you were looking at and what GitHub happened to say about it. A hover
+  // card opens on the same hover and the same focus a tooltip did, and the only difference the
+  // user can find is that this one can be reached into when there is something in it to press.
   return (
-    // Its own provider: this chip renders in the sidebar and the run header as well as inside the
-    // task tables, and only the tables happen to sit under a `TooltipProvider`. Nesting providers
-    // is legal and free; depending on an ancestor that three of four surfaces do not have is not.
-    <TooltipProvider delayDuration={150}>
-      <Tooltip>
-        <TooltipTrigger asChild>{chip}</TooltipTrigger>
-        <TooltipContent side="top" data-slot="reference-status-tooltip" data-tooltip-state={entry.state}>
-          <span className="block font-medium">
-            {kind === 'PR' ? 'Pull request' : 'Issue'}
-            {number ? ` #${number}` : ''} · {tooltip.headline}
-          </span>
-          <span className="block">{tooltip.detail}</span>
-          {/* The URL the native `title` used to carry. Worth keeping: a reference can name a
-              DIFFERENT repository than the project on screen (#526), and the host is the only
-              thing that says so. */}
-          {url && isHttpUrl(url) ? (
-            <span className="block opacity-70">{url.replace(/^https?:\/\//, '')}</span>
-          ) : null}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
+    <ReferenceChipCard
+      chip={chip}
+      action={conflicting ? conflictAction : undefined}
+      state={entry.state}
+    >
+      {panel}
+    </ReferenceChipCard>
+  )
+}
+
+/**
+ * The chip stays a chip.
+ *
+ * It is rendered by four surfaces that know four different things about what they are painting,
+ * and only the ones holding a run record know there is a conversation to send a prompt into.
+ * Teaching this component about that would put a mutation in the sidebar's import graph to serve
+ * two callers — so what it takes is a NODE, rendered inside the panel, and it never learns what
+ * is in it.
+ *
+ * A node rather than a `{label, onSelect}` object for a second reason that turned out to matter
+ * more: the panel only exists while it is open, so a node is only ever mounted then. An object
+ * would have had to be BUILT on every render of every row — and building it means calling the
+ * delivery hooks, which is a react-query client the tasks table does not otherwise need and, on a
+ * hundred-row list, a hundred idle mutations to paint chips nobody has hovered.
+ *
+ * `useCloseReferenceCard` is how that node dismisses the panel it lives in once its work is done.
+ */
+const ReferenceCardCloseContext = createContext<() => void>(() => {})
+
+/** Shuts the panel this node is rendered in. A no-op anywhere else, so an action component is
+ *  still renderable on its own (a test, a story) without a card around it. */
+export function useCloseReferenceCard(): () => void {
+  return useContext(ReferenceCardCloseContext)
+}
+
+/** The interactive panel — everything the tooltip says, plus the one thing it cannot hold. */
+function ReferenceChipCard({
+  chip,
+  action,
+  state,
+  children,
+}: {
+  chip: ReactNode
+  /** Absent on almost every chip — the panel is then exactly the label it always was, just in the
+   *  one surface the cockpit now uses for all of them. */
+  action?: ReactNode
+  state: ReferenceStatusEntry['state']
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(false)
+  // Identity-stable, so the node inside does not re-render for a new closure each time.
+  const close = useCallback(() => setOpen(false), [])
+
+  return (
+    <HoverCard open={open} onOpenChange={setOpen}>
+      <HoverCardTrigger asChild>{chip}</HoverCardTrigger>
+      <HoverCardContent
+        side="top"
+        data-slot="reference-status-card"
+        data-tooltip-state={state}
+        className="space-y-2 text-xs"
+      >
+        <div className="space-y-0.5">{children}</div>
+        {action ? (
+          <ReferenceCardCloseContext.Provider value={close}>{action}</ReferenceCardCloseContext.Provider>
+        ) : null}
+      </HoverCardContent>
+    </HoverCard>
   )
 }
 
@@ -207,19 +315,29 @@ export function ReferenceChip({
  * Takes the PRESENTATION rather than the status, so a value this bundle cannot describe falls
  * through to the state below instead of being described wrongly — or, on a `ready` state, to the
  * plain URL tooltip, which is precisely the pre-status chip.
+ *
+ * `overridden` is the status a conflict took the chip away from, and it comes back as a third
+ * line: the two axes are both true at once, and the tooltip is where the one that lost the colour
+ * still gets said.
  */
 function statusTooltip(
   entry: ReferenceStatusEntry,
   presentation: ReferenceStatusPresentation | undefined,
-): { headline: string; detail: string } | null {
+  overridden?: ReferenceStatusPresentation,
+): { headline: string; detail: string; also?: string } | null {
   if (presentation) {
     const { label, hint } = presentation
+    const also = overridden ? `also ${lowerFirst(overridden.label)} — ${overridden.hint}` : undefined
     // A remembered status while the forge is down is still the best answer there is — but it is
     // dated, and saying so is the difference between trusted and merely confident.
     if (entry.state === 'unavailable') {
-      return { headline: label, detail: `last known — GitHub is unreachable${entry.reason ? ` (${entry.reason})` : ''}` }
+      return {
+        headline: label,
+        detail: `last known — GitHub is unreachable${entry.reason ? ` (${entry.reason})` : ''}`,
+        ...(also ? { also } : {}),
+      }
     }
-    return { headline: label, detail: hint }
+    return { headline: label, detail: hint, ...(also ? { also } : {}) }
   }
   switch (entry.state) {
     case 'loading':
@@ -237,6 +355,12 @@ function statusTooltip(
     default:
       return null
   }
+}
+
+/** `Ready to merge` → `ready to merge`, so it reads as the clause it now is. Only the first
+ *  character, so an acronym a future label opens with keeps its case. */
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1)
 }
 
 /** The status channel that is not color: an icon, or — for checks still running — the pulsing dot

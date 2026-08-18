@@ -1823,6 +1823,9 @@ describe('fetchRefStatuses', () => {
   const prNode = (over: Record<string, unknown> = {}) => ({
     __typename: 'PullRequest',
     state: 'OPEN',
+    // What GitHub answers for a settled open PR. Defaulted so the cases below stay about
+    // STATUSES; the mergeability cases override it, and one of them omits it on purpose.
+    mergeable: 'MERGEABLE',
     isDraft: false,
     reviewDecision: null,
     commits: { nodes: [{ commit: { committedDate: '2026-08-11T12:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }] },
@@ -1849,7 +1852,7 @@ describe('fetchRefStatuses', () => {
     const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 12, 3]);
     expect(runGraphql).toHaveBeenCalledTimes(1);
     expect(sent).toContain('issueOrPullRequest');
-    expect(out[7]).toEqual({ kind: 'pr', status: 'ready' });
+    expect(out[7]).toEqual({ kind: 'pr', status: 'ready', mergeable: 'mergeable' });
     expect(out[12]).toEqual({ kind: 'pr', status: 'merged' });
     expect(out[3]).toEqual({ kind: 'issue', status: 'not-planned' });
   });
@@ -1947,6 +1950,61 @@ describe('fetchRefStatuses', () => {
     expect(await fetchRefStatuses(runGraphql, 'o', 'n', [])).toEqual({ resolved: {}, failed: [] });
     expect(runGraphql).not.toHaveBeenCalled();
   });
+
+  it('carries mergeability as its OWN axis, on the same query and without touching the status', async () => {
+    // The reported case: green, nobody waited on, and GitHub refusing to merge it. `ready` is
+    // still the honest answer to "whose move is it on the review" — the conflict is the second
+    // fact, and it rides the same aliased node, so it costs no extra request.
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({ r0: prNode({ mergeable: 'CONFLICTING' }) });
+    });
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7]);
+
+    expect(runGraphql).toHaveBeenCalledTimes(1);
+    expect(sent).toContain('mergeable');
+    expect(out[7]).toEqual({ kind: 'pr', status: 'ready', mergeable: 'conflicting' });
+  });
+
+  it('keeps "still computing" apart from "merges cleanly" instead of collapsing both to false', async () => {
+    // `UNKNOWN` is what GitHub answers while it computes — seconds after every push — so treating
+    // it as a conflict would flash an orange chip on half the pushes in the repo. Treating it as
+    // CLEAN is the bug this axis was reported for a second time: it is not an answer, and it has
+    // to survive as far as the cache, which asks again in seconds rather than in a minute.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({ mergeable: 'UNKNOWN' }),
+        r1: prNode({ mergeable: 'MERGEABLE' }),
+        r2: prNode({ mergeable: null }),
+        // The field omitted entirely — `prNode` defaults it, so this strips it back off.
+        r3: { ...prNode(), mergeable: undefined },
+      }),
+    );
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 8, 9, 10]);
+
+    expect(out[7]?.mergeable).toBe('unknown');
+    expect(out[8]?.mergeable).toBe('mergeable');
+    // A field GitHub omitted, or nulled, is not a statement that the branch is clean.
+    expect(out[9]?.mergeable).toBe('unknown');
+    expect(out[10]?.mergeable).toBe('unknown');
+  });
+
+  it('never calls a merged or closed pull request conflicting', async () => {
+    // GitHub reports UNKNOWN on a terminal PR, but a stale CONFLICTING would be worse than
+    // useless: there is nothing left to resolve, and the chip would contradict `merged`.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({ state: 'MERGED', mergeable: 'CONFLICTING' }),
+        r1: prNode({ state: 'CLOSED', mergeable: 'CONFLICTING' }),
+      }),
+    );
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 8]);
+
+    // No `mergeable` at all — the question does not apply, which is not the same as answering it.
+    expect(out[7]).toEqual({ kind: 'pr', status: 'merged' });
+    expect(out[8]).toEqual({ kind: 'pr', status: 'closed' });
+  });
 });
 
 /** The route-facing wrapper: one repo-handle lookup, then one batched query for the misses, and
@@ -1981,6 +2039,48 @@ describe('fetchGithubRefStatus', () => {
     const second = await fetchGithubRefStatus('/repo/ref-status-cache', { prs: [7] });
     expect(second.available && second.prs[7]).toBe('merged');
     expect(execFileMock.mock.calls.length).toBe(calls); // nothing spawned the second time
+  });
+
+  it('names the conflicting pull requests beside the statuses, and only those', async () => {
+    // Both axes in one answer: #7 is `ready` AND unmergeable, #8 is merely ready. `conflicts` is
+    // a list rather than a map because the empty case is the normal one.
+    stubGh(
+      JSON.stringify({
+        data: {
+          repository: {
+            r0: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, mergeable: 'CONFLICTING', commits: { nodes: [] } },
+            r1: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, mergeable: 'MERGEABLE', commits: { nodes: [] } },
+          },
+        },
+      }),
+    );
+    const out = await fetchGithubRefStatus('/repo/ref-status-conflicts', { prs: [7, 8] });
+
+    expect(out.available).toBe(true);
+    if (!out.available) throw new Error('expected available');
+    expect(out.prs[7]).toBe('ready');
+    expect(out.prs[8]).toBe('ready');
+    expect(out.conflicts).toEqual([7]);
+  });
+
+  it('remembers the conflict alongside the status, so a cached answer still carries both', async () => {
+    // The cache stores the resolved reference, not the payload — a second read that spawns
+    // nothing must not quietly lose the axis the first one learned.
+    stubGh(
+      JSON.stringify({
+        data: {
+          repository: {
+            r0: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, mergeable: 'CONFLICTING', commits: { nodes: [] } },
+          },
+        },
+      }),
+    );
+    await fetchGithubRefStatus('/repo/ref-status-conflict-cache', { prs: [7] });
+    const calls = execFileMock.mock.calls.length;
+    const cached = await fetchGithubRefStatus('/repo/ref-status-conflict-cache', { prs: [7] });
+
+    expect(execFileMock.mock.calls.length).toBe(calls);
+    expect(cached.available && cached.conflicts).toEqual([7]);
   });
 
   it('keeps every good alias when gh exits non-zero on a PARTIAL failure', async () => {
@@ -2046,6 +2146,7 @@ describe('fetchGithubRefStatus', () => {
               state,
               isDraft: false,
               reviewDecision: null,
+              mergeable: 'MERGEABLE',
               commits: { nodes: [{ commit: { committedDate: '2026-08-11T12:00:00Z', statusCheckRollup: rollup ? { state: rollup } : null } }] },
               reviews: { nodes: [] },
             },
@@ -2083,6 +2184,7 @@ describe('fetchGithubRefStatus', () => {
               state,
               isDraft: false,
               reviewDecision: null,
+              mergeable: 'MERGEABLE',
               commits: { nodes: [{ commit: { committedDate: '2026-08-11T12:00:00Z', statusCheckRollup: rollup ? { state: rollup } : null } }] },
               reviews: { nodes: [] },
             },
@@ -2112,7 +2214,7 @@ describe('fetchGithubRefStatus', () => {
         data: {
           repository: {
             r0: { __typename: 'PullRequest', state: 'MERGED', isDraft: false, reviewDecision: null, commits: { nodes: [] }, reviews: { nodes: [] } },
-            r1: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] }, reviews: { nodes: [] } },
+            r1: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, mergeable: 'MERGEABLE', commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] }, reviews: { nodes: [] } },
           },
         },
       }),
@@ -2120,6 +2222,71 @@ describe('fetchGithubRefStatus', () => {
     return fetchGithubRefStatus('/repo/recheck-mixed', { prs: [7, 8] }).then((out) => {
       expect(out.recheckAfterMs).toBe(60_000);
     });
+  });
+
+  // The reported regression, and the reason mergeability is a tri-state rather than a boolean:
+  // GitHub COMPUTES it when asked and answers `UNKNOWN` while the job runs, which is the normal
+  // reply for the first seconds after every push. Cached as an answer for the usual minute, that
+  // is a conflicting pull request wearing "Ready to merge" until the page is reloaded.
+  const unknownMergeability = (mergeable: string | null) =>
+    JSON.stringify({
+      data: {
+        repository: {
+          r0: {
+            __typename: 'PullRequest',
+            state: 'OPEN',
+            isDraft: false,
+            reviewDecision: null,
+            mergeable,
+            commits: { nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS' } } }] },
+            reviews: { nodes: [] },
+          },
+        },
+      },
+    })
+
+  it('comes back in seconds while GitHub is still computing mergeability, not in a minute', async () => {
+    stubGh(unknownMergeability('UNKNOWN'));
+    const out = await fetchGithubRefStatus('/repo/mergeability-unknown', { prs: [7] });
+
+    expect(out.available).toBe(true);
+    if (!out.available) throw new Error('expected available');
+    // The status itself is settled and would hold for a minute; the OTHER axis is what is still
+    // moving, and the batch travels at the speed of its most impatient member.
+    expect(out.prs[7]).toBe('ready');
+    expect(out.conflicts).toEqual([]);
+    expect(out.recheckAfterMs).toBe(5_000);
+  });
+
+  it('and does not cache that non-answer for the usual minute either', async () => {
+    stubGh(unknownMergeability('UNKNOWN'));
+    await fetchGithubRefStatus('/repo/mergeability-recheck', { prs: [7] });
+    const calls = execFileMock.mock.calls.length;
+
+    // Six seconds later the computation has landed. The cache must not still be serving the
+    // shrug — this is the read that used to answer "no conflicts" for another 54 seconds.
+    vi.advanceTimersByTime(6_000);
+    stubGh(unknownMergeability('CONFLICTING'));
+    const second = await fetchGithubRefStatus('/repo/mergeability-recheck', { prs: [7] });
+
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(calls);
+    expect(second.available && second.conflicts).toEqual([7]);
+    // Answered now, so back to the ordinary cadence.
+    expect(second.available && second.recheckAfterMs).toBe(60_000);
+  });
+
+  it('gives up the fast cadence for a forge that never answers, instead of polling forever', async () => {
+    // A five-second poll that outlives the computation it was waiting for is a `gh` subprocess
+    // every five seconds, indefinitely, for a repository that is simply never going to say.
+    stubGh(unknownMergeability('UNKNOWN'));
+    await fetchGithubRefStatus('/repo/mergeability-stuck', { prs: [7] });
+
+    // Past the window, still unknown: the impatience is measured from the FIRST such answer, so
+    // it cannot be renewed by the answers that kept it going.
+    vi.advanceTimersByTime(61_000);
+    const later = await fetchGithubRefStatus('/repo/mergeability-stuck', { prs: [7] });
+
+    expect(later.available && later.recheckAfterMs).toBe(60_000);
   });
 
   it('asks the cockpit to back off rather than hammer a forge that is not there', async () => {
