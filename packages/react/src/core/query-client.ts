@@ -16,10 +16,8 @@ export function createCezarQueryClient(): QueryClient {
         refetchOnWindowFocus: false,
         refetchOnReconnect: false,
         retry: (failureCount, error) => {
-          if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
-            return false
-          }
-          return failureCount < 1
+          if (failureCount >= 1 || !(error instanceof ApiError)) return false
+          return error.status === 0 || error.status >= 500
         },
       },
       mutations: {

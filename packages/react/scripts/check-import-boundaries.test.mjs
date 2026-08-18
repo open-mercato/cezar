@@ -48,6 +48,35 @@ describe('import boundary check', () => {
     ])
   })
 
+  it('does not let import.meta or import/export property names hide later imports', async () => {
+    const prohibited = await findProhibitedSpecifiers(`
+      const moduleUrl = import.meta.url
+      import 'node:fs'
+      const importer = loader.import
+      import('node:path')
+      const exported = loader.export
+      export type { Secret } from '@open-mercato/cezar-contract'
+    `)
+
+    expect(prohibited).toEqual([
+      'node:fs',
+      'node:path',
+      '@open-mercato/cezar-contract',
+    ])
+  })
+
+  it('ignores harmless import/export property syntax in semicolonless TSX', async () => {
+    const prohibited = await findProhibitedSpecifiers(`
+      const moduleUrl = import.meta.url
+      const importer = loader.import
+      const exported = loader.export
+      const record = { import: 'safe', export: 'safe' }
+      const view = <section data-import="safe">safe</section>
+    `)
+
+    expect(prohibited).toEqual([])
+  })
+
   it('keeps shared runtime dependencies external to the library bundle', () => {
     expect(isReactPackageExternal('@open-mercato/cezar-api-client')).toBe(true)
     expect(isReactPackageExternal('@tanstack/react-query')).toBe(true)

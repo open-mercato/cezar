@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { StrictMode, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -209,7 +209,7 @@ describe('CezarProvider roots and runtime', () => {
 })
 
 describe('query runtime boundaries', () => {
-  it('uses the stable cache namespace and the prescribed query defaults', () => {
+  it('uses the stable cache namespace and retries only explicit network and server failures once', () => {
     const client = fakeCezarClient('identity')
     expect(cezarQueryKey(client, null, 'runs', 'list')).toEqual([
       'cezar', 'identity', 'boot', 'runs', 'list',
@@ -227,11 +227,16 @@ describe('query runtime boundaries', () => {
     expect(mutations?.retry).toBe(false)
     expect(typeof retry).toBe('function')
     if (typeof retry === 'function') {
+      expect(retry(0, new ApiError(0, '/runs', 'cannot reach server'))).toBe(true)
+      expect(retry(1, new ApiError(0, '/runs', 'cannot reach server'))).toBe(false)
+      expect(retry(0, new ApiError(200, '/runs', 'unexpected response body'))).toBe(false)
+      expect(retry(0, new ApiError(302, '/runs', 'unexpected redirect'))).toBe(false)
       expect(retry(0, new ApiError(404, '/runs', 'not found'))).toBe(false)
       expect(retry(0, new ApiError(500, '/runs', 'failed'))).toBe(true)
       expect(retry(1, new ApiError(500, '/runs', 'failed'))).toBe(false)
-      expect(retry(0, new TypeError('network failed'))).toBe(true)
-      expect(retry(1, new TypeError('network failed'))).toBe(false)
+      expect(retry(0, new DOMException('cancelled', 'AbortError'))).toBe(false)
+      expect(retry(0, new TypeError('Cannot read properties of undefined'))).toBe(false)
+      expect(retry(0, new Error('programming failure'))).toBe(false)
     }
   })
 
@@ -288,6 +293,37 @@ describe('query runtime boundaries', () => {
     const ownedClear = vi.spyOn(owned, 'clear')
     ownedView.unmount()
     await waitFor(() => expect(ownedClear).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps one live owned cache and error subscription through StrictMode replay', async () => {
+    const client = fakeCezarClient('strict')
+    const onError = vi.fn()
+    let runtime: CezarRuntime | undefined
+    const view = render(
+      <StrictMode>
+        <CezarProvider client={client} projectId="project-a" onError={onError}>
+          <RuntimeProbe capture={(value) => { runtime = value }} />
+        </CezarProvider>
+      </StrictMode>,
+    )
+    if (!runtime) throw new Error('runtime was not captured')
+
+    runtime.queryClient.setQueryData(['live-after-replay'], 'preserved')
+    await act(async () => Promise.resolve())
+    expect(runtime.queryClient.getQueryData(['live-after-replay'])).toBe('preserved')
+
+    const error = new ApiError(500, '/runs', 'failed')
+    await runtime.queryClient.fetchQuery({
+      queryKey: cezarQueryKey(client, 'project-a', 'runs'),
+      queryFn: () => Promise.reject(error),
+      retry: false,
+    }).catch(() => undefined)
+    await waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
+    expect(onError).toHaveBeenCalledWith(error)
+
+    const clear = vi.spyOn(runtime.queryClient, 'clear')
+    view.unmount()
+    await waitFor(() => expect(clear).toHaveBeenCalledTimes(1))
   })
 })
 

@@ -20,6 +20,14 @@ function segment(value: string): string {
   return encodeURIComponent(value)
 }
 
+function decodeProjectSegment(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
+}
+
 function projectPath(projectId: string | null, path: string): string {
   return projectId === null ? path : `/p/${segment(projectId)}${path}`
 }
@@ -87,7 +95,8 @@ export function ReferenceCezarProvider({
   const location = useLocation()
   const navigate = useNavigate()
   const projectMatch = matchPath('/p/:projectId/*', location.pathname)
-  const projectId = projectMatch?.params.projectId ?? null
+  const encodedProjectId = projectMatch?.params.projectId
+  const projectId = encodedProjectId === undefined ? null : decodeProjectSegment(encodedProjectId)
   const href = useCallback(
     (target: CezarLocation) => referenceCezarHref(projectId, target),
     [projectId],

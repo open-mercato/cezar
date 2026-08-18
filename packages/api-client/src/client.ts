@@ -64,12 +64,14 @@ export interface CezarClientOptions {
 
 export class ApiError extends Error {
   constructor(
+    /** HTTP status, or 0 when the request failed before receiving an HTTP response. */
     readonly status: number,
     readonly path: string,
     message: string,
     readonly body?: unknown,
+    options?: ErrorOptions,
   ) {
-    super(message)
+    super(message, options)
     this.name = 'ApiError'
   }
 }
@@ -126,7 +128,23 @@ function createClientTransport(options: CezarClientOptions) {
       if (token) headers.set('Authorization', `Bearer ${token}`)
       for (const [name, value] of Object.entries(options.headers ?? {})) headers.set(name, value)
 
-      return fetcher(input, { ...init, credentials: init?.credentials ?? credentials, headers })
+      try {
+        return await fetcher(input, { ...init, credentials: init?.credentials ?? credentials, headers })
+      } catch (cause) {
+        if (
+          typeof cause === 'object'
+          && cause !== null
+          && 'name' in cause
+          && cause.name === 'AbortError'
+        ) {
+          throw cause
+        }
+        // Native Fetch uses TypeError for a request that cannot produce an HTTP response.
+        // Preserve other thrown values: a custom fetch implementation may have a programming bug.
+        if (!(cause instanceof TypeError)) throw cause
+        const path = input instanceof Request ? input.url : String(input)
+        throw new ApiError(0, path, `cannot reach the cezar server (${path})`, undefined, { cause })
+      }
     },
   }
 }

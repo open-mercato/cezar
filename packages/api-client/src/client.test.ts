@@ -73,4 +73,34 @@ describe('createCezarClient', () => {
       body: { runner: 'not-a-runner' },
     })
   })
+
+  it('marks rejected fetches as status-zero network failures but preserves aborts', async () => {
+    const networkCause = new TypeError('Failed to fetch')
+    const networkClient = createCezarClient({
+      baseUrl: 'https://cezar.example.test',
+      fetch: async () => Promise.reject(networkCause),
+    })
+
+    const networkError = await networkClient.api.v1.runs.$get().catch((error: unknown) => error)
+    expect(networkError).toMatchObject({
+      name: 'ApiError',
+      status: 0,
+      path: 'https://cezar.example.test/api/v1/runs',
+      cause: networkCause,
+    })
+
+    const abort = new DOMException('The operation was aborted.', 'AbortError')
+    const abortedClient = createCezarClient({
+      baseUrl: 'https://cezar.example.test',
+      fetch: async () => Promise.reject(abort),
+    })
+    await expect(abortedClient.api.v1.runs.$get()).rejects.toBe(abort)
+
+    const programmingError = new Error('custom fetch implementation failed')
+    const brokenClient = createCezarClient({
+      baseUrl: 'https://cezar.example.test',
+      fetch: async () => Promise.reject(programmingError),
+    })
+    await expect(brokenClient.api.v1.runs.$get()).rejects.toBe(programmingError)
+  })
 })

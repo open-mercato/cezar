@@ -16,45 +16,75 @@ export const violatesBoundary = (specifier) =>
 
 export const findProhibitedSpecifiers = async (source) => {
   const scanner = createScanner(true, LanguageVariant.JSX, source)
+  const tokens = []
+  for (let kind = scanner.scan(); kind !== SyntaxKind.EndOfFile; kind = scanner.scan()) {
+    tokens.push({ kind, value: scanner.getTokenValue() })
+  }
   const specifiers = []
 
-  for (let token = scanner.scan(); token !== SyntaxKind.EndOfFile; token = scanner.scan()) {
-    if (token === SyntaxKind.ImportKeyword) {
-      token = scanner.scan()
-      if (token === SyntaxKind.StringLiteral) {
-        specifiers.push(scanner.getTokenValue())
+  const followsPropertyAccess = (index) =>
+    tokens[index - 1]?.kind === SyntaxKind.DotToken
+    || tokens[index - 1]?.kind === SyntaxKind.QuestionDotToken
+
+  const sourceAfterFrom = (start) => {
+    for (let index = start; index < tokens.length; index += 1) {
+      const token = tokens[index]
+      if (
+        token.kind === SyntaxKind.SemicolonToken
+        || token.kind === SyntaxKind.ImportKeyword
+        || token.kind === SyntaxKind.ExportKeyword
+      ) {
+        return undefined
+      }
+      if (token.kind === SyntaxKind.FromKeyword) {
+        const sourceToken = tokens[index + 1]
+        return sourceToken?.kind === SyntaxKind.StringLiteral ? sourceToken.value : undefined
+      }
+    }
+    return undefined
+  }
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]
+    if (token.kind === SyntaxKind.ImportKeyword && !followsPropertyAccess(index)) {
+      const next = tokens[index + 1]
+      if (next?.kind === SyntaxKind.StringLiteral) {
+        specifiers.push(next.value)
         continue
       }
-      if (token === SyntaxKind.OpenParenToken) {
-        token = scanner.scan()
-        if (token === SyntaxKind.StringLiteral) {
-          specifiers.push(scanner.getTokenValue())
+      if (next?.kind === SyntaxKind.OpenParenToken) {
+        const sourceToken = tokens[index + 2]
+        if (sourceToken?.kind === SyntaxKind.StringLiteral) {
+          specifiers.push(sourceToken.value)
         }
         continue
       }
-      while (token !== SyntaxKind.EndOfFile && token !== SyntaxKind.SemicolonToken) {
-        if (token === SyntaxKind.FromKeyword) {
-          token = scanner.scan()
-          if (token === SyntaxKind.StringLiteral) {
-            specifiers.push(scanner.getTokenValue())
-          }
-          break
-        }
-        token = scanner.scan()
+      if (
+        next?.kind === SyntaxKind.Identifier
+        || next?.kind === SyntaxKind.TypeKeyword
+        || next?.kind === SyntaxKind.AsteriskToken
+        || next?.kind === SyntaxKind.OpenBraceToken
+      ) {
+        const specifier = sourceAfterFrom(index + 2)
+        if (specifier !== undefined) specifiers.push(specifier)
       }
       continue
     }
 
-    if (token === SyntaxKind.ExportKeyword) {
-      while (token !== SyntaxKind.EndOfFile && token !== SyntaxKind.SemicolonToken) {
-        if (token === SyntaxKind.FromKeyword) {
-          token = scanner.scan()
-          if (token === SyntaxKind.StringLiteral) {
-            specifiers.push(scanner.getTokenValue())
-          }
-          break
-        }
-        token = scanner.scan()
+    if (token.kind === SyntaxKind.ExportKeyword && !followsPropertyAccess(index)) {
+      const next = tokens[index + 1]
+      const isReexport = next?.kind === SyntaxKind.AsteriskToken
+        || next?.kind === SyntaxKind.OpenBraceToken
+        || (
+          next?.kind === SyntaxKind.TypeKeyword
+          && (
+            tokens[index + 2]?.kind === SyntaxKind.AsteriskToken
+            || tokens[index + 2]?.kind === SyntaxKind.OpenBraceToken
+          )
+        )
+      if (isReexport) {
+        const specifier = sourceAfterFrom(index + 2)
+        if (specifier !== undefined) specifiers.push(specifier)
       }
     }
   }
