@@ -93,6 +93,17 @@ helper, so the marker and the creation evidence may arrive in either order. Reco
 written the old way are healed on load by `reconcileLoadedRun` — one-directional, so it can only
 restore a chip, never remove one.
 
+### Amendment — an uncorroborated declaration leads the chips
+
+`taskReferences` (cockpit) orders references created-PR first, then about-PR, then issue. One thing
+now sits ahead of all of them: a `CEZ:PR` number that **no** scraped URL on the record carries.
+Normally there is none — the agent re-declares with the PR it opened, so the declaration IS the
+created URL and the order is unchanged. When there IS one, the URL tier is naming something the
+agent never did, and that tier is the one built from transcript guesses: a task that quoted
+another run's `gh pr create` line was credited with that run's PR and it led every list, hiding
+the PR the task had actually opened behind it. A statement the agent made outranks a line a
+janitor found.
+
 Record model (additive, old `runs.json` files keep parsing):
 
 - `markerRefs?: { pr?: number; issue?: number }` — what the agent declared;

@@ -522,37 +522,37 @@ function MetaRow({
       </span>,
     )
   }
-  const prUrl = taskPrUrl(run)
-  if (prUrl && isHttpUrl(prUrl)) {
-    const number = prNumber(prUrl)
-    parts.push(
-      <ReferenceChip
-        key="pr"
-        reference={{ kind: 'PR', ...(number ? { number: Number(number) } : {}), url: prUrl }}
-        taskTitle={runTitle(run)}
-        className="h-5"
-      />,
-    )
-  }
-  // The PRs BEYOND the head one: a task opened on someone else's PR that pushes a
+  // EVERY PR the task points at, in `taskReferences` order — the same order, and the same
+  // statuses, the global Tasks table paints. A task opened on someone else's PR that pushes a
   // follow-up of its own is about both, and its own page is the last place that should have to
-  // pick one. The head is `taskPrUrl` above — it stays first, and stays the chip that renders
-  // even when the URL carries no number we recognize. The rest follow in `taskReferences` order,
-  // which is the same order (and the same statuses) the global Tasks table paints.
+  // pick one.
   //
   // A reference with no URL still gets its chip, exactly as All tasks paints it: a number-only
   // reference is what a `CEZ:PR` declaration looks like before any link is scraped, and the two
   // pages read their repository from DIFFERENT places (this one from health's remote, All tasks
   // from the project registry's `repoUrl`) — so "no URL here" never means "nothing to show".
   // `ReferenceChip` degrades such a chip to inert text on its own.
-  const headNumber = prUrl ? Number(prNumber(prUrl)) : undefined
-  for (const reference of references) {
-    if (reference.kind !== 'PR') continue
-    if (prUrl && (reference.url === prUrl || reference.number === headNumber)) continue
+  const prReferences = references.filter((reference) => reference.kind === 'PR')
+  for (const reference of prReferences) {
     parts.push(
       <ReferenceChip
         key={`pr-${reference.number}`}
         reference={reference}
+        taskTitle={runTitle(run)}
+        className="h-5"
+      />,
+    )
+  }
+  // The one PR chip `taskReferences` cannot express: a forge URL whose last segment is not a
+  // number (`taskPrUrl`'s own tolerance — an unrecognized forge still gets a working link, just
+  // without a number cezar would be inventing). It only appears when nothing else did, so it can
+  // never duplicate a chip above.
+  const prUrl = taskPrUrl(run)
+  if (prReferences.length === 0 && prUrl && isHttpUrl(prUrl)) {
+    parts.push(
+      <ReferenceChip
+        key="pr"
+        reference={{ kind: 'PR', url: prUrl }}
         taskTitle={runTitle(run)}
         className="h-5"
       />,

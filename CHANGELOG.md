@@ -18,7 +18,9 @@
   different repository, permanently: the first PR adopted wins, so the real one that followed was
   never looked at. The phrase is now believed only from the agent's own words or from the command
   cezar saw run — the link itself may still come from the command's output, which is where `gh`
-  prints it. (#901)
+  prints it. And when a task declares a PR (`CEZ:PR`) that no scraped link corroborates, that
+  declaration now leads the chips — so a PR picked up by mistake can no longer push the one the
+  task actually named out of the single-chip surfaces. (#901)
 
 # 0.10.0 (2026-08-14)
 
