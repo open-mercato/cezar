@@ -12,8 +12,8 @@
       }
     </style>
     <linearGradient id="Gradient_bez_nazwy_6" data-name="Gradient bez nazwy 6" x1="179.74" y1="232.29" x2="23" y2="-10.82" gradientTransform="translate(0 178) scale(1 -1)" gradientUnits="userSpaceOnUse">
-      <stop offset=".12" stop-color="#b4f372"/>
-      <stop offset="1" stop-color="#bc9aff"/>
+      <stop offset=".12" stop-color="#9df23c"/>
+      <stop offset="1" stop-color="#9d64ff"/>
     </linearGradient>
   </defs>
   <path class="st0" d="M0,24C0,10.75,10.75,0,24,0h128c13.26,0,24,10.75,24,24v128c0,13.26-10.74,24-24,24H24c-13.25,0-24-10.74-24-24V24Z"/>

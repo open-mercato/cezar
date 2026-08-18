@@ -8,7 +8,6 @@ import { CommandPalette } from '@/components/command-palette'
 import { ListViewProvider } from '@/components/list-view'
 import { OfflineBanner } from '@/components/offline-banner'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
-import { ProjectGroups } from '@/components/project-groups'
 import { ProjectSwitcher } from '@/components/project-switcher'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
@@ -102,12 +101,12 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
 
   useDocumentTitle({ projectName, pageLabel })
 
-  // Multi-project sidebar only from the SECOND project on (multi-project spec, "Sidebar").
-  // With one registered project — or with the registry still loading, or unreachable — the
-  // group header would say nothing the repo chip does not already say, so the shell keeps the
-  // flat nav + single quick-list it has always had. That degenerate case is the upgrade path:
-  // an existing user boots the new version in their usual repo and sees no difference.
-  const projects = registry && registry.projects.length > 1 ? registry : null
+  // Multi-project counts from the SECOND project on. The sidebar no longer swaps to the
+  // per-project GROUPS view (user decision, 25-repo review): at 20+ registered repos the
+  // grouped column collapsed the active project's own nav into a list of look-alike rows.
+  // The flat active-project sidebar stays; the flag only pins the All-tasks door above it,
+  // and the other projects are the topbar switcher's job.
+  const multiProject = registry !== undefined && registry.projects.length > 1
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -157,23 +156,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         }
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={<TaskQuickListContainer />}
-        // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
-        // quick-list above whenever this slot is absent.
-        projectGroups={
-          projects ? (
-            <ProjectGroups
-              projects={projects.projects}
-              bootProjectId={projects.bootProject}
-              // No forge prop: each group gates its own GitHub tab on its registry entry's
-              // `forge` field (#698) — the boot folder's health-level answer says nothing
-              // about the other projects in the workspace.
-              inboxAvailable={inboxAvailable}
-              automationsAvailable={automationsAvailable}
-              inboxCount={todos.data?.length ?? null}
-              skillsUpdateAvailable={skillsUpdateAvailable}
-            />
-          ) : undefined
-        }
+        multiProject={multiProject}
         toolsMenu={<ToolsMenu health={health.data} />}
       >
         {children}

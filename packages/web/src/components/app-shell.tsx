@@ -106,6 +106,10 @@ export type AppShellProps = {
    *  still loading, or unreachable — the shell renders the single-project sidebar it always
    *  did, which is the honest degradation, not a special case. */
   projectGroups?: ReactNode
+  /** More than one registered project (user decision, 25-repo review): the sidebar keeps the
+   *  flat ACTIVE-project layout and only pins the All-tasks door above it — the other projects
+   *  live in the switcher, not in a list of groups to scroll past. */
+  multiProject?: boolean
   /** The ACTIVE project's display name for the project bar above the content (the container
    *  resolves it from the registry; falls back to `repo.name`). Null hides the bar. */
   projectName?: string | null
@@ -169,6 +173,7 @@ export function AppShell({
   singleProject = false,
   banner,
   projectGroups,
+  multiProject = false,
   projectName = null,
   projectSwitcher,
 }: AppShellProps) {
@@ -238,6 +243,7 @@ export function AppShell({
     taskQuickList,
     toolsMenu,
     projectGroups,
+    multiProject,
     singleProject,
   }
 
@@ -320,6 +326,10 @@ type NavProps = {
   taskQuickList?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
+  /** More than one registered project: pins the All-tasks door above the flat sidebar. The
+   *  sidebar itself stays the ACTIVE project's (user decision, 25-repo review) — other
+   *  projects are the switcher's job, not a list to scroll past. */
+  multiProject?: boolean
   singleProject: boolean
 }
 
@@ -503,6 +513,7 @@ function SidebarContent({
   taskQuickList,
   toolsMenu,
   projectGroups,
+  multiProject,
   singleProject,
   onNavigate,
   headerAction,
@@ -595,11 +606,20 @@ function SidebarContent({
           </div>
         </>
       ) : (
-        // One scroll column in the mockup's order: the TASKS rows + RECENT list first (the work),
-        // then the WORKSPACE views beneath them (the places). The Tasks nav item is gone — the
-        // quick-list's Active/Archived rows are that entry now, unread badge included. The
-        // navigate context reaches the quick-list rows so a same-path click still closes the
-        // mobile drawer (the route-change effect cannot fire without a pathname change).
+        <>
+          {/* Multi-project, but the sidebar stays the ACTIVE project's (user decision, 25-repo
+              review): only the All-tasks door is pinned above the flat column — the same band
+              the groups view pins it in, so the two framings agree on where "everything" lives. */}
+          {multiProject ? (
+            <div className="shrink-0 border-b border-border px-1.5 pt-0.5 pb-2">
+              <AllTasksLink onNavigate={onNavigate} />
+            </div>
+          ) : null}
+        {/* One scroll column in the mockup's order: the TASKS rows + RECENT list first (the work),
+            then the WORKSPACE views beneath them (the places). The Tasks nav item is gone — the
+            quick-list's Active/Archived rows are that entry now, unread badge included. The
+            navigate context reaches the quick-list rows so a same-path click still closes the
+            mobile drawer (the route-change effect cannot fire without a pathname change). */}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
           <div data-slot="task-quick-list" className="px-2.5">
             <SidebarNavigateContext.Provider value={onNavigate}>
@@ -682,6 +702,7 @@ function SidebarContent({
             })}
           </nav>
         </div>
+        </>
       )}
 
       {/* Two deliberate rows, never a wrap (#702): the search bar owns line 1, the chrome controls

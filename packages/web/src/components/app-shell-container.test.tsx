@@ -314,7 +314,10 @@ describe('sidebar wiring', () => {
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
   })
 
-  it('renders one collapsible group per project once the workspace has two', async () => {
+  it('keeps the flat active-project sidebar with two projects, pinning only the All-tasks door', async () => {
+    // User decision (25-repo review): the sidebar never swaps to per-project groups — at 20+
+    // registered repos that column buried the active project's own nav in look-alike rows.
+    // Other projects are the topbar switcher's job; the flat shell only gains the global door.
     serve({
       '/api/v1/health': HEALTH,
       '/api/v1/todos': [],
@@ -329,13 +332,13 @@ describe('sidebar wiring', () => {
     renderShell()
 
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(2),
+      expect(document.querySelector('[data-slot="all-tasks-link"]')).not.toBeNull(),
     )
-    // The flat nav and the shared quick-list step aside — each group brings its own.
-    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull()
-    expect(document.querySelector('[data-slot="task-quick-list"]')).toBeNull()
-    // The ACTIVE project still names itself on the project bar above the content — the groups
-    // list every project, the bar says which one the URL is looking at.
+    // No groups, ever — the flat nav and the shared quick-list stay.
+    expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(0)
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="task-quick-list"]')).not.toBeNull()
+    // The ACTIVE project still names itself on the project bar above the content.
     expect(repoChip()?.closest('[data-slot="project-bar"]')).not.toBeNull()
     expect(repoChip()?.textContent).toBe('cezar')
   })
