@@ -846,6 +846,28 @@ describe('meta line, tabs, pill and resume hint', () => {
     ])
   })
 
+  // The task view reads the repository from health while All tasks reads it from the project
+  // registry, so a number-only reference can be linkable on one page and not the other. It still
+  // gets a chip here — All tasks paints it, and "we could not build a link" is not a reason to
+  // hide a PR the task declared.
+  it('shows a PR known only by number, with no repository to link it to', () => {
+    stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/5366',
+        prNumber: 901,
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      expect.stringContaining('#5366'),
+      expect.stringContaining('#901'),
+    ])
+    expect(chips[1]?.tagName).toBe('SPAN') // inert: nothing to link to
+  })
+
   it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))

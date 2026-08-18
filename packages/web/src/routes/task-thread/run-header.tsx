@@ -539,8 +539,16 @@ function MetaRow({
   // pick one. The head is `taskPrUrl` above — it stays first, and stays the chip that renders
   // even when the URL carries no number we recognize. The rest follow in `taskReferences` order,
   // which is the same order (and the same statuses) the global Tasks table paints.
+  //
+  // A reference with no URL still gets its chip, exactly as All tasks paints it: a number-only
+  // reference is what a `CEZ:PR` declaration looks like before any link is scraped, and the two
+  // pages read their repository from DIFFERENT places (this one from health's remote, All tasks
+  // from the project registry's `repoUrl`) — so "no URL here" never means "nothing to show".
+  // `ReferenceChip` degrades such a chip to inert text on its own.
+  const headNumber = prUrl ? Number(prNumber(prUrl)) : undefined
   for (const reference of references) {
-    if (reference.kind !== 'PR' || !reference.url || reference.url === prUrl) continue
+    if (reference.kind !== 'PR') continue
+    if (prUrl && (reference.url === prUrl || reference.number === headNumber)) continue
     parts.push(
       <ReferenceChip
         key={`pr-${reference.number}`}

@@ -9,7 +9,16 @@
   what it is, a statement about the created PR (`pullRequestUrl` already carries it), so the PR
   the task is about survives it, as does the number the task came in with. Records already
   written this way heal when they are next read — no migration. The run header now paints every
-  PR the task points at, too, instead of only the strongest one. (#901)
+  PR the task points at, too, instead of only the strongest one — including a PR known only by
+  number, which it used to drop whenever it had no repository to build a link from. (#901)
+- 🐛 **A task can no longer be credited with a PR it only read about.** cezar decides a task
+  opened a PR by spotting `gh pr create` (or "opened a pull request") near a PR link — and it
+  scanned tool *output* for that phrase, so a task that printed a log, a stored transcript, or a
+  test fixture containing someone else's creation line adopted their PR as its own, in a
+  different repository, permanently: the first PR adopted wins, so the real one that followed was
+  never looked at. The phrase is now believed only from the agent's own words or from the command
+  cezar saw run — the link itself may still come from the command's output, which is where `gh`
+  prints it. (#901)
 
 # 0.10.0 (2026-08-14)
 
