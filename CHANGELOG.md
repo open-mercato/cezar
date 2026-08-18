@@ -9,7 +9,7 @@
   what it is, a statement about the created PR (`pullRequestUrl` already carries it), so the PR
   the task is about survives it, as does the number the task came in with. Records already
   written this way heal when they are next read — no migration. The run header now paints every
-  PR the task points at, too, instead of only the strongest one.
+  PR the task points at, too, instead of only the strongest one. (#901)
 
 # 0.10.0 (2026-08-14)
 
