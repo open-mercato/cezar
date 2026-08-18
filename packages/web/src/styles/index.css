@@ -107,6 +107,10 @@
   --input: #262626;
   --contrast: #ebebeb;
   --contrast-foreground: #171717;
+  /* The user bubble's own surface — decoupled from --contrast so the thread can soften
+   * without dragging the New-task CTA with it. Dark theme keeps the light-on-dark bubble. */
+  --bubble: #ebebeb;
+  --bubble-foreground: #171717;
 
   /* accents — `--accent-lime` / `--violet` are the stable family names; `--primary` points at
    * whichever family is active (Settings → Appearance swaps it via [data-accent]). Violet is
@@ -217,6 +221,10 @@
   --input: #949494;
   --contrast: #262626;
   --contrast-foreground: #ffffff;
+  /* Dark GRAY, deliberately not the CTA's near-black (user: "ciemno szary, nie czarny") —
+   * zinc-700-ish keeps the bubble clearly a surface, and white ink stays >8:1 on it. */
+  --bubble: #3f3f46;
+  --bubble-foreground: #fafafa;
 
   --ring: #171717;
 
@@ -325,6 +333,8 @@
   --color-input: var(--input);
   --color-contrast: var(--contrast);
   --color-contrast-foreground: var(--contrast-foreground);
+  --color-bubble: var(--bubble);
+  --color-bubble-foreground: var(--bubble-foreground);
 
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);

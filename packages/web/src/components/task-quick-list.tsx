@@ -1,4 +1,4 @@
-import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
@@ -58,8 +58,22 @@ export function TaskQuickList({
   return (
     <div data-slot="quick-list">
       <div className="flex flex-col gap-0.5 pt-2 pb-0.5">
-        <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
-          Tasks
+        {/* The heading IS the door to the Tasks page (its Active/Archived tabs live there) —
+            the flat list dropped the nav row and the Archived entry, so without this link the
+            table had no way in from the sidebar. Still an h2, so the section keeps its landmark;
+            the chevron is the affordance the quiet text alone was missing. */}
+        <h2 className="pb-1">
+          <Link
+            to="/"
+            data-slot="quick-list-heading"
+            className="group/heading flex items-center gap-0.5 rounded-sm px-3 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase transition-colors hover:text-foreground"
+          >
+            Tasks
+            <ChevronRightIcon
+              aria-hidden="true"
+              className="size-3 text-soft-foreground transition-colors group-hover/heading:text-foreground"
+            />
+          </Link>
         </h2>
         {buckets.length === 0 ? (
           <p className="px-3 py-2 text-xs text-soft-foreground">No tasks yet — describe one.</p>
