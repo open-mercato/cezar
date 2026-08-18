@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isReactPeerExternal } from '../vite.config.ts'
+import { isReactPackageExternal, isReactPeerExternal } from '../vite.config.ts'
 import { findProhibitedSpecifiers } from './import-boundaries.mjs'
 
 describe('import boundary check', () => {
@@ -33,6 +33,26 @@ describe('import boundary check', () => {
     `)
 
     expect(prohibited).toEqual([])
+  })
+
+  it('parses TSX while still finding static and dynamic imports', async () => {
+    const prohibited = await findProhibitedSpecifiers(`
+      import type { Secret } from '@open-mercato/cezar-contract'
+      const view = <section>{String('safe')}</section>
+      const load = () => import('node:fs')
+    `)
+
+    expect(prohibited).toEqual([
+      '@open-mercato/cezar-contract',
+      'node:fs',
+    ])
+  })
+
+  it('keeps shared runtime dependencies external to the library bundle', () => {
+    expect(isReactPackageExternal('@open-mercato/cezar-api-client')).toBe(true)
+    expect(isReactPackageExternal('@tanstack/react-query')).toBe(true)
+    expect(isReactPackageExternal('@tanstack/react-query/devtools')).toBe(true)
+    expect(isReactPackageExternal('@tanstack/reactive-query')).toBe(false)
   })
 })
 

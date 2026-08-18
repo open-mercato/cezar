@@ -10,6 +10,15 @@ export const isReactPeerExternal = (id: string) =>
   || id === 'react-dom'
   || id.startsWith('react-dom/')
 
+const runtimeDependencies = [
+  '@open-mercato/cezar-api-client',
+  '@tanstack/react-query',
+]
+
+export const isReactPackageExternal = (id: string) =>
+  isReactPeerExternal(id)
+  || runtimeDependencies.some((dependency) => id === dependency || id.startsWith(`${dependency}/`))
+
 export default defineConfig({
   build: {
     outDir: resolve(packageDir, 'dist'),
@@ -21,7 +30,7 @@ export default defineConfig({
         session: resolve(packageDir, 'src/session.ts'),
         styles: resolve(packageDir, 'src/styles/index.css'),
       },
-      external: isReactPeerExternal,
+      external: isReactPackageExternal,
       output: {
         entryFileNames: '[name].js',
         assetFileNames: '[name][extname]',

@@ -1,4 +1,8 @@
-import { init, parse } from 'es-module-lexer'
+import {
+  createScanner,
+  LanguageVariant,
+  SyntaxKind,
+} from 'typescript/unstable/ast'
 
 export const violatesBoundary = (specifier) =>
   /(?:^|\/)packages\/web(?:\/|$)/.test(specifier)
@@ -11,10 +15,49 @@ export const violatesBoundary = (specifier) =>
   || specifier.startsWith('node:')
 
 export const findProhibitedSpecifiers = async (source) => {
-  await init
-  const [imports] = parse(source)
+  const scanner = createScanner(true, LanguageVariant.JSX, source)
+  const specifiers = []
 
-  return imports.flatMap(({ n: specifier }) =>
-    typeof specifier === 'string' && violatesBoundary(specifier) ? [specifier] : [],
-  )
+  for (let token = scanner.scan(); token !== SyntaxKind.EndOfFile; token = scanner.scan()) {
+    if (token === SyntaxKind.ImportKeyword) {
+      token = scanner.scan()
+      if (token === SyntaxKind.StringLiteral) {
+        specifiers.push(scanner.getTokenValue())
+        continue
+      }
+      if (token === SyntaxKind.OpenParenToken) {
+        token = scanner.scan()
+        if (token === SyntaxKind.StringLiteral) {
+          specifiers.push(scanner.getTokenValue())
+        }
+        continue
+      }
+      while (token !== SyntaxKind.EndOfFile && token !== SyntaxKind.SemicolonToken) {
+        if (token === SyntaxKind.FromKeyword) {
+          token = scanner.scan()
+          if (token === SyntaxKind.StringLiteral) {
+            specifiers.push(scanner.getTokenValue())
+          }
+          break
+        }
+        token = scanner.scan()
+      }
+      continue
+    }
+
+    if (token === SyntaxKind.ExportKeyword) {
+      while (token !== SyntaxKind.EndOfFile && token !== SyntaxKind.SemicolonToken) {
+        if (token === SyntaxKind.FromKeyword) {
+          token = scanner.scan()
+          if (token === SyntaxKind.StringLiteral) {
+            specifiers.push(scanner.getTokenValue())
+          }
+          break
+        }
+        token = scanner.scan()
+      }
+    }
+  }
+
+  return specifiers.filter(violatesBoundary)
 }

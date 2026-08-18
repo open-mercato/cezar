@@ -39,6 +39,8 @@ export default defineConfig({
     alias: {
       '@': resolve(appDir, 'src'),
       '@open-mercato/cezar-api-client': resolve(packagesDir, 'api-client/src/index.ts'),
+      '@open-mercato/cezar-react/styles.css': resolve(packagesDir, 'react/src/styles/index.css'),
+      '@open-mercato/cezar-react': resolve(packagesDir, 'react/src/index.ts'),
     },
   },
   build: {
