@@ -846,10 +846,6 @@ describe('meta line, tabs, pill and resume hint', () => {
     ])
   })
 
-  // The task view reads the repository from health while All tasks reads it from the project
-  // registry, so a number-only reference can be linkable on one page and not the other. It still
-  // gets a chip here — All tasks paints it, and "we could not build a link" is not a reason to
-  // hide a PR the task declared.
   // The registry knows every project's own repo, so a number-only chip is a real link here just
   // as it is on All tasks — the two pages must not disagree about the same reference.
   it('links a PR known only by number, using the project registry repo', async () => {
@@ -868,6 +864,26 @@ describe('meta line, tabs, pill and resume hint', () => {
       const chip = meta.querySelector('[data-slot="pr-chip"]')
       expect(chip?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/901')
     })
+  })
+
+  // A PR URL whose last segment is not a number never becomes a `taskReferences` entry, so it is
+  // painted from `taskPrUrl` — and must still be painted when a number-only chip exists beside it
+  // (#847: a forge whose PR URLs are not `…/pull/N`).
+  it('keeps a non-numeric PR link beside a chip known only by number', () => {
+    stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://forge.example.com/o/r/merge_requests/spec-fix',
+        prNumber: 42,
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips).toHaveLength(2)
+    expect(chips.map((chip) => chip.getAttribute('href'))).toContain(
+      'https://forge.example.com/o/r/merge_requests/spec-fix',
+    )
   })
 
   it('shows a PR known only by number, with no repository to link it to', () => {

@@ -987,6 +987,20 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     );
   });
 
+  it('never resurrects a chip a live declaration deliberately cleared', () => {
+    // The other direction of the heal, and the one that would quietly undo "no chip beats a wrong
+    // chip": here the declaration names a PR this run did NOT create, so it still owns the
+    // referenced tier and its contradiction with the candidate must survive a reload.
+    const { store, run } = freshRun('task');
+    store.updateRun(run.id, {
+      referencedPullRequestUrl: undefined,
+      referencedPrCandidates: ['https://github.com/open-mercato/cezar/pull/777'],
+      markerRefs: { pr: 500 },
+    });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.referencedPullRequestUrl).toBeUndefined();
+  });
+
   it('never takes a referenced PR away from a record whose candidates no longer explain it', () => {
     const { store, run } = freshRun('task');
     store.updateRun(run.id, {

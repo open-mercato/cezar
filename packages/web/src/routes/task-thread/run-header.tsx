@@ -545,10 +545,12 @@ function MetaRow({
   }
   // The one PR chip `taskReferences` cannot express: a forge URL whose last segment is not a
   // number (`taskPrUrl`'s own tolerance — an unrecognized forge still gets a working link, just
-  // without a number cezar would be inventing). It only appears when nothing else did, so it can
-  // never duplicate a chip above.
+  // without a number cezar would be inventing). Gated on that URL not being painted already,
+  // NOT on there being no chips at all: today every `pullRequestUrl` is a GitHub `…/pull/N` and
+  // the two are the same test, but a forge whose PR URLs do not end in a number (#847's GitLab
+  // adapter) would have a `prNumber` chip standing in front of a link that then never rendered.
   const prUrl = taskPrUrl(run)
-  if (prReferences.length === 0 && prUrl && isHttpUrl(prUrl)) {
+  if (prUrl && isHttpUrl(prUrl) && !prReferences.some((reference) => reference.url === prUrl)) {
     parts.push(
       <ReferenceChip
         key="pr"
