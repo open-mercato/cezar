@@ -43,7 +43,7 @@ import { SettingsField } from './settings-field'
  *  dash rather than `Invalid Date`. */
 function fullDate(iso: string): string {
   const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return '—'
+  if (Number.isNaN(at.getTime())) return ''
   return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 

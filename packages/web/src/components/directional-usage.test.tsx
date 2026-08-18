@@ -12,15 +12,19 @@ describe('DirectionalUsage', () => {
   })
 
   it('shows one known side honestly and omits an entirely unknown compact value', () => {
-    expect(directionalUsageText(184_700, undefined)).toBe('IN 184.7k / OUT —')
+    // No dash placeholders (house rule): the missing side drops out of the phrase, and the
+    // survivor keeps its direction word so a bare number never has to be guessed at.
+    expect(directionalUsageText(184_700, undefined)).toBe('IN 184.7k')
+    expect(directionalUsageText(undefined, 2_400)).toBe('OUT 2.4k')
     const { container } = render(<DirectionalUsage />)
     expect(container.innerHTML).toBe('')
   })
 
-  it('keeps both table placeholders when requested', () => {
-    render(<DirectionalUsage variant="table" omitWhenUnknown={false} />)
-    expect(screen.getByText('— / —').getAttribute('aria-label')).toBe(
-      'Input tokens: unknown; output tokens: unknown',
-    )
+  it('renders an entirely unknown table value as empty, never as dashes', () => {
+    // The accessible label still spells the absence out; the visible cell stays blank.
+    const { container } = render(<DirectionalUsage variant="table" omitWhenUnknown={false} />)
+    const span = container.querySelector('[data-slot="directional-usage"]')
+    expect(span?.textContent).toBe('')
+    expect(span?.getAttribute('aria-label')).toBe('Input tokens: unknown; output tokens: unknown')
   })
 })

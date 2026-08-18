@@ -71,7 +71,7 @@ export const STATUS_LABEL: Record<ProjectListEntry['status'], string> = {
  *  unparseable one (hand-edited config) degrades to an em dash rather than `Invalid Date`. */
 function shortDate(iso: string): string {
   const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return '—'
+  if (Number.isNaN(at.getTime())) return ''
   return at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 

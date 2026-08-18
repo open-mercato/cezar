@@ -777,7 +777,7 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
         cell.kind === 'none' && 'text-xs text-soft-foreground'
       )}
     >
-      {cell.text || '—'}
+      {cell.text}
     </td>
   )
 }
@@ -891,7 +891,9 @@ function TaskCard({
 
 /** An honest em dash: this cell has nothing true to show. */
 function Dash() {
-  return <span className="text-xs text-soft-foreground">—</span>
+  // Blank, not an em dash (house style: an absent value renders as nothing) — the empty cell
+  // is the honest answer, and a column of dashes reads as data that failed to load.
+  return null
 }
 
 function Sep() {

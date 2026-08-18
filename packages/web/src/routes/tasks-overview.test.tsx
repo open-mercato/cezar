@@ -191,7 +191,7 @@ describe('TasksOverview — the table', () => {
     expect(chip?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/554')
   })
 
-  it('fills the columns with the run facts, and honest dashes where no fact exists', () => {
+  it('fills the columns with the run facts, and honest blanks where no fact exists', () => {
     renderOverview({
       runs: [
         run({
@@ -223,14 +223,14 @@ describe('TasksOverview — the table', () => {
       '#402',
       '184.7k / 2.4k',
       '$0.31',
-      '—', // no live sample, CPU has no persisted peak
-      '—',
+      '', // no live sample, CPU has no persisted peak
+      '',
       '12m',
     ])
-    // No branch, no PR, no diff recorded, no cost yet — dashes, not zeros (a pre-R2 record has
+    // No branch, no PR, no diff recorded, no cost yet — blanks, not zeros (a pre-R2 record has
     // no diffStat, and `+0 −0` would claim a measurement that never happened). Started falls
     // back to createdAt.
-    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '—', '—', '26m'])
+    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '', '', '', '', '', '', '', '26m'])
     // The pair is two colored halves, not one string — green adds, red dels (design tokens).
     const diff = tableRow('full')?.querySelector('[data-slot="diff-stat"]')
     expect(diff?.querySelector('.text-success')?.textContent).toBe('+128')
@@ -281,11 +281,11 @@ describe('TasksOverview — the table', () => {
       'done',
       'Hidden metrics',
       'default',
-      '—',
-      '—',
-      '—',
-      '—',
-      '—',
+      '',
+      '',
+      '',
+      '',
+      '',
       '1m',
     ])
 
@@ -614,7 +614,7 @@ describe('TasksOverview — usage cells', () => {
     renderWithUsage([run({ id: 'live1', status: 'running' })])
 
     // Before the first tick: nothing to say, honestly.
-    expect(usageCell('live1', 'cpu')?.textContent).toBe('—')
+    expect(usageCell('live1', 'cpu')?.textContent).toBe('')
 
     act(() => FakeEventSource.last?.emit('usage', JSON.stringify({ project: 'boot', usage: { live1: SAMPLE } })))
 
@@ -630,7 +630,7 @@ describe('TasksOverview — usage cells', () => {
     // Even a stale tick that still names the run must not paint it live — it is done.
     act(() => FakeEventSource.last?.emit('usage', JSON.stringify({ project: 'boot', usage: { done1: SAMPLE } })))
 
-    expect(usageCell('done1', 'cpu')?.textContent).toBe('—')
+    expect(usageCell('done1', 'cpu')?.textContent).toBe('')
     expect(usageCell('done1', 'mem')?.textContent).toBe('peak 401 MB')
     expect(usageCell('done1', 'mem')?.getAttribute('data-usage-kind')).toBe('peak')
     expect(usageCell('done1', 'mem')?.getAttribute('title')).toBe('peak — run finished (7 procs)')

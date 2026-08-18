@@ -1321,7 +1321,7 @@ function EventPhrase({ event, colors }: { event: GithubTimelineEvent; colors: Re
     case 'head_ref_force_pushed':
       return <span>force-pushed</span>
     case 'renamed':
-      return <span className="truncate">renamed this to {event.subject ?? '—'}</span>
+      return <span className="truncate">renamed this{event.subject ? <> to {event.subject}</> : null}</span>
     case 'cross-referenced':
       return (
         <span className="truncate">

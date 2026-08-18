@@ -197,9 +197,9 @@ function WorktreeRow({
         ) : null}
       </td>
       <td className="px-3 py-2 tabular-nums text-soft-foreground">
-        {worktree.sizeBytes !== null ? formatMem(worktree.sizeBytes) || '0 kB' : '—'}
+        {worktree.sizeBytes !== null ? formatMem(worktree.sizeBytes) || '0 kB' : ''}
       </td>
-      <td className="px-3 py-2 tabular-nums text-soft-foreground">{shortAge(worktree.finishedAt ?? undefined) || '—'}</td>
+      <td className="px-3 py-2 tabular-nums text-soft-foreground">{shortAge(worktree.finishedAt ?? undefined) || ''}</td>
       <td className="px-3 py-2 text-right">
         <Button
           type="button"
