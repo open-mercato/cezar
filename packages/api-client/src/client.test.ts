@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { runnerSchema } from '@open-mercato/cezar-contract'
 
 import { ApiError, createCezarClient } from './client.ts'
+
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
 
 describe('createCezarClient', () => {
   it('keeps API error response context', () => {
@@ -74,12 +78,10 @@ describe('createCezarClient', () => {
     })
   })
 
-  it('marks rejected fetches as status-zero network failures but preserves aborts', async () => {
+  it('marks a default native fetch rejection as a status-zero network failure', async () => {
     const networkCause = new TypeError('Failed to fetch')
-    const networkClient = createCezarClient({
-      baseUrl: 'https://cezar.example.test',
-      fetch: async () => Promise.reject(networkCause),
-    })
+    vi.stubGlobal('fetch', vi.fn(async () => Promise.reject(networkCause)))
+    const networkClient = createCezarClient({ baseUrl: 'https://cezar.example.test' })
 
     const networkError = await networkClient.api.v1.runs.$get().catch((error: unknown) => error)
     expect(networkError).toMatchObject({
@@ -88,7 +90,9 @@ describe('createCezarClient', () => {
       path: 'https://cezar.example.test/api/v1/runs',
       cause: networkCause,
     })
+  })
 
+  it('preserves aborts and programming TypeErrors from an injected fetch', async () => {
     const abort = new DOMException('The operation was aborted.', 'AbortError')
     const abortedClient = createCezarClient({
       baseUrl: 'https://cezar.example.test',
@@ -96,7 +100,7 @@ describe('createCezarClient', () => {
     })
     await expect(abortedClient.api.v1.runs.$get()).rejects.toBe(abort)
 
-    const programmingError = new Error('custom fetch implementation failed')
+    const programmingError = new TypeError('custom fetch implementation failed')
     const brokenClient = createCezarClient({
       baseUrl: 'https://cezar.example.test',
       fetch: async () => Promise.reject(programmingError),

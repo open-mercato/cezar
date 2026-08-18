@@ -116,6 +116,7 @@ function errorMessage(status: number, statusText: string, body: unknown): string
 
 function createClientTransport(options: CezarClientOptions) {
   const baseUrl = options.baseUrl?.replace(/\/+$/, '') ?? ''
+  const usesDefaultFetch = options.fetch === undefined
   const fetcher = options.fetch ?? globalThis.fetch
   const credentials = options.credentials ?? 'same-origin'
 
@@ -140,8 +141,8 @@ function createClientTransport(options: CezarClientOptions) {
           throw cause
         }
         // Native Fetch uses TypeError for a request that cannot produce an HTTP response.
-        // Preserve other thrown values: a custom fetch implementation may have a programming bug.
-        if (!(cause instanceof TypeError)) throw cause
+        // An injected adapter owns its own error contract, including programming TypeErrors.
+        if (!usesDefaultFetch || !(cause instanceof TypeError)) throw cause
         const path = input instanceof Request ? input.url : String(input)
         throw new ApiError(0, path, `cannot reach the cezar server (${path})`, undefined, { cause })
       }
