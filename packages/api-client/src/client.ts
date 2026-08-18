@@ -63,17 +63,32 @@ export class ApiError extends Error {
   }
 }
 
-export interface CezarClient<TApp extends Hono<any, any, any> = Hono<any, any, any>> {
+export type CezarClient<TApp extends Hono<any, any, any> = Hono<any, any, any>> = ReturnType<
+  typeof hc<TApp>
+> & {
   readonly identity: string
   readonly baseUrl: string
   readonly rpc: ReturnType<typeof hc<TApp>>
 }
 
-type UntypedCezarClient = Omit<CezarClient, 'rpc'> & {
+type UntypedCezarClient = Record<string, any> & {
+  readonly identity: string
+  readonly baseUrl: string
   readonly rpc: Record<string, any>
 }
 
 let nextClientIdentity = 0
+
+type JsonSchema<T> = {
+  safeParse(value: unknown): { success: true; data: T } | { success: false }
+}
+
+function errorMessage(status: number, statusText: string, body: unknown): string {
+  if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') {
+    return body.error
+  }
+  return `${status} ${statusText || 'request failed'}`
+}
 
 function createClientTransport(options: CezarClientOptions) {
   const baseUrl = options.baseUrl?.replace(/\/+$/, '') ?? ''
@@ -94,6 +109,36 @@ function createClientTransport(options: CezarClientOptions) {
   }
 }
 
+class CezarClientCore<TApp extends Hono<any, any, any>> {
+  readonly identity = `cezar-client-${++nextClientIdentity}`
+  readonly baseUrl: string
+  readonly rpc: ReturnType<typeof hc<TApp>>
+
+  constructor(private readonly transport: ReturnType<typeof createClientTransport>) {
+    this.baseUrl = transport.baseUrl
+    this.rpc = hc<TApp>(transport.baseUrl, { fetch: transport.fetch })
+  }
+
+  private async requestJson<T>(
+    schema: JsonSchema<T>,
+    path: string,
+    init?: RequestInit,
+  ): Promise<T> {
+    const response = await this.transport.fetch(`${this.baseUrl}${path}`, init)
+    const body = await response.json().catch(() => undefined)
+
+    if (!response.ok) {
+      throw new ApiError(response.status, path, errorMessage(response.status, response.statusText, body), body)
+    }
+
+    const parsed = schema.safeParse(body)
+    if (!parsed.success) {
+      throw new ApiError(response.status, path, `the cezar server answered ${path} with an unexpected body`, body)
+    }
+    return parsed.data
+  }
+}
+
 /**
  * Build a typed client for a cezar service.
  *
@@ -110,14 +155,15 @@ export function createCezarClient<
   // them here would reject perfectly good app types. `Hono` as the default is the untyped
   // fallback: `createCezarClient()` with no type argument still returns a working client.
   T extends Hono<any, any, any> = Hono<any, any, any>,
->(options: CezarClientOptions = {}): CezarClient<T> {
+>(options: CezarClientOptions = {}): CezarClient<T> | UntypedCezarClient {
   const transport = createClientTransport(options)
-  const identity = `cezar-client-${++nextClientIdentity}`
-  return {
-    identity,
-    baseUrl: transport.baseUrl,
-    rpc: hc<T>(transport.baseUrl, { fetch: transport.fetch }),
-  }
+  const client = new CezarClientCore<T>(transport)
+  return new Proxy(client, {
+    get(target, property, receiver) {
+      if (property in target) return Reflect.get(target, property, receiver)
+      return Reflect.get(target.rpc as object, property)
+    },
+  }) as unknown as CezarClient<T>
 }
 
 /**
