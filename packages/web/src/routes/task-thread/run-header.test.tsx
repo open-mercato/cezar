@@ -820,6 +820,32 @@ describe('meta line, tabs, pill and resume hint', () => {
     }
   })
 
+  // A task opened on someone else's PR that pushes a follow-up of its own is about BOTH,
+  // and its own page is the last place that should have to pick one. Order is `taskReferences`
+  // order — the PR it created, then the PR it is about — the same order the global Tasks table
+  // paints.
+  it('shows every PR the task points at, not only the strongest one', () => {
+    stubFetch()
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/5366',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/4326',
+        markerRefs: { pr: 5366 },
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips.map((chip) => chip.getAttribute('href'))).toEqual([
+      'https://github.com/open-mercato/cezar/pull/5366',
+      'https://github.com/open-mercato/cezar/pull/4326',
+    ])
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      expect.stringContaining('#5366'),
+      expect.stringContaining('#4326'),
+    ])
+  })
+
   it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))

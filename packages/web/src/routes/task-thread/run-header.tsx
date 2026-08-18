@@ -496,16 +496,17 @@ function MetaRow({
   // goes through the same seam, which is what keeps the header's chip and the table's chip
   // answering identically for the same PR.
   const projectId = useReferenceProjectId()
+  const references = useMemo(() => taskReferences(run, repoBase), [run, repoBase])
   const referenceRequests = useMemo(
     () =>
       projectId === undefined
         ? []
-        : taskReferences(run, repoBase).map((reference) => ({
+        : references.map((reference) => ({
             projectId,
             kind: reference.kind,
             number: reference.number,
           })),
-    [run, repoBase, projectId],
+    [references, projectId],
   )
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
@@ -528,6 +529,22 @@ function MetaRow({
       <ReferenceChip
         key="pr"
         reference={{ kind: 'PR', ...(number ? { number: Number(number) } : {}), url: prUrl }}
+        taskTitle={runTitle(run)}
+        className="h-5"
+      />,
+    )
+  }
+  // The PRs BEYOND the head one: a task opened on someone else's PR that pushes a
+  // follow-up of its own is about both, and its own page is the last place that should have to
+  // pick one. The head is `taskPrUrl` above — it stays first, and stays the chip that renders
+  // even when the URL carries no number we recognize. The rest follow in `taskReferences` order,
+  // which is the same order (and the same statuses) the global Tasks table paints.
+  for (const reference of references) {
+    if (reference.kind !== 'PR' || !reference.url || reference.url === prUrl) continue
+    parts.push(
+      <ReferenceChip
+        key={`pr-${reference.number}`}
+        reference={reference}
         taskTitle={runTitle(run)}
         className="h-5"
       />,

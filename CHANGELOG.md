@@ -1,6 +1,15 @@
 # Unreleased
 
-<!-- Nothing yet. -->
+## 🐛 Fixes
+- 🐛 **A task that opens its own PR keeps the chip for the PR it was working on.** A task started
+  on someone else's PR that pushed a follow-up of its own showed only the new one: the agent
+  re-declares `CEZ:PR` with the number it just opened, as the marker contract asks it to, and
+  that declaration was applied to the *referenced* tier — which clears the chip when no candidate
+  matches the declared number. A declaration naming the PR the run itself created is now read as
+  what it is, a statement about the created PR (`pullRequestUrl` already carries it), so the PR
+  the task is about survives it, as does the number the task came in with. Records already
+  written this way heal when they are next read — no migration. The run header now paints every
+  PR the task points at, too, instead of only the strongest one.
 
 # 0.10.0 (2026-08-14)
 

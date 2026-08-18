@@ -4,6 +4,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { join } from 'node:path';
 import { z } from 'zod';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
+import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 
@@ -415,6 +417,35 @@ function resolveReferencedRef(candidates: string[], task: string, declared?: num
   return named.length === 1 ? named[0] : undefined;
 }
 
+/** The number a forge URL's last segment names (`…/pull/402` → 402), or undefined. */
+function refUrlNumber(url: string | undefined): number | undefined {
+  if (!url) return undefined;
+  const n = Number(url.split('/').pop());
+  return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
+}
+
+/**
+ * The PR declaration the REFERENCED tier is allowed to act on.
+ *
+ * `CEZ:PR=N` means one of two things depending on when the agent writes it: on the way in it
+ * names the PR the task is ABOUT, and once the task has opened a PR of its own the marker
+ * contract asks it to re-declare with the new number ("Re-emit with the new number if the subject
+ * changes (e.g. you open a PR later in the task)"). A declaration naming the PR this run CREATED
+ * is therefore a statement about the CREATED tier, which `pullRequestUrl` already carries — and
+ * feeding it to the referenced tier ERASES the about-PR, because `resolveReferencedRef` clears
+ * the chip when no candidate matches the declared number (a task on #4326 that opened
+ * #5366 dropped from two chips to one the moment it declared #5366).
+ *
+ * Both tiers stay true instead: the created PR is the created PR, and the reference resolves as
+ * if that declaration had not been made — which is exactly what it was before the task opened
+ * anything.
+ */
+function referencedPrDeclaration(run: RunRecord): number | undefined {
+  const declared = run.markerRefs?.pr;
+  if (declared === undefined) return undefined;
+  return declared === refUrlNumber(run.pullRequestUrl) ? undefined : declared;
+}
+
 /**
  * The PR URL a creation phrase *introduces*, or undefined. The created URL is
  * the first one at or after the `CREATED_PR_RE` phrase — a PR the same event
@@ -476,6 +507,25 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
+  // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
+  // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
+  // could match the created number. The evidence is all still on the record — only the
+  // conclusion drawn from it was wrong — so re-resolve without that declaration instead of
+  // asking for a migration. Deliberately one-directional: it only runs on a record that HAS no
+  // referenced PR, so it can never take one away from a record written by an older cezar whose
+  // candidate list no longer explains it. `prNumber` is not recoverable this way (the
+  // declaration overwrote it) and is left alone — the restored URL is what paints the chip.
+  if (
+    run.referencedPullRequestUrl === undefined &&
+    run.markerRefs?.pr !== undefined &&
+    referencedPrDeclaration(run) === undefined
+  ) {
+    run.referencedPullRequestUrl = resolveReferencedRef(
+      run.referencedPrCandidates ?? [],
+      run.task,
+      undefined,
+    );
+  }
   return run;
 }
 
@@ -808,6 +858,18 @@ export class RunStore extends EventEmitter {
         const created = createdPrUrl(haystack);
         if (created) {
           this.updateRun(runId, { pullRequestUrl: created });
+          // Adopting the created tier can RELEASE a declaration the referenced tier was holding
+          // (see `referencedPrDeclaration`), so re-resolve here too: the about-PR must come back
+          // whether the marker arrived before the creation evidence or after it.
+          const resolved = resolveReferencedRef(
+            run.referencedPrCandidates ?? [],
+            run.task,
+            referencedPrDeclaration(run),
+          );
+          if (resolved !== run.referencedPullRequestUrl) {
+            run.referencedPullRequestUrl = resolved;
+            changed = true;
+          }
         } else if (PR_URL_RE.test(haystack) && this.trackReferencedPrs(run, haystack)) {
           changed = true;
         }
@@ -844,7 +906,7 @@ export class RunStore extends EventEmitter {
     run.referencedPullRequestUrl = resolveReferencedRef(
       run.referencedPrCandidates,
       run.task,
-      run.markerRefs?.pr,
+      referencedPrDeclaration(run),
     );
     return true;
   }
@@ -902,6 +964,10 @@ export class RunStore extends EventEmitter {
    * against the candidate working set — including down to `undefined` when no
    * candidate matches (a wrong chip is worse than no chip). The created tier
    * (`pullRequestUrl`) is deliberately untouched.
+   *
+   * One declaration is NOT a statement about the referenced tier: the number of the PR this run
+   * itself created. See `referencedPrDeclaration` — the marker contract asks the agent to
+   * re-declare after it opens a PR, and taking that literally cost the task the PR it was about.
    */
   applyMarkerRefs(runId: string, refs: { pr?: number; issue?: number }): RunRecord | undefined {
     const run = this.runs.get(runId);
@@ -911,7 +977,12 @@ export class RunStore extends EventEmitter {
       ...(refs.pr !== undefined ? { pr: refs.pr } : {}),
       ...(refs.issue !== undefined ? { issue: refs.issue } : {}),
     };
-    if (refs.pr !== undefined) run.prNumber = refs.pr;
+    // `prNumber` is the about-PR as well (it is what paints a numeric-only chip), so a
+    // re-declaration naming the created PR only FILLS it — it never overwrites the number the
+    // task came in with, which is still the PR this task is about.
+    if (refs.pr !== undefined && (run.prNumber === undefined || refs.pr !== refUrlNumber(run.pullRequestUrl))) {
+      run.prNumber = refs.pr;
+    }
     if (refs.issue !== undefined) {
       run.issueNumber = refs.issue;
       delete run.referencedIssueNumberSeeded;
@@ -920,7 +991,7 @@ export class RunStore extends EventEmitter {
       run.referencedPullRequestUrl = resolveReferencedRef(
         run.referencedPrCandidates ?? [],
         run.task,
-        run.markerRefs.pr,
+        referencedPrDeclaration(run),
       );
     }
     if (run.markerRefs.issue !== undefined) {

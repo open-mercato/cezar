@@ -72,9 +72,26 @@ this spec or `handoff.ts` cannot poison its own record via tool output echoes.
 | Field | marker | namer (LLM) | janitor (regex) | user |
 |---|---|---|---|---|
 | `prNumber` / `issueNumber` | **wins** | only while no marker of that kind | seed at creation (task prompt regex) | — |
-| `referencedPullRequestUrl` | marker number filters candidates — only a URL ending in the declared number resolves; no match → unset (no chip beats a wrong chip) | — | fuzzy resolution only while no `CEZ:PR` marker | — |
+| `referencedPullRequestUrl` | marker number filters candidates — only a URL ending in the declared number resolves; no match → unset (no chip beats a wrong chip). Exception: a number equal to the created PR's is ignored here — see the amendment below | — | fuzzy resolution only while no `CEZ:PR` marker | — |
 | `pullRequestUrl` (created tier) | untouched — `CREATED_PR_RE` / cockpit draft-PR flow stay authoritative | — | unchanged | — |
 | `titleSummary` | `CEZ:TITLE` wins over namer | only while `titleOrigin` is unset/`auto` | — | **PATCH rename always wins** (`titleOrigin: 'user'`) |
+
+### Amendment — a declaration naming the PR the run CREATED
+
+The instruction fragment asks the agent to re-emit `CEZ:PR` when it opens a PR later in the task,
+so on such a run the LAST declaration is the number of the run's OWN PR — not the PR it is about.
+Fed to the referenced tier that declaration erased the subject: no candidate ends in the created
+number, and "no match → unset" cleared the chip (seen on a task started on open-mercato#4326 that
+pushed a follow-up as #5366 and dropped from two chips to one).
+
+So a declaration equal to the number in `pullRequestUrl` is read as a statement about the
+**created** tier, which already carries it, and the referenced tier resolves as if it had not been
+made (`referencedPrDeclaration`, `src/runs/store.ts`). `prNumber` follows the same rule: such a
+declaration only FILLS it, never overwrites the about-number the task came in with. Both writers
+(`applyMarkerRefs`, and the janitor at the moment it adopts a created URL) go through the one
+helper, so the marker and the creation evidence may arrive in either order. Records already
+written the old way are healed on load by `reconcileLoadedRun` — one-directional, so it can only
+restore a chip, never remove one.
 
 Record model (additive, old `runs.json` files keep parsing):
 
