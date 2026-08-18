@@ -4,6 +4,12 @@ import type { ClientResponse } from 'hono/client'
 import type { SuccessStatusCode } from 'hono/utils/http-status'
 
 import { createCezarRunsDomain, type CezarRunsDomain } from './domains/runs.ts'
+import {
+  createCezarProjectEventDomain,
+  type CezarEventDomain,
+  type CezarEventSourceFactory,
+  type CezarProjectEventDomain,
+} from './subscriptions/run-events.ts'
 import { projectApiPath, resolveCezarUrl } from './utils/urls.ts'
 
 /**
@@ -52,6 +58,8 @@ export interface CezarClientOptions {
   credentials?: RequestCredentials
   /** Custom fetch — for tests (dispatch straight into a Hono app) or a wrapped transport. */
   fetch?: typeof globalThis.fetch
+  /** Custom EventSource factory. The browser global is resolved lazily when omitted. */
+  eventSource?: CezarEventSourceFactory
 }
 
 export class ApiError extends Error {
@@ -72,12 +80,14 @@ export type CezarClient<TApp extends Hono<any, any, any> = Hono<any, any, any>> 
   readonly identity: string
   readonly baseUrl: string
   readonly rpc: ReturnType<typeof hc<TApp>>
+  readonly events: CezarEventDomain
   forProject(projectId?: string | null): CezarProjectClient
 }
 
 export interface CezarProjectClient {
   readonly projectId: string | null
   readonly runs: CezarRunsDomain
+  readonly events: CezarProjectEventDomain
   resolveUrl(url: string): string
 }
 
@@ -85,6 +95,7 @@ type UntypedCezarClient = Record<string, any> & {
   readonly identity: string
   readonly baseUrl: string
   readonly rpc: Record<string, any>
+  readonly events: CezarEventDomain
   forProject(projectId?: string | null): CezarProjectClient
 }
 
@@ -124,10 +135,17 @@ class CezarClientCore<TApp extends Hono<any, any, any>> {
   readonly identity = `cezar-client-${++nextClientIdentity}`
   readonly baseUrl: string
   readonly rpc: ReturnType<typeof hc<TApp>>
+  readonly events: CezarEventDomain
 
-  constructor(private readonly transport: ReturnType<typeof createClientTransport>) {
+  constructor(
+    private readonly transport: ReturnType<typeof createClientTransport>,
+    private readonly eventSource?: CezarEventSourceFactory,
+  ) {
     this.baseUrl = transport.baseUrl
     this.rpc = hc<TApp>(transport.baseUrl, { fetch: transport.fetch })
+    this.events = {
+      forProject: (projectId = null) => this.createProjectEvents(projectId ?? null),
+    }
   }
 
   private async requestJson<T>(
@@ -163,8 +181,13 @@ class CezarClientCore<TApp extends Hono<any, any, any>> {
     return {
       projectId: normalizedProjectId,
       runs: createCezarRunsDomain(normalizedProjectId, this.requestJson.bind(this)),
+      events: this.createProjectEvents(normalizedProjectId),
       resolveUrl: (url) => this.resolveProjectUrl(normalizedProjectId, url),
     }
+  }
+
+  private createProjectEvents(projectId: string | null): CezarProjectEventDomain {
+    return createCezarProjectEventDomain(this.baseUrl, projectId, this.eventSource)
   }
 
   private resolveProjectUrl(projectId: string | null, url: string): string {
@@ -203,7 +226,7 @@ export function createCezarClient<
   T extends Hono<any, any, any> = Hono<any, any, any>,
 >(options: CezarClientOptions = {}): CezarClient<T> | UntypedCezarClient {
   const transport = createClientTransport(options)
-  const client = new CezarClientCore<T>(transport)
+  const client = new CezarClientCore<T>(transport, options.eventSource)
   return new Proxy(client, {
     get(target, property, receiver) {
       if (property in target) return Reflect.get(target, property, receiver)
