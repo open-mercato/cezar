@@ -4,6 +4,6 @@ export default defineConfig({
   test: {
     name: 'react',
     environment: 'node',
-    include: ['src/**/*.test.ts'],
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.mjs'],
   },
 })

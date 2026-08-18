@@ -26,6 +26,7 @@
     "check:boundaries": "node scripts/check-import-boundaries.mjs"
   },
   "devDependencies": {
+    "es-module-lexer": "^2.3.1",
     "typescript": "^7.0.2",
     "vite": "^8.1.4",
     "vitest": "^4.1.10"

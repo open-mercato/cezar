@@ -4,6 +4,12 @@ import { defineConfig } from 'vite'
 
 const packageDir = dirname(fileURLToPath(import.meta.url))
 
+export const isReactPeerExternal = (id: string) =>
+  id === 'react'
+  || id.startsWith('react/')
+  || id === 'react-dom'
+  || id.startsWith('react-dom/')
+
 export default defineConfig({
   build: {
     outDir: resolve(packageDir, 'dist'),
@@ -15,7 +21,7 @@ export default defineConfig({
         session: resolve(packageDir, 'src/session.ts'),
         styles: resolve(packageDir, 'src/styles/index.css'),
       },
-      external: ['react', 'react-dom'],
+      external: isReactPeerExternal,
       output: {
         entryFileNames: '[name].js',
         assetFileNames: '[name][extname]',
