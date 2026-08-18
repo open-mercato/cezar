@@ -19,72 +19,133 @@ function prefixIdentifier(identifier) {
   return identifier.startsWith('cezar-') ? identifier : `cezar-${identifier}`
 }
 
+const GENERIC_FONT_FAMILIES = new Set([
+  'cursive',
+  'emoji',
+  'fangsong',
+  'fantasy',
+  'math',
+  'monospace',
+  'sans-serif',
+  'serif',
+  'system-ui',
+  'ui-monospace',
+  'ui-rounded',
+  'ui-sans-serif',
+  'ui-serif',
+])
+const CSS_WIDE_KEYWORDS = new Set(['inherit', 'initial', 'revert', 'revert-layer', 'unset'])
+const FONT_SIZE_KEYWORDS = new Set([
+  'large',
+  'larger',
+  'medium',
+  'small',
+  'smaller',
+  'x-large',
+  'x-small',
+  'xx-large',
+  'xx-small',
+  'xxx-large',
+])
+
 function firstIdentifier(value) {
   return valueParser(value).nodes.find((node) => node.type === 'word' || node.type === 'string')
 }
 
-function renameCustomProperties(value) {
+function namespaceCustomProperty(identifier) {
+  if (identifier.startsWith('--cezar-')) return identifier
+  if (identifier.startsWith('--tw-')) return `--cezar-tw-${identifier.slice('--tw-'.length)}`
+  return `--cezar-tw-${identifier.slice(2)}`
+}
+
+function renameCustomPropertyReferences(value) {
   const parsed = valueParser(value)
   parsed.walk((node) => {
-    if (node.type === 'word' && node.value.startsWith('--tw-')) {
-      node.value = `--cezar-tw-${node.value.slice('--tw-'.length)}`
+    if (node.type === 'word' && node.value.startsWith('--')) {
+      node.value = namespaceCustomProperty(node.value)
     }
   })
   return parsed.toString()
 }
 
-function readFontFamily(value) {
-  const parsed = valueParser(value)
-  const first = parsed.nodes.find((node) => node.type !== 'space' && node.type !== 'comment')
-  if (!first) return undefined
-  if (first.type === 'string') return first.value
-
-  const family = []
-  for (const node of parsed.nodes) {
-    if (node.type === 'div' && node.value === ',') break
-    if (node.type === 'word' || node.type === 'string') family.push(node.value)
-  }
-  return family.join(' ') || undefined
+function firstSignificantNode(nodes) {
+  return nodes.find((node) => node.type !== 'space' && node.type !== 'comment')
 }
 
-function renameDeclaredFontFamily(value, renamed) {
+function namespaceFontFamilyGroup(nodes) {
+  const first = firstSignificantNode(nodes)
+  if (!first || first.type === 'function') return
+  if (first.type === 'string') {
+    first.value = prefixIdentifier(first.value)
+    return
+  }
+  if (first.type !== 'word') return
+
+  const significant = nodes.filter((node) => node.type !== 'space' && node.type !== 'comment')
+  const isSingleKeyword = significant.length === 1
+    && (GENERIC_FONT_FAMILIES.has(first.value.toLowerCase()) || CSS_WIDE_KEYWORDS.has(first.value.toLowerCase()))
+  if (!isSingleKeyword) first.value = prefixIdentifier(first.value)
+}
+
+function namespaceFontGroups(nodes) {
+  let group = []
+  for (const node of nodes) {
+    if (node.type === 'div' && node.value === ',') {
+      namespaceFontFamilyGroup(group)
+      group = []
+    } else {
+      group.push(node)
+    }
+  }
+  namespaceFontFamilyGroup(group)
+}
+
+function namespaceFontFamilyValue(value) {
   const parsed = valueParser(value)
-  const first = parsed.nodes.find((node) => node.type === 'word' || node.type === 'string')
-  if (first) first.value = first.type === 'string' ? renamed : prefixIdentifier(first.value)
+  namespaceFontGroups(parsed.nodes)
   return parsed.toString()
 }
 
-function replaceNamedIdentifiers(value, names) {
+function isFontSizeNode(node) {
+  if (node.type === 'function') return true
+  if (node.type !== 'word') return false
+  const word = node.value.toLowerCase()
+  if (FONT_SIZE_KEYWORDS.has(word)) return true
+  if (word === '0') return true
+  return /^-?(?:\d*\.)?\d+(?:[a-z]+|%)$/i.test(word)
+}
+
+function namespaceFontShorthand(value) {
+  const parsed = valueParser(value)
+  const significantIndexes = parsed.nodes
+    .map((node, index) => ({ node, index }))
+    .filter(({ node }) => node.type !== 'space' && node.type !== 'comment')
+  const sizePosition = significantIndexes.findIndex(({ node }) => isFontSizeNode(node))
+  if (sizePosition < 0) return parsed.toString()
+
+  let familyPosition = sizePosition + 1
+  if (significantIndexes[familyPosition]?.node.type === 'div' && significantIndexes[familyPosition].node.value === '/') {
+    familyPosition += 2
+  }
+  const familyStart = significantIndexes[familyPosition]?.index
+  if (familyStart !== undefined) namespaceFontGroups(parsed.nodes.slice(familyStart))
+  return parsed.toString()
+}
+
+function replaceTopLevelIdentifiers(value, names) {
   if (names.size === 0) return value
   const parsed = valueParser(value)
 
-  parsed.walk((node) => {
+  for (const node of parsed.nodes) {
     if ((node.type === 'word' || node.type === 'string') && names.has(node.value)) {
       node.value = names.get(node.value)
     }
-  })
-
-  for (const [original] of names) {
-    const words = original.split(/\s+/)
-    if (words.length < 2) continue
-    for (let index = 0; index < parsed.nodes.length; index += 1) {
-      if (parsed.nodes[index]?.type !== 'word' || parsed.nodes[index].value !== words[0]) continue
-      const followingWords = parsed.nodes
-        .slice(index + 1)
-        .filter((node) => node.type !== 'space')
-        .slice(0, words.length - 1)
-      if (followingWords.every((node, wordIndex) => node.type === 'word' && node.value === words[wordIndex + 1])) {
-        parsed.nodes[index].value = prefixIdentifier(parsed.nodes[index].value)
-      }
-    }
   }
-
   return parsed.toString()
 }
 
 function collectGlobalNames(root) {
   const keyframes = new Map()
-  const fonts = new Map()
 
   root.walkAtRules((atRule) => {
     if (!atRule.name.toLowerCase().endsWith('keyframes')) return
@@ -92,17 +153,14 @@ function collectGlobalNames(root) {
     if (name) keyframes.set(name.value, prefixIdentifier(name.value))
   })
 
-  root.walkAtRules('font-face', (fontFace) => {
-    fontFace.walkDecls('font-family', (declaration) => {
-      const family = readFontFamily(declaration.value)
-      if (family) fonts.set(family, prefixIdentifier(family))
-    })
-  })
-
-  return { keyframes, fonts }
+  return keyframes
 }
 
-function renameGlobalNames(root, keyframes, fonts) {
+function isAnimationCustomProperty(property) {
+  return /^--(?:(?:cezar-)?tw-)?animate(?:-|$)/.test(property)
+}
+
+function renameGlobalNames(root, keyframes) {
   root.walkAtRules((atRule) => {
     if (atRule.name.toLowerCase().endsWith('keyframes')) {
       const parsed = valueParser(atRule.params)
@@ -110,39 +168,39 @@ function renameGlobalNames(root, keyframes, fonts) {
       if (name && keyframes.has(name.value)) name.value = keyframes.get(name.value)
       atRule.params = parsed.toString()
     } else {
-      atRule.params = renameCustomProperties(atRule.params)
+      atRule.params = renameCustomPropertyReferences(atRule.params)
     }
-  })
-
-  root.walkAtRules('font-face', (fontFace) => {
-    fontFace.walkDecls('font-family', (declaration) => {
-      const family = readFontFamily(declaration.value)
-      if (family && fonts.has(family)) {
-        declaration.value = renameDeclaredFontFamily(declaration.value, fonts.get(family))
-      }
-    })
   })
 
   root.walkDecls((declaration) => {
-    if (declaration.prop.startsWith('--tw-')) {
-      declaration.prop = `--cezar-tw-${declaration.prop.slice('--tw-'.length)}`
+    const originalProperty = declaration.prop
+    if (declaration.prop.startsWith('--')) declaration.prop = namespaceCustomProperty(declaration.prop)
+    declaration.value = renameCustomPropertyReferences(declaration.value)
+
+    const property = originalProperty.toLowerCase()
+    if (property === 'animation' || property === 'animation-name' || isAnimationCustomProperty(property)) {
+      declaration.value = replaceTopLevelIdentifiers(declaration.value, keyframes)
     }
-    declaration.value = renameCustomProperties(declaration.value)
-    declaration.value = replaceNamedIdentifiers(declaration.value, keyframes)
-    declaration.value = replaceNamedIdentifiers(declaration.value, fonts)
+    if (property === 'font-family') declaration.value = namespaceFontFamilyValue(declaration.value)
+    if (property === 'font') declaration.value = namespaceFontShorthand(declaration.value)
   })
 }
 
 function selectorHasSafeRoot(selector) {
-  let isScoped = false
+  let hasAncestorRoot = false
+  let currentCompoundHasRoot = false
 
   selector.each((node) => {
-    if (node.type === 'combinator' && ['+', '~', '||'].includes(node.value.trim())) {
-      isScoped = false
+    if (node.type === 'combinator') {
+      const combinator = node.value.trim()
+      if (combinator === '' || combinator === '>') {
+        hasAncestorRoot ||= currentCompoundHasRoot
+      }
+      currentCompoundHasRoot = false
       return
     }
     if (node.type === 'class' && node.value === 'cezar-root') {
-      isScoped = true
+      currentCompoundHasRoot = true
       return
     }
     if (
@@ -151,11 +209,11 @@ function selectorHasSafeRoot(selector) {
       && node.nodes?.length
       && node.nodes.every((nestedSelector) => selectorHasSafeRoot(nestedSelector))
     ) {
-      isScoped = true
+      currentCompoundHasRoot = true
     }
   })
 
-  return isScoped
+  return hasAncestorRoot || currentCompoundHasRoot
 }
 
 function scopeSelectors(root) {
@@ -186,8 +244,8 @@ function scopeSelectors(root) {
 
 export async function scopeCss(css) {
   const root = postcss.parse(css)
-  const { keyframes, fonts } = collectGlobalNames(root)
-  renameGlobalNames(root, keyframes, fonts)
+  const keyframes = collectGlobalNames(root)
+  renameGlobalNames(root, keyframes)
   scopeSelectors(root)
   return root.toString()
 }

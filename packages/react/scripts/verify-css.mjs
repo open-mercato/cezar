@@ -42,34 +42,12 @@ const ANIMATION_KEYWORDS = new Set([
   'step-end',
   'step-start',
 ])
-const FONT_SHORTHAND_KEYWORDS = new Set([
-  ...CSS_WIDE_KEYWORDS,
-  'bold',
-  'bolder',
-  'caption',
-  'condensed',
-  'expanded',
-  'extra-condensed',
-  'extra-expanded',
-  'icon',
-  'italic',
+const FONT_SIZE_KEYWORDS = new Set([
   'large',
   'larger',
-  'lighter',
   'medium',
-  'menu',
-  'message-box',
-  'normal',
-  'oblique',
-  'semi-condensed',
-  'semi-expanded',
   'small',
-  'small-caps',
-  'small-caption',
   'smaller',
-  'status-bar',
-  'ultra-condensed',
-  'ultra-expanded',
   'x-large',
   'x-small',
   'xx-large',
@@ -85,15 +63,20 @@ function isInsideKeyframes(rule) {
 }
 
 function selectorHasScopedRoot(selector) {
-  let isScoped = false
+  let hasAncestorRoot = false
+  let currentCompoundHasRoot = false
 
   selector.each((node) => {
-    if (node.type === 'combinator' && ['+', '~', '||'].includes(node.value.trim())) {
-      isScoped = false
+    if (node.type === 'combinator') {
+      const combinator = node.value.trim()
+      if (combinator === '' || combinator === '>') {
+        hasAncestorRoot ||= currentCompoundHasRoot
+      }
+      currentCompoundHasRoot = false
       return
     }
     if (node.type === 'class' && node.value === 'cezar-root') {
-      isScoped = true
+      currentCompoundHasRoot = true
       return
     }
     if (
@@ -102,11 +85,11 @@ function selectorHasScopedRoot(selector) {
       && node.nodes?.length
       && node.nodes.every((nestedSelector) => selectorHasScopedRoot(nestedSelector))
     ) {
-      isScoped = true
+      currentCompoundHasRoot = true
     }
   })
 
-  return isScoped
+  return hasAncestorRoot || currentCompoundHasRoot
 }
 
 function verifySelectors(root) {
@@ -141,12 +124,12 @@ function firstSignificantNode(nodes) {
   return nodes.find((node) => node.type !== 'space' && node.type !== 'comment')
 }
 
-function assertNamespacedFontFamily(value) {
-  const parsed = valueParser(value)
+function assertNamespacedFontGroups(nodes) {
   let group = []
 
   const verifyGroup = () => {
     const first = firstSignificantNode(group)
+    const significant = group.filter((node) => node.type !== 'space' && node.type !== 'comment')
     group = []
     if (!first || first.type === 'function') return
     if (first.type === 'string') {
@@ -155,35 +138,48 @@ function assertNamespacedFontFamily(value) {
     }
     if (first.type !== 'word') return
     const name = first.value.toLowerCase()
-    if (!GENERIC_FONT_FAMILIES.has(name) && !CSS_WIDE_KEYWORDS.has(name) && !name.startsWith('cezar-')) {
+    const isSingleKeyword = significant.length === 1
+      && (GENERIC_FONT_FAMILIES.has(name) || CSS_WIDE_KEYWORDS.has(name))
+    if (!isSingleKeyword && !name.startsWith('cezar-')) {
       throw new Error(`unnamespaced font family: ${first.value}`)
     }
   }
 
-  for (const node of parsed.nodes) {
+  for (const node of nodes) {
     if (node.type === 'div' && node.value === ',') verifyGroup()
     else group.push(node)
   }
   verifyGroup()
 }
 
+function assertNamespacedFontFamily(value) {
+  const parsed = valueParser(value)
+  assertNamespacedFontGroups(parsed.nodes)
+}
+
+function isFontSizeNode(node) {
+  if (node.type === 'function') return true
+  if (node.type !== 'word') return false
+  const word = node.value.toLowerCase()
+  if (FONT_SIZE_KEYWORDS.has(word)) return true
+  if (word === '0') return true
+  return /^-?(?:\d*\.)?\d+(?:[a-z]+|%)$/i.test(word)
+}
+
 function assertNamespacedFontShorthand(value) {
   const parsed = valueParser(value)
-  for (const node of parsed.nodes) {
-    if (node.type === 'string' && !node.value.startsWith('cezar-')) {
-      throw new Error(`unnamespaced font family: ${node.value}`)
-    }
-    if (node.type !== 'word') continue
-    const word = node.value.toLowerCase()
-    if (
-      !FONT_SHORTHAND_KEYWORDS.has(word)
-      && !GENERIC_FONT_FAMILIES.has(word)
-      && !word.startsWith('cezar-')
-      && !/^-?(?:\d*\.)?\d+(?:[a-z%]+)?$/i.test(word)
-    ) {
-      throw new Error(`unnamespaced font family: ${node.value}`)
-    }
+  const significantIndexes = parsed.nodes
+    .map((node, index) => ({ node, index }))
+    .filter(({ node }) => node.type !== 'space' && node.type !== 'comment')
+  const sizePosition = significantIndexes.findIndex(({ node }) => isFontSizeNode(node))
+  if (sizePosition < 0) return
+
+  let familyPosition = sizePosition + 1
+  if (significantIndexes[familyPosition]?.node.type === 'div' && significantIndexes[familyPosition].node.value === '/') {
+    familyPosition += 2
   }
+  const familyStart = significantIndexes[familyPosition]?.index
+  if (familyStart !== undefined) assertNamespacedFontGroups(parsed.nodes.slice(familyStart))
 }
 
 function isAnimationNonName(word) {
@@ -202,24 +198,34 @@ function assertNamespacedAnimation(value) {
   }
 }
 
-function verifyIdentifiers(root) {
-  const rawKeyframeNames = new Set()
+function isAnimationCustomProperty(property) {
+  return /^--cezar-tw-animate(?:-|$)/.test(property)
+}
 
+function assertNamespacedCustomPropertyReference(identifier) {
+  if (identifier.startsWith('--tw-')) throw new Error(`raw --tw-* identifier: ${identifier}`)
+  if (!identifier.startsWith('--cezar-')) {
+    throw new Error(`non-Cezar custom property reference: ${identifier}`)
+  }
+}
+
+function verifyIdentifiers(root) {
   root.walkDecls((declaration) => {
     if (declaration.prop.startsWith('--tw-')) {
       throw new Error(`raw --tw-* identifier: ${declaration.prop}`)
     }
+    if (declaration.prop.startsWith('--') && !declaration.prop.startsWith('--cezar-')) {
+      throw new Error(`non-Cezar custom property declaration: ${declaration.prop}`)
+    }
 
     valueParser(declaration.value).walk((node) => {
-      if (node.type === 'word' && node.value.startsWith('--tw-')) {
-        throw new Error(`raw --tw-* identifier: ${node.value}`)
-      }
+      if (node.type === 'word' && node.value.startsWith('--')) assertNamespacedCustomPropertyReference(node.value)
     })
 
     const property = declaration.prop.toLowerCase()
     if (property === 'font-family') assertNamespacedFontFamily(declaration.value)
     if (property === 'font') assertNamespacedFontShorthand(declaration.value)
-    if (property === 'animation' || property === 'animation-name') {
+    if (property === 'animation' || property === 'animation-name' || isAnimationCustomProperty(property)) {
       assertNamespacedAnimation(declaration.value)
     }
   })
@@ -231,7 +237,6 @@ function verifyIdentifiers(root) {
       if (!name?.value.startsWith('cezar-')) {
         throw new Error(`unnamespaced keyframe: ${name?.value ?? atRule.params}`)
       }
-      rawKeyframeNames.add(name.value.slice('cezar-'.length))
     }
 
     if (atRuleName === 'property') {
@@ -242,17 +247,7 @@ function verifyIdentifiers(root) {
     }
 
     valueParser(atRule.params).walk((node) => {
-      if (node.type === 'word' && node.value.startsWith('--tw-')) {
-        throw new Error(`raw --tw-* identifier: ${node.value}`)
-      }
-    })
-  })
-
-  root.walkDecls((declaration) => {
-    valueParser(declaration.value).walk((node) => {
-      if ((node.type === 'word' || node.type === 'string') && rawKeyframeNames.has(node.value)) {
-        throw new Error(`unnamespaced keyframe reference: ${node.value}`)
-      }
+      if (node.type === 'word' && node.value.startsWith('--')) assertNamespacedCustomPropertyReference(node.value)
     })
   })
 }

@@ -32,22 +32,83 @@ describe('scopeCss', () => {
     ].join(''))
   })
 
-  it('renames declared font families and every parsed reference', async () => {
+  it('binds every non-Cezar custom property declaration, registration, and reference', async () => {
+    const css = [
+      '@property --foreign-size{syntax:"<length>";inherits:false;initial-value:0px}',
+      '.tokens{--spacing:.25rem;--ease-in:cubic-bezier(.4,0,1,1);--cezar-public:1rem;',
+      'gap:var(--spacing);transition-timing-function:var(--ease-in);width:var(--foreign-size);height:var(--cezar-public)}',
+    ].join('')
+
+    expect(await scopeCss(css)).toBe([
+      '@property --cezar-tw-foreign-size{syntax:"<length>";inherits:false;initial-value:0px}',
+      '.cezar-root .tokens{--cezar-tw-spacing:.25rem;--cezar-tw-ease-in:cubic-bezier(.4,0,1,1);--cezar-public:1rem;',
+      'gap:var(--cezar-tw-spacing);transition-timing-function:var(--cezar-tw-ease-in);width:var(--cezar-tw-foreign-size);height:var(--cezar-public)}',
+    ].join(''))
+  })
+
+  it('renames complete font-family groups only in font semantic positions', async () => {
     const css = [
       '@font-face{font-family:"Cezar Sans";src:url(cezar.woff2)}',
-      '.copy{font-family:"Cezar Sans",sans-serif;font:400 1rem/1.5 "Cezar Sans"}',
+      '.copy{font-family:Cezar Sans,"Other Font",var(--font-host),sans-serif;',
+      'font:400 1rem/1.5 Cezar Sans,"Other Font",var(--font-host),sans-serif;',
+      'content:"Cezar Sans";--label:"Cezar Sans"}',
     ].join('')
 
     expect(await scopeCss(css)).toBe([
       '@font-face{font-family:"cezar-Cezar Sans";src:url(cezar.woff2)}',
-      '.cezar-root .copy{font-family:"cezar-Cezar Sans",sans-serif;font:400 1rem/1.5 "cezar-Cezar Sans"}',
+      '.cezar-root .copy{font-family:cezar-Cezar Sans,"cezar-Other Font",var(--cezar-tw-font-host),sans-serif;',
+      'font:400 1rem/1.5 cezar-Cezar Sans,"cezar-Other Font",var(--cezar-tw-font-host),sans-serif;',
+      'content:"Cezar Sans";--cezar-tw-label:"Cezar Sans"}',
     ].join(''))
   })
 
-  it('recognizes root guarantees inside selector functions and after sibling branches', async () => {
-    const css = ':is(.cezar-root,.cezar-root.active) .x,.cezar-root + .cezar-root{display:block}'
+  it('preserves an ancestor root across sibling combinators and recognizes a root on the right', async () => {
+    const css = [
+      '.peer:checked ~ .target,.a + .b,.cell || .other,',
+      '.cezar-root .peer:checked ~ .target,.cezar-root > .group:hover + .target,',
+      '.host + .cezar-root,:is(.cezar-root,.cezar-root.active) .x',
+      '{display:block}',
+    ].join('')
 
-    expect(await scopeCss(css)).toBe(css)
+    const scoped = [
+      '.cezar-root .peer:checked ~ .target,.cezar-root .a + .b,.cezar-root .cell || .other,',
+      '.cezar-root .peer:checked ~ .target,.cezar-root > .group:hover + .target,',
+      '.host + .cezar-root,:is(.cezar-root,.cezar-root.active) .x',
+      '{display:block}',
+    ].join('')
+
+    expect(await scopeCss(css)).toBe(scoped)
+    expect(await scopeCss(scoped)).toBe(scoped)
+  })
+
+  it('scopes common Tailwind peer and group selector shapes exactly once', async () => {
+    const css = [
+      '.peer-checked\\:block:is(:where(.peer):checked~*),',
+      '.group-hover\\:block:is(:where(.group):hover *)',
+      '{display:block}',
+    ].join('')
+    const scoped = [
+      '.cezar-root .peer-checked\\:block:is(:where(.peer):checked~*),',
+      '.cezar-root .group-hover\\:block:is(:where(.group):hover *)',
+      '{display:block}',
+    ].join('')
+
+    expect(await scopeCss(css)).toBe(scoped)
+    expect(await scopeCss(scoped)).toBe(scoped)
+  })
+
+  it('renames keyframes only in animation semantic positions', async () => {
+    const css = [
+      '@keyframes pulse{to{opacity:.5}}',
+      '.pulse{animation:pulse 1s;animation-name:pulse;--animate-pulse:pulse 1s;',
+      'content:"pulse";color:pulse;--label:pulse}',
+    ].join('')
+
+    expect(await scopeCss(css)).toBe([
+      '@keyframes cezar-pulse{to{opacity:.5}}',
+      '.cezar-root .pulse{animation:cezar-pulse 1s;animation-name:cezar-pulse;--cezar-tw-animate-pulse:cezar-pulse 1s;',
+      'content:"pulse";color:pulse;--cezar-tw-label:pulse}',
+    ].join(''))
   })
 
   it('is deterministic when an already-scoped artifact is processed again', async () => {

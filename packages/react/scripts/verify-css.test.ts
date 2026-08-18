@@ -7,6 +7,9 @@ describe('verifyCss', () => {
     ['.flex{display:flex}', 'selector outside .cezar-root'],
     ['.cezar-root .x{transform:var(--tw-translate-x)}', 'raw --tw-* identifier'],
     ['@supports (--tw-x: 0){.cezar-root{display:block}}', 'raw --tw-* identifier'],
+    ['.cezar-root{--spacing:.25rem}', 'non-Cezar custom property declaration'],
+    ['.cezar-root{gap:var(--spacing)}', 'non-Cezar custom property reference'],
+    ['@supports (--spacing: 0){.cezar-root{display:block}}', 'non-Cezar custom property reference'],
     ['@keyframes spin{to{transform:rotate(1turn)}}', 'unnamespaced keyframe'],
   ])('rejects %s', async (css, reason) => {
     await expect(verifyCss(css)).rejects.toThrow(reason)
@@ -22,6 +25,7 @@ describe('verifyCss', () => {
     ['@font-face{font-family:"Inter";src:url(inter.woff2)}', 'unnamespaced font family'],
     ['.cezar-root{font-family:"Inter",sans-serif}', 'unnamespaced font family'],
     ['.cezar-root{font:400 1rem/1.5 Inter,sans-serif}', 'unnamespaced font family'],
+    ['.cezar-root{font:400 1rem Cezar Sans,sans-serif}', 'unnamespaced font family'],
     [':is(.cezar-root,.host) .x{display:block}', 'selector outside .cezar-root'],
   ])('rejects additional escape %s', async (css, reason) => {
     await expect(verifyCss(css)).rejects.toThrow(reason)
@@ -34,9 +38,11 @@ describe('verifyCss', () => {
       '@property --cezar-tw-x{syntax:"<length>";inherits:false;initial-value:0px}',
       '@keyframes cezar-spin{to{transform:rotate(1turn)}}',
       '@font-face{font-family:"cezar-Sans";src:url(cezar.woff2)}',
-      '.cezar-root{animation:cezar-spin 1s linear;font-family:"cezar-Sans",system-ui,sans-serif}',
+      '.cezar-root{animation:cezar-spin 1s linear;font-family:"cezar-Sans",system-ui,sans-serif;content:"spin"}',
       ':is(.cezar-root,.cezar-root.active) .x,.cezar-root + .cezar-root{display:block}',
-      '.cezar-root{font:400 1rem/1.5 cezar-Sans,sans-serif}',
+      '.cezar-root .peer:checked ~ .target,.cezar-root > .group:hover + .target,.host + .cezar-root{display:block}',
+      '.cezar-root .peer-checked\\:block:is(:where(.peer):checked~*),.cezar-root .group-hover\\:block:is(:where(.group):hover *){display:block}',
+      '.cezar-root{font:400 1rem/1.5 cezar-Cezar Sans,"cezar-Other Font",var(--cezar-font-host),sans-serif}',
       '.cezar-root{font:var(--cezar-font-sans)}',
     ].join('')
 
