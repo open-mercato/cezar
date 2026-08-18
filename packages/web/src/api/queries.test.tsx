@@ -75,6 +75,18 @@ const HEALTH = {
   capabilities: { localHandoff: true, followups: false, singleProject: false, automations: false },
 }
 
+const API_RUN = {
+  id: 'run-1',
+  title: 'Fix it',
+  workflow: 'quick-task',
+  task: 'Fix the failing checkout.',
+  status: 'running',
+  createdAt: '2026-08-18T10:00:00.000Z',
+  tokensUsed: 0,
+  archived: false,
+  steps: [],
+}
+
 /** Just enough WebSocket for useHealth's topic subscription (api/ws.ts): records the frames the
  *  client sends, lets the test drive `open` and deliver server frames by hand. */
 class FakeHealthSocket {
@@ -684,7 +696,7 @@ describe('usePutAgentConfigFile', () => {
 
 describe('useRuns', () => {
   it('goes loading → data', async () => {
-    fetchMock.mockResolvedValue(json([{ id: 'run-1', title: 'Fix it', status: 'running' }]))
+    fetchMock.mockResolvedValue(json([API_RUN]))
     const { result } = renderHook(() => useRuns(), { wrapper: wrapper() })
 
     expect(result.current.isPending).toBe(true)
@@ -697,7 +709,7 @@ describe('useRuns', () => {
 
 describe('useRun', () => {
   it('does not fetch until it has an id', async () => {
-    fetchMock.mockResolvedValue(json({ id: 'run-1' }))
+    fetchMock.mockResolvedValue(json(API_RUN))
     const { result, rerender } = renderHook(({ id }: { id?: string }) => useRun(id), {
       wrapper: wrapper(),
       initialProps: {},
@@ -877,7 +889,7 @@ describe('useMarkRunUnseen', () => {
 
 describe('usePatchRun', () => {
   it('PATCHes the title and invalidates every runs query on success', async () => {
-    fetchMock.mockResolvedValue(json({ id: 'run-1', title: 'New name', titleSummary: 'New name' }))
+    fetchMock.mockResolvedValue(json({ ...API_RUN, title: 'New name', titleSummary: 'New name' }))
     const client = createQueryClient()
     const invalidate = vi.spyOn(client, 'invalidateQueries')
     const { result } = renderHook(() => usePatchRun('run-1'), {

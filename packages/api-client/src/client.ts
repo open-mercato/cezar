@@ -3,6 +3,9 @@ import type { Hono } from 'hono'
 import type { ClientResponse } from 'hono/client'
 import type { SuccessStatusCode } from 'hono/utils/http-status'
 
+import { createCezarRunsDomain, type CezarRunsDomain } from './domains/runs.ts'
+import { projectApiPath, resolveCezarUrl } from './utils/urls.ts'
+
 /**
  * The typed HTTP client for a cezar service.
  *
@@ -69,12 +72,20 @@ export type CezarClient<TApp extends Hono<any, any, any> = Hono<any, any, any>> 
   readonly identity: string
   readonly baseUrl: string
   readonly rpc: ReturnType<typeof hc<TApp>>
+  forProject(projectId?: string | null): CezarProjectClient
+}
+
+export interface CezarProjectClient {
+  readonly projectId: string | null
+  readonly runs: CezarRunsDomain
+  resolveUrl(url: string): string
 }
 
 type UntypedCezarClient = Record<string, any> & {
   readonly identity: string
   readonly baseUrl: string
   readonly rpc: Record<string, any>
+  forProject(projectId?: string | null): CezarProjectClient
 }
 
 let nextClientIdentity = 0
@@ -125,10 +136,19 @@ class CezarClientCore<TApp extends Hono<any, any, any>> {
     init?: RequestInit,
   ): Promise<T> {
     const response = await this.transport.fetch(`${this.baseUrl}${path}`, init)
-    const body = await response.json().catch(() => undefined)
+    let body: unknown
+    let isJson = true
+    try {
+      body = await response.json()
+    } catch {
+      isJson = false
+    }
 
     if (!response.ok) {
       throw new ApiError(response.status, path, errorMessage(response.status, response.statusText, body), body)
+    }
+    if (!isJson) {
+      throw new ApiError(response.status, path, `the cezar server answered ${path} with a non-JSON body`)
     }
 
     const parsed = schema.safeParse(body)
@@ -136,6 +156,32 @@ class CezarClientCore<TApp extends Hono<any, any, any>> {
       throw new ApiError(response.status, path, `the cezar server answered ${path} with an unexpected body`, body)
     }
     return parsed.data
+  }
+
+  forProject(projectId: string | null = null): CezarProjectClient {
+    const normalizedProjectId = projectId ?? null
+    return {
+      projectId: normalizedProjectId,
+      runs: createCezarRunsDomain(normalizedProjectId, this.requestJson.bind(this)),
+      resolveUrl: (url) => this.resolveProjectUrl(normalizedProjectId, url),
+    }
+  }
+
+  private resolveProjectUrl(projectId: string | null, url: string): string {
+    const absolute = /^[a-z][a-z\d+.-]*:\/\//i.test(url)
+    const parsed = new URL(url, 'http://cezar.invalid')
+    const legacyPrefix = parsed.pathname.startsWith('/api/v1/')
+      ? '/api/v1'
+      : parsed.pathname.startsWith('/api/')
+        ? '/api'
+        : null
+    if (legacyPrefix === null) return url
+
+    const suffix = parsed.pathname.slice(legacyPrefix.length)
+    const path = suffix.startsWith('/p/')
+      ? `/api/v1${suffix}${parsed.search}${parsed.hash}`
+      : `${projectApiPath(projectId, suffix as `/${string}`)}${parsed.search}${parsed.hash}`
+    return absolute ? `${parsed.origin}${path}` : resolveCezarUrl(this.baseUrl, path)
   }
 }
 

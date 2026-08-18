@@ -934,11 +934,16 @@ describe('TasksOverviewRoute — wired to the app', () => {
   })
 
   function renderApp(runs: RunRecord[]) {
-    fetchMock.mockImplementation(async (input) => {
+    fetchMock.mockImplementation(async (input, init) => {
       const url = String(input)
       if (url === '/api/v1/runs') return new Response(JSON.stringify(runs), { status: 200 })
       if (url === '/api/v1/runs/archive-finished')
         return new Response(JSON.stringify({ archived: 1 }), { status: 200 })
+      if (url.startsWith('/api/v1/runs/') && init?.method === 'PATCH') {
+        const id = url.slice('/api/v1/runs/'.length)
+        const current = runs.find((run) => run.id === id)
+        return new Response(JSON.stringify({ ...current, ...JSON.parse(String(init.body)) }), { status: 200 })
+      }
       return new Response('[]', { status: 200 })
     })
     return render(
