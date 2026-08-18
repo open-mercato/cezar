@@ -721,12 +721,23 @@ export function useHealth() {
  * `WORKSPACE_LEVEL`): the server always builds it from `bootRoot`, so its `repo.remote` names the
  * project cezar launched in, whichever project the URL is scoped to. Handing a non-boot project's
  * task a link built from the boot project's repo would point at a completely different repository
- * — the same wrong-link defect #526 exists to kill. Until a per-project remote is served, a
- * scoped view synthesizes nothing.
+ * — the same wrong-link defect #526 exists to kill.
+ *
+ * The per-project remote that guard was waiting for already exists: the registry serves each
+ * project's own `repoUrl` (rebuilt server-side from the parsed remote, credentials stripped), and
+ * it is what All tasks builds every cross-project chip from. Reading it here is what stops the
+ * SAME task from showing a linked chip on `/tasks` and inert text on its own page — which is how
+ * this was found: a declared PR was a dead `#901` in the task view and a working link one screen
+ * over. Health stays the fallback, and stays boot-only, so an unregistered boot folder (or a
+ * registry that has not loaded yet) keeps answering exactly as before.
  */
 export function useProjectRepoBase(): string | undefined {
   const health = useHealth().data
+  const projects = useProjects().data?.projects
   const { projectId } = useProjectScope()
+  const scopedId = projectId ?? health?.bootProject
+  const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
+  if (registered?.repoUrl) return registered.repoUrl
   const isBootProject = projectId === null || projectId === health?.bootProject
   return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
 }

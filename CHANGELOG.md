@@ -21,6 +21,12 @@
   prints it. And when a task declares a PR (`CEZ:PR`) that no scraped link corroborates, that
   declaration now leads the chips — so a PR picked up by mistake can no longer push the one the
   task actually named out of the single-chip surfaces. (#901)
+- 🐛 **A reference chip on a task's own page links, in every project.** A PR or issue known only
+  by number was a live link on All tasks and dead text on the task's page whenever the project
+  was not the one cezar booted in: that page synthesized links from `/health`, which always
+  reports the boot project's repository, so it refused to guess rather than point at the wrong
+  repo (#526). It now reads the project registry's own per-project repository — the same source
+  All tasks uses — and falls back to health only for the boot project. (#901)
 
 # 0.10.0 (2026-08-14)
 

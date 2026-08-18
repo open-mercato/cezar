@@ -850,6 +850,26 @@ describe('meta line, tabs, pill and resume hint', () => {
   // registry, so a number-only reference can be linkable on one page and not the other. It still
   // gets a chip here — All tasks paints it, and "we could not build a link" is not a reason to
   // hide a PR the task declared.
+  // The registry knows every project's own repo, so a number-only chip is a real link here just
+  // as it is on All tasks — the two pages must not disagree about the same reference.
+  it('links a PR known only by number, using the project registry repo', async () => {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'boot-id', repo: {} }),
+      '/api/v1/projects': () =>
+        jsonResponse({
+          projects: [
+            { id: 'boot-id', name: 'cezar', root: '/home/me/cezar', repoUrl: 'https://github.com/open-mercato/cezar' },
+          ],
+        }),
+    })
+    renderHeader(run('done', { branch: 'cez/r1', prNumber: 901, markerRefs: { pr: 901 } }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() => {
+      const chip = meta.querySelector('[data-slot="pr-chip"]')
+      expect(chip?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/901')
+    })
+  })
+
   it('shows a PR known only by number, with no repository to link it to', () => {
     stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
     renderHeader(
