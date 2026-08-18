@@ -202,6 +202,27 @@ describe('run event subscriptions', () => {
     stop()
   })
 
+  it('treats a native reconnect open as liveness before the next watchdog tick', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(0)
+    const { client, sources } = setup()
+    const onReconnect = vi.fn()
+    const stop = client.forProject(null).events.subscribeRun('run-1', { onReconnect }, () => {})
+
+    sources[0]!.open()
+    fakeDocument.visibilityState = 'hidden'
+    vi.advanceTimersByTime(60_000)
+
+    fakeDocument.visibilityState = 'visible'
+    sources[0]!.open()
+    expect(onReconnect).toHaveBeenCalledOnce()
+    vi.advanceTimersByTime(10_000)
+
+    expect(sources).toHaveLength(1)
+    expect(onReconnect).toHaveBeenCalledOnce()
+    stop()
+  })
+
   it('watchdogs a visible silent socket, while pings and hidden tabs suppress reopen', () => {
     vi.useFakeTimers()
     vi.setSystemTime(0)
@@ -271,5 +292,23 @@ describe('run event subscriptions', () => {
     sources[0]!.emit('run-event', { seq: 4, type: 'stdout' })
     await Promise.resolve()
     expect(onCompact).toHaveBeenCalledOnce()
+  })
+
+  it('requests compaction from the pre-trim count when maxEvents is below compactAt', async () => {
+    const { client, sources } = setup()
+    const onCompact = vi.fn()
+    const stop = client.forProject(null).events.subscribeRun(
+      'run-1',
+      { maxEvents: 2, compactAt: 3, onCompact },
+      () => {},
+    )
+
+    sources[0]!.emit('run-event', { seq: 1, type: 'stdout' })
+    sources[0]!.emit('run-event', { seq: 2, type: 'stdout' })
+    sources[0]!.emit('run-event', { seq: 3, type: 'stdout' })
+    await Promise.resolve()
+
+    expect(onCompact).toHaveBeenCalledOnce()
+    stop()
   })
 })

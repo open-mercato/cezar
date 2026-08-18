@@ -94,7 +94,6 @@ export function createCezarProjectEventDomain(
       const {
         cursor,
         afterSeq = 0,
-        maxEvents,
         compactAt,
         onCompact,
         onReconnect,
@@ -129,15 +128,15 @@ export function createCezarProjectEventDomain(
         const parsed = parseRunEvent((event as MessageEvent<string>).data)
         if (disposed || !parsed || !(parsed.seq > maxSeq)) return
         maxSeq = parsed.seq
-        acceptedEvents = maxEvents === undefined
-          ? acceptedEvents + 1
-          : Math.min(acceptedEvents + 1, Math.max(0, maxEvents))
         listener(parsed)
-        if (!compactionRequested && compactAt !== undefined && acceptedEvents >= compactAt) {
-          compactionRequested = true
-          queueMicrotask(() => {
-            if (!disposed) onCompact?.()
-          })
+        if (!compactionRequested && compactAt !== undefined) {
+          acceptedEvents += 1
+          if (acceptedEvents >= compactAt) {
+            compactionRequested = true
+            queueMicrotask(() => {
+              if (!disposed) onCompact?.()
+            })
+          }
         }
       }
 
@@ -158,6 +157,7 @@ export function createCezarProjectEventDomain(
         let opened = false
         const onOpen = (): void => {
           if (disposed) return
+          lastFrameAt = Date.now()
           if (replacement || opened) onReconnect?.()
           opened = true
         }
