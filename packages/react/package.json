@@ -1,0 +1,38 @@
+{
+  "name": "@open-mercato/cezar-react",
+  "version": "0.10.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": ["dist", "README.md"],
+  "sideEffects": ["./dist/styles.css"],
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./tasks": { "types": "./dist/tasks.d.ts", "import": "./dist/tasks.js" },
+    "./session": { "types": "./dist/session.d.ts", "import": "./dist/session.js" },
+    "./styles.css": "./dist/styles.css",
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "react": ">=19 <20",
+    "react-dom": ">=19 <20"
+  },
+  "scripts": {
+    "build": "vite build && tsc --emitDeclarationOnly -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json",
+    "check:boundaries": "node scripts/check-import-boundaries.mjs"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "vite": "^8.1.4",
+    "vitest": "^4.1.10"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-mercato/cezar",
+    "directory": "packages/react"
+  }
+}
