@@ -46,9 +46,9 @@ import { cn } from '@/lib/utils'
 // a second, hashed URL for the same picture would be one cache entry too many. Vite serves
 // `public/` at the root in dev and copies it into the build, so the path holds in both.
 // Its own gradient + rounded corners ARE the tile.
-/** Cezar himself — the grumpy violet pixel cat, traced from the original artwork onto a
- *  48×52 vector grid (public/cezar-cat.svg). Also the favicon. */
-const brandLogoUrl = '/cezar-cat.svg'
+/** The cezar mark (public/cezar-logo.svg): the Open Mercato brand-gradient tile (lime→violet)
+ *  with the dark hexagonal C glyph. Also the favicon. */
+const brandLogoUrl = '/cezar-logo.svg'
 
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -913,17 +913,15 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
  *  the tile — no wrapper background. */
 function BrandTile() {
   return (
-    // A white plate under the transparent artwork: violet-on-violet (the cat over the tinted
-    // sidebar) smeared into one mass at 36px — the card surface gives the silhouette an edge.
-    <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-card p-[3px]">
-      <img
-        src={brandLogoUrl}
-        alt=""
-        aria-hidden="true"
-        data-slot="brand-tile"
-        className="size-full object-contain"
-      />
-    </span>
+    // No plate: the artwork carries its own gradient tile and rounded corners. The rounded-md
+    // clip only backstops the SVG's own radius at this size.
+    <img
+      src={brandLogoUrl}
+      alt=""
+      aria-hidden="true"
+      data-slot="brand-tile"
+      className="size-9 shrink-0 rounded-md object-contain"
+    />
   )
 }
 
