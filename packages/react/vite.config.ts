@@ -1,5 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 
 const packageDir = dirname(fileURLToPath(import.meta.url))
@@ -20,6 +21,7 @@ export const isReactPackageExternal = (id: string) =>
   || runtimeDependencies.some((dependency) => id === dependency || id.startsWith(`${dependency}/`))
 
 export default defineConfig({
+  plugins: [tailwindcss()],
   build: {
     outDir: resolve(packageDir, 'dist'),
     emptyOutDir: true,

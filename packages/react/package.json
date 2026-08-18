@@ -23,17 +23,22 @@
     "@tanstack/react-query": "^5.101.2"
   },
   "scripts": {
-    "build": "vite build && tsc --emitDeclarationOnly -p tsconfig.json",
+    "build": "vite build && node scripts/scope-css.mjs && node scripts/verify-css.mjs dist/styles.css && tsc --emitDeclarationOnly -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "check:boundaries": "node scripts/check-import-boundaries.mjs"
   },
   "devDependencies": {
+    "@tailwindcss/vite": "^4.3.2",
     "@testing-library/react": "^16.3.2",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "jsdom": "^29.1.1",
+    "postcss": "^8.5.19",
+    "postcss-selector-parser": "^7.1.1",
+    "postcss-value-parser": "^4.2.0",
+    "tailwindcss": "^4.3.2",
     "typescript": "^7.0.2",
     "vite": "^8.1.4",
     "vitest": "^4.1.10"
