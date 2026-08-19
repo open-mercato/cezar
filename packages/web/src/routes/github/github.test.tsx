@@ -1321,6 +1321,29 @@ describe('the hand-to-agent backend pills (#401)', () => {
     await waitFor(() => expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: null }))
   })
 
+  /**
+   * The other half of that sweep, and the more dangerous one: "no backend is connected" and
+   * "provider status has not answered yet" look identical from inside the hook, so a sweep that
+   * treats an empty runner list as evidence would clear the pick on every single mount — and,
+   * because this surface persists, write the `null` straight back to the store. That destroys the
+   * remembered choice permanently and quietly reintroduces #906. An unreachable agent CLI is a
+   * degradation path, not a licence to discard user state.
+   */
+  it('keeps the remembered pick when no provider has answered — absence of status is not absence of a backend (#906)', async () => {
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":"opus"}')
+    stubFetch({ 'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE) })
+    await openDetail()
+
+    // The disabled Run button proves the "nothing connected" answer really did land, so this is
+    // not merely passing on a render that happened before any query resolved.
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>('button', { name: /Run agent on this issue/ }).disabled,
+      ).toBe(true),
+    )
+    expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: 'opus' })
+  })
+
   it('disables click and shortcut starts with no connected provider while browsing and editing stay live', async () => {
     const sent = stubFetch({
       'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE),

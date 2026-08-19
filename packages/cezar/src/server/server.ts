@@ -106,7 +106,7 @@ import {
 import { gatedSkillsRepos, loadConfig, resolveWorktreeRetention, type CezConfig } from '../config.ts';
 import { findConfigFile } from '../agent-config/catalog.ts';
 import { readConfigFile, statConfigPath, writeConfigFile } from '../agent-config/files.ts';
-import { readAgentModelDefaults } from '../agent-config/models.ts';
+import { type AgentModelDefaults, readAgentModelDefaults } from '../agent-config/models.ts';
 import { listAgentConfig } from '../agent-config/service.ts';
 import { listConfigFiles, type AgentHomePaths } from '../agent-config/catalog.ts';
 import { readAccountIdentity } from '../agent-config/account-identity.ts';
@@ -5026,7 +5026,10 @@ export function createApp(deps: ServerDeps) {
   // auto in every model picker, so an older cockpit reading this answer shows
   // auto too rather than tripping over an unknown sentinel. Only `true` counts —
   // `false` is the absence of an opinion, not an opinion.
-  const autoModelOverrides = (auto: CezConfig['defaultModelsAuto']) =>
+  // Typed rather than left to `Object.fromEntries`' index signature: `configAnswer`'s return type
+  // is asserted `Exact` against `configResponseSchema` (contract-parity.workspace.test.ts), and an
+  // index signature leaking into the spread would widen `defaultModels` past the contract.
+  const autoModelOverrides = (auto: CezConfig['defaultModelsAuto']): AgentModelDefaults =>
     Object.fromEntries(
       Object.entries(auto ?? {})
         .filter(([, isAuto]) => isAuto === true)
