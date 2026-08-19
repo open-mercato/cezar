@@ -79,16 +79,28 @@ function renderChip(requests: readonly ReferenceStatusRequest[] = REQUESTS) {
 
 const chip = () => document.querySelector('[data-slot="pr-chip"]')!
 
-/** Opens the hover panel (focus is the one trigger every input method shares) and returns its
- *  text once it has said something. Focus is idempotent, so calling this twice is safe. */
-async function tooltipText(): Promise<string> {
+/** Opens the hover panel. Focus is the one trigger every input method shares, and it is
+ *  idempotent, so calling this twice is safe. */
+function openPanel(): void {
   fireEvent.focus(screen.getByRole('link'))
-  const content = await waitFor(() => {
-    const node = document.querySelector('[data-slot="reference-status-card"]')
-    if (!node?.textContent) throw new Error('panel not open yet')
-    return node
-  })
-  return content.textContent ?? ''
+}
+
+/**
+ * What the open panel currently says — a SYNCHRONOUS read, deliberately.
+ *
+ * It used to open and await in one helper, which meant every assertion about it was a `waitFor`
+ * wrapped around another `waitFor`. Nested like that the outer poll can hold React's act queue
+ * long enough that a settling query never flushes inside it, and the case then fails on whatever
+ * the panel said first — "Checking GitHub…" — rather than on what it settles to. Open once, poll
+ * a plain read.
+ */
+const panelText = (): string =>
+  document.querySelector('[data-slot="reference-status-card"]')?.textContent ?? ''
+
+/** Open, then wait for the panel to say a thing. */
+async function expectPanelToSay(fragment: string): Promise<void> {
+  openPanel()
+  await waitFor(() => expect(panelText()).toContain(fragment))
 }
 
 describe('a chip under a ReferenceStatusProvider', () => {
@@ -158,7 +170,7 @@ describe('a chip under a ReferenceStatusProvider', () => {
 
     await waitFor(() => expect(document.querySelector('[data-slot="pr-chip"]')).not.toBeNull())
     expect(chip().getAttribute('data-status')).toBe('ready')
-    await waitFor(async () => expect(await tooltipText()).toContain('last known'))
+    await expectPanelToSay('last known')
   })
 })
 
@@ -222,7 +234,7 @@ describe('the conflict axis, from the wire to the chip', () => {
       </QueryClientProvider>,
     )
 
-    await waitFor(async () => expect(await tooltipText()).toContain('last known'))
+    await expectPanelToSay('last known')
     expect(chip().getAttribute('data-conflicting')).toBe('true')
   })
 })
@@ -232,8 +244,8 @@ describe('a chip with no status says which kind of nothing it is', () => {
     answers = [{ available: false, reason: 'gh CLI not found — install it and run `gh auth login`' }]
     renderChip()
 
-    await waitFor(async () => expect(await tooltipText()).toContain('Status unavailable'))
-    expect(await tooltipText()).toContain('gh CLI not found')
+    await expectPanelToSay('Status unavailable')
+    expect(panelText()).toContain('gh CLI not found')
     expect(chip().getAttribute('data-status')).toBeNull()
   })
 
@@ -242,14 +254,14 @@ describe('a chip with no status says which kind of nothing it is', () => {
     answers = [{ available: true, prs: {}, issues: {} }]
     renderChip()
 
-    await waitFor(async () => expect(await tooltipText()).toContain('Not found on this repository'))
+    await expectPanelToSay('Not found on this repository')
   })
 
   it('says it is still checking while the request is in flight', async () => {
     answers = ['never']
     renderChip()
 
-    expect(await tooltipText()).toContain('Checking GitHub')
+    await expectPanelToSay('Checking GitHub')
   })
 
   it('names the URL in the tooltip, which the native title used to carry', async () => {
@@ -257,7 +269,7 @@ describe('a chip with no status says which kind of nothing it is', () => {
     renderChip()
     await waitFor(() => expect(chip().getAttribute('data-status')).toBe('merged'))
 
-    expect(await tooltipText()).toContain('github.com/acme/api/pull/774')
+    await expectPanelToSay('github.com/acme/api/pull/774')
     expect(chip().getAttribute('title')).toBeNull()
   })
 })

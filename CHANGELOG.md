@@ -7,7 +7,7 @@
   ready-green with nothing on screen saying otherwise. Mergeability is now carried as its own axis
   (it rides the same batched GraphQL query, so it costs no extra request) and paints the chip that
   links to the PR in its own colour: orange, not the red that already means "checks failed" and
-  "changes requested", with a warning glyph and a tooltip that leads with the conflict and still
+  "changes requested", with a warning glyph and a panel that leads with the conflict and still
   spells out the status underneath. Only a forge that actually answers `CONFLICTING` paints it —
   GitHub's still-computing `UNKNOWN`, an unreachable forge and a server too old to send the field
   all leave the chip exactly as it was, because none of them is an answer — and `UNKNOWN`, which
@@ -16,8 +16,9 @@
   held for the usual minute, so a conflict shows up on its own rather than on a page reload. A
   push made through cezar drops what the forge told us about that task's pull requests for the
   same reason — it is the event that changes the answer. Every reference chip everywhere now opens
-  the SAME panel (a hover card rather than a tooltip, so it can hold a control), and a conflicting
-  one carries a **Resolve conflicts** button that sends the agent `Merge head branch and resolve
+  the SAME panel — a popover driven by our own hover intent, so it can hold a control without
+  costing the chip the tap and tab order a link is owed — and a conflicting one carries a
+  **Resolve conflicts** button that sends the agent `Merge head branch and resolve
   conflicts in PR number N` on whichever seam the task's state allows — a live message, or a
   continue for a task parked at review, which is where a conflicting PR usually hangs. The number
   is in the words because a task can point at several pull requests, and each chip's button names
