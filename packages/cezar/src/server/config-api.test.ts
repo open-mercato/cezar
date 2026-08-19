@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -176,6 +176,66 @@ describe('the config API', () => {
     expect(rawFile().defaultModels).toEqual({ claude: 'opus' });
     await put({ defaultModels: { claude: '' } });
     expect(rawFile().defaultModels).toBeUndefined();
+  });
+
+  it('an explicit auto default beats the coding agent\'s own configured model (#906)', async () => {
+    mkdirSync(join(homeRoot, '.claude'), { recursive: true });
+    mkdirSync(join(homeRoot, '.codex'), { recursive: true });
+    writeFileSync(join(homeRoot, '.claude', 'settings.json'), '{"model":"opus"}');
+    writeFileSync(join(homeRoot, '.codex', 'config.toml'), 'model = "gpt-5-codex"\n');
+
+    // The defect: clearing the preset is indistinguishable from never setting one, so the
+    // native file shows straight back through and the picker snaps back to its model.
+    await put({ defaultModels: { claude: null } });
+    expect((await getBody()).defaultModels).toMatchObject({ claude: 'opus' });
+
+    // The override says "ignore that default" — answered as '', which IS auto in every picker.
+    const res = await put({ defaultModelsAuto: { claude: true } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ defaultModels: { claude: '', codex: 'gpt-5-codex' } });
+    // Only the runner asked for: codex still shows its own native default.
+    expect((await getBody()).defaultModels).toEqual({ claude: '', codex: 'gpt-5-codex' });
+
+    // Naming a real preset later simply wins over the override.
+    await put({ defaultModels: { claude: 'sonnet' } });
+    expect((await getBody()).defaultModels).toMatchObject({ claude: 'sonnet' });
+  });
+
+  it('PUT defaultModelsAuto merges per runner and stores only a real opinion (#906)', async () => {
+    await put({ defaultModelsAuto: { claude: true } });
+    await put({ defaultModelsAuto: { codex: true } });
+    expect(rawFile().defaultModelsAuto).toEqual({ claude: true, codex: true });
+    // false and null both mean "no opinion", so they delete rather than persist.
+    await put({ defaultModelsAuto: { codex: false } });
+    expect(rawFile().defaultModelsAuto).toEqual({ claude: true });
+    await put({ defaultModelsAuto: { claude: null } });
+    expect(rawFile().defaultModelsAuto).toBeUndefined();
+    expect((await getBody()).defaultModels).toEqual({});
+  });
+
+  it('the fixed-model policy refuses an auto override too (#906)', async () => {
+    process.env.CEZ_AGENT_MODELS_LOCKED = '1';
+    mkdirSync(join(homeRoot, '.claude'), { recursive: true });
+    writeFileSync(join(homeRoot, '.claude', 'settings.json'), '{"model":"opus"}');
+
+    expect((await put({ defaultModelsAuto: { claude: true } })).status).toBe(409);
+    // Refused before any write — the config file was never even created.
+    expect(existsSync(configPath())).toBe(false);
+    expect((await getBody()).defaultModels).toEqual({ claude: 'opus' });
+  });
+
+  it('a config written before #906 round-trips untouched — the new key stays absent', async () => {
+    writeFileSync(
+      configPath(),
+      JSON.stringify({ skillsRepos: [{ repo: 'me/skills' }], defaultModels: { claude: 'opus' } }),
+      'utf8',
+    );
+    await put({ baseBranch: 'develop' });
+    expect(rawFile()).toEqual({
+      skillsRepos: [{ repo: 'me/skills' }],
+      defaultModels: { claude: 'opus' },
+      baseBranch: 'develop',
+    });
   });
 
   it('PUT merges into the raw file — user keys survive, defaults never materialize', async () => {

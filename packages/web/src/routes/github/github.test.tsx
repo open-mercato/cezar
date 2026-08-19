@@ -1241,6 +1241,86 @@ describe('the hand-to-agent backend pills (#401)', () => {
     expect(postedRun(sent)).toMatchObject({ runner: 'codex' })
   })
 
+  /**
+   * The #906 regression. `defaultModels` is seeded server-side from the coding agent's OWN
+   * settings file, so "never touched" is not a neutral state — it hands the choice to
+   * `~/.claude/settings.json`. Before the fix the pick was plain route state, reset on every
+   * mount, and an explicit `auto` therefore survived exactly until the next navigation: the user
+   * re-picked auto forever and every run still went out pinned to the native model.
+   */
+  it('an explicitly picked auto survives a remount instead of reverting to the native default (#906)', async () => {
+    const nativeDefault = () =>
+      jsonResponse({ defaultRunner: 'claude', defaultModels: { claude: 'opus' } })
+    stubFetch({ 'GET /api/v1/config': nativeDefault })
+    await openDetail()
+
+    // The starting state the issue describes: untouched, so the native default shows through.
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('opus'),
+    )
+    await pickPill('model-pill', 'auto')
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('auto'),
+    )
+
+    // A full cold mount — the reload / tab hop that used to discard the pick.
+    cleanup()
+    const sent = stubFetch({ 'GET /api/v1/config': nativeDefault })
+    await openDetail()
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="model-pill"]')?.textContent).toContain('auto'),
+    )
+
+    // And the pick is real, not cosmetic: auto stays implicit, so no model rides the request.
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).not.toHaveProperty('model')
+  })
+
+  /**
+   * Remembering gave the pick a lifetime beyond the host that justified it — the same problem
+   * `github.tsx` already solves for a workflow the server no longer knows. It is not theoretical:
+   * cockpits for different repos share one `localhost:<port>` origin and therefore this
+   * localStorage key, so a pick can arrive from a repo where it was perfectly valid.
+   */
+  it('drops a remembered runner this host cannot honour instead of posting it (#906)', async () => {
+    // Remembered from elsewhere: a backend that is not connected on this host.
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":null}')
+    const sent = stubFetch({
+      'GET /api/v1/health': SINGLE_BACKEND,
+      'GET /api/v1/config': () => jsonResponse({ defaultRunner: 'claude', defaultModels: {} }),
+    })
+    await openDetail()
+
+    // A single-backend host hides the runner pill entirely, so a dead pick could not even be
+    // seen, let alone corrected — it must be dropped rather than ride the request as an
+    // explicit override of the server's own default.
+    await waitFor(() => expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /Run agent on this issue/ }))
+    await waitFor(() => expect(postedRun(sent)).toBeDefined())
+    expect(postedRun(sent)).not.toHaveProperty('runner')
+    // And it is cleared from the store, so it stops haunting every later hand-off.
+    await waitFor(() => expect(readFollowupSelection().runner).toBeNull())
+  })
+
+  it('drops a remembered model that belongs to a different backend (#906)', async () => {
+    // `opus` is a claude preset; the remembered runner is codex. Both are valid somewhere, which
+    // is exactly how this arrives — one localStorage key is shared across repos.
+    localStorage.setItem('cez-followup-selection', '{"runner":"codex","model":"opus"}')
+    stubFetch({
+      'GET /api/v1/health': MULTI_BACKEND,
+      'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_MULTI),
+    })
+    await openDetail()
+
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="runner-pill"]')?.textContent).toContain('codex'),
+    )
+    await waitFor(() => expect(readFollowupSelection()).toMatchObject({ runner: 'codex', model: null }))
+  })
+
   it('disables click and shortcut starts with no connected provider while browsing and editing stay live', async () => {
     const sent = stubFetch({
       'GET /api/v1/providers/status': () => jsonResponse(PROVIDERS_NONE),

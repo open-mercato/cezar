@@ -35,7 +35,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffFileChange } from '@/components/diff'
-import type { EnginePick } from '@/components/engine-pills'
+import { useRememberedEnginePick } from '@/components/engine-pills'
 import { GithubIcon } from '@/components/icons'
 import { TabLink } from '@/components/tab-link'
 import { Button } from '@/components/ui/button'
@@ -223,9 +223,11 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   )
   // The backend choice (#401) is a way of working too, so it lives here beside the pickers —
   // and it must, because HandToAgent is keyed by item and would otherwise reset on every hop.
-  // The agent account rides along on the same footing: a per-hand-off choice, route state rather
-  // than a persisted one, exactly like the runner and the model beside it.
-  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null, account: null })
+  // It is remembered on the same footing as the workflow (#906): route state alone reset it to
+  // "never touched" on every mount, and "never touched" is what lets the coding agent's OWN
+  // settings file outvote a pick the user makes over and over. The agent ACCOUNT stays per
+  // hand-off — its `null` follows the project's selection rather than a native default.
+  const [engine, setEngine] = useRememberedEnginePick()
   useEffect(() => {
     writeFollowupSelection({ workflow, skills: [...selectedSkills] })
   }, [workflow, selectedSkills])

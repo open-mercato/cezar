@@ -415,7 +415,7 @@ describe('the agents form', () => {
     )
   })
 
-  it('model presets round-trip per runner — auto sends null to clear the key', async () => {
+  it('model presets round-trip per runner — auto clears the preset AND claims the override (#906)', async () => {
     serve({ config: { defaultModels: { codex: 'gpt-5-codex' } } })
     renderAt('/settings/agents')
     await waitFor(() => expect(form()).not.toBeNull())
@@ -423,14 +423,23 @@ describe('the agents form', () => {
     const claude = screen.getByLabelText<HTMLSelectElement>('Default model for claude')
     fireEvent.change(claude, { target: { value: 'opus' } })
     await waitFor(() => expect(puts()).toHaveLength(1))
-    expect(puts()[0]?.body).toEqual({ defaultModels: { claude: 'opus' } })
+    // Naming a model releases the auto override — the two are alternatives, never both.
+    expect(puts()[0]?.body).toEqual({
+      defaultModels: { claude: 'opus' },
+      defaultModelsAuto: { claude: false },
+    })
     // The readback is the server's merged truth: codex's preset survived claude's write.
     await waitFor(() => expect(claude.value).toBe('opus'))
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for codex').value).toBe('gpt-5-codex')
 
     fireEvent.change(claude, { target: { value: '' } })
     await waitFor(() => expect(puts()).toHaveLength(2))
-    expect(puts()[1]?.body).toEqual({ defaultModels: { claude: null } })
+    // Clearing the preset alone let the native settings file show back through, which is why
+    // picking auto used to snap straight back to the model it names (#906).
+    expect(puts()[1]?.body).toEqual({
+      defaultModels: { claude: null },
+      defaultModelsAuto: { claude: true },
+    })
     await waitFor(() => expect(claude.value).toBe(''))
   })
 

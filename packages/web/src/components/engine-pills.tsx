@@ -1,14 +1,18 @@
+import { useEffect, useState } from 'react'
+
 import { useAgentProfiles, useConfig, useProviderStatus, useRepo, useRunnerModels } from '@/api/queries'
 import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
 import { usableRunners } from '@/lib/provider-status'
 import {
+  modelConflictsWithRunner,
   modelsForRunner,
   modelCatalogStatus,
   resolveModel,
   resolveRunner,
   runnerOverride,
 } from '@/routes/new-task-form'
+import { readFollowupSelection, writeFollowupSelection } from '@/routes/github/hand-to-agent-draft'
 
 /**
  * The runner + model pill pair for the surfaces that START a run outside the /new composer
@@ -110,6 +114,91 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
     account,
     repoAccount,
   }
+}
+
+/**
+ * The remembered engine pick (#906), read out of the same `cez-followup-selection` store that
+ * already remembers the workflow and skills pick.
+ *
+ * It lives here rather than in either route for the reason stated at the top of this file: these
+ * two start surfaces must not drift, and "is the pick remembered at all" was the one axis the
+ * shared component did not own — so they drifted. The GitHub tab's pick was plain `useState`,
+ * reset to "never touched" on every mount, and "never touched" is exactly the state `resolveModel`
+ * resolves to `defaultModels[runner]` — which `configAnswer` seeds from the coding agent's OWN
+ * settings file. The result was that a user who picks `auto` every single time still got every
+ * hand-off pinned to whatever `~/.claude/settings.json` names, i.e. silently upgraded to the most
+ * expensive model on the host.
+ *
+ * The `account` is deliberately NOT persisted. Its `null` does not mean "no opinion, fall back to
+ * a native file" — it means "follow the project's selection, and keep following it if that setting
+ * changes" (see `EnginePick`). Remembering it would freeze a per-project setting into a per-browser
+ * one, which is a different feature, not this fix.
+ */
+function useEnginePick(persist: boolean): [EnginePick, (pick: EnginePick) => void] {
+  const [pick, setPick] = useState<EnginePick>(readPersistedEnginePick)
+  useEffect(() => {
+    if (!persist) return
+    writeFollowupSelection({ runner: pick.runner, model: pick.model })
+  }, [persist, pick.runner, pick.model])
+  useEnginePickValidity(pick, setPick)
+  return [pick, setPick]
+}
+
+/** The seed every surface starts from. `account` is per-run, never remembered — see `useEnginePick`. */
+function readPersistedEnginePick(): EnginePick {
+  const stored = readFollowupSelection()
+  return { runner: stored.runner, model: stored.model, account: null }
+}
+
+/**
+ * For a surface where the pick IS the remembered way of working: seeded from the store and written
+ * back on every change. That is the GitHub tab's hand-off panel, whose sibling workflow/skills
+ * pickers already behave this way (#408).
+ */
+export function useRememberedEnginePick(): [EnginePick, (pick: EnginePick) => void] {
+  return useEnginePick(true)
+}
+
+/**
+ * For a surface that must READ the remembered pick without writing to it — the Inbox card.
+ *
+ * Seeding fixes the reported defect there too: an untouched card no longer falls through to the
+ * native default. Writing back would break a separate, deliberate rule (#401): each card starts
+ * its own run, so "run this one on codex" must not silently re-aim the card below it. Persisting
+ * would make that leak global and survive reloads — strictly worse than the route state #401
+ * already rejected — so the Inbox reads the pick and keeps its per-card lifetime.
+ */
+export function useSeededEnginePick(): [EnginePick, (pick: EnginePick) => void] {
+  return useEnginePick(false)
+}
+
+/**
+ * Drop a remembered pick that can no longer be honoured, instead of letting it ride a POST — the
+ * same rule `github.tsx` applies to a workflow the server no longer knows, and it applies here for
+ * the same reason: remembering gave this state a lifetime beyond the thing that justified it.
+ * Cockpits for different repos also share one `localhost:<port>` origin and therefore this
+ * localStorage key, so a runner that is not connected here, or a model belonging to a different
+ * backend, can genuinely arrive from a repo where it was valid.
+ *
+ * Only once provider status has LOADED — an in-flight fetch is not evidence of absence. An explicit
+ * auto (`model: ''`) never conflicts with anything and always survives; that is the whole point.
+ */
+function useEnginePickValidity(pick: EnginePick, onChange: (pick: EnginePick) => void): void {
+  const providers = useProviderStatus()
+  const config = useConfig()
+  const runners = usableRunners(providers.data)
+  const runner = resolveRunner(pick.runner, runners, config.data?.defaultRunner ?? runners[0] ?? 'claude')
+  const loaded = providers.isSuccess && runners.length > 0
+  const runnerGone = loaded && pick.runner !== null && !runners.includes(pick.runner)
+  const modelWrong = loaded && pick.model !== null && modelConflictsWithRunner(pick.model, runner)
+  useEffect(() => {
+    if (!runnerGone && !modelWrong) return
+    onChange({
+      ...pick,
+      runner: runnerGone ? null : pick.runner,
+      model: modelWrong ? null : pick.model,
+    })
+  }, [runnerGone, modelWrong, pick, onChange])
 }
 
 /**
