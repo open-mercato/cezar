@@ -1582,7 +1582,7 @@ describe('derivePrReferenceStatus', () => {
     expect(
       pr({ reviewDecision: 'CHANGES_REQUESTED', checks: 'passing', reviewRequested: true }),
     ).toBe('review-required');
-    // …even with the review timestamps saying the review is the newest thing that happened.
+    // …even with nothing pushed since, as long as the request itself POSTDATES the review.
     expect(
       pr({
         reviewDecision: 'CHANGES_REQUESTED',
@@ -1590,8 +1590,48 @@ describe('derivePrReferenceStatus', () => {
         reviewRequested: true,
         changesRequestedAt: '2026-08-11T12:00:00Z',
         headCommittedAt: '2026-08-11T09:00:00Z',
+        reviewRequestedAt: '2026-08-11T12:30:00Z',
       }),
     ).toBe('review-required');
+  });
+
+  it('does NOT read a reviewer asked BEFORE the review as an answer to it', () => {
+    // The reported case: three reviewers requested at once, one of them requested changes the
+    // next day, the other two never looked — so `reviewRequests.totalCount` stays 1 with nothing
+    // whatsoever having happened since. Counting that as the author re-requesting painted "Waiting
+    // for review" over a live rejection, which is the opposite of whose move it is.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        reviewRequested: true,
+        reviewRequestedAt: '2026-08-18T10:28:43Z',
+        changesRequestedAt: '2026-08-19T11:00:27Z',
+        headCommittedAt: '2026-08-18T10:23:40Z',
+      }),
+    ).toBe('changes-requested');
+    // A stale request does not stop a PUSH from handing the ball back, though — that rule is
+    // untouched, and it is the one the reporter called fine.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        reviewRequested: true,
+        reviewRequestedAt: '2026-08-18T10:28:43Z',
+        changesRequestedAt: '2026-08-19T11:00:27Z',
+        headCommittedAt: '2026-08-19T14:00:00Z',
+      }),
+    ).toBe('review-required');
+    // An undated request against a dated review is the unusable-pair case: conservative, so the
+    // chip keeps pointing at the author rather than dismissing a review on a guess.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        reviewRequested: true,
+        changesRequestedAt: '2026-08-19T11:00:27Z',
+      }),
+    ).toBe('changes-requested');
   });
 
   it('hands it back on a PUSH too, for an author who re-requested nothing', () => {
@@ -1620,7 +1660,7 @@ describe('derivePrReferenceStatus', () => {
   });
 
   it('lets an APPROVAL outrank a reviewer still listed as requested', () => {
-    // Real shape, from shopware/frontends#2574: approved, mergeable, green — and one reviewer left
+    // Real shape, observed live: approved, mergeable, green — and one reviewer left
     // on the request list after someone else approved. That is a courtesy ask, not an unmet gate,
     // and reading it as "waiting for review" would stick for as long as anyone stays listed, which
     // is indefinitely. A repo needing two approvals reports REVIEW_REQUIRED until it has both, so
@@ -1676,9 +1716,10 @@ describe('derivePrReferenceStatus', () => {
  * The whole combination space, checked against INVARIANTS rather than a second copy of the
  * ranking.
  *
- * The precedence has been edited three times — checks-pending above a requested change, the
- * re-request handoff, then `APPROVED` outranking a pending request — and each edit reordered
- * branches that the curated examples above only sample. Restating the expected answer for all 64
+ * The precedence has been edited four times — checks-pending above a requested change, the
+ * re-request handoff, `APPROVED` outranking a pending request, then that handoff being narrowed to
+ * requests that postdate the review — and each edit reordered branches that the curated examples
+ * above only sample. Restating the expected answer for all 128
  * combinations would just be the implementation written twice, and would agree with a bug as
  * readily as with a fix. These are the properties that must hold whatever the ordering is; a
  * future edit that violates one is a bug by construction.
@@ -1698,22 +1739,26 @@ describe('derivePrReferenceStatus over every combination', () => {
     'ready',
   ]);
 
-  /** Every open, non-draft shape: 4 check states × 4 decisions × requested × pushed-since. */
+  /** Every open, non-draft shape: 4 check states × 4 decisions × requested × pushed-since ×
+   *  request-postdates-the-review. */
   const openRows = () => {
     const rows: Parameters<typeof derivePrReferenceStatus>[0][] = [];
     for (const checks of CHECKS) {
       for (const reviewDecision of DECISIONS) {
         for (const reviewRequested of BOOLS) {
           for (const pushed of BOOLS) {
-            rows.push({
-              state: 'OPEN',
-              isDraft: false,
-              reviewDecision,
-              checks,
-              reviewRequested,
-              changesRequestedAt: '2026-08-11T09:00:00Z',
-              headCommittedAt: pushed ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
-            });
+            for (const reRequested of BOOLS) {
+              rows.push({
+                state: 'OPEN',
+                isDraft: false,
+                reviewDecision,
+                checks,
+                reviewRequested,
+                changesRequestedAt: '2026-08-11T09:00:00Z',
+                headCommittedAt: pushed ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
+                reviewRequestedAt: reRequested ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
+              });
+            }
           }
         }
       }
@@ -1723,8 +1768,8 @@ describe('derivePrReferenceStatus over every combination', () => {
 
   const describeRow = (row: Parameters<typeof derivePrReferenceStatus>[0]) => JSON.stringify(row);
 
-  it('covers 64 open shapes', () => {
-    expect(openRows()).toHaveLength(64);
+  it('covers 128 open shapes', () => {
+    expect(openRows()).toHaveLength(128);
   });
 
   it('only ever answers with a PULL REQUEST status', () => {
@@ -1751,7 +1796,7 @@ describe('derivePrReferenceStatus over every combination', () => {
   });
 
   it('never blames the author once the forge says APPROVED', () => {
-    // The shopware/frontends#2574 class of bug: an approved PR must not read as waiting on a
+    // The approved-but-still-requested class of bug: an approved PR must not read as waiting on a
     // reviewer or owing edits, however many reviewers are still listed as requested.
     for (const row of openRows()) {
       const status = derivePrReferenceStatus({ ...row, reviewDecision: 'APPROVED' });
@@ -1764,6 +1809,19 @@ describe('derivePrReferenceStatus over every combination', () => {
       if (derivePrReferenceStatus(row) === 'changes-requested') {
         expect(row.reviewDecision, describeRow(row)).toBe('CHANGES_REQUESTED');
       }
+    }
+  });
+
+  it('never lets a request OLDER than the review dismiss that review', () => {
+    // The stale-review-request class of bug, as an invariant: with nothing pushed since and the
+    // standing request predating the review, no combination may report the ball as the reviewer's.
+    for (const row of openRows()) {
+      if (row.reviewDecision !== 'CHANGES_REQUESTED') continue;
+      if (row.checks === 'pending' || row.checks === 'failing') continue; // those outrank it by design
+      const stale =
+        row.headCommittedAt === '2026-08-11T06:00:00Z' && row.reviewRequestedAt === '2026-08-11T06:00:00Z';
+      if (!stale) continue;
+      expect(derivePrReferenceStatus(row), describeRow(row)).toBe('changes-requested');
     }
   });
 
@@ -1828,6 +1886,7 @@ describe('fetchRefStatuses', () => {
     commits: { nodes: [{ commit: { committedDate: '2026-08-11T12:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }] },
     reviews: { nodes: [] },
     reviewRequests: { totalCount: 0 },
+    timelineItems: { nodes: [] },
     ...over,
   });
   const issueNode = (over: Record<string, unknown> = {}) => ({
@@ -1906,6 +1965,45 @@ describe('fetchRefStatuses', () => {
     });
     expect((await fetchRefStatuses(runGraphql, 'o', 'n', [774])).resolved[774]?.status).toBe('review-required');
     expect(sent).toContain('reviewRequests(first: 1) { totalCount }');
+  });
+
+  it('carries the review-request DATE too, so an old request cannot dismiss a review', async () => {
+    // The reported PR's exact payload. The count alone is identical to the #774 shape
+    // above; only the timeline event tells the two apart, so it has to survive the query and the
+    // parse — dropping either would silently restore the bug.
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-18T10:23:40Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
+          reviewRequests: { totalCount: 1 },
+          timelineItems: { nodes: [{ createdAt: '2026-08-18T10:28:43Z' }] },
+        }),
+      });
+    });
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [2642])).resolved[2642]?.status).toBe('changes-requested');
+    expect(sent).toContain('itemTypes: [REVIEW_REQUESTED_EVENT]');
+  });
+
+  it('reads an absent timeline as an UNDATED request, not as a fresh one', async () => {
+    // Same defensive shape as the missing `reviewRequests` below: an omitted field must not invent
+    // a re-request and dismiss a review that is still about the code on screen.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
+          reviewRequests: { totalCount: 1 },
+          timelineItems: null,
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('changes-requested');
   });
 
   it('reads an absent reviewRequests as nobody waiting, not as somebody', async () => {

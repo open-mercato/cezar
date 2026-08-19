@@ -1197,6 +1197,7 @@ const ghRefStatusPrSchema = z
       .nullish(),
     reviews: z.object({ nodes: z.array(z.object({ submittedAt: z.string().nullish() })) }).nullish(),
     reviewRequests: z.object({ totalCount: z.number() }).nullish(),
+    timelineItems: z.object({ nodes: z.array(z.object({ createdAt: z.string().nullish() }).nullish()) }).nullish(),
   })
   .nullish();
 
@@ -1224,13 +1225,16 @@ const ghRefStatusSchema = z.record(z.string(), z.unknown());
  *
  * `committedDate` and the last CHANGES_REQUESTED review's `submittedAt` cost nothing extra, riding
  * the same node, and are what let the precedence tell a review the author has already responded to
- * from one still about the code on screen.
+ * from one still about the code on screen. The last `ReviewRequestedEvent` is asked for the same
+ * reason: `reviewRequests` says only THAT someone is on the hook, never since when, and the
+ * difference between a request made before the review and one made after it is the difference
+ * between a reviewer who has not looked yet and an author who has answered.
  */
 function refStatusQuery(numbers: number[]): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 1) { totalCount } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 1) { totalCount } timelineItems(last: 1, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt } } } } ... on Issue { state stateReason } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -1260,11 +1264,18 @@ function refStatusQuery(numbers: number[]): string {
  * reviewer submits again — so on its own it points at the author forever. Two signals say the ball
  * has moved back:
  *
- *  - **a pending review request** (`reviewRequests.totalCount`), which is the author clicking
- *    re-request. Authoritative, and observed live alongside a stale `CHANGES_REQUESTED` and an
- *    EMPTY `latestReviews` — the case that has no other tell.
+ *  - **a review request made AFTER the review**, which is the author clicking re-request.
+ *    Authoritative, and observed live alongside a stale `CHANGES_REQUESTED` and an EMPTY
+ *    `latestReviews` — the case that has no other tell.
  *  - **a commit newer than the review**, the fallback for an author who pushed without clicking
  *    anything.
+ *
+ * The "after" in the first one is load-bearing, and its absence was a reported bug. A request that
+ * PREDATES the review is a reviewer who has not looked yet, and on a PR where several people were
+ * asked and one of them rejected it the others stay listed forever — so a bare
+ * `reviewRequests.totalCount > 0` reads a live "changes requested" as answered and hides it behind
+ * "waiting for review" (observed live: three reviewers asked at 10:28, changes requested
+ * the next day, one reviewer still pending).
  *
  * Either way the words change from "you owe edits" to "they owe a look", and so does the colour:
  * danger is the author's move, info is the reviewer's.
@@ -1288,8 +1299,12 @@ export function derivePrReferenceStatus(pr: {
   changesRequestedAt?: string | null;
   /** Is a reviewer currently ON THE HOOK — `reviewRequests.totalCount > 0`? True after the author
    *  clicks re-request, which is the one thing that says so while `reviewDecision` still reads
-   *  `CHANGES_REQUESTED`. */
+   *  `CHANGES_REQUESTED` — but also true of a reviewer asked long ago who never looked, hence
+   *  `reviewRequestedAt`. */
   reviewRequested?: boolean | null;
+  /** ISO-8601 `createdAt` of the most recent `ReviewRequestedEvent`, which is WHEN the standing
+   *  request was made. Only a request younger than the review can be an answer to it. */
+  reviewRequestedAt?: string | null;
 }): ReferenceStatus {
   const state = pr.state.toUpperCase();
   if (state === 'MERGED') return 'merged';
@@ -1300,7 +1315,13 @@ export function derivePrReferenceStatus(pr: {
   const decision = (pr.reviewDecision ?? '').toUpperCase();
   const changesRequested = decision === 'CHANGES_REQUESTED';
   // Has the author already answered the review — by asking for another look, or by pushing?
-  const answered = pr.reviewRequested === true || pushedSince(pr.headCommittedAt, pr.changesRequestedAt);
+  // A standing request counts as the ask only if it POSTDATES the review; one made before it is a
+  // reviewer who has not got to the PR yet, and on a PR where someone else rejected it that
+  // request would otherwise mask the rejection indefinitely. With no review date at all it still
+  // counts — that is the empty-`reviews` case above, where it is the only signal there is.
+  const reRequested =
+    pr.reviewRequested === true && (!pr.changesRequestedAt || isAfter(pr.reviewRequestedAt, pr.changesRequestedAt));
+  const answered = reRequested || isAfter(pr.headCommittedAt, pr.changesRequestedAt);
   if (changesRequested && !answered) return 'changes-requested';
   if (pr.checks === 'failing') return 'checks-failing';
   // `APPROVED` is the forge saying the review requirement IS MET, and it outranks a pending
@@ -1315,13 +1336,14 @@ export function derivePrReferenceStatus(pr: {
   return 'ready';
 }
 
-/** Did a commit land AFTER the review? Unparseable or missing dates answer `false` — the
- *  conservative direction, since it keeps a review current rather than silently demoting one. */
-function pushedSince(headCommittedAt?: string | null, reviewedAt?: string | null): boolean {
-  if (!headCommittedAt || !reviewedAt) return false;
-  const head = Date.parse(headCommittedAt);
-  const reviewed = Date.parse(reviewedAt);
-  return Number.isFinite(head) && Number.isFinite(reviewed) && head > reviewed;
+/** Did `later` happen AFTER `earlier` — a commit, or a re-request, landing past the review?
+ *  Unparseable or missing dates answer `false`, which is the conservative direction for both
+ *  callers: they only ever use a `true` to demote a review, so no answer must keep the review
+ *  current rather than silently dismiss one. */
+function isAfter(later?: string | null, earlier?: string | null): boolean {
+  const a = later ? Date.parse(later) : NaN;
+  const b = earlier ? Date.parse(earlier) : NaN;
+  return Number.isFinite(a) && Number.isFinite(b) && a > b;
 }
 
 /**
@@ -1409,7 +1431,10 @@ export async function fetchRefStatuses(
               // are requested stays `reviewDecision`'s answer, which is the one that accounts for
               // dismissed and superseded reviews.
               changesRequestedAt: pr.reviews?.nodes[0]?.submittedAt,
-            reviewRequested: (pr.reviewRequests?.totalCount ?? 0) > 0,
+              reviewRequested: (pr.reviewRequests?.totalCount ?? 0) > 0,
+              // WHEN that standing request was made. `reviewRequests` carries no date of its own,
+              // and without one an old request looks exactly like a re-request.
+              reviewRequestedAt: pr.timelineItems?.nodes[0]?.createdAt,
             }),
           };
         } else if (node.__typename === 'Issue') {
