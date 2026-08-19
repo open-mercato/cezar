@@ -1643,6 +1643,37 @@ describe('derivePrReferenceStatus', () => {
         headCommittedAt: '2026-08-11T12:00:00Z',
       }),
     ).toBe('review-required');
+    // One parent is an ordinary commit, stated or not — the count only ever rules a merge OUT.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        changesRequestedAt: '2026-08-11T09:00:00Z',
+        headCommittedAt: '2026-08-11T12:00:00Z',
+        headParentCount: 1,
+      }),
+    ).toBe('review-required');
+  });
+
+  it('does NOT let "Update branch" clear a rejection — a merge answers nothing', () => {
+    // GitHub's Update-branch button writes `Merge branch 'main' into <branch>` dated NOW, newer
+    // than any review while addressing none of it. Shape confirmed on a real PR,
+    // whose head commit reports two parents. Counting it as a push would let the one click people
+    // make reflexively on a stale PR wipe a live rejection off the chip.
+    const updated = {
+      reviewDecision: 'CHANGES_REQUESTED' as const,
+      changesRequestedAt: '2026-08-11T09:00:00Z',
+      headCommittedAt: '2026-08-11T12:00:00Z',
+      headParentCount: 2,
+    };
+    expect(pr({ ...updated, checks: 'passing' })).toBe('changes-requested');
+    // An octopus merge is no more of an answer than a two-parent one.
+    expect(pr({ ...updated, checks: 'passing', headParentCount: 3 })).toBe('changes-requested');
+    // …but a re-request still hands the ball back, merge or no merge: that signal is the author
+    // SAYING they are done, where the merge only looks like it.
+    expect(
+      pr({ ...updated, checks: 'passing', reviewRequested: true, reviewRequestedAt: '2026-08-11T12:30:00Z' }),
+    ).toBe('review-required');
   });
 
   it('still puts a red build above a waiting reviewer — they cannot approve it anyway', () => {
@@ -1716,10 +1747,11 @@ describe('derivePrReferenceStatus', () => {
  * The whole combination space, checked against INVARIANTS rather than a second copy of the
  * ranking.
  *
- * The precedence has been edited four times — checks-pending above a requested change, the
- * re-request handoff, `APPROVED` outranking a pending request, then that handoff being narrowed to
- * requests that postdate the review — and each edit reordered branches that the curated examples
- * above only sample. Restating the expected answer for all 128
+ * The precedence has been edited five times — checks-pending above a requested change, the
+ * re-request handoff, `APPROVED` outranking a pending request, that handoff being narrowed to
+ * requests that postdate the review, then merge commits dropping out of the push rule — and each
+ * edit reordered branches that the curated examples above only sample. Restating the expected
+ * answer for all 256
  * combinations would just be the implementation written twice, and would agree with a bug as
  * readily as with a fix. These are the properties that must hold whatever the ordering is; a
  * future edit that violates one is a bug by construction.
@@ -1740,7 +1772,7 @@ describe('derivePrReferenceStatus over every combination', () => {
   ]);
 
   /** Every open, non-draft shape: 4 check states × 4 decisions × requested × pushed-since ×
-   *  request-postdates-the-review. */
+   *  request-postdates-the-review × head-is-a-merge. */
   const openRows = () => {
     const rows: Parameters<typeof derivePrReferenceStatus>[0][] = [];
     for (const checks of CHECKS) {
@@ -1748,16 +1780,19 @@ describe('derivePrReferenceStatus over every combination', () => {
         for (const reviewRequested of BOOLS) {
           for (const pushed of BOOLS) {
             for (const reRequested of BOOLS) {
-              rows.push({
-                state: 'OPEN',
-                isDraft: false,
-                reviewDecision,
-                checks,
-                reviewRequested,
-                changesRequestedAt: '2026-08-11T09:00:00Z',
-                headCommittedAt: pushed ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
-                reviewRequestedAt: reRequested ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
-              });
+              for (const merge of BOOLS) {
+                rows.push({
+                  state: 'OPEN',
+                  isDraft: false,
+                  reviewDecision,
+                  checks,
+                  reviewRequested,
+                  changesRequestedAt: '2026-08-11T09:00:00Z',
+                  headCommittedAt: pushed ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
+                  reviewRequestedAt: reRequested ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
+                  headParentCount: merge ? 2 : 1,
+                });
+              }
             }
           }
         }
@@ -1768,8 +1803,8 @@ describe('derivePrReferenceStatus over every combination', () => {
 
   const describeRow = (row: Parameters<typeof derivePrReferenceStatus>[0]) => JSON.stringify(row);
 
-  it('covers 128 open shapes', () => {
-    expect(openRows()).toHaveLength(128);
+  it('covers 256 open shapes', () => {
+    expect(openRows()).toHaveLength(256);
   });
 
   it('only ever answers with a PULL REQUEST status', () => {
@@ -1821,6 +1856,20 @@ describe('derivePrReferenceStatus over every combination', () => {
       const stale =
         row.headCommittedAt === '2026-08-11T06:00:00Z' && row.reviewRequestedAt === '2026-08-11T06:00:00Z';
       if (!stale) continue;
+      expect(derivePrReferenceStatus(row), describeRow(row)).toBe('changes-requested');
+    }
+  });
+
+  it('never lets a MERGE at the head stand in for the author answering', () => {
+    // The "Update branch" class of bug, as an invariant: with a merge commit on top and no
+    // re-request, the head's date is irrelevant — a rejection stays a rejection however fresh the
+    // merge is. Only `reviewRequested` may overrule it, and it does so on its own merits.
+    for (const row of openRows()) {
+      if (row.reviewDecision !== 'CHANGES_REQUESTED') continue;
+      if (row.checks === 'pending' || row.checks === 'failing') continue; // those outrank it by design
+      if (row.headParentCount !== 2) continue;
+      const reRequested = row.reviewRequested === true && row.reviewRequestedAt === '2026-08-11T12:00:00Z';
+      if (reRequested) continue;
       expect(derivePrReferenceStatus(row), describeRow(row)).toBe('changes-requested');
     }
   });
@@ -1988,6 +2037,51 @@ describe('fetchRefStatuses', () => {
     });
     expect((await fetchRefStatuses(runGraphql, 'o', 'n', [2642])).resolved[2642]?.status).toBe('changes-requested');
     expect(sent).toContain('itemTypes: [REVIEW_REQUESTED_EVENT]');
+  });
+
+  it('carries the head commit\'s PARENT COUNT, so "Update branch" cannot clear a review', async () => {
+    // A real "Update branch" head's shape: a `Merge branch 'main' into <branch>` head reporting two
+    // parents. `parents(first: 0)` asks for the count and no parent — if the query or the parse
+    // dropped it, the merge would read as a push and the chip would go blue on a rejected PR.
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  committedDate: '2026-08-19T15:00:00Z',
+                  parents: { totalCount: 2 },
+                  statusCheckRollup: { state: 'SUCCESS' },
+                },
+              },
+            ],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
+        }),
+      });
+    });
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [2639])).resolved[2639]?.status).toBe('changes-requested');
+    expect(sent).toContain('parents(first: 0) { totalCount }');
+  });
+
+  it('reads an absent parent count as an ORDINARY commit, so a real push still counts', async () => {
+    // The push rule is the common path; a field GitHub declined to send must not switch it off.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-19T15:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('review-required');
   });
 
   it('reads an absent timeline as an UNDATED request, not as a fresh one', async () => {

@@ -1189,6 +1189,7 @@ const ghRefStatusPrSchema = z
           z.object({
             commit: z.object({
               committedDate: z.string().nullish(),
+              parents: z.object({ totalCount: z.number() }).nullish(),
               statusCheckRollup: z.object({ state: z.string().nullish() }).nullish(),
             }),
           }),
@@ -1223,9 +1224,10 @@ const ghRefStatusSchema = z.record(z.string(), z.unknown());
  * from which field carried the number, and a bare `#774` can land in either — because the answer
  * carries `__typename` and is filed under what the number REALLY is.
  *
- * `committedDate` and the last CHANGES_REQUESTED review's `submittedAt` cost nothing extra, riding
- * the same node, and are what let the precedence tell a review the author has already responded to
- * from one still about the code on screen. The last `ReviewRequestedEvent` is asked for the same
+ * `committedDate`, the head commit's `parents.totalCount` (`first: 0` — the COUNT is the whole
+ * question, so no parent is fetched) and the last CHANGES_REQUESTED review's `submittedAt` cost
+ * nothing extra, riding the same node, and are what let the precedence tell a review the author has
+ * already responded to from one still about the code on screen. The last `ReviewRequestedEvent` is asked for the same
  * reason: `reviewRequests` says only THAT someone is on the hook, never since when, and the
  * difference between a request made before the review and one made after it is the difference
  * between a reviewer who has not looked yet and an author who has answered.
@@ -1234,7 +1236,7 @@ function refStatusQuery(numbers: number[]): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 1) { totalCount } timelineItems(last: 1, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt } } } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision commits(last: 1) { nodes { commit { committedDate parents(first: 0) { totalCount } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 1) { totalCount } timelineItems(last: 1, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt } } } } ... on Issue { state stateReason } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -1267,8 +1269,10 @@ function refStatusQuery(numbers: number[]): string {
  *  - **a review request made AFTER the review**, which is the author clicking re-request.
  *    Authoritative, and observed live alongside a stale `CHANGES_REQUESTED` and an EMPTY
  *    `latestReviews` — the case that has no other tell.
- *  - **a commit newer than the review**, the fallback for an author who pushed without clicking
- *    anything.
+ *  - **a non-merge commit newer than the review**, the fallback for an author who pushed without
+ *    clicking anything. Merges are excluded because GitHub's "Update branch" button writes one,
+ *    dated now, that answers nothing — the reflexive click on a stale PR must not clear a
+ *    rejection.
  *
  * The "after" in the first one is load-bearing, and its absence was a reported bug. A request that
  * PREDATES the review is a reviewer who has not looked yet, and on a PR where several people were
@@ -1295,6 +1299,10 @@ export function derivePrReferenceStatus(pr: {
   /** ISO-8601 commit date of the head commit. `committedDate`, not a push time: GitHub's
    *  `pushedDate` is deprecated and comes back null on new PRs. */
   headCommittedAt?: string | null;
+  /** How many parents the head commit has. 2+ means a MERGE — "Update branch" pulling the base in,
+   *  not work on the review. See `answered` below. Absent reads as an ordinary commit: the push
+   *  rule is the common path and must not switch off on a field GitHub declined to send. */
+  headParentCount?: number | null;
   /** ISO-8601 `submittedAt` of the most recent CHANGES_REQUESTED review, when there is one. */
   changesRequestedAt?: string | null;
   /** Is a reviewer currently ON THE HOOK — `reviewRequests.totalCount > 0`? True after the author
@@ -1321,7 +1329,14 @@ export function derivePrReferenceStatus(pr: {
   // counts — that is the empty-`reviews` case above, where it is the only signal there is.
   const reRequested =
     pr.reviewRequested === true && (!pr.changesRequestedAt || isAfter(pr.reviewRequestedAt, pr.changesRequestedAt));
-  const answered = reRequested || isAfter(pr.headCommittedAt, pr.changesRequestedAt);
+  // A push counts as the answer — unless the head is a MERGE commit. GitHub's "Update branch"
+  // button writes `Merge branch 'main' into <branch>` dated NOW, which is newer than any review
+  // while addressing none of it: the one click people make reflexively on a stale PR would
+  // otherwise wipe a rejection off the chip. Two parents is what tells that commit apart from work.
+  // (Merging the base AND pushing fixes together, with the merge landing last, still reads as
+  // unanswered until the next real commit — the conservative direction, as everywhere here.)
+  const pushed = (pr.headParentCount ?? 1) < 2 && isAfter(pr.headCommittedAt, pr.changesRequestedAt);
+  const answered = reRequested || pushed;
   if (changesRequested && !answered) return 'changes-requested';
   if (pr.checks === 'failing') return 'checks-failing';
   // `APPROVED` is the forge saying the review requirement IS MET, and it outranks a pending
@@ -1427,6 +1442,8 @@ export async function fetchRefStatuses(
               // reusing the FAILURE/PENDING/SUCCESS vocabulary rather than duplicating it.
               checks: rollup ? rollupToChecks([{ state: rollup.state, status: null, conclusion: null }]) ?? null : null,
               headCommittedAt: head?.committedDate,
+              // Two parents = "Update branch", which is dated now and answers nothing.
+              headParentCount: head?.parents?.totalCount,
               // `reviews(last: 1, states: CHANGES_REQUESTED)` — the timestamp only. WHETHER changes
               // are requested stays `reviewDecision`'s answer, which is the one that accounts for
               // dismissed and superseded reviews.

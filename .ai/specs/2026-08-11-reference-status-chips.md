@@ -66,9 +66,24 @@ has moved back, and either is enough:
   the last `ReviewRequestedEvent`) — the author clicking re-request. Authoritative, and observed
   live on a PR whose `reviewDecision` was still `CHANGES_REQUESTED` *and* whose `latestReviews`
   came back **empty**: the case with no other tell.
-- **A commit newer than the review** — the fallback for an author who pushed without clicking
-  anything. Its two timestamps (the head commit's `committedDate`, the last changes-requested
-  review's `submittedAt`) ride the same aliased node and cost no extra request.
+- **A _non-merge_ commit newer than the review** — the fallback for an author who pushed without
+  clicking anything. Its two timestamps (the head commit's `committedDate`, the last
+  changes-requested review's `submittedAt`) ride the same aliased node and cost no extra request.
+
+**Merges are excluded from that second signal**, because GitHub's **Update branch** button writes
+`Merge branch 'main' into <branch>` dated *now* — newer than any review, addressing none of it. It
+is the click people make reflexively on a stale PR, so counting it as a push let one button wipe a
+live rejection off the chip. `parents.totalCount >= 2` on the head commit is what tells that commit
+apart from work (`parents(first: 0)` — the count is the whole question, so no parent is fetched;
+shape confirmed on a real PR). An absent count reads as an ordinary commit: the push
+rule is the common path and must not switch off on a field GitHub declined to send. Merging the
+base *and* pushing fixes together, with the merge landing last, still reads as unanswered until the
+next real commit.
+
+This does not cover **Update with rebase**, which rewrites the committer date on every commit and
+is indistinguishable from real work. Only an explicit re-request would fix that, at the cost of a
+sticky red chip for authors who push a fix without clicking anything — a trade deliberately not
+taken.
 
 The **after** in the first one is load-bearing, and leaving it out was a reported bug
 (observed live): three reviewers were asked at once, one requested changes the next day,
