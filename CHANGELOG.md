@@ -1,6 +1,57 @@
 # Unreleased
 
-<!-- Nothing yet. -->
+## 🐛 Fixes
+- 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
+  answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
+  of that stays true of a branch GitHub is refusing to merge, so a conflicted PR sat there in
+  ready-green with nothing on screen saying otherwise. Mergeability is now carried as its own axis
+  (it rides the same batched GraphQL query, so it costs no extra request) and paints the chip that
+  links to the PR in its own colour: orange, not the red that already means "checks failed" and
+  "changes requested", with a warning glyph and a panel that leads with the conflict and still
+  spells out the status underneath. Only a forge that actually answers `CONFLICTING` paints it —
+  GitHub's still-computing `UNKNOWN`, an unreachable forge and a server too old to send the field
+  all leave the chip exactly as it was, because none of them is an answer — and `UNKNOWN`, which
+  is what GitHub says for the first seconds after every push while it computes the merge base, is
+  now cached as the non-answer it is: such a reference is re-asked within seconds instead of being
+  held for the usual minute, so a conflict shows up on its own rather than on a page reload. A
+  push made through cezar drops what the forge told us about that task's pull requests for the
+  same reason — it is the event that changes the answer. Every reference chip everywhere now opens
+  the SAME panel — a popover driven by our own hover intent, so it can hold a control without
+  costing the chip the tap and tab order a link is owed — and a conflicting one carries a
+  **Resolve conflicts** button that sends the agent `Merge head branch and resolve
+  conflicts in PR number N` on whichever seam the task's state allows — a live message, or a
+  continue for a task parked at review, which is where a conflicting PR usually hangs. The number
+  is in the words because a task can point at several pull requests, and each chip's button names
+  its own. Offered on the task page, the Tasks table and cards, the sidebar, and the cross-project
+  All tasks page alike — that last one fetches the task's record when the panel opens (its index
+  row is deliberately too slim to say whether a finished task can be reopened) and sends through
+  the run's OWN project rather than whichever one the page happens to be standing in.
+- 🐛 **A task that opens its own PR keeps the chip for the PR it was working on.** A task started
+  on someone else's PR that pushed a follow-up of its own showed only the new one: the agent
+  re-declares `CEZ:PR` with the number it just opened, as the marker contract asks it to, and
+  that declaration was applied to the *referenced* tier — which clears the chip when no candidate
+  matches the declared number. A declaration naming the PR the run itself created is now read as
+  what it is, a statement about the created PR (`pullRequestUrl` already carries it), so the PR
+  the task is about survives it, as does the number the task came in with. Records already
+  written this way heal when they are next read — no migration. The run header now paints every
+  PR the task points at, too, instead of only the strongest one — including a PR known only by
+  number, which it used to drop whenever it had no repository to build a link from. (#901)
+- 🐛 **A task can no longer be credited with a PR it only read about.** cezar decides a task
+  opened a PR by spotting `gh pr create` (or "opened a pull request") near a PR link — and it
+  scanned tool *output* for that phrase, so a task that printed a log, a stored transcript, or a
+  test fixture containing someone else's creation line adopted their PR as its own, in a
+  different repository, permanently: the first PR adopted wins, so the real one that followed was
+  never looked at. The phrase is now believed only from the agent's own words or from the command
+  cezar saw run — the link itself may still come from the command's output, which is where `gh`
+  prints it. And when a task declares a PR (`CEZ:PR`) that no scraped link corroborates, that
+  declaration now leads the chips — so a PR picked up by mistake can no longer push the one the
+  task actually named out of the single-chip surfaces. (#901)
+- 🐛 **A reference chip on a task's own page links, in every project.** A PR or issue known only
+  by number was a live link on All tasks and dead text on the task's page whenever the project
+  was not the one cezar booted in: that page synthesized links from `/health`, which always
+  reports the boot project's repository, so it refused to guess rather than point at the wrong
+  repo (#526). It now reads the project registry's own per-project repository — the same source
+  All tasks uses — and falls back to health only for the boot project. (#901)
 
 # 0.10.0 (2026-08-14)
 

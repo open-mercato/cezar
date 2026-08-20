@@ -20,7 +20,14 @@ export interface ReferenceStatusPresentation {
   tone: ReferenceStatusTone
 }
 
-export type ReferenceStatusTone = 'success' | 'danger' | 'violet' | 'neutral' | 'pending' | 'info'
+export type ReferenceStatusTone =
+  | 'success'
+  | 'danger'
+  | 'violet'
+  | 'neutral'
+  | 'pending'
+  | 'info'
+  | 'conflict'
 
 export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentation> = {
   // ---- pull requests --------------------------------------------------------------------
@@ -84,6 +91,30 @@ export const REFERENCE_STATUS: Record<ReferenceStatus, ReferenceStatusPresentati
     hint: 'the issue was declined — nothing shipped for it',
     tone: 'neutral',
   },
+}
+
+/**
+ * The OTHER axis, in the same shape: a pull request whose branch no longer merges into its base.
+ *
+ * It sits BESIDE the table rather than in it because it is not one of the eleven. Those answer
+ * "whose move is it" and are mutually exclusive; this is a second fact that can be true alongside
+ * any of them — most sharply alongside `ready`, whose whole sentence ("open, checks pass, nothing
+ * is waiting on a reviewer") stays true of a pull request GitHub will not merge. That pair is what
+ * this was reported for.
+ *
+ * It is still painted on the SAME chip — the one that links to the pull request — because a
+ * reference has one chip and this is that reference's state. What it takes over is the colour, the
+ * glyph and the tooltip's headline; the status it overrode keeps its own line in that tooltip, so
+ * nothing is lost by showing the blocker first.
+ *
+ * `conflict` and not `danger`: red already says "the checks failed" and "a reviewer asked for
+ * changes" on these very chips, and a third meaning on one colour is how a colour stops meaning
+ * anything. Not `pending` either — nothing resolves this on its own. It is the author's move.
+ */
+export const REFERENCE_CONFLICT: ReferenceStatusPresentation = {
+  label: 'Merge conflicts',
+  hint: 'this branch no longer merges cleanly into its base — rebase or merge the base in',
+  tone: 'conflict',
 }
 
 /**
