@@ -1676,6 +1676,47 @@ describe('derivePrReferenceStatus', () => {
     ).toBe('review-required');
   });
 
+  it('does NOT let a merge landing on top ERASE an answer the author already gave', () => {
+    // The other half of the merge rule, and the one that bites in practice: a merge is transparent,
+    // not disqualifying. Sequence — reviewer requests changes at 09:00; author pushes a real fix at
+    // 12:00 (chip correctly goes blue); the base moves on and the PR conflicts; the author presses
+    // this cockpit's own "Resolve conflicts" (or GitHub's "Update branch") at 15:00. Reading only
+    // the head would see a 2-parent commit, discard the 12:00 fix and flip the chip back to red,
+    // blaming an author who answered two steps ago. The merge's FIRST parent still carries 12:00.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        changesRequestedAt: '2026-08-11T09:00:00Z',
+        headCommittedAt: '2026-08-11T15:00:00Z',
+        headParentCount: 2,
+        headFirstParentCommittedAt: '2026-08-11T12:00:00Z',
+      }),
+    ).toBe('review-required');
+    // The plain "Update branch" case is unchanged: nothing was pushed after the review, so the
+    // first parent is the pre-review commit and the rejection still stands.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        changesRequestedAt: '2026-08-11T09:00:00Z',
+        headCommittedAt: '2026-08-11T15:00:00Z',
+        headParentCount: 2,
+        headFirstParentCommittedAt: '2026-08-11T06:00:00Z',
+      }),
+    ).toBe('changes-requested');
+    // A merge with no first-parent date is the unusable-pair case: conservative, review stands.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        changesRequestedAt: '2026-08-11T09:00:00Z',
+        headCommittedAt: '2026-08-11T15:00:00Z',
+        headParentCount: 2,
+      }),
+    ).toBe('changes-requested');
+  });
+
   it('still puts a red build above a waiting reviewer — they cannot approve it anyway', () => {
     const answered = { changesRequestedAt: '2026-08-11T09:00:00Z', headCommittedAt: '2026-08-11T12:00:00Z' };
     expect(pr({ reviewDecision: 'CHANGES_REQUESTED', checks: 'failing', ...answered })).toBe('checks-failing');
@@ -1941,6 +1982,9 @@ describe('fetchRefStatuses', () => {
     timelineItems: { nodes: [] },
     ...over,
   });
+  /** A requested reviewer as both connections spell one. `Team` uses `slug` instead — see the
+   *  team test below. */
+  const reviewer = (login: string) => ({ __typename: 'User', login });
   const issueNode = (over: Record<string, unknown> = {}) => ({
     __typename: 'Issue',
     state: 'OPEN',
@@ -2016,7 +2060,7 @@ describe('fetchRefStatuses', () => {
       });
     });
     expect((await fetchRefStatuses(runGraphql, 'o', 'n', [774])).resolved[774]?.status).toBe('review-required');
-    expect(sent).toContain('reviewRequests(first: 1) { totalCount }');
+    expect(sent).toContain('reviewRequests(first: 20) { totalCount');
   });
 
   it('carries the review-request DATE too, so an old request cannot dismiss a review', async () => {
@@ -2033,13 +2077,78 @@ describe('fetchRefStatuses', () => {
             nodes: [{ commit: { committedDate: '2026-08-18T10:23:40Z', statusCheckRollup: { state: 'SUCCESS' } } }],
           },
           reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
-          reviewRequests: { totalCount: 1 },
-          timelineItems: { nodes: [{ createdAt: '2026-08-18T10:28:43Z' }] },
+          reviewRequests: { totalCount: 1, nodes: [{ requestedReviewer: reviewer('carol') }] },
+          timelineItems: { nodes: [{ createdAt: '2026-08-18T10:28:43Z', requestedReviewer: reviewer('carol') }] },
         }),
       });
     });
     expect((await fetchRefStatuses(runGraphql, 'o', 'n', [2642])).resolved[2642]?.status).toBe('changes-requested');
     expect(sent).toContain('itemTypes: [REVIEW_REQUESTED_EVENT]');
+  });
+
+  it('dates the request that STILL STANDS, not one that was made and then withdrawn', async () => {
+    // The two connections answer about different requests: `reviewRequests` is who is on the hook
+    // now, a `ReviewRequestedEvent` survives the request being withdrawn. Here carol was asked
+    // before the review and never looked (so she still stands), while dave was asked after it and
+    // then removed. Taking the newest event blindly would date the request from dave's withdrawn
+    // one, read the rejection as answered, and hide it behind "waiting for review" — the same bug
+    // one step rarer. Matching by reviewer keeps the date on a request that is really there.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-18T10:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:00Z' }] },
+          reviewRequests: { totalCount: 1, nodes: [{ requestedReviewer: reviewer('carol') }] },
+          timelineItems: {
+            nodes: [
+              { createdAt: '2026-08-18T10:30:00Z', requestedReviewer: reviewer('carol') },
+              { createdAt: '2026-08-19T14:00:00Z', requestedReviewer: reviewer('dave') }, // withdrawn
+            ],
+          },
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('changes-requested');
+  });
+
+  it('hands the ball back when the STANDING reviewer is the one asked after the review', async () => {
+    // The mirror of the test above, so the correlation cannot pass by simply never matching:
+    // carol's own request postdates the review and still stands, which is a real re-request.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-18T10:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:00Z' }] },
+          reviewRequests: { totalCount: 1, nodes: [{ requestedReviewer: reviewer('carol') }] },
+          timelineItems: { nodes: [{ createdAt: '2026-08-19T14:00:00Z', requestedReviewer: reviewer('carol') }] },
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('review-required');
+  });
+
+  it('matches a TEAM reviewer by slug, since a team carries no login', async () => {
+    const team = { __typename: 'Team', slug: 'platform' };
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-18T10:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:00Z' }] },
+          reviewRequests: { totalCount: 1, nodes: [{ requestedReviewer: team }] },
+          timelineItems: { nodes: [{ createdAt: '2026-08-19T14:00:00Z', requestedReviewer: team }] },
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('review-required');
   });
 
   it('carries the head commit\'s PARENT COUNT, so "Update branch" cannot clear a review', async () => {
@@ -2068,7 +2177,8 @@ describe('fetchRefStatuses', () => {
       });
     });
     expect((await fetchRefStatuses(runGraphql, 'o', 'n', [2639])).resolved[2639]?.status).toBe('changes-requested');
-    expect(sent).toContain('parents(first: 0) { totalCount }');
+    // `first: 1`, not `first: 0`: the first parent's date is what a merge answers WITH.
+    expect(sent).toContain('parents(first: 1) { totalCount nodes { committedDate } }');
   });
 
   it('reads an absent parent count as an ORDINARY commit, so a real push still counts', async () => {

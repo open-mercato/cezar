@@ -62,23 +62,36 @@ stays `CHANGES_REQUESTED` after the author has responded** — GitHub does not c
 reviewer submits again — so on its own it points at the author forever. Two signals say the ball
 has moved back, and either is enough:
 
-- **A pending review request made _after_ the review** (`reviewRequests.totalCount > 0`, dated by
-  the last `ReviewRequestedEvent`) — the author clicking re-request. Authoritative, and observed
-  live on a PR whose `reviewDecision` was still `CHANGES_REQUESTED` *and* whose `latestReviews`
-  came back **empty**: the case with no other tell.
+- **A still-standing review request made _after_ the review** (`reviewRequests`, dated by the newest
+  `ReviewRequestedEvent` **for a reviewer who is still on the list**) — the author clicking
+  re-request. Authoritative, and observed live on a PR whose `reviewDecision` was still
+  `CHANGES_REQUESTED` *and* whose `latestReviews` came back **empty**: the case with no other tell.
+  The two connections have to be matched by reviewer because they answer about different requests:
+  `reviewRequests` is who is on the hook *now* and carries no date, while a `ReviewRequestedEvent`
+  carries the date and *survives the request being withdrawn*. Dating the standing request from a
+  withdrawn one would hide a live rejection all over again.
 - **A _non-merge_ commit newer than the review** — the fallback for an author who pushed without
   clicking anything. Its two timestamps (the head commit's `committedDate`, the last
   changes-requested review's `submittedAt`) ride the same aliased node and cost no extra request.
 
-**Merges are excluded from that second signal**, because GitHub's **Update branch** button writes
-`Merge branch 'main' into <branch>` dated *now* — newer than any review, addressing none of it. It
-is the click people make reflexively on a stale PR, so counting it as a push let one button wipe a
-live rejection off the chip. `parents.totalCount >= 2` on the head commit is what tells that commit
-apart from work (`parents(first: 0)` — the count is the whole question, so no parent is fetched;
-shape confirmed on a real PR). An absent count reads as an ordinary commit: the push
-rule is the common path and must not switch off on a field GitHub declined to send. Merging the
-base *and* pushing fixes together, with the merge landing last, still reads as unanswered until the
-next real commit.
+**A merge is transparent to that second signal, not disqualifying.** GitHub's **Update branch**
+button — and this cockpit's own **Resolve conflicts** — writes `Merge branch 'main' into <branch>`
+dated *now*: newer than any review, addressing none of it. It is the click people make reflexively
+on a stale PR, so counting it as a push let one button wipe a live rejection off the chip.
+`parents.totalCount >= 2` on the head commit is what tells that commit apart from work.
+
+But *ignoring* a merge head is equally wrong, and in a more common sequence: request changes → the
+author pushes a real fix (chip correctly turns blue) → the base moves on → the author resolves the
+conflicts. Discarding the head because it is a merge would throw away the fix underneath it and
+flip the chip **back** to red, blaming an author who answered two steps ago — the same
+misattribution this whole ranking exists to prevent, pointed the other way.
+
+So the push is judged by the newest commit that is actual *work*: the head, or — when the head is a
+merge — its **first parent**, which is the branch's previous tip and therefore what the merge sat on
+top of (`parents(first: 1)`, riding the same node at no extra request). A plain "Update branch" on a
+PR that was never fixed still reads as unanswered, because that first parent is the pre-review
+commit. An absent count reads as an ordinary commit: the push rule is the common path and must not
+switch off on a field GitHub declined to send.
 
 This does not cover **Update with rebase**, which rewrites the committer date on every commit and
 is indistinguishable from real work. Only an explicit re-request would fix that, at the cost of a
