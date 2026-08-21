@@ -208,21 +208,37 @@ export interface TaskReference {
  *
  * Built by walking an ordered list of SOURCES rather than by hand-picking a winner, so adding the
  * next kind of reference is one entry here and nothing else — and the PR half is `prUrls`, the
- * same list `taskPrUrl` takes its head from, so the two can never disagree about #407 or #526. Order is strongest-first — the PR a
- * task created, the PR it is about, then the issue — which is also what makes `taskReference`
- * answer exactly what it always answered.
+ * same list `taskPrUrl` takes its head from, so the two can never disagree about #407 or #526.
+ * Order is strongest-first — the PR a task created, the PR it is about, then the issue — with one
+ * thing ahead of all of them: a `CEZ:PR` declaration that NO scraped URL corroborates.
+ *
+ * That exception is narrow on purpose. Normally the declaration is already one of the URLs below
+ * (the marker contract asks the agent to re-declare once it opens a PR of its own), and then
+ * nothing changes: dedup collapses them and the created PR still leads. But when the URL tier
+ * carries a number the agent never declared, that tier is pointing somewhere the agent did not —
+ * and it is the tier built out of guesses. It has been wrong exactly that way: a task that
+ * printed another run's stored `gh pr create` line was credited with that run's PR, in another
+ * repository, and it then led every chip list on the page while the PR the task actually opened
+ * sat behind it. A statement the agent made outranks a line a janitor found.
  *
  * What this deliberately does NOT read is `referencedPrCandidates` / `referencedIssueCandidates`.
  * Those are transcript scrapings that routinely name OTHER repositories (#526), so a further
  * reference has to arrive as a real field before it can be shown: the shape is ready for more,
- * the guesswork is not invited in. `markerRefs.pr` is the obvious next source, and is left out
- * only because today it never appears without one of the URLs below already carrying it.
+ * the guesswork is not invited in.
  *
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
 export function taskReferences(run: TaskReferenceInput, repoBase?: string): TaskReference[] {
+  const prs = prUrls(run)
+  const declared = run.markerRefs?.pr
   const sources: { kind: TaskReference['kind']; url?: string; number?: number }[] = [
-    ...prUrls(run).map((url) => ({ kind: 'PR' as const, url })),
+    // The uncorroborated declaration, ahead of everything (see above). When a URL below does name
+    // it, this entry is omitted entirely rather than added and deduped — that keeps the ORDER the
+    // ordinary case had, with the created PR first.
+    ...(declared === undefined || prs.some((url) => prNumber(url) === String(declared))
+      ? []
+      : [{ kind: 'PR' as const, number: declared }]),
+    ...prs.map((url) => ({ kind: 'PR' as const, url })),
     // Numeric-only: a reference known by number before any URL was scraped. `repoBase` turns it
     // into a real link — see the synthesis note below.
     { kind: 'PR', number: run.prNumber },

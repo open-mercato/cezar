@@ -62,21 +62,59 @@ stays `CHANGES_REQUESTED` after the author has responded** — GitHub does not c
 reviewer submits again — so on its own it points at the author forever. Two signals say the ball
 has moved back, and either is enough:
 
-- **A pending review request** (`reviewRequests.totalCount > 0`) — the author clicking re-request.
-  Authoritative, and observed live on a PR whose `reviewDecision` was still `CHANGES_REQUESTED`
-  *and* whose `latestReviews` came back **empty**: the case with no other tell.
-- **A commit newer than the review** — the fallback for an author who pushed without clicking
-  anything. Its two timestamps (the head commit's `committedDate`, the last changes-requested
-  review's `submittedAt`) ride the same aliased node and cost no extra request.
+- **A still-standing review request made _after_ the review** (`reviewRequests`, dated by the newest
+  `ReviewRequestedEvent` **for a reviewer who is still on the list**) — the author clicking
+  re-request. Authoritative, and observed live on a PR whose `reviewDecision` was still
+  `CHANGES_REQUESTED` *and* whose `latestReviews` came back **empty**: the case with no other tell.
+  The two connections have to be matched by reviewer because they answer about different requests:
+  `reviewRequests` is who is on the hook *now* and carries no date, while a `ReviewRequestedEvent`
+  carries the date and *survives the request being withdrawn*. Dating the standing request from a
+  withdrawn one would hide a live rejection all over again.
+- **A _non-merge_ commit newer than the review** — the fallback for an author who pushed without
+  clicking anything. Its two timestamps (the head commit's `committedDate`, the last
+  changes-requested review's `submittedAt`) ride the same aliased node and cost no extra request.
+
+**A merge is transparent to that second signal, not disqualifying.** GitHub's **Update branch**
+button — and this cockpit's own **Resolve conflicts** — writes `Merge branch 'main' into <branch>`
+dated *now*: newer than any review, addressing none of it. It is the click people make reflexively
+on a stale PR, so counting it as a push let one button wipe a live rejection off the chip.
+`parents.totalCount >= 2` on the head commit is what tells that commit apart from work.
+
+But *ignoring* a merge head is equally wrong, and in a more common sequence: request changes → the
+author pushes a real fix (chip correctly turns blue) → the base moves on → the author resolves the
+conflicts. Discarding the head because it is a merge would throw away the fix underneath it and
+flip the chip **back** to red, blaming an author who answered two steps ago — the same
+misattribution this whole ranking exists to prevent, pointed the other way.
+
+So the push is judged by the newest commit that is actual *work*: the head, or — when the head is a
+merge — its **first parent**, which is the branch's previous tip and therefore what the merge sat on
+top of (`parents(first: 1)`, riding the same node at no extra request). A plain "Update branch" on a
+PR that was never fixed still reads as unanswered, because that first parent is the pre-review
+commit. An absent count reads as an ordinary commit: the push rule is the common path and must not
+switch off on a field GitHub declined to send.
+
+This does not cover **Update with rebase**, which rewrites the committer date on every commit and
+is indistinguishable from real work. Only an explicit re-request would fix that, at the cost of a
+sticky red chip for authors who push a fix without clicking anything — a trade deliberately not
+taken.
+
+The **after** in the first one is load-bearing, and leaving it out was a reported bug
+(observed live): three reviewers were asked at once, one requested changes the next day,
+the other two never looked — so `totalCount` stayed 1 with nothing whatsoever having happened
+since. Read as a re-request, that stale entry painted "Waiting for review" over a live rejection,
+which is the opposite of whose move it is. `reviewRequests` says only *that* someone is on the
+hook, never since when, so the request's own date comes from
+`timelineItems(last: 1, itemTypes: [REVIEW_REQUESTED_EVENT])` on the same node.
 
 Absence is conservative: with no re-request and no usable dates, a review counts as current and the
-chip keeps pointing at the author.
+chip keeps pointing at the author. That includes a dated review against an undated request — the
+one case where "after" cannot be checked, so it is not assumed.
 
 One more thing falls out of reading `reviewRequests`: a repo with **no review policy at all**
 (`reviewDecision` null) but a reviewer explicitly asked reads `review-required` rather than `ready
 to merge`, which would have painted over the ask.
 
-With one hard limit, found on a real PR (shopware/frontends#2574): **`APPROVED` outranks a pending
+With one hard limit, found on a real PR: **`APPROVED` outranks a pending
 request.** A reviewer left on the request list after somebody else approved is a courtesy ask, not
 an unmet gate — and `reviewDecision` is the forge's own statement that the requirement is met (a
 repo needing two approvals reports `REVIEW_REQUIRED` until it has both, so `APPROVED` never arrives
