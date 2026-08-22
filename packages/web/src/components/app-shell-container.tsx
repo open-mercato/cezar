@@ -9,7 +9,7 @@ import { ListViewProvider } from '@/components/list-view'
 import { OfflineBanner } from '@/components/offline-banner'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectSwitcher } from '@/components/project-switcher'
-import { TaskQuickListContainer } from '@/components/task-quick-list'
+import { RecentListMenu, TaskQuickListContainer } from '@/components/task-quick-list'
 import { ToolsMenu } from '@/components/tools-menu'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { useActiveProjectId } from '@/lib/project-router'
@@ -156,6 +156,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         }
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={<TaskQuickListContainer crossProject={multiProject} />}
+        listMenu={<RecentListMenu />}
         multiProject={multiProject}
         toolsMenu={<ToolsMenu health={health.data} />}
       >

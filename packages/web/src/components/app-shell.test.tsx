@@ -195,10 +195,10 @@ describe('AppShell', () => {
       expect(within(sidebar()).getByRole('link', { name: /New task/ }).getAttribute('href')).toBe('/new')
     })
 
-    it('renders the C hint (the browser-usable accelerator; ⌘N only fires in the desktop shell)', () => {
+    it('carries the C hint in its tooltip (the browser-usable accelerator; ⌘N only fires in the desktop shell)', () => {
       renderShell()
       const link = within(sidebar()).getByRole('link', { name: /New task/ })
-      expect(within(link).getByText('C').tagName).toBe('KBD')
+      expect(link.getAttribute('title')).toBe('New task (C)')
     })
   })
 

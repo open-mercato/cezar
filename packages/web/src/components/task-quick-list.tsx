@@ -1,9 +1,8 @@
-import { ArchiveIcon, CheckCheckIcon, ChevronDownIcon, EllipsisIcon, ScaleIcon, SearchIcon } from 'lucide-react'
+import { ArchiveIcon, CheckCheckIcon, ChevronDownIcon, EllipsisIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { archiveFinished, markAllRunsSeen } from '@/api/client'
 import { queryKeys, useHealth, useProjects, useReferenceProjectId, useRuns, useRunsIndex } from '@/api/queries'
-import { openCommandPalette } from '@/components/command-palette'
 import { toast } from '@/components/ui/toaster'
 import {
   DropdownMenu,
@@ -49,11 +48,8 @@ export function TaskQuickList({
   now = Date.now(),
   showTokens = true,
   showCost = true,
-  actions,
 }: {
   runs: RunRecord[]
-  /** The header's inline actions (search, overflow menu) — supplied by the container. */
-  actions?: React.ReactNode
   /** The run open at `/tasks/:id`, so its row can show as active. */
   currentRunId?: string | null
   /** Injected so the ages are not racing the clock in tests. */
@@ -70,14 +66,7 @@ export function TaskQuickList({
 
   return (
     <div data-slot="quick-list">
-      <div className="flex flex-col gap-0.5 pt-2 pb-0.5">
-        {/* Devin-style section header (user decision): a quiet RECENT label with the list's
-            own actions inline on the right (search, overflow). The Tasks nav row above is the
-            door to the full table, so the label itself no longer needs to be a link. */}
-        <div className="flex h-7 items-center pr-1 pl-3">
-          <h2 className="text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Recent</h2>
-          {actions ? <span className="ml-auto flex items-center gap-0.5">{actions}</span> : null}
-        </div>
+      <div className="flex flex-col gap-0.5 pb-0.5">
         {buckets.length === 0 ? (
           <p className="px-3 py-2 text-xs text-soft-foreground">No tasks yet — describe one.</p>
         ) : (
@@ -497,11 +486,11 @@ export function CrossProjectTasks({ activeProjectId, now = Date.now() }: { activ
 }
 
 /**
- * The Recent header's inline actions (Devin-style): search opens the palette the sidebar already
- * knows; the overflow carries the two list-wide verbs the Tasks page has always owned, so the
- * sidebar can tidy the list without a trip to the table.
+ * The Recent header's overflow (Devin-style): the two list-wide verbs the Tasks page has always
+ * owned, so the sidebar can tidy the list without a trip to the table. Rendered by the shell's
+ * header through the `listMenu` slot — the shell owns the header, this owns the mutations.
  */
-function RecentActions() {
+export function RecentListMenu() {
   const queryClient = useQueryClient()
   const archive = useMutation({
     mutationFn: archiveFinished,
@@ -513,36 +502,28 @@ function RecentActions() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
-  const iconButton =
-    'flex size-6 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
   return (
-    <>
-      <button
-        type="button"
-        data-slot="recent-search"
-        aria-label="Search tasks"
-        title="Search tasks"
-        onClick={() => openCommandPalette()}
-        className={iconButton}
-      >
-        <SearchIcon className="size-3.5" aria-hidden="true" />
-      </button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button type="button" data-slot="recent-menu" aria-label="List actions" title="List actions" className={iconButton}>
-            <EllipsisIcon className="size-3.5" aria-hidden="true" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-[11rem]">
-          <DropdownMenuItem onSelect={() => markAllRead.mutate()}>
-            <CheckCheckIcon aria-hidden="true" /> Mark all read
-          </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => archive.mutate()}>
-            <ArchiveIcon aria-hidden="true" /> Archive finished
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </>
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-slot="recent-menu"
+          aria-label="List actions"
+          title="List actions"
+          className="flex size-6 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <EllipsisIcon className="size-3.5" aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[11rem]">
+        <DropdownMenuItem onSelect={() => markAllRead.mutate()}>
+          <CheckCheckIcon aria-hidden="true" /> Mark all read
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => archive.mutate()}>
+          <ArchiveIcon aria-hidden="true" /> Archive finished
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }
 
@@ -587,7 +568,6 @@ export function TaskQuickListContainer({ crossProject = false }: { crossProject?
         now={now}
         showTokens={visibility.tokens}
         showCost={visibility.cost}
-        actions={<RecentActions />}
       />
       {/* The parallel-work band (multi-project only): what OTHER repos need eyes on, under this
           project's own list. */}

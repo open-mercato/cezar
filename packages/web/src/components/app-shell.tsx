@@ -55,6 +55,10 @@ const brandLogoUrl = '/cezar-logo.svg'
  *  for CSS and once for the state machine. */
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
 
+/** The Recent header's icon buttons: 24px targets, card-white on hover, no chrome at rest. */
+const RECENT_ICON_BUTTON =
+  'flex size-6 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
+
 export type RepoChip = {
   name: string
   branch: string
@@ -82,6 +86,9 @@ export type AppShellProps = {
   taskQuickList?: ReactNode
   /** Step 4.2's Tools dropdown trigger. */
   toolsMenu?: ReactNode
+  /** The Recent header's overflow menu (Mark all read, Archive finished) — data-wired by the
+   *  container; the shell only places it beside its own + and search. */
+  listMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
    *  Defaults to shown so the presentational shell stays renderable alone; the container
    *  passes the health payload's truth. */
@@ -167,6 +174,7 @@ export function AppShell({
   latestVersion = null,
   taskQuickList,
   toolsMenu,
+  listMenu,
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
@@ -242,6 +250,7 @@ export function AppShell({
     latestVersion,
     taskQuickList,
     toolsMenu,
+    listMenu,
     projectGroups,
     multiProject,
     singleProject,
@@ -325,6 +334,7 @@ type NavProps = {
   latestVersion: string | null
   taskQuickList?: ReactNode
   toolsMenu?: ReactNode
+  listMenu?: ReactNode
   projectGroups?: ReactNode
   /** More than one registered project: pins the All-tasks door above the flat sidebar. The
    *  sidebar itself stays the ACTIVE project's (user decision, 25-repo review) — other
@@ -512,6 +522,7 @@ function SidebarContent({
   latestVersion,
   taskQuickList,
   toolsMenu,
+  listMenu,
   projectGroups,
   multiProject,
   singleProject,
@@ -558,29 +569,8 @@ function SidebarContent({
         {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
       </div>
 
-      <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
-        {/* contrast (near-black / near-white), not primary: a full-width purple slab out-shouted
-            everything — purple stays for in-flow actions, the CTA reads as solid chrome. */}
-        <Button asChild variant="contrast" className="relative min-w-0 flex-1 justify-center">
-          {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
-              New task affordances stay inside the SPA. Full document loads of /new (the
-              bookmarklet contract) land on the shell like any route (static-ui.ts) — the
-              React composer has owned auto-start parity since R4 Step 1.3. */}
-          <Link to="/new" onClick={onNavigate}>
-            <PlusIcon className="size-[15px]" aria-hidden="true" />
-            New task
-            {/* Decorative: the `c`-to-create accelerator is registered in the command palette.
-                (⌘N is also bound there, but only the desktop shell receives it — the browser
-                reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
-            <kbd
-              aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-contrast-foreground/60"
-            >
-              C
-            </kbd>
-          </Link>
-        </Button>
-      </div>
+      {/* No New-task slab here any more (user decision, Devin reference): the action is the
+          small + in the Recent header — one quiet row of verbs beside the list they act on. */}
 
 
       {projectGroups ? (
@@ -692,6 +682,36 @@ function SidebarContent({
           {/* The group divider between the places and the work. */}
           <hr aria-hidden="true" className="mx-5 mt-1 mb-1 border-border" />
 
+          {/* The RECENT header (Devin reference): one quiet label, the list's verbs inline on the
+              right — new task, search, and the container-supplied overflow. The + IS the New-task
+              action now (no slab above the nav); the accessible name and tooltip carry the `C`
+              accelerator the icon cannot. */}
+          <div data-slot="recent-header" className="flex h-7 items-center pr-3.5 pl-[22px] pt-1">
+            <h2 className="text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Recent</h2>
+            <span className="ml-auto flex items-center gap-0.5">
+              <Link
+                to="/new"
+                data-slot="recent-new-task"
+                aria-label="New task"
+                title="New task (C)"
+                onClick={onNavigate}
+                className={RECENT_ICON_BUTTON}
+              >
+                <PlusIcon className="size-3.5" aria-hidden="true" />
+              </Link>
+              <button
+                type="button"
+                data-slot="recent-search"
+                aria-label="Search tasks"
+                title="Search tasks"
+                onClick={() => openCommandPalette()}
+                className={RECENT_ICON_BUTTON}
+              >
+                <SearchIcon className="size-3.5" aria-hidden="true" />
+              </button>
+              {listMenu}
+            </span>
+          </div>
           <div data-slot="task-quick-list" className="px-2.5">
             <SidebarNavigateContext.Provider value={onNavigate}>
               {taskQuickList}
