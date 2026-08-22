@@ -362,10 +362,12 @@ export function paletteGroups(skills: readonly Skill[]): PaletteGroup[] {
     const counts = new Map<string, number>()
     for (const skill of list) counts.set(familyOf(skill), (counts.get(familyOf(skill)) ?? 0) + 1)
     const families = [...counts].filter(([, n]) => n >= FAMILY_MIN).map(([name]) => name).sort()
-    // Families must carry the source, not decorate it: when most of the list would land under
-    // `Other` anyway (a mixed catalog of unrelated names), headers only add noise.
+    // Families must carry the source, not decorate it. In a MIXED catalog (no vendor prefix)
+    // a first token is a coincidence more often than a set, so headers need to cover most of
+    // the list; inside a vendor collection (`om-*`) every family is a real one, and `auto (12)`
+    // against `Other (21)` is exactly the split a reader wants.
     const covered = families.reduce((sum, name) => sum + (counts.get(name) ?? 0), 0)
-    if (families.length === 0 || covered * 2 < list.length) {
+    if (families.length === 0 || (prefix === '' && covered * 2 < list.length)) {
       groups.push({ key: source, source, family: null, skills: list })
       continue
     }
