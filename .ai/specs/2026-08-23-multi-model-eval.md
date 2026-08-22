@@ -132,6 +132,13 @@ Per run, eight dimensions. Model self-reports are recorded and never trusted.
   separately — the "salvage" number, credited generously to arm A.
 - **Concurrency.** `maxParallel: 2`; arm B in waves of two, arm A sequentially.
 - **Caps.** 45 min per single run, 4.5 h per harness run, 30 min per gate command.
+- **Transport.** One cezar booted in the cezar repo drives eval-app through
+  `/api/v1/p/eval-app/...` — the same project-scoped path the cockpit uses for any non-boot
+  project.
+- **Skill profile.** `generic`. The `open-mercato` profile routes phases to `om-*` skills,
+  which are not in the bundled vendor tree and would have to resolve from the project
+  catalog mid-run; `generic` is fully bundled, is what the predecessor's runs actually
+  used, and is what a user outside Open Mercato gets.
 
 Reuses `om-eval-sandboxes/orchestrator.py` and `postpass.py` with a new roles file;
 results stream to `eval-results/results.jsonl`.
@@ -148,6 +155,26 @@ reviewer seats are subscription-backed and the third is free.
   worktree is the control.
 - **Small n**: five tasks cannot support a significance claim. The writeup reports counts
   and per-task detail, never a rate dressed as a measurement.
+- **Probe and council disagree on transport for the Muse Spark seat.** Preflight verifies
+  an `opencode/<model>` ref by spawning `opencode serve`; the council reaches the same
+  model as a structured call to the Zen endpoint. `probe.ts` already names this hazard —
+  "a model is only interchangeable with itself on the same transport" — so the seat can
+  probe green and still fail at council, or the reverse. Left as measured behaviour rather
+  than pre-emptively "fixed": the run will say whether it matters, and aligning the probe
+  with the executing transport is a change worth making on evidence.
+
+## Readiness at time of writing (2026-08-23)
+
+| Seat | Verdict |
+| --- | --- |
+| codex / gpt-5.6-luna | ready — round-trip ok via `codex exec` |
+| opencode / muse-spark-1.2-contributor-free | ready — round-trip ok |
+| claude / haiku | **failed — `claude CLI exited with code 1`** |
+
+The Claude Code OAuth token in `~/.claude/.credentials.json` expired on 2026-08-12, so
+`claude auth status --json` reports `loggedIn: false` and cezar's provider probe reports
+`disconnected`. Both Claude seats — orchestrator and one reviewer — are unavailable until
+the user re-authenticates in their own terminal. Nothing else blocks the launch.
 
 ## Output
 
