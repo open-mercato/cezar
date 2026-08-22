@@ -53,6 +53,7 @@ import {
   harnessRolesIssue,
   freeTierReviewerWarning,
   rolesEqual,
+  sessionRoleOptions,
   visibleHarnessPresets,
   type HarnessMode,
   type HarnessModelOption,
@@ -713,7 +714,7 @@ export function HarnessPanel({
               ariaLabel="Orchestrator model"
               readiness={readinessOf(roles.orchestrator)}
               value={roles.orchestrator}
-              options={options.filter((o) => o.runner !== 'harness')}
+              options={sessionRoleOptions(options)}
               onPick={(ref) => {
                 if (ref.runner === 'harness') return
                 onRoles({
@@ -748,7 +749,7 @@ export function HarnessPanel({
               ariaLabel="Implementer model"
               readiness={readinessOf(roles.implementer)}
               value={roles.implementer}
-              options={options.filter((o) => o.runner !== 'harness')}
+              options={sessionRoleOptions(options)}
               onPick={(ref) => {
                 if (ref.runner === 'harness') return
                 onRoles({

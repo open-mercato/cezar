@@ -96,6 +96,7 @@ import {
   canSaveHarnessPreset,
   defaultHarnessRoles,
   advisorHarnessOptions,
+  sessionRoleOptions,
   harnessRolesIssue,
   harnessSetupPrefill,
   harnessWorkflowName,
@@ -338,8 +339,13 @@ export function NewTaskRoute() {
   // one runner family and three configured advisors still cannot field a lineup
   // — and used to be told "no models are available yet", which is false and
   // sends the user to the wrong fix.
+  //
+  // `sessionRoleOptions` and not "not an advisor": OpenCode is runner-backed but
+  // cannot hold a session to stage-only, so it seats reviewers only. Counting it
+  // here let a claude+opencode workspace past this gate and into a lineup the
+  // server then refused.
   const harnessRunnerFamilies = useMemo(
-    () => [...new Set(harnessOptions.filter((o) => o.runner !== 'harness').map((o) => o.family))],
+    () => [...new Set(sessionRoleOptions(harnessOptions).map((o) => o.family))],
     [harnessOptions],
   )
   const harnessAdvisorFamilies = useMemo(

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { reviewerFamily, synthesizeReviewerBinding } from './reviewer-binding.js';
+import { opencodeSeatingError, reviewerFamily, synthesizeReviewerBinding } from './reviewer-binding.js';
 
 /**
  * The port's central defect (2026-07-25): cezar ran council reviewers as full
@@ -85,5 +85,66 @@ describe('reviewerFamily', () => {
 
   it('falls back to the gateway for an unrecognised model instead of guessing', () => {
     expect(reviewerFamily('big-pickle', 'opencode')).toBe('opencode');
+  });
+});
+
+/**
+ * The refusal used to be "no OpenCode anywhere in the lineup", which blocked the
+ * exact transport the module above exists to provide: a picker-chosen
+ * `opencode/<model>` reviewer resolves to one structured Zen call and never
+ * opens a session, so nothing about stage-only applies to it. Meanwhile the
+ * composer offered OpenCode for every role and DEFAULTED the orchestrator to
+ * one, so the first Start on a fresh workspace answered 409.
+ */
+describe('opencodeSeatingError', () => {
+  const claude = { runner: 'claude', model: 'haiku' } as const;
+  const codex = { runner: 'codex', model: 'gpt-5.6-luna' } as const;
+
+  it('seats an OpenCode reviewer that resolves to a structured gateway call', () => {
+    expect(
+      opencodeSeatingError({
+        orchestrator: claude,
+        implementer: codex,
+        reviewers: [claude, codex, { runner: 'opencode', model: 'opencode/muse-spark-1.2-contributor-free' }],
+      }),
+    ).toBeNull();
+  });
+
+  it('refuses OpenCode for the orchestrator — that role runs as a session', () => {
+    expect(
+      opencodeSeatingError({
+        orchestrator: { runner: 'opencode', model: 'opencode/claude-fable-5' },
+        implementer: codex,
+        reviewers: [claude, codex],
+      }),
+    ).toMatch(/stage-only isolation for the orchestrator/);
+  });
+
+  it('refuses OpenCode for the implementer for the same reason', () => {
+    expect(
+      opencodeSeatingError({
+        orchestrator: claude,
+        implementer: { runner: 'opencode', model: 'opencode/gpt-5.6-luna' },
+        reviewers: [claude, codex],
+      }),
+    ).toMatch(/stage-only isolation for the implementer/);
+  });
+
+  it('refuses an OpenCode reviewer with no gateway prefix, and says how to spell it', () => {
+    // A bare id names no gateway, so `synthesizeReviewerBinding` has no endpoint
+    // to reach — the council would have had to fall back to a session.
+    const error = opencodeSeatingError({
+      orchestrator: claude,
+      implementer: codex,
+      reviewers: [claude, { runner: 'opencode', model: 'muse-spark-1.2-contributor-free' }],
+    });
+    expect(error).toMatch(/no structured review path/);
+    expect(error).toContain('opencode/<model>');
+  });
+
+  it('leaves a lineup with no OpenCode at all alone', () => {
+    expect(
+      opencodeSeatingError({ orchestrator: claude, implementer: codex, reviewers: [claude, codex] }),
+    ).toBeNull();
   });
 });

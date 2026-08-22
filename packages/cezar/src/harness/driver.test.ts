@@ -2773,9 +2773,50 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(h.calls.map((c) => c.id)).not.toContain('stage');
   });
 
-  it('rejects OpenCode before any paid harness phase because it cannot enforce stage-only isolation', async () => {
+  /**
+   * Stage-only is a property of SESSIONS, so the refusal follows the session, not
+   * the vendor. The orchestrator and the implementer write to the worktree and
+   * cezar has no seam to hold an OpenCode session to stage-only; a reviewer with
+   * a gateway prefix opens no session at all — `synthesizeReviewerBinding` turns
+   * it into one structured Zen call, which is the transport that module exists
+   * for. The refusal used to cover all three, which blocked exactly the
+   * reviewers the picker offers.
+   */
+  it('rejects an OpenCode implementer before any paid harness phase — that role is a session', async () => {
     const h = makeHarness(dir);
     const unsafe = {
+      ...input,
+      roles: { ...roles, implementer: { runner: 'opencode' as const, model: 'opencode/gpt-5.6-luna' } },
+    };
+
+    const error = await runHarnessDriver(h.host, unsafe, h.deps);
+
+    expect(error).toMatch(/stage-only isolation for the implementer/i);
+    expect(h.calls.map((call) => call.id)).not.toContain('qualify');
+  });
+
+  it('rejects an OpenCode reviewer that names no gateway, because nothing can route it', async () => {
+    const h = makeHarness(dir);
+    const unsafe = {
+      ...input,
+      roles: {
+        ...roles,
+        reviewers: [
+          { runner: 'claude' as const, model: 'opus' },
+          { runner: 'opencode' as const, model: 'mimo-v2.5-free' },
+        ],
+      },
+    };
+
+    const error = await runHarnessDriver(h.host, unsafe, h.deps);
+
+    expect(error).toMatch(/no structured review path/i);
+    expect(h.calls.map((call) => call.id)).not.toContain('qualify');
+  });
+
+  it('seats an OpenCode reviewer that does name one, and conducts the run', async () => {
+    const h = makeHarness(dir);
+    const seated = {
       ...input,
       roles: {
         ...roles,
@@ -2786,10 +2827,10 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
       },
     };
 
-    const error = await runHarnessDriver(h.host, unsafe, h.deps);
+    const error = await runHarnessDriver(h.host, seated, h.deps);
 
-    expect(error).toMatch(/OpenCode.*stage-only isolation/i);
-    expect(h.calls.map((call) => call.id)).not.toContain('qualify');
+    expect(typeof error === 'string' ? error : '').not.toMatch(/stage-only|structured review path/i);
+    expect(h.calls.map((call) => call.id)).toContain('qualify');
   });
 
   it('records the probe verdict per model in the ledger instead of assuming ready', async () => {

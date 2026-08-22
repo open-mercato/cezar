@@ -120,3 +120,58 @@ export function synthesizeReviewerBinding(
 }
 
 const sanitize = (value: string): string => value.replace(/[^A-Za-z0-9._-]+/g, '-');
+
+/** The shape every caller of {@link opencodeSeatingError} shares — the contract's
+ *  `HarnessModelRef` and the driver's `HarnessRoleRef` both satisfy it. */
+interface SeatRef {
+  runner: string;
+  model: string;
+  effort?: 'low' | 'medium' | 'high' | 'max';
+}
+
+/**
+ * Why an OpenCode-bound lineup cannot be seated, or null when it can.
+ *
+ * The stage-only refusal is about SESSIONS, not about OpenCode. An orchestrator
+ * or implementer runs as an agent session that writes to the worktree, and
+ * cezar can only hold such a session to stage-only where it has a seam for it:
+ * a `PreToolUse` hook plus sandboxed Bash for claude (`claude-guard.ts`), the
+ * workspace-write sandbox for codex. OpenCode offers neither, so those two
+ * roles refuse it outright.
+ *
+ * A reviewer with a structured binding never opens a session at all — it is one
+ * `response_format: json_object` call to the gateway ({@link
+ * synthesizeReviewerBinding}), and the driver content-hashes the worktree
+ * around every council regardless. Refusing it was over-broad: it blocked the
+ * one transport this module exists to provide, and left the composer offering
+ * `opencode/…` reviewers that always 409'd at start.
+ *
+ * A reviewer WITHOUT a structured path (a bare model id naming no gateway) is
+ * still refused, and says how to spell it instead.
+ */
+export function opencodeSeatingError(roles: {
+  orchestrator: SeatRef;
+  implementer: SeatRef;
+  reviewers: readonly SeatRef[];
+}): string | null {
+  const sessionRole = ([['orchestrator', roles.orchestrator], ['implementer', roles.implementer]] as const)
+    .find(([, ref]) => ref.runner === 'opencode');
+  if (sessionRole) {
+    return (
+      `OpenCode cannot enforce Cezar’s stage-only isolation for the ${sessionRole[0]} — ` +
+      'that role runs as an agent session. Use Claude or Codex.'
+    );
+  }
+  const unroutable = roles.reviewers.find(
+    (ref) =>
+      ref.runner === 'opencode' &&
+      synthesizeReviewerBinding({ ...ref, runner: 'opencode', model: ref.model }) === null,
+  );
+  if (unroutable) {
+    return (
+      `OpenCode reviewer "${unroutable.model}" has no structured review path — ` +
+      'name it as `opencode/<model>` so the council can reach it through the gateway.'
+    );
+  }
+  return null;
+}

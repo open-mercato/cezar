@@ -18,6 +18,7 @@ import {
   modelFamilyOf,
   normalizeHarnessPresets,
   rolesEqual,
+  sessionRoleOptions,
   buildAutomationTask,
   availableRunners,
   buildCreateRunBody,
@@ -432,6 +433,72 @@ describe('harness form rules (spec 2026-07-23-harness-orchestration)', () => {
     expect(defaults).not.toBeNull()
     const refs = [defaults!.orchestrator, defaults!.implementer, ...defaults!.reviewers]
     expect(refs.every((ref) => ref.runner !== 'harness')).toBe(true)
+  })
+
+  it('defaultHarnessRoles never seats OpenCode on the orchestrator or implementer', () => {
+    // The defect this pins: with claude + opencode connected, the picker defaulted the
+    // orchestrator to `opencode/claude-fable-5`, probed it GREEN, and enabled Start on a
+    // lineup the server answers 409 for — OpenCode has no seam to hold an agent session to
+    // stage-only. Reviewers are unaffected: they resolve to a structured gateway call.
+    const options = [
+      { runner: 'claude' as const, model: 'haiku', label: 'haiku', family: 'anthropic' },
+      { runner: 'opencode' as const, model: 'opencode/claude-fable-5', label: 'fable', family: 'anthropic' },
+      { runner: 'opencode' as const, model: 'opencode/gpt-5.6-luna', label: 'luna', family: 'openai' },
+      { runner: 'codex' as const, model: 'gpt-5.6-luna', label: 'luna', family: 'openai' },
+    ]
+    const defaults = defaultHarnessRoles(options)
+    expect(defaults).not.toBeNull()
+    expect(defaults!.orchestrator.runner).not.toBe('opencode')
+    expect(defaults!.implementer.runner).not.toBe('opencode')
+  })
+
+  it('sessionRoleOptions drops advisors and OpenCode, and keeps the agent backends', () => {
+    const options = [
+      { runner: 'claude' as const, model: 'haiku', label: 'haiku', family: 'anthropic' },
+      { runner: 'codex' as const, model: 'gpt-5.6-luna', label: 'luna', family: 'openai' },
+      { runner: 'opencode' as const, model: 'opencode/muse-spark-1.2-contributor-free', label: 'muse', family: 'opencode' },
+      { runner: 'harness' as const, model: 'kimi', label: 'kimi', family: 'moonshot' },
+    ]
+    expect(sessionRoleOptions(options).map((o) => o.runner)).toEqual(['claude', 'codex'])
+  })
+
+  it('a workspace of only claude + opencode cannot field a lineup, and says so', () => {
+    // Two families on paper, one seatable backend in practice. Returning null is what opens
+    // the setup dialog with "Multi-model needs a second agent backend" instead of letting the
+    // user compose something that cannot start.
+    expect(
+      defaultHarnessRoles([
+        { runner: 'claude' as const, model: 'haiku', label: 'haiku', family: 'anthropic' },
+        { runner: 'opencode' as const, model: 'opencode/gpt-5.6-luna', label: 'luna', family: 'openai' },
+      ]),
+    ).toBeNull()
+  })
+
+  it('harnessRolesIssue explains a stale OpenCode session role instead of leaving it to the 409', () => {
+    const issue = harnessRolesIssue({
+      orchestrator: { runner: 'opencode', model: 'opencode/claude-fable-5' },
+      implementer: { runner: 'codex', model: 'gpt-5.6-luna' },
+      reviewers: [
+        { runner: 'claude', model: 'haiku' },
+        { runner: 'codex', model: 'gpt-5.6-luna' },
+      ],
+    })
+    expect(issue).toMatch(/^Orchestrator: OpenCode runs as an agent session/)
+    expect(issue).toContain('OpenCode can still review')
+  })
+
+  it('harnessRolesIssue passes an OpenCode REVIEWER — it resolves to a structured call', () => {
+    expect(
+      harnessRolesIssue({
+        orchestrator: { runner: 'claude', model: 'haiku' },
+        implementer: { runner: 'codex', model: 'gpt-5.6-luna' },
+        reviewers: [
+          { runner: 'claude', model: 'haiku' },
+          { runner: 'codex', model: 'gpt-5.6-luna' },
+          { runner: 'opencode', model: 'opencode/muse-spark-1.2-contributor-free' },
+        ],
+      }),
+    ).toBeNull()
   })
 
   it('harnessWorkflowName recognizes exactly the two harness workflows', () => {

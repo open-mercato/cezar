@@ -42,7 +42,7 @@ import {
 } from '../skills.js';
 import { HARNESS_FIX_ISSUE, HARNESS_IMPLEMENT_FEATURE } from './workflows.js';
 import { createModelProber, sharedHarnessProbeCache, type ModelProber } from './probe.js';
-import { synthesizeReviewerBinding } from './reviewer-binding.js';
+import { opencodeSeatingError, synthesizeReviewerBinding } from './reviewer-binding.js';
 import {
   MAX_PARALLEL_REVIEWERS,
   councilQuorum,
@@ -1946,17 +1946,8 @@ export async function runHarnessDriver(
       };
     }
     if (roles) {
-      if (
-        [roles.orchestrator, roles.implementer, ...roles.reviewers].some(
-          (ref) => ref.runner === 'opencode',
-        )
-      ) {
-        return {
-          ok: false,
-          error:
-            'OpenCode cannot enforce Cezar’s stage-only isolation; use Claude, Codex, or a configured advisor',
-        };
-      }
+      const seating = opencodeSeatingError(roles);
+      if (seating) return { ok: false, error: seating };
       // Advisor reviewers execute through the runtime council and need their
       // bindings in the config (spec 2026-07-24-advisor-reviewers) — fail the
       // preflight with the setup hint rather than a mid-council surprise.

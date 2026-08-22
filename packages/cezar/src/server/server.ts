@@ -103,6 +103,7 @@ import { resolveHarnessPlan } from '../harness/profile-plan.ts';
 import { harnessArtifactDir } from '../harness/driver.ts';
 import { providerFamilyOf } from '../harness/model-family.ts';
 import { canonicalizeAdvisorRefs } from '../harness/advisor-identity.ts';
+import { opencodeSeatingError } from '../harness/reviewer-binding.ts';
 import { releaseIssueClaim } from '../harness/issue-claim.ts';
 import {
   HARNESS_PROFILES,
@@ -4213,18 +4214,9 @@ export function createApp(deps: ServerDeps) {
             return c.json({ error: `harness start blocked: ${canonical.error}` }, 409);
           }
           const roles = { ...harnessInput.roles, reviewers: canonical.refs };
-          if (
-            [roles.orchestrator, roles.implementer, ...roles.reviewers].some(
-              (ref) => ref.runner === 'opencode',
-            )
-          ) {
-            return c.json(
-              {
-                error:
-                  'harness start blocked: OpenCode cannot enforce Cezar’s stage-only isolation; use Claude, Codex, or a configured advisor',
-              },
-              409,
-            );
+          const seating = opencodeSeatingError(roles);
+          if (seating) {
+            return c.json({ error: `harness start blocked: ${seating}` }, 409);
           }
           if (new Set(roles.reviewers.map(providerFamilyOf)).size < 2) {
             return c.json(
@@ -4258,14 +4250,9 @@ export function createApp(deps: ServerDeps) {
           resolved.plan.implementer,
           ...resolved.plan.reviewers,
         ];
-        if (refs.some((ref) => ref.runner === 'opencode')) {
-          return c.json(
-            {
-              error:
-                'harness start blocked: OpenCode cannot enforce Cezar’s stage-only isolation; use Claude, Codex, or a configured advisor',
-            },
-            409,
-          );
+        const planSeating = opencodeSeatingError(resolved.plan);
+        if (planSeating) {
+          return c.json({ error: `harness start blocked: ${planSeating}` }, 409);
         }
         const prober =
           deps.harnessProber ??

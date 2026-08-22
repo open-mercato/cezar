@@ -411,6 +411,17 @@ const sameRef = (a: HarnessModelRef, b: HarnessModelRef) => a.runner === b.runne
  * single-voice council is exactly what this surface exists to prevent.
  */
 export function harnessRolesIssue(roles: HarnessRoles): string | null {
+  // The seating rule the server enforces, said here instead of as a 409. The picker no
+  // longer OFFERS OpenCode for a session role, but a saved preset or a draft from before
+  // this rule can still carry one, and "Start" answering 409 is a worse way to learn it.
+  for (const [role, ref] of [
+    ['Orchestrator', roles.orchestrator],
+    ['Implementer', roles.implementer],
+  ] as const) {
+    if (ref.runner === 'opencode') {
+      return `${role}: OpenCode runs as an agent session and cezar cannot hold it to stage-only. Pick a Claude or Codex model — OpenCode can still review.`
+    }
+  }
   if (roles.reviewers.length < 2) return 'Pick at least 2 reviewers — multi-model means more than one voice.'
   if (roles.reviewers.length > 5) return 'Pick at most 5 reviewers.'
   for (let i = 0; i < roles.reviewers.length; i += 1) {
@@ -603,11 +614,32 @@ export function freeTierReviewerWarning(roles: HarnessRoles | null): string | nu
   return `${names} ${free.length > 1 ? 'are free-tier models' : 'is a free-tier model'} — free tiers often cannot finish a full review in time. The council continues without a reviewer that fails, but you lose its perspective.`
 }
 
-export function defaultHarnessRoles(allOptions: readonly HarnessModelOption[]): HarnessRoles | null {
-  const options = allOptions.filter(
+/**
+ * The options a SESSION role — orchestrator or implementer — may take.
+ *
+ * Two exclusions, for two different reasons. An advisor has no session at all
+ * (reviewer-only by construction). OpenCode has one, but cezar has no seam to
+ * hold it to stage-only — a `PreToolUse` hook and sandboxed Bash for claude, the
+ * workspace-write sandbox for codex, nothing for OpenCode — so the server
+ * refuses those two roles on it. Offering them anyway is how the picker came to
+ * DEFAULT the orchestrator to `opencode/claude-fable-5`, probe it green, and
+ * enable Start on a lineup that always answered 409.
+ *
+ * Reviewers deliberately keep OpenCode: a reviewer resolves to one structured
+ * gateway call (`reviewer-binding.ts`), never a session, so nothing about
+ * stage-only applies to it.
+ */
+export function sessionRoleOptions(
+  allOptions: readonly HarnessModelOption[],
+): Array<HarnessModelOption & { runner: HarnessRunnerRef['runner'] }> {
+  return allOptions.filter(
     (option): option is HarnessModelOption & { runner: HarnessRunnerRef['runner'] } =>
-      option.runner !== 'harness',
+      option.runner !== 'harness' && option.runner !== 'opencode',
   )
+}
+
+export function defaultHarnessRoles(allOptions: readonly HarnessModelOption[]): HarnessRoles | null {
+  const options = sessionRoleOptions(allOptions)
   const families = [...new Set(options.map((o) => o.family))]
   if (families.length < 2 || options.length < 2) return null
   const byFamily = (family: string) => options.filter((o) => o.family === family)
