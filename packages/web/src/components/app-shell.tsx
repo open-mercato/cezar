@@ -760,19 +760,21 @@ function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
       data-slot="all-tasks-link"
       onClick={onNavigate}
       aria-current={isActive ? 'page' : undefined}
-      // Reads at the weight of a section header rather than a nav row: full-strength foreground
-      // and semibold, where the project groups below it are semibold-on-default and their nav
-      // rows are muted. The violet icon is the one spot of accent — the same hue the tag chips
-      // and this page's own selected filters use, so the door and the room match.
+      // The same row grammar as the WORKSPACE nav (sidebar redesign): muted at rest, lifting
+      // onto card white with a hairline shadow when hovered or current, the purple edge caret
+      // marking the active page. Purple is a signal, never a surface — so no tinted icon.
       className={cn(
-        'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9',
-        isActive && 'bg-muted',
+        'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
+        isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
       )}
     >
-      <LayersIcon
-        className={cn('size-4 shrink-0', isActive ? 'text-violet' : 'text-violet/70')}
-        aria-hidden="true"
-      />
+      {isActive ? (
+        <span
+          aria-hidden="true"
+          className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
+        />
+      ) : null}
+      <LayersIcon className="size-4 shrink-0" aria-hidden="true" />
       All tasks
     </RouterLink>
   )

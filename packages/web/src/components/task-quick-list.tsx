@@ -494,7 +494,7 @@ export function CrossProjectTasks({ activeProjectId, now = Date.now() }: { activ
               <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
               {/* The project is the row's leading identifier here — which repo needs you is the
                   question this band answers; the task title elaborates. */}
-              <span className="max-w-[9ch] shrink-0 truncate font-mono text-[10.5px] font-medium text-soft-foreground">
+              <span className="max-w-[12ch] shrink-0 truncate font-mono text-[10.5px] font-medium text-soft-foreground">
                 {projectName(entry.projectId)}
               </span>
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted-foreground">
