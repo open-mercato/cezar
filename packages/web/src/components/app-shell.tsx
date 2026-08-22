@@ -600,11 +600,6 @@ function SidebarContent({
           {/* Multi-project, but the sidebar stays the ACTIVE project's (user decision, 25-repo
               review): only the All-tasks door is pinned above the flat column — the same band
               the groups view pins it in, so the two framings agree on where "everything" lives. */}
-          {multiProject ? (
-            <div className="shrink-0 border-b border-border px-1.5 pt-0.5 pb-2">
-              <AllTasksLink onNavigate={onNavigate} />
-            </div>
-          ) : null}
         {/* Devin-style order (user decision): the PLACES first (one quiet nav, no section
             label, Tasks back as a real row with its unread badge), then the WORK beneath as a
             Recent list with its own header actions. The navigate context reaches the quick-list
@@ -614,7 +609,7 @@ function SidebarContent({
           {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob.
               No Settings here — it is not a workspace surface; it lives with the utilities. */}
           <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
-            {items.filter((item) => item.to !== '/settings').map((item) => {
+            {items.filter((item) => item.to !== '/settings').map((item, index) => {
               const isActive = item.to === activeTo
               const Icon = item.icon
               // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
@@ -622,8 +617,8 @@ function SidebarContent({
               // /tasks/:id — which the spec requires. `aria-current` cannot be forced past NavLink's
               // own matching, so the area rule lives in `activeNavPath` and this is a plain Link.
               return (
+                <React.Fragment key={item.to}>
                 <Link
-                  key={item.to}
                   to={item.to}
                   onClick={onNavigate}
                   aria-current={isActive ? 'page' : undefined}
@@ -675,6 +670,11 @@ function SidebarContent({
                     </span>
                   ) : null}
                 </Link>
+                {/* All tasks rides the nav as a PEER of Tasks (user feedback: a separate band
+                    above the nav read as a second, differently-dressed Tasks). Multi-project
+                    only — with one project it would be the same table under a second name. */}
+                {index === 0 && multiProject ? <AllTasksLink onNavigate={onNavigate} /> : null}
+                </React.Fragment>
               )
             })}
           </nav>
