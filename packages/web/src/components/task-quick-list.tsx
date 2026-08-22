@@ -13,7 +13,7 @@ import {
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { ReferenceChip } from '@/components/reference-chip'
+import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
@@ -375,9 +375,9 @@ function RunRow({
           <span data-slot="task-row-meta" className="flex min-w-0 items-center gap-2.5 text-[11px] leading-none text-soft-foreground">
             {age ? <span className="shrink-0 tabular-nums">{age}</span> : null}
             {reference ? (
-              <ReferenceChip
+              <TaskReferenceChip
+                run={run}
                 reference={reference}
-                taskTitle={title}
                 compact
                 // De-pilled for the sidebar: plain mono text that keeps its STATUS tone (open,
                 // merged, failing) — the one colour on the meta line, and it means something.

@@ -377,6 +377,73 @@ describe('RunStore — PR auto-link only on real creation (#fake-pr)', () => {
     } as never);
     expect(store.getRun(run.id)?.pullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/321');
   });
+
+  // The claim must come from something that can speak FOR this run. Verbatim from the task that
+  // wrote this guard: it dumped ANOTHER run's stored events while investigating them, and the
+  // dump contained that run's `"title": "Ran gh pr create …"` next to its PR URL — so this run
+  // adopted a PR in a different repository as its own, forever (the first created URL wins).
+  it('does not believe a creation phrase that arrives inside tool OUTPUT', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't1',
+        name: 'Bash',
+        toolKind: 'execute',
+        title: 'Ran python3 - <<PY … PY',
+        status: 'completed',
+        input: { command: 'python3 - <<PY\nprint(open("other-run.ndjson").read())\nPY' },
+        output:
+          '{"type":"item.completed","item":{"kind":"tool","title":"Ran gh pr create --repo o/other …",' +
+          '"output":"https://github.com/o/other/pull/5366"}}',
+      },
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.pullRequestUrl).toBeUndefined();
+    // Still a PR URL the conversation mentioned, so the referenced tier keeps it as a candidate —
+    // that tier is allowed to be wrong about a subject, never about authorship.
+    expect(loaded?.referencedPrCandidates).toEqual(['https://github.com/o/other/pull/5366']);
+  });
+
+  it('does not believe a creation phrase the agent merely WROTE into a file', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't2',
+        name: 'Edit',
+        toolKind: 'edit',
+        title: 'packages/cezar/src/runs/store.test.ts',
+        status: 'completed',
+        input: {
+          new_string: "result: 'Opened a draft pull request: https://github.com/open-mercato/cezar/pull/42'",
+        },
+      },
+    });
+    expect(store.getRun(run.id)?.pullRequestUrl).toBeUndefined();
+  });
+
+  it('still adopts the PR from a real `gh pr create`, whose URL only appears in the output', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: 't3',
+        name: 'Bash',
+        toolKind: 'execute',
+        title: 'Ran gh pr create --repo open-mercato/cezar --base main --head cez/x --title "fix…',
+        status: 'completed',
+        input: { command: 'gh pr create --repo open-mercato/cezar --base main' },
+        output: 'https://github.com/open-mercato/cezar/pull/901',
+      },
+    });
+    expect(store.getRun(run.id)?.pullRequestUrl).toBe(
+      'https://github.com/open-mercato/cezar/pull/901',
+    );
+  });
 });
 
 describe('RunStore — secret redaction before persistence (#427)', () => {
@@ -846,6 +913,117 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     const { store, run } = freshRun();
     store.applyMarkerRefs(run.id, {});
     expect(store.getRun(run.id)?.markerRefs).toBeUndefined();
+  });
+
+  // Verbatim from the run that reported it: a task opened on open-mercato#4326 pushed a
+  // fix as its own #5366 and re-declared with the new number, as the marker contract asks. Both
+  // PRs are true, and the record has a field for each — but feeding the re-declaration to the
+  // referenced tier cleared #4326 (no candidate ends in /5366), so the cockpit painted one chip.
+  it('a declaration naming the PR the task CREATED keeps the PR it is about', () => {
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.applyMarkerRefs(run.id, { pr: 4326 });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Reviewing https://github.com/open-mercato/open-mercato/pull/4326.',
+    });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Ran gh pr create … → https://github.com/open-mercato/open-mercato/pull/5366',
+    });
+    store.applyMarkerRefs(run.id, { pr: 5366 });
+
+    const loaded = store.getRun(run.id);
+    expect(loaded?.pullRequestUrl).toBe('https://github.com/open-mercato/open-mercato/pull/5366');
+    expect(loaded?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/4326',
+    );
+    // The about-number too: it is what paints a numeric-only chip, and the created PR already
+    // has a field of its own.
+    expect(loaded?.prNumber).toBe(4326);
+    expect(loaded?.markerRefs?.pr).toBe(5366);
+  });
+
+  it('restores the about-PR when the declaration arrives BEFORE the creation evidence', () => {
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Reviewing https://github.com/open-mercato/open-mercato/pull/4326.',
+    });
+    store.applyMarkerRefs(run.id, { pr: 5366 });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBeUndefined(); // nothing created yet
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Ran gh pr create … → https://github.com/open-mercato/open-mercato/pull/5366',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/4326',
+    );
+  });
+
+  it('still fills an unknown prNumber from a declaration that names the created PR', () => {
+    const { store, run } = freshRun('ship the devices work');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Created a pull request: https://github.com/open-mercato/cezar/pull/42',
+    });
+    store.applyMarkerRefs(run.id, { pr: 42 });
+    expect(store.getRun(run.id)?.prNumber).toBe(42);
+  });
+
+  it('heals a record already written by the bug, on load', () => {
+    // Exactly the shape the bug left on disk: the created PR, the declaration that named it, the
+    // about-PR still sitting in the working set, and the chip it should have painted gone.
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.updateRun(run.id, {
+      pullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/5366',
+      referencedPullRequestUrl: undefined,
+      referencedPrCandidates: ['https://github.com/open-mercato/open-mercato/pull/4326'],
+      markerRefs: { pr: 5366 },
+      prNumber: 5366,
+    });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/4326',
+    );
+  });
+
+  it('never resurrects a chip a live declaration deliberately cleared', () => {
+    // The other direction of the heal, and the one that would quietly undo "no chip beats a wrong
+    // chip": here the declaration names a PR this run did NOT create, so it still owns the
+    // referenced tier and its contradiction with the candidate must survive a reload.
+    const { store, run } = freshRun('task');
+    store.updateRun(run.id, {
+      referencedPullRequestUrl: undefined,
+      referencedPrCandidates: ['https://github.com/open-mercato/cezar/pull/777'],
+      markerRefs: { pr: 500 },
+    });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.referencedPullRequestUrl).toBeUndefined();
+  });
+
+  it('never takes a referenced PR away from a record whose candidates no longer explain it', () => {
+    const { store, run } = freshRun('task');
+    store.updateRun(run.id, {
+      referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/777',
+      referencedPrCandidates: undefined,
+      markerRefs: { pr: 777 },
+    });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/cezar/pull/777',
+    );
+  });
+
+  it('a declaration naming some OTHER PR still overrides the fuzzy tier', () => {
+    const { store, run } = freshRun('task');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Created a pull request: https://github.com/open-mercato/cezar/pull/42',
+    });
+    store.applyMarkerRefs(run.id, { pr: 500 });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.prNumber).toBe(500);
+    expect(loaded?.referencedPullRequestUrl).toBeUndefined(); // no candidate ends in /500
   });
 });
 

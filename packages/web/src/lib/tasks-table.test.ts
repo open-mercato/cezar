@@ -265,6 +265,50 @@ describe('taskReferences', () => {
     ])
   })
 
+  // The record this rule was written from, verbatim: the task declared the PR it opened (#901),
+  // while the created-PR field had been poisoned with a PR from ANOTHER repository that the
+  // transcript merely quoted. The declared one leads — including on the surfaces with room for
+  // exactly one chip, which is where the wrong PR was all you could see.
+  it('leads with a declared PR that no scraped URL corroborates', () => {
+    const r = run({
+      pullRequestUrl: 'https://github.com/o/other/pull/5366',
+      prNumber: 901,
+      markerRefs: { pr: 901 },
+    })
+    expect(taskReferences(r, REPO)).toEqual([
+      { kind: 'PR', number: 901, url: `${REPO}/pull/901` },
+      { kind: 'PR', number: 5366, url: 'https://github.com/o/other/pull/5366' },
+    ])
+    expect(taskReference(r)?.number).toBe(901)
+  })
+
+  it('leaves the order alone when a URL does carry the declared number', () => {
+    // The ordinary shape — the agent re-declared with the PR it opened — so nothing is ahead of
+    // the created PR and the declaration adds no chip of its own.
+    expect(
+      taskReferences(
+        run({
+          pullRequestUrl: `${REPO}/pull/533`,
+          referencedPullRequestUrl: `${REPO}/pull/530`,
+          markerRefs: { pr: 533 },
+        }),
+      ).map((reference) => reference.number),
+    ).toEqual([533, 530])
+  })
+
+  it('keeps #526 with a declaration too: an issue-subject run adopts no stray PR', () => {
+    expect(
+      taskReferences(
+        run({
+          referencedPullRequestUrl: `${REPO}/pull/900`,
+          referencedIssueUrl: `${REPO}/issues/524`,
+          markerRefs: { issue: 524 },
+        }),
+        REPO,
+      ),
+    ).toEqual([{ kind: 'Issue', number: 524, url: `${REPO}/issues/524` }])
+  })
+
   it('is what taskReference takes its single answer from', () => {
     const r = run({ pullRequestUrl: `${REPO}/pull/7`, referencedIssueUrl: `${REPO}/issues/4` })
     expect(taskReference(r)).toEqual(taskReferences(r)[0])

@@ -42,6 +42,17 @@ The created tier always wins. Both fields are additive and optional — old
   into `pullRequestUrl` only when the same event also matches
   `CREATED_PR_RE`. Scanning v2 sources fixes creation detection for backends
   that report `gh pr create` through tool items.
+  - **Amendment — where the claim may come from.** Matching `CREATED_PR_RE`
+    against *everything* an event carried made tool OUTPUT able to claim
+    authorship: a task that printed a log, a stored transcript or a test
+    fixture containing someone else's `gh pr create` line adopted their PR —
+    in another repository — and, because the first adoption freezes the tier,
+    never looked at the one it really opened. The claim is now read from
+    `eventCreationClaimFragments` (the agent's own turn text, an assistant
+    message item, and the tool TITLE cezar renders from the command it saw
+    run) while the URL is still taken from the whole event, since `gh` prints
+    it in the output. The referenced tier is untouched by this: it may be
+    wrong about a *subject*, never about *authorship*.
 - **Referenced detection:** every distinct PR URL spotted accumulates into
   `referencedPrCandidates` (capped at 8 — beyond that the conversation is a
   survey, not a subject). `referencedPullRequestUrl` is then resolved:

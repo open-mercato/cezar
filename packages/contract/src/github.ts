@@ -151,6 +151,26 @@ export const githubRefStatusDataSchema = z.discriminatedUnion('available', [
     available: z.literal(true),
     prs: z.record(z.number(), referenceStatusSchema),
     issues: z.record(z.number(), referenceStatusSchema),
+    /**
+     * The pull request numbers that do NOT merge cleanly into their base right now.
+     *
+     * A second list rather than a twelfth status, because a conflict is a different AXIS from the
+     * one `referenceStatusSchema` ranks. That enum answers *whose move is it*, and it answers with
+     * one word; mergeability is an independent fact that can be true alongside any of them — a PR
+     * can be green, approved and conflicting at the same time, and folding the two together would
+     * force the cockpit to pick which of two true things to say. Kept apart, it paints a second
+     * chip next to the first and says both.
+     *
+     * It rides the same GraphQL node the statuses come from (`mergeable`), so unlike
+     * `githubPrMergeStateResponseSchema` — the full per-PR probe, blockers and all — it costs no
+     * extra request for the batch.
+     *
+     * Optional on the wire, and its absence means *nothing is known about mergeability*, never
+     * *no conflicts*: a server from before this field simply omits it. Only OPEN pull requests are
+     * ever named — GitHub reports `UNKNOWN` for merged and closed ones, and `UNKNOWN` (which is
+     * also what it answers while it is still computing) is never listed.
+     */
+    conflicts: z.array(z.number()).optional(),
     recheckAfterMs: recheckAfterMsSchema,
   }),
   z.object({

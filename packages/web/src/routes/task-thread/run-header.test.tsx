@@ -8,6 +8,7 @@ import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-clien
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { RunHeader, RunMetaFooter, TakeOverButton } from './run-header'
+import { resolveConflictsPrompt } from './run-actions'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -843,6 +844,123 @@ describe('meta line, tabs, pill and resume hint', () => {
       expect(issueChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/544')
       expect(issueChip.textContent).toContain('Issue #544')
     }
+  })
+
+  // The conflict chip's one-click prompt, end to end: the forge says a PR will not merge, the
+  // chip goes orange, and the panel it opens can send the agent the fix — into the very
+  // conversation under this header, which is what makes the button unambiguous here and nowhere
+  // else in the cockpit.
+  it('sends the resolve-conflicts prompt into this task’s own conversation', async () => {
+    const sent = stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'acme' }),
+      '/api/v1/p/acme/github/ref-status?prs=534': () =>
+        jsonResponse({ available: true, prs: { 534: 'ready' }, issues: {}, conflicts: [534], recheckAfterMs: null }),
+    })
+    renderHeader(
+      run('running', {
+        branch: 'cez/r1',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/534',
+      }),
+    )
+
+    const chip = await waitFor(() => {
+      const found = document.querySelector('[data-slot="pr-chip"][data-conflicting="true"]')
+      if (!found) throw new Error('the chip has not learned about the conflict yet')
+      return found as HTMLElement
+    })
+    fireEvent.focus(chip)
+    fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Resolve conflicts' })))
+
+    const message = await waitFor(() => {
+      const found = sent.find((request) => request.method === 'POST' && request.path.endsWith('/messages'))
+      if (!found) throw new Error('nothing was sent')
+      return found
+    })
+    expect(message.body).toMatchObject({ text: resolveConflictsPrompt(534) })
+  })
+
+  // A task opened on someone else's PR that pushes a follow-up of its own is about BOTH,
+  // and its own page is the last place that should have to pick one. Order is `taskReferences`
+  // order — the PR it created, then the PR it is about — the same order the global Tasks table
+  // paints.
+  it('shows every PR the task points at, not only the strongest one', () => {
+    stubFetch()
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/5366',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/4326',
+        markerRefs: { pr: 5366 },
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips.map((chip) => chip.getAttribute('href'))).toEqual([
+      'https://github.com/open-mercato/cezar/pull/5366',
+      'https://github.com/open-mercato/cezar/pull/4326',
+    ])
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      expect.stringContaining('#5366'),
+      expect.stringContaining('#4326'),
+    ])
+  })
+
+  // The registry knows every project's own repo, so a number-only chip is a real link here just
+  // as it is on All tasks — the two pages must not disagree about the same reference.
+  it('links a PR known only by number, using the project registry repo', async () => {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'boot-id', repo: {} }),
+      '/api/v1/projects': () =>
+        jsonResponse({
+          projects: [
+            { id: 'boot-id', name: 'cezar', root: '/home/me/cezar', repoUrl: 'https://github.com/open-mercato/cezar' },
+          ],
+        }),
+    })
+    renderHeader(run('done', { branch: 'cez/r1', prNumber: 901, markerRefs: { pr: 901 } }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() => {
+      const chip = meta.querySelector('[data-slot="pr-chip"]')
+      expect(chip?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/901')
+    })
+  })
+
+  // A PR URL whose last segment is not a number never becomes a `taskReferences` entry, so it is
+  // painted from `taskPrUrl` — and must still be painted when a number-only chip exists beside it
+  // (#847: a forge whose PR URLs are not `…/pull/N`).
+  it('keeps a non-numeric PR link beside a chip known only by number', () => {
+    stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://forge.example.com/o/r/merge_requests/spec-fix',
+        prNumber: 42,
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips).toHaveLength(2)
+    expect(chips.map((chip) => chip.getAttribute('href'))).toContain(
+      'https://forge.example.com/o/r/merge_requests/spec-fix',
+    )
+  })
+
+  it('shows a PR known only by number, with no repository to link it to', () => {
+    stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/5366',
+        prNumber: 901,
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      expect.stringContaining('#5366'),
+      expect.stringContaining('#901'),
+    ])
+    expect(chips[1]?.tagName).toBe('SPAN') // inert: nothing to link to
   })
 
   it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {
