@@ -18,6 +18,7 @@ import {
   CheckIcon,
   CopyIcon,
   DownloadIcon,
+  ChevronDownIcon,
   GripVerticalIcon,
   PlusIcon,
   SparklesIcon,
@@ -50,7 +51,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
-import { isProjectSkill, orderSkillsByUsage } from '@/lib/skills'
+import { SKILL_SOURCE_LABEL, isProjectSkill, paletteGroups, orderSkillsByUsage } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 import {
   WB_MAX_STEPS,
@@ -940,11 +941,12 @@ function Palette({
       skill.name.toLowerCase().includes(needle) ||
       (skill.description ?? '').toLowerCase().includes(needle),
   )
+  const groups = paletteGroups(shown)
   return (
     <div data-slot="wb-palette" className="mt-2.5 flex flex-col gap-1">
-      {shown.length > 0 ? (
-        shown.map((skill) => (
-          <PaletteSkill key={skill.path} skill={skill} inFlow={inFlow.has(skill.name)} onAdd={onAdd} />
+      {groups.length > 0 ? (
+        groups.map((group) => (
+          <PaletteGroupSection key={group.key} group={group} inFlow={inFlow} onAdd={onAdd} />
         ))
       ) : (
         <p className="py-1 text-xs leading-relaxed text-soft-foreground">
@@ -952,6 +954,43 @@ function Palette({
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * One collapsible palette section (user request: categories). The header names the source and,
+ * when the source splits into name families, the family — `Global / auto (14)`. Open by default;
+ * folding is local view state, and a filter query keeps whatever still matches visible.
+ */
+function PaletteGroupSection({
+  group,
+  inFlow,
+  onAdd,
+}: {
+  group: ReturnType<typeof paletteGroups>[number]
+  inFlow: ReadonlySet<string>
+  onAdd: (skill: string) => void
+}) {
+  const [open, setOpen] = useState(true)
+  const label = group.family ? `${SKILL_SOURCE_LABEL[group.source]} / ${group.family}` : SKILL_SOURCE_LABEL[group.source]
+  return (
+    <section data-slot="wb-palette-group" data-group={group.key} className="flex flex-col gap-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="mt-1.5 flex h-6 w-full items-center gap-1.5 rounded-sm px-1 text-left text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        <ChevronDownIcon aria-hidden="true" className={cn('size-3 shrink-0 transition-transform', !open && '-rotate-90')} />
+        <span className="truncate">{label}</span>
+        <span className="ml-auto font-mono text-[10.5px] font-medium text-soft-foreground tabular-nums normal-case">{group.skills.length}</span>
+      </button>
+      {open
+        ? group.skills.map((skill) => (
+            <PaletteSkill key={skill.path} skill={skill} inFlow={inFlow.has(skill.name)} onAdd={onAdd} />
+          ))
+        : null}
+    </section>
   )
 }
 
@@ -987,6 +1026,9 @@ function PaletteSkill({
       )}
       {...listeners}
     >
+      {/* The grip says "this row drags" (user feedback: the drag affordance was invisible).
+          Decorative — the whole row is the pointer surface; the add button is the keyboard path. */}
+      <GripVerticalIcon aria-hidden="true" className="-ml-0.5 size-3.5 shrink-0 text-soft-foreground/70" />
       <SparklesIcon
         aria-hidden="true"
         className={cn('size-3.5 shrink-0', isProjectSkill(skill) ? 'text-violet' : 'text-soft-foreground')}
@@ -1006,7 +1048,11 @@ function PaletteSkill({
         aria-label={`Add ${skill.name} to the flow`}
         title="Add to the flow"
         onClick={() => onAdd(skill.name)}
-        className="shrink-0 rounded p-0.5 text-soft-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        // Stop the pointerdown here: the row is a dnd-kit drag source with a 4px activation
+        // distance, and a click that slips those 4px on a 14px icon became a drag instead of an
+        // add (user report: "+ doesn't work"). The sensor never sees presses on the button now.
+        onPointerDown={(event) => event.stopPropagation()}
+        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors outline-none hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
         <PlusIcon aria-hidden="true" className="size-3.5" />
       </button>

@@ -11,6 +11,7 @@ import {
   multiWordFilter,
   orderSkills,
   orderSkillsByUsage,
+  paletteGroups,
   partitionSkillsForDisplay,
   queryScore,
   searchSkills,
@@ -386,5 +387,51 @@ describe('#519: usage folds into query ranking and the / autocomplete order', ()
       'om-fix',
       'om-auto-fix-issue',
     ])
+  })
+})
+
+describe('paletteGroups', () => {
+  const sk = (name: string, source: Skill['source'] = 'global'): Skill =>
+    ({ name, path: `/s/${name}`, source }) as Skill
+
+  it('splits a vendor-prefixed collection into name families, stragglers last under Other', () => {
+    const groups = paletteGroups([
+      sk('om-apply-upgrade-notes'),
+      sk('om-auto-create-pr'),
+      sk('om-auto-fix-pr'),
+      sk('om-auto-review-pr'),
+      sk('om-brainstorm'),
+      sk('om-ux-review'),
+      sk('om-ux-setup'),
+      sk('om-ux-shape'),
+    ])
+    expect(groups.map((g) => [g.family, g.skills.map((s) => s.name)])).toEqual([
+      ['auto', ['om-auto-create-pr', 'om-auto-fix-pr', 'om-auto-review-pr']],
+      ['ux', ['om-ux-review', 'om-ux-setup', 'om-ux-shape']],
+      ['Other', ['om-apply-upgrade-notes', 'om-brainstorm']],
+    ])
+  })
+
+  it('keeps a source without real families as one plain section, sources in incoming order', () => {
+    const groups = paletteGroups([sk('deploy', 'ai'), sk('review', 'ai'), sk('clean-code'), sk('ddia-systems')])
+    expect(groups.map((g) => [g.source, g.family, g.skills.length])).toEqual([
+      ['ai', null, 2],
+      ['global', null, 2],
+    ])
+  })
+
+  it('needs three members before a family earns a header', () => {
+    const groups = paletteGroups([sk('x-auto-a'), sk('x-auto-b'), sk('x-misc')])
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.family).toBeNull()
+  })
+
+  it('stays flat when families would leave most of a mixed catalog under Other', () => {
+    const groups = paletteGroups([
+      sk('lean-a'), sk('lean-b'), sk('lean-c'),
+      sk('clean-code'), sk('ddia'), sk('negotiation'), sk('release-it'), sk('system-design'),
+    ])
+    expect(groups).toHaveLength(1)
+    expect(groups[0]?.family).toBeNull()
   })
 })
