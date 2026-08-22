@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -79,24 +80,38 @@ describe('Codex app-server transport', () => {
  * if the watchdog reports BEFORE the teardown it provokes, or the exit can
  * race ahead of the flag. Teardown itself is `terminateAgentProcessTree` (one
  * group SIGTERM with its own group-checked SIGKILL escalation — exercised
- * against real processes in the claude-cli-runner EOF-watchdog test); a fake
- * without a pid deliberately makes the group signal a no-op, because a made-up
- * pid would signal a real process group on the host.
+ * against real processes in `process-tree.test.ts`); a fake without a pid
+ * deliberately makes the group signal a no-op, because a made-up pid would
+ * signal a real process group on the host.
  */
 describe('endCodexAppServer watchdog', () => {
-  function signallableChild(): { child: ChildProcessWithoutNullStreams; signals: NodeJS.Signals[] } {
+  function signallableChild(): {
+    child: ChildProcessWithoutNullStreams;
+    signals: NodeJS.Signals[];
+    exit: (code: number) => void;
+  } {
     const signals: NodeJS.Signals[] = [];
-    const child = {
+    const emitter = new EventEmitter();
+    const child = Object.assign(emitter, {
       stdin: new PassThrough(),
-      exitCode: null,
-      killed: false,
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      // Node sets `killed` when a signal is *delivered*, not when the child
+      // dies, and an app-server with its own SIGTERM handler runs on with the
+      // flag already true. Pre-set here because that is the exact state the old
+      // `!child.killed` guard read as "already gone", skipping the teardown for
+      // the one process it exists for (#844).
+      killed: true,
       kill: (signal: NodeJS.Signals) => {
         signals.push(signal);
         return true;
       },
-      once: () => child,
-    } as unknown as ChildProcessWithoutNullStreams;
-    return { child, signals };
+    }) as unknown as ChildProcessWithoutNullStreams;
+    const exit = (code: number) => {
+      Object.assign(child, { exitCode: code });
+      emitter.emit('exit', code, null);
+    };
+    return { child, signals, exit };
   }
 
   it('reports the teardown before it starts so the runner can classify the exit', () => {
@@ -112,6 +127,9 @@ describe('endCodexAppServer watchdog', () => {
       expect(reported).toBe(0);
 
       vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
+      // Flagged killed but never exited — the state that used to veto teardown.
+      expect(child.killed).toBe(true);
+      expect(child.exitCode).toBeNull();
       expect(reported).toBe(1);
       expect(signals).toEqual([]);
     } finally {
@@ -122,12 +140,12 @@ describe('endCodexAppServer watchdog', () => {
   it('stays silent when the app-server exits on EOF by itself', () => {
     vi.useFakeTimers();
     try {
-      const { child, signals } = signallableChild();
+      const { child, signals, exit } = signallableChild();
       let reported = 0;
       endCodexAppServer(child, undefined, () => {
         reported += 1;
       });
-      (child as unknown as { exitCode: number | null }).exitCode = 0;
+      exit(0);
 
       vi.advanceTimersByTime(EOF_TERM_GRACE_MS + EOF_KILL_GRACE_MS);
       expect(signals).toEqual([]);

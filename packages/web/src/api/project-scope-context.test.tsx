@@ -1,5 +1,5 @@
 import { cleanup, render } from '@testing-library/react'
-import { useEffect } from 'react'
+import { StrictMode, useEffect } from 'react'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import { ProjectScopeProvider, useProjectScope } from './project-scope-context'
@@ -82,6 +82,60 @@ describe('ProjectScopeProvider', () => {
       <ProjectScopeProvider projectId="b">
         <MountProbe key="b" />
       </ProjectScopeProvider>,
+    )
+    expect(seen).toEqual(['a', 'b'])
+  })
+
+  // #task-detail-404: the same rule under StrictMode's simulated remount, which is what a soft
+  // navigation into another project's task hits in dev — the provider and the (lazily-loaded,
+  // by then warm) thread mount in ONE commit, so the double-invoke's destroys include this
+  // provider's own reset. A passive reset landed between it and the re-created child effects,
+  // and the thread's very first `/runs/:id` went out unprefixed: a 404 the boot project honestly
+  // answers, cached under the correctly-scoped key, so only a reload cleared it.
+  it('never dips back to unscoped through StrictMode’s remount of a fresh subtree', () => {
+    const seen: (string | null)[] = []
+    function MountProbe() {
+      useEffect(() => {
+        seen.push(getApiScope())
+      }, [])
+      return null
+    }
+
+    render(
+      <StrictMode>
+        <ProjectScopeProvider projectId="a">
+          <MountProbe />
+        </ProjectScopeProvider>
+      </StrictMode>,
+    )
+    expect(seen).toEqual(['a', 'a'])
+  })
+
+  // Two provider INSTANCES in one commit — leaving a project area for another (the global Tasks
+  // page's rows, the sidebar's cross-project task links). The departing one's cleanup must not
+  // land between the arriving one's render and its children's first requests.
+  it('never dips back to unscoped when one provider replaces another in a single commit', () => {
+    const seen: (string | null)[] = []
+    function MountProbe() {
+      useEffect(() => {
+        seen.push(getApiScope())
+      }, [])
+      return null
+    }
+
+    const view = render(
+      <div>
+        <ProjectScopeProvider key="a" projectId="a">
+          <MountProbe />
+        </ProjectScopeProvider>
+      </div>,
+    )
+    view.rerender(
+      <div>
+        <ProjectScopeProvider key="b" projectId="b">
+          <MountProbe />
+        </ProjectScopeProvider>
+      </div>,
     )
     expect(seen).toEqual(['a', 'b'])
   })

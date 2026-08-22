@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
 import {
@@ -125,9 +126,13 @@ export function endCodexAppServer(
   } catch {
     // already gone
   }
+  // Real termination, not `child.killed` — the latter is set by the SIGTERM
+  // this very watchdog sends, which would then suppress its own SIGKILL for an
+  // app-server that handles the signal instead of dying from it (#844).
+  const hasExited = trackChildExit(child);
   let killTimer: NodeJS.Timeout | undefined;
   const termTimer = setTimeout(() => {
-    if (child.exitCode == null && !child.killed) {
+    if (!hasExited()) {
       // The caller's flag first (#703 — the exit this provokes is ours), then
       // the tree teardown with its own group-checked SIGKILL escalation.
       onSignal?.();

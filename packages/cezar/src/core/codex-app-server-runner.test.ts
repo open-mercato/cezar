@@ -1,7 +1,46 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.js';
+import { KILL_GRACE_MS } from './claude-cli-runner.js';
 import { CodexAppServerRunner } from './codex-app-server-runner.js';
+
+/** Only the escalation tests below swap the child out; every other test in this
+ *  file keeps spawning the real mock app-server through the untouched `spawn`. */
+const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) =>
+      spawnHook.override ? spawnHook.override() : actual.spawn(...args),
+  };
+});
+
+/** Records tree teardowns instead of performing them while a fake child is
+ *  installed: its made-up pid would otherwise have `process.kill(-pid)` reach a
+ *  real process group on the host. The real-process tests in this file keep the
+ *  real teardown, and what it does — group SIGTERM, then a
+ *  group-liveness-checked SIGKILL — is covered by `process-tree.test.ts`. */
+const treeHook = vi.hoisted(() => ({
+  recording: false,
+  calls: [] as Array<[unknown, number]>,
+}));
+
+vi.mock('./process-tree.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./process-tree.ts')>();
+  return {
+    ...actual,
+    terminateAgentProcessTree: (child: never, graceMs: number) => {
+      if (!treeHook.recording) return actual.terminateAgentProcessTree(child, graceMs);
+      treeHook.calls.push([child, graceMs]);
+      return setTimeout(() => {}, 0);
+    },
+  };
+});
 
 /**
  * #703 backend parity — `claude-cli-runner.test.ts` proves the Claude half;
@@ -94,4 +133,91 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     expect(events).toContainEqual({ type: 'error', message: 'model unavailable' });
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
+});
+
+/**
+ * #844 — the runner's own SIGTERM sets `ChildProcess.killed`, so a watchdog
+ * gated on `!child.killed` refused to tear down for exactly the app-server it
+ * was written for: one that handles the signal and keeps running. The guard now
+ * tracks real termination, and `terminatedByCezar` (#703) is still set before
+ * every teardown so the resulting 137/143 stays a teardown note, not a failure.
+ *
+ * The teardown itself is `terminateAgentProcessTree`, asserted here as a call
+ * rather than as signals — see the module mock above.
+ */
+describe('teardown for an app-server that survives SIGTERM', () => {
+  function signallableChild(): {
+    child: ChildProcessWithoutNullStreams;
+    signals: NodeJS.Signals[];
+    exit: (code: number) => void;
+  } {
+    const signals: NodeJS.Signals[] = [];
+    const emitter = new EventEmitter();
+    const child = Object.assign(emitter, {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      // Delivery flips `killed` whether or not the child dies; an app-server
+      // that handles SIGTERM runs on with the flag already true.
+      killed: true,
+      pid: 4243,
+      kill: (signal: NodeJS.Signals) => {
+        signals.push(signal);
+        return true;
+      },
+    }) as unknown as ChildProcessWithoutNullStreams;
+    const exit = (code: number) => {
+      Object.assign(child, { exitCode: code });
+      emitter.emit('exit', code, null);
+    };
+    return { child, signals, exit };
+  }
+
+  function withFakeChild(run: (fake: ReturnType<typeof signallableChild>) => void): void {
+    const fake = signallableChild();
+    spawnHook.override = () => fake.child;
+    treeHook.calls.length = 0;
+    treeHook.recording = true;
+    vi.useFakeTimers();
+    try {
+      run(fake);
+    } finally {
+      vi.useRealTimers();
+      treeHook.recording = false;
+      spawnHook.override = null;
+    }
+  }
+
+  it('tears the tree down on the wall-clock timeout even after Node flagged the child as killed', () => {
+    withFakeChild((fake) => {
+      const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 20 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      void session.result.catch(() => undefined);
+
+      vi.advanceTimersByTime(20);
+      // Delivered, not dead — the state that used to disable the teardown.
+      expect(fake.child.killed).toBe(true);
+      expect(fake.child.exitCode).toBeNull();
+      expect(treeHook.calls).toEqual([[fake.child, KILL_GRACE_MS]]);
+    });
+  });
+
+  it('does not touch an app-server that interrupt() saw exit', () => {
+    withFakeChild((fake) => {
+      const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      void session.result.catch(() => undefined);
+      fake.exit(0);
+
+      session.interrupt();
+      expect(treeHook.calls).toEqual([]);
+      expect(fake.signals).toEqual([]);
+    });
+  });
 });

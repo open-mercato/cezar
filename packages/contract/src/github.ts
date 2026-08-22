@@ -74,6 +74,113 @@ export const githubChecksDataSchema = z.discriminatedUnion('available', [
 ]);
 export type GithubChecksData = z.infer<typeof githubChecksDataSchema>;
 
+/**
+ * Where a referenced PR or issue STANDS — the vocabulary a task's tracker chip paints.
+ *
+ * One flat enum rather than a per-kind union, because the chip renders one status and a union
+ * would make every consumer narrow on `kind` before it could pick a color. The kinds share no
+ * value on purpose: a closed PR (abandoned — red) and a closed issue (`completed` — done, violet)
+ * are opposite outcomes wearing the same English word, and collapsing them is how a merged-looking
+ * task turns out to have been dropped.
+ *
+ * PR values: `merged`, `closed` (closed WITHOUT merging), `draft`, `checks-pending`,
+ * `changes-requested`, `checks-failing`, `review-required`, `ready`. Issue values: `open`,
+ * `completed`, `not-planned`.
+ *
+ * Which one a PR gets is `derivePrReferenceStatus`'s ranking (server-side, and documented there):
+ * it answers "what is this waiting on right now", so it ranks by how FRESH a signal is rather
+ * than by how heavy a blocker it is — running checks mean a commit was just pushed, and a
+ * requested change the author has already pushed past is not what the PR is waiting on.
+ *
+ * `ready` is the honest reading of "nothing is blocking it here": open, not a draft, no failing or
+ * running checks, and no review the forge is still waiting on. It is NOT a mergeability probe —
+ * that is `githubPrMergeStateResponseSchema`, which costs a request per PR; this is one batched
+ * query for a whole table.
+ */
+export const referenceStatusSchema = z.enum([
+  'draft',
+  'review-required',
+  'changes-requested',
+  'checks-pending',
+  'checks-failing',
+  'ready',
+  'merged',
+  'closed',
+  'open',
+  'completed',
+  'not-planned',
+]);
+export type ReferenceStatus = z.infer<typeof referenceStatusSchema>;
+
+/**
+ * When the client should ask again — milliseconds, or `null` for "nothing in this answer can
+ * change; do not schedule anything".
+ *
+ * The cockpit does not decide this, and that is the point. Whether a status can still move is
+ * forge semantics (a merged pull request is merged forever; a closed one can be reopened; a
+ * running check finishes in minutes), and those semantics already live server-side, in the same
+ * function that decides how long the answer may be cached. Duplicating them in the cockpit meant
+ * two tables of constants that had to agree and nothing making them: too eager and the client
+ * burns requests the cache can only answer identically, too lazy and a chip goes stale under a
+ * cache that would happily have told it otherwise.
+ *
+ * So the server answers both questions at once — *what is this* and *when could it differ* — and
+ * the cockpit's whole refresh policy becomes "ask again when told to".
+ */
+const recheckAfterMsSchema = z.number().nullable();
+
+/**
+ * `GET /api/v1/github/ref-status?prs=…&issues=…` — batched status for the PR/issue chips a task
+ * table is painting. The additive sibling of `/github/checks`: same cache-behind-the-route shape,
+ * same in-payload degrade, same "absent number = nothing known" rule (an unknown or unreachable
+ * number is simply missing from the map, and its chip stays neutral).
+ */
+/**
+ * How many numbers of ONE kind a single `/github/ref-status` request may name — the route 400s
+ * past it, and the cockpit caps its batches to match.
+ *
+ * It lives in the contract because it is one: a client that believed a larger number would send
+ * requests the server rejects outright, costing every chip in the batch its status rather than
+ * just the tail. Two constants that must agree, in two packages, with nothing making them, is the
+ * drift this export exists to prevent.
+ */
+export const REFERENCE_STATUS_MAX = 100;
+
+export const githubRefStatusDataSchema = z.discriminatedUnion('available', [
+  z.object({
+    available: z.literal(true),
+    prs: z.record(z.number(), referenceStatusSchema),
+    issues: z.record(z.number(), referenceStatusSchema),
+    /**
+     * The pull request numbers that do NOT merge cleanly into their base right now.
+     *
+     * A second list rather than a twelfth status, because a conflict is a different AXIS from the
+     * one `referenceStatusSchema` ranks. That enum answers *whose move is it*, and it answers with
+     * one word; mergeability is an independent fact that can be true alongside any of them — a PR
+     * can be green, approved and conflicting at the same time, and folding the two together would
+     * force the cockpit to pick which of two true things to say. Kept apart, it paints a second
+     * chip next to the first and says both.
+     *
+     * It rides the same GraphQL node the statuses come from (`mergeable`), so unlike
+     * `githubPrMergeStateResponseSchema` — the full per-PR probe, blockers and all — it costs no
+     * extra request for the batch.
+     *
+     * Optional on the wire, and its absence means *nothing is known about mergeability*, never
+     * *no conflicts*: a server from before this field simply omits it. Only OPEN pull requests are
+     * ever named — GitHub reports `UNKNOWN` for merged and closed ones, and `UNKNOWN` (which is
+     * also what it answers while it is still computing) is never listed.
+     */
+    conflicts: z.array(z.number()).optional(),
+    recheckAfterMs: recheckAfterMsSchema,
+  }),
+  z.object({
+    available: z.literal(false),
+    reason: z.string(),
+    recheckAfterMs: recheckAfterMsSchema,
+  }),
+]);
+export type GithubRefStatusData = z.infer<typeof githubRefStatusDataSchema>;
+
 /** One comment or PR review summary in an issue/PR thread (#499). */
 export const githubCommentSchema = z.object({
   id: z.number(),

@@ -14,7 +14,7 @@ import type {
 
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
-import { isSignalTerminationExit } from './agent-runner.ts';
+import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { thinkingBudgetFor } from './reasoning-effort.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
@@ -180,6 +180,11 @@ export class ClaudeCliRunner implements AgentRunner {
       terminatedByCezar = true;
       return terminateAgentProcessTree(child, graceMs);
     };
+    // Every watchdog below asks "is the child still alive?" — and that question
+    // is NOT `child.killed`, which only reports signal delivery. claude handles
+    // SIGTERM itself, so `killed` is true while the process runs on; escalation
+    // has to follow real termination or it never fires (#844).
+    const hasExited = trackChildExit(child);
 
     const end = (): void => {
       if (!stdinOpen) return;
@@ -190,7 +195,7 @@ export class ClaudeCliRunner implements AgentRunner {
         // already gone
       }
       eofTermTimer = setTimeout(() => {
-        if (child.exitCode == null && !child.killed) {
+        if (!hasExited()) {
           eofKilled = true;
           eofKillTimer = terminateChild(EOF_KILL_GRACE_MS);
         }
@@ -200,7 +205,7 @@ export class ClaudeCliRunner implements AgentRunner {
 
     const interrupt = (): void => {
       stdinOpen = false;
-      if (!child.killed) terminateChild(KILL_GRACE_MS);
+      if (!hasExited()) terminateChild(KILL_GRACE_MS);
     };
 
     // Seed the first user message — the same path every follow-up takes.

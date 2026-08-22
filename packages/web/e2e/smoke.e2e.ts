@@ -171,6 +171,31 @@ describe('cockpit app shell', () => {
     expect(footerRows.rowCount).toBe(2)
   })
 
+  it('keeps the footer controls inside the 264px column even on a nightly-length version', () => {
+    browser.goto(baseUrl + scoped('/'))
+    browser.waitForFunction(`document.querySelector('[data-slot="version-chip"]') !== null`)
+
+    // The e2e server reports this checkout's own (short) semver, which never overflowed. The
+    // string that DID is the nightly dist-tag of #876 — so write it into the chip and measure
+    // what the real layout engine does with it. Every control in the row but the chip is
+    // `shrink-0`, so before the chip could give, this pushed the gear and the theme toggle
+    // bodily outside the sidebar's right edge instead of clipping anything.
+    const overflow = browser.evaluate(`(() => {
+      const chip = document.querySelector('[data-slot="version-chip"]')
+      const label = chip.querySelector('span:not([data-slot])')
+      label.textContent = 'v0.9.2-nightly.20260813.1'
+      const sidebarRight = document.querySelector('[data-slot="sidebar"]').getBoundingClientRect().right
+      const escaped = [...document.querySelectorAll('[data-slot="sidebar-footer-controls"] > *')]
+        .filter((el) => el.getBoundingClientRect().right > sidebarRight)
+        .map((el) => el.dataset.slot)
+      return { escaped, truncated: label.scrollWidth > Math.ceil(label.getBoundingClientRect().width) }
+    })()`) as { escaped: string[]; truncated: boolean }
+
+    expect(overflow.escaped).toEqual([])
+    // …and the chip absorbed it by clipping its own label, which is where the `title` earns its keep.
+    expect(overflow.truncated).toBe(true)
+  })
+
   it('fills the repo and version chips from the live /api/v1/health', async () => {
     // The server runs against this checkout (a real git repo), so health is real data — the one
     // thing a jsdom test with a mocked fetch cannot prove. Ask it from here rather than inside

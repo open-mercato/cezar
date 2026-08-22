@@ -223,7 +223,9 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   )
   // The backend choice (#401) is a way of working too, so it lives here beside the pickers —
   // and it must, because HandToAgent is keyed by item and would otherwise reset on every hop.
-  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null })
+  // The agent account rides along on the same footing: a per-hand-off choice, route state rather
+  // than a persisted one, exactly like the runner and the model beside it.
+  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null, account: null })
   useEffect(() => {
     writeFollowupSelection({ workflow, skills: [...selectedSkills] })
   }, [workflow, selectedSkills])

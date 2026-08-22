@@ -15,7 +15,25 @@ const runId = `e2e-tools-${process.pid}`
 
 type Health = {
   version: string
+  defaultRunner: string
   checks: Array<{ name: string; available: boolean; version?: string; hint?: string }>
+}
+
+/** The agent CLIs among `checks[]` — `gh` and `git` are rows too, but neither runs a task. Kept in
+ *  step with the contract's runner enum (`packages/contract/src/health.ts`). */
+const RUNNERS = new Set(['claude', 'codex', 'opencode', 'pi'])
+
+/** What (if anything) keeps the aggregate dot from green, derived from the live health answer the
+ *  same way `toolsBlocker()` derives it: the dot is amber only when cez cannot start a task at all,
+ *  not merely because an optional tool is absent. */
+function blockerFor(health: Health): string | null {
+  const runners = health.checks.filter((check) => RUNNERS.has(check.name))
+  if (runners.length > 0 && !runners.some((check) => check.available)) {
+    return 'no agent CLI found — install one to run tasks'
+  }
+  const preferred = runners.find((check) => check.name === health.defaultRunner)
+  if (preferred && !preferred.available) return `default runner (${health.defaultRunner}) not found`
+  return null
 }
 
 let browser: AgentBrowser
@@ -53,17 +71,18 @@ describe('tools menu', () => {
     // The server really probed something — otherwise every assertion below is vacuous.
     expect(health.checks.length).toBeGreaterThan(0)
 
+    const blocker = blockerFor(health)
     const missing = health.checks.filter((c) => !c.available).map((c) => c.name)
-    const expectedTitle =
-      missing.length === 0
-        ? `cezar v${health.version}`
-        : `cezar v${health.version} · needs attention: ${missing.join(', ')}`
+    let expectedTitle = `cezar v${health.version}`
+    if (blocker) expectedTitle += ` · ${blocker}`
+    else if (missing.length > 0) expectedTitle += ` · optional: ${missing.join(', ')} not installed`
     expect(browser.evaluate(`document.querySelector('${TRIGGER}').getAttribute('title')`)).toBe(expectedTitle)
 
-    // Aggregate dot: green only when nothing needs attention.
+    // Aggregate dot: amber only when something genuinely stops a task from starting — a missing
+    // optional tool leaves it green, which is the whole point of the blocker rule.
     expect(
       browser.evaluate(`document.querySelector('${TRIGGER} [data-slot="status-dot"]').dataset.tone`)
-    ).toBe(missing.length === 0 ? 'success' : 'pending')
+    ).toBe(blocker ? 'pending' : 'success')
   })
 
   it('opens a menu listing exactly the tools /api/v1/health reports', () => {

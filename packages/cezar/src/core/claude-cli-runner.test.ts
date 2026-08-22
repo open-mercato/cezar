@@ -1,12 +1,55 @@
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
-import { buildClaudeArgs, ClaudeCliRunner } from './claude-cli-runner.ts';
+import {
+  buildClaudeArgs,
+  ClaudeCliRunner,
+  EOF_KILL_GRACE_MS,
+  EOF_TERM_GRACE_MS,
+  KILL_GRACE_MS,
+} from './claude-cli-runner.ts';
 import type { UiEvent } from './ui-events.ts';
+
+/** Only the escalation tests below swap the child out; every other test in this
+ *  file keeps spawning its real stub binary through the untouched `spawn`. */
+const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    spawn: (...args: Parameters<typeof actual.spawn>) =>
+      spawnHook.override ? spawnHook.override() : actual.spawn(...args),
+  };
+});
+
+/** Records tree teardowns instead of performing them, but only while a fake
+ *  child is installed — the real-process tests in this file need the real
+ *  teardown. See the teardown describe below for why a fake child must never
+ *  reach `process.kill`. */
+const treeHook = vi.hoisted(() => ({
+  recording: false,
+  calls: [] as Array<[unknown, number]>,
+}));
+
+vi.mock('./process-tree.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./process-tree.ts')>();
+  return {
+    ...actual,
+    terminateAgentProcessTree: (child: never, graceMs: number) => {
+      if (!treeHook.recording) return actual.terminateAgentProcessTree(child, graceMs);
+      treeHook.calls.push([child, graceMs]);
+      return setTimeout(() => {}, 0);
+    },
+  };
+});
 
 /**
  * The per-backend system-prompt delivery mechanism (spec §protocol v2
@@ -120,6 +163,106 @@ describe('a teardown cezar initiated', () => {
       events.some((e) => e.type === 'note' && e.message.includes('terminated by cezar (code 143)')),
     ).toBe(true);
   }, 15_000);
+});
+
+/**
+ * #844 — the watchdogs used to ask `!child.killed` before tearing down, but Node
+ * sets `killed` the moment a signal is *delivered*. claude installs its own
+ * SIGTERM handler, so the flag went true while the process ran on and the
+ * teardown that exists for exactly that case was skipped — one leaked CLI per
+ * teardown. Every watchdog now follows real termination instead.
+ *
+ * The teardown itself is `terminateAgentProcessTree` (group SIGTERM, then a
+ * group-liveness-checked SIGKILL), and it is asserted here as a call rather than
+ * as signals: the module is mocked because a fake child's made-up pid would
+ * otherwise have `process.kill(-pid)` signal a real process group on the host.
+ * The escalation inside it is exercised against real processes in
+ * `process-tree.test.ts`.
+ */
+describe('teardown for a CLI that survives SIGTERM', () => {
+  function signallableChild(): {
+    child: ChildProcessWithoutNullStreams;
+    exit: (code: number) => void;
+  } {
+    const emitter = new EventEmitter();
+    const child = Object.assign(emitter, {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      // Node's semantics: delivery flips `killed`; a CLI with its own handler
+      // keeps running with `exitCode` still null. Pre-set here, because that is
+      // the state an earlier signal leaves behind and the one the old guard
+      // silently treated as "already dead".
+      killed: true,
+      pid: 4242,
+      kill: () => true,
+    }) as unknown as ChildProcessWithoutNullStreams;
+    const exit = (code: number) => {
+      Object.assign(child, { exitCode: code });
+      emitter.emit('exit', code, null);
+    };
+    return { child, exit };
+  }
+
+  function withFakeChild(run: (fake: ReturnType<typeof signallableChild>) => void): void {
+    const fake = signallableChild();
+    spawnHook.override = () => fake.child;
+    treeHook.calls.length = 0;
+    treeHook.recording = true;
+    vi.useFakeTimers();
+    try {
+      run(fake);
+    } finally {
+      vi.useRealTimers();
+      treeHook.recording = false;
+      spawnHook.override = null;
+    }
+  }
+
+  it('tears the tree down after end() even though Node already flagged the child as killed', () => {
+    withFakeChild((fake) => {
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      session.end();
+
+      vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
+      // Delivered, not dead — the state that used to disable the teardown.
+      expect(fake.child.killed).toBe(true);
+      expect(fake.child.exitCode).toBeNull();
+      expect(treeHook.calls).toEqual([[fake.child, EOF_KILL_GRACE_MS]]);
+    });
+  });
+
+  it('tears the tree down on the wall-clock timeout path as well', () => {
+    withFakeChild((fake) => {
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 20 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      void session.result.catch(() => undefined);
+
+      vi.advanceTimersByTime(20);
+      expect(treeHook.calls).toEqual([[fake.child, KILL_GRACE_MS]]);
+    });
+  });
+
+  it('leaves a CLI that really exited alone', () => {
+    withFakeChild((fake) => {
+      const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      session.end();
+      fake.exit(143);
+
+      vi.advanceTimersByTime(EOF_TERM_GRACE_MS + EOF_KILL_GRACE_MS);
+      expect(treeHook.calls).toEqual([]);
+    });
+  });
 });
 
 describe('prependSystemPrompt (codex/opencode delivery)', () => {

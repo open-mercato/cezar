@@ -91,6 +91,22 @@ settle such an exit on the normal path — `isSignalTerminationExit(exitCode)`
 (`packages/cezar/src/core/agent-runner.ts`) plus a `note` — instead of throwing. Throwing makes
 a finished run settle as `failed` and a cancelled run settle as `failed` too.
 
+That watchdog MUST gate its teardown on real termination, never on
+`ChildProcess.killed` (#844). Node sets `killed` when a signal is *delivered*,
+so the watchdog's own SIGTERM flips it while the CLI — which handles the
+signal — keeps running, and the teardown written for exactly that case is
+skipped. Use `trackChildExit(child)` (`packages/cezar/src/core/agent-runner.ts`),
+which seeds from `exitCode`/`signalCode` and listens for `exit`.
+
+The teardown itself is TREE-WIDE: spawn with `detached: AGENT_PROCESS_DETACHED`
+and terminate through `terminateAgentProcessTree(child, graceMs)`
+(`packages/cezar/src/core/process-tree.ts`), never `child.kill()` alone. Agent
+CLIs spawn their own children (MCP servers, provider processes, `opencode
+serve`), and signalling the leader leaves them running. That helper owns the
+SIGKILL escalation and asks whether the process GROUP is still alive rather than
+whether the leader exited — the same liveness rule as `trackChildExit`, one level
+wider (#858).
+
 `SessionOptions`:
 
 - `autoEndAfterFirstTurn?` — single-turn behavior for non-interactive workflow

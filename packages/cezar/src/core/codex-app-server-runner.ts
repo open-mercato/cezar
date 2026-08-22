@@ -10,7 +10,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.ts';
-import { isSignalTerminationExit, prependSystemPrompt } from './agent-runner.ts';
+import { isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import {
   AUTO_END_DELAY_MS,
   DEFAULT_RUN_TIMEOUT_MS,
@@ -126,6 +126,10 @@ class CodexSession implements AgentSession {
    *  codex handles the signal and exits 143, so without this the runner reads
    *  its own teardown as a codex failure (#703). */
   private terminatedByCezar = false;
+  /** "Has the app-server really terminated?" — the question `child.killed`
+   *  does not answer: it flips on signal delivery, so the SIGTERM this runner
+   *  sends would otherwise veto its own SIGKILL escalation (#844). */
+  private readonly hasExited: () => boolean;
   /** Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
    *  byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
    *  lands in R2 step 2.1). */
@@ -155,6 +159,7 @@ class CodexSession implements AgentSession {
       throw codexSpawnError(err, bin);
     }
 
+    this.hasExited = trackChildExit(this.child);
     this.child.on('error', (err: NodeJS.ErrnoException) => {
       this.spawnFailed = codexSpawnError(err, bin);
     });
@@ -332,9 +337,11 @@ class CodexSession implements AgentSession {
         () => undefined,
       );
     }
-    if (!this.child.killed) {
-      // Ours coming back must not read as an agent failure (#703) — and the
-      // teardown is tree-wide so the app-server's own children die with it.
+    // Liveness is `hasExited()`, never `child.killed`, which only reports that a
+    // signal was delivered (#844). Ours coming back must not read as an agent
+    // failure (#703) — and the teardown is tree-wide so the app-server's own
+    // children die with it.
+    if (!this.hasExited()) {
       this.terminatedByCezar = true;
       terminateAgentProcessTree(this.child, KILL_GRACE_MS);
     }

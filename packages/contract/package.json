@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/cezar-contract",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "description": "The cezar HTTP API contract: zod schemas and the types inferred from them.",
   "license": "MIT",
   "type": "module",
