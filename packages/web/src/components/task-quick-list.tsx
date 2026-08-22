@@ -1,6 +1,16 @@
-import { ChevronDownIcon, ChevronRightIcon, ScaleIcon } from 'lucide-react'
+import { ArchiveIcon, CheckCheckIcon, ChevronDownIcon, EllipsisIcon, ScaleIcon, SearchIcon } from 'lucide-react'
 import * as React from 'react'
-import { useHealth, useProjects, useReferenceProjectId, useRuns, useRunsIndex } from '@/api/queries'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { archiveFinished, markAllRunsSeen } from '@/api/client'
+import { queryKeys, useHealth, useProjects, useReferenceProjectId, useRuns, useRunsIndex } from '@/api/queries'
+import { openCommandPalette } from '@/components/command-palette'
+import { toast } from '@/components/ui/toaster'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -39,8 +49,11 @@ export function TaskQuickList({
   now = Date.now(),
   showTokens = true,
   showCost = true,
+  actions,
 }: {
   runs: RunRecord[]
+  /** The header's inline actions (search, overflow menu) — supplied by the container. */
+  actions?: React.ReactNode
   /** The run open at `/tasks/:id`, so its row can show as active. */
   currentRunId?: string | null
   /** Injected so the ages are not racing the clock in tests. */
@@ -58,23 +71,13 @@ export function TaskQuickList({
   return (
     <div data-slot="quick-list">
       <div className="flex flex-col gap-0.5 pt-2 pb-0.5">
-        {/* The heading IS the door to the Tasks page (its Active/Archived tabs live there) —
-            the flat list dropped the nav row and the Archived entry, so without this link the
-            table had no way in from the sidebar. Still an h2, so the section keeps its landmark;
-            the chevron is the affordance the quiet text alone was missing. */}
-        <h2 className="pb-1">
-          <Link
-            to="/"
-            data-slot="quick-list-heading"
-            className="group/heading flex items-center gap-0.5 rounded-sm px-3 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase transition-colors hover:text-foreground"
-          >
-            Tasks
-            <ChevronRightIcon
-              aria-hidden="true"
-              className="size-3 text-soft-foreground transition-colors group-hover/heading:text-foreground"
-            />
-          </Link>
-        </h2>
+        {/* Devin-style section header (user decision): a quiet RECENT label with the list's
+            own actions inline on the right (search, overflow). The Tasks nav row above is the
+            door to the full table, so the label itself no longer needs to be a link. */}
+        <div className="flex h-7 items-center pr-1 pl-3">
+          <h2 className="text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Recent</h2>
+          {actions ? <span className="ml-auto flex items-center gap-0.5">{actions}</span> : null}
+        </div>
         {buckets.length === 0 ? (
           <p className="px-3 py-2 text-xs text-soft-foreground">No tasks yet — describe one.</p>
         ) : (
@@ -313,7 +316,7 @@ function RunRow({
   const age = variant
     ? ''
     : queuePosition !== null
-      ? `#${queuePosition}`
+      ? `queue #${queuePosition}`
       : shortAge(run.finishedAt ?? run.createdAt, now)
 
   return (
@@ -328,7 +331,7 @@ function RunRow({
         // Plain rows on the sidebar ground — a white surface only on HOVER. Even the open task
         // stays flat (a resting card here re-tinted the column); `aria-current` on the link and
         // the thread being open are what say "this one".
-        'flex min-h-11 items-center gap-2 rounded-sm pl-3 hover:bg-card md:min-h-9',
+        'flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-card',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
         // to it — 26px = the row's own 10px plus the 16px indent.
@@ -337,85 +340,67 @@ function RunRow({
     >
       {/* Outside the Link so it can lead the reference chip. The dot is a status indicator, not a
           navigation target, and the wrapper still owns the row's hover surface. */}
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
-      {/* The reference, ONCE (#788, option C): the number that used to be both a `775: ` title
-          prefix and a trailing `PR ↗` chip is now one leading chip that is itself the link. */}
-      {reference ? (
-        <ReferenceChip
-          reference={reference}
-          taskTitle={title}
-          compact
-          // De-pilled for the sidebar (review): the violet outline made the id read as a CTA
-          // next to the title. Plain quiet mono text — the link behavior stays.
-          className="h-auto shrink-0 gap-[2px] rounded-none border-0 px-0 py-px text-[10.5px] font-medium text-soft-foreground"
-        />
-      ) : null}
-      <Link
-        to={scopeTo(scope, `/tasks/${run.id}`)}
-        // `title` carries the FULL stored title — including a `NNN: ` prefix the chip let the
-        // visible text drop — so hover always gives back everything the column could not show.
-        title={title}
-        aria-current={isActive ? 'page' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2 py-[7px] pr-2.5"
-      >
-        {variant ? (
-          <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
-            {run.variant ?? '?'}
+      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" className="mt-[12px]" />
+      {/* Two lines, ONE anchor: the title line is the row's link; the meta line sits beside it
+          as a sibling because the reference chip is itself a link, and an anchor inside an
+          anchor is invalid HTML. The wrapper still paints the hover for both. */}
+      <span className={cn('flex min-w-0 flex-1 flex-col gap-[3px] pr-2.5', variant ? 'py-[7px]' : 'py-[6px]')}>
+        <Link
+          to={scopeTo(scope, `/tasks/${run.id}`)}
+          // `title` carries the FULL stored title — including a `NNN: ` prefix the chip let the
+          // visible text drop — so hover always gives back everything the column could not show.
+          title={title}
+          aria-current={isActive ? 'page' : undefined}
+          className="flex min-w-0 items-center gap-2"
+        >
+          {variant ? (
+            <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
+              {run.variant ?? '?'}
+            </span>
+          ) : null}
+          <span
+            data-slot="task-row-title"
+            className={cn(
+              'min-w-0 flex-1 truncate text-[13px] leading-[1.3]',
+              unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+            )}
+          >
+            {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
+          </span>
+          {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
+              different hue from the leading status dot, so the two read as two signals. */}
+          {unread ? (
+            <StatusDot
+              tone="violet"
+              role="img"
+              aria-label="unread"
+              className="size-[6px] shrink-0"
+            />
+          ) : null}
+        </Link>
+        {/* The META line (Devin-style two-line row): age or queue slot, then the reference with
+            its live status in its own tone, then the diff pair where the column affords it.
+            Space separates, never a glyph (house style). A variant row has no meta of its own —
+            its first line already says what distinguishes it. */}
+        {!variant ? (
+          <span data-slot="task-row-meta" className="flex min-w-0 items-center gap-2.5 text-[11px] leading-none text-soft-foreground">
+            {age ? <span className="shrink-0 tabular-nums">{age}</span> : null}
+            {reference ? (
+              <ReferenceChip
+                reference={reference}
+                taskTitle={title}
+                compact
+                // De-pilled for the sidebar: plain mono text that keeps its STATUS tone (open,
+                // merged, failing) — the one colour on the meta line, and it means something.
+                className="h-auto shrink-0 gap-[3px] rounded-none border-0 px-0 py-0 text-[10.5px] font-medium"
+              />
+            ) : null}
+            {run.diffStat ? (
+              <DiffStatLabel stat={run.diffStat} className="hidden shrink-0 @min-[20rem]/sidebar:inline" />
+            ) : null}
           </span>
         ) : null}
-        <span
-          data-slot="task-row-title"
-          className={cn(
-            // `min-w-[7rem]`: the floor of the width-priority rule above. The title never gives
-            // way past ~17 characters; metadata drops instead.
-            'min-w-[7rem] flex-1 truncate text-[13px]',
-            unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
-          )}
-        >
-          {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
-        </span>
-        {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
-            sidebar row has no column to hold an em dash open for.
-
-            Droppable metadata, per the width-priority rule: `+59514 −12160` is ~82px, which a
-            264px column cannot spend and still name the task, and its exact numbers stay in the
-            `title` tooltip and in the Tasks table's ± column either way.
-
-            23rem is not the width at which the pair merely *fits* — it is the width at which it
-            fits AND the name is still at least as long as it was in the default 264px column
-            (measured: 146px of title at 23rem vs 132px at 264px). Anything narrower buys the
-            numbers back by making the task names shorter than they were before the drag, which
-            is precisely the bargain this issue exists to stop making. */}
-        {run.diffStat ? (
-          <DiffStatLabel
-            stat={run.diffStat}
-            className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
-          />
-        ) : null}
-        {/* The reference chip takes the AGE's slot when there is one — same as the mockup, and
-            the same trade as before: a row that knows its PR or issue number is identified by
-            that, not by how long ago it finished.
-
-            It never takes the QUEUE POSITION's slot. `#2` is not an age, it is where the engine
-            will pick this run up, it is carried nowhere else in the row, and a queued run is
-            exactly the kind that has an issue reference and no PR yet — so keying this on "has a
-            reference" alone would have silently deleted the queue position from every
-            issue-driven queued row. */}
-        {age && (queuePosition !== null || !reference) ? (
-          <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
-        ) : null}
-        {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
-            different hue from the leading status dot, so the two read as two signals. */}
-        {unread ? (
-          <StatusDot
-            tone="violet"
-            role="img"
-            aria-label="unread"
-            title="Unread — not opened since it finished"
-            className="ml-0.5 shrink-0"
-          />
-        ) : null}
-      </Link>
+      </span>
     </div>
   )
 }
@@ -512,6 +497,56 @@ export function CrossProjectTasks({ activeProjectId, now = Date.now() }: { activ
 }
 
 /**
+ * The Recent header's inline actions (Devin-style): search opens the palette the sidebar already
+ * knows; the overflow carries the two list-wide verbs the Tasks page has always owned, so the
+ * sidebar can tidy the list without a trip to the table.
+ */
+function RecentActions() {
+  const queryClient = useQueryClient()
+  const archive = useMutation({
+    mutationFn: archiveFinished,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+  const markAllRead = useMutation({
+    mutationFn: markAllRunsSeen,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+  const iconButton =
+    'flex size-6 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
+  return (
+    <>
+      <button
+        type="button"
+        data-slot="recent-search"
+        aria-label="Search tasks"
+        title="Search tasks"
+        onClick={() => openCommandPalette()}
+        className={iconButton}
+      >
+        <SearchIcon className="size-3.5" aria-hidden="true" />
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button type="button" data-slot="recent-menu" aria-label="List actions" title="List actions" className={iconButton}>
+            <EllipsisIcon className="size-3.5" aria-hidden="true" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[11rem]">
+          <DropdownMenuItem onSelect={() => markAllRead.mutate()}>
+            <CheckCheckIcon aria-hidden="true" /> Mark all read
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => archive.mutate()}>
+            <ArchiveIcon aria-hidden="true" /> Archive finished
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </>
+  )
+}
+
+/**
  * The quick-list wired to live data: `useRuns()` for the list (kept fresh by the global SSE
  * stream, Step 3.2), the router for which row is open, and the shared Active/Archived context so
  * the sidebar and the Tasks table (Step 3.4) always show the same filter.
@@ -552,6 +587,7 @@ export function TaskQuickListContainer({ crossProject = false }: { crossProject?
         now={now}
         showTokens={visibility.tokens}
         showCost={visibility.cost}
+        actions={<RecentActions />}
       />
       {/* The parallel-work band (multi-project only): what OTHER repos need eyes on, under this
           project's own list. */}

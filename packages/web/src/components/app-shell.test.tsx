@@ -101,10 +101,11 @@ describe('AppShell', () => {
     expect(routeOwnsScrollArrival('/tasks')).toBe(false)
   })
 
-  it('renders the WORKSPACE nav as real router links — Tasks lives in the quick-list rows, Settings in the footer', () => {
+  it('renders the nav as real router links — Tasks first, Settings in the footer', () => {
     renderShell()
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.textContent)).toEqual([
+      'Tasks',
       'Inbox',
       'Git',
       'GitHub',
@@ -114,6 +115,7 @@ describe('AppShell', () => {
     ])
     // Deep-linkable per Step 2.1: every nav row is an <a href>, not a button with an onClick.
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
+      '/',
       '/inbox',
       '/git',
       '/github',
@@ -133,7 +135,7 @@ describe('AppShell', () => {
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
     // Minus the forge-gated items, the Tasks item (quick-list rows) and Settings (footer).
     expect(links).toHaveLength(
-      NAV_ITEMS.filter((item) => !item.forge && item.to !== '/' && item.to !== '/settings').length,
+      NAV_ITEMS.filter((item) => !item.forge && item.to !== '/settings').length,
     )
   })
 
@@ -145,7 +147,7 @@ describe('AppShell', () => {
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
     // Minus the gated item, the Tasks item (quick-list rows) and Settings (footer).
     expect(links).toHaveLength(
-      NAV_ITEMS.filter((item) => !item.automations && item.to !== '/' && item.to !== '/settings').length,
+      NAV_ITEMS.filter((item) => !item.automations && item.to !== '/settings').length,
     )
   })
 
@@ -171,14 +173,14 @@ describe('AppShell', () => {
       })
     }
 
-    it('lights no workspace item on the tasks overview — the quick-list rows are that entry', () => {
+    it('lights Tasks on the tasks overview (Devin-style order: the nav row is the door)', () => {
       renderShell('/')
-      expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+      expect(within(nav()).getByRole('link', { current: 'page' }).textContent).toBe('Tasks')
     })
 
-    it('lights no workspace item on a task thread either', () => {
+    it('keeps Tasks lit on a task thread — the area rule, not a prefix match', () => {
       renderShell('/tasks/abc123')
-      expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+      expect(within(nav()).getByRole('link', { current: 'page' }).textContent).toBe('Tasks')
     })
 
     it('lights nothing on a full-screen surface like /new', () => {
@@ -792,9 +794,8 @@ describe('AppShell', () => {
 
       // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
       // reuses the sidebar's content, so adding a nav item must not need a second edit here.
-      // (Minus '/': the quick-list's TASKS rows are that entry in both framings. Minus
-      // '/settings': the footer utility row is that entry.)
-      const workspaceItems = NAV_ITEMS.filter((item) => item.to !== '/' && item.to !== '/settings')
+      // (Minus '/settings': the footer utility row is that entry.)
+      const workspaceItems = NAV_ITEMS.filter((item) => item.to !== '/settings')
       expect(links.map((a) => a.getAttribute('href'))).toEqual(workspaceItems.map((item) => item.to))
       expect(links.map((a) => a.textContent)).toEqual(workspaceItems.map((item) => item.label))
 

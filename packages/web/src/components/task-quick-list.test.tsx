@@ -220,20 +220,20 @@ describe('TaskQuickList', () => {
 
     it('is a sibling of the row link, not nested inside it', () => {
       // Two independent targets: the row opens the task, the chip opens the PR. An anchor inside
-      // an anchor is invalid HTML, and only one of them would ever fire.
+      // an anchor is invalid HTML, and only one of them would ever fire — so the chip lives on
+      // the META line beside the title link, never inside it.
       renderList({ runs: [run({ id: 'x', pullRequestUrl: 'https://github.com/o/r/pull/7' })] })
       const chip = document.querySelector('[data-slot="pr-chip"]') as HTMLElement
       expect(chip.closest('a[href^="/tasks/"]')).toBeNull()
-      expect(chip.parentElement?.getAttribute('data-slot')).toBe('task-row')
+      expect(chip.parentElement?.getAttribute('data-slot')).toBe('task-row-meta')
     })
 
-    it('leads the row and takes the age slot, spelling the number rather than the word "PR" (#788)', () => {
+    it('sits on the meta line under the name, spelling the number rather than the word "PR" (#788)', () => {
       renderList({
         runs: [run({ id: 'x', title: 'Has a PR', status: 'review', pullRequestUrl: 'https://github.com/o/r/pull/7' })],
       })
-      // Chip first, then the name: the number is the row's leading identifier, and the age it
-      // displaces was the weaker of the two signals.
-      expect(rowsIn('Needs you')).toEqual(['#7Has a PR'])
+      // Two lines (Devin-style): the name first, then age and reference beneath it.
+      expect(rowsIn('Needs you')).toEqual(['Has a PR1m#7'])
     })
 
     it('carries the issue when no PR exists yet — the number the title prefix was about', () => {
@@ -333,21 +333,23 @@ describe('TaskQuickList', () => {
 
       const rowEl = row('worst') as HTMLElement
       const title = rowEl.querySelector('[data-slot="task-row-title"]') as HTMLElement
-      expect(title.className).toContain('min-w-[7rem]')
+      // The title owns its whole line now (two-line row): it grows, truncates, and competes with
+      // nothing but the unread marker.
       expect(title.className).toContain('flex-1')
+      expect(title.className).toContain('truncate')
       expect(title.textContent).toBe('implementing comment threads across the whole thread view')
 
       const diff = rowEl.querySelector('[data-slot="diff-stat"]') as HTMLElement
-      // Hidden by default at the 264px column, back once the column is dragged past 23rem —
-      // the width at which the pair fits without costing the name any of its default budget.
+      // On the meta line: hidden at the 264px column, back once the column is dragged past
+      // 20rem — the meta line has no name to protect, so it can afford the pair sooner.
       expect(diff.className).toContain('hidden')
-      expect(diff.className).toContain('@min-[23rem]/sidebar:inline')
+      expect(diff.className).toContain('@min-[20rem]/sidebar:inline')
       // Dropped from view, never from reach — the exact numbers stay in its tooltip.
       expect(diff.getAttribute('title')).toBe('+59514 −12160 across 208 files')
 
-      // Everything the row paints, in reading order: reference, name, diff, unread marker. No
-      // age — the reference took that slot.
-      expect(rowsIn('Recent')).toEqual(['#775implementing comment threads across the whole thread view+59514 −12160'])
+      // Everything the row paints, in reading order: name, then the meta line — age,
+      // reference, diff.
+      expect(rowsIn('Recent')).toEqual(['implementing comment threads across the whole thread view1m#775+59514 −12160'])
     })
 
     it('gives the collapsed variant tile the same floor', () => {
@@ -387,8 +389,8 @@ describe('TaskQuickList', () => {
           run({ id: 'q2', title: 'Second', status: 'queued', createdAt: ago(60_000) }),
         ],
       })
-      expect(row('q1')?.textContent).toBe('First#1')
-      expect(row('q2')?.textContent).toBe('Second#2')
+      expect(row('q1')?.textContent).toBe('Firstqueue #1')
+      expect(row('q2')?.textContent).toBe('Secondqueue #2')
     })
 
     it('keeps the queue position even when the row has a reference chip', () => {
@@ -406,10 +408,10 @@ describe('TaskQuickList', () => {
           }),
         ],
       })
-      expect(row('qref')?.textContent).toBe('#788queued on an issue#1')
+      expect(row('qref')?.textContent).toBe('queued on an issuequeue #1#788')
     })
 
-    it('still drops the age for a referenced row that is not queued', () => {
+    it('keeps the age beside the reference on the meta line', () => {
       renderList({
         runs: [
           run({
@@ -421,7 +423,7 @@ describe('TaskQuickList', () => {
           }),
         ],
       })
-      expect(row('aged')?.textContent).toBe('#9Finished with a PR')
+      expect(row('aged')?.textContent).toBe('Finished with a PR2h#9')
     })
   })
 

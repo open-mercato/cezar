@@ -615,29 +615,16 @@ function SidebarContent({
               <AllTasksLink onNavigate={onNavigate} />
             </div>
           ) : null}
-        {/* One scroll column in the mockup's order: the TASKS rows + RECENT list first (the work),
-            then the WORKSPACE views beneath them (the places). The Tasks nav item is gone — the
-            quick-list's Active/Archived rows are that entry now, unread badge included. The
-            navigate context reaches the quick-list rows so a same-path click still closes the
-            mobile drawer (the route-change effect cannot fire without a pathname change). */}
+        {/* Devin-style order (user decision): the PLACES first (one quiet nav, no section
+            label, Tasks back as a real row with its unread badge), then the WORK beneath as a
+            Recent list with its own header actions. The navigate context reaches the quick-list
+            rows so a same-path click still closes the mobile drawer (the route-change effect
+            cannot fire without a pathname change). */}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          <div data-slot="task-quick-list" className="px-2.5">
-            <SidebarNavigateContext.Provider value={onNavigate}>
-              {taskQuickList}
-            </SidebarNavigateContext.Provider>
-          </div>
-
-          {/* The group divider before WORKSPACE — same contexts-separate-with-a-line rule as the
-              quick-list's TASKS → RECENT boundary. */}
-          <hr aria-hidden="true" className="mx-5 mt-3 mb-2 border-border" />
-
           {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob.
               No Settings here — it is not a workspace surface; it lives with the utilities. */}
-          <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pb-2">
-            <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
-              Workspace
-            </h2>
-            {items.filter((item) => item.to !== '/' && item.to !== '/settings').map((item) => {
+          <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
+            {items.filter((item) => item.to !== '/settings').map((item) => {
               const isActive = item.to === activeTo
               const Icon = item.icon
               // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
@@ -701,6 +688,15 @@ function SidebarContent({
               )
             })}
           </nav>
+
+          {/* The group divider between the places and the work. */}
+          <hr aria-hidden="true" className="mx-5 mt-1 mb-1 border-border" />
+
+          <div data-slot="task-quick-list" className="px-2.5">
+            <SidebarNavigateContext.Provider value={onNavigate}>
+              {taskQuickList}
+            </SidebarNavigateContext.Provider>
+          </div>
         </div>
         </>
       )}
