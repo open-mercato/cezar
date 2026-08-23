@@ -509,9 +509,9 @@ describe('sidebar wiring', () => {
     expect(within(section).queryByRole('link', { name: 'Manage projects' })).toBeNull()
     expect(within(section).getByRole('button', { name: 'Clone from GitHub' })).toBeTruthy()
     expect(within(section).getByRole('button', { name: 'Add local folder' })).toBeTruthy()
-    fireEvent.click(within(section).getByRole('button', { name: 'Search projects' }))
-    fireEvent.change(screen.getByLabelText('Filter projects'), { target: { value: 'sho' } })
-    expect([...section.querySelectorAll('[data-slot="project-row"]')].map((r) => r.getAttribute('data-project-id'))).toEqual(['shop'])
+    // No sidebar search (user decision): the PROJECTS heading is the door to the registry.
+    expect(within(section).queryByRole('button', { name: 'Search projects' })).toBeNull()
+    expect(within(section).getByRole('link', { name: 'Projects' }).getAttribute('href')).toBe('/settings/global/projects')
   })
 
   it('shows the version chip even outside a git repo', async () => {

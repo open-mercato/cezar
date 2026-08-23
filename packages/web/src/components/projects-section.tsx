@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ChevronDownIcon, FolderPlusIcon, PlusIcon, SearchIcon, SettingsIcon, XIcon } from 'lucide-react'
+import { ChevronDownIcon, FolderPlusIcon, PlusIcon, SettingsIcon } from 'lucide-react'
 import { Link as RouterLink } from 'react-router'
 
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
@@ -41,13 +41,10 @@ export function ProjectsSection({
   projects: readonly ProjectListEntry[]
   activeId: string | null
 }) {
-  const [searching, setSearching] = React.useState(false)
-  const [query, setQuery] = React.useState('')
   const [limit, setLimit] = React.useState(PAGE)
   const [browsing, setBrowsing] = React.useState(false)
   const [cloning, setCloning] = React.useState(false)
   const onNavigate = useSidebarNavigate()
-  const inputRef = React.useRef<HTMLInputElement>(null)
   const now = useNow(30_000)
   const index = useRunsIndex(true)
   const match = useProjectMatch('/tasks/:id/*')
@@ -80,29 +77,24 @@ export function ProjectsSection({
   )
 
   const ordered = orderForSwitcher(projects, activeId)
-  const needle = query.trim().toLowerCase()
-  const matching = needle ? ordered.filter((p) => p.name.toLowerCase().includes(needle)) : ordered
-  // A filter shows everything it matches — paging is for browsing, not for hiding hits.
-  const shown = needle ? matching : matching.slice(0, limit)
-  const hidden = matching.length - shown.length
-
-  const toggleSearch = () => {
-    setSearching((on) => {
-      if (on) setQuery('')
-      return !on
-    })
-    // Focus after the input mounts.
-    setTimeout(() => inputRef.current?.focus(), 0)
-  }
+  const shown = ordered.slice(0, limit)
+  const hidden = ordered.length - shown.length
 
   return (
     <section data-slot="projects-section" className="flex flex-col gap-0.5">
       <div className="flex h-7 items-center pr-1 pl-3">
-        <h2 className="text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">Projects</h2>
+        {/* The heading IS the way to the full registry (user decision) — no sidebar search;
+            the projects screen carries the browsing. */}
+        <RouterLink
+          to="/settings/global/projects"
+          data-slot="projects-heading"
+          title="All projects"
+          onClick={onNavigate}
+          className="text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase transition-colors hover:text-foreground"
+        >
+          Projects
+        </RouterLink>
         <span className="ml-auto flex items-center gap-0.5">
-          <button type="button" data-slot="projects-search" aria-label="Search projects" aria-pressed={searching} title="Search projects" onClick={toggleSearch} className={cn(ICON_BUTTON, searching && 'text-foreground')}>
-            <SearchIcon className="size-3.5" aria-hidden="true" />
-          </button>
           <button type="button" data-slot="add-project-local" aria-label="Add local folder" title="Add local folder" onClick={() => setBrowsing(true)} className={ICON_BUTTON}>
             <FolderPlusIcon className="size-3.5" aria-hidden="true" />
           </button>
@@ -112,27 +104,6 @@ export function ProjectsSection({
         </span>
       </div>
 
-      {searching ? (
-        <div className="relative px-1 pb-1">
-          <input
-            ref={inputRef}
-            data-slot="projects-filter"
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') toggleSearch()
-            }}
-            placeholder="Filter projects…"
-            aria-label="Filter projects"
-            // A quiet focus for a sidebar-width field (user feedback: the app's 3px ring read as
-            // a thick frame here): the border takes the accent, no halo.
-            className="h-8 w-full rounded-md border border-border bg-card px-2.5 pr-7 text-[13px] outline-none placeholder:text-soft-foreground transition-colors focus-visible:border-primary/60"
-          />
-          <button type="button" aria-label="Close search" onClick={toggleSearch} className="absolute top-4 right-3 -translate-y-1/2 text-soft-foreground hover:text-foreground">
-            <XIcon className="size-3.5" aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
 
       <ReferenceStatusProvider requests={referenceRequests}>
         {shown.map((project) => (
