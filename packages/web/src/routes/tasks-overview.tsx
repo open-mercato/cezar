@@ -22,7 +22,6 @@ import {
 } from 'lucide-react'
 import * as React from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
-import { TaskScopeSwitch } from '@/components/task-scope-switch'
 
 import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
@@ -94,11 +93,7 @@ export function TasksOverview({
   expandedColumns = normalizeExpandedColumns(undefined),
   onToggleColumn = () => undefined,
   columnsPending = false,
-  scopeSwitch,
 }: {
-  /** The This project / All projects switch, supplied by the route (it reads the registry);
-   *  absent in single-project mode and in bare renders. */
-  scopeSwitch?: React.ReactNode
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
   runs: RunRecord[] | undefined
@@ -139,7 +134,6 @@ export function TasksOverview({
           carries the shared Active/Archived tabs — repeating them here would be a third copy. */}
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">Tasks</h1>
-        {scopeSwitch}
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <OverviewTab view="active" current={view} onSelect={onViewChange} count={counts.active}>
             Active
@@ -984,7 +978,6 @@ export function TasksOverviewRoute() {
         expandedColumns={taskTableColumns.expandedColumns}
         onToggleColumn={taskTableColumns.toggleColumn}
         columnsPending={taskTableColumns.isPending}
-        scopeSwitch={<TaskScopeSwitch scope="project" visible={(health.data?.projects?.length ?? 0) > 1} />}
       />
     </ReferenceStatusProvider>
   )

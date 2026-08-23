@@ -118,6 +118,9 @@ function inArea(pathname: string, prefix: string): boolean {
  * `/settings/agents` lights Settings, `/git/commits` lights Git.
  */
 export function activeNavPath(pathname: string): string | null {
+  // Exactly `/tasks` is the workspace-wide page (#845, reachable from the palette): nobody's
+  // project, so no project item lights; the project's Tasks area claims only `/tasks/:id`.
+  if (pathname === '/tasks') return null
   let best: { to: string; length: number } | null = null
   for (const item of NAV_ITEMS) {
     for (const prefix of item.match) {

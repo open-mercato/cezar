@@ -633,8 +633,10 @@ function SidebarContent({
               .map((item) => {
                 const isActive = item.to === activeTo
                 const Icon = item.icon
+                // A global row (All tasks) is never `/p/<id>`-prefixed.
+                const RowLink = item.global ? RouterLink : Link
                 return (
-                  <Link
+                  <RowLink
                     key={item.to}
                     to={item.to}
                     onClick={onNavigate}
@@ -658,7 +660,7 @@ function SidebarContent({
                         <span className="sr-only">Skills update available</span>
                       </span>
                     ) : null}
-                  </Link>
+                  </RowLink>
                 )
               })}
             {projectsMenu}

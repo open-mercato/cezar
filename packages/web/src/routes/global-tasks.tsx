@@ -75,7 +75,6 @@ import { canBeUnread, isReadDoneItem, isUnread } from '@/lib/read-state'
 import { runTitle, type ListView } from '@/lib/task-groups'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
-import { TaskScopeSwitch } from '@/components/task-scope-switch'
 import { cn } from '@/lib/utils'
 
 /**
@@ -377,8 +376,7 @@ export function GlobalTasksRoute() {
   return (
     <div data-route="global-tasks" className="flex min-h-full flex-col">
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Tasks</h1>
-        <TaskScopeSwitch scope="all" visible={(projects.data?.projects.length ?? 0) > 1} />
+        <h1 className="text-base font-semibold">All tasks</h1>
         <div className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]">
           <ViewTab view="active" current={view} onSelect={setView}>
             Active
