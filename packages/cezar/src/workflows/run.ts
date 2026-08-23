@@ -174,6 +174,8 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** An intermediate agent emitted CEZ:ASK and must not advance the workflow. */
+  waitingForInput?: boolean;
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
@@ -1933,6 +1935,7 @@ export class RunManager {
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
       this.monitoring.delete(runId);
+      state.waitingForInput = false;
       // Clear any `monitoring` activity — the agent is actively working again
       // (spec 2026-07-18-subagent-monitoring-status, #490).
       this.store.updateRun(runId, { status: 'running', activity: undefined });
@@ -2670,6 +2673,10 @@ export class RunManager {
           runError = `step "${step.id}" failed: ${failure}`;
           break;
         }
+        // An ask from an intermediate step parks the workflow at that step.
+        // The session normally remains open, but keep this guard for runners
+        // that close their session while reporting the turn boundary.
+        if (state.waitingForInput) break;
         this.finishStep(runId, step.id, 'done', undefined, emit);
         i++;
         continue;
@@ -2706,6 +2713,15 @@ export class RunManager {
       this.finishStep(runId, step.id, 'failed', `\`${step.command}\` exited non-zero`, emit);
       runError = `check "${step.id}" failed${step.onFail ? ` after ${used + 1} attempts` : ''}`;
       break;
+    }
+
+    // An intermediate CEZ:ASK is a durable pause, not a failed or successful
+    // workflow. Leave the run/step in `waiting` and keep the session alive so
+    // the cockpit can deliver the selected answer.
+    if (state.waitingForInput) {
+      this.clearAutosaveTimer(state);
+      this.clearIdleTimer(state);
+      return;
     }
 
     // Final autosave: the branch always ends holding the finished state.
@@ -2851,8 +2867,16 @@ export class RunManager {
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
         // `CEZ:DONE` (#473).
-        const askResult = interactive && sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
+        // Every agent step may need user input. Previously this parser was
+        // gated by `interactive`, which is only true for the final step, so
+        // CEZ:ASK from an implementation/review step was ignored and the
+        // workflow advanced into its next check.
+        const askResult = sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
         const ask = askResult?.kind === 'valid' ? askResult.request : null;
+        const asksForInput =
+          askResult?.kind === 'valid' ||
+          askResult?.kind === 'invalid-json' ||
+          askResult?.kind === 'invalid-structure';
         const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
         const monitoring =
           interactive &&
@@ -2870,7 +2894,7 @@ export class RunManager {
           state.session?.end();
           return;
         }
-        const waiting = interactive && sessionOpen;
+        const waiting = (asksForInput || interactive) && sessionOpen;
         if (waiting) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
@@ -2880,6 +2904,10 @@ export class RunManager {
           // instead of raising "needs you" (#490). Lifecycle is identical: the
           // run frees its slot and keeps the idle timer.
           if (ask) emitAskRequested(sink, ask);
+          // Final interactive steps already have the established waiting
+          // lifecycle. The extra workflow pause guard is only needed when a
+          // non-final step would otherwise be marked done by `execute`.
+          if (asksForInput && !interactive) state.waitingForInput = true;
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
@@ -2896,6 +2924,9 @@ export class RunManager {
           if (!monitoring) this.armIdleTimer(runId, state);
           this.releaseSlot(); // the freed slot can start a queued run right away — in any project
         }
+        // Preserve the old one-shot behavior for ordinary intermediate steps,
+        // while leaving an asking session open for the user's answer.
+        if (!interactive && sessionOpen && !asksForInput) state.session?.end();
         // The window is proven open — see the twin in `runContinuation`.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
           this.store.updateRun(runId, { autoResumeAttempts: undefined });
@@ -2981,7 +3012,10 @@ export class RunManager {
         },
         onEvent,
         {
-          autoEndAfterFirstTurn: !interactive,
+          // We close ordinary intermediate sessions explicitly at turn-end.
+          // That lets the turn-end handler keep an intermediate CEZ:ASK
+          // session open instead of the runner auto-closing it first.
+          autoEndAfterFirstTurn: false,
           onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
         },
       );

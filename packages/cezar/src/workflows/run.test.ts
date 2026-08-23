@@ -1050,6 +1050,28 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(questions[0]!.options).toHaveLength(2);
   }, 30_000);
 
+  it('an intermediate CEZ:ASK pauses before the following check', async () => {
+    const workflow: WorkflowDef = {
+      name: 'implement-verify',
+      source: 'built-in',
+      steps: [
+        { id: 'implement', name: 'Implement', prompt: '{{task}}' },
+        { id: 'verify', name: 'Verify', command: 'false' },
+      ],
+    };
+    const record = manager.startRun(workflow, { task: 'mock:ask choose a path', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    const parked = store.getRun(record.id);
+    expect(parked?.status).toBe('waiting');
+    expect(parked?.steps.map((s) => ({ id: s.id, status: s.status }))).toEqual([
+      { id: 'implement', status: 'waiting' },
+      { id: 'verify', status: 'pending' },
+    ]);
+    expect(readEvents(record.id).filter((event) => event.type === 'ask.requested')).toHaveLength(1);
+  }, 30_000);
+
   it('strips the CEZ:ASK marker from server-emitted v1 text events', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask pick one', worktree: false });
     currentId = record.id;
