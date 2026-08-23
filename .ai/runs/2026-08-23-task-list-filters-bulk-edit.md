@@ -138,5 +138,5 @@ inventing a second module the component would have to consult separately.
 
 ### Phase 5: Validation
 
-- [ ] 5.1 Full validation gate green
+- [x] 5.1 Full validation gate green — 45037789 (typecheck / test 6221 / test:unit 36 / build + check:pack / test:package 15, all green)
 - [ ] 5.2 `om-auto-review-pr --autofix` clean
