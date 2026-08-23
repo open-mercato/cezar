@@ -170,7 +170,7 @@ function ProjectRow({
       <div
         className={cn(
           'group/row flex h-9 items-center gap-1 rounded-md pr-1 pl-1 transition-colors hover:bg-card md:h-8',
-          active && 'bg-card shadow-xs',
+          active && 'bg-muted',
         )}
       >
         <button

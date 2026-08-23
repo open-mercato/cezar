@@ -656,7 +656,7 @@ function SidebarContent({
                     aria-current={isActive ? 'page' : undefined}
                     className={cn(
                       'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
-                      isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
+                      isActive && 'bg-muted font-semibold text-foreground hover:bg-muted',
                     )}
                   >
                     {isActive ? (
@@ -735,12 +735,13 @@ function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
       data-slot="all-tasks-link"
       onClick={onNavigate}
       aria-current={isActive ? 'page' : undefined}
-      // The same row grammar as the WORKSPACE nav (sidebar redesign): muted at rest, lifting
-      // onto card white with a hairline shadow when hovered or current, the purple edge caret
-      // marking the active page. Purple is a signal, never a surface — so no tinted icon.
+      // The same row grammar as the WORKSPACE nav (sidebar redesign): muted at rest, hovering
+      // onto card, sitting on GRAY when current (user decision: the selection is gray, not
+      // white), the purple edge caret marking the active page. Purple is a signal, never a
+      // surface — so no tinted icon.
       className={cn(
         'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
-        isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
+        isActive && 'bg-muted font-semibold text-foreground hover:bg-muted',
       )}
     >
       {isActive ? (
