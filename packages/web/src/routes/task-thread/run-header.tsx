@@ -85,7 +85,7 @@ import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
-import { cliTargetResumes, cliTargetRunner, finishTitle, primaryRunCta, resumeHint, runActionFlags } from './run-actions'
+import { cliTargetResumes, cliTargetRunner, finishLabel, finishTitle, primaryRunCta, resumeHint, runActionFlags } from './run-actions'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -215,13 +215,9 @@ export function RunHeader({
           {/* The task's context chips (PR, branch) live on the bar too (user decision) —
               identity beside the verbs that act on it. */}
           <MetaRow run={run} showBranch={false} automationsAvailable={health.data?.capabilities?.automations === true} />
-          {flags.finish ? (
-            <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
-              <CheckIcon aria-hidden="true" />
-              Finish
-            </Button>
-          ) : null}
-          <PrimaryCtaButton run={run} actions={actions} />
+          {/* No stateful buttons here (user decision: the bar must not jump as the run moves
+              through its lifecycle). The ONE primary CTA floats over the content in a fixed
+              spot, and Finish lives in the More menu under its real name. */}
           {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
           {/* Icon-only on the bar (user decision): the full "Open in" label outweighed the row. */}
           <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} iconOnly />
@@ -235,6 +231,13 @@ export function RunHeader({
         {/* Workflow steps moved to the context bar above the composer, and the take-over command
             moved to a button UNDER the composer (task-thread.tsx) — the sticky header stays shallow. */}
         {notesOpen ? <NotesPanel runId={run.id} /> : null}
+      </div>
+
+      {/* The stateful CTA FLOATS (user decision): one fixed spot over the content, so the
+          bar never reflows when Stop becomes Reply becomes Review changes. md+ only — the
+          mobile kebab and the composer itself cover small screens. */}
+      <div data-slot="floating-cta" className="fixed right-6 bottom-6 z-40 hidden md:block">
+        <PrimaryCtaButton run={run} actions={actions} floating />
       </div>
 
       <ConfirmDialog run={run} actions={actions} />
@@ -429,7 +432,7 @@ type RunActions = ReturnType<typeof useRunActions>
  *  - review  → scroll the review panel into view
  *  - retry / reopen → resume the session (gated on the provider's canContinue, like Continue was)
  */
-function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }) {
+function PrimaryCtaButton({ run, actions, floating = false }: { run: ApiRun; actions: RunActions; floating?: boolean }) {
   const navigate = useNavigate()
   const cta = primaryRunCta(run)
   if (!cta) return null
@@ -485,13 +488,17 @@ function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }
       data-slot="primary-cta"
       data-cta={cta.kind}
       variant={cta.tone === 'primary' ? 'primary' : cta.tone === 'neutral' ? 'contrast' : 'outline'}
-      size="sm"
+      size={floating ? 'default' : 'sm'}
       title={title}
       disabled={disabled}
       onClick={onClick}
       // Calm states (Reopen, Stop) go SOLID contrast with a violet icon — chrome-black with the
-      // brand wink; urgent states keep full purple; failure keeps danger on an outline.
-      className={cn(cta.tone === 'danger' && 'border-danger/40 text-danger hover:bg-danger/10')}
+      // brand wink; urgent states keep full purple; failure keeps danger on an outline. The
+      // floating variant carries a real shadow — it sits OVER the content.
+      className={cn(
+        cta.tone === 'danger' && 'border-danger/40 text-danger hover:bg-danger/10',
+        floating && 'shadow-lg',
+      )}
     >
       {icon}
       {cta.label}
@@ -915,8 +922,8 @@ function ActionsKebab({
           <PencilIcon aria-hidden="true" /> Rename
         </DropdownMenuItem>
         {flags.finish ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
-            <CheckIcon aria-hidden="true" /> Finish
+          <DropdownMenuItem title={finishTitle(run.status)} onSelect={() => actions.finish.mutate()}>
+            <CheckIcon aria-hidden="true" /> {finishLabel(run.status)}
           </DropdownMenuItem>
         ) : null}
         {flags.continueRun ? (
@@ -990,6 +997,13 @@ function SecondaryActionsMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-overflow">
+        {/* Finish under its REAL name per state (user decision): closing a waiting session and
+            accepting a review without a PR are different acts and read as such here. */}
+        {flags.finish ? (
+          <DropdownMenuItem data-action="finish" title={finishTitle(run.status)} onSelect={() => actions.finish.mutate()}>
+            <CheckIcon aria-hidden="true" /> {finishLabel(run.status)}
+          </DropdownMenuItem>
+        ) : null}
         <DropdownMenuItem data-action="rename" onSelect={onRename}>
           <PencilIcon aria-hidden="true" /> Rename
         </DropdownMenuItem>

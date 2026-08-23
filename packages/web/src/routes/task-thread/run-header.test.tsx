@@ -115,6 +115,10 @@ const inlineActionNames = () =>
     .getAllByRole('button')
     .map((el) => el.getAttribute('aria-label') ?? el.textContent?.trim())
 
+/** The floating stateful CTA (user decision: it left the bar so the bar never jumps). */
+const floatingCta = () =>
+  document.querySelector('[data-slot="floating-cta"] [data-slot="primary-cta"]') as HTMLButtonElement
+
 /** Open the desktop overflow (#765) and return a scope over its folded secondary actions. */
 const openOverflow = async () => {
   fireEvent.pointerDown(actionBar().getByRole('button', { name: 'More actions' }))
@@ -214,19 +218,22 @@ describe('action bar visibility per status (#765: primaries inline, the rest fol
   // Inline = Finish (when flagged), then the ONE stateful primary CTA (its label follows the
   // lifecycle — design review), then Open in… and the "More actions" disclosure; the secondary
   // actions live in that overflow menu.
-  const matrix: Array<{ status: RunStatus; inline: string[]; overflow: string[] }> = [
-    { status: 'queued', inline: ['Stop'], overflow: ['Rename', 'Notes', 'Cancel'] },
-    { status: 'running', inline: ['Stop'], overflow: ['Rename', 'Notes', 'Cancel'] },
-    { status: 'waiting', inline: ['Finish', 'Reply'], overflow: ['Rename', 'Notes', 'Cancel'] },
-    { status: 'review', inline: ['Finish', 'Review changes', 'Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
-    { status: 'done', inline: ['Reopen', 'Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
-    { status: 'failed', inline: ['Retry', 'Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', inline: ['Reopen', 'Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
+  const matrix: Array<{ status: RunStatus; cta: string; inline: string[]; overflow: string[] }> = [
+    { status: 'queued', cta: 'Stop', inline: [], overflow: ['Rename', 'Notes', 'Cancel'] },
+    { status: 'running', cta: 'Stop', inline: [], overflow: ['Rename', 'Notes', 'Cancel'] },
+    { status: 'waiting', cta: 'Reply', inline: [], overflow: ['Close session', 'Rename', 'Notes', 'Cancel'] },
+    { status: 'review', cta: 'Review changes', inline: ['Open in'], overflow: ['Accept without PR', 'Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'done', cta: 'Reopen', inline: ['Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'failed', cta: 'Retry', inline: ['Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'cancelled', cta: 'Reopen', inline: ['Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
   ]
 
-  it.each(matrix)('$status → inline $inline, overflow $overflow', async ({ status, inline, overflow }) => {
+  it.each(matrix)('$status → floating $cta, inline $inline, overflow $overflow', async ({ status, cta, inline, overflow }) => {
     stubFetch()
     renderHeader(run(status))
+    // The ONE stateful CTA floats in a fixed spot; the bar's inline set stays constant per
+    // lifecycle phase, so the bar never reflows between states.
+    expect(floatingCta()?.textContent?.trim()).toBe(cta)
     expect(inlineActionNames()).toEqual([...inline, 'More actions'])
     const menu = await openOverflow()
     expect(menu.getAllByRole('menuitem').map((el) => el.textContent?.trim())).toEqual(overflow)
@@ -333,10 +340,11 @@ describe('Mark unread (#775)', () => {
 })
 
 describe('actions hit their endpoints', () => {
-  it('Finish → POST /finish', async () => {
+  it('Close session (the old Finish) → POST /finish, from the overflow menu', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Finish' }))
+    const menu = await openOverflow()
+    fireEvent.click(menu.getByRole('menuitem', { name: 'Close session' }))
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toBe(true)
     })
@@ -345,7 +353,7 @@ describe('actions hit their endpoints', () => {
   it('Continue → POST /continue', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Reopen' })
+    const button = floatingCta()
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
     await waitFor(() => {
@@ -366,7 +374,7 @@ describe('actions hit their endpoints', () => {
     })
     renderHeader(run('done', { runner: 'claude' }))
 
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Reopen' })
+    const button = floatingCta()
     await waitFor(() => expect(button.disabled).toBe(true))
     button.removeAttribute('disabled')
     fireEvent.click(button)
@@ -410,7 +418,7 @@ describe('actions hit their endpoints', () => {
     })
     renderHeader(run('done', { runner: 'claude' }))
 
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Reopen' })
+    const button = floatingCta()
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
 
@@ -488,7 +496,7 @@ describe('actions hit their endpoints', () => {
       '/api/v1/runs/r1/continue': () => jsonResponse({ error: 'no agent session to resume' }, 409),
     })
     renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Reopen' })
+    const button = floatingCta()
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
     const item = await screen.findByRole('status')

@@ -176,6 +176,12 @@ export function finishTitle(status: RunStatus): string {
   return status === 'review' ? 'Accept the changes without a PR' : 'Close the session'
 }
 
+/** The menu label says what Finish MEANS in this state (user decision: one word for two
+ *  different acts read as one act). */
+export function finishLabel(status: RunStatus): string {
+  return status === 'review' ? 'Accept without PR' : 'Close session'
+}
+
 /**
  * 1-based position among the queued, unarchived runs, FIFO by `createdAt` — the legacy
  * queued-placeholder math (web/app.js `queuePosition`, spec 006). Undefined when the run is
