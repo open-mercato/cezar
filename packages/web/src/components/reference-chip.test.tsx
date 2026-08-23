@@ -43,7 +43,7 @@ describe('ReferenceChip without a status', () => {
     expect(chip.getAttribute('data-status')).toBeNull()
     expect(chip.className).toContain('text-muted-foreground')
     expect(chip.getAttribute('title')).toBe('https://github.com/o/r/pull/402')
-    expect(chip.textContent).toBe('#402')
+    expect(chip.textContent).toBe('PR #402')
   })
 
   it('carries no status glyph', () => {

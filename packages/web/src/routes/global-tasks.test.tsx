@@ -620,8 +620,8 @@ describe('global tasks page', () => {
     const list = await screen.findByText('References')
     const chips = [...list.parentElement!.querySelectorAll('[data-slot$="-chip"]')]
     expect(chips.map((chip) => chip.textContent?.trim())).toEqual([
-      '#42',
-      '#40',
+      'PR #42',
+      'PR #40',
       'Issue #12',
       'Issue #99',
     ])

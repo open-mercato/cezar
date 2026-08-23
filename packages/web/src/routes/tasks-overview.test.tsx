@@ -220,7 +220,7 @@ describe('TasksOverview — the table', () => {
       'feat',
       'cez/8f31ab02',
       '+128 −14', // the ± column (R2 #389) — adds and dels, the mockup's pair
-      '#402',
+      'PR #402',
       '184.7k / 2.4k',
       '$0.31',
       '', // no live sample, CPU has no persisted peak

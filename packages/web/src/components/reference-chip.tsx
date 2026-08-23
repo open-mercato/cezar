@@ -16,6 +16,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import type * as React from 'react'
 import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
 
+import { GithubIcon } from '@/components/icons'
 import { useReferenceStatus } from '@/components/reference-status'
 import type { ReferenceStatusEntry } from '@/api/queries'
 import { StatusDot } from '@/components/status-dot'
@@ -57,6 +58,16 @@ const TONE_HOVER: Record<ReferenceStatusTone, string> = {
   neutral: 'hover:bg-muted',
   pending: 'hover:bg-pending-strong/10',
   conflict: 'hover:bg-conflict/10',
+}
+
+/** A github.com link earns the mark; other forges stay neutral until they have their own. */
+function isGithubUrl(url: string | undefined): boolean {
+  if (!url) return false
+  try {
+    return new URL(url).hostname.endsWith('github.com')
+  } catch {
+    return false
+  }
 }
 
 /** One glyph per status, borrowed from the vocabulary GitHub itself uses, so the icon is legible
@@ -151,13 +162,20 @@ export function ReferenceChip({
   )
   // The overridden status rides along into the tooltip whenever the conflict took the chip.
   const tooltip = statusTooltip(entry, presentation, conflicting ? statusPresentation : undefined)
-  const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind
+  // Source + kind + number, the way a tracker chip reads elsewhere (user reference: `PR-001`
+  // beside a GitHub mark): `PR #402`, `Issue #788`. The compact sidebar row keeps the bare
+  // number (#788, option C) — there the glyphs cost the task its name.
+  const label = number ? `${compact ? '' : `${kind} `}#${number}` : kind
+  const forgeMark = !compact && isGithubUrl(url)
   const kindWord = kind === 'PR' ? 'pull request' : 'issue'
   // The accessible name carries the status too — a screen reader gets what the color says.
   const ariaLabel = `Open the ${kindWord} for ${taskTitle}${presentation ? `, ${presentation.label}` : ''}`
 
   const body = (
     <>
+      {/* The forge mark leads (user decision): it says WHERE this lives before the number says
+          which. Only a github.com link earns it; other hosts stay unmarked until they have one. */}
+      {forgeMark ? <GithubIcon className="size-3 shrink-0" aria-hidden="true" /> : null}
       {/* `presentation ? status : undefined` — one gate for every status channel, so an unknown
           value cannot paint a glyph either. The conflict overrides the glyph as it overrides the
           colour, including `checks-pending`'s pulsing dot: a branch that will not merge is not a
