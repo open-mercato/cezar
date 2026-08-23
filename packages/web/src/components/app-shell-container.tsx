@@ -207,7 +207,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // The bar's breadcrumb: the open task's title (the same resolution the document title
         // uses), else the view's label. Never on the project's own Tasks table — "cezar › Tasks"
         // would say the project twice.
-        crumb={titleRun ? runTitle(titleRun) : libraryView ? libraryView.label : globalSettings ? 'Workspace settings' : workspaceTasks ? 'All projects' : null}
+        crumb={titleRun ? runTitle(titleRun) : libraryView ? libraryView.label : globalSettings ? 'Workspace settings' : workspaceTasks ? 'All projects' : activeTo === '/settings' ? 'Settings' : null}
         // On a project VIEW the tab band already lists the project's views, so the chip is just
         // the name (user decision); the menu returns where the band is absent (a task thread,
         // the composer) as the way back to those views.
