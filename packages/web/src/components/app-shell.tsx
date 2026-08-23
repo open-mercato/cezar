@@ -189,10 +189,9 @@ export function AppShell({
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
   const areaPathname = stripProjectPrefix(pathname)
-  // The GLOBAL tasks page is exactly `/tasks` with no project scope — the one URL in the Tasks
-  // area that is not about this project. All tasks owns it (its own `aria-current`); lighting
-  // the project's Tasks row too put two carets in the nav (user report).
-  const activeTo = pathname === '/tasks' ? null : activeNavPath(areaPathname)
+  // ONE Tasks row (user decision): the global `/tasks` page is the same list at workspace
+  // scope, so it lights Tasks too; the page header's scope switch is where the scope lives.
+  const activeTo = activeNavPath(areaPathname)
   const current = activeNavItem(areaPathname)
   const [menuOpen, setMenuOpen] = React.useState(false)
   const mainRef = React.useRef<HTMLElement>(null)
@@ -612,7 +611,7 @@ function SidebarContent({
           {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob.
               No Settings here — it is not a workspace surface; it lives with the utilities. */}
           <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
-            {items.filter((item) => item.to !== '/settings').map((item, index) => {
+            {items.filter((item) => item.to !== '/settings').map((item) => {
               const isActive = item.to === activeTo
               const Icon = item.icon
               // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
@@ -673,10 +672,6 @@ function SidebarContent({
                     </span>
                   ) : null}
                 </Link>
-                {/* All tasks rides the nav as a PEER of Tasks (user feedback: a separate band
-                    above the nav read as a second, differently-dressed Tasks). Multi-project
-                    only — with one project it would be the same table under a second name. */}
-                {index === 0 && multiProject ? <AllTasksLink onNavigate={onNavigate} /> : null}
                 </React.Fragment>
               )
             })}

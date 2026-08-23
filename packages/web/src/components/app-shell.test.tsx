@@ -183,10 +183,11 @@ describe('AppShell', () => {
       expect(within(nav()).getByRole('link', { current: 'page' }).textContent).toBe('Tasks')
     })
 
-    it('leaves Tasks unlit on the GLOBAL /tasks page — All tasks owns that one', () => {
+    it('lights Tasks on the GLOBAL /tasks page too — one row, the scope lives in the page header', () => {
       renderShell('/tasks', { multiProject: true })
       const current = within(nav()).getAllByRole('link', { current: 'page' })
-      expect(current.map((a) => a.textContent)).toEqual(['All tasks'])
+      expect(current.map((a) => a.textContent)).toEqual(['Tasks'])
+      expect(document.querySelector('[data-slot="all-tasks-link"]')).toBeNull()
     })
 
     it('lights nothing on a full-screen surface like /new', () => {

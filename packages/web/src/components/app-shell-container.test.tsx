@@ -314,7 +314,7 @@ describe('sidebar wiring', () => {
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
   })
 
-  it('keeps the flat active-project sidebar with two projects, pinning only the All-tasks door', async () => {
+  it('keeps the flat active-project sidebar with two projects — no groups, no second Tasks row', async () => {
     // User decision (25-repo review): the sidebar never swaps to per-project groups — at 20+
     // registered repos that column buried the active project's own nav in look-alike rows.
     // Other projects are the topbar switcher's job; the flat shell only gains the global door.
@@ -331,11 +331,11 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() =>
-      expect(document.querySelector('[data-slot="all-tasks-link"]')).not.toBeNull(),
-    )
-    // No groups, ever — the flat nav and the shared quick-list stay.
+    await waitFor(() => expect(repoChip()).not.toBeNull())
+    // No groups, ever — the flat nav and the shared quick-list stay; the workspace-wide list is
+    // a scope on the Tasks page, not a row of its own (user decision).
     expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(0)
+    expect(document.querySelector('[data-slot="all-tasks-link"]')).toBeNull()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
     expect(document.querySelector('[data-slot="task-quick-list"]')).not.toBeNull()
     // The ACTIVE project still names itself on the project bar above the content.
