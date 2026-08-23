@@ -59,6 +59,25 @@ list excludes only `pi` (`new-task.tsx`).
 Without this fix the eval would need a hand-written advisor binding in eval-app, and no
 user arriving through the UI would have one — the result would not describe the product.
 
+## Prerequisite 2: the synthesized council config
+
+Found while preparing the baseline, and it would have killed the first council round.
+
+`validateConfig` in `harness.mjs` refuses to run a council unless the config it is handed
+carries `agentHarness.version === 1` and `delivery.mode === 'stage-only'`. The driver
+synthesizes that config itself when the repo has none — the case its own comment calls
+"the ordinary cezar project" — but wrote only `models` and `profiles`. Every zero-config
+council therefore died on `agentHarness.version must be 1`.
+
+Both keys are cezar invariants, not user choices: the vendored runtime is version 1, and
+delivery is stage-only by construction. The driver states them now, in the synthesized
+council config only; the user's own file is never written.
+
+This is the shape the predecessor eval hit and recorded as a lineup mistake — "agentHarness
+lacked `delivery.mode: stage-only` → all three structured-call reviewers failed config
+validation → below quorum". It was a defect, and it is the reason this eval's baseline can
+carry no `agentHarness` block at all.
+
 ## Arms
 
 | | Arm A — single | Arm B — multi |
@@ -120,9 +139,13 @@ Per run, eight dimensions. Model self-reports are recorded and never trusted.
 
 ## Protocol
 
-- **Baseline.** eval-app reset to a verified-green commit; the gate is run once and must
-  pass before any arm starts. eval-app's HEAD currently carries T8's merged output, so the
-  reset is required, not cosmetic.
+- **Baseline.** Branch `eval-baseline-2026-08-23` at `309eec9`, non-destructively: eval-app's
+  `main` is left where it was, carrying T8's merged pagination output, and the branch forks
+  from the last commit before any task output landed. Its one added commit REMOVES the
+  `agentHarness` block, so the zero-config claim is proven rather than merely not
+  disproven — every reviewer binding this run uses is synthesized by the driver.
+  `baseBranch` and `validation` stay: those are project facts, not harness configuration.
+  The gate is run once on this branch and must pass before any arm starts.
 - **Faithfulness.** Runs start through the same `POST /api/v1/runs` body the composer
   builds (`buildCreateRunBody`) — same workflow names, same `harness.skillProfile`, same
   worktree defaults. No eval-only branches, no special-cased configuration. What the eval
