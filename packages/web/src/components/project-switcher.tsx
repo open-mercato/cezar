@@ -1,4 +1,4 @@
-import { ChevronDownIcon, FolderOpenIcon, ListChecksIcon } from 'lucide-react'
+import { FolderOpenIcon, ListChecksIcon } from 'lucide-react'
 
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import type { NavItem } from '@/components/nav-items'
@@ -63,13 +63,14 @@ export function ProjectSwitcher({
           className="flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 transition-colors outline-none hover:bg-muted focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
           <FolderOpenIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+          {/* No chevron (user decision): the hover surface already says "clickable", and the
+              bar's width is the crumb's. */}
           <span data-slot="repo-chip" className="truncate font-mono text-[12px] font-medium text-muted-foreground">
             {name}
           </span>
-          <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" data-slot="project-menu" className="w-56">
+      <DropdownMenuContent align="start" data-slot="project-menu" className="min-w-40 text-[13px]">
         {/* No name label and no "Open project" (user feedback: both repeated the chip). The
             first row is what the project opens to — its Tasks — then the rest of its views. */}
         <DropdownMenuItem asChild>
@@ -78,7 +79,7 @@ export function ProjectSwitcher({
             data-slot="project-open"
             data-nav-to="/"
             aria-current={activeTo === '/' ? 'page' : undefined}
-            className={cn(activeTo === '/' && 'bg-primary/10 font-semibold text-foreground')}
+            className={cn('text-[13px]', activeTo === '/' && 'bg-muted font-semibold text-foreground')}
           >
             <ListChecksIcon aria-hidden="true" />
             Tasks
@@ -93,7 +94,7 @@ export function ProjectSwitcher({
                 to={item.to}
                 data-nav-to={item.to}
                 aria-current={lit ? 'page' : undefined}
-                className={cn(lit && 'bg-primary/10 font-semibold text-foreground')}
+                className={cn('text-[13px]', lit && 'bg-muted font-semibold text-foreground')}
               >
                 <Icon aria-hidden="true" />
                 {item.label}
