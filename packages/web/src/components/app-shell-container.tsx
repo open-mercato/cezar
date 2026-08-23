@@ -199,8 +199,11 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // uses), else the view's label. Never on the project's own Tasks table — "cezar › Tasks"
         // would say the project twice.
         crumb={titleRun ? runTitle(titleRun) : null}
+        // On a project VIEW the tab band already lists the project's views, so the chip is just
+        // the name (user decision); the menu returns where the band is absent (a task thread,
+        // the composer) as the way back to those views.
         projectSwitcher={
-          registry && registry.projects.length > 0 ? (
+          registry && registry.projects.length > 0 && !onProjectView ? (
             <ProjectSwitcher
               projects={registry.projects}
               activeId={projectId ?? registry.bootProject ?? null}
