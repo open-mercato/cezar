@@ -112,6 +112,8 @@ inventing a second module the component would have to consult separately.
 
 ## Progress
 
+PR: #3
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: The pure filter model
@@ -139,4 +141,4 @@ inventing a second module the component would have to consult separately.
 ### Phase 5: Validation
 
 - [x] 5.1 Full validation gate green — 45037789 (typecheck / test 6221 / test:unit 36 / build + check:pack / test:package 15, all green)
-- [ ] 5.2 `om-auto-review-pr --autofix` clean
+- [x] 5.2 `om-auto-review-pr --autofix` clean — a4ab6fec (verdict APPROVED; one minor finding — the bulk receipt's wording — fixed in that commit, no blockers or majors)
