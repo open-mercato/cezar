@@ -180,29 +180,28 @@ describe('sidebar wiring', () => {
     expect(versionChip()?.textContent).toBe('v0.1.3')
   })
 
-  it('renders the inbox badge from /api/v1/todos — on the active project\u2019s nav', async () => {
+  it('renders the inbox badge from /api/v1/todos — on the bar\u2019s Inbox tab', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': TODOS, ...REGISTRY_STUBS })
     renderShell()
 
     await waitFor(() => expect(navBadge()).not.toBeNull())
     expect(navBadge()?.textContent).toBe('2')
-    expect(navBadge()?.closest('[data-slot="project-nav"]')).not.toBeNull()
+    expect(navBadge()?.closest('[data-slot="project-tabs"]')).not.toBeNull()
   })
 
-  it('puts the project\u2019s views under the ACTIVE group only, lit from the URL, forge-gated', async () => {
-    // User decision: Git / Skills / Workflows are a project's, so they live inside its group, not
-    // as workspace rows — and the forge gate still applies (HEALTH has no forge → no GitHub).
+  it('puts the project\u2019s views on the bar as tabs, lit from the URL, forge-gated — and nowhere in the sidebar', async () => {
+    // User decision: Git / Skills / Workflows are a project's. They ride the bar beside the
+    // breadcrumb once a project is picked; the sidebar lists tasks and the Projects menu only.
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
     renderShell('/git')
 
-    await waitFor(() => expect(document.querySelector('[data-slot="project-nav"]')).not.toBeNull())
-    const navs = [...document.querySelectorAll('[data-slot="project-nav"]')]
-    expect(navs).toHaveLength(1)
-    expect(navs[0]?.closest('[data-slot="project-task-group"]')?.getAttribute('data-project-id')).toBe('cezar')
-    const labels = [...(navs[0]?.querySelectorAll('a') ?? [])].map((a) => a.textContent)
-    expect(labels).toEqual(['Inbox', 'Git', 'Skills', 'Workflows', 'Settings'])
-    expect(within(navs[0] as HTMLElement).getByRole('link', { current: 'page' }).textContent).toBe('Git')
-    expect(within(navs[0] as HTMLElement).getByRole('link', { name: 'Git' }).getAttribute('href')).toBe('/p/cezar/git')
+    // Health gates Inbox, so settle on the full tab set rather than the first paint.
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="project-tabs"] a')).toHaveLength(5))
+    const tabs = document.querySelector('[data-slot="project-tabs"]') as HTMLElement
+    expect([...tabs.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Skills', 'Workflows'])
+    expect(within(tabs).getByRole('link', { current: 'page' }).textContent).toBe('Git')
+    expect(document.querySelector('[data-slot="sidebar"] [data-slot="project-nav"]')).toBeNull()
+    expect(within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).queryByRole('link', { name: 'Git' })).toBeNull()
   })
 
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.

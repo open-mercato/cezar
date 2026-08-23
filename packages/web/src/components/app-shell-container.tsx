@@ -126,10 +126,22 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         .filter((item) => !item.global && item.to !== '/settings')
         .map((item) => {
           const Icon = item.icon
+          const count = item.badge === 'inbox-count' ? (todos.data?.length ?? 0) : 0
           return (
             <TabLink key={item.to} to={item.to} active={item.to === activeTo}>
               <Icon aria-hidden="true" className="size-3.5" />
               {item.label}
+              {count > 0 ? (
+                <span data-slot="nav-badge" className="rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground">
+                  {count}
+                </span>
+              ) : null}
+              {item.badge === 'skills-update' && skillsUpdateAvailable ? (
+                <span data-slot="nav-update-marker" className="flex items-center">
+                  <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                  <span className="sr-only">Skills update available</span>
+                </span>
+              ) : null}
             </TabLink>
           )
         })
@@ -186,17 +198,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
           ) : undefined
         }
         singleProject={health.data?.capabilities.singleProject === true}
-        taskQuickList={
-          <ProjectTaskGroupsContainer
-            availability={{
-              forge: health.data?.forge?.available === true,
-              inbox: inboxAvailable,
-              automations: automationsAvailable,
-              singleProject: health.data?.capabilities.singleProject === true,
-            }}
-            badges={{ inboxCount: inboxAvailable ? (todos.data?.length ?? null) : null, skillsUpdateAvailable }}
-          />
-        }
+        taskQuickList={<ProjectTaskGroupsContainer />}
         projectsMenu={
           registry && registry.projects.length > 0 && health.data?.capabilities.singleProject !== true ? (
             <ProjectSwitcher
