@@ -146,6 +146,25 @@ Per run, eight dimensions. Model self-reports are recorded and never trusted.
   disproven — every reviewer binding this run uses is synthesized by the driver.
   `baseBranch` and `validation` stay: those are project facts, not harness configuration.
   The gate is run once on this branch and must pass before any arm starts.
+
+  **Verified 2026-08-23:** `generate` PASS, `typecheck` PASS, `lint` PASS, `test` PASS.
+
+  Two things the verification turned up, both recorded because they change how a result
+  reads:
+
+  - `lint` failed on the first attempt with 13 errors, **none of them from this app**.
+    ESLint was walking `.ai/cezar/worktrees/<runId>/` — the run worktrees left by the
+    2026-08-06 eval, including linted Next build chunks under one worktree's `.mercato/`.
+    Cezar writes `.ai/cezar/.gitignore` so git ignores those trees, but ESLint does not
+    read `.gitignore`, and the config's `.mercato/**` glob is root-relative so it misses a
+    nested worktree's build output. The baseline now ignores `.ai/**`. Worth knowing
+    beyond this eval: any project whose gate globs the tree will lint, and possibly test,
+    the sibling checkouts cezar nests inside it. Runs themselves are measured inside their
+    own worktree, where no siblings exist, so the exposure is the main checkout — which is
+    exactly where a baseline or a `worktree: false` run is gated.
+  - `test` PASS at baseline means **"No tests found, exiting with code 0"**. The scaffold
+    ships none. So the test dimension is vacuous until an arm writes tests, and a baseline
+    `test: PASS` must never be read as evidence that anything ran.
 - **Faithfulness.** Runs start through the same `POST /api/v1/runs` body the composer
   builds (`buildCreateRunBody`) — same workflow names, same `harness.skillProfile`, same
   worktree defaults. No eval-only branches, no special-cased configuration. What the eval
