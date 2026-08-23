@@ -122,8 +122,6 @@ export type AppShellProps = {
   /** The Projects nav row (user decision): the same project menu as the bar's switcher, as the
    *  nav's last row — the list, add, manage — never a page of its own. */
   projectsMenu?: ReactNode
-  /** The bar's project tabs (Tasks / Git / Skills / Workflows), container-built. */
-  projectTabs?: ReactNode
 }
 
 /**
@@ -186,7 +184,6 @@ export function AppShell({
   projectSwitcher,
   crumb = null,
   projectsMenu,
-  projectTabs,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -298,7 +295,6 @@ export function AppShell({
             name={projectName ?? repo?.name ?? null}
             toolsMenu={toolsMenu}
             crumb={crumb}
-            projectTabs={projectTabs}
             projectSwitcher={projectSwitcher}
           />
 
@@ -835,16 +831,12 @@ function ProjectBar({
   toolsMenu,
   crumb,
   projectSwitcher,
-  projectTabs,
 }: {
   name: string | null
   toolsMenu?: ReactNode
   /** What the page is about, after the project: the open task's title, or the view's name. */
   crumb?: string | null
   projectSwitcher?: ReactNode
-  /** The active project's views as underline tabs (user decision: Tasks / Git / Skills /
-   *  Workflows on the bar once a project is picked). */
-  projectTabs?: ReactNode
 }) {
   if (!name && !toolsMenu && !projectSwitcher) return null
   return (
@@ -864,17 +856,10 @@ function ProjectBar({
             </span>
           </span>
         ) : null)}
-      {/* The project's views come right after the project (user feedback: placed after the task
-          crumb they read as the task's). Then the crumb, which is about the page itself. */}
-      {projectTabs ? (
-        <div data-slot="project-tabs" className="ml-3 flex h-full items-end gap-1 self-end">
-          {projectTabs}
-        </div>
-      ) : null}
       {/* The breadcrumb's second step (user decision: "project and task, here"): the open
           task's title, or the view's name. Quiet, truncating, never a link — the page IS it. */}
       {crumb ? (
-        <span className="ml-3 flex min-w-0 items-center gap-2 text-[12.5px]">
+        <span className="flex min-w-0 items-center gap-2 text-[12.5px]">
           <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
           <span data-slot="project-bar-crumb" className="truncate font-medium text-foreground" title={crumb}>
             {crumb}

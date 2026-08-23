@@ -11,7 +11,6 @@ import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectSwitcher } from '@/components/project-switcher'
 import { ProjectsSection } from '@/components/projects-section'
 import { ProjectTaskGroupsContainer } from '@/components/task-quick-list'
-import { TabLink } from '@/components/tab-link'
 import { ToolsMenu } from '@/components/tools-menu'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { stripProjectPrefix } from '@/lib/project-router'
@@ -112,40 +111,16 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // and the other projects are the topbar switcher's job.
   const multiProject = registry !== undefined && registry.projects.length > 1
 
-  // The bar's project tabs (user decision): the project's views, lit from the URL's area. Only
-  // while a project is the context — global settings has none.
-  const areaPath = stripProjectPrefix(pathname)
-  const activeTo = activeNavPath(areaPath)
-  const projectTabs = globalSettings
-    ? undefined
-    : visibleNavItems({
-        forge: health.data?.forge?.available === true,
-        inbox: inboxAvailable,
-        automations: automationsAvailable,
-        singleProject: health.data?.capabilities.singleProject === true,
-      })
-        .filter((item) => !item.global && item.to !== '/settings')
-        .map((item) => {
-          const Icon = item.icon
-          const count = item.badge === 'inbox-count' ? (todos.data?.length ?? 0) : 0
-          return (
-            <TabLink key={item.to} to={item.to} active={item.to === activeTo}>
-              <Icon aria-hidden="true" className="size-3.5" />
-              {item.label}
-              {count > 0 ? (
-                <span data-slot="nav-badge" className="rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground">
-                  {count}
-                </span>
-              ) : null}
-              {item.badge === 'skills-update' && skillsUpdateAvailable ? (
-                <span data-slot="nav-update-marker" className="flex items-center">
-                  <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
-                  <span className="sr-only">Skills update available</span>
-                </span>
-              ) : null}
-            </TabLink>
-          )
-        })
+  // The project menu's views (user decision: the bar chip's menu lists THIS project's views —
+  // Tasks, Git, Skills, Workflows, the gated ones, Settings — never other projects). Lit from
+  // the URL's area, the same rule the old workspace nav used.
+  const activeTo = activeNavPath(stripProjectPrefix(pathname))
+  const projectViews = visibleNavItems({
+    forge: health.data?.forge?.available === true,
+    inbox: inboxAvailable,
+    automations: automationsAvailable,
+    singleProject: health.data?.capabilities.singleProject === true,
+  })
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -189,12 +164,15 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // uses), else the view's label. Never on the project's own Tasks table — "cezar › Tasks"
         // would say the project twice.
         crumb={titleRun ? runTitle(titleRun) : null}
-        projectTabs={projectTabs}
         projectSwitcher={
           registry && registry.projects.length > 0 ? (
             <ProjectSwitcher
               projects={registry.projects}
               activeId={projectId ?? registry.bootProject ?? null}
+              items={projectViews}
+              activeTo={activeTo}
+              inboxCount={inboxAvailable ? (todos.data?.length ?? null) : null}
+              skillsUpdateAvailable={skillsUpdateAvailable}
             />
           ) : undefined
         }

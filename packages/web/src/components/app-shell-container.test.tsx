@@ -169,6 +169,13 @@ describe('skillsUpdateMarkerOf', () => {
   })
 })
 
+/** The bar chip's menu (Radix opens on pointerdown) — where the project's views live now. */
+async function openProjectMenu(): Promise<HTMLElement> {
+  await waitFor(() => expect(document.querySelector('[data-slot="project-switcher"]')).not.toBeNull())
+  fireEvent.pointerDown(document.querySelector('[data-slot="project-switcher"]') as HTMLElement, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+  return await screen.findByRole('menu')
+}
+
 describe('sidebar wiring', () => {
   it('renders the repo and version chips from /api/v1/health', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
@@ -180,27 +187,29 @@ describe('sidebar wiring', () => {
     expect(versionChip()?.textContent).toBe('v0.1.3')
   })
 
-  it('renders the inbox badge from /api/v1/todos — on the bar\u2019s Inbox tab', async () => {
+  it('renders the inbox badge from /api/v1/todos — on the project menu\u2019s Inbox row', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': TODOS, ...REGISTRY_STUBS })
     renderShell()
 
-    await waitFor(() => expect(navBadge()).not.toBeNull())
-    expect(navBadge()?.textContent).toBe('2')
-    expect(navBadge()?.closest('[data-slot="project-tabs"]')).not.toBeNull()
+    await waitFor(() => expect(repoChip()).not.toBeNull())
+    const menu = await openProjectMenu()
+    await waitFor(() => expect(menu.querySelector('[data-slot="nav-badge"]')?.textContent).toBe('2'))
   })
 
-  it('puts the project\u2019s views on the bar as tabs, lit from the URL, forge-gated — and nowhere in the sidebar', async () => {
-    // User decision: Git / Skills / Workflows are a project's. They ride the bar beside the
-    // breadcrumb once a project is picked; the sidebar lists tasks and the Projects menu only.
+  it('lists THIS project\u2019s views in the chip\u2019s menu — Open project, the gated views, Settings — lit from the URL', async () => {
+    // User decision: the bar's project menu is the project's, not a list of other projects
+    // (the sidebar's Projects section is that). HEALTH has no forge → no GitHub row.
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
     renderShell('/git')
 
-    // Health gates Inbox, so settle on the full tab set rather than the first paint.
-    await waitFor(() => expect(document.querySelectorAll('[data-slot="project-tabs"] a')).toHaveLength(5))
-    const tabs = document.querySelector('[data-slot="project-tabs"]') as HTMLElement
-    expect([...tabs.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Skills', 'Workflows'])
-    expect(within(tabs).getByRole('link', { current: 'page' }).textContent).toBe('Git')
-    expect(document.querySelector('[data-slot="sidebar"] [data-slot="project-nav"]')).toBeNull()
+    await waitFor(() => expect(repoChip()).not.toBeNull())
+    const menu = await openProjectMenu()
+    await waitFor(() => expect(menu.querySelectorAll('[data-nav-to]')).toHaveLength(5))
+    expect([...menu.querySelectorAll('[data-nav-to]')].map((a) => a.textContent)).toEqual(['Inbox', 'Git', 'Skills', 'Workflows', 'Settings'])
+    expect(menu.querySelector('[data-slot="project-open"]')?.getAttribute('href')).toBe('/')
+    expect(within(menu).getByRole('menuitem', { current: 'page' }).textContent).toBe('Git')
+    // No tabs on the bar and no views in the sidebar.
+    expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
     expect(within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).queryByRole('link', { name: 'Git' })).toBeNull()
   })
 
@@ -209,23 +218,26 @@ describe('sidebar wiring', () => {
     serve({
       '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
+      ...REGISTRY_STUBS,
     })
     renderShell()
 
     await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.queryByRole('link', { name: /Inbox/ })).toBeNull()
+    const menu = await openProjectMenu()
+    expect(within(menu).queryByRole('menuitem', { name: /Inbox/ })).toBeNull()
     expect(navBadge()).toBeNull()
     // Every other view is untouched — the gate owns exactly one item. (Tasks is no longer a
     // nav link; the quick-list's TASKS rows are that entry.)
-    expect(screen.getByRole('link', { name: /Git/ })).toBeTruthy()
-    // Two Settings entries by design: the desktop topbar and the (md:hidden) drawer footer.
-    expect(screen.getAllByRole('link', { name: /Settings/ }).length).toBeGreaterThan(0)
+    expect(within(menu).getByRole('menuitem', { name: /Git/ })).toBeTruthy()
+    // The open menu hides the rest of the tree from assistive tech; Settings is still there.
+    expect(screen.getAllByRole('link', { name: /Settings/, hidden: true }).length).toBeGreaterThan(0)
   })
 
   it('never asks for todos on a server with the inbox off', async () => {
     serve({
       '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
+      ...REGISTRY_STUBS,
     })
     renderShell()
 
@@ -242,24 +254,27 @@ describe('sidebar wiring', () => {
   const WITH_FORGE = { ...HEALTH, forge: { kind: 'github' as const, available: true } }
 
   it('drops the Automations nav item when the server has automations off', async () => {
-    serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [] })
+    serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [], ...REGISTRY_STUBS })
     renderShell()
 
     await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.queryByRole('link', { name: /Automations/ })).toBeNull()
+    const menu = await openProjectMenu()
+    expect(within(menu).queryByRole('menuitem', { name: /Automations/ })).toBeNull()
     // The gate owns exactly one item — GitHub is forge-gated, not automations-gated.
-    expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
+    expect(within(menu).getByRole('menuitem', { name: /GitHub/ })).toBeTruthy()
   })
 
   it('shows the Automations nav item once health reports the capability', async () => {
     serve({
       '/api/v1/health': { ...WITH_FORGE, capabilities: { ...HEALTH.capabilities, automations: true } },
       '/api/v1/todos': [],
+      ...REGISTRY_STUBS,
     })
     renderShell()
 
     await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
+    const menu = await openProjectMenu()
+    expect(within(menu).getByRole('menuitem', { name: /Automations/ })).toBeTruthy()
   })
 
   it('renders no badge for an empty inbox', async () => {
@@ -596,9 +611,8 @@ describe('document title wiring', () => {
     renderShell('/p/cezar/')
 
     await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
-    // The bar's project tab — the sidebar group nav is the other door to the same place.
-    const bar = document.querySelector('[data-slot="project-bar"]') as HTMLElement
-    fireEvent.click(within(bar).getByRole('link', { name: 'Git' }))
+    const menu = await openProjectMenu()
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Git' }))
     await waitFor(() => expect(document.title).toBe('cezar — Git · cezar'))
   })
 
