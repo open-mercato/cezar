@@ -107,6 +107,7 @@ export function ReferenceChip({
   projectId,
   className,
   compact = false,
+  bare = false,
 }: {
   reference: { kind: 'PR' | 'Issue'; number?: number; url?: string }
   taskTitle: string
@@ -125,6 +126,9 @@ export function ReferenceChip({
    *  them may each have a #42. Elsewhere the provider's own project is right. */
   projectId?: string
   className?: string
+  /** The app bar's grammar (user decision: every bar control shares one style): a quiet
+   *  rounded-md ghost, no border ring — the status keeps only its ink. */
+  bare?: boolean
   /**
    * The narrow sidebar row (#788, option C): the number ALONE — `#402` — with no `Issue ` word
    * and no `PR` label. There the chip is the row's leading identifier and every glyph it spends
@@ -156,8 +160,11 @@ export function ReferenceChip({
   const conflicting = kind === 'PR' && (explicitConflicting ?? entry.conflicting) === true
   const presentation = conflicting ? REFERENCE_CONFLICT : statusPresentation
   const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-[11px] font-semibold',
+    bare
+      ? 'inline-flex h-7 items-center gap-1 rounded-md px-1.5 font-mono text-[11px] font-semibold transition-colors hover:bg-muted'
+      : 'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-[11px] font-semibold',
     TONE_CLASS[presentation?.tone ?? 'neutral'],
+    bare && 'border-0',
     className,
   )
   // The overridden status rides along into the tooltip whenever the conflict took the chip.

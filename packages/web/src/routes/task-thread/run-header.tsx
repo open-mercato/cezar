@@ -214,7 +214,7 @@ export function RunHeader({
           <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
           {/* The task's context chips (PR, branch) live on the bar too (user decision) —
               identity beside the verbs that act on it. */}
-          <MetaRow run={run} showBranch={false} automationsAvailable={health.data?.capabilities?.automations === true} />
+          <MetaRow run={run} showBranch={false} bare automationsAvailable={health.data?.capabilities?.automations === true} />
           {/* No stateful buttons here (user decision: the bar must not jump as the run moves
               through its lifecycle). The ONE primary CTA floats over the content in a fixed
               spot, and Finish lives in the More menu under its real name. */}
@@ -239,8 +239,16 @@ export function RunHeader({
           this sticky header, so it centers on the CONTENT column whatever the sidebar's
           width, and stays pinned while the thread scrolls. md+ only — the mobile kebab and
           the composer itself cover small screens. */}
-      <div data-slot="floating-cta" className="absolute top-2 left-1/2 z-30 hidden -translate-x-1/2 md:block">
-        <PrimaryCtaButton run={run} actions={actions} floating />
+      {/* A full-width frosted band under the bar carries the button (user decision): the CTA
+          reads as chrome, and thread text slides under a soft blur instead of colliding with
+          a naked pill. The mask fades the blur out toward the bottom edge. */}
+      <div
+        data-slot="floating-cta"
+        className="pointer-events-none absolute inset-x-0 top-0 z-30 hidden justify-center bg-gradient-to-b from-background/80 via-background/40 to-transparent pt-2 pb-7 backdrop-blur-[3px] [mask-image:linear-gradient(to_bottom,black_45%,transparent)] md:flex"
+      >
+        <span className="pointer-events-auto">
+          <PrimaryCtaButton run={run} actions={actions} floating />
+        </span>
       </div>
 
       <ConfirmDialog run={run} actions={actions} />
@@ -314,11 +322,11 @@ function OpenInMenuForRun({
     <OpenInMenu
       choices={choices}
       onPick={(target) => open.mutate(target)}
-      // A real bordered button, not a ghost link, so the label never reads as clipped plain text.
-      triggerVariant="outline"
       // No trailing ellipsis (it read as a truncated label) — the chevron already says "menu".
       label="Open in"
       iconOnly={iconOnly}
+      // On the bar every control shares the quiet ghost grammar (user decision).
+      triggerVariant={iconOnly ? 'ghost' : 'outline'}
       title="Resume in a terminal, or open the worktree locally"
       leading={
         canResumeHere ? (
@@ -726,11 +734,14 @@ function FooterStat({ label, children }: { label: string; children: ReactNode })
 function MetaRow({
   run,
   showBranch = true,
+  bare = false,
   automationsAvailable = false,
 }: {
   run: ApiRun
   /** Off on the app bar, where the branch rides the Commits tab instead of a chip. */
   showBranch?: boolean
+  /** The app bar's grammar: borderless ghost chips matching the icon tabs. */
+  bare?: boolean
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
@@ -784,7 +795,8 @@ function MetaRow({
         key={`pr-${reference.number}`}
         reference={reference}
         taskTitle={runTitle(run)}
-        className="h-5"
+        bare={bare}
+        className={bare ? undefined : 'h-5'}
         // Shown only on a chip that IS conflicting — the chip decides that, being the thing that
         // knows — and mounted only while its panel is open. The same component the Tasks table
         // hands its chips, so both send the same prompt on the same seam.
@@ -817,7 +829,8 @@ function MetaRow({
         key="issue"
         reference={{ kind: 'Issue', ...(number ? { number: Number(number) } : {}), url: issueUrl }}
         taskTitle={runTitle(run)}
-        className="h-6"
+        bare={bare}
+        className={bare ? undefined : 'h-6'}
       />,
     )
   }
