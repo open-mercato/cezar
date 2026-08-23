@@ -1,4 +1,5 @@
 import type { ProcessUsage, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import { deriveAttention, type AttentionInput } from '@/lib/attention'
 import { groupTitle, runTitle, type ListView } from '@/lib/task-groups'
 
 /**
@@ -19,8 +20,10 @@ const USAGE_LIVE_STATUSES: ReadonlySet<RunStatus> = new Set(['running', 'waiting
 export const TERMINAL_STATUSES: ReadonlySet<RunStatus> = new Set(['done', 'failed', 'review', 'cancelled'])
 
 /** What "Archive finished" archives (`POST /api/runs/archive-finished` server-side): outcomes,
- *  not gates — a `review` run still wants a human and must not be swept away. */
-const FINISHED_STATUSES: ReadonlySet<RunStatus> = new Set(['done', 'failed', 'cancelled'])
+ *  not gates — a `review` run still wants a human and must not be swept away. Exported because
+ *  the same rule decides whether a SELECTED row can be archived by hand (`lib/task-selection.ts`);
+ *  one definition means the broom and the bulk bar can never disagree about what "finished" is. */
+export const FINISHED_STATUSES: ReadonlySet<RunStatus> = new Set(['done', 'failed', 'cancelled'])
 
 /**
  * Humanized RSS — `612 MB`, `1.2 GB`. Ported from the legacy `fmtBytes` (ps gives KB, the store
@@ -84,20 +87,187 @@ export function workflowLabel(run: RunRecord): string {
 }
 
 /**
+ * What a search box entry is asking for when it is asking for a TRACKER REFERENCE: `#909`, a bare
+ * `909`, `pr 909`, `pr#909`, `issue 42`. Undefined for anything else, which is every ordinary
+ * word — this is a recognizer, not a parser that has to succeed.
+ *
+ * The keyword is optional and, when present, NARROWS the kind: `pr 42` must not surface the task
+ * that merely opened issue #42, because a reader who typed the kind meant it. Without one, both
+ * kinds match — `#42` is how the number is written everywhere in the cockpit and in the tracker,
+ * and demanding a keyword to use it would be a worse search box, not a stricter one.
+ */
+export function referenceNeedle(query: string): { kind?: TaskReference['kind']; number: number } | undefined {
+  const match = /^(?:(pr|pull|issue)\s*)?#?\s*(\d{1,9})$/.exec(query.trim().toLowerCase())
+  const number = match?.[2]
+  if (number === undefined) return undefined
+  const keyword = match?.[1]
+  const kind = keyword === undefined ? undefined : keyword === 'issue' ? 'Issue' : 'PR'
+  return { number: Number(number), ...(kind ? { kind } : {}) }
+}
+
+/** Does this run carry the reference the needle named? Asked of `taskReferences` — the same list
+ *  the row's own chip is built from — so search can only ever find a number the table itself
+ *  would be willing to show, never a scraped candidate pointing at another repository (#526). */
+function matchesReference(
+  run: TaskReferenceInput,
+  needle: ReturnType<typeof referenceNeedle>,
+): boolean {
+  if (needle === undefined) return false
+  return taskReferences(run).some(
+    (reference) =>
+      reference.number === needle.number && (needle.kind === undefined || reference.kind === needle.kind),
+  )
+}
+
+/**
  * The header search: case-insensitive substring over what the table actually shows — the
  * displayed title (`runTitle`: the auto-summary when one exists, per R2 #389), branch and
  * workflow (both the raw name and the label the column prints). Not the task prompt, and not a
  * raw `title` hidden behind a summary: matching on text the table never displays makes rows
  * appear for no visible reason.
+ *
+ * Plus one thing the table shows that is not text: the REFERENCE chip. `#909` and `issue 42` are
+ * how a task is named in a PR body, in a standup and in the tracker, and the number is routinely
+ * the only thing the reader has. It is an ADDITIONAL haystack rather than a replacement, so a
+ * bare `909` still finds the title that contains it — the auto-name prefix (`909: …`) means the
+ * two answers usually agree anyway, and where they do not, both are what the reader asked for.
  */
 export function filterRuns(runs: readonly RunRecord[], query: string): RunRecord[] {
   const needle = query.trim().toLowerCase()
   if (!needle) return [...runs]
-  return runs.filter((run) =>
-    [runTitle(run), run.branch ?? '', run.workflow, workflowLabel(run)].some((text) =>
-      text.toLowerCase().includes(needle),
-    ),
+  const reference = referenceNeedle(needle)
+  return runs.filter(
+    (run) =>
+      [runTitle(run), run.branch ?? '', run.workflow, workflowLabel(run)].some((text) =>
+        text.toLowerCase().includes(needle),
+      ) || matchesReference(run, reference),
   )
+}
+
+/**
+ * The Tasks table's narrowings, beyond the Active/Archived tabs: the search box and the status
+ * facet. One shape rather than two loose props, so "is anything narrowed?" and "clear it" are one
+ * question each (`activeFilterCount` / `NO_TASK_FILTERS`) instead of a check per control.
+ *
+ * The per-project page keeps this in component state rather than in the URL, unlike the global
+ * `/tasks` page: a cross-project view is something people paste to each other, a project's own
+ * list is where they already are.
+ */
+export interface TaskListFilters {
+  /** Free text, matched by `filterRuns` above. */
+  query: string
+  /** Selected status values (`taskStatusValue`), ORed. Empty = every status, which is the
+   *  no-opinion default rather than a state anyone has to set. */
+  statuses: readonly string[]
+}
+
+export const NO_TASK_FILTERS: TaskListFilters = { query: '', statuses: [] }
+
+/**
+ * The status a row SHOWS — `deriveAttention().label`, the exact word in its Status pill.
+ *
+ * Filtering on the pill rather than on `RunRecord.status` is what makes the facet able to say
+ * `scheduled` and `monitoring` at all: both are sub-states the record spells as `failed` and
+ * `running`, and a filter whose vocabulary disagreed with the column beside it would be a second
+ * status grammar — the one thing `lib/attention.ts` exists to prevent.
+ */
+export function taskStatusValue(run: AttentionInput): string {
+  return deriveAttention(run).label
+}
+
+/**
+ * The order the status facet lists its options in: the list's own priority ladder (needs-you
+ * first, then work in flight, then outcomes), NOT the alphabet — the same reading order
+ * `sortRuns` gives the rows themselves. A label this array has never heard of sorts last
+ * alphabetically rather than being dropped; `tasks-table.test.ts` pins every label
+ * `deriveAttention` can currently produce to a place in here, so a new one is a failing test
+ * rather than a silent trip to the bottom.
+ */
+const STATUS_FILTER_ORDER: readonly string[] = [
+  'needs permission',
+  'needs you',
+  'needs review',
+  'running',
+  'monitoring',
+  'scheduled',
+  'queued',
+  'unseen',
+  'done',
+  'failed',
+  'cancelled',
+]
+
+const statusFilterRank = (value: string): number => {
+  const index = STATUS_FILTER_ORDER.indexOf(value)
+  return index === -1 ? STATUS_FILTER_ORDER.length : index
+}
+
+/** One option of the status facet. Structurally the `FacetOption` the shared filter pill takes —
+ *  spelled here so this module stays free of anything that imports React. */
+export interface StatusFacetOption {
+  value: string
+  label: string
+  count: number
+}
+
+/**
+ * The status facet's options for a list.
+ *
+ * Options come from every status PRESENT in the list, so a facet can never offer a value that
+ * could only ever empty the table. Counts, though, are computed against the list as the OTHER
+ * narrowing (the search box) leaves it and with the status facet's own ticks ignored — the same
+ * rule the global page follows, and the reason unticking a value promises exactly the number of
+ * rows it delivers. A count of `0` is shown rather than hidden: "this would empty the table" is
+ * what a filter should say before it is clicked, not after.
+ */
+export function statusFacetOptions(
+  runs: readonly RunRecord[],
+  filters: TaskListFilters,
+): StatusFacetOption[] {
+  const counts = new Map<string, number>()
+  for (const run of filterTaskList(runs, { ...filters, statuses: [] })) {
+    const value = taskStatusValue(run)
+    counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+  const present = new Set(runs.map((run) => taskStatusValue(run)))
+  return [...present]
+    .sort((a, b) => statusFilterRank(a) - statusFilterRank(b) || a.localeCompare(b))
+    .map((value) => ({ value, label: value, count: counts.get(value) ?? 0 }))
+}
+
+/** The list a set of filters leaves. Facet AND search — a status tick and a typed word narrow
+ *  together, which is the only reading of two controls that are both switched on. The
+ *  Active/Archived split is not here: that chooses WHICH list you are reading (`sortRuns`), not
+ *  how it is narrowed. */
+export function filterTaskList(
+  runs: readonly RunRecord[],
+  filters: TaskListFilters,
+): RunRecord[] {
+  const byStatus =
+    filters.statuses.length === 0
+      ? runs
+      : runs.filter((run) => filters.statuses.includes(taskStatusValue(run)))
+  return filterRuns(byStatus, filters.query)
+}
+
+/** Add or remove one status from the facet. A new array, so it composes with `setState` without
+ *  a mutation nobody can see. (The global page's `toggleFacetValue` is the same one-liner; it is
+ *  not imported because that module is the cross-project page's own model and this one must not
+ *  depend on it.) */
+export function toggleStatusFilter(values: readonly string[], value: string): string[] {
+  return values.includes(value) ? values.filter((current) => current !== value) : [...values, value]
+}
+
+/** How many narrowings are in force — the number "Clear" prints, and therefore a promise it has
+ *  to keep: every status tick, plus the search text if there is any. */
+export function activeFilterCount(filters: TaskListFilters): number {
+  return filters.statuses.length + (filters.query.trim() === '' ? 0 : 1)
+}
+
+/** Is the list narrowed by anything the reader turned on? Drives both the Clear affordance and
+ *  the empty state's wording — "nothing here" and "nothing matches" are different facts. */
+export function hasActiveTaskFilters(filters: TaskListFilters): boolean {
+  return activeFilterCount(filters) > 0
 }
 
 /** How many active runs "Archive finished" would sweep. The button only exists when this is
