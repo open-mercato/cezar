@@ -55,7 +55,7 @@ export const NAV_ITEMS: NavItem[] = [
   /** The workspace registry (user request: "add projects to the menu"). GLOBAL: it lives outside
    *  every project, so the shell links it unscoped and `visibleNavItems` drops it in
    *  single-project mode, where there is no registry to manage. */
-  { to: '/settings/global/projects', label: 'Projects', icon: FoldersIcon, match: ['/settings/global/projects'], global: true },
+  { to: '/projects', label: 'Projects', icon: FoldersIcon, match: ['/projects'], global: true },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
 ]
 

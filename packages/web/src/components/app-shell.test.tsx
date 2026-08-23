@@ -121,7 +121,7 @@ describe('AppShell', () => {
       '/automations',
       '/skills',
       '/workflows',
-      '/settings/global/projects',
+      '/projects',
     ])
     // Settings is a utility, not a workspace surface — it lives in the footer, still a link.
     expect(within(footer()).getByRole('link', { name: /Settings/ }).getAttribute('href')).toBe('/settings')

@@ -251,7 +251,7 @@ describe('Views group', () => {
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     // New task FIRST — an empty query pre-selects it, so ⌘K then Enter starts a task.
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/settings/global/projects', '/settings',
+      '/new', '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/projects', '/settings',
     ])
     expect(views[0]?.textContent).toContain('New task')
     // The chip advertises `c` — ⌘N is browser-reserved and only fires in the desktop shell.
@@ -270,7 +270,7 @@ describe('Views group', () => {
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings/global/projects', '/settings',
+      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/projects', '/settings',
     ])
   })
 
