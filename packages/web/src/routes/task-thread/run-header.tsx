@@ -190,6 +190,7 @@ export function RunHeader({
           <span data-slot="bar-tabs" role="tablist" aria-label="Task views" className="flex items-center gap-0.5">
             <BarTab to={`/tasks/${run.id}`} active={tab === 'session'} label="Session">
               <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
+              Session
             </BarTab>
             {/* ONE git entry (user decision): the changes live on the branch, so the branch
                 and its ± are one control. It opens the diff; the Changes/Commits split is a
@@ -209,6 +210,7 @@ export function RunHeader({
             </BarTab>
             <BarTab to={`/tasks/${run.id}/files`} active={tab === 'files'} label="Files">
               <FilesIcon aria-hidden="true" className="size-3.5" />
+              Files
             </BarTab>
           </span>
           <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
