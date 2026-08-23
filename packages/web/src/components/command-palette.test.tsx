@@ -239,19 +239,19 @@ describe('opening and closing', () => {
 })
 
 describe('Views group', () => {
-  it('leads with New task and its C hint, then the 9 nav destinations', async () => {
+  it('leads with New task and its C hint, then the 8 nav destinations', async () => {
     renderPalette({ automations: true })
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
     // The GitHub row waits on the health answer (forge gate) — settle before asserting.
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     // New task FIRST — an empty query pre-selects it, so ⌘K then Enter starts a task.
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/projects', '/settings',
+      '/new', '/', '/inbox', '/git', '/github', '/automations', '/skills', '/workflows', '/settings',
     ])
     expect(views[0]?.textContent).toContain('New task')
     // The chip advertises `c` — ⌘N is browser-reserved and only fires in the desktop shell.
@@ -266,11 +266,11 @@ describe('Views group', () => {
     await screen.findByRole('dialog')
 
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(8),
     )
     const views = [...document.querySelectorAll('[data-slot="palette-view"]')]
     expect(views.map((view) => view.getAttribute('data-nav-to'))).toEqual([
-      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/projects', '/settings',
+      '/new', '/', '/inbox', '/git', '/github', '/skills', '/workflows', '/settings',
     ])
   })
 
@@ -279,7 +279,7 @@ describe('Views group', () => {
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
     await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(10),
+      expect(document.querySelectorAll('[data-slot="palette-view"]')).toHaveLength(9),
     )
 
     const newTaskRows = [...document.querySelectorAll('[data-nav-to="/new"]')]

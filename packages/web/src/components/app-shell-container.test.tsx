@@ -408,8 +408,11 @@ describe('sidebar wiring', () => {
     expect(screen.getByRole('link', { name: 'New task in shop' }).getAttribute('href')).toBe('/p/shop/new')
     expect(screen.getByRole('link', { name: 'New task in cezar' })).toBeTruthy()
     expect(groups[1]?.querySelector('[data-slot="group-tasks-link"]')?.getAttribute('href')).toBe('/p/shop/')
-    // No nav Tasks row any more.
-    expect(within(screen.getByRole('navigation', { name: 'Main' })).queryByRole('link', { name: 'Tasks' })).toBeNull()
+    // No nav Tasks row any more; the nav's last row is the Projects MENU (the switcher's list,
+    // add, manage), not a page.
+    const nav = screen.getByRole('navigation', { name: 'Main' })
+    expect(within(nav).queryByRole('link', { name: 'Tasks' })).toBeNull()
+    expect(within(nav).getByRole('button', { name: 'Projects' }).getAttribute('data-slot')).toBe('projects-nav')
   })
 
   it('shows the version chip even outside a git repo', async () => {

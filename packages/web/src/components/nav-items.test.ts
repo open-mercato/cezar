@@ -72,7 +72,6 @@ describe('NAV_ITEMS', () => {
       'Automations',
       'Skills',
       'Workflows',
-      'Projects',
       'Settings',
     ])
   })
@@ -105,7 +104,6 @@ describe('visibleNavItems', () => {
       'Git',
       'Skills',
       'Workflows',
-      'Projects',
       'Settings',
     ])
   })
@@ -118,7 +116,6 @@ describe('visibleNavItems', () => {
       'Automations',
       'Skills',
       'Workflows',
-      'Projects',
       'Settings',
     ])
   })
@@ -131,7 +128,6 @@ describe('visibleNavItems', () => {
       'GitHub',
       'Skills',
       'Workflows',
-      'Projects',
       'Settings',
     ])
   })
@@ -148,7 +144,6 @@ describe('visibleNavItems', () => {
       'Git',
       'Skills',
       'Workflows',
-      'Projects',
       'Settings',
     ])
   })

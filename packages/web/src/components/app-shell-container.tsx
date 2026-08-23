@@ -160,6 +160,15 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         }
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={<ProjectTaskGroupsContainer />}
+        projectsMenu={
+          registry && registry.projects.length > 0 && health.data?.capabilities.singleProject !== true ? (
+            <ProjectSwitcher
+              variant="nav"
+              projects={registry.projects}
+              activeId={projectId ?? registry.bootProject ?? null}
+            />
+          ) : undefined
+        }
         multiProject={multiProject}
         toolsMenu={<ToolsMenu health={health.data} />}
       >

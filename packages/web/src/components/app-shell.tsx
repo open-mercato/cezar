@@ -119,6 +119,9 @@ export type AppShellProps = {
   projectSwitcher?: ReactNode
   /** The bar's second breadcrumb step: the open task's title, else the view's name. */
   crumb?: string | null
+  /** The Projects nav row (user decision): the same project menu as the bar's switcher, as the
+   *  nav's last row — the list, add, manage — never a page of its own. */
+  projectsMenu?: ReactNode
 }
 
 /**
@@ -180,6 +183,7 @@ export function AppShell({
   projectName = null,
   projectSwitcher,
   crumb = null,
+  projectsMenu,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -252,6 +256,7 @@ export function AppShell({
     multiProject,
     singleProject,
     projectName,
+    projectsMenu,
   }
 
   return (
@@ -335,6 +340,7 @@ type NavProps = {
   projectGroups?: ReactNode
   /** The active project's name — the task list's label. */
   projectName?: string | null
+  projectsMenu?: ReactNode
   /** More than one registered project: pins the All-tasks door above the flat sidebar. The
    *  sidebar itself stays the ACTIVE project's (user decision, 25-repo review) — other
    *  projects are the switcher's job, not a list to scroll past. */
@@ -525,6 +531,7 @@ function SidebarContent({
   multiProject,
   singleProject,
   projectName = null,
+  projectsMenu,
   onNavigate,
   headerAction,
 }: NavProps & {
@@ -684,6 +691,7 @@ function SidebarContent({
                 </React.Fragment>
               )
             })}
+            {projectsMenu}
           </nav>
         </div>
         </>

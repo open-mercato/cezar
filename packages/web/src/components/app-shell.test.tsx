@@ -111,7 +111,6 @@ describe('AppShell', () => {
       'Automations',
       'Skills',
       'Workflows',
-      'Projects',
     ])
     // Deep-linkable per Step 2.1: every nav row is an <a href>, not a button with an onClick.
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
@@ -121,7 +120,6 @@ describe('AppShell', () => {
       '/automations',
       '/skills',
       '/workflows',
-      '/projects',
     ])
     // Settings is a utility, not a workspace surface — it lives in the footer, still a link.
     expect(within(footer()).getByRole('link', { name: /Settings/ }).getAttribute('href')).toBe('/settings')

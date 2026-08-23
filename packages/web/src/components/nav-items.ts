@@ -5,7 +5,6 @@ import {
   SettingsIcon,
   SparklesIcon,
   WorkflowIcon,
-  FoldersIcon,
   ZapIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
@@ -52,10 +51,6 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], forge: true, automations: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
-  /** The workspace registry (user request: "add projects to the menu"). GLOBAL: it lives outside
-   *  every project, so the shell links it unscoped and `visibleNavItems` drops it in
-   *  single-project mode, where there is no registry to manage. */
-  { to: '/projects', label: 'Projects', icon: FoldersIcon, match: ['/projects'], global: true },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
 ]
 
