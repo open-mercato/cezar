@@ -14,6 +14,7 @@ import { useSidebarNavigate } from '@/components/app-shell'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { GithubIcon } from '@/components/icons'
 import { orderForSwitcher } from '@/components/project-switcher'
+import { ATTENTION_RANK, deriveAttention } from '@/lib/attention'
 import { cn } from '@/lib/utils'
 
 /** How many projects the section shows before "Load more" — and how many each load adds. */
@@ -182,8 +183,13 @@ function ProjectRow({
   onNavigate?: () => void
 }) {
   // Replit-style tree (user reference): a chevron folds the project, its tasks hang off a tree
-  // line beneath, and an empty project offers "+ New task" as its one child. Open by default.
-  const [open, setOpen] = React.useState(true)
+  // line beneath. Only ACTIVE projects start open (user decision): the selected one, and any
+  // with live work (running, waiting, blocked, failed); finished-only projects fold so a long
+  // registry stays a list of names. The user's own toggle wins once used.
+  const live = entries.some((entry) => ATTENTION_RANK[deriveAttention(entry).bucket] <= ATTENTION_RANK.running)
+  const [toggled, setToggled] = React.useState<boolean | null>(null)
+  const open = toggled ?? (active || live)
+  const setOpen = (next: (value: boolean) => boolean) => setToggled(next(open))
   const [expanded, setExpanded] = React.useState(false)
   const missing = project.status === 'missing'
   const hidden = Math.max(0, entries.length - TASK_PREVIEW)
