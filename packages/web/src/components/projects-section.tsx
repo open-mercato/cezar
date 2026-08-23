@@ -228,9 +228,9 @@ function ProjectRow({
           </span>
         ) : null}
       </div>
+      {/* No tree line or indent on the children (user decision): it only spent width — the
+          rows' own smaller type already reads as children of the row above. */}
       {open ? (
-        {/* No tree line or indent (user decision): it only spent width — the rows' own
-            smaller type already reads as children of the row above. */}
         <div className="flex flex-col gap-0.5 pt-0.5 pb-1">
           {/* No "+ New task" child (user decision): the row's + already starts one. */}
           {shown.length === 0 && !missing ? (
