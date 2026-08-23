@@ -234,7 +234,7 @@ export function AppShell({
 
   const nav = {
     activeTo,
-    items: visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable }),
+    items: visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, singleProject }),
     repo,
     // The badge belongs to the Inbox item — with the item gone there is nothing to badge.
     inboxCount: inboxAvailable ? inboxCount : null,
@@ -621,9 +621,11 @@ function SidebarContent({
               // match against `to`, and that rule is wrong here: it would *not* light Tasks on
               // /tasks/:id — which the spec requires. `aria-current` cannot be forced past NavLink's
               // own matching, so the area rule lives in `activeNavPath` and this is a plain Link.
+              // A global item (the Projects registry) must never be `/p/<id>`-prefixed.
+              const NavLink = item.global ? RouterLink : Link
               return (
                 <React.Fragment key={item.to}>
-                <Link
+                <NavLink
                   to={item.to}
                   onClick={onNavigate}
                   aria-current={isActive ? 'page' : undefined}
@@ -674,7 +676,7 @@ function SidebarContent({
                       <span className="sr-only">Skills update available</span>
                     </span>
                   ) : null}
-                </Link>
+                </NavLink>
                 </React.Fragment>
               )
             })}

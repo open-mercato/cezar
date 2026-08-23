@@ -5,6 +5,7 @@ import {
   SettingsIcon,
   SparklesIcon,
   WorkflowIcon,
+  FoldersIcon,
   ZapIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
@@ -20,6 +21,9 @@ export type NavItem = {
   match: string[]
   /** Optional trailing status affordance. Rendering/data stay with the shell. */
   badge?: 'inbox-count' | 'skills-update' | 'tasks-unread'
+  /** A workspace-level surface: linked with a plain router link (never `/p/<id>`-prefixed) and
+   *  hidden in single-project mode. */
+  global?: boolean
   /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports the forge
    *  driver available — see `visibleNavItems`. */
   forge?: boolean
@@ -48,6 +52,10 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], forge: true, automations: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
+  /** The workspace registry (user request: "add projects to the menu"). GLOBAL: it lives outside
+   *  every project, so the shell links it unscoped and `visibleNavItems` drops it in
+   *  single-project mode, where there is no registry to manage. */
+  { to: '/settings/global/projects', label: 'Projects', icon: FoldersIcon, match: ['/settings/global/projects'], global: true },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
 ]
 
@@ -59,6 +67,8 @@ export type NavAvailability = {
   inbox?: boolean
   /** `capabilities.automations` — the opt-in GitHub automations (#801). */
   automations?: boolean
+  /** `capabilities.singleProject` — no registry to manage, so no Projects item. */
+  singleProject?: boolean
 }
 
 /**
@@ -80,11 +90,13 @@ export function visibleNavItems({
   forge = false,
   inbox = false,
   automations = false,
+  singleProject = false,
 }: NavAvailability = {}): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
-    && (item.automations ? automations : true))
+    && (item.automations ? automations : true)
+    && (item.global ? !singleProject : true))
 }
 
 /** Does `pathname` sit inside the area rooted at `prefix`?

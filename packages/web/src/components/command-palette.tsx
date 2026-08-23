@@ -489,6 +489,7 @@ function PaletteContent({ close }: { close: () => void }) {
             forge: health.data?.forge?.available === true,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
+            singleProject: health.data?.capabilities.singleProject === true,
           }).map((item) => {
             const Icon = item.icon
             return (
@@ -500,7 +501,8 @@ function PaletteContent({ close }: { close: () => void }) {
                 data-slot="palette-view"
                 data-chip=""
                 data-nav-to={item.to}
-                onSelect={() => go(item.to)}
+                // A global item (the Projects registry) lives outside every project scope.
+                onSelect={() => (item.global ? goGlobal(item.to) : go(item.to))}
                 className="rounded-md border border-border bg-card px-2.5 py-1.5 data-[selected=true]:border-primary/40"
               >
                 <Icon aria-hidden="true" />
