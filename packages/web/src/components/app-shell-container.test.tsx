@@ -196,7 +196,7 @@ describe('sidebar wiring', () => {
     await waitFor(() => expect(menu.querySelector('[data-slot="nav-badge"]')?.textContent).toBe('2'))
   })
 
-  it('lists THIS project\u2019s views in the chip\u2019s menu — Open project, the gated views, Settings — lit from the URL', async () => {
+  it('lists THIS project\u2019s views in the chip\u2019s menu — Tasks first, the gated views, Settings — lit from the URL', async () => {
     // User decision: the bar's project menu is the project's, not a list of other projects
     // (the sidebar's Projects section is that). HEALTH has no forge → no GitHub row.
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
@@ -204,8 +204,8 @@ describe('sidebar wiring', () => {
 
     await waitFor(() => expect(repoChip()).not.toBeNull())
     const menu = await openProjectMenu()
-    await waitFor(() => expect(menu.querySelectorAll('[data-nav-to]')).toHaveLength(5))
-    expect([...menu.querySelectorAll('[data-nav-to]')].map((a) => a.textContent)).toEqual(['Inbox', 'Git', 'Skills', 'Workflows', 'Settings'])
+    await waitFor(() => expect(menu.querySelectorAll('[data-nav-to]')).toHaveLength(6))
+    expect([...menu.querySelectorAll('[data-nav-to]')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Skills', 'Workflows', 'Settings'])
     expect(menu.querySelector('[data-slot="project-open"]')?.getAttribute('href')).toBe('/')
     expect(within(menu).getByRole('menuitem', { current: 'page' }).textContent).toBe('Git')
     // No tabs on the bar and no views in the sidebar.

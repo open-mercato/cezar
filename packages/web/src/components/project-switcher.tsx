@@ -6,8 +6,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Link } from '@/lib/project-router'
@@ -29,8 +27,8 @@ export function orderForSwitcher(
 }
 
 /**
- * The bar's project chip and ITS menu (user decision): the active project's own views — Open
- * project, then Tasks / Git / Skills / Workflows (and the gated Inbox / GitHub / Automations),
+ * The bar's project chip and ITS menu (user decision): the active project's own views — Tasks,
+ * then Git / Skills / Workflows (and the gated Inbox / GitHub / Automations),
  * then Settings — never a list of other projects, which the sidebar's Projects section owns.
  * The chip is the breadcrumb's first step; the menu is where that step leads.
  */
@@ -72,14 +70,20 @@ export function ProjectSwitcher({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" data-slot="project-menu" className="w-56">
-        <DropdownMenuLabel className="truncate font-mono text-[11px] font-normal text-soft-foreground">{name}</DropdownMenuLabel>
+        {/* No name label and no "Open project" (user feedback: both repeated the chip). The
+            first row is what the project opens to — its Tasks — then the rest of its views. */}
         <DropdownMenuItem asChild>
-          <Link to="/" data-slot="project-open" className={cn(activeTo === '/' && 'bg-primary/10 font-semibold text-foreground')}>
+          <Link
+            to="/"
+            data-slot="project-open"
+            data-nav-to="/"
+            aria-current={activeTo === '/' ? 'page' : undefined}
+            className={cn(activeTo === '/' && 'bg-primary/10 font-semibold text-foreground')}
+          >
             <ListChecksIcon aria-hidden="true" />
-            Open project
+            Tasks
           </Link>
         </DropdownMenuItem>
-        <DropdownMenuSeparator />
         {views.map((item) => {
           const Icon = item.icon
           const lit = item.to === activeTo
