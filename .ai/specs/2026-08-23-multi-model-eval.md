@@ -222,3 +222,69 @@ the user re-authenticates in their own terminal. Nothing else blocks the launch.
 
 Results appended here, and the summary table in `docs/multi-model-harness.md` updated to
 describe this lineup alongside the predecessor's.
+
+---
+
+# Results (2026-08-23)
+
+10 runs, 5 tasks × 2 arms, eval-app at `e161420`. Scored by `postpass-2026-08-23.py`:
+task code only (handoff notes and the `node_modules` symlink excluded), and the gate re-run
+over each arm's **full deliverable** — worktree plus escaped writes — reassembled on a clean
+baseline, so arm A is credited generously for work it put in the wrong place.
+
+| task | arm | in worktree | escaped | contained | tests | gate | wall | cost | status | council |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
+| T9 | A | 0 | 10 | 0% | 13 | 4/4 | 4m | $0.89 | done | — |
+| T9 | B | 17 | 0 | **100%** | 13 | 4/4 | 56m | $2.50 | review | 6 rounds, 18/18, 75 |
+| T3 | A | 0 | 1 | 0% | 0 | 4/4 | 17m | $0.27 | done | — |
+| T3 | B | 22 | 0 | **100%** | 7 | 4/4 | 64m | $3.03 | review | 6 rounds, 18/18, 81 |
+| T10 | A | 0 | 0 | — | 0 | 4/4 | 15m | $0.19 | done | — |
+| T10 | B | 11 | 0 | **100%** | 12 | 4/4 | 69m | $2.50 | review | 6 rounds, 18/18, 82 |
+| T6 | A | 0 | 4 | 0% | 26 | 4/4 | 4m | $0.48 | done | — |
+| T6 | B | 10 | 0 | **100%** | 23 | 4/4 | 57m | $2.39 | review | 6 rounds, 18/18, 69 |
+| T5 | A | 0 | 0 | — | 0 | 4/4 | 15m | $0.19 | done | — |
+| T5 | B | 27 | 0 | **100%** | 9 | 4/4 | 96m | $2.91 | review | 6 rounds, 18/18, 94 |
+
+| | Arm A — single | Arm B — multi-model |
+| --- | --- | --- |
+| Delivered to its own worktree | **0 / 5** | **5 / 5** |
+| Produced any code at all | 2 / 5 | 5 / 5 |
+| Tests written and green | 2 / 5 | **5 / 5** |
+| Terminal state | 5 × `done` (success reported) | 5 × `review`, `ready`, staged |
+| Cost | $2.02 | $13.33 |
+| Wall clock | 57m | 343m |
+| Reviewer completions | — | **90 / 90**, 401 findings |
+
+Arm B costs 6.6× and takes 6× the wall clock. It is also the only arm that delivered anything
+to the worktree it was given.
+
+`gate 4/4` on an arm-A row is not a success signal: three of those runs produced no code, so
+the gate is the untouched baseline passing. The `tests` column is the honest one — 0 means the
+run wrote nothing to run.
+
+Two arm-A runs (T9, T6) did write working code — it passes the gate once salvaged onto a clean
+tree. Their failure is placement and honesty, not code quality.
+
+## Council reliability
+
+90 of 90 reviewer invocations completed across 30 rounds and three provider families
+(anthropic, openai, opencode) — zero timeouts, zero drops, quorum never degraded. Every run
+used the free-tier `muse-spark-1.2-contributor-free` seat, which is seatable only because of
+the reviewer-guard fix in this branch.
+
+## What this comparison does not show
+
+The two arms differ in more than the harness: different implementer model, and ordinary runs
+load the operator's Claude settings, plugins and memory while harness runs disable them
+(`--setting-sources ''`, applied only when `CEZ_HARNESS_CLAUDE_SETTINGS` is set,
+`claude-cli-runner.ts`). Two arm-A runs were derailed into writing only a planning document by
+a globally installed `writing-plans` skill. So arm A's numbers describe **cezar's ordinary
+single-agent path as configured on this machine**, not a bare model, and no causal claim about
+*why* arm A escaped is supported by this data.
+
+Two defects it did surface, both independently verified:
+
+1. **Nested-worktree root detection.** A run's worktree lives inside the checkout and its
+   `.git` is a file, so repo-root heuristics resolve to the parent. The harness names the root
+   explicitly in every phase prompt (`driver.ts`); ordinary runs get no such sentence.
+2. **An empty run settles as `done`.** No check that an ordinary run produced anything.
