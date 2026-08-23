@@ -23,7 +23,7 @@ const PAGE = 10
 const TASK_PREVIEW = 5
 
 const ICON_BUTTON =
-  'flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
+  'flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
 
 /**
  * The sidebar's Projects section (user decision): the ten most recently used projects as rows,
@@ -169,7 +169,7 @@ function ProjectRow({
     <section data-slot="project-task-group" data-project-id={project.id} className="flex flex-col">
       <div
         className={cn(
-          'group/row flex h-9 items-center gap-1 rounded-md pr-1 pl-1 transition-colors hover:bg-card md:h-8',
+          'group/row flex h-9 items-center gap-1 rounded-md pr-1 pl-1 transition-colors hover:bg-muted md:h-8',
           active && 'bg-muted',
         )}
       >

@@ -113,7 +113,7 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
           // the nav items above it, opening the tools dropdown.
           data-attention={blocker ? 'true' : undefined}
           title={toolsTooltip(health)}
-          className="flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground data-[state=open]:bg-card data-[state=open]:text-foreground md:h-9"
+          className="flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground md:h-9"
         >
           <WrenchIcon
             aria-hidden="true"

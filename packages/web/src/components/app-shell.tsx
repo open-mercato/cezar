@@ -655,7 +655,7 @@ function SidebarContent({
                     onClick={onNavigate}
                     aria-current={isActive ? 'page' : undefined}
                     className={cn(
-                      'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
+                      'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9',
                       isActive && 'bg-muted font-semibold text-foreground hover:bg-muted',
                     )}
                   >
@@ -702,7 +702,7 @@ function SidebarContent({
           to="/settings/global"
           data-slot="footer-settings"
           onClick={onNavigate}
-          className="flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9"
+          className="flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9"
         >
           <SettingsIcon className="size-4 shrink-0" aria-hidden="true" />
           Settings
@@ -735,12 +735,12 @@ function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
       data-slot="all-tasks-link"
       onClick={onNavigate}
       aria-current={isActive ? 'page' : undefined}
-      // The same row grammar as the WORKSPACE nav (sidebar redesign): muted at rest, hovering
-      // onto card, sitting on GRAY when current (user decision: the selection is gray, not
-      // white), the purple edge caret marking the active page. Purple is a signal, never a
-      // surface — so no tinted icon.
+      // The same row grammar as the WORKSPACE nav (sidebar redesign): muted ink at rest, GRAY
+      // surface on hover and when current (user decision: no white rows in the sidebar), the
+      // purple edge caret marking the active page. Purple is a signal, never a surface — so
+      // no tinted icon.
       className={cn(
-        'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
+        'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9',
         isActive && 'bg-muted font-semibold text-foreground hover:bg-muted',
       )}
     >

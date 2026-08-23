@@ -314,7 +314,7 @@ function RunRow({
         // Plain rows on the sidebar ground — a white surface only on HOVER. Even the open task
         // stays flat (a resting card here re-tinted the column); `aria-current` on the link and
         // the thread being open are what say "this one".
-        'flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-card',
+        'flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-muted',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
         // to it — 26px = the row's own 10px plus the 16px indent.
@@ -537,7 +537,7 @@ function ProjectTaskGroup({
           aria-label={`New task in ${name}`}
           title={`New task in ${name}`}
           onClick={onNavigate}
-          className="ml-auto flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="ml-auto flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           <PlusIcon className="size-3.5" aria-hidden="true" />
         </Link>
@@ -607,7 +607,7 @@ export function IndexVariantTile({
   const [expanded, setExpanded] = React.useState(false)
   return (
     <>
-      <div className="flex items-center rounded-sm hover:bg-card">
+      <div className="flex items-center rounded-sm hover:bg-muted">
         <button
           type="button"
           data-slot="group-tile"
@@ -629,7 +629,7 @@ export function IndexVariantTile({
           to={scopeTo(projectId, `/compare/${row.groupId}`)}
           aria-label={`Compare variants of ${row.title}`}
           title="Compare variants"
-          className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
         >
           <ScaleIcon className="size-3.5" aria-hidden="true" />
         </Link>
@@ -661,7 +661,7 @@ export function IndexRunRow({ entry, currentRunId, now, variant = false }: { ent
       data-run-id={entry.id}
       data-project-id={entry.projectId}
       data-active={isActive ? 'true' : undefined}
-      className={cn('flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-card', variant && 'pl-[26px]')}
+      className={cn('flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-muted', variant && 'pl-[26px]')}
     >
       <StatusMark attention={attention} className="mt-[9px]" />
       <span className="flex min-w-0 flex-1 flex-col gap-[3px] py-[6px] pr-2.5">
