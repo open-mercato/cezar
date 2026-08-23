@@ -23,6 +23,9 @@ export type NavItem = {
   /** A workspace-level surface: linked with a plain router link (never `/p/<id>`-prefixed) and
    *  hidden in single-project mode. */
   global?: boolean
+  /** A workspace LIBRARY (scoped route, but not one project's view): rendered in the sidebar's
+   *  own nav rather than on the project's tab band or in its menu. */
+  library?: boolean
   /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports the forge
    *  driver available — see `visibleNavItems`. */
   forge?: boolean
@@ -49,7 +52,9 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], forge: true, automations: true },
-  { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
+  /** A LIBRARY, not a project view (user decision): the catalog spans user-global, team and
+   *  project skills, so it lives in the sidebar's workspace nav, not on the project's tab band. */
+  { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update', library: true },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
 ]

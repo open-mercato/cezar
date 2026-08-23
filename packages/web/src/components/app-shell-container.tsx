@@ -127,7 +127,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // The project's tab band (user decision: Tasks / Git / Skills / Workflows on the project's
   // pages, like a repo's tabs) — shown on the project-level views only: not inside a task
   // thread, the composer, the compare view or global settings, which are about one thing.
-  const projectViewRoots = projectViews.filter((item) => !item.global && item.to !== '/settings')
+  const projectViewRoots = projectViews.filter((item) => !item.global && !item.library && item.to !== '/settings')
   const onProjectView =
     !globalSettings &&
     titleContext.taskId === null &&

@@ -205,8 +205,8 @@ describe('sidebar wiring', () => {
 
     await waitFor(() => expect(repoChip()).not.toBeNull())
     const menu = await openProjectMenu()
-    await waitFor(() => expect(menu.querySelectorAll('[data-nav-to]')).toHaveLength(6))
-    expect([...menu.querySelectorAll('[data-nav-to]')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Skills', 'Workflows', 'Settings'])
+    await waitFor(() => expect(menu.querySelectorAll('[data-nav-to]')).toHaveLength(5))
+    expect([...menu.querySelectorAll('[data-nav-to]')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Workflows', 'Settings'])
     expect(menu.querySelector('[data-slot="project-open"]')?.getAttribute('href')).toBe('/')
     expect(within(menu).getByRole('menuitem', { current: 'page' }).textContent).toBe('Tasks')
     fireEvent.keyDown(menu, { key: 'Escape' })
@@ -217,12 +217,15 @@ describe('sidebar wiring', () => {
   it('on a project view the band lists the views and the chip is just the name — no menu', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
     renderShell('/git')
-    await waitFor(() => expect(document.querySelectorAll('[data-slot="project-tabs"] a')).toHaveLength(5))
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="project-tabs"] a')).toHaveLength(4))
     const band = document.querySelector('[data-slot="project-tabs"]') as HTMLElement
-    expect([...band.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Skills', 'Workflows'])
+    expect([...band.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Workflows'])
     expect(within(band).getByRole('link', { current: 'page' }).textContent).toBe('Git')
     expect(repoChip()?.textContent).toBe('cezar')
     expect(document.querySelector('[data-slot="project-switcher"]')).toBeNull()
+    // Skills is a LIBRARY: a sidebar nav row, never a project tab.
+    const sidebarNav = within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).getByRole('navigation', { name: 'Main' })
+    expect(within(sidebarNav).getByRole('link', { name: 'Skills' }).getAttribute('href')).toBe('/p/cezar/skills')
   })
 
   it('shows the project tab band on project views only — not inside a task thread', async () => {

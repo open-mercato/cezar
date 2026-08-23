@@ -51,7 +51,7 @@ export function ProjectSwitcher({
 }) {
   const active = projects.find((project) => project.id === activeId)
   const name = active?.name ?? activeId ?? projects[0]?.name ?? ''
-  const views = items.filter((item) => item.to !== '/' && !item.global)
+  const views = items.filter((item) => item.to !== '/' && !item.global && !item.library)
 
   return (
     <DropdownMenu>

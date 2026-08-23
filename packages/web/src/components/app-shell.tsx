@@ -626,6 +626,41 @@ function SidebarContent({
               load-more, and the section's verbs as header icons. Git / Skills / Workflows are a
               project's and ride the app bar as tabs. */}
           <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
+            {/* Workspace LIBRARIES (Skills) as nav rows — the same row grammar the project's
+                views once used here, now reserved for what is not one project's. */}
+            {items
+              .filter((item) => item.library)
+              .map((item) => {
+                const isActive = item.to === activeTo
+                const Icon = item.icon
+                return (
+                  <Link
+                    key={item.to}
+                    to={item.to}
+                    onClick={onNavigate}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={cn(
+                      'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
+                      isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
+                    )}
+                  >
+                    {isActive ? (
+                      <span
+                        aria-hidden="true"
+                        className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
+                      />
+                    ) : null}
+                    <Icon className="size-4 shrink-0" aria-hidden="true" />
+                    {item.label}
+                    {item.badge === 'skills-update' && skillsUpdateAvailable ? (
+                      <span data-slot="nav-update-marker" className="ml-auto flex items-center">
+                        <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                        <span className="sr-only">Skills update available</span>
+                      </span>
+                    ) : null}
+                  </Link>
+                )
+              })}
             {projectsMenu}
           </nav>
         </div>
