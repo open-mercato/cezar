@@ -125,7 +125,9 @@ export function ProjectsSection({
             }}
             placeholder="Filter projects…"
             aria-label="Filter projects"
-            className="h-8 w-full rounded-md border border-input bg-card px-2.5 pr-7 text-[13px] outline-none placeholder:text-soft-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            // A quiet focus for a sidebar-width field (user feedback: the app's 3px ring read as
+            // a thick frame here): the border takes the accent, no halo.
+            className="h-8 w-full rounded-md border border-border bg-card px-2.5 pr-7 text-[13px] outline-none placeholder:text-soft-foreground transition-colors focus-visible:border-primary/60"
           />
           <button type="button" aria-label="Close search" onClick={toggleSearch} className="absolute top-1/2 right-2.5 -translate-y-1/2 text-soft-foreground hover:text-foreground">
             <XIcon className="size-3.5" aria-hidden="true" />

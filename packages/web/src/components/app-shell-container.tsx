@@ -89,11 +89,28 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
     registry?.bootProject === projectId,
   ).data
 
+  // The project menu's views (user decision: the bar chip's menu lists THIS project's views —
+  // Tasks, Git, Skills, Workflows, the gated ones, Settings — never other projects). Lit from
+  // the URL's area, the same rule the old workspace nav used.
+  const areaPath = stripProjectPrefix(pathname)
+  const activeTo = activeNavPath(areaPath)
+  const projectViews = visibleNavItems({
+    forge: health.data?.forge?.available === true,
+    inbox: inboxAvailable,
+    automations: automationsAvailable,
+    singleProject: health.data?.capabilities.singleProject === true,
+  })
+
+  // A LIBRARY view (Skills) is the workspace's, not one project's (user decision): the bar
+  // names the view instead of putting a project over it, like the workspace-wide Tasks page.
+  const libraryView = projectViews.find((item) => item.library && item.to === activeTo) ?? null
+  const workspaceView = pathname === '/tasks' || libraryView !== null
+
   // Global settings intentionally has no selected project. Everywhere else the URL id selects
   // the authoritative registry entry; health may name only the CONFIRMED boot project while
   // the registry is unavailable, never a non-boot project whose root health does not describe.
   const globalSettings = pathname === '/settings/global' || pathname.startsWith('/settings/global/')
-  const projectName = globalSettings || pathname === '/tasks'
+  const projectName = globalSettings || workspaceView
     ? null
     : (activeProject?.name ??
       (isBootProject ? (repoChipOf(health.data)?.name ?? null) : null))
@@ -111,18 +128,6 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // and the other projects are the topbar switcher's job.
   const multiProject = registry !== undefined && registry.projects.length > 1
 
-  // The project menu's views (user decision: the bar chip's menu lists THIS project's views —
-  // Tasks, Git, Skills, Workflows, the gated ones, Settings — never other projects). Lit from
-  // the URL's area, the same rule the old workspace nav used.
-  const areaPath = stripProjectPrefix(pathname)
-  const activeTo = activeNavPath(areaPath)
-  const projectViews = visibleNavItems({
-    forge: health.data?.forge?.available === true,
-    inbox: inboxAvailable,
-    automations: automationsAvailable,
-    singleProject: health.data?.capabilities.singleProject === true,
-  })
-
   // The project's tab band (user decision: Tasks / Git / Skills / Workflows on the project's
   // pages, like a repo's tabs) — shown on the project-level views only: not inside a task
   // thread, the composer, the compare view or global settings, which are about one thing.
@@ -130,7 +135,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // The workspace-wide Tasks page (`/tasks`, unscoped) is nobody's project: no band, and the
   // bar names the scope instead (user report: the project's tabs over every project's tasks
   // read as one project holding them all).
-  const workspaceTasks = pathname === '/tasks'
+  const workspaceTasks = workspaceView
   const onProjectView =
     !globalSettings &&
     !workspaceTasks &&
@@ -202,7 +207,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // The bar's breadcrumb: the open task's title (the same resolution the document title
         // uses), else the view's label. Never on the project's own Tasks table — "cezar › Tasks"
         // would say the project twice.
-        crumb={titleRun ? runTitle(titleRun) : workspaceTasks ? 'All projects' : null}
+        crumb={titleRun ? runTitle(titleRun) : libraryView ? libraryView.label : workspaceTasks ? 'All projects' : null}
         // On a project VIEW the tab band already lists the project's views, so the chip is just
         // the name (user decision); the menu returns where the band is absent (a task thread,
         // the composer) as the way back to those views.

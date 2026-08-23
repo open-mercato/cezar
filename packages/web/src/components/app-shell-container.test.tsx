@@ -235,6 +235,14 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
   })
 
+  it('treats Skills as a workspace library: the bar says Skills, no project chip, no band', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    renderShell('/skills')
+    await waitFor(() => expect(document.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('Skills'))
+    expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
+    expect(repoChip()).toBeNull()
+  })
+
   it('names the workspace-wide Tasks page on the bar and shows no project band there', async () => {
     // `/tasks` is every project's work at once — nobody's project, so no project chip, no tabs;
     // the bar says "All projects" so the page cannot read as one project holding them all.
