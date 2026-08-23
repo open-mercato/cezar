@@ -256,16 +256,11 @@ function ProjectRow({
       </div>
       {open ? (
         <div className="ml-[15px] flex flex-col gap-0.5 border-l border-border pl-1.5 pt-0.5 pb-1">
+          {/* No "+ New task" child (user decision): the row's + already starts one. */}
           {shown.length === 0 && !missing ? (
-            <RouterLink
-              to={`/p/${project.id}/new`}
-              data-slot="group-new-task-child"
-              onClick={onNavigate}
-              className="flex h-8 items-center gap-2 rounded-sm px-2 text-[12.5px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
-            >
-              <PlusIcon className="size-3.5 text-soft-foreground" aria-hidden="true" />
-              New task
-            </RouterLink>
+            <p data-slot="group-empty" className="px-2 py-1.5 text-[12px] text-soft-foreground">
+              No tasks yet
+            </p>
           ) : null}
           {foldVariants(shown).map((row) =>
             row.kind === 'run' ? (
