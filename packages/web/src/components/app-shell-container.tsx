@@ -94,7 +94,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // the authoritative registry entry; health may name only the CONFIRMED boot project while
   // the registry is unavailable, never a non-boot project whose root health does not describe.
   const globalSettings = pathname === '/settings/global' || pathname.startsWith('/settings/global/')
-  const projectName = globalSettings
+  const projectName = globalSettings || pathname === '/tasks'
     ? null
     : (activeProject?.name ??
       (isBootProject ? (repoChipOf(health.data)?.name ?? null) : null))
@@ -208,7 +208,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // the name (user decision); the menu returns where the band is absent (a task thread,
         // the composer) as the way back to those views.
         projectSwitcher={
-          registry && registry.projects.length > 0 && !onProjectView ? (
+          registry && registry.projects.length > 0 && !onProjectView && !workspaceTasks ? (
             <ProjectSwitcher
               projects={registry.projects}
               activeId={projectId ?? registry.bootProject ?? null}
