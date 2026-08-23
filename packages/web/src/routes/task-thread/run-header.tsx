@@ -194,8 +194,19 @@ export function RunHeader({
               <FileDiffIcon aria-hidden="true" className="size-3.5" />
               {run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : null}
             </BarTab>
-            <BarTab to={`/tasks/${run.id}/commits`} active={tab === 'commits'} label="Commits">
+            {/* The branch rides the Commits tab (user decision): the view IS that branch's
+                history, so one control says both — no separate chip. */}
+            <BarTab
+              to={`/tasks/${run.id}/commits`}
+              active={tab === 'commits'}
+              label={run.branch ? `Commits on ${run.branch}` : 'Commits'}
+            >
               <GitCommitHorizontalIcon aria-hidden="true" className="size-3.5" />
+              {run.branch ? (
+                <span data-slot="bar-branch" className="max-w-[18ch] truncate font-mono">
+                  {run.branch}
+                </span>
+              ) : null}
             </BarTab>
             <BarTab to={`/tasks/${run.id}/files`} active={tab === 'files'} label="Files">
               <FilesIcon aria-hidden="true" className="size-3.5" />
@@ -204,7 +215,7 @@ export function RunHeader({
           <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
           {/* The task's context chips (PR, branch) live on the bar too (user decision) —
               identity beside the verbs that act on it. */}
-          <MetaRow run={run} automationsAvailable={health.data?.capabilities?.automations === true} />
+          <MetaRow run={run} showBranch={false} automationsAvailable={health.data?.capabilities?.automations === true} />
           {flags.finish ? (
             <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
               <CheckIcon aria-hidden="true" />
@@ -682,9 +693,12 @@ function FooterStat({ label, children }: { label: string; children: ReactNode })
  *  not a placeholder. */
 function MetaRow({
   run,
+  showBranch = true,
   automationsAvailable = false,
 }: {
   run: ApiRun
+  /** Off on the app bar, where the branch rides the Commits tab instead of a chip. */
+  showBranch?: boolean
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
@@ -710,7 +724,7 @@ function MetaRow({
     [references, projectId],
   )
   const parts: ReactNode[] = []
-  if (run.branch) {
+  if (showBranch && run.branch) {
     parts.push(
       <span
         key="branch"
