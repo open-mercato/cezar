@@ -128,8 +128,13 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // pages, like a repo's tabs) — shown on the project-level views only: not inside a task
   // thread, the composer, the compare view or global settings, which are about one thing.
   const projectViewRoots = projectViews.filter((item) => !item.global && !item.library && item.to !== '/settings')
+  // The workspace-wide Tasks page (`/tasks`, unscoped) is nobody's project: no band, and the
+  // bar names the scope instead (user report: the project's tabs over every project's tasks
+  // read as one project holding them all).
+  const workspaceTasks = pathname === '/tasks'
   const onProjectView =
     !globalSettings &&
+    !workspaceTasks &&
     titleContext.taskId === null &&
     activeTo !== null &&
     projectViewRoots.some((item) => item.to === activeTo) &&
@@ -198,7 +203,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // The bar's breadcrumb: the open task's title (the same resolution the document title
         // uses), else the view's label. Never on the project's own Tasks table — "cezar › Tasks"
         // would say the project twice.
-        crumb={titleRun ? runTitle(titleRun) : null}
+        crumb={titleRun ? runTitle(titleRun) : workspaceTasks ? 'All projects' : null}
         // On a project VIEW the tab band already lists the project's views, so the chip is just
         // the name (user decision); the menu returns where the band is absent (a task thread,
         // the composer) as the way back to those views.

@@ -873,7 +873,7 @@ function ProjectBar({
   crumb?: string | null
   projectSwitcher?: ReactNode
 }) {
-  if (!name && !toolsMenu && !projectSwitcher) return null
+  if (!name && !toolsMenu && !projectSwitcher && !crumb) return null
   return (
     <div
       data-slot="project-bar"
@@ -895,7 +895,11 @@ function ProjectBar({
           task's title, or the view's name. Quiet, truncating, never a link — the page IS it. */}
       {crumb ? (
         <span className="flex min-w-0 items-center gap-2 text-[12.5px]">
-          <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+          {/* The chevron separates a crumb FROM a project; with no project on the bar (the
+              workspace-wide Tasks page) the crumb stands alone. */}
+          {projectSwitcher || name ? (
+            <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+          ) : null}
           <span data-slot="project-bar-crumb" className="truncate font-medium text-foreground" title={crumb}>
             {crumb}
           </span>

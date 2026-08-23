@@ -235,6 +235,21 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
   })
 
+  it('names the workspace-wide Tasks page on the bar and shows no project band there', async () => {
+    // `/tasks` is every project's work at once — nobody's project, so no project chip, no tabs;
+    // the bar says "All projects" so the page cannot read as one project holding them all.
+    serve({
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      ...REGISTRY_STUBS,
+      '/api/v1/projects': { projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop' }], bootProject: 'cezar', projectsDir: '/x' },
+    })
+    renderShell('/tasks')
+    await waitFor(() => expect(document.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('All projects'))
+    expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
+    expect(repoChip()).toBeNull()
+  })
+
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.
   it('drops the Inbox nav item and its badge when the server has follow-ups off', async () => {
     serve({
