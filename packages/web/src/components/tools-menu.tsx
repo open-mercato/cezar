@@ -1,6 +1,6 @@
 import { SettingsIcon, WrenchIcon } from 'lucide-react'
 import { Link } from '@/lib/project-router'
-import { chipClass, chevron } from '@/components/picker-pill'
+import { chevron } from '@/components/picker-pill'
 import { cn } from '@/lib/utils'
 
 import type { BackendCheck, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
@@ -109,10 +109,11 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
           // the unread badges — only on a real BLOCKER (#884: no agent CLI, or the default
           // runner missing). A merely-optional missing tool keeps the trigger quiet; its own
           // row's red dot says so. The tooltip names whichever is the case.
-          // `chipClass`: the same pill grammar as the composer's runner/model pickers.
+          // Dressed like the bar's other utilities (Search, Settings): a quiet text button, no
+          // frame (user decision).
           data-attention={blocker ? 'true' : undefined}
           title={toolsTooltip(health)}
-          className={chipClass}
+          className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
         >
           <WrenchIcon
             aria-hidden="true"
