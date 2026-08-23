@@ -916,8 +916,10 @@ function ProjectBar({
           </span>
         </span>
       ) : null}
-      {/* No utilities here (user decision): Search sits at the sidebar's top, and Settings,
-          Tools and the theme toggle live in the sidebar footer. The bar is identity only. */}
+      {/* The bar's right side hosts the OPEN PAGE's actions (user decision): a page with verbs
+          on its whole subject — today the task thread — portals its buttons here, where they
+          stay in view on every tab. No workspace utilities: those live in the sidebar. */}
+      <span data-slot="bar-actions" className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5" />
     </div>
   )
 }

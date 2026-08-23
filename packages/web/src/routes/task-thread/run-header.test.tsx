@@ -705,7 +705,7 @@ describe('notes panel', () => {
 })
 
 describe('meta line, tabs, pill and resume hint', () => {
-  it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
+  it('meta shows the branch chip, the diffstat on its tab, and the agent summary in the badge', () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -718,9 +718,13 @@ describe('meta line, tabs, pill and resume hint', () => {
     )
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
     const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
-    expect(meta.textContent).toContain('quick-task')
+    // The workflow chip left the header (it lives under the composer) and the diffstat rides
+    // the Changes tab now — the meta strip holds references and the branch only (UX pass).
+    expect(meta.textContent).not.toContain('quick-task')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
-    expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
+    expect(meta.querySelector('[data-slot="diff-stat"]')).toBeNull()
+    const changesTab = screen.getByRole('link', { name: /Changes/ })
+    expect(changesTab.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
     // The meta footer: the Agent stat names the runner (icon + name), a button that opens the
     // runner/account/model breakdown; the Mode stat carries the model; Tokens and Cost their own.
     const badge = within(footer).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })

@@ -22,6 +22,7 @@ import {
   Trash2Icon,
 } from 'lucide-react'
 import { Fragment, useMemo, useRef, useState, type ReactNode, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -76,7 +77,6 @@ import {
   taskIssueUrl,
   taskPrUrl,
   taskReferences,
-  workflowLabel,
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { chipClass, chevron } from '@/components/picker-pill'
@@ -133,7 +133,7 @@ export function RunHeader({
       // Changes/Commits/Files views start their content flush under the header, so there the
       // overlay would sit on the first rows instead of on scrolled-away text.
       className={cn(
-        'sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-6 pb-0 backdrop-blur md:px-6',
+        'sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-4 pb-0 backdrop-blur md:px-6',
         tab === 'session' &&
           "after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-gradient-to-b after:from-background after:to-transparent after:content-['']",
       )}
@@ -149,33 +149,10 @@ export function RunHeader({
         {/* `capabilities?.` fail-closed (#801): this header renders against minimal health
             payloads, and with automations off the chip degrades to text rather than linking
             into a disabled view. */}
-        <MetaRow
-          run={run}
-          automationsAvailable={health.data?.capabilities?.automations === true}
-          trailing={
-            <span className="flex shrink-0 items-center gap-2.5">
-              {/* No plan mirror here (user decision): the PLAN chip by the composer already
-                  carries the tally. The actions ride the chips row now that the title left. */}
-              <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
-                {flags.finish ? (
-                  <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
-                    <CheckIcon aria-hidden="true" />
-                    Finish
-                  </Button>
-                ) : null}
-                <PrimaryCtaButton run={run} actions={actions} />
-                {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
-                <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
-                {/* Everything past the state's primary actions folds behind one disclosure (#765). */}
-                <SecondaryActionsMenu run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
-              </div>
-              <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
-            </span>
-          }
-        />
-        <MonitoringSchedule run={run} />
-
-        <div data-slot="run-tabs" className="mt-5 flex items-end gap-1">
+        {/* One band now (user decision, UX pass): tabs on the left, the surviving context
+            chips (PR, branch…) on the right; the ACTIONS moved up to the app bar's right side
+            via the bar-actions portal, where they stay in view on every tab. */}
+        <div data-slot="run-tabs" className="flex items-end gap-1">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
             Session
@@ -183,6 +160,9 @@ export function RunHeader({
           <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
             <FileDiffIcon aria-hidden="true" className="size-3.5" />
             Changes
+            {/* The diffstat rides its own tab (UX pass): "+1 −0" is what Changes holds, not a
+                separate fact worth a chip of its own. */}
+            {run.diffStat ? <DiffStatLabel stat={run.diffStat} className="ml-0.5" /> : null}
           </TabLink>
           <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
             <GitCommitHorizontalIcon aria-hidden="true" className="size-3.5" />
@@ -192,7 +172,27 @@ export function RunHeader({
             <FilesIcon aria-hidden="true" className="size-3.5" />
             Files
           </TabLink>
+          <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2 pb-1.5">
+            <MetaRow run={run} automationsAvailable={health.data?.capabilities?.automations === true} />
+            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
+          </span>
         </div>
+        <BarActions>
+          {flags.finish ? (
+            <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
+              <CheckIcon aria-hidden="true" />
+              Finish
+            </Button>
+          ) : null}
+          <PrimaryCtaButton run={run} actions={actions} />
+          {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
+          <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+          {/* Everything past the state's primary actions folds behind one disclosure (#765). */}
+          <SecondaryActionsMenu run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
+        </BarActions>
+
+        <MonitoringSchedule run={run} />
+
 
         {/* Workflow steps moved to the context bar above the composer, and the take-over command
             moved to a button UNDER the composer (task-thread.tsx) — the sticky header stays shallow. */}
@@ -446,6 +446,25 @@ async function copyToClipboard(text: string, doneMessage: string): Promise<void>
 }
 
 /**
+ * The desktop actions, rendered onto the APP BAR's right side (user decision, UX pass) through
+ * the shell's `bar-actions` slot — the verbs act on the whole task, so they sit with its name,
+ * in view on every tab. Where no bar exists (mobile has none; bare test mounts), the buttons
+ * stay here in the header — the kebab still covers small screens, and nothing is lost.
+ */
+function BarActions({ children }: { children: ReactNode }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    setTarget(document.querySelector<HTMLElement>('[data-slot="bar-actions"]'))
+  }, [])
+  const content = (
+    <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
+      {children}
+    </div>
+  )
+  return target ? createPortal(content, target) : content
+}
+
+/**
  * The rename input (#389), now opened from the actions menu (user decision: the header shows
  * no title of its own — the shell's bar does). Renders in the title's old spot, already in
  * edit mode; Enter/blur commit through `usePatchRun`, Escape closes it.
@@ -611,11 +630,9 @@ function FooterStat({ label, children }: { label: string; children: ReactNode })
  *  not a placeholder. */
 function MetaRow({
   run,
-  trailing,
   automationsAvailable = false,
 }: {
   run: ApiRun
-  trailing?: ReactNode
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
@@ -640,17 +657,7 @@ function MetaRow({
           })),
     [references, projectId],
   )
-  // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
-  // placeholder — which reads like a status next to the live status pill.
-  const parts: ReactNode[] = [
-    <span
-      key="workflow"
-      data-slot="workflow-chip"
-      className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs font-medium"
-    >
-      {workflowLabel(run)}
-    </span>,
-  ]
+  const parts: ReactNode[] = []
   if (run.branch) {
     parts.push(
       <span
@@ -716,16 +723,6 @@ function MetaRow({
       />,
     )
   }
-  if (run.diffStat)
-    parts.push(
-      // A chip like its neighbours (the +/− colours stay) so it belongs to the row instead of
-      // floating past the last chip.
-      <DiffStatLabel
-        key="diff"
-        stat={run.diffStat}
-        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs"
-      />,
-    )
   if (run.automation) {
     // Provenance is history and is always shown; only the LINK is gated. Following it with the
     // capability off would land on the disabled `/automations` state, which says nothing about
@@ -758,13 +755,14 @@ function MetaRow({
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <div
         data-slot="run-meta"
-        className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-2.5 text-xs text-muted-foreground"
+        className="flex min-w-0 items-center gap-x-2 text-xs text-muted-foreground"
       >
-        {/* Identity chips on the left, spaced by the row gap — no middot separators (house rule). */}
+        {/* Identity chips, spaced by the row gap — no middot separators (house rule). The
+            workflow chip left (it lives under the composer) and the diffstat rides the
+            Changes tab now, so what remains is the task's references and its branch. */}
         {parts.map((part, index) => (
           <Fragment key={index}>{part}</Fragment>
         ))}
-        {trailing ? <div className="ml-auto shrink-0">{trailing}</div> : null}
       </div>
     </ReferenceStatusProvider>
   )
