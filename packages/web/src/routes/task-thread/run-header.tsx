@@ -244,7 +244,14 @@ export function RunHeader({
           a naked pill. The mask fades the blur out toward the bottom edge. */}
       <div
         data-slot="floating-cta"
-        className="pointer-events-none absolute inset-x-0 top-0 z-30 hidden justify-center bg-gradient-to-b from-background/80 via-background/40 to-transparent pt-2 pb-7 backdrop-blur-[3px] [mask-image:linear-gradient(to_bottom,black_45%,transparent)] md:flex"
+        className={cn(
+          'pointer-events-none absolute inset-x-0 top-0 z-30 hidden justify-center pt-2 pb-7 md:flex',
+          // The frosted band belongs to SESSION, where thread text scrolls underneath. The git
+          // and files tabs have their own toolbar on this line — there the button floats alone
+          // in the toolbar's empty middle, and a full-width wash would gray the controls out.
+          tab === 'session' &&
+            'bg-gradient-to-b from-background/80 via-background/40 to-transparent backdrop-blur-[3px] [mask-image:linear-gradient(to_bottom,black_45%,transparent)]',
+        )}
       >
         <span className="pointer-events-auto">
           <PrimaryCtaButton run={run} actions={actions} floating />
