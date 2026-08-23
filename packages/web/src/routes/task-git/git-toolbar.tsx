@@ -11,6 +11,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { DiffStat } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import type { DiffMode } from '@/components/diff'
+import { Link } from '@/lib/project-router'
+import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -19,22 +21,47 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { GitAction, GitActionBar, GitActionId } from '@/lib/git-actions'
-import { isHttpUrl } from '@/lib/utils'
 
-import { BranchChip, DiffViewToggles } from './diff-controls'
+import { DiffViewToggles } from './diff-controls'
+
+/** The one git area, two lenses (user decision): the branch's DIFF and its HISTORY, switched
+ *  locally. md+ only — below md the tab row over the page already lists Changes and Commits. */
+export function GitSubTabs({ runId, active }: { runId: string; active: 'changes' | 'commits' }) {
+  const step = 'rounded-[5px] px-2.5 py-1 text-[12px] font-medium transition-colors'
+  return (
+    <span
+      data-slot="git-subtabs"
+      className="hidden items-center rounded-md border border-border bg-muted p-0.5 md:flex"
+    >
+      <Link
+        to={`/tasks/${runId}/changes`}
+        aria-current={active === 'changes' ? 'page' : undefined}
+        className={cn(step, active === 'changes' ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')}
+      >
+        Changes
+      </Link>
+      <Link
+        to={`/tasks/${runId}/commits`}
+        aria-current={active === 'commits' ? 'page' : undefined}
+        className={cn(step, active === 'commits' ? 'bg-card text-foreground shadow-xs' : 'text-muted-foreground hover:text-foreground')}
+      >
+        Commits
+      </Link>
+    </span>
+  )
+}
 
 /**
  * The Changes tab's toolbar (spec #390). Deliberately DUMB about git: it renders whatever
  * `gitActionPolicy` returned — primary CTA, secondary buttons, overflow menu — plus the
- * branch chip, the animated aggregate ± stat, and the local view toggles (unified/split,
- * wrap; hidden below `md`, where unified+wrap is forced). Every disabled action shows the
- * policy's own reason as its tooltip. No git conditionals live here — that is the policy
- * module's contract.
+ * local view toggles (unified/split, wrap; hidden below `md`, where unified+wrap is forced).
+ * The branch chip and the aggregate ± left for the app bar (user decision) — the bar's one
+ * branch control says both. Every disabled action shows the policy's own reason as its
+ * tooltip. No git conditionals live here — that is the policy module's contract.
  */
 export function GitToolbar({
   bar,
-  branch,
-  stat,
+  runId,
   mode,
   wrap,
   onModeChange,
@@ -42,8 +69,7 @@ export function GitToolbar({
   onAction,
 }: {
   bar: GitActionBar
-  branch?: string
-  stat?: DiffStat
+  runId: string
   mode: DiffMode
   wrap: boolean
   onModeChange: (mode: DiffMode) => void
@@ -55,8 +81,7 @@ export function GitToolbar({
       data-slot="git-toolbar"
       className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border px-4 py-2 md:px-6"
     >
-      {branch ? <BranchChip branch={branch} /> : null}
-      {stat ? <AnimatedDiffStat stat={stat} /> : null}
+      <GitSubTabs runId={runId} active="changes" />
 
       <span className="ml-auto flex items-center gap-1">
         {/* View toggles — layout preferences, not git actions, so not the policy's business.
@@ -101,7 +126,6 @@ const ACTION_ICONS: Record<GitActionId, ReactNode> = {
   commit: <GitCommitHorizontalIcon aria-hidden="true" />,
   push: <UploadIcon aria-hidden="true" />,
   'create-pr': <GitPullRequestIcon aria-hidden="true" />,
-  'view-pr': <ExternalLinkIcon aria-hidden="true" />,
   'open-terminal': <SquareTerminalIcon aria-hidden="true" />,
 }
 
@@ -117,35 +141,6 @@ function ActionButton({
   variant: 'primary' | 'outline'
   onAction: (id: GitActionId) => void
 }) {
-  // href protocol guard (#431): treat the PR link as a link only for http(s) URLs. A refused
-  // href must NOT fall through to the generic button below — the policy hardcodes view-pr as
-  // enabled and the parent's `view-pr` case is a deliberate no-op, so it would render a
-  // clickable button that silently does nothing. Disabled + a reason, like every other
-  // unavailable action.
-  if (action.id === 'view-pr') {
-    if (!isHttpUrl(action.href)) {
-      return (
-        <Button
-          variant={variant}
-          size="sm"
-          data-action={action.id}
-          disabled
-          title="View PR unavailable — the recorded PR link is not an http(s) URL"
-        >
-          {ACTION_ICONS[action.id]}
-          {action.label}
-        </Button>
-      )
-    }
-    return (
-      <Button asChild variant={variant} size="sm" data-action={action.id}>
-        <a href={action.href} target="_blank" rel="noopener noreferrer">
-          {ACTION_ICONS[action.id]}
-          {action.label}
-        </a>
-      </Button>
-    )
-  }
   return (
     <Button
       variant={variant}

@@ -8,7 +8,7 @@ import { gitActionPolicy, type GitActionState } from './git-actions'
  * The git action policy, pinned row by row. The toolbar renders whatever this function
  * returns, so these tables ARE the toolbar's behavior spec: every disabled entry must carry
  * its human reason, hosted mode must HIDE the terminal handoff (not disable it), and the
- * Create PR → View PR flip must follow the PR URL exactly.
+ * Create PR must retire exactly when the PR URL lands (View PR itself lives on the app bar).
  */
 
 /** A healthy local-mode baseline: worktree + changes + github forge + remote + session. */
@@ -38,16 +38,10 @@ describe('gitActionPolicy — slots', () => {
     expect(bar.menu.map((a) => a.id)).toEqual(['open-terminal'])
   })
 
-  it('with a PR URL: View PR takes primary (with the href) and Create PR disappears', () => {
+  it('with a PR URL: Commit stays primary and Create PR disappears (the bar owns View PR)', () => {
     const bar = gitActionPolicy(withState({ prUrl: 'https://github.com/acme/demo/pull/7' }))
-    expect(bar.primary).toEqual({
-      id: 'view-pr',
-      label: 'View PR',
-      enabled: true,
-      href: 'https://github.com/acme/demo/pull/7',
-    })
-    expect(bar.secondary.map((a) => a.id)).toEqual(['commit', 'push'])
-    expect(bar.secondary.every((a) => a.id !== 'create-pr')).toBe(true)
+    expect(bar.primary.id).toBe('commit')
+    expect(bar.secondary.map((a) => a.id)).toEqual(['push'])
   })
 
   it('every disabled action carries a reason — no mute buttons anywhere', () => {

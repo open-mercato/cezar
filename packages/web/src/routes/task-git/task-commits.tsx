@@ -10,6 +10,7 @@ import type { ApiRun, RunCommit } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffMode } from '@/components/diff'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { GitSubTabs } from './git-toolbar'
 import { Button } from '@/components/ui/button'
 import { useIsDesktop } from '@/lib/use-desktop'
 
@@ -40,6 +41,13 @@ function CommitsView({ run }: { run: ApiRun }) {
   return (
     <div data-route="task-commits" className="flex min-h-full flex-col">
       <RunHeader run={run} tab="commits" />
+      {/* The same local Changes/Commits toggle the diff view carries — one git area, two
+          lenses. Hidden on a single commit, whose strip is the back button's. */}
+      {!sha ? (
+        <div className="hidden items-center border-b border-border px-4 py-2 md:flex md:px-6">
+          <GitSubTabs runId={run.id} active="commits" />
+        </div>
+      ) : null}
       {sha ? (
         <CommitDiffView runId={run.id} sha={sha} />
       ) : commits.isPending ? (

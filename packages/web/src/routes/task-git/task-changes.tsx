@@ -128,8 +128,6 @@ function ChangesView({ run }: { run: ApiRun }) {
       case 'open-terminal':
         terminal.mutate()
         break
-      case 'view-pr':
-        break // the toolbar renders it as an <a> (safe href) or disabled (unsafe) — never routed here
     }
   }
 
@@ -153,8 +151,7 @@ function ChangesView({ run }: { run: ApiRun }) {
 
       <GitToolbar
         bar={bar}
-        branch={run.branch}
-        stat={changes.data?.stat}
+        runId={run.id}
         mode={effectiveMode}
         wrap={effectiveWrap}
         onModeChange={setMode}

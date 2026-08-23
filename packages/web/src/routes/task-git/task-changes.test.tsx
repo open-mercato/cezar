@@ -167,9 +167,8 @@ describe('the Changes tab route', () => {
 
     // The facade renders both files (the engine chunk is lazy — wait for it).
     await waitFor(() => expect(document.querySelectorAll('[data-slot="diff-file"]')).toHaveLength(2))
-    // The aggregate animated stat shows the payload's totals.
-    expect(document.querySelector('[data-slot="changes-stat"]')?.textContent).toContain('+5')
-    expect(document.querySelector('[data-slot="changes-stat"]')?.textContent).toContain('−1')
+    // No aggregate stat strip in the toolbar any more — the app bar's branch control says it.
+    expect(document.querySelector('[data-slot="changes-stat"]')).toBeNull()
     // Collapsing a folder folds its rows.
     fireEvent.click(dir)
     expect(document.querySelectorAll('[data-slot="tree-file"]')).toHaveLength(1)
@@ -288,7 +287,7 @@ describe('the Changes tab route', () => {
     await waitFor(() => expect(toolbarAction('push')?.disabled).toBe(false))
   })
 
-  it('Create PR uses the existing /pr flow and flips to View PR once the record carries the URL', async () => {
+  it('Create PR uses the existing /pr flow and retires once the record carries the URL', async () => {
     let record: ApiRun = RUN
     const sent = stubFetch({
       'POST /api/v1/runs/r1/pr': () => {
@@ -305,11 +304,10 @@ describe('the Changes tab route', () => {
     await waitFor(() =>
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/pr')).toBe(true),
     )
-    await waitFor(() => {
-      const link = document.querySelector('[data-slot="git-toolbar"] a[data-action="view-pr"]')
-      expect(link?.getAttribute('href')).toBe('https://github.com/acme/demo/pull/9')
-    })
-    expect(toolbarAction('create-pr')).toBeNull()
+    // No View PR button appears (user decision): the app bar's PR chip is the one door to
+    // the PR — the toolbar just retires Create PR once the record carries the URL.
+    await waitFor(() => expect(toolbarAction('create-pr')).toBeNull())
+    expect(document.querySelector('[data-slot="git-toolbar"] a[data-action="view-pr"]')).toBeNull()
   })
 
   it('hosted mode (localHandoff: false) hides the overflow menu entirely', async () => {
@@ -336,18 +334,20 @@ describe('the Changes tab route', () => {
 
 describe('GitToolbar renders policy fixtures verbatim', () => {
   const noop = () => {}
+  // A router around the bare toolbar: the sub-tabs are real scoped Links.
   const renderToolbar = (bar: GitActionBar) =>
     render(
-      <GitToolbar
-        bar={bar}
-        branch="cez/abc12345"
-        stat={{ adds: 12, dels: 3, files: 2 }}
-        mode="unified"
-        wrap={false}
-        onModeChange={noop}
-        onWrapChange={noop}
-        onAction={noop}
-      />,
+      <MemoryRouter>
+        <GitToolbar
+          bar={bar}
+          runId="r1"
+          mode="unified"
+          wrap={false}
+          onModeChange={noop}
+          onWrapChange={noop}
+          onAction={noop}
+        />
+      </MemoryRouter>,
     )
 
   it('disabled entries render disabled with the policy reason as the tooltip', () => {
@@ -368,62 +368,32 @@ describe('GitToolbar renders policy fixtures verbatim', () => {
     expect(document.querySelector('[aria-label="More git actions"]')).toBeNull()
   })
 
-  it('view-pr renders as a real external link carrying the policy href', () => {
-    renderToolbar({
-      primary: { id: 'view-pr', label: 'View PR', enabled: true, href: 'https://github.com/acme/demo/pull/7' },
-      secondary: [{ id: 'commit', label: 'Commit', enabled: true }],
-      menu: [],
-    })
-    const link = document.querySelector('a[data-action="view-pr"]')!
-    expect(link.getAttribute('href')).toBe('https://github.com/acme/demo/pull/7')
-    expect(link.getAttribute('target')).toBe('_blank')
-  })
-
-  it('view-pr with a non-http href renders disabled, not as a clickable no-op (#431)', () => {
-    const onAction = vi.fn()
-    render(
-      <GitToolbar
-        bar={{
-          primary: { id: 'view-pr', label: 'View PR', enabled: true, href: 'javascript:void(0)' },
-          secondary: [],
-          menu: [],
-        }}
-        mode="unified"
-        wrap={false}
-        onModeChange={noop}
-        onWrapChange={noop}
-        onAction={onAction}
-      />,
-    )
-    // No link at all — and the fallback button is inert, with the reason as its tooltip.
-    expect(document.querySelector('a[data-action="view-pr"]')).toBeNull()
-    const button = toolbarAction('view-pr')!
-    expect(button.disabled).toBe(true)
-    expect(button.title).toContain('View PR unavailable')
-    fireEvent.click(button)
-    expect(onAction).not.toHaveBeenCalled()
-  })
-
-  it('shows the branch chip and the aggregate ± stat', () => {
+  it('carries the local Changes/Commits toggle instead of the branch chip and ± (both live on the app bar)', () => {
     renderToolbar({ primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] })
-    expect(document.querySelector('[data-slot="branch-chip"]')?.textContent).toContain('cez/abc12345')
-    const stat = document.querySelector('[data-slot="changes-stat"]')?.textContent
-    expect(stat).toContain('+12')
-    expect(stat).toContain('−3')
+    expect(document.querySelector('[data-slot="branch-chip"]')).toBeNull()
+    expect(document.querySelector('[data-slot="changes-stat"]')).toBeNull()
+    const subtabs = document.querySelector('[data-slot="git-subtabs"]') as HTMLElement
+    const links = [...subtabs.querySelectorAll('a')]
+    expect(links.map((a) => a.textContent)).toEqual(['Changes', 'Commits'])
+    expect(links[0]?.getAttribute('aria-current')).toBe('page')
+    expect(links[1]?.getAttribute('href')).toBe('/tasks/r1/commits')
   })
 
   it('the unified/split and wrap toggles reflect and report their state', () => {
     const onModeChange = vi.fn()
     const onWrapChange = vi.fn()
     render(
-      <GitToolbar
-        bar={{ primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] }}
-        mode="unified"
-        wrap={false}
-        onModeChange={onModeChange}
-        onWrapChange={onWrapChange}
-        onAction={noop}
-      />,
+      <MemoryRouter>
+        <GitToolbar
+          bar={{ primary: { id: 'commit', label: 'Commit', enabled: true }, secondary: [], menu: [] }}
+          runId="r1"
+          mode="unified"
+          wrap={false}
+          onModeChange={onModeChange}
+          onWrapChange={onWrapChange}
+          onAction={noop}
+        />
+      </MemoryRouter>,
     )
     const split = document.querySelector('[data-slot="diff-mode-toggle"] [data-mode="split"]')!
     expect(split.getAttribute('aria-pressed')).toBe('false')

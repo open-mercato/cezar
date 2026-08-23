@@ -10,6 +10,7 @@ import {
   FileDiffIcon,
   FilesIcon,
   FileTextIcon,
+  GitBranchIcon,
   GitCommitHorizontalIcon,
   MailIcon,
   MessageSquareTextIcon,
@@ -190,23 +191,21 @@ export function RunHeader({
             <BarTab to={`/tasks/${run.id}`} active={tab === 'session'} label="Session">
               <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
             </BarTab>
-            <BarTab to={`/tasks/${run.id}/changes`} active={tab === 'changes'} label="Changes">
-              <FileDiffIcon aria-hidden="true" className="size-3.5" />
-              {run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : null}
-            </BarTab>
-            {/* The branch rides the Commits tab (user decision): the view IS that branch's
-                history, so one control says both — no separate chip. */}
+            {/* ONE git entry (user decision): the changes live on the branch, so the branch
+                and its ± are one control. It opens the diff; the Changes/Commits split is a
+                local toggle inside that area. */}
             <BarTab
-              to={`/tasks/${run.id}/commits`}
-              active={tab === 'commits'}
-              label={run.branch ? `Commits on ${run.branch}` : 'Commits'}
+              to={`/tasks/${run.id}/changes`}
+              active={tab === 'changes' || tab === 'commits'}
+              label={run.branch ? `Changes on ${run.branch}` : 'Changes'}
             >
-              <GitCommitHorizontalIcon aria-hidden="true" className="size-3.5" />
+              <GitBranchIcon aria-hidden="true" className="size-3.5" />
               {run.branch ? (
                 <span data-slot="bar-branch" className="max-w-[18ch] truncate font-mono">
                   {run.branch}
                 </span>
               ) : null}
+              {run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : null}
             </BarTab>
             <BarTab to={`/tasks/${run.id}/files`} active={tab === 'files'} label="Files">
               <FilesIcon aria-hidden="true" className="size-3.5" />
