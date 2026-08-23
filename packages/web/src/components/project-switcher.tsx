@@ -1,8 +1,11 @@
 import * as React from 'react'
-import { CheckIcon, ChevronDownIcon, FolderOpenIcon, SlidersHorizontalIcon } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon, FolderIcon, FolderOpenIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { useNavigate as useRouterNavigate } from 'react-router'
 
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
+import { AddProjectDialog } from '@/components/add-project-dialog'
+import { CloneProjectDialog } from '@/components/clone-project-dialog'
+import { GithubIcon } from '@/components/icons'
 import {
   Command,
   CommandEmpty,
@@ -56,6 +59,10 @@ export function ProjectSwitcher({
   activeId: string | null
 }) {
   const [open, setOpen] = React.useState(false)
+  // The add-project dialogs live here now (user decision: one project menu — the list, then
+  // add, then manage — rather than a second control beside it). Mounted only while open.
+  const [browsing, setBrowsing] = React.useState(false)
+  const [cloning, setCloning] = React.useState(false)
   const navigate = useNavigate()
   const routerNavigate = useRouterNavigate()
   const active = projects.find((project) => project.id === activeId)
@@ -110,8 +117,34 @@ export function ProjectSwitcher({
             </CommandGroup>
             <CommandSeparator />
             <CommandGroup>
-              {/* forceMount: the footer action survives any filter text — narrowing the list
-                  must not hide the one row that manages it. */}
+              {/* forceMount on every footer row: the footer survives any filter text — narrowing
+                  the list must not hide the rows that add to it or manage it. */}
+              <CommandItem
+                forceMount
+                value="Open local folder"
+                data-slot="add-project-local"
+                className={cn('text-muted-foreground')}
+                onSelect={() => {
+                  setOpen(false)
+                  setBrowsing(true)
+                }}
+              >
+                <FolderIcon aria-hidden="true" />
+                Add local folder…
+              </CommandItem>
+              <CommandItem
+                forceMount
+                value="Clone from GitHub"
+                data-slot="add-project-clone"
+                className={cn('text-muted-foreground')}
+                onSelect={() => {
+                  setOpen(false)
+                  setCloning(true)
+                }}
+              >
+                <GithubIcon aria-hidden="true" />
+                Clone from GitHub…
+              </CommandItem>
               <CommandItem
                 forceMount
                 value="Manage projects"
@@ -130,6 +163,8 @@ export function ProjectSwitcher({
           </CommandList>
         </Command>
       </PopoverContent>
+      {browsing ? <AddProjectDialog open onOpenChange={setBrowsing} /> : null}
+      {cloning ? <CloneProjectDialog open onOpenChange={setCloning} /> : null}
     </Popover>
   )
 }
