@@ -81,7 +81,7 @@ export function ProjectSwitcher({
             aria-current={activeTo === '/' ? 'page' : undefined}
             className={cn('gap-2.5 rounded-md px-2.5 py-2 text-[13px]', activeTo === '/' && 'bg-muted font-semibold text-foreground')}
           >
-            <ListChecksIcon aria-hidden="true" />
+            <ListChecksIcon aria-hidden="true" className="size-3.5" />
             Tasks
           </Link>
         </DropdownMenuItem>
@@ -96,7 +96,7 @@ export function ProjectSwitcher({
                 aria-current={lit ? 'page' : undefined}
                 className={cn('gap-2.5 rounded-md px-2.5 py-2 text-[13px]', lit && 'bg-muted font-semibold text-foreground')}
               >
-                <Icon aria-hidden="true" />
+                <Icon aria-hidden="true" className="size-3.5" />
                 {item.label}
                 {item.badge === 'inbox-count' && inboxCount ? (
                   <span data-slot="nav-badge" className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground">
