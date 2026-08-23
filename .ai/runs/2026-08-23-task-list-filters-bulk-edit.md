@@ -116,12 +116,12 @@ inventing a second module the component would have to consult separately.
 
 ### Phase 1: The pure filter model
 
-- [ ] 1.1 Reference-number search in `filterRuns`
-- [ ] 1.2 Status-facet model (`TaskListFilters`, `filterTaskList`, `statusFacetOptions`, `activeFilterCount`)
+- [x] 1.1 Reference-number search in `filterRuns` — 97a5ecb6
+- [x] 1.2 Status-facet model (`TaskListFilters`, `filterTaskList`, `statusFacetOptions`, `activeFilterCount`) — 97a5ecb6
 
 ### Phase 2: The pure selection model
 
-- [ ] 2.1 `lib/task-selection.ts` with toggling, pruning, header state and action gating
+- [x] 2.1 `lib/task-selection.ts` with toggling, pruning, header state and action gating — 557126a1
 
 ### Phase 3: The filter bar on the Tasks table
 
