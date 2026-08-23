@@ -13,11 +13,9 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
-  CommandSeparator,
 } from '@/components/ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { scopeTo, useNavigate } from '@/lib/project-router'
-import { cn } from '@/lib/utils'
 
 /** Type-to-filter appears from this many projects up. Below it the list is scannable at a
  *  glance and an input would be chrome with nothing to earn. */
@@ -115,56 +113,68 @@ export function ProjectSwitcher({
                 </CommandItem>
               ))}
             </CommandGroup>
-            <CommandSeparator />
-            <CommandGroup>
-              {/* forceMount on every footer row: the footer survives any filter text — narrowing
-                  the list must not hide the rows that add to it or manage it. */}
-              <CommandItem
-                forceMount
-                value="Open local folder"
-                data-slot="add-project-local"
-                className={cn('text-muted-foreground')}
-                onSelect={() => {
-                  setOpen(false)
-                  setBrowsing(true)
-                }}
-              >
-                <FolderIcon aria-hidden="true" />
-                Add local folder…
-              </CommandItem>
-              <CommandItem
-                forceMount
-                value="Clone from GitHub"
-                data-slot="add-project-clone"
-                className={cn('text-muted-foreground')}
-                onSelect={() => {
-                  setOpen(false)
-                  setCloning(true)
-                }}
-              >
-                <GithubIcon aria-hidden="true" />
-                Clone from GitHub…
-              </CommandItem>
-              <CommandItem
-                forceMount
-                value="Manage projects"
-                data-slot="manage-projects"
-                className={cn('text-muted-foreground')}
-                onSelect={() => {
-                  setOpen(false)
-                  // Plain router target: the registry lives in GLOBAL settings, outside every project.
-                  routerNavigate('/settings/global')
-                }}
-              >
-                <SlidersHorizontalIcon aria-hidden="true" />
-                Manage projects
-              </CommandItem>
-            </CommandGroup>
           </CommandList>
+          {/* The footer sits OUTSIDE the scrolling list (user feedback: with 25 projects it was
+              below the fold). Plain buttons, so the list's filter and keyboard travel stay the
+              list's; these three are always in view and always one click. */}
+          <div data-slot="switcher-footer" className="flex flex-col gap-0.5 border-t border-border p-1">
+            <FooterAction
+              slot="add-project-local"
+              icon={<FolderIcon aria-hidden="true" className="size-3.5" />}
+              label="Add local folder…"
+              onSelect={() => {
+                setOpen(false)
+                setBrowsing(true)
+              }}
+            />
+            <FooterAction
+              slot="add-project-clone"
+              icon={<GithubIcon aria-hidden="true" className="size-3.5" />}
+              label="Clone from GitHub…"
+              onSelect={() => {
+                setOpen(false)
+                setCloning(true)
+              }}
+            />
+            <FooterAction
+              slot="manage-projects"
+              icon={<SlidersHorizontalIcon aria-hidden="true" className="size-3.5" />}
+              label="Manage projects"
+              onSelect={() => {
+                setOpen(false)
+                // Plain router target: the registry lives in GLOBAL settings, outside every project.
+                routerNavigate('/settings/global/projects')
+              }}
+            />
+          </div>
         </Command>
       </PopoverContent>
       {browsing ? <AddProjectDialog open onOpenChange={setBrowsing} /> : null}
       {cloning ? <CloneProjectDialog open onOpenChange={setCloning} /> : null}
     </Popover>
+  )
+}
+
+function FooterAction({
+  slot,
+  icon,
+  label,
+  onSelect,
+}: {
+  slot: string
+  icon: React.ReactNode
+  label: string
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      data-slot={slot}
+      onClick={onSelect}
+      className="flex h-8 w-full items-center gap-2 rounded-sm px-2 text-left text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+    >
+      {icon}
+      {label}
+    </button>
   )
 }
