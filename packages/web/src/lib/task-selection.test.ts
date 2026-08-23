@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import {
   bulkActionTargets,
+  bulkResultMessage,
   selectionSummary,
   toggleAllVisible,
   toggleSelected,
@@ -99,6 +100,33 @@ describe('bulkActionTargets', () => {
   it('answers with empty lists for an empty selection rather than throwing', () => {
     const none = bulkActionTargets([])
     expect([none.archive, none.restore, none.read, none.unread]).toEqual([[], [], [], []])
+  })
+})
+
+describe('bulkResultMessage', () => {
+  it('names the action in the past tense, and counts in tasks', () => {
+    expect(bulkResultMessage('archive', 3, [])).toBe('Archived 3 tasks.')
+    expect(bulkResultMessage('restore', 1, [])).toBe('Restored 1 task.')
+    expect(bulkResultMessage('read', 2, [])).toBe('Marked read 2 tasks.')
+    expect(bulkResultMessage('unread', 1, [])).toBe('Marked unread 1 task.')
+  })
+
+  it('reports the half that landed AND the half that did not, with the first reason', () => {
+    // The failure mode this exists for: a flat "Archived 5 tasks." over two refused writes is a
+    // claim the list will contradict a second later.
+    expect(bulkResultMessage('archive', 5, ['run is locked', 'run is locked'])).toBe(
+      'Archived 3 of 5 tasks — 2 failed: run is locked',
+    )
+  })
+
+  it('does not pretend a total failure was a success', () => {
+    expect(bulkResultMessage('archive', 2, ['409 conflict', '409 conflict'])).toBe(
+      'Archived 0 of 2 tasks — 2 failed: 409 conflict',
+    )
+  })
+
+  it('still reads as a sentence when the reason is empty', () => {
+    expect(bulkResultMessage('read', 1, [''])).toBe('Marked read 0 of 1 task — 1 failed')
   })
 })
 

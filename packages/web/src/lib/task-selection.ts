@@ -125,3 +125,35 @@ export function toggleAllVisible(
 
 /** An empty selection — the state the bar hides in, and what a completed bulk action returns to. */
 export const NO_SELECTION: ReadonlySet<string> = new Set<string>()
+
+/** Past tense, per action: what the receipt says a bulk edit DID. */
+const BULK_DONE_VERB: Record<BulkActionId, string> = {
+  archive: 'Archived',
+  restore: 'Restored',
+  read: 'Marked read',
+  unread: 'Marked unread',
+}
+
+/**
+ * The receipt a bulk edit leaves in a toast.
+ *
+ * A bulk action is N independent requests, and N requests can fail independently — so the message
+ * has to be able to say "some". Reporting a flat success over a batch where two writes were
+ * refused claims work that never happened, and reporting a flat failure hides the writes that
+ * landed; both leave the reader with a list they cannot trust. The first failure's reason rides
+ * along because with a local server it is nearly always the same reason for all of them, and it
+ * is the only thing that makes the failure actionable.
+ */
+export function bulkResultMessage(
+  action: BulkActionId,
+  total: number,
+  failures: readonly string[],
+): string {
+  const verb = BULK_DONE_VERB[action]
+  const noun = (count: number) => `${count} ${count === 1 ? 'task' : 'tasks'}`
+  if (failures.length === 0) return `${verb} ${noun(total)}.`
+  const reason = failures[0]
+  return `${verb} ${total - failures.length} of ${noun(total)} — ${failures.length} failed${
+    reason ? `: ${reason}` : ''
+  }`
+}
