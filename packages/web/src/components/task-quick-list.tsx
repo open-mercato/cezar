@@ -408,7 +408,7 @@ function rankEntry(entry: RunIndexEntry): number {
   return 2
 }
 
-function compareEntries(a: RunIndexEntry, b: RunIndexEntry): number {
+export function compareEntries(a: RunIndexEntry, b: RunIndexEntry): number {
   const rank = rankEntry(a) - rankEntry(b)
   if (rank !== 0) return rank
   return (b.finishedAt ?? b.startedAt ?? b.createdAt).localeCompare(a.finishedAt ?? a.startedAt ?? a.createdAt)
@@ -568,13 +568,13 @@ function ProjectTaskGroup({
   )
 }
 
-type IndexRow =
+export type IndexRow =
   | { kind: 'run'; entry: RunIndexEntry }
   | { kind: 'group'; groupId: string; title: string; members: RunIndexEntry[] }
 
 /** Spec 010 in the project groups: members of one variant group fold into one tile, at the
  *  position of their first member; a lone member (the others archived) stays a plain row. */
-function foldVariants(entries: RunIndexEntry[]): IndexRow[] {
+export function foldVariants(entries: RunIndexEntry[]): IndexRow[] {
   const rows: IndexRow[] = []
   const seen = new Set<string>()
   for (const entry of entries) {
@@ -593,7 +593,7 @@ function foldVariants(entries: RunIndexEntry[]): IndexRow[] {
 
 /** The collapsed variant group: the shared title, a ×N badge, the compare link as the toggle's
  *  flex SIBLING (a link inside a button is invalid), and the members beneath when expanded. */
-function IndexVariantTile({
+export function IndexVariantTile({
   projectId,
   row,
   currentRunId,
@@ -646,7 +646,7 @@ function IndexVariantTile({
 /** One task row from the workspace index — the two-line grammar of `RunRow`, on the slim entry
  *  every project group shares. Explicit `/p/<id>` scope so a row under another project lands
  *  in that project. */
-function IndexRunRow({ entry, currentRunId, now, variant = false }: { entry: RunIndexEntry; currentRunId: string | null; now: number; variant?: boolean }) {
+export function IndexRunRow({ entry, currentRunId, now, variant = false }: { entry: RunIndexEntry; currentRunId: string | null; now: number; variant?: boolean }) {
   const attention = deriveAttention(entry)
   const isActive = entry.id === currentRunId
   const reference = taskReference(entry)

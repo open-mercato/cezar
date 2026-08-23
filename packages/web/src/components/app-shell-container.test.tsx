@@ -384,7 +384,6 @@ describe('sidebar wiring', () => {
 
     await waitFor(() => expect(versionChip()).not.toBeNull())
     expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
-    expect(screen.getByRole('link', { name: /New task/ })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
   })
 
@@ -466,14 +465,16 @@ describe('sidebar wiring', () => {
       { timeout: 3000 },
     )
     const groups = [...document.querySelectorAll('[data-slot="project-task-group"]')]
-    // The active (boot) project first even with nothing in it; `idle` has no tasks and is absent.
-    expect(groups.map((g) => g.getAttribute('data-project-id'))).toEqual(['cezar', 'shop'])
-    expect(groups[0]?.textContent).toContain('No tasks yet')
+    // Every registered project, the active (boot) one first, then by last use — with or without tasks.
+    expect(groups.map((g) => g.getAttribute('data-project-id'))).toEqual(['cezar', 'idle', 'shop'])
+    expect(groups[0]?.querySelectorAll('[data-slot="task-row"]')).toHaveLength(0)
     // Needs-you before finished, within the shop group.
-    const rows = [...(groups[1]?.querySelectorAll('[data-slot="task-row"]') ?? [])]
+    // The index lands a beat after the registry — settle on the rows, not the groups.
+    await waitFor(() => expect(groups[2]?.querySelectorAll('[data-slot="task-row"]')).toHaveLength(2), { timeout: 3000 })
+    const rows = [...(groups[2]?.querySelectorAll('[data-slot="task-row"]') ?? [])]
     expect(rows.map((r) => r.getAttribute('data-run-id'))).toEqual(['r-shop-1', 'r-shop-2'])
     // The variant pair is one tile, not two rows, and the compare view stays one click away.
-    const tile = groups[1]?.querySelector('[data-slot="group-tile"][data-group-id="g1"]')
+    const tile = groups[2]?.querySelector('[data-slot="group-tile"][data-group-id="g1"]')
     expect(tile?.textContent).toContain('×2')
     expect(screen.getByRole('link', { name: 'Compare variants of Pick a runner' }).getAttribute('href')).toBe('/p/shop/compare/g1')
     expect(rows[0]?.querySelector('a')?.getAttribute('href')).toBe('/p/shop/tasks/r-shop-1')
@@ -481,7 +482,7 @@ describe('sidebar wiring', () => {
     // Each group starts its own task in its own project, and names itself as the door to its table.
     expect(screen.getByRole('link', { name: 'New task in shop' }).getAttribute('href')).toBe('/p/shop/new')
     expect(screen.getByRole('link', { name: 'New task in cezar' })).toBeTruthy()
-    expect(groups[1]?.querySelector('[data-slot="group-tasks-link"]')?.getAttribute('href')).toBe('/p/shop/')
+    expect(groups[2]?.querySelector('[data-slot="project-row"]')?.getAttribute('href')).toBe('/p/shop/')
     // No nav Tasks row any more; the nav's last row is the Projects MENU (the switcher's list,
     // add, manage), not a page.
     const nav = screen.getByRole('navigation', { name: 'Main' })

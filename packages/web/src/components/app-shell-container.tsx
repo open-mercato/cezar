@@ -10,7 +10,6 @@ import { OfflineBanner } from '@/components/offline-banner'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectSwitcher } from '@/components/project-switcher'
 import { ProjectsSection } from '@/components/projects-section'
-import { ProjectTaskGroupsContainer } from '@/components/task-quick-list'
 import { TabLink } from '@/components/tab-link'
 import { ToolsMenu } from '@/components/tools-menu'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
@@ -220,7 +219,6 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
           ) : undefined
         }
         singleProject={health.data?.capabilities.singleProject === true}
-        taskQuickList={<ProjectTaskGroupsContainer />}
         projectsMenu={
           registry && registry.projects.length > 0 && health.data?.capabilities.singleProject !== true ? (
             <ProjectsSection projects={registry.projects} activeId={projectId ?? registry.bootProject ?? null} />
