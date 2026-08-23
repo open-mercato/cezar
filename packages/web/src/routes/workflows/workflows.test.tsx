@@ -151,15 +151,31 @@ describe('canvas seeding', () => {
 // ---- palette → canvas, remove, limit -----------------------------------------------------------
 
 describe('palette add / remove / the 8-step limit', () => {
-  it('the palette add appends a step, dedupes ids, and updates count + YAML', async () => {
+  it('the palette add appends a step and updates count + YAML', async () => {
     stubFetch()
     renderAt('/workflows')
     await waitFor(() => expect(stepCards()).toHaveLength(2))
 
-    fireEvent.click(addButton('om-fix'))
-    expect(stepIds()).toEqual(['om-fix', 'om-review', 'om-fix-2'])
-    expect(screen.getByText('3 skills')).toBeTruthy()
-    expect(yamlText().match(/- om-fix/g)).toHaveLength(2)
+    fireEvent.click(screen.getByLabelText('Remove step 2: om-review'))
+    expect(stepIds()).toEqual(['om-fix'])
+    fireEvent.click(addButton('om-review'))
+    expect(stepIds()).toEqual(['om-fix', 'om-review'])
+    expect(screen.getByText('2 skills')).toBeTruthy()
+    expect(yamlText().match(/- om-review/g)).toHaveLength(1)
+  })
+
+  it('refuses the same skill twice — the add button is disabled and a drop is a no-op', async () => {
+    // User report: the same skill could be stacked five times. A skill is a recipe; applying it
+    // twice in one chain is never what was meant.
+    stubFetch()
+    renderAt('/workflows')
+    await waitFor(() => expect(stepCards()).toHaveLength(2))
+
+    const button = screen.getByLabelText('om-fix is already in the flow') as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    fireEvent.click(button)
+    expect(stepIds()).toEqual(['om-fix', 'om-review'])
+    expect(yamlText().match(/- om-fix/g)).toHaveLength(1)
   })
 
   it('remove drops exactly that card', async () => {

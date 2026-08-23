@@ -260,8 +260,15 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
   /** Palette → canvas, at `at` (or the end). One rule for drop, click and keyboard: the
    *  server's 8-step limit answers a toast, never a silent no-op. */
   const addSkill = (skill: string, at = steps.length) => {
+    // Once per flow (user report: the same skill could be stacked five times). A skill is a
+    // recipe, and applying it twice in one chain is never what was meant — the drop and the
+    // add button both land here, so one guard covers both.
     if (steps.length >= WB_MAX_STEPS) {
       toast(`A workflow holds at most ${WB_MAX_STEPS} steps.`, { tone: 'danger' })
+      return
+    }
+    if (steps.some((step) => step.skill === skill)) {
+      toast(`${skill} is already in the flow.`)
       return
     }
     setSteps(insertStep(steps, skillStep(skill, steps), at))
@@ -1008,6 +1015,9 @@ function PaletteSkill({
   const { listeners, setNodeRef, isDragging } = useDraggable({
     id: `palette:${skill.name}`,
     data: { type: 'palette', skill: skill.name } satisfies DragItem,
+    // A skill already in the flow has nowhere to go: the row stops dragging and the add button
+    // below says why, instead of a drop that toasts after the fact.
+    disabled: inFlow,
   })
   return (
     // Pointer-only drag surface, DELIBERATELY without dnd-kit's `attributes` (audit B2): the
@@ -1021,7 +1031,8 @@ function PaletteSkill({
       data-skill={skill.name}
       title={skill.description ?? ''}
       className={cn(
-        'flex cursor-grab items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 shadow-xs transition-colors hover:bg-muted',
+        'flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 shadow-xs transition-colors hover:bg-muted',
+        inFlow ? 'cursor-default' : 'cursor-grab',
         isDragging && 'opacity-40',
       )}
       {...listeners}
@@ -1045,14 +1056,15 @@ function PaletteSkill({
       <button
         type="button"
         data-slot="wb-skill-add"
-        aria-label={`Add ${skill.name} to the flow`}
-        title="Add to the flow"
+        aria-label={inFlow ? `${skill.name} is already in the flow` : `Add ${skill.name} to the flow`}
+        title={inFlow ? 'Already in the flow' : 'Add to the flow'}
+        disabled={inFlow}
         onClick={() => onAdd(skill.name)}
         // Stop the pointerdown here: the row is a dnd-kit drag source with a 4px activation
         // distance, and a click that slips those 4px on a 14px icon became a drag instead of an
         // add (user report: "+ doesn't work"). The sensor never sees presses on the button now.
         onPointerDown={(event) => event.stopPropagation()}
-        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors outline-none hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors outline-none hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-40"
       >
         <PlusIcon aria-hidden="true" className="size-3.5" />
       </button>
