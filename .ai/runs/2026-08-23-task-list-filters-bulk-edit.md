@@ -125,16 +125,16 @@ inventing a second module the component would have to consult separately.
 
 ### Phase 3: The filter bar on the Tasks table
 
-- [ ] 3.1 Status facet + Clear in the Tasks header
-- [ ] 3.2 Filter-aware empty state and reference-aware search affordance
-- [ ] 3.3 Filter-bar tests
+- [x] 3.1 Status facet + Clear in the Tasks header — 099c7fff
+- [x] 3.2 Filter-aware empty state and reference-aware search affordance — 099c7fff
+- [x] 3.3 Filter-bar tests — 099c7fff
 
 ### Phase 4: Selection and the bulk action bar
 
-- [ ] 4.1 Selection column on the table and the mobile cards
-- [ ] 4.2 Bulk action bar (archive / restore / mark read / mark unread)
-- [ ] 4.3 Route-level bulk mutation fan-out with honest partial-failure reporting
-- [ ] 4.4 Selection and bulk-action tests
+- [x] 4.1 Selection column on the table and the mobile cards — 099c7fff
+- [x] 4.2 Bulk action bar (archive / restore / mark read / mark unread) — 099c7fff
+- [x] 4.3 Route-level bulk mutation fan-out with honest partial-failure reporting — 099c7fff
+- [x] 4.4 Selection and bulk-action tests — 099c7fff
 
 ### Phase 5: Validation
 
