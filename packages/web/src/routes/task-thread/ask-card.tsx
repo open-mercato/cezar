@@ -125,7 +125,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       {delivery.blockedBy === 'provider' ? (
         <div data-slot="ask-provider-gate" className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <span>{delivery.reason}</span>
-          <Link to="/settings/agents#providers" className="font-medium text-foreground underline underline-offset-4">
+          <Link to="/settings/global/accounts#providers" className="font-medium text-foreground underline underline-offset-4">
             Configure providers
           </Link>
         </div>

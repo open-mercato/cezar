@@ -231,29 +231,29 @@ describe('ToolsMenu', () => {
     expect(row.querySelector('[data-slot="tool-hint"]')).toBeNull()
     expect(row.querySelector('[data-slot="tool-setup"]')?.textContent).toBe('Set up →')
     // The whole row is the link into Settings → Agents.
-    expect(row.closest('a')?.getAttribute('href') ?? row.getAttribute('href')).toBe('/settings/agents')
+    expect(row.closest('a')?.getAttribute('href') ?? row.getAttribute('href')).toBe('/settings/global/accounts')
   })
 
-  it('navigates to /settings/agents from the Set up row and closes the menu', async () => {
+  it('navigates to workspace Agent accounts from the Set up row and closes the menu', async () => {
     renderMenu(HEALTH)
     const menu = await openMenu()
 
     fireEvent.click(rowsIn(menu).find((el) => el.dataset.tool === 'codex') as HTMLElement)
 
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
-    expect(screen.getByTestId('location').textContent).toBe('/settings/agents')
+    expect(screen.getByTestId('location').textContent).toBe('/settings/global/accounts')
   })
 
-  it('offers the cog row into Settings → Agents, and closes on navigation', async () => {
+  it('offers the cog row into Workspace settings → Agent accounts, and closes on navigation', async () => {
     renderMenu(ALL_GOOD)
     const menu = await openMenu()
 
     const settings = within(menu).getByRole('menuitem', { name: /Tool settings/ })
-    expect(settings.getAttribute('href')).toBe('/settings/agents')
+    expect(settings.getAttribute('href')).toBe('/settings/global/accounts')
 
     fireEvent.click(settings)
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
-    expect(screen.getByTestId('location').textContent).toBe('/settings/agents')
+    expect(screen.getByTestId('location').textContent).toBe('/settings/global/accounts')
   })
 })
 

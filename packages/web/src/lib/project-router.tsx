@@ -58,6 +58,9 @@ function scopePathname(projectId: string, pathname: string): string {
   // explicit cross-project links. Both pass through untouched.
   if (!pathname.startsWith('/')) return pathname
   if (pathname === '/p' || pathname.startsWith('/p/')) return pathname
+  // The GLOBAL settings area is outside every project by definition — a scoped Link pointing
+  // there must not mint /p/<id>/settings/global (moved-provider links, #user decision).
+  if (pathname === '/settings/global' || pathname.startsWith('/settings/global/')) return pathname
   return `/p/${encodeURIComponent(projectId)}${pathname}`
 }
 

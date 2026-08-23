@@ -27,7 +27,6 @@ import {
   hasAgentAccounts,
 } from '@/components/default-agent-picker'
 import { modelCatalogStatus, modelsForRunner, RUNNERS } from '@/routes/new-task-form'
-import { ProviderSettings } from './provider-settings'
 
 /**
  * Settings → Agents (R6 Step 1.5, spec §"Settings"): today's scattered `PUT /api/config` knobs
@@ -121,8 +120,9 @@ function AgentsForm({
       data-slot="agents-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
-      <ProviderSettings />
-
+      {/* Providers moved to Workspace settings → Agent accounts (user decision): which agents
+          this MACHINE has is not one repo's business — this page keeps only the repo's own
+          choices (runner, models, system prompt). */}
       <DefaultAgentField
         defaultRunner={config.defaultRunner}
         providerStatus={providerStatus}

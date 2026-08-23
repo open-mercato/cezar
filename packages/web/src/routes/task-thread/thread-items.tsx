@@ -274,7 +274,7 @@ export function ProviderAuthRequiredCard({
         Review {label} settings before retrying.
       </p>
       <Link
-        to="/settings/agents#providers"
+        to="/settings/global/accounts#providers"
         className="mt-2 inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
       >
         Open provider settings

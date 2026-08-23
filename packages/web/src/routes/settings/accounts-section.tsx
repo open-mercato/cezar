@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ExternalLinkIcon, IdCardIcon } from 'lucide-react'
 import { Fragment, useState } from 'react'
 
+import { ProviderSettings } from './provider-settings'
+
 import { ApiError, putWorkspaceConfig } from '@/api/client'
 
 import {
@@ -166,6 +168,10 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
       data-slot="accounts-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-5 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
+      {/* Machine-level, like everything on this page (moved from the project's Agents settings,
+          user decision): which coding agents this computer connects. */}
+      <ProviderSettings />
+
       <div>
         <h2 className="text-sm font-semibold text-foreground">Agent accounts</h2>
         <p className="text-[13px] text-muted-foreground">

@@ -664,7 +664,7 @@ describe('provider authentication gate', () => {
     fireEvent.click(screen.getByRole('radio', { name: 'Plan first' }))
     expect((screen.getByRole('button', { name: 'Plan task' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/p/acme/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
   })
 
@@ -677,7 +677,7 @@ describe('provider authentication gate', () => {
     )
     expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
   })
 
@@ -1700,7 +1700,7 @@ describe('the plan flow', () => {
     expect(start.disabled).toBe(true)
     expect(screen.getByText('Connect an agent provider before starting a task.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
     start.removeAttribute('disabled')
     fireEvent.click(start)

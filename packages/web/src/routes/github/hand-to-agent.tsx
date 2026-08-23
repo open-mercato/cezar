@@ -276,7 +276,7 @@ export function HandToAgent({
               ? 'Provider authentication could not be verified.'
               : 'Connect an agent provider to run this item.'}
             <Link
-              to="/settings/agents#providers"
+              to="/settings/global/accounts#providers"
               className="font-medium text-foreground underline underline-offset-4"
             >
               Configure providers

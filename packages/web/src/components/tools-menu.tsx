@@ -148,7 +148,7 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>
           <Link
-            to="/settings/agents"
+            to="/settings/global/accounts"
             data-slot="tools-settings"
             className="gap-2 text-[12.5px] text-muted-foreground"
           >
@@ -195,7 +195,7 @@ function UnavailableToolRow({ check }: { check: BackendCheck }) {
   return (
     <DropdownMenuItem asChild>
       <Link
-        to="/settings/agents"
+        to="/settings/global/accounts"
         data-slot="tool-row"
         data-tool={check.name}
         data-available="false"

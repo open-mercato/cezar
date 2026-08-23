@@ -1255,7 +1255,7 @@ describe('the hand-to-agent backend pills (#401)', () => {
       document.querySelector<HTMLButtonElement>('[data-slot="model-pill"]')?.disabled,
     ).toBe(true)
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/p/acme/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
 
     fireEvent.change(promptField(), { target: { value: 'Keep this editable.' } })

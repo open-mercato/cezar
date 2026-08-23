@@ -116,7 +116,7 @@ describe('ThreadView', () => {
 
     expect(screen.getByRole('alert').textContent).toContain('This run needed Codex authorization')
     expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
   })
 

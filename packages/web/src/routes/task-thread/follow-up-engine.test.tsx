@@ -147,7 +147,7 @@ function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
       <div data-slot="follow-up-provider-gate">
         <span>{action.reason}</span>
         {!action.providerPending ? (
-          <Link to="/settings/agents#providers">Configure providers</Link>
+          <Link to="/settings/global/accounts#providers">Configure providers</Link>
         ) : null}
       </div>
     )
@@ -359,7 +359,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     renderAction(makeRun(), '', '/p/acme/tasks/r1')
 
     const link = await screen.findByRole('link', { name: 'Configure providers' })
-    expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
+    expect(link.getAttribute('href')).toBe('/settings/global/accounts#providers')
     expect(screen.queryByRole('button', { name: /continue/i })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Runner' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()

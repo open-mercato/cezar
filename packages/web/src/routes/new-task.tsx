@@ -706,7 +706,7 @@ export function NewTaskRoute() {
             <>
               {!providersReady && !providers.isPending ? (
                 <Link
-                  to="/settings/agents#providers"
+                  to="/settings/global/accounts#providers"
                   className="text-xs font-medium text-foreground underline underline-offset-4"
                 >
                   Configure providers
@@ -744,7 +744,7 @@ export function NewTaskRoute() {
           }
           startUnavailableAction={
             !providers.isPending ? (
-              <Link to="/settings/agents#providers">Configure providers</Link>
+              <Link to="/settings/global/accounts#providers">Configure providers</Link>
             ) : undefined
           }
           onStepsChange={(steps) => setPlan((current) => (current ? { ...current, steps } : current))}

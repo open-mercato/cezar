@@ -465,7 +465,7 @@ export function ThreadView({
             footerEnd={
               providerBlocked && !continueAction.providerPending ? (
                 <Link
-                  to="/settings/agents#providers"
+                  to="/settings/global/accounts#providers"
                   className="text-xs font-medium text-foreground underline underline-offset-4"
                 >
                   Configure providers
