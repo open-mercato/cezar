@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { ChevronDownIcon, FolderPlusIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersHorizontalIcon, XIcon } from 'lucide-react'
+import { ChevronDownIcon, FolderPlusIcon, PlusIcon, SearchIcon, SettingsIcon, XIcon } from 'lucide-react'
 import { Link as RouterLink } from 'react-router'
 
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
@@ -108,9 +108,6 @@ export function ProjectsSection({
           <button type="button" data-slot="add-project-clone" aria-label="Clone from GitHub" title="Clone from GitHub" onClick={() => setCloning(true)} className={ICON_BUTTON}>
             <GithubIcon className="size-3.5" aria-hidden="true" />
           </button>
-          <RouterLink to="/settings/global/projects" data-slot="manage-projects" aria-label="Manage projects" title="Manage projects" onClick={onNavigate} className={ICON_BUTTON}>
-            <SlidersHorizontalIcon className="size-3.5" aria-hidden="true" />
-          </RouterLink>
         </span>
       </div>
 

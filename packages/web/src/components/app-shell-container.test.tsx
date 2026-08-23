@@ -506,7 +506,7 @@ describe('sidebar wiring', () => {
     const section = nav.querySelector('[data-slot="projects-section"]') as HTMLElement
     expect([...section.querySelectorAll('[data-slot="project-row"]')].map((r) => r.getAttribute('data-project-id'))).toEqual(['cezar', 'idle', 'shop'])
     expect(within(section).getByRole('link', { name: 'shop' }).getAttribute('href')).toBe('/p/shop/')
-    expect(within(section).getByRole('link', { name: 'Manage projects' }).getAttribute('href')).toBe('/settings/global/projects')
+    expect(within(section).queryByRole('link', { name: 'Manage projects' })).toBeNull()
     expect(within(section).getByRole('button', { name: 'Clone from GitHub' })).toBeTruthy()
     expect(within(section).getByRole('button', { name: 'Add local folder' })).toBeTruthy()
     fireEvent.click(within(section).getByRole('button', { name: 'Search projects' }))
