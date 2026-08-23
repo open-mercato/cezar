@@ -89,9 +89,19 @@ const type = (textarea: HTMLTextAreaElement, value: string) =>
 const pngFile = (name = 'shot.png', bytes: number[] = [1, 2, 3]) =>
   new File([new Uint8Array(bytes)], name, { type: 'image/png' })
 
+/** A real `DataTransferItem` carries `kind` as well as `type`, and the composer screens on
+ *  `kind` — a clipboard file the OS could not type still has `kind: 'file'`. */
 const paste = (textarea: HTMLTextAreaElement, files: File[]) =>
   fireEvent.paste(textarea, {
-    clipboardData: { items: files.map((file) => ({ type: file.type, getAsFile: () => file })) },
+    clipboardData: {
+      items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+    },
+  })
+
+/** A plain text paste: string items, no files — it must fall through to the textarea. */
+const pasteText = (textarea: HTMLTextAreaElement) =>
+  fireEvent.paste(textarea, {
+    clipboardData: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }] },
   })
 
 describe('submit shortcuts', () => {
@@ -231,6 +241,29 @@ describe('images — attach, paste, thumbnails, caps (legacy parity)', () => {
     paste(textarea, [big])
     expect(await screen.findByText('huge.png is too large (max 5 MB)')).toBeTruthy()
     expect(screen.queryByLabelText('Remove huge.png')).toBeNull()
+  })
+
+  /** The paste path used to screen on `item.type` before `screenFiles` ever saw the file,
+   *  so a clipboard screenshot the OS handed over untyped was dropped with no thumbnail
+   *  and no toast — the user's paste simply did nothing. */
+  it('a clipboard screenshot the OS could not type still attaches', async () => {
+    const { textarea } = renderComposer()
+    const untyped = new File([new Uint8Array([7, 7])], 'Screenshot.png', { type: '' })
+    paste(textarea, [untyped])
+    expect(await screen.findByLabelText('Remove Screenshot.png')).toBeTruthy()
+  })
+
+  it('an untyped clipboard file that is not an image says so instead of vanishing', async () => {
+    const { textarea } = renderComposer()
+    paste(textarea, [new File([new Uint8Array([7])], 'notes.tar.gz', { type: '' })])
+    expect(await screen.findByText('notes.tar.gz skipped — not a recognized image')).toBeTruthy()
+  })
+
+  it('a plain text paste attaches nothing and is left to the textarea', () => {
+    const { textarea } = renderComposer()
+    const event = pasteText(textarea)
+    expect(event).toBe(true) // not preventDefault()-ed: the browser still inserts the text
+    expect(screen.queryAllByLabelText(/^Remove /)).toHaveLength(0)
   })
 })
 
