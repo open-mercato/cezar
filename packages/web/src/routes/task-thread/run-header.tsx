@@ -21,7 +21,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useMemo, useRef, useState, type ReactNode, useEffect } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -118,6 +118,10 @@ export function RunHeader({
 }) {
   const flags = runActionFlags(run)
   const [notesOpen, setNotesOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  // Deferred a tick: the menu's close restores focus to its trigger, which would blur (and so
+  // close) the rename input the moment it mounted. After the restore, autoFocus wins.
+  const beginRename = () => setTimeout(() => setRenaming(true), 0)
   const health = useHealth()
   const actions = useRunActions(run, onMarkedUnread)
 
@@ -135,38 +139,40 @@ export function RunHeader({
       )}
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
-        <div className="flex min-w-0 items-center gap-2">
-          {/* The task's glyph — a violet pixel hammer, same family as the brand cat. */}
-          <PixelHammerIcon className="size-[18px] shrink-0 text-violet" />
-          <EditableTitle run={run} />
-          <span className="ml-auto flex shrink-0 items-center gap-2.5">
-            {/* No plan mirror here (user decision): the PLAN chip by the composer already carries
-                the tally, and the title row stays actions-only. */}
-            {/* The run's actions ride the title row now — Finish/Continue/Open in…/overflow on the
-                right at the title's height; mobile still folds them into the kebab. */}
-            <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
-              {flags.finish ? (
-                <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
-                  <CheckIcon aria-hidden="true" />
-                  Finish
-                </Button>
-              ) : null}
-              <PrimaryCtaButton run={run} actions={actions} />
-              {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
-              <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
-              {/* Everything past the state's primary actions folds behind one disclosure (#765). */}
-              <SecondaryActionsMenu run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
-            </div>
-            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
-          </span>
-        </div>
+        {/* No visible title (user decision): the shell's bar crumb already says it. The h1
+            stays for assistive tech; renaming opens an inline input over the meta row. */}
+        <h1 className="sr-only">{runTitle(run)}</h1>
+        {renaming ? <RenameRow run={run} onDone={() => setRenaming(false)} /> : null}
 
         {/* The stat strip left the header: Plan is the context tab, Status duplicated the paused
             hint, and Cost/Agent/Mode moved to a meta row UNDER the composer (task-thread.tsx). */}
         {/* `capabilities?.` fail-closed (#801): this header renders against minimal health
             payloads, and with automations off the chip degrades to text rather than linking
             into a disabled view. */}
-        <MetaRow run={run} automationsAvailable={health.data?.capabilities?.automations === true} />
+        <MetaRow
+          run={run}
+          automationsAvailable={health.data?.capabilities?.automations === true}
+          trailing={
+            <span className="flex shrink-0 items-center gap-2.5">
+              {/* No plan mirror here (user decision): the PLAN chip by the composer already
+                  carries the tally. The actions ride the chips row now that the title left. */}
+              <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
+                {flags.finish ? (
+                  <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
+                    <CheckIcon aria-hidden="true" />
+                    Finish
+                  </Button>
+                ) : null}
+                <PrimaryCtaButton run={run} actions={actions} />
+                {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
+                <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+                {/* Everything past the state's primary actions folds behind one disclosure (#765). */}
+                <SecondaryActionsMenu run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
+              </div>
+              <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
+            </span>
+          }
+        />
         <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-5 flex items-end gap-1">
@@ -440,36 +446,33 @@ async function copyToClipboard(text: string, doneMessage: string): Promise<void>
 }
 
 /**
- * The editable title (#389): a plain h1 with a pencil that only appears on hover (mockup
- * `.pencil-btn`), flipping into an inline input. Enter/blur commit through `usePatchRun`
- * (the server stores it as both `title` and `titleSummary`), Escape abandons the draft.
- * The rename machine itself is shared with the Tasks table (`components/editable-title.tsx`).
+ * The rename input (#389), now opened from the actions menu (user decision: the header shows
+ * no title of its own — the shell's bar does). Renders in the title's old spot, already in
+ * edit mode; Enter/blur commit through `usePatchRun`, Escape closes it.
  */
-function EditableTitle({ run }: { run: ApiRun }) {
+function RenameRow({ run, onDone }: { run: ApiRun; onDone: () => void }) {
   const patch = usePatchRun(run.id)
   const title = runTitle(run)
   const editor = useTitleEditor(title, (next) =>
     patch.mutate({ title: next }, { onError: (error) => toast(error.message, { tone: 'danger' }) }),
   )
-
-  if (editor.editing) {
-    return <TitleEditInput editor={editor} className="flex-1 text-[15px] font-semibold" />
-  }
-
+  // Open on mount; close the row only after editing actually started, or the mount-time
+  // "not editing yet" state would call onDone before begin()'s set lands.
+  const startedRef = useRef(false)
+  if (editor.editing) startedRef.current = true
+  useEffect(() => {
+    editor.begin()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open once, on mount
+  }, [])
+  useEffect(() => {
+    if (startedRef.current && !editor.editing) onDone()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- editor object is not stable
+  }, [editor.editing])
+  if (!editor.editing) return null
   return (
-    <span className="group flex min-w-0 items-center gap-1">
-      <h1 className="min-w-0 truncate text-[15px] font-semibold" title={run.task}>
-        {title}
-      </h1>
-      <button
-        type="button"
-        aria-label="Rename task"
-        onClick={editor.begin}
-        className="shrink-0 rounded-sm p-1 text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-      >
-        <PencilIcon className="size-3.5" aria-hidden="true" />
-      </button>
-    </span>
+    <div className="mb-1 flex items-center">
+      <TitleEditInput editor={editor} className="flex-1 text-[15px] font-semibold" />
+    </div>
   )
 }
 
@@ -806,10 +809,12 @@ function ActionsKebab({
   run,
   actions,
   onToggleNotes,
+  onRename,
 }: {
   run: ApiRun
   actions: RunActions
   onToggleNotes: () => void
+  onRename: () => void
 }) {
   const flags = runActionFlags(run)
   return (
@@ -820,6 +825,9 @@ function ActionsKebab({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu">
+        <DropdownMenuItem data-action="rename" onSelect={onRename}>
+          <PencilIcon aria-hidden="true" /> Rename
+        </DropdownMenuItem>
         {flags.finish ? (
           <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
             <CheckIcon aria-hidden="true" /> Finish
@@ -880,10 +888,12 @@ function SecondaryActionsMenu({
   run,
   actions,
   onToggleNotes,
+  onRename,
 }: {
   run: ApiRun
   actions: RunActions
   onToggleNotes: () => void
+  onRename: () => void
 }) {
   const flags = runActionFlags(run)
   return (
@@ -894,6 +904,9 @@ function SecondaryActionsMenu({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-overflow">
+        <DropdownMenuItem data-action="rename" onSelect={onRename}>
+          <PencilIcon aria-hidden="true" /> Rename
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={onToggleNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>

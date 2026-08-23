@@ -145,13 +145,19 @@ describe('monitoring schedule', () => {
   })
 })
 
+const openRename = async () => {
+  const menu = await openOverflow()
+  fireEvent.click(menu.getByRole('menuitem', { name: 'Rename' }))
+  // The input mounts a tick later: the row opens itself in an effect.
+  return (await screen.findByLabelText('Task title')) as HTMLInputElement
+}
+
 describe('editable title (#389)', () => {
-  it('pencil flips the h1 into an input; Enter PATCHes the trimmed title exactly once', async () => {
+  it('Rename in the overflow opens the input; Enter PATCHes the trimmed title exactly once', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
-    const input = screen.getByLabelText('Task title') as HTMLInputElement
+    const input = await openRename()
     expect(input.value).toBe('Do the thing') // seeded with the displayed title, not the raw one
 
     fireEvent.change(input, { target: { value: '  New name  ' } })
@@ -173,8 +179,7 @@ describe('editable title (#389)', () => {
   it('blur commits like Enter', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
-    const input = screen.getByLabelText('Task title')
+    const input = await openRename()
     fireEvent.change(input, { target: { value: 'Renamed on blur' } })
     fireEvent.blur(input)
     await waitFor(() => {
@@ -182,11 +187,10 @@ describe('editable title (#389)', () => {
     })
   })
 
-  it('Escape abandons the draft — no PATCH, the old title stays', () => {
+  it('Escape abandons the draft — no PATCH, the old title stays', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
-    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
-    const input = screen.getByLabelText('Task title')
+    const input = await openRename()
     fireEvent.change(input, { target: { value: 'Never sent' } })
     fireEvent.keyDown(input, { key: 'Escape' })
 
@@ -194,12 +198,11 @@ describe('editable title (#389)', () => {
     expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
   })
 
-  it('an unchanged or emptied draft is not worth a request', () => {
+  it('an unchanged or emptied draft is not worth a request', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
     for (const value of ['Do the thing', '   ']) {
-      fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
-      const input = screen.getByLabelText('Task title')
+      const input = await openRename()
       fireEvent.change(input, { target: { value } })
       fireEvent.keyDown(input, { key: 'Enter' })
     }
@@ -212,13 +215,13 @@ describe('action bar visibility per status (#765: primaries inline, the rest fol
   // lifecycle — design review), then Open in… and the "More actions" disclosure; the secondary
   // actions live in that overflow menu.
   const matrix: Array<{ status: RunStatus; inline: string[]; overflow: string[] }> = [
-    { status: 'queued', inline: ['Stop'], overflow: ['Notes', 'Cancel'] },
-    { status: 'running', inline: ['Stop'], overflow: ['Notes', 'Cancel'] },
-    { status: 'waiting', inline: ['Finish', 'Reply'], overflow: ['Notes', 'Cancel'] },
-    { status: 'review', inline: ['Finish', 'Review changes', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'done', inline: ['Reopen', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'failed', inline: ['Retry', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', inline: ['Reopen', 'Open in'], overflow: ['Notes', 'Archive', 'Delete'] },
+    { status: 'queued', inline: ['Stop'], overflow: ['Rename', 'Notes', 'Cancel'] },
+    { status: 'running', inline: ['Stop'], overflow: ['Rename', 'Notes', 'Cancel'] },
+    { status: 'waiting', inline: ['Finish', 'Reply'], overflow: ['Rename', 'Notes', 'Cancel'] },
+    { status: 'review', inline: ['Finish', 'Review changes', 'Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'done', inline: ['Reopen', 'Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'failed', inline: ['Retry', 'Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'cancelled', inline: ['Reopen', 'Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
   ]
 
   it.each(matrix)('$status → inline $inline, overflow $overflow', async ({ status, inline, overflow }) => {
@@ -262,6 +265,7 @@ describe('Mark unread (#775)', () => {
     renderHeader(readDone())
     const menu = await openOverflow()
     expect(menu.getAllByRole('menuitem').map((el) => el.textContent?.trim())).toEqual([
+      'Rename',
       'Notes',
       'Mark unread',
       'Archive',
