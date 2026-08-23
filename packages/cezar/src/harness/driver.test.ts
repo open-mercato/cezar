@@ -2814,6 +2814,42 @@ describe('harness driver — role-based conduction (2026-07-24)', () => {
     expect(h.calls.map((call) => call.id)).not.toContain('qualify');
   });
 
+  /**
+   * `validateConfig` in harness.mjs demands `agentHarness.version === 1` and
+   * `delivery.mode === 'stage-only'` before it will run a council. The driver
+   * synthesizes the council config from scratch when the repo has none — the
+   * ordinary cezar project — and used to supply neither, so the first round of
+   * every zero-config council died on "agentHarness.version must be 1". The
+   * 2026-08-06 eval hit this exact shape and read it as a lineup problem.
+   */
+  it('states the runtime invariants in the synthesized council config, so a repo with no config still gets a council', async () => {
+    const h = makeHarness(dir);
+    const seated = {
+      ...input,
+      roles: {
+        ...roles,
+        reviewers: [
+          { runner: 'claude' as const, model: 'opus' },
+          { runner: 'opencode' as const, model: 'opencode/muse-spark-1.2-contributor-free' },
+        ],
+      },
+    };
+
+    await runHarnessDriver(h.host, seated, h.deps);
+
+    // `ops`, not `calls`: an agent phase can share the name, and only the runtime op
+    // carries the argv the council config path lives in.
+    const review = h.ops.find((call) => call.kind === 'op' && call.id === 'review' && call.args);
+    expect(review).toBeDefined();
+    const args = review!.args!;
+    const configPath = args[args.indexOf('--config') + 1]!;
+    const cfg = JSON.parse(readFileSync(configPath, 'utf8')) as {
+      agentHarness?: { version?: unknown; delivery?: { mode?: unknown } };
+    };
+    expect(cfg.agentHarness?.version).toBe(1);
+    expect(cfg.agentHarness?.delivery?.mode).toBe('stage-only');
+  });
+
   it('seats an OpenCode reviewer that does name one, and conducts the run', async () => {
     const h = makeHarness(dir);
     const seated = {

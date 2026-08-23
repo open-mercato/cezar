@@ -2541,11 +2541,23 @@ export async function runHarnessDriver(
         ? (JSON.parse(readHarnessArtifactText(configSource)) as object)
         : {}) as {
         agentHarness?: {
+          version?: unknown;
+          delivery?: Record<string, unknown>;
           models?: Record<string, { timeoutMs?: unknown } | undefined>;
           profiles?: Record<string, unknown>;
         };
       };
       const harnessObj = configJson.agentHarness ?? {};
+      // `validateConfig` in harness.mjs rejects a config without these two, and a repo
+      // with no `.ai/agentic.config.json` supplies neither — so the zero-config council
+      // the comment above promises died at its first round with
+      // "agentHarness.version must be 1". Both are cezar INVARIANTS rather than user
+      // choices: the vendored runtime is version 1, and delivery is stage-only by
+      // construction (the server 409s push and PR until the ledger proves staging), so
+      // the driver states them instead of hoping the repo does. Written into the
+      // synthesized council config only — the user's own file is never touched.
+      harnessObj.version = 1;
+      harnessObj.delivery = { ...(harnessObj.delivery ?? {}), mode: 'stage-only' };
       harnessObj.models = { ...(harnessObj.models ?? {}) };
       for (const member of pendingMembers) {
         if (member.entry) harnessObj.models[member.councilId] = member.entry as never;
