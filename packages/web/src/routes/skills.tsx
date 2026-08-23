@@ -43,12 +43,10 @@ const IMPORT = '__import'
 
 export function SkillsRoute() {
   return (
-    <div data-route="skills" className="flex min-h-full flex-col">
-      {/* Desktop header — below `md` the shell's top bar already says "Skills". */}
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">Skills</h1>
-        <p className="text-[13px] text-muted-foreground">Markdown playbooks agents can follow.</p>
-      </header>
+    // No page header: the shell's bar already names the view (user decision). The h1 stays
+    // for assistive tech only. `md:h-full` gives the list pane a definite height to pin to.
+    <div data-route="skills" className="flex min-h-full flex-col md:h-full">
+      <h1 className="sr-only">Skills</h1>
       <SkillsCatalog />
     </div>
   )
@@ -105,16 +103,16 @@ function SkillsCatalog() {
   const shown = filterSkills(skills, query)
 
   return (
-    <div data-slot="skills-section" className="flex min-h-full flex-1 items-stretch">
+    <div data-slot="skills-section" className="flex min-h-full flex-1 items-stretch md:min-h-0">
       {/* List pane. Below md it IS the page until a selection is in the URL — the GitHub
           tab's two-surfaces-one-URL rule. */}
       <section
         data-slot="skills-list"
         className={cn(
           'w-full flex-col border-border md:flex md:w-[320px] md:shrink-0 md:border-r',
-          // Pin the pane below the sticky h-14 header so the ROWS scroll inside it (the #384
-          // stable-scroll surface) — `var(--spacing)*14` tracks the density token.
-          'md:sticky md:top-14 md:max-h-[calc(100dvh-(var(--spacing)*14))]',
+          // The pane fills the route's height so the ROWS scroll inside it (the #384
+          // stable-scroll surface) while the detail pane scrolls with the page.
+          'md:sticky md:top-0 md:min-h-0 md:max-h-full',
           param === null ? 'flex' : 'hidden md:flex',
         )}
       >
