@@ -151,8 +151,8 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('v')?.textContent).toBe('needs review')
     expect(pillOf('d')?.textContent).toBe('done')
     expect(pillOf('f')?.textContent).toBe('failed')
-    expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
-    expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    expect(pillOf('w')?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(pillOf('d')?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('success')
   })
 
   it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
@@ -169,10 +169,10 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('sched')?.textContent).toContain('scheduled')
     // The time itself, locale-formatted — assert it is there rather than its spelling.
     expect(pillOf('sched')?.querySelector('.tabular-nums')?.textContent).toMatch(/\d{1,2}[:.]\d{2}/)
-    expect(pillOf('sched')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(pillOf('sched')?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
     // …and an ordinary failure is untouched.
     expect(pillOf('broke')?.textContent).toBe('failed')
-    expect(pillOf('broke')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+    expect(pillOf('broke')?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('danger')
   })
 
   it('shows a queued issue reference before the agent starts', () => {

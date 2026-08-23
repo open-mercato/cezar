@@ -40,13 +40,14 @@ const ALL_STATUSES: readonly RunStatus[] = [
 
 describe('deriveAttention', () => {
   const cases: ReadonlyArray<[RunStatus, Attention]> = [
-    ['waiting', { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }],
-    ['review', { bucket: 'waiting', tone: 'violet', pulse: true, label: 'needs review' }],
-    ['running', { bucket: 'running', tone: 'violet', pulse: true, label: 'running' }],
-    ['queued', { bucket: 'none', tone: 'neutral', pulse: false, label: 'queued' }],
-    ['done', { bucket: 'none', tone: 'success', pulse: false, label: 'done' }],
-    ['failed', { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }],
-    ['cancelled', { bucket: 'none', tone: 'neutral', pulse: false, label: 'cancelled' }],
+    ['waiting', { bucket: 'waiting', kind: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }],
+    // Amber, not violet (sidebar redesign): review is the user's move; violet is the agent's.
+    ['review', { bucket: 'waiting', kind: 'review', tone: 'pending', pulse: false, label: 'needs review' }],
+    ['running', { bucket: 'running', kind: 'running', tone: 'violet', pulse: true, label: 'running' }],
+    ['queued', { bucket: 'none', kind: 'queued', tone: 'neutral', pulse: false, label: 'queued' }],
+    ['done', { bucket: 'none', kind: 'done', tone: 'success', pulse: false, label: 'done' }],
+    ['failed', { bucket: 'error', kind: 'failed', tone: 'danger', pulse: false, label: 'failed' }],
+    ['cancelled', { bucket: 'none', kind: 'cancelled', tone: 'neutral', pulse: false, label: 'cancelled' }],
   ]
 
   it.each(cases)('maps %s', (status, expected) => {
@@ -61,7 +62,7 @@ describe('deriveAttention', () => {
     // The spec's "pulsing while transitioning": something is happening, or something is waiting
     // on you. A finished or parked run is still — a list where everything pulses says nothing.
     const pulsing = ALL_STATUSES.filter((status) => deriveAttention(run({ status })).pulse)
-    expect(pulsing).toEqual(['running', 'waiting', 'review'])
+    expect(pulsing).toEqual(['running', 'waiting'])
   })
 
   describe('permutations', () => {
@@ -148,6 +149,7 @@ describe('a run waiting out a usage limit', () => {
     // 2026-08-03-auto-resume-after-usage-limit) — amber and still, like `queued`.
     expect(deriveAttention(scheduled)).toEqual({
       bucket: 'none',
+      kind: 'scheduled',
       tone: 'pending',
       pulse: false,
       label: 'scheduled',
@@ -179,6 +181,7 @@ describe("running activity: 'monitoring' (#490)", () => {
   it('is a distinct, non-attention sub-state of running', () => {
     expect(deriveAttention(run({ status: 'running', activity: 'monitoring' }))).toEqual({
       bucket: 'running',
+      kind: 'monitoring',
       tone: 'violet',
       pulse: true,
       label: 'monitoring',

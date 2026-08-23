@@ -45,7 +45,7 @@ const bucket = (label: string): HTMLElement => {
 }
 
 const row = (id: string) => document.querySelector(`[data-run-id="${id}"]`)
-const dotOf = (id: string) => document.querySelector(`[data-run-id="${id}"] [data-slot="status-dot"]`)
+const dotOf = (id: string) => document.querySelector(`[data-run-id="${id}"] [data-slot="status-mark"]`)
 
 /** The rendered text of each row under one bucket header, in order. */
 const rowsIn = (label: string): string[] =>
@@ -165,20 +165,23 @@ describe('TaskQuickList', () => {
         ],
       })
       expect(dotOf('w')?.getAttribute('data-tone')).toBe('pending')
-      expect(dotOf('v')?.getAttribute('data-tone')).toBe('violet')
+      // Review is amber now — your move, like waiting — told apart from it by its glyph.
+      expect(dotOf('v')?.getAttribute('data-tone')).toBe('pending')
+      expect(dotOf('v')?.getAttribute('data-kind')).toBe('review')
       expect(dotOf('r')?.getAttribute('data-tone')).toBe('violet')
       expect(dotOf('d')?.getAttribute('data-tone')).toBe('success')
       expect(dotOf('f')?.getAttribute('data-tone')).toBe('danger')
 
       // Exactly one dot per row — the design system's "a single 7px dot per row" rule.
-      expect(document.querySelectorAll('[data-run-id="w"] [data-slot="status-dot"]')).toHaveLength(1)
+      expect(document.querySelectorAll('[data-run-id="w"] [data-slot="status-mark"]')).toHaveLength(1)
       expect(dotOf('w')?.getAttribute('aria-label')).toBe('needs you')
     })
 
     it('pulses the transitioning rows only', () => {
       renderList({ runs: [run({ id: 'r', status: 'running' }), run({ id: 'd', status: 'done' })] })
-      expect(dotOf('r')?.className).toContain('animate-pulse')
-      expect(dotOf('d')?.className).not.toContain('animate-pulse')
+      // Motion rides the glyph: a slow spin for the agent at work, nothing on a finished run.
+      expect(dotOf('r')?.querySelector('svg')?.getAttribute('class')).toContain('animate-spin')
+      expect(dotOf('d')?.querySelector('svg')?.getAttribute('class')).not.toMatch(/animate-/)
     })
   })
 
@@ -349,7 +352,7 @@ describe('TaskQuickList', () => {
 
       // Everything the row paints, in reading order: name, then the meta line — age,
       // reference, diff.
-      expect(rowsIn('Recent')).toEqual(['implementing comment threads across the whole thread view1m#775+59514 −12160'])
+      expect(rowsIn('Recent')).toEqual(['implementing comment threads across the whole thread viewunread1m#775+59514 −12160'])
     })
 
     it('gives the collapsed variant tile the same floor', () => {
@@ -378,7 +381,7 @@ describe('TaskQuickList', () => {
           run({ id: 'new', title: 'New', status: 'running', createdAt: ago(4 * 60_000) }),
         ],
       })
-      expect(row('old')?.textContent).toBe('Old2h')
+      expect(row('old')?.textContent).toBe('Oldunread2h')
       expect(row('new')?.textContent).toBe('New4m')
     })
 
@@ -423,7 +426,7 @@ describe('TaskQuickList', () => {
           }),
         ],
       })
-      expect(row('aged')?.textContent).toBe('Finished with a PR2h#9')
+      expect(row('aged')?.textContent).toBe('Finished with a PRunread2h#9')
     })
   })
 

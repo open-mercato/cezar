@@ -603,7 +603,7 @@ function TaskTableCell({
         <td data-column-id={column.id} className={TD_BASE}>
           {/* A scheduled run wears its appointment in the pill, the way a queued one wears its
               queue position — the row's whole answer to "what is this waiting for?". */}
-          <Pill dot={attention.tone} pulse={attention.pulse} title={scheduled?.title}>
+          <Pill mark={attention} title={scheduled?.title}>
             {attention.label}
             {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
           </Pill>
@@ -824,7 +824,7 @@ function TaskCard({
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
     >
       <div className="flex items-start gap-2.5">
-        <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
+        <Pill mark={attention} className="mt-px shrink-0" title={scheduled?.title}>
           {attention.label}
           {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
         </Pill>

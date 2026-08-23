@@ -6,6 +6,7 @@ import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
 import { StatusDot } from '@/components/status-dot'
+import { StatusMark } from '@/components/status-mark'
 import { useTheme } from '@/components/theme-provider'
 import type { Theme } from '@/lib/theme'
 import {
@@ -300,7 +301,7 @@ function TaskItem({
       data-project-id={task.projectId ?? undefined}
       onSelect={() => onSelect(task)}
     >
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+      <StatusMark attention={attention} />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {/* Only in a multi-project workspace: with one project the label would name the only
           place a task could possibly be. */}

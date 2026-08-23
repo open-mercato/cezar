@@ -9,6 +9,7 @@ import { ReferenceChip } from '@/components/reference-chip'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
+import { StatusMark } from '@/components/status-mark'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread } from '@/lib/read-state'
@@ -322,7 +323,7 @@ function RunRow({
     >
       {/* Outside the Link so it can lead the reference chip. The dot is a status indicator, not a
           navigation target, and the wrapper still owns the row's hover surface. */}
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" className="mt-[12px]" />
+      <StatusMark attention={attention} className="mt-[9px]" />
       {/* Two lines, ONE anchor: the title line is the row's link; the meta line sits beside it
           as a sibling because the reference chip is itself a link, and an anchor inside an
           anchor is invalid HTML. The wrapper still paints the hover for both. */}
@@ -349,16 +350,9 @@ function RunRow({
           >
             {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
           </span>
-          {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
-              different hue from the leading status dot, so the two read as two signals. */}
-          {unread ? (
-            <StatusDot
-              tone="violet"
-              role="img"
-              aria-label="unread"
-              className="size-[6px] shrink-0"
-            />
-          ) : null}
+          {/* Unread (#unread-done-items) is the title's WEIGHT alone — the trailing dot said the
+              same thing twice. The accessible name keeps the word. */}
+          {unread ? <span className="sr-only">unread</span> : null}
         </Link>
         {/* The META line (Devin-style two-line row): age or queue slot, then the reference with
             its live status in its own tone, then the diff pair where the column affords it.
@@ -590,7 +584,7 @@ function IndexRunRow({ entry, currentRunId, now }: { entry: RunIndexEntry; curre
       data-active={isActive ? 'true' : undefined}
       className="flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-card"
     >
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" className="mt-[12px]" />
+      <StatusMark attention={attention} className="mt-[9px]" />
       <span className="flex min-w-0 flex-1 flex-col gap-[3px] py-[6px] pr-2.5">
         <Link
           to={scopeTo(entry.projectId, `/tasks/${entry.id}`)}
@@ -607,7 +601,7 @@ function IndexRunRow({ entry, currentRunId, now }: { entry: RunIndexEntry; curre
           >
             {displayTitle}
           </span>
-          {unread ? <StatusDot tone="violet" role="img" aria-label="unread" className="size-[6px] shrink-0" /> : null}
+          {unread ? <span className="sr-only">unread</span> : null}
         </Link>
         <span data-slot="task-row-meta" className="flex min-w-0 items-center gap-2.5 text-[11px] leading-none text-soft-foreground">
           <span className="shrink-0 tabular-nums">{age}</span>

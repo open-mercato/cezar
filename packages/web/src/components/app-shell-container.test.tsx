@@ -396,7 +396,7 @@ describe('sidebar wiring', () => {
     const rows = [...(groups[1]?.querySelectorAll('[data-slot="task-row"]') ?? [])]
     expect(rows.map((r) => r.getAttribute('data-run-id'))).toEqual(['r-shop-1', 'r-shop-2'])
     expect(rows[0]?.querySelector('a')?.getAttribute('href')).toBe('/p/shop/tasks/r-shop-1')
-    expect(rows[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(rows[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
     // Each group starts its own task in its own project, and names itself as the door to its table.
     expect(screen.getByRole('link', { name: 'New task in shop' }).getAttribute('href')).toBe('/p/shop/new')
     expect(screen.getByRole('link', { name: 'New task in cezar' })).toBeTruthy()

@@ -241,7 +241,7 @@ function VariantColumn({
         >
           {variant.variant}
         </span>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
+        <Pill mark={attention}>
           {attention.label}
         </Pill>
         {(showTokens && hasDirectionalUsage) || (showCost && cost) ? (

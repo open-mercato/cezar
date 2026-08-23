@@ -33,8 +33,25 @@ export type AttentionBucket = keyof typeof ATTENTION_RANK
  *  this module UI-free; `attention.test.ts` asserts the two sets stay identical. */
 export type AttentionTone = 'success' | 'pending' | 'danger' | 'violet' | 'neutral'
 
+/** The state the mark draws — one glyph each (`StatusMark`). The tone says WHO has the move
+ *  (violet = the agent, amber = you, red = broken, green = done, neutral = nothing moving);
+ *  the kind says what exactly, so two states of one colour never look the same. */
+export type AttentionKind =
+  | 'permission'
+  | 'scheduled'
+  | 'failed'
+  | 'waiting'
+  | 'review'
+  | 'monitoring'
+  | 'running'
+  | 'unseen'
+  | 'queued'
+  | 'done'
+  | 'cancelled'
+
 export interface Attention {
   bucket: AttentionBucket
+  kind: AttentionKind
   tone: AttentionTone
   /** True while the run is *transitioning* — the spec's "pulsing while transitioning" rule. */
   pulse: boolean
@@ -93,7 +110,7 @@ export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResume
  */
 export function deriveAttention(run: AttentionInput): Attention {
   if (hasPendingPermission(run)) {
-    return { bucket: 'permission', tone: 'violet', pulse: true, label: 'needs permission' }
+    return { bucket: 'permission', kind: 'permission', tone: 'pending', pulse: true, label: 'needs permission' }
   }
   // A run a provider usage limit stopped is `failed` on the record, but it is not an outcome —
   // it is a task with an appointment (spec 2026-08-03-auto-resume-after-usage-limit). Painting
@@ -102,36 +119,38 @@ export function deriveAttention(run: AttentionInput): Attention {
   // like `queued`: amber, still, and asking for nothing. Ahead of the `failed` rung because the
   // chain is first-match-wins.
   if (run.status === 'failed' && run.autoResumeAt) {
-    return { bucket: 'none', tone: 'pending', pulse: false, label: 'scheduled' }
+    return { bucket: 'none', kind: 'scheduled', tone: 'pending', pulse: false, label: 'scheduled' }
   }
   if (run.status === 'failed') {
-    return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
+    return { bucket: 'error', kind: 'failed', tone: 'danger', pulse: false, label: 'failed' }
   }
   if (run.status === 'waiting') {
-    return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
+    return { bucket: 'waiting', kind: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
   }
   if (run.status === 'review') {
-    return { bucket: 'waiting', tone: 'violet', pulse: true, label: 'needs review' }
+    // Amber, not violet (sidebar redesign): review is YOUR move, and amber is the colour of
+    // your move — violet is reserved for the agent's. Still, no pulse: it waits, it does not nag.
+    return { bucket: 'waiting', kind: 'review', tone: 'pending', pulse: false, label: 'needs review' }
   }
   if (run.status === 'running' && run.activity === 'monitoring') {
     // Still working, but on its OWN downstream work (a sub-agent / a monitored
     // command), not on you (#490). A sub-state of `running`, so it stays in the
     // `running` bucket — no notification, no "Needs you" — with its own label.
-    return { bucket: 'running', tone: 'violet', pulse: true, label: 'monitoring' }
+    return { bucket: 'running', kind: 'monitoring', tone: 'violet', pulse: true, label: 'monitoring' }
   }
   if (run.status === 'running') {
-    return { bucket: 'running', tone: 'violet', pulse: true, label: 'running' }
+    return { bucket: 'running', kind: 'running', tone: 'violet', pulse: true, label: 'running' }
   }
   if (isUnseen(run)) {
-    return { bucket: 'unseen', tone: 'violet', pulse: false, label: 'unseen' }
+    return { bucket: 'unseen', kind: 'unseen', tone: 'violet', pulse: false, label: 'unseen' }
   }
   if (run.status === 'queued') {
-    return { bucket: 'none', tone: 'neutral', pulse: false, label: 'queued' }
+    return { bucket: 'none', kind: 'queued', tone: 'neutral', pulse: false, label: 'queued' }
   }
   if (run.status === 'done') {
-    return { bucket: 'none', tone: 'success', pulse: false, label: 'done' }
+    return { bucket: 'none', kind: 'done', tone: 'success', pulse: false, label: 'done' }
   }
-  return { bucket: 'none', tone: 'neutral', pulse: false, label: 'cancelled' }
+  return { bucket: 'none', kind: 'cancelled', tone: 'neutral', pulse: false, label: 'cancelled' }
 }
 
 /**

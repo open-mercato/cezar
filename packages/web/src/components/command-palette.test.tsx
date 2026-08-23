@@ -448,8 +448,8 @@ describe('Tasks group', () => {
     const tasks = [...document.querySelectorAll('[data-slot="palette-task"]')]
     expect(tasks.map((task) => task.getAttribute('data-run-id'))).toEqual(['r-new', 'r-old'])
     // The dot is deriveAttention's, not a re-derivation: waiting → pending, done → success.
-    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
-    expect(tasks[1]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    expect(tasks[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(tasks[1]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('success')
 
     fireEvent.click(tasks[0] as HTMLElement)
 
@@ -587,7 +587,7 @@ describe('Recently finished group', () => {
     expect(groups).not.toContain('Recently finished')
     // And it wears the parked dot the rest of the cockpit gives it, not the failure red.
     const row = document.querySelector('[data-run-id="r-parked"]')
-    expect(row?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(row?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
   })
 
   it('leaves archived runs out — archiving is a stronger "done with this" than reading', async () => {
@@ -768,8 +768,9 @@ describe('Tasks across projects', () => {
 
     const tasks = [...document.querySelectorAll('[data-slot="palette-task"]')]
     expect(tasks.map((task) => task.getAttribute('data-run-id'))).toEqual(['r-mine', 'r-shop'])
-    // review → violet, not the index's stale running.
-    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    // review → amber (the user's move), not the index's stale running (violet, the agent's).
+    expect(tasks[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(tasks[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-kind')).toBe('review')
   })
 
   it('lists the boot project once from an unscoped screen like global settings', async () => {
