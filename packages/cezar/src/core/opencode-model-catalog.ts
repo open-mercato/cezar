@@ -1,4 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import type { ModelOption } from './runner-model-catalog.ts';
 
@@ -10,6 +11,8 @@ export interface OpencodeModelDiscoveryOptions {
 }
 
 const DEFAULT_DISCOVERY_TIMEOUT_MS = 10_000;
+/** Grace between the probe's SIGTERM and the SIGKILL that follows it. */
+export const KILL_GRACE_MS = 2_000;
 const MAX_MODELS = 500;
 /** Defensive cap on what we buffer from a misbehaving child (characters of stdout). */
 const MAX_OUTPUT_CHARS = 512 * 1_024;
@@ -46,6 +49,7 @@ export async function discoverOpencodeModels(
   const bin = resolveOpencodeExecutable(options.bin);
   const args = ['models'] as const;
   const child = (options.spawn ?? spawnOpencode)(bin, args, options.cwd);
+  const kill = teardown(child);
 
   const timeoutMs = options.timeoutMs ?? DEFAULT_DISCOVERY_TIMEOUT_MS;
   let timeout: NodeJS.Timeout | undefined;
@@ -57,7 +61,7 @@ export async function discoverOpencodeModels(
 
       const fail = (message: string) => {
         reject(new Error(message));
-        kill(child);
+        kill();
       };
 
       timeout = setTimeout(() => fail('OpenCode model discovery timed out'), timeoutMs);
@@ -92,7 +96,7 @@ export async function discoverOpencodeModels(
     });
   } finally {
     if (timeout) clearTimeout(timeout);
-    kill(child);
+    kill();
   }
 }
 
@@ -142,6 +146,28 @@ function spawnOpencode(
   return child;
 }
 
-function kill(child: ChildProcessWithoutNullStreams): void {
-  if (child.exitCode === null && !child.killed) child.kill('SIGTERM');
+/**
+ * Returns the probe's teardown: SIGTERM now, SIGKILL once the grace window elapses.
+ *
+ * Both steps gate on the child's *real* termination, never on `child.killed` — Node flips that
+ * flag the moment a signal is delivered, so the old `exitCode === null && !child.killed` test
+ * went false the instant our own SIGTERM landed. A probe that installs a SIGTERM handler then
+ * survived every teardown, leaking one process per cache refresh (#858, the shape #841 fixed for
+ * the Claude probe in `a67b327d`).
+ *
+ * Called from both the failure path and the `finally`, so the escalation is armed at most once.
+ */
+function teardown(child: ChildProcessWithoutNullStreams): () => void {
+  const hasExited = trackChildExit(child);
+  let signalled = false;
+  return () => {
+    if (signalled || hasExited()) return;
+    signalled = true;
+    child.kill('SIGTERM');
+    const escalation = setTimeout(() => {
+      if (hasExited()) return;
+      child.kill('SIGKILL');
+    }, KILL_GRACE_MS);
+    escalation.unref?.();
+  };
 }

@@ -110,6 +110,8 @@ import {
   getApiBaseUrl,
   getApiScope,
   queryScope,
+  runHistoryContextSchema,
+  runHistoryPageSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -300,6 +302,45 @@ async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>
 }
 
 /**
+ * The `safeParse` half of a contract schema, spelled structurally.
+ *
+ * Keeps this package free of a direct `zod` dependency: the schemas arrive through the
+ * api-client barrel as runtime values (`contract-pipeline.test.ts` pins that), and this is the
+ * only part of them `unwrapValidated` uses.
+ */
+type ResponseValidator<T> = {
+  safeParse: (value: unknown) => { success: true; data: T } | { success: false }
+}
+
+/**
+ * `unwrap`, plus the shape check its cast cannot make.
+ *
+ * `unwrap` ends in `parsed as OkJson<R>` — a compile-time claim about a body the server sent at
+ * runtime. For most routes the claim is harmless: a caller reading a missing field gets
+ * `undefined` and renders nothing. The history routes are different — `useRunHistory` iterates
+ * `page.events`, so a 200 whose body is not a page throws a `TypeError` mid-render and takes the
+ * session view down with it, bypassing the hook's own full-replay fallback (which only triggers
+ * on a REJECTED query). Validating here turns that body into the same `ApiError` a non-JSON body
+ * already produces, so the malformed case degrades exactly like the unreachable one.
+ *
+ * Its own server cannot produce such a body (`contract-parity.test.ts` pins both response types
+ * to these schemas) — this guards the boundary against a proxy, a stale server, or a stub.
+ */
+async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>>(
+  res: R,
+  label: string,
+  schema: ResponseValidator<OkJson<R>>,
+): Promise<OkJson<R>> {
+  const status = res.status
+  const parsed = await unwrap(res, label)
+  const result = schema.safeParse(parsed)
+  if (!result.success) {
+    throw new ApiError(status, `the cezar server answered ${label} with an unexpected body`)
+  }
+  return result.data
+}
+
+/**
  * The one `fetch` both request paths go through — hand-written and typed alike.
  *
  * Shared rather than duplicated because the two behaviours below are the contract, and a
@@ -464,12 +505,32 @@ export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
   )
 }
 
+/**
+ * The same read by EXPLICIT project — the twin of `getRun`, for the reason `archiveProjectRun`
+ * spells out: the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would
+ * name the BOOT project for a row that belongs to another one. It is also the only way that page
+ * can learn a run's steps: its own index ships a deliberately slim entry (no `steps`, no
+ * `runner`), and whether a finished task can be reopened is a question only the full record
+ * answers.
+ */
+export async function getProjectRun(projectId: string, id: string, opts?: ReadOptions): Promise<ApiRun> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$get(
+      { param: { projectId, id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id),
+  )
+}
+
+/** One reverse-paged history page. Validated (not merely cast) because `useRunHistory` iterates
+ *  `events`: see `unwrapValidated`. */
 export async function getRunHistory(
   id: string,
   cursor?: string,
   opts?: ReadOptions,
 ): Promise<RunHistoryPage> {
-  return unwrap(
+  return unwrapValidated(
     await cez.api.v1.p[':projectId'].runs[':id'].history.$get(
       {
         param: { projectId: queryScope(), id: encodeURIComponent(id) },
@@ -478,16 +539,19 @@ export async function getRunHistory(
       init(opts),
     ),
     `${runPath(id)}/history`,
+    runHistoryPageSchema,
   )
 }
 
+/** The compact current-state context for a run. Validated for the same reason as the page above. */
 export async function getRunHistoryContext(id: string, opts?: ReadOptions): Promise<RunHistoryContext> {
-  return unwrap(
+  return unwrapValidated(
     await cez.api.v1.p[':projectId'].runs[':id']['history-context'].$get(
       { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
       init(opts),
     ),
     `${runPath(id)}/history-context`,
+    runHistoryContextSchema,
   )
 }
 
@@ -1211,6 +1275,26 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
   )
 }
 
+/** The same reopen by EXPLICIT project — see `archiveProjectRun`. */
+export async function continueProjectRun(
+  projectId: string,
+  id: string,
+  opts: ContinueOptions = {},
+): Promise<ContinueResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: {
+        ...(opts.text !== undefined ? { text: opts.text } : {}),
+        ...(opts.images !== undefined ? { images: opts.images } : {}),
+        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+      },
+    }),
+    runPath(id, '/continue'),
+  )
+}
+
 /** Draft PR from the review gate (spec 009): push the branch, `gh pr create --draft`; the run
  *  completes as done with the PR badge. On 409 the ApiError's `manual` carries the
  *  `git merge <branch>` fallback to show copyable. */
@@ -1398,6 +1482,22 @@ export async function sendMessage(id: string, message: MessageInput): Promise<Me
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { text: message.text ?? '', images: message.images ?? [] },
+    }),
+    runPath(id, '/messages'),
+  )
+}
+
+/** The same delivery by EXPLICIT project — see `archiveProjectRun`. What lets a chip on the
+ *  global Tasks page speak to a run in a project this page is not standing in. */
+export async function sendProjectRunMessage(
+  projectId: string,
+  id: string,
+  message: MessageInput,
+): Promise<MessageResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+      param: { projectId, id: encodeURIComponent(id) },
       json: { text: message.text ?? '', images: message.images ?? [] },
     }),
     runPath(id, '/messages'),

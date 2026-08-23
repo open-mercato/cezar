@@ -28,6 +28,7 @@ import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-fi
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ResolveConflictsForRun } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -988,6 +989,16 @@ function ReferenceChips({
           // Named per chip HERE and nowhere else: this page's rows come from different projects,
           // and two of them may each have a #42.
           projectId={run.projectId}
+          // Same panel, same button, same prompt as the task's own page. The run record it needs
+          // is fetched by the action itself, and only once the panel is open — this page's index
+          // row is deliberately too slim to answer whether the task can be reopened.
+          conflictAction={
+            <ResolveConflictsForRun
+              projectId={run.projectId}
+              runId={run.id}
+              prNumber={reference.number}
+            />
+          }
           className="shrink-0"
         />
       ))}

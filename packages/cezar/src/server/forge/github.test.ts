@@ -1980,7 +1980,7 @@ describe('derivePrReferenceStatus', () => {
     expect(
       pr({ reviewDecision: 'CHANGES_REQUESTED', checks: 'passing', reviewRequested: true }),
     ).toBe('review-required');
-    // …even with the review timestamps saying the review is the newest thing that happened.
+    // …even with nothing pushed since, as long as the request itself POSTDATES the review.
     expect(
       pr({
         reviewDecision: 'CHANGES_REQUESTED',
@@ -1988,8 +1988,48 @@ describe('derivePrReferenceStatus', () => {
         reviewRequested: true,
         changesRequestedAt: '2026-08-11T12:00:00Z',
         headCommittedAt: '2026-08-11T09:00:00Z',
+        reviewRequestedAt: '2026-08-11T12:30:00Z',
       }),
     ).toBe('review-required');
+  });
+
+  it('does NOT read a reviewer asked BEFORE the review as an answer to it', () => {
+    // The reported case: three reviewers requested at once, one of them requested changes the
+    // next day, the other two never looked — so `reviewRequests.totalCount` stays 1 with nothing
+    // whatsoever having happened since. Counting that as the author re-requesting painted "Waiting
+    // for review" over a live rejection, which is the opposite of whose move it is.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        reviewRequested: true,
+        reviewRequestedAt: '2026-08-18T10:28:43Z',
+        changesRequestedAt: '2026-08-19T11:00:27Z',
+        headCommittedAt: '2026-08-18T10:23:40Z',
+      }),
+    ).toBe('changes-requested');
+    // A stale request does not stop a PUSH from handing the ball back, though — that rule is
+    // untouched, and it is the one the reporter called fine.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        reviewRequested: true,
+        reviewRequestedAt: '2026-08-18T10:28:43Z',
+        changesRequestedAt: '2026-08-19T11:00:27Z',
+        headCommittedAt: '2026-08-19T14:00:00Z',
+      }),
+    ).toBe('review-required');
+    // An undated request against a dated review is the unusable-pair case: conservative, so the
+    // chip keeps pointing at the author rather than dismissing a review on a guess.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        reviewRequested: true,
+        changesRequestedAt: '2026-08-19T11:00:27Z',
+      }),
+    ).toBe('changes-requested');
   });
 
   it('hands it back on a PUSH too, for an author who re-requested nothing', () => {
@@ -2001,6 +2041,78 @@ describe('derivePrReferenceStatus', () => {
         headCommittedAt: '2026-08-11T12:00:00Z',
       }),
     ).toBe('review-required');
+    // One parent is an ordinary commit, stated or not — the count only ever rules a merge OUT.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        changesRequestedAt: '2026-08-11T09:00:00Z',
+        headCommittedAt: '2026-08-11T12:00:00Z',
+        headParentCount: 1,
+      }),
+    ).toBe('review-required');
+  });
+
+  it('does NOT let "Update branch" clear a rejection — a merge answers nothing', () => {
+    // GitHub's Update-branch button writes `Merge branch 'main' into <branch>` dated NOW, newer
+    // than any review while addressing none of it. Shape confirmed on a real PR,
+    // whose head commit reports two parents. Counting it as a push would let the one click people
+    // make reflexively on a stale PR wipe a live rejection off the chip.
+    const updated = {
+      reviewDecision: 'CHANGES_REQUESTED' as const,
+      changesRequestedAt: '2026-08-11T09:00:00Z',
+      headCommittedAt: '2026-08-11T12:00:00Z',
+      headParentCount: 2,
+    };
+    expect(pr({ ...updated, checks: 'passing' })).toBe('changes-requested');
+    // An octopus merge is no more of an answer than a two-parent one.
+    expect(pr({ ...updated, checks: 'passing', headParentCount: 3 })).toBe('changes-requested');
+    // …but a re-request still hands the ball back, merge or no merge: that signal is the author
+    // SAYING they are done, where the merge only looks like it.
+    expect(
+      pr({ ...updated, checks: 'passing', reviewRequested: true, reviewRequestedAt: '2026-08-11T12:30:00Z' }),
+    ).toBe('review-required');
+  });
+
+  it('does NOT let a merge landing on top ERASE an answer the author already gave', () => {
+    // The other half of the merge rule, and the one that bites in practice: a merge is transparent,
+    // not disqualifying. Sequence — reviewer requests changes at 09:00; author pushes a real fix at
+    // 12:00 (chip correctly goes blue); the base moves on and the PR conflicts; the author presses
+    // this cockpit's own "Resolve conflicts" (or GitHub's "Update branch") at 15:00. Reading only
+    // the head would see a 2-parent commit, discard the 12:00 fix and flip the chip back to red,
+    // blaming an author who answered two steps ago. The merge's FIRST parent still carries 12:00.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        changesRequestedAt: '2026-08-11T09:00:00Z',
+        headCommittedAt: '2026-08-11T15:00:00Z',
+        headParentCount: 2,
+        headFirstParentCommittedAt: '2026-08-11T12:00:00Z',
+      }),
+    ).toBe('review-required');
+    // The plain "Update branch" case is unchanged: nothing was pushed after the review, so the
+    // first parent is the pre-review commit and the rejection still stands.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        changesRequestedAt: '2026-08-11T09:00:00Z',
+        headCommittedAt: '2026-08-11T15:00:00Z',
+        headParentCount: 2,
+        headFirstParentCommittedAt: '2026-08-11T06:00:00Z',
+      }),
+    ).toBe('changes-requested');
+    // A merge with no first-parent date is the unusable-pair case: conservative, review stands.
+    expect(
+      pr({
+        reviewDecision: 'CHANGES_REQUESTED',
+        checks: 'passing',
+        changesRequestedAt: '2026-08-11T09:00:00Z',
+        headCommittedAt: '2026-08-11T15:00:00Z',
+        headParentCount: 2,
+      }),
+    ).toBe('changes-requested');
   });
 
   it('still puts a red build above a waiting reviewer — they cannot approve it anyway', () => {
@@ -2018,7 +2130,7 @@ describe('derivePrReferenceStatus', () => {
   });
 
   it('lets an APPROVAL outrank a reviewer still listed as requested', () => {
-    // Real shape, from shopware/frontends#2574: approved, mergeable, green — and one reviewer left
+    // Real shape, observed live: approved, mergeable, green — and one reviewer left
     // on the request list after someone else approved. That is a courtesy ask, not an unmet gate,
     // and reading it as "waiting for review" would stick for as long as anyone stays listed, which
     // is indefinitely. A repo needing two approvals reports REVIEW_REQUIRED until it has both, so
@@ -2074,9 +2186,11 @@ describe('derivePrReferenceStatus', () => {
  * The whole combination space, checked against INVARIANTS rather than a second copy of the
  * ranking.
  *
- * The precedence has been edited three times — checks-pending above a requested change, the
- * re-request handoff, then `APPROVED` outranking a pending request — and each edit reordered
- * branches that the curated examples above only sample. Restating the expected answer for all 64
+ * The precedence has been edited five times — checks-pending above a requested change, the
+ * re-request handoff, `APPROVED` outranking a pending request, that handoff being narrowed to
+ * requests that postdate the review, then merge commits dropping out of the push rule — and each
+ * edit reordered branches that the curated examples above only sample. Restating the expected
+ * answer for all 256
  * combinations would just be the implementation written twice, and would agree with a bug as
  * readily as with a fix. These are the properties that must hold whatever the ordering is; a
  * future edit that violates one is a bug by construction.
@@ -2096,22 +2210,29 @@ describe('derivePrReferenceStatus over every combination', () => {
     'ready',
   ]);
 
-  /** Every open, non-draft shape: 4 check states × 4 decisions × requested × pushed-since. */
+  /** Every open, non-draft shape: 4 check states × 4 decisions × requested × pushed-since ×
+   *  request-postdates-the-review × head-is-a-merge. */
   const openRows = () => {
     const rows: Parameters<typeof derivePrReferenceStatus>[0][] = [];
     for (const checks of CHECKS) {
       for (const reviewDecision of DECISIONS) {
         for (const reviewRequested of BOOLS) {
           for (const pushed of BOOLS) {
-            rows.push({
-              state: 'OPEN',
-              isDraft: false,
-              reviewDecision,
-              checks,
-              reviewRequested,
-              changesRequestedAt: '2026-08-11T09:00:00Z',
-              headCommittedAt: pushed ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
-            });
+            for (const reRequested of BOOLS) {
+              for (const merge of BOOLS) {
+                rows.push({
+                  state: 'OPEN',
+                  isDraft: false,
+                  reviewDecision,
+                  checks,
+                  reviewRequested,
+                  changesRequestedAt: '2026-08-11T09:00:00Z',
+                  headCommittedAt: pushed ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
+                  reviewRequestedAt: reRequested ? '2026-08-11T12:00:00Z' : '2026-08-11T06:00:00Z',
+                  headParentCount: merge ? 2 : 1,
+                });
+              }
+            }
           }
         }
       }
@@ -2121,8 +2242,8 @@ describe('derivePrReferenceStatus over every combination', () => {
 
   const describeRow = (row: Parameters<typeof derivePrReferenceStatus>[0]) => JSON.stringify(row);
 
-  it('covers 64 open shapes', () => {
-    expect(openRows()).toHaveLength(64);
+  it('covers 256 open shapes', () => {
+    expect(openRows()).toHaveLength(256);
   });
 
   it('only ever answers with a PULL REQUEST status', () => {
@@ -2149,7 +2270,7 @@ describe('derivePrReferenceStatus over every combination', () => {
   });
 
   it('never blames the author once the forge says APPROVED', () => {
-    // The shopware/frontends#2574 class of bug: an approved PR must not read as waiting on a
+    // The approved-but-still-requested class of bug: an approved PR must not read as waiting on a
     // reviewer or owing edits, however many reviewers are still listed as requested.
     for (const row of openRows()) {
       const status = derivePrReferenceStatus({ ...row, reviewDecision: 'APPROVED' });
@@ -2162,6 +2283,33 @@ describe('derivePrReferenceStatus over every combination', () => {
       if (derivePrReferenceStatus(row) === 'changes-requested') {
         expect(row.reviewDecision, describeRow(row)).toBe('CHANGES_REQUESTED');
       }
+    }
+  });
+
+  it('never lets a request OLDER than the review dismiss that review', () => {
+    // The stale-review-request class of bug, as an invariant: with nothing pushed since and the
+    // standing request predating the review, no combination may report the ball as the reviewer's.
+    for (const row of openRows()) {
+      if (row.reviewDecision !== 'CHANGES_REQUESTED') continue;
+      if (row.checks === 'pending' || row.checks === 'failing') continue; // those outrank it by design
+      const stale =
+        row.headCommittedAt === '2026-08-11T06:00:00Z' && row.reviewRequestedAt === '2026-08-11T06:00:00Z';
+      if (!stale) continue;
+      expect(derivePrReferenceStatus(row), describeRow(row)).toBe('changes-requested');
+    }
+  });
+
+  it('never lets a MERGE at the head stand in for the author answering', () => {
+    // The "Update branch" class of bug, as an invariant: with a merge commit on top and no
+    // re-request, the head's date is irrelevant — a rejection stays a rejection however fresh the
+    // merge is. Only `reviewRequested` may overrule it, and it does so on its own merits.
+    for (const row of openRows()) {
+      if (row.reviewDecision !== 'CHANGES_REQUESTED') continue;
+      if (row.checks === 'pending' || row.checks === 'failing') continue; // those outrank it by design
+      if (row.headParentCount !== 2) continue;
+      const reRequested = row.reviewRequested === true && row.reviewRequestedAt === '2026-08-11T12:00:00Z';
+      if (reRequested) continue;
+      expect(derivePrReferenceStatus(row), describeRow(row)).toBe('changes-requested');
     }
   });
 
@@ -2221,13 +2369,20 @@ describe('fetchRefStatuses', () => {
   const prNode = (over: Record<string, unknown> = {}) => ({
     __typename: 'PullRequest',
     state: 'OPEN',
+    // What GitHub answers for a settled open PR. Defaulted so the cases below stay about
+    // STATUSES; the mergeability cases override it, and one of them omits it on purpose.
+    mergeable: 'MERGEABLE',
     isDraft: false,
     reviewDecision: null,
     commits: { nodes: [{ commit: { committedDate: '2026-08-11T12:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }] },
     reviews: { nodes: [] },
     reviewRequests: { totalCount: 0 },
+    timelineItems: { nodes: [] },
     ...over,
   });
+  /** A requested reviewer as both connections spell one. `Team` uses `slug` instead — see the
+   *  team test below. */
+  const reviewer = (login: string) => ({ __typename: 'User', login });
   const issueNode = (over: Record<string, unknown> = {}) => ({
     __typename: 'Issue',
     state: 'OPEN',
@@ -2247,7 +2402,7 @@ describe('fetchRefStatuses', () => {
     const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 12, 3]);
     expect(runGraphql).toHaveBeenCalledTimes(1);
     expect(sent).toContain('issueOrPullRequest');
-    expect(out[7]).toEqual({ kind: 'pr', status: 'ready' });
+    expect(out[7]).toEqual({ kind: 'pr', status: 'ready', mergeable: 'mergeable' });
     expect(out[12]).toEqual({ kind: 'pr', status: 'merged' });
     expect(out[3]).toEqual({ kind: 'issue', status: 'not-planned' });
   });
@@ -2303,7 +2458,157 @@ describe('fetchRefStatuses', () => {
       });
     });
     expect((await fetchRefStatuses(runGraphql, 'o', 'n', [774])).resolved[774]?.status).toBe('review-required');
-    expect(sent).toContain('reviewRequests(first: 1) { totalCount }');
+    expect(sent).toContain('reviewRequests(first: 20) { totalCount');
+  });
+
+  it('carries the review-request DATE too, so an old request cannot dismiss a review', async () => {
+    // The reported PR's exact payload. The count alone is identical to the #774 shape
+    // above; only the timeline event tells the two apart, so it has to survive the query and the
+    // parse — dropping either would silently restore the bug.
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-18T10:23:40Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
+          reviewRequests: { totalCount: 1, nodes: [{ requestedReviewer: reviewer('carol') }] },
+          timelineItems: { nodes: [{ createdAt: '2026-08-18T10:28:43Z', requestedReviewer: reviewer('carol') }] },
+        }),
+      });
+    });
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [2642])).resolved[2642]?.status).toBe('changes-requested');
+    expect(sent).toContain('itemTypes: [REVIEW_REQUESTED_EVENT]');
+  });
+
+  it('dates the request that STILL STANDS, not one that was made and then withdrawn', async () => {
+    // The two connections answer about different requests: `reviewRequests` is who is on the hook
+    // now, a `ReviewRequestedEvent` survives the request being withdrawn. Here carol was asked
+    // before the review and never looked (so she still stands), while dave was asked after it and
+    // then removed. Taking the newest event blindly would date the request from dave's withdrawn
+    // one, read the rejection as answered, and hide it behind "waiting for review" — the same bug
+    // one step rarer. Matching by reviewer keeps the date on a request that is really there.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-18T10:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:00Z' }] },
+          reviewRequests: { totalCount: 1, nodes: [{ requestedReviewer: reviewer('carol') }] },
+          timelineItems: {
+            nodes: [
+              { createdAt: '2026-08-18T10:30:00Z', requestedReviewer: reviewer('carol') },
+              { createdAt: '2026-08-19T14:00:00Z', requestedReviewer: reviewer('dave') }, // withdrawn
+            ],
+          },
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('changes-requested');
+  });
+
+  it('hands the ball back when the STANDING reviewer is the one asked after the review', async () => {
+    // The mirror of the test above, so the correlation cannot pass by simply never matching:
+    // carol's own request postdates the review and still stands, which is a real re-request.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-18T10:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:00Z' }] },
+          reviewRequests: { totalCount: 1, nodes: [{ requestedReviewer: reviewer('carol') }] },
+          timelineItems: { nodes: [{ createdAt: '2026-08-19T14:00:00Z', requestedReviewer: reviewer('carol') }] },
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('review-required');
+  });
+
+  it('matches a TEAM reviewer by slug, since a team carries no login', async () => {
+    const team = { __typename: 'Team', slug: 'platform' };
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-18T10:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:00Z' }] },
+          reviewRequests: { totalCount: 1, nodes: [{ requestedReviewer: team }] },
+          timelineItems: { nodes: [{ createdAt: '2026-08-19T14:00:00Z', requestedReviewer: team }] },
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('review-required');
+  });
+
+  it('carries the head commit\'s PARENT COUNT, so "Update branch" cannot clear a review', async () => {
+    // A real "Update branch" head's shape: a `Merge branch 'main' into <branch>` head reporting two
+    // parents. `parents(first: 0)` asks for the count and no parent — if the query or the parse
+    // dropped it, the merge would read as a push and the chip would go blue on a rejected PR.
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [
+              {
+                commit: {
+                  committedDate: '2026-08-19T15:00:00Z',
+                  parents: { totalCount: 2 },
+                  statusCheckRollup: { state: 'SUCCESS' },
+                },
+              },
+            ],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
+        }),
+      });
+    });
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [2639])).resolved[2639]?.status).toBe('changes-requested');
+    // `first: 1`, not `first: 0`: the first parent's date is what a merge answers WITH.
+    expect(sent).toContain('parents(first: 1) { totalCount nodes { committedDate } }');
+  });
+
+  it('reads an absent parent count as an ORDINARY commit, so a real push still counts', async () => {
+    // The push rule is the common path; a field GitHub declined to send must not switch it off.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          commits: {
+            nodes: [{ commit: { committedDate: '2026-08-19T15:00:00Z', statusCheckRollup: { state: 'SUCCESS' } } }],
+          },
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('review-required');
+  });
+
+  it('reads an absent timeline as an UNDATED request, not as a fresh one', async () => {
+    // Same defensive shape as the missing `reviewRequests` below: an omitted field must not invent
+    // a re-request and dismiss a review that is still about the code on screen.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({
+          reviewDecision: 'CHANGES_REQUESTED',
+          reviews: { nodes: [{ submittedAt: '2026-08-19T11:00:27Z' }] },
+          reviewRequests: { totalCount: 1 },
+          timelineItems: null,
+        }),
+      }),
+    );
+    expect((await fetchRefStatuses(runGraphql, 'o', 'n', [7])).resolved[7]?.status).toBe('changes-requested');
   });
 
   it('reads an absent reviewRequests as nobody waiting, not as somebody', async () => {
@@ -2345,6 +2650,61 @@ describe('fetchRefStatuses', () => {
     expect(await fetchRefStatuses(runGraphql, 'o', 'n', [])).toEqual({ resolved: {}, failed: [] });
     expect(runGraphql).not.toHaveBeenCalled();
   });
+
+  it('carries mergeability as its OWN axis, on the same query and without touching the status', async () => {
+    // The reported case: green, nobody waited on, and GitHub refusing to merge it. `ready` is
+    // still the honest answer to "whose move is it on the review" — the conflict is the second
+    // fact, and it rides the same aliased node, so it costs no extra request.
+    let sent = '';
+    const runGraphql = vi.fn(async (query: string) => {
+      sent = query;
+      return reply({ r0: prNode({ mergeable: 'CONFLICTING' }) });
+    });
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7]);
+
+    expect(runGraphql).toHaveBeenCalledTimes(1);
+    expect(sent).toContain('mergeable');
+    expect(out[7]).toEqual({ kind: 'pr', status: 'ready', mergeable: 'conflicting' });
+  });
+
+  it('keeps "still computing" apart from "merges cleanly" instead of collapsing both to false', async () => {
+    // `UNKNOWN` is what GitHub answers while it computes — seconds after every push — so treating
+    // it as a conflict would flash an orange chip on half the pushes in the repo. Treating it as
+    // CLEAN is the bug this axis was reported for a second time: it is not an answer, and it has
+    // to survive as far as the cache, which asks again in seconds rather than in a minute.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({ mergeable: 'UNKNOWN' }),
+        r1: prNode({ mergeable: 'MERGEABLE' }),
+        r2: prNode({ mergeable: null }),
+        // The field omitted entirely — `prNode` defaults it, so this strips it back off.
+        r3: { ...prNode(), mergeable: undefined },
+      }),
+    );
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 8, 9, 10]);
+
+    expect(out[7]?.mergeable).toBe('unknown');
+    expect(out[8]?.mergeable).toBe('mergeable');
+    // A field GitHub omitted, or nulled, is not a statement that the branch is clean.
+    expect(out[9]?.mergeable).toBe('unknown');
+    expect(out[10]?.mergeable).toBe('unknown');
+  });
+
+  it('never calls a merged or closed pull request conflicting', async () => {
+    // GitHub reports UNKNOWN on a terminal PR, but a stale CONFLICTING would be worse than
+    // useless: there is nothing left to resolve, and the chip would contradict `merged`.
+    const runGraphql = vi.fn(async () =>
+      reply({
+        r0: prNode({ state: 'MERGED', mergeable: 'CONFLICTING' }),
+        r1: prNode({ state: 'CLOSED', mergeable: 'CONFLICTING' }),
+      }),
+    );
+    const { resolved: out } = await fetchRefStatuses(runGraphql, 'o', 'n', [7, 8]);
+
+    // No `mergeable` at all — the question does not apply, which is not the same as answering it.
+    expect(out[7]).toEqual({ kind: 'pr', status: 'merged' });
+    expect(out[8]).toEqual({ kind: 'pr', status: 'closed' });
+  });
 });
 
 /** The route-facing wrapper: one repo-handle lookup, then one batched query for the misses, and
@@ -2379,6 +2739,48 @@ describe('fetchGithubRefStatus', () => {
     const second = await fetchGithubRefStatus('/repo/ref-status-cache', { prs: [7] });
     expect(second.available && second.prs[7]).toBe('merged');
     expect(execFileMock.mock.calls.length).toBe(calls); // nothing spawned the second time
+  });
+
+  it('names the conflicting pull requests beside the statuses, and only those', async () => {
+    // Both axes in one answer: #7 is `ready` AND unmergeable, #8 is merely ready. `conflicts` is
+    // a list rather than a map because the empty case is the normal one.
+    stubGh(
+      JSON.stringify({
+        data: {
+          repository: {
+            r0: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, mergeable: 'CONFLICTING', commits: { nodes: [] } },
+            r1: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, mergeable: 'MERGEABLE', commits: { nodes: [] } },
+          },
+        },
+      }),
+    );
+    const out = await fetchGithubRefStatus('/repo/ref-status-conflicts', { prs: [7, 8] });
+
+    expect(out.available).toBe(true);
+    if (!out.available) throw new Error('expected available');
+    expect(out.prs[7]).toBe('ready');
+    expect(out.prs[8]).toBe('ready');
+    expect(out.conflicts).toEqual([7]);
+  });
+
+  it('remembers the conflict alongside the status, so a cached answer still carries both', async () => {
+    // The cache stores the resolved reference, not the payload — a second read that spawns
+    // nothing must not quietly lose the axis the first one learned.
+    stubGh(
+      JSON.stringify({
+        data: {
+          repository: {
+            r0: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, mergeable: 'CONFLICTING', commits: { nodes: [] } },
+          },
+        },
+      }),
+    );
+    await fetchGithubRefStatus('/repo/ref-status-conflict-cache', { prs: [7] });
+    const calls = execFileMock.mock.calls.length;
+    const cached = await fetchGithubRefStatus('/repo/ref-status-conflict-cache', { prs: [7] });
+
+    expect(execFileMock.mock.calls.length).toBe(calls);
+    expect(cached.available && cached.conflicts).toEqual([7]);
   });
 
   it('keeps every good alias when gh exits non-zero on a PARTIAL failure', async () => {
@@ -2444,6 +2846,7 @@ describe('fetchGithubRefStatus', () => {
               state,
               isDraft: false,
               reviewDecision: null,
+              mergeable: 'MERGEABLE',
               commits: { nodes: [{ commit: { committedDate: '2026-08-11T12:00:00Z', statusCheckRollup: rollup ? { state: rollup } : null } }] },
               reviews: { nodes: [] },
             },
@@ -2481,6 +2884,7 @@ describe('fetchGithubRefStatus', () => {
               state,
               isDraft: false,
               reviewDecision: null,
+              mergeable: 'MERGEABLE',
               commits: { nodes: [{ commit: { committedDate: '2026-08-11T12:00:00Z', statusCheckRollup: rollup ? { state: rollup } : null } }] },
               reviews: { nodes: [] },
             },
@@ -2510,7 +2914,7 @@ describe('fetchGithubRefStatus', () => {
         data: {
           repository: {
             r0: { __typename: 'PullRequest', state: 'MERGED', isDraft: false, reviewDecision: null, commits: { nodes: [] }, reviews: { nodes: [] } },
-            r1: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] }, reviews: { nodes: [] } },
+            r1: { __typename: 'PullRequest', state: 'OPEN', isDraft: false, reviewDecision: null, mergeable: 'MERGEABLE', commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] }, reviews: { nodes: [] } },
           },
         },
       }),
@@ -2518,6 +2922,71 @@ describe('fetchGithubRefStatus', () => {
     return fetchGithubRefStatus('/repo/recheck-mixed', { prs: [7, 8] }).then((out) => {
       expect(out.recheckAfterMs).toBe(60_000);
     });
+  });
+
+  // The reported regression, and the reason mergeability is a tri-state rather than a boolean:
+  // GitHub COMPUTES it when asked and answers `UNKNOWN` while the job runs, which is the normal
+  // reply for the first seconds after every push. Cached as an answer for the usual minute, that
+  // is a conflicting pull request wearing "Ready to merge" until the page is reloaded.
+  const unknownMergeability = (mergeable: string | null) =>
+    JSON.stringify({
+      data: {
+        repository: {
+          r0: {
+            __typename: 'PullRequest',
+            state: 'OPEN',
+            isDraft: false,
+            reviewDecision: null,
+            mergeable,
+            commits: { nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS' } } }] },
+            reviews: { nodes: [] },
+          },
+        },
+      },
+    })
+
+  it('comes back in seconds while GitHub is still computing mergeability, not in a minute', async () => {
+    stubGh(unknownMergeability('UNKNOWN'));
+    const out = await fetchGithubRefStatus('/repo/mergeability-unknown', { prs: [7] });
+
+    expect(out.available).toBe(true);
+    if (!out.available) throw new Error('expected available');
+    // The status itself is settled and would hold for a minute; the OTHER axis is what is still
+    // moving, and the batch travels at the speed of its most impatient member.
+    expect(out.prs[7]).toBe('ready');
+    expect(out.conflicts).toEqual([]);
+    expect(out.recheckAfterMs).toBe(5_000);
+  });
+
+  it('and does not cache that non-answer for the usual minute either', async () => {
+    stubGh(unknownMergeability('UNKNOWN'));
+    await fetchGithubRefStatus('/repo/mergeability-recheck', { prs: [7] });
+    const calls = execFileMock.mock.calls.length;
+
+    // Six seconds later the computation has landed. The cache must not still be serving the
+    // shrug — this is the read that used to answer "no conflicts" for another 54 seconds.
+    vi.advanceTimersByTime(6_000);
+    stubGh(unknownMergeability('CONFLICTING'));
+    const second = await fetchGithubRefStatus('/repo/mergeability-recheck', { prs: [7] });
+
+    expect(execFileMock.mock.calls.length).toBeGreaterThan(calls);
+    expect(second.available && second.conflicts).toEqual([7]);
+    // Answered now, so back to the ordinary cadence.
+    expect(second.available && second.recheckAfterMs).toBe(60_000);
+  });
+
+  it('gives up the fast cadence for a forge that never answers, instead of polling forever', async () => {
+    // A five-second poll that outlives the computation it was waiting for is a `gh` subprocess
+    // every five seconds, indefinitely, for a repository that is simply never going to say.
+    stubGh(unknownMergeability('UNKNOWN'));
+    await fetchGithubRefStatus('/repo/mergeability-stuck', { prs: [7] });
+
+    // Past the window, still unknown: the impatience is measured from the FIRST such answer, so
+    // it cannot be renewed by the answers that kept it going.
+    vi.advanceTimersByTime(61_000);
+    const later = await fetchGithubRefStatus('/repo/mergeability-stuck', { prs: [7] });
+
+    expect(later.available && later.recheckAfterMs).toBe(60_000);
   });
 
   it('asks the cockpit to back off rather than hammer a forge that is not there', async () => {

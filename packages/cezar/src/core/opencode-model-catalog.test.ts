@@ -1,29 +1,43 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
-import { discoverOpencodeModels, parseOpencodeModels } from './opencode-model-catalog.ts';
+import { describe, expect, it, vi } from 'vitest';
+import { KILL_GRACE_MS, discoverOpencodeModels, parseOpencodeModels } from './opencode-model-catalog.ts';
 
-/** A stand-in for the `opencode models` child: write its stdout, then close with a code. */
+/**
+ * A stand-in for the `opencode models` child: write its stdout, then close with a code.
+ *
+ * Mirrors Node's actual signal semantics — `kill()` records the signal and sets `killed = true`
+ * on *delivery*, while the child stays alive until something makes it exit. That distinction is
+ * the whole subject of the escalation tests below.
+ */
 function fakeChild(): {
   child: ChildProcessWithoutNullStreams;
   say(text: string): void;
   close(code: number): void;
+  exit(code: number): void;
+  signals: NodeJS.Signals[];
   killed(): boolean;
 } {
   const process = new EventEmitter();
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
-  let killed = false;
+  const signals: NodeJS.Signals[] = [];
+  const exit = (code: number) => {
+    Object.assign(process, { exitCode: code });
+    process.emit('exit', code, null);
+  };
   Object.assign(process, {
     stdin,
     stdout,
     stderr,
     exitCode: null,
+    signalCode: null,
     killed: false,
-    kill: () => {
-      killed = true;
+    kill: (signal: NodeJS.Signals = 'SIGTERM') => {
+      signals.push(signal);
+      Object.assign(process, { killed: true });
       return true;
     },
     pid: 321,
@@ -32,11 +46,13 @@ function fakeChild(): {
     child: process as unknown as ChildProcessWithoutNullStreams,
     say: (text: string) => stdout.write(text),
     close(code: number) {
-      Object.assign(process, { exitCode: code });
+      exit(code);
       stdout.end();
       queueMicrotask(() => process.emit('close', code));
     },
-    killed: () => killed,
+    exit,
+    signals,
+    killed: () => signals.length > 0,
   };
 }
 
@@ -123,6 +139,51 @@ describe('discoverOpencodeModels', () => {
     const promise = discoverOpencodeModels({ cwd: '/repo', timeoutMs: 5, spawn: () => fake.child });
     await expect(promise).rejects.toThrow('timed out');
     expect(fake.killed()).toBe(true);
+  });
+
+  /**
+   * #858 — `ChildProcess.killed` reports delivery, not death. Gating the escalation on it let a
+   * probe that installs a SIGTERM handler outlive every teardown, one leaked process per refresh.
+   */
+  it('escalates to SIGKILL when the probe survives the teardown SIGTERM', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeChild();
+      const rejected = expect(
+        discoverOpencodeModels({ cwd: '/repo', timeoutMs: 5, spawn: () => fake.child }),
+      ).rejects.toThrow('timed out');
+      await vi.advanceTimersByTimeAsync(5);
+      await rejected;
+
+      expect(fake.signals).toEqual(['SIGTERM']);
+      // Delivered, not dead — the state that used to disable the escalation.
+      expect(fake.child.killed).toBe(true);
+      expect(fake.child.exitCode).toBeNull();
+
+      await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops at SIGTERM once the probe really exits', async () => {
+    vi.useFakeTimers();
+    try {
+      const fake = fakeChild();
+      const rejected = expect(
+        discoverOpencodeModels({ cwd: '/repo', timeoutMs: 5, spawn: () => fake.child }),
+      ).rejects.toThrow('timed out');
+      await vi.advanceTimersByTimeAsync(5);
+      await rejected;
+      expect(fake.signals).toEqual(['SIGTERM']);
+
+      fake.exit(143);
+      await vi.advanceTimersByTimeAsync(KILL_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('fails when the child floods stdout', async () => {

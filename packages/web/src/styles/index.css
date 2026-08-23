@@ -114,6 +114,16 @@
    * is blue. Ink-only, per theme, AA on both backgrounds (10.9:1 here, 6.7:1 on light). */
   --info: #93c5fd;
 
+  /* A pull request that will not merge — the OTHER axis of a reference's state, and the reason it
+   * needs a hue of its own. Red is already spoken for by "the checks failed" and "a reviewer asked
+   * for changes", and a conflict shown in that same red is a third meaning on one colour; green
+   * "ready" is the very claim it contradicts. Orange sits between the two on the same warm ramp —
+   * blocked, not broken — and is the one warm hue the cockpit had not spent. Ink-only, per theme,
+   * AA on both backgrounds (8.6:1 on this one, 7.9:1 on --card; 5.2:1 on light). Distinct from
+   * `--pending`'s amber by hue AND by glyph: the pending chip carries the pulsing dot, this one a
+   * warning triangle. */
+  --conflict: #fb923c;
+
   /* The INK version of pending. `--pending` is a fill colour: amber-400 as text passes against
    * this theme's near-black and fails badly against the light theme's white, which is why the
    * design guardian bans `text-pending` outright. This token is the sanctioned way to write amber
@@ -186,6 +196,10 @@
   /* amber-700, not amber-400: the dot keeps `--pending` in both themes, but amber ink on white
    * has to come down this far to stay readable (~4.8:1 against #ffffff). */
   --pending-strong: #b45309;
+
+  /* orange-700, for the same reason the amber above darkens: orange-400 as ink on white is ~2:1.
+   * Far enough from `--pending-strong` (amber-700) to stay a different colour, not a shade. */
+  --conflict: #c2410c;
 
   --shadow-modal: 0 16px 48px 0 rgba(0, 0, 0, 0.12);
 
@@ -297,6 +311,7 @@
   --color-pending: var(--pending);
   --color-pending-strong: var(--pending-strong);
   --color-info: var(--info);
+  --color-conflict: var(--conflict);
 
   --color-diff-add: var(--diff-add-bg);
   --color-diff-add-strong: var(--diff-add-strong);
