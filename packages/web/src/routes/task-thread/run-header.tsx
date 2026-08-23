@@ -133,7 +133,11 @@ export function RunHeader({
       // Changes/Commits/Files views start their content flush under the header, so there the
       // overlay would sit on the first rows instead of on scrolled-away text.
       className={cn(
-        'sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-4 pb-0 backdrop-blur md:px-6',
+        'sticky top-0 z-20 bg-background/95 px-4 backdrop-blur max-md:border-b max-md:border-border max-md:pt-4 md:px-6',
+        // On md+ the bar carries the whole header, so this strip only earns its border and
+        // padding when it actually shows something (a rename, the monitoring line, notes).
+        (renaming || notesOpen || (run.status === 'running' && run.activity === 'monitoring')) &&
+          'border-b border-border pt-3',
         tab === 'session' &&
           "after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-gradient-to-b after:from-background after:to-transparent after:content-['']",
       )}
@@ -149,10 +153,10 @@ export function RunHeader({
         {/* `capabilities?.` fail-closed (#801): this header renders against minimal health
             payloads, and with automations off the chip degrades to text rather than linking
             into a disabled view. */}
-        {/* One band now (user decision, UX pass): tabs on the left, the surviving context
-            chips (PR, branch…) on the right; the ACTIONS moved up to the app bar's right side
-            via the bar-actions portal, where they stay in view on every tab. */}
-        <div data-slot="run-tabs" className="flex items-end gap-1">
+        {/* Below md only (user decision, UX pass): everything — tabs, chips, actions — lives
+            on the app bar via the bar-actions portal on desktop; this row is the mobile
+            stand-in, where no bar exists. */}
+        <div data-slot="run-tabs" className="flex items-end gap-1 md:hidden">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
             Session
@@ -180,6 +184,24 @@ export function RunHeader({
           </span>
         </div>
         <BarActions>
+          {/* The task's views as compact icon tabs (user decision) — the bar carries the whole
+              header now: where you are, whose task it is, and what you can do to it. */}
+          <span data-slot="bar-tabs" role="tablist" aria-label="Task views" className="flex items-center gap-0.5">
+            <BarTab to={`/tasks/${run.id}`} active={tab === 'session'} label="Session">
+              <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
+            </BarTab>
+            <BarTab to={`/tasks/${run.id}/changes`} active={tab === 'changes'} label="Changes">
+              <FileDiffIcon aria-hidden="true" className="size-3.5" />
+              {run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : null}
+            </BarTab>
+            <BarTab to={`/tasks/${run.id}/commits`} active={tab === 'commits'} label="Commits">
+              <GitCommitHorizontalIcon aria-hidden="true" className="size-3.5" />
+            </BarTab>
+            <BarTab to={`/tasks/${run.id}/files`} active={tab === 'files'} label="Files">
+              <FilesIcon aria-hidden="true" className="size-3.5" />
+            </BarTab>
+          </span>
+          <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
           {/* The task's context chips (PR, branch) live on the bar too (user decision) —
               identity beside the verbs that act on it. */}
           <MetaRow run={run} automationsAvailable={health.data?.capabilities?.automations === true} />
@@ -452,6 +474,27 @@ async function copyToClipboard(text: string, doneMessage: string): Promise<void>
     // No clipboard access (permissions, http) — show the command itself; it is the payload.
     toast(`Run manually: ${text}`)
   }
+}
+
+/** One compact icon tab on the app bar — the underline grammar shrunk to the bar's height.
+ *  A real Link, like TabLink: every view is a URL. */
+function BarTab({ to, active, label, children }: { to: string; active: boolean; label: string; children: ReactNode }) {
+  return (
+    <Link
+      to={to}
+      role="tab"
+      aria-selected={active}
+      aria-label={label}
+      title={label}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium transition-colors',
+        active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      {children}
+    </Link>
+  )
 }
 
 /**
