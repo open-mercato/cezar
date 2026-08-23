@@ -229,7 +229,9 @@ function ProjectRow({
         ) : null}
       </div>
       {open ? (
-        <div className="ml-[15px] flex flex-col gap-0.5 border-l border-border pl-1.5 pt-0.5 pb-1">
+        {/* No tree line or indent (user decision): it only spent width — the rows' own
+            smaller type already reads as children of the row above. */}
+        <div className="flex flex-col gap-0.5 pt-0.5 pb-1">
           {/* No "+ New task" child (user decision): the row's + already starts one. */}
           {shown.length === 0 && !missing ? (
             <p data-slot="group-empty" className="px-2 py-1.5 text-[12px] text-soft-foreground">
