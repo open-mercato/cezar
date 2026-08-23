@@ -430,6 +430,7 @@ type RunActions = ReturnType<typeof useRunActions>
  *  - retry / reopen → resume the session (gated on the provider's canContinue, like Continue was)
  */
 function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }) {
+  const navigate = useNavigate()
   const cta = primaryRunCta(run)
   if (!cta) return null
   const resumes = cta.kind === 'retry' || cta.kind === 'reopen'
@@ -449,12 +450,34 @@ function PrimaryCtaButton({ run, actions }: { run: ApiRun; actions: RunActions }
   const onClick = () => {
     if (cta.kind === 'stop') actions.setConfirming('cancel')
     else if (cta.kind === 'reply') {
-      const composer = document.querySelector<HTMLTextAreaElement>('textarea')
-      composer?.scrollIntoView({ block: 'center' })
-      composer?.focus()
+      const focusComposer = () => {
+        const composer = document.querySelector<HTMLTextAreaElement>('textarea')
+        composer?.scrollIntoView({ block: 'center' })
+        composer?.focus()
+      }
+      if (document.querySelector('textarea')) focusComposer()
+      else {
+        // Same bar-wide rule as review: the composer is Session's — go there first.
+        navigate(`/tasks/${run.id}`)
+        requestAnimationFrame(() => requestAnimationFrame(focusComposer))
+      }
     } else if (cta.kind === 'review') {
       const panel = document.querySelector('[data-slot="review-panel"]')
-      panel?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      if (panel) {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      } else {
+        // The button lives on the app bar now, visible from every tab — but the review panel
+        // only exists in Session. From elsewhere, go there first; the panel scrolls itself
+        // into view on the next frame, once Session has rendered.
+        navigate(`/tasks/${run.id}`)
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() =>
+            document
+              .querySelector('[data-slot="review-panel"]')
+              ?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+          ),
+        )
+      }
     } else actions.continueRun.mutate()
   }
   return (
