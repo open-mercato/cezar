@@ -208,9 +208,21 @@ describe('sidebar wiring', () => {
     expect([...menu.querySelectorAll('[data-nav-to]')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Skills', 'Workflows', 'Settings'])
     expect(menu.querySelector('[data-slot="project-open"]')?.getAttribute('href')).toBe('/')
     expect(within(menu).getByRole('menuitem', { current: 'page' }).textContent).toBe('Git')
-    // No tabs on the bar and no views in the sidebar.
-    expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
+    // No views in the sidebar; the project's tab band sits above the page content instead.
+    // (The open menu hides the rest of the tree from assistive tech, so close it first.)
+    fireEvent.keyDown(menu, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
     expect(within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).queryByRole('link', { name: 'Git' })).toBeNull()
+    const band = document.querySelector('[data-slot="project-tabs"]') as HTMLElement
+    expect([...band.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Skills', 'Workflows'])
+    expect(within(band).getByRole('link', { current: 'page' }).textContent).toBe('Git')
+  })
+
+  it('shows the project tab band on project views only — not inside a task thread', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    renderShell('/tasks/abc')
+    await waitFor(() => expect(repoChip()).not.toBeNull())
+    expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
   })
 
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.

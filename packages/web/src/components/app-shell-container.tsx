@@ -11,6 +11,7 @@ import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectSwitcher } from '@/components/project-switcher'
 import { ProjectsSection } from '@/components/projects-section'
 import { ProjectTaskGroupsContainer } from '@/components/task-quick-list'
+import { TabLink } from '@/components/tab-link'
 import { ToolsMenu } from '@/components/tools-menu'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
 import { stripProjectPrefix } from '@/lib/project-router'
@@ -114,13 +115,46 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // The project menu's views (user decision: the bar chip's menu lists THIS project's views —
   // Tasks, Git, Skills, Workflows, the gated ones, Settings — never other projects). Lit from
   // the URL's area, the same rule the old workspace nav used.
-  const activeTo = activeNavPath(stripProjectPrefix(pathname))
+  const areaPath = stripProjectPrefix(pathname)
+  const activeTo = activeNavPath(areaPath)
   const projectViews = visibleNavItems({
     forge: health.data?.forge?.available === true,
     inbox: inboxAvailable,
     automations: automationsAvailable,
     singleProject: health.data?.capabilities.singleProject === true,
   })
+
+  // The project's tab band (user decision: Tasks / Git / Skills / Workflows on the project's
+  // pages, like a repo's tabs) — shown on the project-level views only: not inside a task
+  // thread, the composer, the compare view or global settings, which are about one thing.
+  const projectViewRoots = projectViews.filter((item) => !item.global && item.to !== '/settings')
+  const onProjectView =
+    !globalSettings &&
+    titleContext.taskId === null &&
+    activeTo !== null &&
+    projectViewRoots.some((item) => item.to === activeTo) &&
+    !areaPath.startsWith('/tasks/') &&
+    areaPath !== '/new' &&
+    !areaPath.startsWith('/compare/')
+  const projectTabs = onProjectView ? (
+    <div data-slot="project-tabs" className="flex h-10 items-end gap-1 border-b border-border bg-background px-5">
+      {projectViewRoots.map((item) => {
+        const Icon = item.icon
+        const count = item.badge === 'inbox-count' ? (todos.data?.length ?? 0) : 0
+        return (
+          <TabLink key={item.to} to={item.to} active={item.to === activeTo}>
+            <Icon aria-hidden="true" className="size-3.5" />
+            {item.label}
+            {count > 0 ? (
+              <span data-slot="nav-badge" className="rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground">
+                {count}
+              </span>
+            ) : null}
+          </TabLink>
+        )
+      })}
+    </div>
+  ) : null
 
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
@@ -153,6 +187,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
                 banner would be claiming from cached data. */}
             <OfflineBanner />
             <ProviderBannerContainer />
+            {projectTabs}
           </>
         }
         // The project bar above the content — the same resolved name the document title uses,
