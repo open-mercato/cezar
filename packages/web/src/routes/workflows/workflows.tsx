@@ -21,7 +21,6 @@ import {
   ChevronDownIcon,
   GripVerticalIcon,
   PlusIcon,
-  SparklesIcon,
   SquareTerminalIcon,
   Trash2Icon,
   TriangleAlertIcon,
@@ -638,7 +637,6 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
         <DragOverlay>
           {dragging?.type === 'palette' ? (
             <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 font-mono text-[13px] font-medium shadow-md">
-              <SparklesIcon aria-hidden="true" className="size-3.5 text-primary" />
               {dragging.skill}
             </div>
           ) : dragging?.type === 'step' ? (
@@ -879,11 +877,10 @@ function StepCardBody({
       <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
         {String(index + 1).padStart(2, '0')}
       </span>
-      {isCheck ? (
-        <SquareTerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
-      ) : (
-        <SparklesIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
-      )}
+      {/* Only a CHECK step carries a glyph — it is the one kind that is not a skill, and the
+          terminal mark is what says so. Skill steps are the default and wear nothing (user
+          feedback: the sparkle on every card was decoration). */}
+      {isCheck ? <SquareTerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" /> : null}
       <div className="min-w-0 flex-1">
         <div className="truncate font-mono text-[13px] font-medium">{title}</div>
         {description ? (
