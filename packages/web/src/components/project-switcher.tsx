@@ -70,7 +70,7 @@ export function ProjectSwitcher({
           </span>
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" data-slot="project-menu" className="min-w-40 text-[13px]">
+      <DropdownMenuContent align="start" data-slot="project-menu" className="min-w-44 p-1.5">
         {/* No name label and no "Open project" (user feedback: both repeated the chip). The
             first row is what the project opens to — its Tasks — then the rest of its views. */}
         <DropdownMenuItem asChild>
@@ -79,7 +79,7 @@ export function ProjectSwitcher({
             data-slot="project-open"
             data-nav-to="/"
             aria-current={activeTo === '/' ? 'page' : undefined}
-            className={cn('text-[13px]', activeTo === '/' && 'bg-muted font-semibold text-foreground')}
+            className={cn('gap-2.5 rounded-md px-2.5 py-2 text-[13px]', activeTo === '/' && 'bg-muted font-semibold text-foreground')}
           >
             <ListChecksIcon aria-hidden="true" />
             Tasks
@@ -94,7 +94,7 @@ export function ProjectSwitcher({
                 to={item.to}
                 data-nav-to={item.to}
                 aria-current={lit ? 'page' : undefined}
-                className={cn('text-[13px]', lit && 'bg-muted font-semibold text-foreground')}
+                className={cn('gap-2.5 rounded-md px-2.5 py-2 text-[13px]', lit && 'bg-muted font-semibold text-foreground')}
               >
                 <Icon aria-hidden="true" />
                 {item.label}
