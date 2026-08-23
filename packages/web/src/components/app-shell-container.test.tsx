@@ -122,6 +122,14 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
   }
 }
 
+/** A one-project registry plus an empty index — enough for the active group (and its nav) to mount. */
+const REGISTRY_STUBS = {
+  '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+  '/api/v1/workspace/ui-state': {},
+  '/api/v1/runs': [],
+  '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
+}
+
 const repoChip = () => document.querySelector('[data-slot="repo-chip"]')
 const versionChip = () => document.querySelector('[data-slot="version-chip"]')
 const navBadge = () => document.querySelector('[data-slot="nav-badge"]')
@@ -172,13 +180,29 @@ describe('sidebar wiring', () => {
     expect(versionChip()?.textContent).toBe('v0.1.3')
   })
 
-  it('renders the inbox badge from /api/v1/todos', async () => {
-    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': TODOS })
+  it('renders the inbox badge from /api/v1/todos — on the active project\u2019s nav', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': TODOS, ...REGISTRY_STUBS })
     renderShell()
 
     await waitFor(() => expect(navBadge()).not.toBeNull())
     expect(navBadge()?.textContent).toBe('2')
-    expect(screen.getByRole('link', { name: /Inbox/ })).toBeTruthy()
+    expect(navBadge()?.closest('[data-slot="project-nav"]')).not.toBeNull()
+  })
+
+  it('puts the project\u2019s views under the ACTIVE group only, lit from the URL, forge-gated', async () => {
+    // User decision: Git / Skills / Workflows are a project's, so they live inside its group, not
+    // as workspace rows — and the forge gate still applies (HEALTH has no forge → no GitHub).
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    renderShell('/git')
+
+    await waitFor(() => expect(document.querySelector('[data-slot="project-nav"]')).not.toBeNull())
+    const navs = [...document.querySelectorAll('[data-slot="project-nav"]')]
+    expect(navs).toHaveLength(1)
+    expect(navs[0]?.closest('[data-slot="project-task-group"]')?.getAttribute('data-project-id')).toBe('cezar')
+    const labels = [...(navs[0]?.querySelectorAll('a') ?? [])].map((a) => a.textContent)
+    expect(labels).toEqual(['Inbox', 'Git', 'Skills', 'Workflows', 'Settings'])
+    expect(within(navs[0] as HTMLElement).getByRole('link', { current: 'page' }).textContent).toBe('Git')
+    expect(within(navs[0] as HTMLElement).getByRole('link', { name: 'Git' }).getAttribute('href')).toBe('/p/cezar/git')
   })
 
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.
@@ -565,7 +589,9 @@ describe('document title wiring', () => {
     renderShell('/p/cezar/')
 
     await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
-    fireEvent.click(screen.getByRole('link', { name: 'Git' }))
+    // The bar's project tab — the sidebar group nav is the other door to the same place.
+    const bar = document.querySelector('[data-slot="project-bar"]') as HTMLElement
+    fireEvent.click(within(bar).getByRole('link', { name: 'Git' }))
     await waitFor(() => expect(document.title).toBe('cezar — Git · cezar'))
   })
 

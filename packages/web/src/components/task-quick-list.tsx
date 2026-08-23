@@ -1,7 +1,10 @@
 import { ChevronDownIcon, PlusIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
 import { rememberReferenceStatuses, useHealth, useProjects, useReferenceProjectId, useRuns, useRunsIndex } from '@/api/queries'
-import { useSidebarNavigate } from '@/components/app-shell'
+import { ProjectNavLinks, useSidebarNavigate } from '@/components/app-shell'
+import { activeNavPath, visibleNavItems, type NavAvailability } from '@/components/nav-items'
+import { stripProjectPrefix } from '@/lib/project-router'
+import { useLocation } from 'react-router'
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -427,7 +430,16 @@ const GROUP_PREVIEW = 5
  * One data source for every group — the workspace runs index (what the global Tasks page and
  * the palette read) — so the active project and the others cannot disagree about a task.
  */
-export function ProjectTaskGroups({ now = Date.now() }: { now?: number }) {
+export function ProjectTaskGroups({
+  now = Date.now(),
+  availability = {},
+  badges = {},
+}: {
+  now?: number
+  availability?: NavAvailability
+  /** What the active project's nav rows wear: the Inbox count and the Skills update marker. */
+  badges?: { inboxCount?: number | null; skillsUpdateAvailable?: boolean }
+}) {
   const index = useRunsIndex(true)
   const registry = useProjects().data
   const activeFromUrl = useActiveProjectId()
@@ -436,6 +448,10 @@ export function ProjectTaskGroups({ now = Date.now() }: { now?: number }) {
   const exact = useProjectMatch('/tasks/:id')
   const currentRunId = match?.params.id ?? exact?.params.id ?? null
   const onNavigate = useSidebarNavigate()
+  const { pathname } = useLocation()
+  // The active project's views, lit from the URL's area (same rule the old workspace nav used).
+  const navItems = visibleNavItems(availability)
+  const activeTo = activeNavPath(stripProjectPrefix(pathname))
 
   // Statuses the server already had ride along with the index; cold ones are asked for below.
   const indexedStatuses = index.data?.referenceStatuses
@@ -488,6 +504,18 @@ export function ProjectTaskGroups({ now = Date.now() }: { now?: number }) {
             currentRunId={currentRunId}
             now={now}
             onNavigate={onNavigate}
+            nav={
+              project.id === activeProjectId ? (
+                <ProjectNavLinks
+                  projectId={project.id}
+                  items={navItems}
+                  activeTo={activeTo}
+                  inboxCount={badges.inboxCount ?? null}
+                  skillsUpdateAvailable={badges.skillsUpdateAvailable ?? false}
+                  onNavigate={onNavigate}
+                />
+              ) : null
+            }
           />
         ))}
       </div>
@@ -502,6 +530,7 @@ function ProjectTaskGroup({
   currentRunId,
   now,
   onNavigate,
+  nav,
 }: {
   projectId: string
   name: string
@@ -509,6 +538,8 @@ function ProjectTaskGroup({
   currentRunId: string | null
   now: number
   onNavigate?: () => void
+  /** The project's views (Git, Skills…) — only the ACTIVE group carries them. */
+  nav?: React.ReactNode
 }) {
   const [expanded, setExpanded] = React.useState(false)
   const hidden = Math.max(0, entries.length - GROUP_PREVIEW)
@@ -564,6 +595,7 @@ function ProjectTaskGroup({
           {expanded ? 'Show less' : `Show ${hidden} more`}
         </button>
       ) : null}
+      {nav}
     </section>
   )
 }
@@ -739,7 +771,13 @@ export function TaskQuickListContainer() {
 }
 
 /** The boot sidebar's list: every project's tasks, grouped, by last use. */
-export function ProjectTaskGroupsContainer() {
+export function ProjectTaskGroupsContainer({
+  availability,
+  badges,
+}: {
+  availability?: NavAvailability
+  badges?: { inboxCount?: number | null; skillsUpdateAvailable?: boolean }
+}) {
   const now = useNow(30_000)
-  return <ProjectTaskGroups now={now} />
+  return <ProjectTaskGroups now={now} availability={availability} badges={badges} />
 }

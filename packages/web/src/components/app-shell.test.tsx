@@ -58,11 +58,11 @@ describe('AppShell', () => {
   })
 
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
-    renderShell('/')
+    renderShell('/', {}, <RouterLink to="/github">Go to GitHub</RouterLink>)
     const main = screen.getByRole('main')
     main.scrollTop = 640
     expect(main.scrollTop).toBe(640) // jsdom kept the write — the reset below is the effect's
-    fireEvent.click(within(nav()).getByRole('link', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Go to GitHub' }))
     expect(screen.getByTestId('location').textContent).toBe('/github')
     expect(main.scrollTop).toBe(0)
   })
@@ -83,11 +83,11 @@ describe('AppShell', () => {
   })
 
   it('restores the generic top reset when leaving a task thread (#761)', () => {
-    renderShell('/tasks/source')
+    renderShell('/tasks/source', {}, <RouterLink to="/github">Go to GitHub</RouterLink>)
     const main = screen.getByRole('main')
     main.scrollTop = 640
 
-    fireEvent.click(within(nav()).getByRole('link', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Go to GitHub' }))
 
     expect(screen.getByTestId('location').textContent).toBe('/github')
     expect(main.scrollTop).toBe(0)
@@ -99,91 +99,6 @@ describe('AppShell', () => {
     expect(routeOwnsScrollArrival('/tasks/run-1/changes')).toBe(false)
     expect(routeOwnsScrollArrival('/p/cezar/tasks/run-1/files')).toBe(false)
     expect(routeOwnsScrollArrival('/tasks')).toBe(false)
-  })
-
-  it('renders the nav as real router links — no Tasks row (the project groups are that door), Settings in the footer', () => {
-    renderShell()
-    const links = within(nav()).getAllByRole('link')
-    expect(links.map((a) => a.textContent)).toEqual([
-      'Inbox',
-      'Git',
-      'GitHub',
-      'Automations',
-      'Skills',
-      'Workflows',
-    ])
-    // Deep-linkable per Step 2.1: every nav row is an <a href>, not a button with an onClick.
-    expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      '/inbox',
-      '/git',
-      '/github',
-      '/automations',
-      '/skills',
-      '/workflows',
-    ])
-    // Settings is a utility, not a workspace surface — it lives in the footer, still a link.
-    expect(within(footer()).getByRole('link', { name: /Settings/ }).getAttribute('href')).toBe('/settings')
-  })
-
-  // R6 Step 1.1: no forge, no GitHub tab — the nav item disappears entirely (spec's
-  // degradation table), it does not render disabled.
-  it('drops the GitHub item when the forge is unavailable', () => {
-    renderShell('/', { forgeAvailable: false })
-    const links = within(nav()).getAllByRole('link')
-    expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    // Minus the forge-gated items, the Tasks item (quick-list rows) and Settings (footer).
-    expect(links).toHaveLength(
-      NAV_ITEMS.filter((item) => !item.forge && item.to !== '/' && item.to !== '/settings').length,
-    )
-  })
-
-  // #801: same degradation for the opt-in automations capability — the item disappears, it does
-  // not render disabled. The two gates on that item are independent: a forge alone is not enough.
-  it('drops the Automations item when the capability is off', () => {
-    renderShell('/', { automationsAvailable: false })
-    const links = within(nav()).getAllByRole('link')
-    expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
-    // Minus the gated item, the Tasks item (quick-list rows) and Settings (footer).
-    expect(links).toHaveLength(
-      NAV_ITEMS.filter((item) => !item.automations && item.to !== '/' && item.to !== '/settings').length,
-    )
-  })
-
-  it('shows the Automations item once the capability is on', () => {
-    renderShell('/', { automationsAvailable: true })
-    expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href')))
-      .toContain('/automations')
-  })
-
-  describe('active nav state follows the current route', () => {
-    const cases: Array<[entry: string, active: string]> = [
-      ['/git', 'Git'],
-      ['/skills', 'Skills'],
-    ]
-
-    for (const [entry, active] of cases) {
-      it(`${entry} → ${active}`, () => {
-        renderShell(entry)
-        const current = within(nav()).getAllByRole('link', { current: 'page' })
-        // Exactly one — two lit rows is as wrong as none.
-        expect(current).toHaveLength(1)
-        expect(current[0]?.textContent).toBe(active)
-      })
-    }
-
-    it('lights no nav item on the tasks surfaces — the project groups above are that entry', () => {
-      // User decision: projects, and tasks inside them; the nav is the places (Git, Skills…).
-      for (const entry of ['/', '/tasks/abc123', '/tasks']) {
-        renderShell(entry, { multiProject: true })
-        expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
-        cleanup()
-      }
-    })
-
-    it('lights nothing on a full-screen surface like /new', () => {
-      renderShell('/new')
-      expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
-    })
   })
 
   describe('project bar breadcrumb', () => {
@@ -199,10 +114,9 @@ describe('AppShell', () => {
       expect(bar.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('Fix the checkout')
     })
 
-    it('is omitted in single-project mode while normal navigation remains', () => {
+    it('is omitted in single-project mode', () => {
       renderShell('/', { singleProject: true })
       expect(within(sidebar()).queryByRole('button', { name: 'Add project' })).toBeNull()
-      expect(within(nav()).getByRole('link', { name: 'Git' })).toBeTruthy()
     })
   })
 
@@ -341,30 +255,6 @@ describe('AppShell', () => {
         // The version shown is still the one actually running.
         expect(chip().textContent).toContain('v1.2.3')
       })
-    })
-
-    it('renders the Inbox badge only for a non-zero count', () => {
-      renderShell('/', { inboxCount: 2 })
-      const inbox = within(nav()).getByRole('link', { name: /Inbox/ })
-      expect(within(inbox).getByText('2')).toBeTruthy()
-
-      cleanup()
-      renderShell('/', { inboxCount: 0 })
-      expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
-    })
-
-    it('renders a quiet accessible Skills update marker in desktop and mobile navigation', () => {
-      renderShell('/', { skillsUpdateAvailable: true })
-      expect(document.querySelectorAll('[data-slot="nav-update-marker"]')).toHaveLength(1)
-      fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
-      const markers = document.querySelectorAll('[data-slot="nav-update-marker"]')
-      expect(markers).toHaveLength(2)
-      for (const marker of markers) {
-        expect(marker.textContent).toBe('Skills update available')
-        expect(marker.innerHTML).not.toContain('animate-')
-      }
-      // Radix hides the desktop app from the accessibility tree while the mobile drawer is modal.
-      expect(screen.getAllByRole('link', { name: /Skills update available/ })).toHaveLength(1)
     })
 
     it('renders no Skills marker without an actionable update', () => {
@@ -773,43 +663,12 @@ describe('AppShell', () => {
       await waitFor(() => expect(drawer()).toBeNull())
     })
 
-    it('renders the same nav as the desktop sidebar', () => {
-      renderShell()
+    it('carries the sidebar along — the Projects menu row slot and the theme toggle', () => {
+      renderShell('/', { projectsMenu: <button type="button">Projects</button> })
       openMenu()
-
       const inDrawer = within(drawer() as HTMLElement)
-        .getByRole('navigation', { name: 'Main' })
-      const links = within(inDrawer).getAllByRole('link')
-
-      // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
-      // reuses the sidebar's content, so adding a nav item must not need a second edit here.
-      // (Minus '/settings': the footer utility row is that entry.)
-      const workspaceItems = NAV_ITEMS.filter((item) => item.to !== '/' && item.to !== '/settings')
-      expect(links.map((a) => a.getAttribute('href'))).toEqual(workspaceItems.map((item) => item.to))
-      expect(links.map((a) => a.textContent)).toEqual(workspaceItems.map((item) => item.label))
-
-      // …and the rest of the sidebar came along, not just the nav.
-      expect(within(drawer() as HTMLElement).getByRole('button', { name: /^Theme:/ })).toBeTruthy()
-    })
-
-    it('marks the active nav item inside the drawer too', () => {
-      renderShell('/skills')
-      openMenu()
-      const current = within(drawer() as HTMLElement).getAllByRole('link', { current: 'page' })
-      expect(current).toHaveLength(1)
-      expect(current[0]?.textContent).toBe('Skills')
-    })
-
-    it('closes when a nav item inside it navigates', async () => {
-      renderShell('/')
-      openMenu()
-
-      fireEvent.click(within(drawer() as HTMLElement).getByRole('link', { name: 'Git' }))
-
-      // Both halves matter: an open drawer sitting on top of the newly routed view is the whole
-      // bug this guards, and a drawer that closed without navigating would be just as wrong.
-      await waitFor(() => expect(drawer()).toBeNull())
-      expect(screen.getByTestId('location').textContent).toBe('/git')
+      expect(within(inDrawer.getByRole('navigation', { name: 'Main' })).getByRole('button', { name: 'Projects' })).toBeTruthy()
+      expect(inDrawer.getByRole('button', { name: /^Theme:/ })).toBeTruthy()
     })
 
     it('closes when a quick-list row fires the sidebar-navigate callback on a same-path click', async () => {

@@ -10,7 +10,10 @@ import { OfflineBanner } from '@/components/offline-banner'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectSwitcher } from '@/components/project-switcher'
 import { ProjectTaskGroupsContainer } from '@/components/task-quick-list'
+import { TabLink } from '@/components/tab-link'
 import { ToolsMenu } from '@/components/tools-menu'
+import { activeNavPath, visibleNavItems } from '@/components/nav-items'
+import { stripProjectPrefix } from '@/lib/project-router'
 import { useDocumentTitle } from '@/lib/use-document-title'
 import { useActiveProjectId } from '@/lib/project-router'
 import { unreadDoneCount } from '@/lib/read-state'
@@ -108,6 +111,29 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
   // and the other projects are the topbar switcher's job.
   const multiProject = registry !== undefined && registry.projects.length > 1
 
+  // The bar's project tabs (user decision): the project's views, lit from the URL's area. Only
+  // while a project is the context — global settings has none.
+  const areaPath = stripProjectPrefix(pathname)
+  const activeTo = activeNavPath(areaPath)
+  const projectTabs = globalSettings
+    ? undefined
+    : visibleNavItems({
+        forge: health.data?.forge?.available === true,
+        inbox: inboxAvailable,
+        automations: automationsAvailable,
+        singleProject: health.data?.capabilities.singleProject === true,
+      })
+        .filter((item) => !item.global && item.to !== '/settings')
+        .map((item) => {
+          const Icon = item.icon
+          return (
+            <TabLink key={item.to} to={item.to} active={item.to === activeTo}>
+              <Icon aria-hidden="true" className="size-3.5" />
+              {item.label}
+            </TabLink>
+          )
+        })
+
   return (
     // The Active/Archived filter is shared by the quick-list below and the Tasks table (Step 3.4),
     // which renders in `children`. The provider goes here because this is the lowest node that has
@@ -149,7 +175,8 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         // The bar's breadcrumb: the open task's title (the same resolution the document title
         // uses), else the view's label. Never on the project's own Tasks table — "cezar › Tasks"
         // would say the project twice.
-        crumb={titleRun ? runTitle(titleRun) : titleContext.pageLabel === 'Tasks' ? null : titleContext.pageLabel}
+        crumb={titleRun ? runTitle(titleRun) : null}
+        projectTabs={projectTabs}
         projectSwitcher={
           registry && registry.projects.length > 0 ? (
             <ProjectSwitcher
@@ -159,7 +186,17 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
           ) : undefined
         }
         singleProject={health.data?.capabilities.singleProject === true}
-        taskQuickList={<ProjectTaskGroupsContainer />}
+        taskQuickList={
+          <ProjectTaskGroupsContainer
+            availability={{
+              forge: health.data?.forge?.available === true,
+              inbox: inboxAvailable,
+              automations: automationsAvailable,
+              singleProject: health.data?.capabilities.singleProject === true,
+            }}
+            badges={{ inboxCount: inboxAvailable ? (todos.data?.length ?? null) : null, skillsUpdateAvailable }}
+          />
+        }
         projectsMenu={
           registry && registry.projects.length > 0 && health.data?.capabilities.singleProject !== true ? (
             <ProjectSwitcher

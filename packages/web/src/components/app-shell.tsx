@@ -122,6 +122,80 @@ export type AppShellProps = {
   /** The Projects nav row (user decision): the same project menu as the bar's switcher, as the
    *  nav's last row — the list, add, manage — never a page of its own. */
   projectsMenu?: ReactNode
+  /** The bar's project tabs (Tasks / Git / Skills / Workflows), container-built. */
+  projectTabs?: ReactNode
+}
+
+/**
+ * The active project's nav, rendered INSIDE its sidebar group under the tasks (user decision):
+ * the same items `visibleNavItems` gives the shell, scoped to that project, one size down from
+ * the old workspace rows. Exported for the groups container, which knows which group is active.
+ */
+export function ProjectNavLinks({
+  projectId,
+  items,
+  activeTo,
+  inboxCount = null,
+  unreadCount = null,
+  skillsUpdateAvailable = false,
+  onNavigate,
+}: {
+  projectId: string
+  items: NavItem[]
+  /** `activeNavPath(...)` of the current URL, or null outside this project. */
+  activeTo: string | null
+  inboxCount?: number | null
+  unreadCount?: number | null
+  skillsUpdateAvailable?: boolean
+  onNavigate?: () => void
+}) {
+  return (
+    <nav aria-label={`${projectId} views`} data-slot="project-nav" className="mt-1 flex flex-col gap-px">
+      {items
+        .filter((item) => item.to !== '/' && !item.global)
+        .map((item) => {
+          const isActive = item.to === activeTo
+          const Icon = item.icon
+          return (
+            <RouterLink
+              key={item.to}
+              to={`/p/${projectId}${item.to}`}
+              onClick={onNavigate}
+              aria-current={isActive ? 'page' : undefined}
+              className={cn(
+                'relative flex h-9 w-full items-center gap-2.5 rounded-md px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-8',
+                isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card',
+              )}
+            >
+              {isActive ? (
+                <span
+                  aria-hidden="true"
+                  className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
+                />
+              ) : null}
+              <Icon className="size-3.5 shrink-0" aria-hidden="true" />
+              {item.label}
+              {item.badge === 'inbox-count' && inboxCount ? (
+                <span data-slot="nav-badge" className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground">
+                  {inboxCount}
+                </span>
+              ) : null}
+              {item.badge === 'tasks-unread' && unreadCount ? (
+                <span data-slot="nav-unread-badge" className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground">
+                  {unreadCount}
+                </span>
+              ) : null}
+              {item.badge === 'skills-update' && skillsUpdateAvailable ? (
+                <span data-slot="nav-update-marker" className="ml-auto flex items-center">
+                  <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                  <span className="sr-only">Skills update available</span>
+                </span>
+              ) : null}
+            </RouterLink>
+          )
+        })}
+    </nav>
+  )
 }
 
 /**
@@ -184,6 +258,7 @@ export function AppShell({
   projectSwitcher,
   crumb = null,
   projectsMenu,
+  projectTabs,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -295,6 +370,7 @@ export function AppShell({
             name={projectName ?? repo?.name ?? null}
             toolsMenu={toolsMenu}
             crumb={crumb}
+            projectTabs={projectTabs}
             projectSwitcher={projectSwitcher}
           />
 
@@ -622,75 +698,11 @@ function SidebarContent({
               read as the sidebar's subject, and it is not; the tasks are). */}
           <hr aria-hidden="true" className="mx-5 mt-2 mb-1 border-border" />
 
-          {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob.
-              No Settings here — it is not a workspace surface; it lives with the utilities. */}
+          {/* The workspace nav is ONE row now: the Projects menu. Git / Skills / Workflows /
+              Settings are a project's, so they live under the active project's group above
+              (user decision: a Git hanging in the sidebar read as a workspace thing, and it is
+              not — you need a project before it means anything). */}
           <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
-            {items.filter((item) => item.to !== '/' && item.to !== '/settings').map((item) => {
-              const isActive = item.to === activeTo
-              const Icon = item.icon
-              // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
-              // match against `to`, and that rule is wrong here: it would *not* light Tasks on
-              // /tasks/:id — which the spec requires. `aria-current` cannot be forced past NavLink's
-              // own matching, so the area rule lives in `activeNavPath` and this is a plain Link.
-              // A global item (the Projects registry) must never be `/p/<id>`-prefixed.
-              const NavLink = item.global ? RouterLink : Link
-              return (
-                <React.Fragment key={item.to}>
-                <NavLink
-                  to={item.to}
-                  onClick={onNavigate}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={cn(
-                    // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
-                    // they relax to 44px — the one place the two framings legitimately differ.
-                    // 36px is the sidebar's one control height (CTA, search, rows); the drawer
-                    // relaxes to 44px touch targets. Hover/selected lift onto card WHITE — the
-                    // same rule as the TASKS rows: purple is a signal, never a surface.
-                    'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9',
-                    isActive && 'bg-card font-semibold text-foreground shadow-xs hover:bg-card'
-                  )}
-                >
-                  {isActive ? (
-                    // Same edge-caret as the TASKS rows — glued to the browser edge, not inset.
-                    <span
-                      aria-hidden="true"
-                      className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
-                    />
-                  ) : null}
-                  <Icon className="size-4 shrink-0" aria-hidden="true" />
-                  {item.label}
-                  {item.badge === 'inbox-count' && inboxCount ? (
-                    <span
-                      data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
-                    >
-                      {inboxCount}
-                    </span>
-                  ) : null}
-                  {/* Unread done items (#unread-done-items): same violet count grammar as the
-                      Inbox badge — the two share the "needs a human" hue. */}
-                  {item.badge === 'tasks-unread' && unreadCount ? (
-                    <span
-                      data-slot="nav-unread-badge"
-                      title={`${unreadCount} unread finished ${unreadCount === 1 ? 'task' : 'tasks'}`}
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
-                    >
-                      {unreadCount}
-                    </span>
-                  ) : null}
-                  {item.badge === 'skills-update' && skillsUpdateAvailable ? (
-                    <span
-                      data-slot="nav-update-marker"
-                      className="ml-auto flex items-center"
-                    >
-                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
-                      <span className="sr-only">Skills update available</span>
-                    </span>
-                  ) : null}
-                </NavLink>
-                </React.Fragment>
-              )
-            })}
             {projectsMenu}
           </nav>
         </div>
@@ -896,12 +908,16 @@ function ProjectBar({
   toolsMenu,
   crumb,
   projectSwitcher,
+  projectTabs,
 }: {
   name: string | null
   toolsMenu?: ReactNode
   /** What the page is about, after the project: the open task's title, or the view's name. */
   crumb?: string | null
   projectSwitcher?: ReactNode
+  /** The active project's views as underline tabs (user decision: Tasks / Git / Skills /
+   *  Workflows on the bar once a project is picked). */
+  projectTabs?: ReactNode
 }) {
   if (!name && !toolsMenu && !projectSwitcher) return null
   return (
@@ -930,6 +946,11 @@ function ProjectBar({
             {crumb}
           </span>
         </span>
+      ) : null}
+      {projectTabs ? (
+        <div data-slot="project-tabs" className="ml-3 flex h-full items-end gap-1 self-end">
+          {projectTabs}
+        </div>
       ) : null}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
         {/* Search lives on the app bar (user decision) — global reach, right where the other
