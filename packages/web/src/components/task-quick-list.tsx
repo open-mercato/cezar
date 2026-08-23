@@ -450,8 +450,11 @@ export function CrossProjectTasks({ activeProjectId, now = Date.now() }: { activ
   return (
     <div data-slot="cross-project-tasks">
       <hr aria-hidden="true" className="mx-2.5 mt-3 mb-2 border-border" />
-      <h2 className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase">
-        Other projects
+      <h2
+        className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
+        title="Tasks in your other projects that are running or waiting on you. Finished work stays on the Tasks page."
+      >
+        Needs you elsewhere
       </h2>
       <div className="flex flex-col gap-0.5">
         {rows.map((entry) => {
