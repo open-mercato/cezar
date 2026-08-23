@@ -1039,11 +1039,10 @@ function PaletteSkill({
     >
       {/* The grip says "this row drags" (user feedback: the drag affordance was invisible).
           Decorative — the whole row is the pointer surface; the add button is the keyboard path. */}
+      {/* Three things per row, no more (user feedback): the grip, the name, one control. The
+          sparkle went — every row had it, and project-vs-global already lives in the section
+          header. Check and + are mutually exclusive, so one slot carries whichever applies. */}
       <GripVerticalIcon aria-hidden="true" className="-ml-0.5 size-3.5 shrink-0 text-soft-foreground/70" />
-      <SparklesIcon
-        aria-hidden="true"
-        className={cn('size-3.5 shrink-0', isProjectSkill(skill) ? 'text-violet' : 'text-soft-foreground')}
-      />
       <span
         className={cn(
           'min-w-0 flex-1 truncate font-mono text-[13px]',
@@ -1052,22 +1051,32 @@ function PaletteSkill({
       >
         {skill.name}
       </span>
-      {inFlow ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" /> : null}
-      <button
-        type="button"
-        data-slot="wb-skill-add"
-        aria-label={inFlow ? `${skill.name} is already in the flow` : `Add ${skill.name} to the flow`}
-        title={inFlow ? 'Already in the flow' : 'Add to the flow'}
-        disabled={inFlow}
-        onClick={() => onAdd(skill.name)}
-        // Stop the pointerdown here: the row is a dnd-kit drag source with a 4px activation
-        // distance, and a click that slips those 4px on a 14px icon became a drag instead of an
-        // add (user report: "+ doesn't work"). The sensor never sees presses on the button now.
-        onPointerDown={(event) => event.stopPropagation()}
-        className="flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors outline-none hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-40"
-      >
-        <PlusIcon aria-hidden="true" className="size-3.5" />
-      </button>
+      {inFlow ? (
+        <span
+          data-slot="wb-skill-in-flow"
+          role="img"
+          aria-label={`${skill.name} is already in the flow`}
+          title="Already in the flow"
+          className="flex size-6 shrink-0 items-center justify-center text-success"
+        >
+          <CheckIcon aria-hidden="true" className="size-3.5" />
+        </span>
+      ) : (
+        <button
+          type="button"
+          data-slot="wb-skill-add"
+          aria-label={`Add ${skill.name} to the flow`}
+          title="Add to the flow"
+          onClick={() => onAdd(skill.name)}
+          // Stop the pointerdown here: the row is a dnd-kit drag source with a 4px activation
+          // distance, and a click that slips those 4px on a 14px icon became a drag instead of an
+          // add (user report: "+ doesn't work"). The sensor never sees presses on the button now.
+          onPointerDown={(event) => event.stopPropagation()}
+          className="flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors outline-none hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        >
+          <PlusIcon aria-hidden="true" className="size-3.5" />
+        </button>
+      )}
     </div>
   )
 }

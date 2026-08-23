@@ -164,16 +164,18 @@ describe('palette add / remove / the 8-step limit', () => {
     expect(yamlText().match(/- om-review/g)).toHaveLength(1)
   })
 
-  it('refuses the same skill twice — the add button is disabled and a drop is a no-op', async () => {
+  it('refuses the same skill twice — the row shows a check instead of an add button', async () => {
     // User report: the same skill could be stacked five times. A skill is a recipe; applying it
     // twice in one chain is never what was meant.
     stubFetch()
     renderAt('/workflows')
     await waitFor(() => expect(stepCards()).toHaveLength(2))
 
-    const button = screen.getByLabelText('om-fix is already in the flow') as HTMLButtonElement
-    expect(button.disabled).toBe(true)
-    fireEvent.click(button)
+    // No add button at all on a skill already in the flow — the slot shows the check instead.
+    const mark = screen.getByLabelText('om-fix is already in the flow')
+    expect(mark.tagName).not.toBe('BUTTON')
+    expect(document.querySelector('[data-skill="om-fix"] [data-slot="wb-skill-add"]')).toBeNull()
+    fireEvent.click(mark)
     expect(stepIds()).toEqual(['om-fix', 'om-review'])
     expect(yamlText().match(/- om-fix/g)).toHaveLength(1)
   })
