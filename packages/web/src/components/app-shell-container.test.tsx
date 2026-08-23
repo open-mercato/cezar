@@ -275,11 +275,13 @@ describe('sidebar wiring', () => {
     serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [], ...REGISTRY_STUBS })
     renderShell()
 
-    await waitFor(() => expect(document.querySelectorAll('[data-slot="project-tabs"] a').length).toBeGreaterThan(3))
+    // GitHub arrives with health (the forge gate) — settle on it, not on the first paint.
+    await waitFor(() =>
+      expect(within(document.querySelector('[data-slot="project-tabs"]') as HTMLElement).getByRole('link', { name: /GitHub/ })).toBeTruthy(),
+    )
     const band = document.querySelector('[data-slot="project-tabs"]') as HTMLElement
-    expect(within(band).queryByRole('link', { name: /Automations/ })).toBeNull()
     // The gate owns exactly one item — GitHub is forge-gated, not automations-gated.
-    expect(within(band).getByRole('link', { name: /GitHub/ })).toBeTruthy()
+    expect(within(band).queryByRole('link', { name: /Automations/ })).toBeNull()
   })
 
   it('shows the Automations nav item once health reports the capability', async () => {
