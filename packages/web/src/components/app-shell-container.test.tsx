@@ -235,6 +235,14 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
   })
 
+  it('names workspace settings on the bar, with no project chip', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    renderShell('/settings/global')
+    await waitFor(() => expect(document.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('Workspace settings'))
+    expect(document.querySelector('[data-slot="project-switcher"]')).toBeNull()
+    expect(repoChip()).toBeNull()
+  })
+
   it('treats Skills as a workspace library: the bar says Skills, no project chip, no band', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
     renderShell('/skills')

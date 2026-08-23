@@ -103,13 +103,13 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
 
   // A LIBRARY view (Skills) is the workspace's, not one project's (user decision): the bar
   // names the view instead of putting a project over it, like the workspace-wide Tasks page.
-  const libraryView = projectViews.find((item) => item.library && item.to === activeTo) ?? null
-  const workspaceView = pathname === '/tasks' || libraryView !== null
-
-  // Global settings intentionally has no selected project. Everywhere else the URL id selects
-  // the authoritative registry entry; health may name only the CONFIRMED boot project while
-  // the registry is unavailable, never a non-boot project whose root health does not describe.
+  // Global (workspace) settings intentionally has no selected project either. Everywhere else
+  // the URL id selects the authoritative registry entry; health may name only the CONFIRMED
+  // boot project while the registry is unavailable, never a non-boot project whose root
+  // health does not describe.
   const globalSettings = pathname === '/settings/global' || pathname.startsWith('/settings/global/')
+  const libraryView = projectViews.find((item) => item.library && item.to === activeTo) ?? null
+  const workspaceView = pathname === '/tasks' || libraryView !== null || globalSettings
   const projectName = globalSettings || workspaceView
     ? null
     : (activeProject?.name ??
@@ -201,13 +201,13 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         }
         // The project bar above the content — the same resolved name the document title uses,
         // falling back to the repo basename while the registry is unknown.
-        projectName={projectName ?? repoChipOf(health.data)?.name ?? null}
+        projectName={projectName ?? (workspaceView ? null : (repoChipOf(health.data)?.name ?? null))}
         // With a registry answer the identity becomes a real switcher; before that (or outside
         // any project) the bar keeps the static chip built from `projectName` above.
         // The bar's breadcrumb: the open task's title (the same resolution the document title
         // uses), else the view's label. Never on the project's own Tasks table — "cezar › Tasks"
         // would say the project twice.
-        crumb={titleRun ? runTitle(titleRun) : libraryView ? libraryView.label : workspaceTasks ? 'All projects' : null}
+        crumb={titleRun ? runTitle(titleRun) : libraryView ? libraryView.label : globalSettings ? 'Workspace settings' : workspaceTasks ? 'All projects' : null}
         // On a project VIEW the tab band already lists the project's views, so the chip is just
         // the name (user decision); the menu returns where the band is absent (a task thread,
         // the composer) as the way back to those views.
