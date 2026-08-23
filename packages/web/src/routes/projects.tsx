@@ -4,6 +4,7 @@ import { Link as RouterLink } from 'react-router'
 
 import { useProjects, useRunsIndex } from '@/api/queries'
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
+import { AddProjectMenu } from '@/components/app-shell'
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { shortAge } from '@/lib/format'
@@ -56,6 +57,9 @@ export function ProjectsRoute() {
           <span className="text-[12.5px] text-soft-foreground tabular-nums">{projects.data.projects.length}</span>
         ) : null}
         <div className="flex-1" />
+        {/* Adding a project moved here from the app bar (user decision): a rare action beside
+            the list it extends, not next to the thing you do a hundred times a day. */}
+        <AddProjectMenu />
         <Button asChild variant="ghost" size="sm">
           <RouterLink to="/settings/global/projects" data-slot="projects-manage">
             <SlidersHorizontalIcon className="size-3.5" aria-hidden="true" />

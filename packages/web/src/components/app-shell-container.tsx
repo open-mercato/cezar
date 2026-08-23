@@ -146,6 +146,10 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         projectName={projectName ?? repoChipOf(health.data)?.name ?? null}
         // With a registry answer the identity becomes a real switcher; before that (or outside
         // any project) the bar keeps the static chip built from `projectName` above.
+        // The bar's breadcrumb: the open task's title (the same resolution the document title
+        // uses), else the view's label. Never on the project's own Tasks table — "cezar › Tasks"
+        // would say the project twice.
+        crumb={titleRun ? runTitle(titleRun) : titleContext.pageLabel === 'Tasks' ? null : titleContext.pageLabel}
         projectSwitcher={
           registry && registry.projects.length > 0 ? (
             <ProjectSwitcher

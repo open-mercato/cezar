@@ -1,4 +1,5 @@
 import {
+  ChevronRightIcon,
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
@@ -116,6 +117,8 @@ export type AppShellProps = {
   /** The registry-backed project SWITCHER for the bar's left side; when absent the bar falls
    *  back to the static name chip (registry unknown / single project). */
   projectSwitcher?: ReactNode
+  /** The bar's second breadcrumb step: the open task's title, else the view's name. */
+  crumb?: string | null
 }
 
 /**
@@ -126,6 +129,8 @@ export type AppShellProps = {
  * on desktop, where there is nothing to close.
  */
 const SidebarNavigateContext = React.createContext<(() => void) | undefined>(undefined)
+
+export { AddProjectMenu }
 
 export function useSidebarNavigate(): (() => void) | undefined {
   return React.useContext(SidebarNavigateContext)
@@ -176,6 +181,7 @@ export function AppShell({
   multiProject = false,
   projectName = null,
   projectSwitcher,
+  crumb = null,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
@@ -285,7 +291,7 @@ export function AppShell({
           <ProjectBar
             name={projectName ?? repo?.name ?? null}
             toolsMenu={toolsMenu}
-            addProject={singleProject ? undefined : <AddProjectMenu />}
+            crumb={crumb}
             projectSwitcher={projectSwitcher}
           />
 
@@ -937,15 +943,16 @@ function BrandTile() {
 function ProjectBar({
   name,
   toolsMenu,
-  addProject,
+  crumb,
   projectSwitcher,
 }: {
   name: string | null
   toolsMenu?: ReactNode
-  addProject?: ReactNode
+  /** What the page is about, after the project: the open task's title, or the view's name. */
+  crumb?: string | null
   projectSwitcher?: ReactNode
 }) {
-  if (!name && !toolsMenu && !addProject && !projectSwitcher) return null
+  if (!name && !toolsMenu && !projectSwitcher) return null
   return (
     <div
       data-slot="project-bar"
@@ -963,7 +970,16 @@ function ProjectBar({
             </span>
           </span>
         ) : null)}
-      {addProject}
+      {/* The breadcrumb's second step (user decision: "project and task, here"): the open
+          task's title, or the view's name. Quiet, truncating, never a link — the page IS it. */}
+      {crumb ? (
+        <span className="flex min-w-0 items-center gap-2 text-[12.5px]">
+          <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+          <span data-slot="project-bar-crumb" className="truncate font-medium text-foreground" title={crumb}>
+            {crumb}
+          </span>
+        </span>
+      ) : null}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
         {/* Search lives on the app bar (user decision) — global reach, right where the other
             global utilities sit. The drawer keeps its own copy below md. */}

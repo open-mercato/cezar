@@ -188,11 +188,17 @@ describe('AppShell', () => {
     })
   })
 
-  describe('Add project menu', () => {
-    it('is shown by default — on the project bar, beside the repo context', () => {
-      renderShell()
+  describe('project bar breadcrumb', () => {
+    it('carries no Add project any more — that moved to the Projects page', () => {
+      renderShell('/', { projectName: 'cezar' })
       const bar = document.querySelector('[data-slot="project-bar"]') as HTMLElement
-      expect(within(bar).getByRole('button', { name: 'Add project' })).toBeTruthy()
+      expect(within(bar).queryByRole('button', { name: 'Add project' })).toBeNull()
+    })
+
+    it('shows the second step after the project — the open task, or the view', () => {
+      renderShell('/tasks/abc', { projectName: 'cezar', crumb: 'Fix the checkout' })
+      const bar = document.querySelector('[data-slot="project-bar"]') as HTMLElement
+      expect(bar.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('Fix the checkout')
     })
 
     it('is omitted in single-project mode while normal navigation remains', () => {
