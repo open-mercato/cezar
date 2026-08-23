@@ -686,15 +686,17 @@ function SidebarContent({
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
-          <Link
-            to="/settings"
+          {/* WORKSPACE settings (appearance, accounts, projects…) — the one place for them
+              (user decision); the project's own settings sit on the project bar. */}
+          <RouterLink
+            to="/settings/global"
             data-slot="footer-settings"
             onClick={onNavigate}
-            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <SettingsIcon className="size-3.5" aria-hidden="true" />
             Settings
-          </Link>
+          </RouterLink>
           <div data-slot="tools-menu" className="shrink-0 md:hidden">
             {toolsMenu}
           </div>
@@ -911,15 +913,20 @@ function ProjectBar({
         {/* Search lives on the app bar (user decision) — global reach, right where the other
             global utilities sit. The drawer keeps its own copy below md. */}
         <CommandPaletteHint />
-        {/* Settings beside Tools — both are utilities of the workspace this bar names. */}
-        <Link
-          to="/settings"
-          data-slot="topbar-settings"
-          className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <SettingsIcon className="size-3.5" aria-hidden="true" />
-          Settings
-        </Link>
+        {/* The PROJECT's settings, named as such and only where the bar names a project (user
+            decision: two "Settings" with one icon read as duplicates; workspace settings live
+            in the sidebar footer). A library view or the all-projects page has no project to
+            configure, so the link goes with the chip. */}
+        {projectSwitcher || name ? (
+          <Link
+            to="/settings"
+            data-slot="topbar-settings"
+            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <SettingsIcon className="size-3.5" aria-hidden="true" />
+            Project settings
+          </Link>
+        ) : null}
         {toolsMenu ? <div data-slot="topbar-tools" className="shrink-0">{toolsMenu}</div> : null}
         <ThemeToggle />
       </span>

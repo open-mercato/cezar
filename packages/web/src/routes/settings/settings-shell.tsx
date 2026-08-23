@@ -68,6 +68,7 @@ function SectionNav({
       data-scope={scope}
       className="hidden w-52 shrink-0 flex-col gap-1 border-r border-border p-3 md:flex"
     >
+      <ScopeSwitch scope={scope} />
       <NavLink
         to={settingsIndexPath(scope)}
         end
@@ -109,6 +110,45 @@ function SectionNav({
         <ProjectLocationNav />
       )}
     </nav>
+  )
+}
+
+/**
+ * Project ↔ Workspace at the top of the settings nav (user decision): the two areas are one
+ * screen with two scopes, so the way between them is here, not hunted for in the chrome.
+ * The project step is a flat `/settings` link: inside a project it scopes to it, from the
+ * global area the legacy redirect lands on the boot project.
+ */
+function ScopeSwitch({ scope }: { scope: SettingsScope }) {
+  const step = 'flex-1 rounded-[5px] px-2 py-1 text-center text-[12px] font-medium transition-colors'
+  const on = 'bg-card text-foreground shadow-xs'
+  const off = 'text-muted-foreground hover:text-foreground'
+  // Inside a project the scoped link keeps THAT project; outside one the flat URL redirects.
+  const ProjectStep = scope === 'project' ? ScopedLink : RouterLink
+  return (
+    <div
+      data-slot="settings-scope-switch"
+      role="group"
+      aria-label="Settings scope"
+      className="mb-2 flex rounded-md border border-border bg-muted p-0.5"
+    >
+      <ProjectStep
+        to="/settings"
+        data-scope="project"
+        data-active={scope === 'project' ? '' : undefined}
+        className={cn(step, scope === 'project' ? on : off)}
+      >
+        Project
+      </ProjectStep>
+      <RouterLink
+        to="/settings/global"
+        data-scope="global"
+        data-active={scope === 'global' ? '' : undefined}
+        className={cn(step, scope === 'global' ? on : off)}
+      >
+        Workspace
+      </RouterLink>
+    </div>
   )
 }
 
@@ -182,7 +222,7 @@ export function SettingsSectionRoute({
         <p className="text-[13px] text-soft-foreground">{section.description}</p>
         {scope === 'global' ? (
           <span data-slot="settings-scope-chip" className="ml-auto text-[11px] text-soft-foreground">
-            Global settings
+            Workspace settings
           </span>
         ) : null}
       </header>
@@ -208,7 +248,7 @@ export function SettingsIndexRoute({ scope, capabilities }: {
   return (
     <div data-route={global ? 'settings-global' : 'settings'} className="flex min-h-full flex-col">
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">{global ? 'Global settings' : 'Settings'}</h1>
+        <h1 className="text-base font-semibold">{global ? 'Workspace settings' : 'Project settings'}</h1>
         <p className="text-[13px] text-soft-foreground">
           {global
             ? 'Preferences for you and this machine, shared by every project.'
