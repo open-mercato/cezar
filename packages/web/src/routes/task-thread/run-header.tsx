@@ -233,13 +233,14 @@ export function RunHeader({
         {notesOpen ? <NotesPanel runId={run.id} /> : null}
       </div>
 
-      {/* The stateful CTA FLOATS (user decision): one fixed spot over the content, so the
-          bar never reflows when Stop becomes Reply becomes Review changes. md+ only — the
-          mobile kebab and the composer itself cover small screens. Portaled to the body:
+      {/* The stateful CTA FLOATS top-center, just under the bar (user decision): one fixed
+          spot over the content, so the bar never reflows when Stop becomes Reply becomes
+          Review changes — and the eye finds it where a notification would land. md+ only —
+          the mobile kebab and the composer itself cover small screens. Portaled to the body:
           the header's backdrop-blur would otherwise become the fixed position's containing
           block and swallow it. */}
       {createPortal(
-        <div data-slot="floating-cta" className="fixed right-6 bottom-6 z-40 hidden md:block">
+        <div data-slot="floating-cta" className="fixed top-14 left-1/2 z-40 hidden -translate-x-1/2 md:block">
           <PrimaryCtaButton run={run} actions={actions} floating />
         </div>,
         document.body,
