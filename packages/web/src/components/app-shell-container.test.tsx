@@ -225,7 +225,7 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="project-switcher"]')).toBeNull()
     // Skills is a LIBRARY: a sidebar nav row, never a project tab.
     const sidebarNav = within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).getByRole('navigation', { name: 'Main' })
-    expect(within(sidebarNav).getByRole('link', { name: 'Skills' }).getAttribute('href')).toBe('/p/cezar/skills')
+    expect(within(sidebarNav).getByRole('link', { name: 'Skills' }).getAttribute('href')).toBe('/skills')
   })
 
   it('shows the project tab band on project views only — not inside a task thread', async () => {
