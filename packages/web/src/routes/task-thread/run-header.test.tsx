@@ -763,8 +763,9 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(automated())
 
-    const link = await screen.findByRole('link', { name: 'Automation' })
-    expect(link.getAttribute('href')).toBe('/automations/a-1/log')
+    // Two chip strips by design now: the bar portal's (desktop) and the tab row's (mobile).
+    const links = await screen.findAllByRole('link', { name: 'Automation' })
+    for (const link of links) expect(link.getAttribute('href')).toBe('/automations/a-1/log')
   })
 
   it('degrades the automation chip to plain text while automations are off', async () => {

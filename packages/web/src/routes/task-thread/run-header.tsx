@@ -172,12 +172,17 @@ export function RunHeader({
             <FilesIcon aria-hidden="true" className="size-3.5" />
             Files
           </TabLink>
-          <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2 pb-1.5">
+          {/* Below md only: the bar (and its portal) does not exist there, so the chips and
+              the kebab keep the row's right side. */}
+          <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2 pb-1.5 md:hidden">
             <MetaRow run={run} automationsAvailable={health.data?.capabilities?.automations === true} />
             <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
           </span>
         </div>
         <BarActions>
+          {/* The task's context chips (PR, branch) live on the bar too (user decision) —
+              identity beside the verbs that act on it. */}
+          <MetaRow run={run} automationsAvailable={health.data?.capabilities?.automations === true} />
           {flags.finish ? (
             <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
               <CheckIcon aria-hidden="true" />
@@ -186,7 +191,8 @@ export function RunHeader({
           ) : null}
           <PrimaryCtaButton run={run} actions={actions} />
           {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
-          <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
+          {/* Icon-only on the bar (user decision): the full "Open in" label outweighed the row. */}
+          <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} iconOnly />
           {/* Everything past the state's primary actions folds behind one disclosure (#765). */}
           <SecondaryActionsMenu run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
         </BarActions>
@@ -217,10 +223,12 @@ function OpenInMenuForRun({
   run,
   canResume,
   onResume,
+  iconOnly,
 }: {
   run: ApiRun
   canResume: boolean
   onResume: () => void
+  iconOnly?: boolean
 }) {
   const targets = useOpenTargets()
   const providers = useProviderStatus()
@@ -272,6 +280,7 @@ function OpenInMenuForRun({
       triggerVariant="outline"
       // No trailing ellipsis (it read as a truncated label) — the chevron already says "menu".
       label="Open in"
+      iconOnly={iconOnly}
       title="Resume in a terminal, or open the worktree locally"
       leading={
         canResumeHere ? (
