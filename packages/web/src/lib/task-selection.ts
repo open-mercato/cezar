@@ -126,12 +126,18 @@ export function toggleAllVisible(
 /** An empty selection — the state the bar hides in, and what a completed bulk action returns to. */
 export const NO_SELECTION: ReadonlySet<string> = new Set<string>()
 
-/** Past tense, per action: what the receipt says a bulk edit DID. */
-const BULK_DONE_VERB: Record<BulkActionId, string> = {
-  archive: 'Archived',
-  restore: 'Restored',
-  read: 'Marked read',
-  unread: 'Marked unread',
+/**
+ * Past tense, per action: what the receipt says a bulk edit DID.
+ *
+ * Split into a verb and a trailing complement rather than one phrase because English puts the
+ * object in the middle of "marked … read": `Marked 3 tasks read.` is a sentence, `Marked read 3
+ * tasks.` is a log line, and this string is shown to a person.
+ */
+const BULK_DONE_VERB: Record<BulkActionId, { verb: string; complement: string }> = {
+  archive: { verb: 'Archived', complement: '' },
+  restore: { verb: 'Restored', complement: '' },
+  read: { verb: 'Marked', complement: ' read' },
+  unread: { verb: 'Marked', complement: ' unread' },
 }
 
 /**
@@ -149,11 +155,11 @@ export function bulkResultMessage(
   total: number,
   failures: readonly string[],
 ): string {
-  const verb = BULK_DONE_VERB[action]
+  const { verb, complement } = BULK_DONE_VERB[action]
   const noun = (count: number) => `${count} ${count === 1 ? 'task' : 'tasks'}`
-  if (failures.length === 0) return `${verb} ${noun(total)}.`
+  if (failures.length === 0) return `${verb} ${noun(total)}${complement}.`
   const reason = failures[0]
-  return `${verb} ${total - failures.length} of ${noun(total)} — ${failures.length} failed${
-    reason ? `: ${reason}` : ''
-  }`
+  return `${verb} ${total - failures.length} of ${noun(total)}${complement} — ${
+    failures.length
+  } failed${reason ? `: ${reason}` : ''}`
 }

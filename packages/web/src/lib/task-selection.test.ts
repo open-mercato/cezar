@@ -104,11 +104,12 @@ describe('bulkActionTargets', () => {
 })
 
 describe('bulkResultMessage', () => {
-  it('names the action in the past tense, and counts in tasks', () => {
+  it('names the action in the past tense, counts in tasks, and reads as a sentence', () => {
     expect(bulkResultMessage('archive', 3, [])).toBe('Archived 3 tasks.')
     expect(bulkResultMessage('restore', 1, [])).toBe('Restored 1 task.')
-    expect(bulkResultMessage('read', 2, [])).toBe('Marked read 2 tasks.')
-    expect(bulkResultMessage('unread', 1, [])).toBe('Marked unread 1 task.')
+    // The object goes in the MIDDLE of "marked … read" — this string is shown to a person.
+    expect(bulkResultMessage('read', 2, [])).toBe('Marked 2 tasks read.')
+    expect(bulkResultMessage('unread', 1, [])).toBe('Marked 1 task unread.')
   })
 
   it('reports the half that landed AND the half that did not, with the first reason', () => {
@@ -126,7 +127,7 @@ describe('bulkResultMessage', () => {
   })
 
   it('still reads as a sentence when the reason is empty', () => {
-    expect(bulkResultMessage('read', 1, [''])).toBe('Marked read 0 of 1 task — 1 failed')
+    expect(bulkResultMessage('read', 1, [''])).toBe('Marked 0 of 1 task read — 1 failed')
   })
 })
 
