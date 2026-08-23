@@ -864,20 +864,22 @@ function ProjectBar({
             </span>
           </span>
         ) : null)}
+      {/* The project's views come right after the project (user feedback: placed after the task
+          crumb they read as the task's). Then the crumb, which is about the page itself. */}
+      {projectTabs ? (
+        <div data-slot="project-tabs" className="ml-3 flex h-full items-end gap-1 self-end">
+          {projectTabs}
+        </div>
+      ) : null}
       {/* The breadcrumb's second step (user decision: "project and task, here"): the open
           task's title, or the view's name. Quiet, truncating, never a link — the page IS it. */}
       {crumb ? (
-        <span className="flex min-w-0 items-center gap-2 text-[12.5px]">
+        <span className="ml-3 flex min-w-0 items-center gap-2 text-[12.5px]">
           <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
           <span data-slot="project-bar-crumb" className="truncate font-medium text-foreground" title={crumb}>
             {crumb}
           </span>
         </span>
-      ) : null}
-      {projectTabs ? (
-        <div data-slot="project-tabs" className="ml-3 flex h-full items-end gap-1 self-end">
-          {projectTabs}
-        </div>
       ) : null}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
         {/* Search lives on the app bar (user decision) — global reach, right where the other
