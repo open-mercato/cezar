@@ -187,7 +187,7 @@ export function RunHeader({
         <BarActions>
           {/* The task's views as compact icon tabs (user decision) — the bar carries the whole
               header now: where you are, whose task it is, and what you can do to it. */}
-          <span data-slot="bar-tabs" role="tablist" aria-label="Task views" className="flex items-center gap-0.5">
+          <span data-slot="bar-tabs" role="tablist" aria-label="Task views" className="flex items-center gap-1.5">
             <BarTab to={`/tasks/${run.id}`} active={tab === 'session'} label="Session">
               <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
               Session
@@ -548,7 +548,7 @@ function BarTab({ to, active, label, children }: { to: string; active: boolean; 
       title={label}
       aria-current={active ? 'page' : undefined}
       className={cn(
-        'flex h-7 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium transition-colors',
+        'flex h-7 items-center gap-1 rounded-sm px-2 text-[11px] font-medium transition-colors',
         active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
     >
@@ -569,7 +569,7 @@ function BarActions({ children }: { children: ReactNode }) {
     setTarget(document.querySelector<HTMLElement>('[data-slot="bar-actions"]'))
   }, [])
   const content = (
-    <div data-slot="run-actions" className="hidden items-center gap-1 md:flex">
+    <div data-slot="run-actions" className="hidden items-center gap-1.5 md:flex">
       {children}
     </div>
   )

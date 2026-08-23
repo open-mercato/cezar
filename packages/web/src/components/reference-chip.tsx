@@ -161,7 +161,7 @@ export function ReferenceChip({
   const presentation = conflicting ? REFERENCE_CONFLICT : statusPresentation
   const chipClass = cn(
     bare
-      ? 'inline-flex h-7 items-center gap-1 rounded-md px-1.5 font-mono text-[11px] font-semibold transition-colors hover:bg-muted'
+      ? 'inline-flex h-7 items-center gap-1 rounded-sm px-2 font-mono text-[11px] font-semibold transition-colors hover:bg-muted'
       : 'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-[11px] font-semibold',
     TONE_CLASS[presentation?.tone ?? 'neutral'],
     bare && 'border-0',
