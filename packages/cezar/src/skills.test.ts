@@ -102,6 +102,24 @@ describe('filterImportedTeamSkills', () => {
 });
 
 describe('discoverSkills local entrypoints', () => {
+  it('reads a scalar category from the frontmatter, trimmed and capped', async () => {
+    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
+    tempDirs.push(repoRoot);
+    const skillsDir = join(repoRoot, '.ai/cezar/skills');
+    await mkdir(skillsDir, { recursive: true });
+    await writeFile(join(skillsDir, 'themed.md'), '---\ncategory:   Pull requests  \n---\nBody');
+    await writeFile(join(skillsDir, 'listed.md'), '---\ncategory: [a, b]\n---\nBody');
+    await writeFile(join(skillsDir, 'long.md'), `---\ncategory: ${'x'.repeat(60)}\n---\nBody`);
+    await writeFile(join(skillsDir, 'plain.md'), 'Body');
+
+    const skills = (await discoverSkills(repoRoot)).filter((skill) => skill.source === 'cezar');
+    const byName = (name: string) => skills.find((skill) => skill.name === name);
+    expect(byName('themed')?.category).toBe('Pull requests');
+    expect(byName('listed')?.category).toBeUndefined();
+    expect(byName('long')?.category).toHaveLength(40);
+    expect(byName('plain')?.category).toBeUndefined();
+  });
+
   it('recognizes only scalar true as the interactive composer hint', async () => {
     const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
     tempDirs.push(repoRoot);

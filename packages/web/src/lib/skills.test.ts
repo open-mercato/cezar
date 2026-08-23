@@ -426,6 +426,21 @@ describe('paletteGroups', () => {
     expect(groups[0]?.family).toBeNull()
   })
 
+  it('groups by an author-declared category before any name family', () => {
+    const cat = (name: string, category?: string): Skill => ({ ...sk(name), category }) as Skill
+    const groups = paletteGroups([
+      cat('om-auto-fix-pr', 'Pull requests'),
+      cat('om-open-pr', 'Pull requests'),
+      cat('om-auto-fix-issue', 'Issues'),
+      cat('om-brainstorm'),
+    ])
+    expect(groups.map((g) => [g.family, g.skills.map((s) => s.name)])).toEqual([
+      ['Issues', ['om-auto-fix-issue']],
+      ['Pull requests', ['om-auto-fix-pr', 'om-open-pr']],
+      ['Other', ['om-brainstorm']],
+    ])
+  })
+
   it('stays flat when families would leave most of a mixed catalog under Other', () => {
     const groups = paletteGroups([
       sk('lean-a'), sk('lean-b'), sk('lean-c'),

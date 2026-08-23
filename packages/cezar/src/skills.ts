@@ -18,6 +18,8 @@ export interface Skill {
   description?: string;
   /** Advisory composer hint: untouched run-mode choices default to interactive, in-place execution. */
   interactive?: true;
+  /** An author-declared theme (`category:` frontmatter) — what the workflow palette groups by. */
+  category?: string;
   body: string;
   path: string;
   source: 'ai' | 'cezar' | 'agents' | 'global' | 'team';
@@ -224,7 +226,13 @@ async function readMarkdownSkills(dir: string, source: Skill['source']): Promise
         ? frontmatter.description.trim()
         : undefined;
     const interactive = frontmatter.interactive === 'true' ? true : undefined;
-    skills.push({ name, description, interactive, body, path: absPath, source });
+    // A theme the author chose, so a palette can group by it (`category: Pull requests`).
+    // Scalar only, trimmed, capped — an array or an essay is not a category.
+    const category =
+      typeof frontmatter.category === 'string' && frontmatter.category.trim()
+        ? frontmatter.category.trim().slice(0, 40)
+        : undefined;
+    skills.push({ name, description, interactive, category, body, path: absPath, source });
   }
   return skills;
 }

@@ -357,6 +357,19 @@ export function paletteGroups(skills: readonly Skill[]): PaletteGroup[] {
   }
   const groups: PaletteGroup[] = []
   for (const [source, list] of bySource) {
+    // An author-declared `category` wins over anything inferred: when a collection carries
+    // themes, those are its sections (alphabetical), and the skills that declare none gather
+    // under `Other`, last. Only when nobody declared one do the name families below apply.
+    const themed = list.filter((skill) => skill.category)
+    if (themed.length > 0) {
+      const categories = [...new Set(themed.map((skill) => skill.category as string))].sort()
+      for (const category of categories) {
+        groups.push({ key: `${source}:${category}`, source, family: category, skills: list.filter((s) => s.category === category) })
+      }
+      const rest = list.filter((skill) => !skill.category)
+      if (rest.length > 0) groups.push({ key: `${source}:other`, source, family: 'Other', skills: rest })
+      continue
+    }
     const prefix = commonVendorPrefix(list.map((skill) => skill.name))
     const familyOf = (skill: Skill) => skill.name.slice(prefix.length).split('-')[0] || skill.name
     const counts = new Map<string, number>()
