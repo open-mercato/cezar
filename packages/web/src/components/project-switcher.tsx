@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { CheckIcon, ChevronDownIcon, FolderIcon, FolderOpenIcon, FoldersIcon, SlidersHorizontalIcon } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon, FolderIcon, FolderOpenIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { useNavigate as useRouterNavigate } from 'react-router'
 
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
@@ -52,13 +52,9 @@ export function orderForSwitcher(
 export function ProjectSwitcher({
   projects,
   activeId,
-  variant = 'bar',
 }: {
   projects: readonly ProjectListEntry[]
   activeId: string | null
-  /** `bar`: the app bar's identity chip. `nav`: a sidebar nav row named Projects (user decision:
-   *  the Projects entry opens this menu — the list, add, manage — rather than a page). */
-  variant?: 'bar' | 'nav'
 }) {
   const [open, setOpen] = React.useState(false)
   // The add-project dialogs live here now (user decision: one project menu — the list, then
@@ -74,22 +70,6 @@ export function ProjectSwitcher({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        {variant === 'nav' ? (
-          <button
-            type="button"
-            data-slot="projects-nav"
-            aria-label="Projects"
-            aria-haspopup="dialog"
-            // The nav rows' own grammar (see the WORKSPACE links in app-shell): same height,
-            // padding, type and hover, so this reads as a peer of Git and Skills — only it opens
-            // a menu instead of a page.
-            className="relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none md:h-9"
-          >
-            <FoldersIcon className="size-4 shrink-0" aria-hidden="true" />
-            Projects
-            <ChevronDownIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-soft-foreground" />
-          </button>
-        ) : (
           <button
             type="button"
             data-slot="project-switcher"
@@ -102,9 +82,8 @@ export function ProjectSwitcher({
             </span>
             <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
           </button>
-        )}
       </PopoverTrigger>
-      <PopoverContent align="start" side={variant === 'nav' ? 'right' : 'bottom'} className="w-64 p-0">
+      <PopoverContent align="start" className="w-64 p-0">
         <Command>
           {projects.length >= FILTER_THRESHOLD ? (
             <CommandInput data-slot="project-filter" placeholder="Filter projects…" />

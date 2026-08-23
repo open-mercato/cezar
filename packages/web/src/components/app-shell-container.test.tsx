@@ -435,7 +435,15 @@ describe('sidebar wiring', () => {
     // add, manage), not a page.
     const nav = screen.getByRole('navigation', { name: 'Main' })
     expect(within(nav).queryByRole('link', { name: 'Tasks' })).toBeNull()
-    expect(within(nav).getByRole('button', { name: 'Projects' }).getAttribute('data-slot')).toBe('projects-nav')
+    const section = nav.querySelector('[data-slot="projects-section"]') as HTMLElement
+    expect([...section.querySelectorAll('[data-slot="project-row"]')].map((r) => r.getAttribute('data-project-id'))).toEqual(['cezar', 'idle', 'shop'])
+    expect(within(section).getByRole('link', { name: 'shop' }).getAttribute('href')).toBe('/p/shop/')
+    expect(within(section).getByRole('link', { name: 'Manage projects' }).getAttribute('href')).toBe('/settings/global/projects')
+    expect(within(section).getByRole('button', { name: 'Clone from GitHub' })).toBeTruthy()
+    expect(within(section).getByRole('button', { name: 'Add local folder' })).toBeTruthy()
+    fireEvent.click(within(section).getByRole('button', { name: 'Search projects' }))
+    fireEvent.change(screen.getByLabelText('Filter projects'), { target: { value: 'sho' } })
+    expect([...section.querySelectorAll('[data-slot="project-row"]')].map((r) => r.getAttribute('data-project-id'))).toEqual(['shop'])
   })
 
   it('shows the version chip even outside a git repo', async () => {

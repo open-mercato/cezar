@@ -626,10 +626,9 @@ function SidebarContent({
               read as the sidebar's subject, and it is not; the tasks are). */}
           <hr aria-hidden="true" className="mx-5 mt-2 mb-1 border-border" />
 
-          {/* The workspace nav is ONE row now: the Projects menu. Git / Skills / Workflows /
-              Settings are a project's, so they live under the active project's group above
-              (user decision: a Git hanging in the sidebar read as a workspace thing, and it is
-              not — you need a project before it means anything). */}
+          {/* The workspace nav is the Projects SECTION (user decision): recent projects as rows,
+              load-more, and the section's verbs as header icons. Git / Skills / Workflows are a
+              project's and ride the app bar as tabs. */}
           <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
             {projectsMenu}
           </nav>

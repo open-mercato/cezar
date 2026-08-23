@@ -9,6 +9,7 @@ import { ListViewProvider } from '@/components/list-view'
 import { OfflineBanner } from '@/components/offline-banner'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectSwitcher } from '@/components/project-switcher'
+import { ProjectsSection } from '@/components/projects-section'
 import { ProjectTaskGroupsContainer } from '@/components/task-quick-list'
 import { TabLink } from '@/components/tab-link'
 import { ToolsMenu } from '@/components/tools-menu'
@@ -201,11 +202,7 @@ export function AppShellContainer({ children }: { children: ReactNode }) {
         taskQuickList={<ProjectTaskGroupsContainer />}
         projectsMenu={
           registry && registry.projects.length > 0 && health.data?.capabilities.singleProject !== true ? (
-            <ProjectSwitcher
-              variant="nav"
-              projects={registry.projects}
-              activeId={projectId ?? registry.bootProject ?? null}
-            />
+            <ProjectsSection projects={registry.projects} activeId={projectId ?? registry.bootProject ?? null} />
           ) : undefined
         }
         multiProject={multiProject}
