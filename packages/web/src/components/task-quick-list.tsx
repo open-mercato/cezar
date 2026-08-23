@@ -545,9 +545,13 @@ function ProjectTaskGroup({
       {entries.length === 0 ? (
         <p className="px-3 py-1.5 text-xs text-soft-foreground">No tasks yet</p>
       ) : (
-        shown.map((entry) => (
-          <IndexRunRow key={entry.id} entry={entry} currentRunId={currentRunId} now={now} />
-        ))
+        foldVariants(shown).map((row) =>
+          row.kind === 'run' ? (
+            <IndexRunRow key={row.entry.id} entry={row.entry} currentRunId={currentRunId} now={now} />
+          ) : (
+            <IndexVariantTile key={row.groupId} projectId={projectId} row={row} currentRunId={currentRunId} now={now} />
+          ),
+        )
       )}
       {hidden > 0 ? (
         <button
@@ -564,10 +568,85 @@ function ProjectTaskGroup({
   )
 }
 
+type IndexRow =
+  | { kind: 'run'; entry: RunIndexEntry }
+  | { kind: 'group'; groupId: string; title: string; members: RunIndexEntry[] }
+
+/** Spec 010 in the project groups: members of one variant group fold into one tile, at the
+ *  position of their first member; a lone member (the others archived) stays a plain row. */
+function foldVariants(entries: RunIndexEntry[]): IndexRow[] {
+  const rows: IndexRow[] = []
+  const seen = new Set<string>()
+  for (const entry of entries) {
+    if (!entry.groupId) {
+      rows.push({ kind: 'run', entry })
+      continue
+    }
+    if (seen.has(entry.groupId)) continue
+    seen.add(entry.groupId)
+    const members = entries.filter((e) => e.groupId === entry.groupId)
+    if (members.length < 2) rows.push({ kind: 'run', entry })
+    else rows.push({ kind: 'group', groupId: entry.groupId, title: runTitle(entry), members })
+  }
+  return rows
+}
+
+/** The collapsed variant group: the shared title, a ×N badge, the compare link as the toggle's
+ *  flex SIBLING (a link inside a button is invalid), and the members beneath when expanded. */
+function IndexVariantTile({
+  projectId,
+  row,
+  currentRunId,
+  now,
+}: {
+  projectId: string
+  row: Extract<IndexRow, { kind: 'group' }>
+  currentRunId: string | null
+  now: number
+}) {
+  const [expanded, setExpanded] = React.useState(false)
+  return (
+    <>
+      <div className="flex items-center rounded-sm hover:bg-card">
+        <button
+          type="button"
+          data-slot="group-tile"
+          data-group-id={row.groupId}
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="flex min-w-0 flex-1 items-center gap-2 py-[7px] pl-3 text-left"
+        >
+          <ChevronDownIcon
+            className={cn('size-3 shrink-0 text-soft-foreground transition-transform', !expanded && '-rotate-90')}
+            aria-hidden="true"
+          />
+          <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{row.title}</span>
+          <span className="shrink-0 rounded-sm bg-muted px-1.5 py-px font-mono text-[10.5px] font-semibold text-muted-foreground">
+            ×{row.members.length}
+          </span>
+        </button>
+        <Link
+          to={scopeTo(projectId, `/compare/${row.groupId}`)}
+          aria-label={`Compare variants of ${row.title}`}
+          title="Compare variants"
+          className="mr-1 flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <ScaleIcon className="size-3.5" aria-hidden="true" />
+        </Link>
+      </div>
+      {expanded
+        ? row.members.map((entry) => (
+            <IndexRunRow key={entry.id} entry={entry} currentRunId={currentRunId} now={now} variant />
+          ))
+        : null}
+    </>
+  )
+}
+
 /** One task row from the workspace index — the two-line grammar of `RunRow`, on the slim entry
  *  every project group shares. Explicit `/p/<id>` scope so a row under another project lands
  *  in that project. */
-function IndexRunRow({ entry, currentRunId, now }: { entry: RunIndexEntry; currentRunId: string | null; now: number }) {
+function IndexRunRow({ entry, currentRunId, now, variant = false }: { entry: RunIndexEntry; currentRunId: string | null; now: number; variant?: boolean }) {
   const attention = deriveAttention(entry)
   const isActive = entry.id === currentRunId
   const reference = taskReference(entry)
@@ -582,7 +661,7 @@ function IndexRunRow({ entry, currentRunId, now }: { entry: RunIndexEntry; curre
       data-run-id={entry.id}
       data-project-id={entry.projectId}
       data-active={isActive ? 'true' : undefined}
-      className="flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-card"
+      className={cn('flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-card', variant && 'pl-[26px]')}
     >
       <StatusMark attention={attention} className="mt-[9px]" />
       <span className="flex min-w-0 flex-1 flex-col gap-[3px] py-[6px] pr-2.5">
@@ -592,6 +671,11 @@ function IndexRunRow({ entry, currentRunId, now }: { entry: RunIndexEntry; curre
           aria-current={isActive ? 'page' : undefined}
           className="flex min-w-0 items-center gap-2"
         >
+          {variant && entry.variant ? (
+            <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
+              {entry.variant}
+            </span>
+          ) : null}
           <span
             data-slot="task-row-title"
             className={cn(

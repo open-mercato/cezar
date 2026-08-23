@@ -376,6 +376,9 @@ describe('sidebar wiring', () => {
           { ...indexRun, id: 'r-shop-2', title: 'Old news', status: 'done' as const },
           // Archived stays off the sidebar, as it always has.
           { ...indexRun, id: 'r-shop-3', title: 'Buried', archived: true },
+          // A ×2 variant group (spec 010) folds into one tile with its compare link.
+          { ...indexRun, id: 'v-a', title: 'Pick a runner', status: 'done' as const, groupId: 'g1', variant: 'A' },
+          { ...indexRun, id: 'v-b', title: 'Pick a runner', status: 'done' as const, groupId: 'g1', variant: 'B' },
         ],
         perProjectLimit: 200,
         truncated: [],
@@ -395,6 +398,10 @@ describe('sidebar wiring', () => {
     // Needs-you before finished, within the shop group.
     const rows = [...(groups[1]?.querySelectorAll('[data-slot="task-row"]') ?? [])]
     expect(rows.map((r) => r.getAttribute('data-run-id'))).toEqual(['r-shop-1', 'r-shop-2'])
+    // The variant pair is one tile, not two rows, and the compare view stays one click away.
+    const tile = groups[1]?.querySelector('[data-slot="group-tile"][data-group-id="g1"]')
+    expect(tile?.textContent).toContain('×2')
+    expect(screen.getByRole('link', { name: 'Compare variants of Pick a runner' }).getAttribute('href')).toBe('/p/shop/compare/g1')
     expect(rows[0]?.querySelector('a')?.getAttribute('href')).toBe('/p/shop/tasks/r-shop-1')
     expect(rows[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
     // Each group starts its own task in its own project, and names itself as the door to its table.
