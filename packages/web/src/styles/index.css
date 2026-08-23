@@ -213,9 +213,8 @@
   --card-2: #f0f0f2;
   --sidebar: #fafafa;
   --muted: #f0f0f2;
-  /* Selection surface — the one violet-tinted neutral left (the accent's 200): a picked thing
-   * reads as the accent's quiet cousin. Overrides the shared `--accent: --muted`. */
-  --accent: #e9e2fa;
+  /* Selection/hover surface stays GRAY (user decision): the shared `--accent: --muted`
+   * mapping holds in light too — violet is a signal, never a hover wash. */
   --muted-foreground: #5c5a63;
   /* AA-checked (audit 2026-08-08): ≥4.5:1 on every light surface incl. --muted; #a3a3a3 was
    * 2.52:1 on white across ~300 call sites. Don't lighten back above #6f6f6f — the review's
