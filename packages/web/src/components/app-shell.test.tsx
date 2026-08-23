@@ -101,11 +101,10 @@ describe('AppShell', () => {
     expect(routeOwnsScrollArrival('/tasks')).toBe(false)
   })
 
-  it('renders the nav as real router links — Tasks first, Settings in the footer', () => {
+  it('renders the nav as real router links — no Tasks row (the project groups are that door), Settings in the footer', () => {
     renderShell()
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.textContent)).toEqual([
-      'Tasks',
       'Inbox',
       'Git',
       'GitHub',
@@ -115,7 +114,6 @@ describe('AppShell', () => {
     ])
     // Deep-linkable per Step 2.1: every nav row is an <a href>, not a button with an onClick.
     expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      '/',
       '/inbox',
       '/git',
       '/github',
@@ -135,7 +133,7 @@ describe('AppShell', () => {
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
     // Minus the forge-gated items, the Tasks item (quick-list rows) and Settings (footer).
     expect(links).toHaveLength(
-      NAV_ITEMS.filter((item) => !item.forge && item.to !== '/settings').length,
+      NAV_ITEMS.filter((item) => !item.forge && item.to !== '/' && item.to !== '/settings').length,
     )
   })
 
@@ -147,7 +145,7 @@ describe('AppShell', () => {
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
     // Minus the gated item, the Tasks item (quick-list rows) and Settings (footer).
     expect(links).toHaveLength(
-      NAV_ITEMS.filter((item) => !item.automations && item.to !== '/settings').length,
+      NAV_ITEMS.filter((item) => !item.automations && item.to !== '/' && item.to !== '/settings').length,
     )
   })
 
@@ -173,39 +171,18 @@ describe('AppShell', () => {
       })
     }
 
-    it('lights Tasks on the tasks overview (Devin-style order: the nav row is the door)', () => {
-      renderShell('/')
-      expect(within(nav()).getByRole('link', { current: 'page' }).textContent).toBe('Tasks')
-    })
-
-    it('keeps Tasks lit on a task thread — the area rule, not a prefix match', () => {
-      renderShell('/tasks/abc123')
-      expect(within(nav()).getByRole('link', { current: 'page' }).textContent).toBe('Tasks')
-    })
-
-    it('lights Tasks on the GLOBAL /tasks page too — one row, the scope lives in the page header', () => {
-      renderShell('/tasks', { multiProject: true })
-      const current = within(nav()).getAllByRole('link', { current: 'page' })
-      expect(current.map((a) => a.textContent)).toEqual(['Tasks'])
-      expect(document.querySelector('[data-slot="all-tasks-link"]')).toBeNull()
+    it('lights no nav item on the tasks surfaces — the project groups above are that entry', () => {
+      // User decision: projects, and tasks inside them; the nav is the places (Git, Skills…).
+      for (const entry of ['/', '/tasks/abc123', '/tasks']) {
+        renderShell(entry, { multiProject: true })
+        expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
+        cleanup()
+      }
     })
 
     it('lights nothing on a full-screen surface like /new', () => {
       renderShell('/new')
       expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
-    })
-  })
-
-  describe('New task button', () => {
-    it('links to /new', () => {
-      renderShell()
-      expect(within(sidebar()).getByRole('link', { name: /New task/ }).getAttribute('href')).toBe('/new')
-    })
-
-    it('carries the C hint in its tooltip (the browser-usable accelerator; ⌘N only fires in the desktop shell)', () => {
-      renderShell()
-      const link = within(sidebar()).getByRole('link', { name: /New task/ })
-      expect(link.getAttribute('title')).toBe('New task (C)')
     })
   })
 
@@ -220,7 +197,6 @@ describe('AppShell', () => {
       renderShell('/', { singleProject: true })
       expect(within(sidebar()).queryByRole('button', { name: 'Add project' })).toBeNull()
       expect(within(nav()).getByRole('link', { name: 'Git' })).toBeTruthy()
-      expect(within(sidebar()).getByRole('link', { name: /New task/ })).toBeTruthy()
     })
   })
 
@@ -802,12 +778,11 @@ describe('AppShell', () => {
       // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
       // reuses the sidebar's content, so adding a nav item must not need a second edit here.
       // (Minus '/settings': the footer utility row is that entry.)
-      const workspaceItems = NAV_ITEMS.filter((item) => item.to !== '/settings')
+      const workspaceItems = NAV_ITEMS.filter((item) => item.to !== '/' && item.to !== '/settings')
       expect(links.map((a) => a.getAttribute('href'))).toEqual(workspaceItems.map((item) => item.to))
       expect(links.map((a) => a.textContent)).toEqual(workspaceItems.map((item) => item.label))
 
       // …and the rest of the sidebar came along, not just the nav.
-      expect(within(drawer() as HTMLElement).getByRole('link', { name: /New task/ })).toBeTruthy()
       expect(within(drawer() as HTMLElement).getByRole('button', { name: /^Theme:/ })).toBeTruthy()
     })
 
@@ -847,18 +822,6 @@ describe('AppShell', () => {
       openMenu()
       fireEvent.click(within(drawer() as HTMLElement).getByRole('button', { name: 'Active' }))
       await waitFor(() => expect(drawer()).toBeNull())
-      expect(screen.getByTestId('location').textContent).toBe('/')
-    })
-
-    it('closes before the New task anchor hands off to the legacy document', async () => {
-      renderShell('/')
-      openMenu()
-      const link = within(drawer() as HTMLElement).getByRole('link', { name: /New task/ })
-      // jsdom does not implement full document navigation; suppress only that browser default.
-      link.addEventListener('click', (event) => event.preventDefault(), { once: true })
-      fireEvent.click(link)
-      await waitFor(() => expect(drawer()).toBeNull())
-      expect(link.getAttribute('href')).toBe('/new')
       expect(screen.getByTestId('location').textContent).toBe('/')
     })
 

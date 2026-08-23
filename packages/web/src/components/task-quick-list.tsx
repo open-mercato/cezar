@@ -1,18 +1,11 @@
-import { ArchiveIcon, CheckCheckIcon, ChevronDownIcon, EllipsisIcon, ScaleIcon } from 'lucide-react'
+import { ChevronDownIcon, PlusIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { archiveFinished, markAllRunsSeen } from '@/api/client'
-import { queryKeys, useHealth, useProjects, useReferenceProjectId, useRuns, useRunsIndex } from '@/api/queries'
-import { toast } from '@/components/ui/toaster'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { rememberReferenceStatuses, useHealth, useProjects, useReferenceProjectId, useRuns, useRunsIndex } from '@/api/queries'
+import { useSidebarNavigate } from '@/components/app-shell'
 import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import type { RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { ReferenceChip } from '@/components/reference-chip'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
@@ -406,12 +399,6 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
   return parts.join(', ')
 }
 
-/** A cross-project row is worth sidebar space only while it can still ask for a human:
- *  live, waiting, or failed. Finished work in other repos belongs to the All-tasks page. */
-function needsSupervision(entry: { status: RunRecord['status'] }): boolean {
-  return entry.status !== 'done' && entry.status !== 'cancelled'
-}
-
 /** Needs-you outranks merely-running; a usage-limit `failed` with an appointment is parked,
  *  not broken, so it sorts with the live ones (same rule as `deriveAttention`). */
 function needsYou(entry: { status: RunRecord['status']; autoResumeAt?: string }): boolean {
@@ -419,133 +406,235 @@ function needsYou(entry: { status: RunRecord['status']; autoResumeAt?: string })
   return entry.status === 'failed' && !entry.autoResumeAt
 }
 
+/** Live before finished, needs-you before working, newest first within — the order the
+ *  single-project list has always used, applied per project group. */
+function rankEntry(entry: RunIndexEntry): number {
+  if (needsYou(entry)) return 0
+  if (entry.status === 'running' || entry.status === 'queued' || entry.status === 'failed') return 1
+  return 2
+}
+
+function compareEntries(a: RunIndexEntry, b: RunIndexEntry): number {
+  const rank = rankEntry(a) - rankEntry(b)
+  if (rank !== 0) return rank
+  return (b.finishedAt ?? b.startedAt ?? b.createdAt).localeCompare(a.finishedAt ?? a.startedAt ?? a.createdAt)
+}
+
+/** How many rows a project group shows before folding the rest behind "Show N more". */
+const GROUP_PREVIEW = 5
+
 /**
- * The parallel-work band (user decision, 25-repo review follow-up): tasks from OTHER projects
- * that are live or waiting on a human, under the active project's own list. This is what makes
- * supervising agents across repos possible without switching — the sidebar names every place
- * that needs eyes, and a click lands in that project's thread.
+ * One group per project, the project's tasks under it (user decision, Claude Code reference):
+ * the sidebar's top is "what is going on, everywhere", ordered by last use — the active project
+ * first, then the registry by `lastOpenedAt`. A project with no live tasks stays out of the way
+ * (it is still one switcher pick away); the active project is always listed, even empty, so the
+ * `+` beside its name is where a first task starts.
  *
- * Renders nothing when every other project is quiet: the band is a signal, not a fixture.
+ * One data source for every group — the workspace runs index (what the global Tasks page and
+ * the palette read) — so the active project and the others cannot disagree about a task.
  */
-export function CrossProjectTasks({ activeProjectId, now = Date.now() }: { activeProjectId: string | null; now?: number }) {
+export function ProjectTaskGroups({ now = Date.now() }: { now?: number }) {
   const index = useRunsIndex(true)
   const registry = useProjects().data
-  // An unscoped URL still MEANS the boot project — its runs are the quick list above, so they
-  // must not repeat here as "other".
-  const excludedId = activeProjectId ?? registry?.bootProject ?? null
-  const rows = React.useMemo(() => {
-    const entries = (index.data?.runs ?? []).filter(
-      (entry) => entry.projectId !== excludedId && !entry.archived && needsSupervision(entry),
-    )
-    return entries.sort((a, b) => {
-      const attention = Number(needsYou(b)) - Number(needsYou(a))
-      if (attention !== 0) return attention
-      return (b.startedAt ?? b.createdAt).localeCompare(a.startedAt ?? a.createdAt)
-    })
-  }, [index.data, excludedId])
+  const activeFromUrl = useActiveProjectId()
+  const activeProjectId = activeFromUrl ?? registry?.bootProject ?? null
+  const match = useProjectMatch('/tasks/:id/*')
+  const exact = useProjectMatch('/tasks/:id')
+  const currentRunId = match?.params.id ?? exact?.params.id ?? null
+  const onNavigate = useSidebarNavigate()
 
-  if (rows.length === 0) return null
-  const projectName = (id: string) => registry?.projects.find((project) => project.id === id)?.name ?? id
+  // Statuses the server already had ride along with the index; cold ones are asked for below.
+  const indexedStatuses = index.data?.referenceStatuses
+  React.useEffect(() => {
+    if (indexedStatuses) rememberReferenceStatuses(indexedStatuses)
+  }, [indexedStatuses])
+
+  const groups = React.useMemo(() => {
+    if (!registry) return []
+    const entries = (index.data?.runs ?? []).filter((entry) => !entry.archived)
+    const byProject = new Map<string, RunIndexEntry[]>()
+    for (const entry of entries) {
+      const list = byProject.get(entry.projectId)
+      if (list) list.push(entry)
+      else byProject.set(entry.projectId, [entry])
+    }
+    return [...registry.projects]
+      .sort((a, b) => {
+        if (a.id === activeProjectId) return -1
+        if (b.id === activeProjectId) return 1
+        return (b.lastOpenedAt || '').localeCompare(a.lastOpenedAt || '')
+      })
+      .map((project) => ({ project, entries: (byProject.get(project.id) ?? []).sort(compareEntries) }))
+      .filter(({ project, entries }) => entries.length > 0 || project.id === activeProjectId)
+  }, [registry, index.data, activeProjectId])
+
+  const referenceRequests = React.useMemo(
+    () =>
+      groups.flatMap(({ project, entries }) =>
+        entries.flatMap((entry) => {
+          const reference = taskReference(entry)
+          return reference ? [{ projectId: project.id, kind: reference.kind, number: reference.number }] : []
+        }),
+      ),
+    [groups],
+  )
+
+  // Nothing until the registry has answered: a group list with no names would be a guess.
+  if (!registry) return null
 
   return (
-    <div data-slot="cross-project-tasks">
-      <hr aria-hidden="true" className="mx-2.5 mt-3 mb-2 border-border" />
-      <h2
-        className="px-3 pb-1 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
-        title="Tasks in your other projects that are running or waiting on you. Finished work stays on the Tasks page."
-      >
-        Needs you elsewhere
-      </h2>
-      <div className="flex flex-col gap-0.5">
-        {rows.map((entry) => {
-          const attention = deriveAttention(entry)
-          return (
-            <Link
-              key={`${entry.projectId}/${entry.id}`}
-              to={scopeTo(entry.projectId, `/tasks/${entry.id}`)}
-              data-slot="cross-project-row"
-              data-project-id={entry.projectId}
-              title={`${projectName(entry.projectId)}: ${runTitle(entry)}`}
-              className="flex min-h-11 items-center gap-2 rounded-md py-[7px] pr-2.5 pl-3 transition-colors hover:bg-card md:min-h-9"
-            >
-              <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
-              {/* The project is the row's leading identifier here — which repo needs you is the
-                  question this band answers; the task title elaborates. */}
-              <span className="max-w-[12ch] shrink-0 truncate font-mono text-[10.5px] font-medium text-soft-foreground">
-                {projectName(entry.projectId)}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-muted-foreground">
-                {runTitle(entry)}
-              </span>
-              <span className="shrink-0 text-[10.5px] text-soft-foreground tabular-nums">
-                {shortAge(entry.startedAt ?? entry.createdAt, now)}
-              </span>
-            </Link>
-          )
-        })}
+    <ReferenceStatusProvider requests={referenceRequests}>
+      <div data-slot="project-task-groups" className="flex flex-col gap-3 pt-1">
+        {groups.map(({ project, entries }) => (
+          <ProjectTaskGroup
+            key={project.id}
+            projectId={project.id}
+            name={project.name}
+            entries={entries}
+            currentRunId={currentRunId}
+            now={now}
+            onNavigate={onNavigate}
+          />
+        ))}
       </div>
+    </ReferenceStatusProvider>
+  )
+}
+
+function ProjectTaskGroup({
+  projectId,
+  name,
+  entries,
+  currentRunId,
+  now,
+  onNavigate,
+}: {
+  projectId: string
+  name: string
+  entries: RunIndexEntry[]
+  currentRunId: string | null
+  now: number
+  onNavigate?: () => void
+}) {
+  const [expanded, setExpanded] = React.useState(false)
+  const hidden = Math.max(0, entries.length - GROUP_PREVIEW)
+  const shown = expanded ? entries : entries.slice(0, GROUP_PREVIEW)
+  return (
+    <section data-slot="project-task-group" data-project-id={projectId} className="flex flex-col gap-0.5">
+      {/* The project's name is the group's label, the + beside it starts a task THERE — the
+          explicit scope is what makes a group for another project more than a list. */}
+      <div className="flex h-7 items-center pr-1 pl-3">
+        {/* The name IS the door to that project's Tasks table (user decision: no Tasks row in
+            the nav — projects, and tasks inside them). Still an h2 for the section landmark. */}
+        <h2 className="min-w-0 truncate">
+          <Link
+            to={scopeTo(projectId, '/')}
+            data-slot="group-tasks-link"
+            title={`All tasks in ${name}`}
+            onClick={onNavigate}
+            className="text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase transition-colors hover:text-foreground"
+          >
+            {name}
+          </Link>
+        </h2>
+        <Link
+          to={scopeTo(projectId, '/new')}
+          data-slot="group-new-task"
+          aria-label={`New task in ${name}`}
+          title={`New task in ${name}`}
+          onClick={onNavigate}
+          className="ml-auto flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <PlusIcon className="size-3.5" aria-hidden="true" />
+        </Link>
+      </div>
+      {entries.length === 0 ? (
+        <p className="px-3 py-1.5 text-xs text-soft-foreground">No tasks yet</p>
+      ) : (
+        shown.map((entry) => (
+          <IndexRunRow key={entry.id} entry={entry} currentRunId={currentRunId} now={now} />
+        ))
+      )}
+      {hidden > 0 ? (
+        <button
+          type="button"
+          data-slot="group-show-more"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((value) => !value)}
+          className="self-start rounded-sm px-3 py-1 text-[12px] text-soft-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          {expanded ? 'Show less' : `Show ${hidden} more`}
+        </button>
+      ) : null}
+    </section>
+  )
+}
+
+/** One task row from the workspace index — the two-line grammar of `RunRow`, on the slim entry
+ *  every project group shares. Explicit `/p/<id>` scope so a row under another project lands
+ *  in that project. */
+function IndexRunRow({ entry, currentRunId, now }: { entry: RunIndexEntry; currentRunId: string | null; now: number }) {
+  const attention = deriveAttention(entry)
+  const isActive = entry.id === currentRunId
+  const reference = taskReference(entry)
+  const title = runTitle(entry)
+  const displayTitle = refPrefixMatches(title, reference?.number) ? splitRefPrefix(title).rest : title
+  const unread = isUnread(entry)
+  const readDone = isReadDoneItem(entry)
+  const age = shortAge(entry.finishedAt ?? entry.startedAt ?? entry.createdAt, now)
+  return (
+    <div
+      data-slot="task-row"
+      data-run-id={entry.id}
+      data-project-id={entry.projectId}
+      data-active={isActive ? 'true' : undefined}
+      className="flex min-h-11 items-start gap-2 rounded-sm pl-3 hover:bg-card"
+    >
+      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" className="mt-[12px]" />
+      <span className="flex min-w-0 flex-1 flex-col gap-[3px] py-[6px] pr-2.5">
+        <Link
+          to={scopeTo(entry.projectId, `/tasks/${entry.id}`)}
+          title={title}
+          aria-current={isActive ? 'page' : undefined}
+          className="flex min-w-0 items-center gap-2"
+        >
+          <span
+            data-slot="task-row-title"
+            className={cn(
+              'min-w-0 flex-1 truncate text-[13px] leading-[1.3]',
+              unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium',
+            )}
+          >
+            {displayTitle}
+          </span>
+          {unread ? <StatusDot tone="violet" role="img" aria-label="unread" className="size-[6px] shrink-0" /> : null}
+        </Link>
+        <span data-slot="task-row-meta" className="flex min-w-0 items-center gap-2.5 text-[11px] leading-none text-soft-foreground">
+          <span className="shrink-0 tabular-nums">{age}</span>
+          {reference ? (
+            <ReferenceChip
+              reference={reference}
+              taskTitle={title}
+              projectId={entry.projectId}
+              compact
+              className="h-auto shrink-0 gap-[3px] rounded-none border-0 px-0 py-0 text-[10.5px] font-medium"
+            />
+          ) : null}
+        </span>
+      </span>
     </div>
   )
 }
 
-/**
- * The Recent header's overflow (Devin-style): the two list-wide verbs the Tasks page has always
- * owned, so the sidebar can tidy the list without a trip to the table. Rendered by the shell's
- * header through the `listMenu` slot — the shell owns the header, this owns the mutations.
- */
-export function RecentListMenu() {
-  const queryClient = useQueryClient()
-  const archive = useMutation({
-    mutationFn: archiveFinished,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
-    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
-  })
-  const markAllRead = useMutation({
-    mutationFn: markAllRunsSeen,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
-    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
-  })
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          data-slot="recent-menu"
-          aria-label="List actions"
-          title="List actions"
-          className="flex size-6 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <EllipsisIcon className="size-3.5" aria-hidden="true" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[11rem]">
-        <DropdownMenuItem onSelect={() => markAllRead.mutate()}>
-          <CheckCheckIcon aria-hidden="true" /> Mark all read
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => archive.mutate()}>
-          <ArchiveIcon aria-hidden="true" /> Archive finished
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
-}
-
-/**
- * The quick-list wired to live data: `useRuns()` for the list (kept fresh by the global SSE
- * stream, Step 3.2), the router for which row is open, and the shared Active/Archived context so
- * the sidebar and the Tasks table (Step 3.4) always show the same filter.
- */
-export function TaskQuickListContainer({ crossProject = false }: { crossProject?: boolean } = {}) {
+/** Kept for the per-project groups view (`project-groups.tsx`) and direct renders: the active
+ *  project's own list, wired to `useRuns()`. The boot sidebar renders `ProjectTaskGroups`. */
+export function TaskQuickListContainer() {
   const runs = useRuns()
-  const activeProjectId = useActiveProjectId()
   const health = useHealth()
   const visibility = usageMetricVisibility(health.data)
-  // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
   const now = useNow(30_000)
-  // The sidebar's chips are the same chips as the tables', so they get their status the same way:
-  // one batched request for the whole list, mounted here where the list is.
   const projectId = useReferenceProjectId()
   const referenceRequests = React.useMemo(
     () =>
@@ -557,24 +646,22 @@ export function TaskQuickListContainer({ crossProject = false }: { crossProject?
           }),
     [runs.data, projectId],
   )
-
-  // Nothing at all until the list has answered: a skeleton here would be inventing rows, and an
-  // empty state would claim "No tasks yet" before we know whether there are any.
   if (!runs.data) return null
-
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TaskQuickList
         runs={runs.data}
-        // Both matches: `/tasks/:id` and its `/changes` and `/files` children all keep the row lit.
         currentRunId={match?.params.id ?? exact?.params.id ?? null}
         now={now}
         showTokens={visibility.tokens}
         showCost={visibility.cost}
       />
-      {/* The parallel-work band (multi-project only): what OTHER repos need eyes on, under this
-          project's own list. */}
-      {crossProject ? <CrossProjectTasks activeProjectId={activeProjectId} now={now} /> : null}
     </ReferenceStatusProvider>
   )
+}
+
+/** The boot sidebar's list: every project's tasks, grouped, by last use. */
+export function ProjectTaskGroupsContainer() {
+  const now = useNow(30_000)
+  return <ProjectTaskGroups now={now} />
 }

@@ -1,5 +1,5 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -343,10 +343,10 @@ describe('sidebar wiring', () => {
     expect(repoChip()?.textContent).toBe('cezar')
   })
 
-  it('surfaces other projects’ live and waiting tasks in the cross-project band', async () => {
-    // The parallel-work answer (25-repo follow-up): supervising agents across repos must not
-    // require switching — the band names every OTHER project that needs eyes. Finished work
-    // stays off it; the boot project's runs are the quick list above, never repeated here.
+  it('lists every project with tasks as a group, by last use, each with its own New-task +', async () => {
+    // User decision (Claude Code reference): the sidebar's top is projects, and tasks inside
+    // them — the active project first, then by `lastOpenedAt`; a project with no tasks stays out
+    // unless it is the active one. One index feeds every group.
     const indexRun = {
       projectId: 'shop',
       id: 'r-shop-1',
@@ -360,44 +360,49 @@ describe('sidebar wiring', () => {
       '/api/v1/health': HEALTH,
       '/api/v1/todos': [],
       '/api/v1/projects': {
-        projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' }],
+        projects: [
+          PROJECT,
+          { ...PROJECT, id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' },
+          { ...PROJECT, id: 'idle', name: 'idle', lastOpenedAt: '2026-07-21T00:00:00.000Z' },
+        ],
         bootProject: 'cezar',
         projectsDir: '/home/me/cezar/projects',
       },
       '/api/v1/workspace/ui-state': {},
-      // The unscoped URL reads the legacy unscoped runs route — the quick-list container
-      // (which hosts the band) stays unmounted until it answers.
       '/api/v1/runs': [],
       '/api/v1/workspace/runs-index': {
         runs: [
           indexRun,
-          // Done elsewhere: the All-tasks page's business, not the sidebar's.
           { ...indexRun, id: 'r-shop-2', title: 'Old news', status: 'done' as const },
-          // The boot project's own run must not echo under "Other projects".
-          { ...indexRun, projectId: 'cezar', id: 'r-boot-1', status: 'running' as const },
+          // Archived stays off the sidebar, as it always has.
+          { ...indexRun, id: 'r-shop-3', title: 'Buried', archived: true },
         ],
         perProjectLimit: 200,
-        truncated: false,
-        // #871: batched reference statuses ride the index answer; none of these rows carries one.
+        truncated: [],
         referenceStatuses: {},
       },
     })
     renderShell()
 
-    // 3s: two dependent queries (projects, then the index) must land before the band mounts,
-    // and the full-suite worker pool makes the default 1s a coin flip.
     await waitFor(
-      () => expect(document.querySelector('[data-slot="cross-project-tasks"]')).not.toBeNull(),
+      () => expect(document.querySelectorAll('[data-slot="project-task-group"]').length).toBeGreaterThan(0),
       { timeout: 3000 },
     )
-    const rows = [...document.querySelectorAll('[data-slot="cross-project-row"]')]
-    expect(rows).toHaveLength(1)
-    const row = rows[0] as HTMLElement
-    expect(row.getAttribute('href')).toBe('/p/shop/tasks/r-shop-1')
-    expect(row.textContent).toContain('shop')
-    expect(row.textContent).toContain('Fix the checkout')
-    // The dot says what the row asks for — waiting is the amber "needs you".
-    expect(row.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    const groups = [...document.querySelectorAll('[data-slot="project-task-group"]')]
+    // The active (boot) project first even with nothing in it; `idle` has no tasks and is absent.
+    expect(groups.map((g) => g.getAttribute('data-project-id'))).toEqual(['cezar', 'shop'])
+    expect(groups[0]?.textContent).toContain('No tasks yet')
+    // Needs-you before finished, within the shop group.
+    const rows = [...(groups[1]?.querySelectorAll('[data-slot="task-row"]') ?? [])]
+    expect(rows.map((r) => r.getAttribute('data-run-id'))).toEqual(['r-shop-1', 'r-shop-2'])
+    expect(rows[0]?.querySelector('a')?.getAttribute('href')).toBe('/p/shop/tasks/r-shop-1')
+    expect(rows[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    // Each group starts its own task in its own project, and names itself as the door to its table.
+    expect(screen.getByRole('link', { name: 'New task in shop' }).getAttribute('href')).toBe('/p/shop/new')
+    expect(screen.getByRole('link', { name: 'New task in cezar' })).toBeTruthy()
+    expect(groups[1]?.querySelector('[data-slot="group-tasks-link"]')?.getAttribute('href')).toBe('/p/shop/')
+    // No nav Tasks row any more.
+    expect(within(screen.getByRole('navigation', { name: 'Main' })).queryByRole('link', { name: 'Tasks' })).toBeNull()
   })
 
   it('shows the version chip even outside a git repo', async () => {

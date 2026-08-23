@@ -55,10 +55,6 @@ const brandLogoUrl = '/cezar-logo.svg'
  *  for CSS and once for the state machine. */
 const DESKTOP_MEDIA_QUERY = '(min-width: 768px)'
 
-/** The Recent header's icon buttons: 24px targets, card-white on hover, no chrome at rest. */
-const RECENT_ICON_BUTTON =
-  'flex size-6 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none'
-
 export type RepoChip = {
   name: string
   branch: string
@@ -86,9 +82,6 @@ export type AppShellProps = {
   taskQuickList?: ReactNode
   /** Step 4.2's Tools dropdown trigger. */
   toolsMenu?: ReactNode
-  /** The Recent header's overflow menu (Mark all read, Archive finished) — data-wired by the
-   *  container; the shell only places it beside its own + and search. */
-  listMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
    *  Defaults to shown so the presentational shell stays renderable alone; the container
    *  passes the health payload's truth. */
@@ -174,7 +167,6 @@ export function AppShell({
   latestVersion = null,
   taskQuickList,
   toolsMenu,
-  listMenu,
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
@@ -252,7 +244,6 @@ export function AppShell({
     latestVersion,
     taskQuickList,
     toolsMenu,
-    listMenu,
     projectGroups,
     multiProject,
     singleProject,
@@ -337,7 +328,6 @@ type NavProps = {
   latestVersion: string | null
   taskQuickList?: ReactNode
   toolsMenu?: ReactNode
-  listMenu?: ReactNode
   projectGroups?: ReactNode
   /** The active project's name — the task list's label. */
   projectName?: string | null
@@ -527,7 +517,6 @@ function SidebarContent({
   latestVersion,
   taskQuickList,
   toolsMenu,
-  listMenu,
   projectGroups,
   multiProject,
   singleProject,
@@ -612,44 +601,6 @@ function SidebarContent({
             rows so a same-path click still closes the mobile drawer (the route-change effect
             cannot fire without a pathname change). */}
         <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-          {/* The RECENT header (Devin reference): one quiet label, the list's verbs inline on the
-              right — new task, search, and the container-supplied overflow. The + IS the New-task
-              action now (no slab above the nav); the accessible name and tooltip carry the `C`
-              accelerator the icon cannot. */}
-          <div data-slot="recent-header" className="flex h-7 items-center pr-3.5 pl-[22px] pt-1">
-            {/* The list is named after the project it lists (user feedback: "Recent" said
-                nothing about whose tasks these are). Falls back to "Tasks" before the registry
-                has answered. */}
-            <h2
-              className="min-w-0 truncate text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
-              title={`Tasks in ${projectName ?? 'this project'}: waiting on you first, then working, then recently finished`}
-            >
-              {projectName ?? 'Tasks'}
-            </h2>
-            <span className="ml-auto flex items-center gap-0.5">
-              <Link
-                to="/new"
-                data-slot="recent-new-task"
-                aria-label="New task"
-                title="New task (C)"
-                onClick={onNavigate}
-                className={RECENT_ICON_BUTTON}
-              >
-                <PlusIcon className="size-3.5" aria-hidden="true" />
-              </Link>
-              <button
-                type="button"
-                data-slot="recent-search"
-                aria-label="Search tasks"
-                title="Search tasks"
-                onClick={() => openCommandPalette()}
-                className={RECENT_ICON_BUTTON}
-              >
-                <SearchIcon className="size-3.5" aria-hidden="true" />
-              </button>
-              {listMenu}
-            </span>
-          </div>
           <div data-slot="task-quick-list" className="px-2.5">
             <SidebarNavigateContext.Provider value={onNavigate}>
               {taskQuickList}
@@ -663,7 +614,7 @@ function SidebarContent({
           {/* gap-0.5 keeps a lit row and its hovered neighbour from fusing into one blob.
               No Settings here — it is not a workspace surface; it lives with the utilities. */}
           <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
-            {items.filter((item) => item.to !== '/settings').map((item) => {
+            {items.filter((item) => item.to !== '/' && item.to !== '/settings').map((item) => {
               const isActive = item.to === activeTo
               const Icon = item.icon
               // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
