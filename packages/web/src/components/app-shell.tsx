@@ -293,7 +293,6 @@ export function AppShell({
               content on every route, instead of buried in the sidebar lockup. */}
           <ProjectBar
             name={projectName ?? repo?.name ?? null}
-            toolsMenu={toolsMenu}
             crumb={crumb}
             projectSwitcher={projectSwitcher}
           />
@@ -572,7 +571,21 @@ function SidebarContent({
         </span>
         {/* Add-project moved to the project bar, beside the repo context it actually concerns —
             next to the brand it read as part of Cezar's profile. */}
-        {headerAction ? <div className="ml-auto shrink-0">{headerAction}</div> : null}
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {/* Search at the sidebar's top (user decision, Replit reference) — an icon opening
+              the ⌘K palette. The drawer keeps its full-width copy below md instead. */}
+          <button
+            type="button"
+            data-slot="sidebar-search"
+            title="Search — command palette (⌘K / Ctrl+K)"
+            aria-label="Search"
+            onClick={() => openCommandPalette()}
+            className="hidden size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
+          >
+            <SearchIcon className="size-4" aria-hidden="true" />
+          </button>
+          {headerAction ? <div className="shrink-0">{headerAction}</div> : null}
+        </span>
       </div>
 
       {/* No New-task slab here any more (user decision, Devin reference): the action is the
@@ -678,29 +691,30 @@ function SidebarContent({
         <CommandPaletteHint />
       </div>
 
-      {/* The UTILITY bar: Settings + version. Settings, Tools and the theme toggle render
-          md:hidden — the desktop has them on the project bar; the MOBILE drawer (which has no
-          project bar) keeps them here. The version label stays at every size. */}
+      {/* The UTILITY bar (user decision): Settings, Tools, the theme toggle and the version
+          live here at every size — the workspace's chrome sits at the sidebar's bottom, not
+          on the bar over the content. */}
       <div
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
-          {/* Below md the bar is hidden, so the drawer footer carries the workspace link. */}
           <RouterLink
             to="/settings/global"
             data-slot="footer-settings"
             onClick={onNavigate}
-            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           >
             <SettingsIcon className="size-3.5" aria-hidden="true" />
             Settings
           </RouterLink>
-          <div data-slot="tools-menu" className="shrink-0 md:hidden">
+          <div data-slot="tools-menu" className="shrink-0">
             {toolsMenu}
           </div>
-          {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
-          <ThemeToggle className="ml-auto md:hidden" />
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
+            <ThemeToggle />
+          </span>
         </div>
       </div>
     </div>
@@ -866,17 +880,15 @@ function BrandTile() {
  */
 function ProjectBar({
   name,
-  toolsMenu,
   crumb,
   projectSwitcher,
 }: {
   name: string | null
-  toolsMenu?: ReactNode
   /** What the page is about, after the project: the open task's title, or the view's name. */
   crumb?: string | null
   projectSwitcher?: ReactNode
 }) {
-  if (!name && !toolsMenu && !projectSwitcher && !crumb) return null
+  if (!name && !projectSwitcher && !crumb) return null
   return (
     <div
       data-slot="project-bar"
@@ -908,24 +920,8 @@ function ProjectBar({
           </span>
         </span>
       ) : null}
-      <span className="ml-auto flex shrink-0 items-center gap-2.5">
-        {/* Search lives on the app bar (user decision) — global reach, right where the other
-            global utilities sit. The drawer keeps its own copy below md. */}
-        <CommandPaletteHint />
-        {/* WORKSPACE settings, beside Tools: both are utilities of the whole app, not of the
-            project the bar names (user decision). The project's own settings sit on its
-            sidebar row. */}
-        <RouterLink
-          to="/settings/global"
-          data-slot="topbar-settings"
-          className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <SettingsIcon className="size-3.5" aria-hidden="true" />
-          Settings
-        </RouterLink>
-        {toolsMenu ? <div data-slot="topbar-tools" className="shrink-0">{toolsMenu}</div> : null}
-        <ThemeToggle />
-      </span>
+      {/* No utilities here (user decision): Search sits at the sidebar's top, and Settings,
+          Tools and the theme toggle live in the sidebar footer. The bar is identity only. */}
     </div>
   )
 }

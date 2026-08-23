@@ -165,16 +165,20 @@ describe('AppShell', () => {
       // Named by its own visible label, not by an aria-label that would diverge from it
       // (WCAG 2.5.3) — jsdom reports no `navigator.platform`, so the chord reads Ctrl+K.
       // Two copies by design: the app bar (desktop) and the drawer's md:hidden one.
-      const search = within(sidebar()).getByRole('button', { name: 'Search' })
-      expect(search.dataset.slot).toBe('command-palette-hint')
-      expect(search.textContent).toContain('Search')
-      expect(search.querySelector('kbd')?.textContent).toBe('Ctrl+K')
+      // Two copies by design: the top-of-sidebar icon (desktop) and the drawer's md:hidden
+      // full-width launcher, which keeps its visible label and Ctrl+K chord (WCAG 2.5.3).
+      const buttons = within(sidebar()).getAllByRole('button', { name: 'Search' })
+      const icon = buttons.find((el) => el.dataset.slot === 'sidebar-search')!
+      const hint = buttons.find((el) => el.dataset.slot === 'command-palette-hint')!
+      expect(hint.textContent).toContain('Search')
+      expect(hint.querySelector('kbd')?.textContent).toBe('Ctrl+K')
 
       const opened = vi.fn()
       window.addEventListener('cezar:open-command-palette', opened)
-      fireEvent.click(search)
+      fireEvent.click(icon)
+      fireEvent.click(hint)
       window.removeEventListener('cezar:open-command-palette', opened)
-      expect(opened).toHaveBeenCalledTimes(1)
+      expect(opened).toHaveBeenCalledTimes(2)
     })
 
     it('still shows the version chip update affordance (#368) in the narrower row', () => {
