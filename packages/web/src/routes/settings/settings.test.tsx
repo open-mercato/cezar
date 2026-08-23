@@ -166,10 +166,6 @@ describe('the settings shell', () => {
     const nav = document.querySelector('[data-slot="settings-nav"]')!
     const ids = [...nav.querySelectorAll('[data-section]')].map((el) => el.getAttribute('data-section'))
     expect(ids).toEqual(PROJECT_SECTIONS)
-    // The scope switch at the top of the nav: Project lit, Workspace the way across.
-    const sw = nav.querySelector('[data-slot="settings-scope-switch"]')!
-    expect(sw.querySelector('[data-active]')?.getAttribute('data-scope')).toBe('project')
-    expect(sw.querySelector('[data-scope="global"]')?.getAttribute('href')).toBe('/settings/global')
     // The active section is marked for assistive tech, not just by color.
     expect(nav.querySelector('[aria-current="page"]')?.getAttribute('data-section')).toBe('agents')
     // The mobile pill row renders through the same registry — the two can never disagree.

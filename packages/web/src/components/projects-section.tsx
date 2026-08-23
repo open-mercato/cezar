@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { CheckIcon, ChevronDownIcon, FolderPlusIcon, PlusIcon, SearchIcon, SlidersHorizontalIcon, XIcon } from 'lucide-react'
+import { ChevronDownIcon, FolderPlusIcon, PlusIcon, SearchIcon, SettingsIcon, SlidersHorizontalIcon, XIcon } from 'lucide-react'
 import { Link as RouterLink } from 'react-router'
 
 import type { ProjectListEntry, RunIndexEntry } from '@open-mercato/cezar-api-client'
@@ -29,7 +29,8 @@ const ICON_BUTTON =
  * each with ITS tasks beneath (needs-you, working, finished; five, then Show N more; variant
  * groups folded), "Load more" for the rest, and the section's verbs as icons on its header —
  * search (an inline filter), add a local folder, clone from GitHub, manage the registry. A
- * project's name opens its tasks; the active one wears a check; the + starts a task there.
+ * project's name opens its tasks; on hover or focus the row shows its settings and a + for a
+ * new task there.
  * One source, the workspace runs index, feeds every project's list.
  */
 export function ProjectsSection({
@@ -166,7 +167,7 @@ export function ProjectsSection({
   )
 }
 
-/** One project: its row (name → its tasks, check when active, + for a new task there), then
+/** One project: its row (name → its tasks; settings and + appear on hover/focus), then
  *  its tasks beneath — the first five, the rest behind "Show N more"; variants folded. */
 function ProjectRow({
   project,
@@ -194,7 +195,7 @@ function ProjectRow({
     <section data-slot="project-task-group" data-project-id={project.id} className="flex flex-col">
       <div
         className={cn(
-          'flex h-9 items-center gap-1 rounded-md pr-1 pl-1 transition-colors hover:bg-card md:h-8',
+          'group/row flex h-9 items-center gap-1 rounded-md pr-1 pl-1 transition-colors hover:bg-card md:h-8',
           active && 'bg-card shadow-xs',
         )}
       >
@@ -225,19 +226,32 @@ function ProjectRow({
           )}
         >
           <span className="min-w-0 flex-1 truncate">{project.name}</span>
-          {active ? <CheckIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" /> : null}
         </RouterLink>
+        {/* The row's two actions (user decision): the PROJECT's settings and a new task there,
+            shown on hover or focus so the list reads as names. Active is the bold row. */}
         {!missing ? (
-          <RouterLink
-            to={`/p/${project.id}/new`}
-            data-slot="group-new-task"
-            aria-label={`New task in ${project.name}`}
-            title={`New task in ${project.name}`}
-            onClick={onNavigate}
-            className={ICON_BUTTON}
-          >
-            <PlusIcon className="size-3.5" aria-hidden="true" />
-          </RouterLink>
+          <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 has-[:focus-visible]:opacity-100">
+            <RouterLink
+              to={`/p/${project.id}/settings`}
+              data-slot="group-settings"
+              aria-label={`Settings for ${project.name}`}
+              title={`Settings for ${project.name}`}
+              onClick={onNavigate}
+              className={ICON_BUTTON}
+            >
+              <SettingsIcon className="size-3.5" aria-hidden="true" />
+            </RouterLink>
+            <RouterLink
+              to={`/p/${project.id}/new`}
+              data-slot="group-new-task"
+              aria-label={`New task in ${project.name}`}
+              title={`New task in ${project.name}`}
+              onClick={onNavigate}
+              className={ICON_BUTTON}
+            >
+              <PlusIcon className="size-3.5" aria-hidden="true" />
+            </RouterLink>
+          </span>
         ) : null}
       </div>
       {open ? (
