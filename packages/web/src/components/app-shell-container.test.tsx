@@ -223,9 +223,9 @@ describe('sidebar wiring', () => {
     expect(within(band).getByRole('link', { current: 'page' }).textContent).toBe('Git')
     expect(repoChip()?.textContent).toBe('cezar')
     expect(document.querySelector('[data-slot="project-switcher"]')).toBeNull()
-    // Skills is a LIBRARY: a sidebar nav row, never a project tab.
-    const sidebarNav = within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).getByRole('navigation', { name: 'Main' })
-    expect(within(sidebarNav).getByRole('link', { name: 'Skills' }).getAttribute('href')).toBe('/skills')
+    // Skills is a LIBRARY: a sidebar footer row above Settings, never a project tab.
+    const foot = document.querySelector('[data-slot="sidebar-footer"]') as HTMLElement
+    expect(within(foot).getByRole('link', { name: 'Skills' }).getAttribute('href')).toBe('/skills')
   })
 
   it('shows the project tab band on project views only — not inside a task thread', async () => {

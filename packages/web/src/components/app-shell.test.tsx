@@ -142,8 +142,11 @@ describe('AppShell', () => {
       renderShell('/', { version: '1.2.3', toolsMenu: <button type="button">Tools</button> })
       // The footer is now three stacked children (user decision): the Settings ROW, the Tools
       // ROW, then the slim controls line holding version + theme toggle.
+      // Skills (the workspace library) sits above Settings (user decision); it has no
+      // data-slot, so assert by order of what identifies each row.
       const children = Array.from(footer().children) as HTMLElement[]
-      expect(children.map((child) => child.dataset.slot)).toEqual([
+      expect(children.map((child) => child.dataset.slot ?? child.textContent?.trim())).toEqual([
+        'Skills',
         'footer-settings',
         'tools-menu',
         'sidebar-footer-controls',

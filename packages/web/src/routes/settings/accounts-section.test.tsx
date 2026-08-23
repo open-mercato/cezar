@@ -215,7 +215,7 @@ const openDetails = async (id: string) => {
 
 describe('the agent accounts section', () => {
   it('opens with the machine Providers block, anchored for the #providers deep links', async () => {
-    serve({ editable: true, profileCapableProviders: ['claude'], profiles: [] })
+    serve({ editable: true, profileCapableProviders: ['claude'], profiles: [], defaults: {}, selections: {} })
     renderAccounts()
     const section = await screen.findByRole('heading', { level: 2, name: 'Agent accounts' })
     const providers = document.querySelector<HTMLElement>('[data-slot="provider-settings"]')!

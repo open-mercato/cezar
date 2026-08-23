@@ -639,43 +639,6 @@ function SidebarContent({
               load-more, and the section's verbs as header icons. Git / Skills / Workflows are a
               project's and ride the app bar as tabs. */}
           <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
-            {/* Workspace LIBRARIES (Skills) as nav rows — the same row grammar the project's
-                views once used here, now reserved for what is not one project's. */}
-            {items
-              .filter((item) => item.library)
-              .map((item) => {
-                const isActive = item.to === activeTo
-                const Icon = item.icon
-                // A global row (All tasks) is never `/p/<id>`-prefixed.
-                const RowLink = item.global ? RouterLink : Link
-                return (
-                  <RowLink
-                    key={item.to}
-                    to={item.to}
-                    onClick={onNavigate}
-                    aria-current={isActive ? 'page' : undefined}
-                    className={cn(
-                      'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9',
-                      isActive && 'bg-muted font-semibold text-foreground hover:bg-muted',
-                    )}
-                  >
-                    {isActive ? (
-                      <span
-                        aria-hidden="true"
-                        className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
-                      />
-                    ) : null}
-                    <Icon className="size-4 shrink-0" aria-hidden="true" />
-                    {item.label}
-                    {item.badge === 'skills-update' && skillsUpdateAvailable ? (
-                      <span data-slot="nav-update-marker" className="ml-auto flex items-center">
-                        <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
-                        <span className="sr-only">Skills update available</span>
-                      </span>
-                    ) : null}
-                  </RowLink>
-                )
-              })}
             {projectsMenu}
           </nav>
         </div>
@@ -698,6 +661,43 @@ function SidebarContent({
         data-slot="sidebar-footer"
         className="flex flex-col gap-0.5 border-t border-border px-2.5 pt-1.5 pb-2"
       >
+    {/* Workspace LIBRARIES (Skills) as rows above Settings (user decision): the sidebar's
+        top is the projects' alone; the workspace's own doors gather at the bottom. */}
+        {items
+          .filter((item) => item.library)
+          .map((item) => {
+            const isActive = item.to === activeTo
+            const Icon = item.icon
+            // A global row (All tasks) is never `/p/<id>`-prefixed.
+            const RowLink = item.global ? RouterLink : Link
+            return (
+              <RowLink
+                key={item.to}
+                to={item.to}
+                onClick={onNavigate}
+                aria-current={isActive ? 'page' : undefined}
+                className={cn(
+                  'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9',
+                  isActive && 'bg-muted font-semibold text-foreground hover:bg-muted',
+                )}
+              >
+                {isActive ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
+                  />
+                ) : null}
+                <Icon className="size-4 shrink-0" aria-hidden="true" />
+                {item.label}
+                {item.badge === 'skills-update' && skillsUpdateAvailable ? (
+                  <span data-slot="nav-update-marker" className="ml-auto flex items-center">
+                    <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                    <span className="sr-only">Skills update available</span>
+                  </span>
+                ) : null}
+              </RowLink>
+            )
+          })}
         <RouterLink
           to="/settings/global"
           data-slot="footer-settings"
