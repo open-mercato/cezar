@@ -138,25 +138,29 @@ describe('AppShell', () => {
       expect(footer().className).not.toContain('flex-wrap')
     })
 
-    it('has exactly one child (the controls row) — search sits just ABOVE the bordered bar', () => {
-      renderShell('/', { version: '1.2.3' })
+    it('stacks Settings and Tools as menu rows, with the utility line beneath', () => {
+      renderShell('/', { version: '1.2.3', toolsMenu: <button type="button">Tools</button> })
+      // The footer is now three stacked children (user decision): the Settings ROW, the Tools
+      // ROW, then the slim controls line holding version + theme toggle.
       const children = Array.from(footer().children) as HTMLElement[]
-      expect(children.map((child) => child.dataset.slot)).toEqual(['sidebar-footer-controls'])
-      // …and the search launcher is the footer's immediate previous sibling, not inside it.
+      expect(children.map((child) => child.dataset.slot)).toEqual([
+        'footer-settings',
+        'tools-menu',
+        'sidebar-footer-controls',
+      ])
+      const settings = footer().querySelector('[data-slot="footer-settings"]') as HTMLElement
+      expect(settings.getAttribute('href')).toBe('/settings/global')
+      // …and the drawer's search launcher stays ABOVE the bordered bar, not inside it.
       const search = document.querySelector('[data-slot="command-palette-hint"]') as HTMLElement
       expect(search.closest('[data-slot="sidebar-footer"]')).toBeNull()
       expect(footer().previousElementSibling?.contains(search)).toBe(true)
     })
 
-    it('keeps every control a sibling inside the one controls row', () => {
+    it('keeps version and theme toggle siblings inside the controls line', () => {
       renderShell('/', { version: '1.2.3', toolsMenu: <button type="button">Tools</button> })
-      // The controls came apart in #702 — assert they share a parent, and that the row is the
-      // whole of the footer's chrome. (No global-settings gear: the WORKSPACE nav's Settings is
-      // the one entry, its index cross-links to Global settings.)
       const row = controls()
       expect(row.querySelector('[data-slot="global-settings-link"]')).toBeNull()
       expect(row.querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
-      expect(row.querySelector('[data-slot="tools-menu"]')).not.toBeNull()
       expect(row.querySelector('[data-slot="version-chip"]')).not.toBeNull()
     })
 
@@ -207,11 +211,10 @@ describe('AppShell', () => {
       expect(chip.textContent).toBe('v0.9.2-nightly.20260813.1')
       // …and the full string stays legible on hover, since the visible one may be clipped.
       expect(chip.getAttribute('title')).toBe('v0.9.2-nightly.20260813.1')
-      // Everything else in the row still refuses to shrink — that is what keeps them readable.
-      for (const slot of ['tools-menu', 'theme-toggle']) {
-        const el = controls().querySelector(`[data-slot="${slot}"]`) as HTMLElement
-        expect(el.className).toContain('shrink-0')
-      }
+      // The theme toggle still refuses to shrink — that is what keeps it readable. (Tools is
+      // its own full-width row above the line now, so it no longer competes for this space.)
+      const toggle = controls().querySelector('[data-slot="theme-toggle"]') as HTMLElement
+      expect(toggle.className).toContain('shrink-0')
     })
   })
 

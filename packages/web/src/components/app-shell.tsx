@@ -691,30 +691,26 @@ function SidebarContent({
         <CommandPaletteHint />
       </div>
 
-      {/* The UTILITY bar (user decision): Settings, Tools, the theme toggle and the version
-          live here at every size — the workspace's chrome sits at the sidebar's bottom, not
-          on the bar over the content. */}
+      {/* The sidebar's bottom (user decision): Settings and Tools as MENU ROWS — the same row
+          grammar as the nav above — pinned under the scroll column; the version and the theme
+          toggle keep a slim utility line beneath them. */}
       <div
         data-slot="sidebar-footer"
-        className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
+        className="flex flex-col gap-0.5 border-t border-border px-2.5 pt-1.5 pb-2"
       >
-        <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
-          <RouterLink
-            to="/settings/global"
-            data-slot="footer-settings"
-            onClick={onNavigate}
-            className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <SettingsIcon className="size-3.5" aria-hidden="true" />
-            Settings
-          </RouterLink>
-          <div data-slot="tools-menu" className="shrink-0">
-            {toolsMenu}
-          </div>
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
-            <ThemeToggle />
-          </span>
+        <RouterLink
+          to="/settings/global"
+          data-slot="footer-settings"
+          onClick={onNavigate}
+          className="flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground md:h-9"
+        >
+          <SettingsIcon className="size-4 shrink-0" aria-hidden="true" />
+          Settings
+        </RouterLink>
+        <div data-slot="tools-menu">{toolsMenu}</div>
+        <div data-slot="sidebar-footer-controls" className="flex items-center gap-1.5 px-3 pt-1">
+          {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
+          <ThemeToggle className="ml-auto shrink-0" />
         </div>
       </div>
     </div>

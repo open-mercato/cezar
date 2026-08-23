@@ -109,15 +109,15 @@ export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {
           // the unread badges — only on a real BLOCKER (#884: no agent CLI, or the default
           // runner missing). A merely-optional missing tool keeps the trigger quiet; its own
           // row's red dot says so. The tooltip names whichever is the case.
-          // Dressed like the bar's other utilities (Search, Settings): a quiet text button, no
-          // frame (user decision).
+          // A MENU ROW in the sidebar's bottom block (user decision): the same row grammar as
+          // the nav items above it, opening the tools dropdown.
           data-attention={blocker ? 'true' : undefined}
           title={toolsTooltip(health)}
-          className="flex h-7 items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground data-[state=open]:bg-muted data-[state=open]:text-foreground"
+          className="flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground data-[state=open]:bg-card data-[state=open]:text-foreground md:h-9"
         >
           <WrenchIcon
             aria-hidden="true"
-            className={cn('size-3.5 shrink-0', blocker ? 'text-violet' : 'text-soft-foreground')}
+            className={cn('size-4 shrink-0', blocker ? 'text-violet' : 'text-soft-foreground')}
           />
           Tools
           {chevron}
