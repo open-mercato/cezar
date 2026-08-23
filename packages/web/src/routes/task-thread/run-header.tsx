@@ -235,16 +235,13 @@ export function RunHeader({
 
       {/* The stateful CTA FLOATS top-center, just under the bar (user decision): one fixed
           spot over the content, so the bar never reflows when Stop becomes Reply becomes
-          Review changes — and the eye finds it where a notification would land. md+ only —
-          the mobile kebab and the composer itself cover small screens. Portaled to the body:
-          the header's backdrop-blur would otherwise become the fixed position's containing
-          block and swallow it. */}
-      {createPortal(
-        <div data-slot="floating-cta" className="fixed top-14 left-1/2 z-40 hidden -translate-x-1/2 md:block">
-          <PrimaryCtaButton run={run} actions={actions} floating />
-        </div>,
-        document.body,
-      )}
+          Review changes — and the eye finds it where a notification would land. Anchored to
+          this sticky header, so it centers on the CONTENT column whatever the sidebar's
+          width, and stays pinned while the thread scrolls. md+ only — the mobile kebab and
+          the composer itself cover small screens. */}
+      <div data-slot="floating-cta" className="absolute top-2 left-1/2 z-30 hidden -translate-x-1/2 md:block">
+        <PrimaryCtaButton run={run} actions={actions} floating />
+      </div>
 
       <ConfirmDialog run={run} actions={actions} />
     </header>
