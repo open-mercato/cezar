@@ -189,7 +189,10 @@ export function AppShell({
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
   const areaPathname = stripProjectPrefix(pathname)
-  const activeTo = activeNavPath(areaPathname)
+  // The GLOBAL tasks page is exactly `/tasks` with no project scope — the one URL in the Tasks
+  // area that is not about this project. All tasks owns it (its own `aria-current`); lighting
+  // the project's Tasks row too put two carets in the nav (user report).
+  const activeTo = pathname === '/tasks' ? null : activeNavPath(areaPathname)
   const current = activeNavItem(areaPathname)
   const [menuOpen, setMenuOpen] = React.useState(false)
   const mainRef = React.useRef<HTMLElement>(null)

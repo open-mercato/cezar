@@ -183,6 +183,12 @@ describe('AppShell', () => {
       expect(within(nav()).getByRole('link', { current: 'page' }).textContent).toBe('Tasks')
     })
 
+    it('leaves Tasks unlit on the GLOBAL /tasks page — All tasks owns that one', () => {
+      renderShell('/tasks', { multiProject: true })
+      const current = within(nav()).getAllByRole('link', { current: 'page' })
+      expect(current.map((a) => a.textContent)).toEqual(['All tasks'])
+    })
+
     it('lights nothing on a full-screen surface like /new', () => {
       renderShell('/new')
       expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
