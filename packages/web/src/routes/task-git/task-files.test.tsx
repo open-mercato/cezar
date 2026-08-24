@@ -131,6 +131,13 @@ describe('the Files tab route', () => {
     expect(rows).toEqual(['src', 'big.txt', 'blob.dat', 'hello.ts', 'logo.png'])
     // Nothing selected yet — the pane says so instead of pretending.
     expect(screen.getByRole('heading', { level: 2, name: 'Select a file' })).toBeTruthy()
+    // Desktop only: the tree owns its scroller so a deep tree never drags the preview along.
+    // Below md the columns stack and the page IS the pane, so none of it applies there.
+    const pane = document.querySelector('[data-slot="files-tree-pane"]') as HTMLElement
+    expect(pane.className).toContain('md:max-h-[calc(100dvh_-_8rem)]')
+    expect(pane.className).toContain('md:overflow-y-auto')
+    expect(pane.className).toContain('md:overscroll-contain')
+    expect(pane.className.split(' ')).not.toContain('overflow-y-auto')
   })
 
   it('directories are lazy: closed by default, fetched only on first expand', async () => {

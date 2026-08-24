@@ -241,4 +241,46 @@ describe(`diff virtualization on a generated ${FIXTURE_FILES}-file changeset`, (
     // The topmost mounted card starts at or above the fold — no uncovered band.
     expect(gap!).toBeLessThanOrEqual(0)
   }, 120_000)
+
+  /**
+   * The file tree is its OWN scroller, not a passenger on the page's. This fixture is the only
+   * place with a tree taller than the viewport (120+ files), which is exactly the shape that was
+   * broken: the pane was `sticky` but unbounded, so it grew the page instead of scrolling, and
+   * the last file could only be reached by dragging `main` — the diff — to the bottom.
+   */
+  it('scrolls the file tree independently of the diff', () => {
+    openChanges('virtual')
+
+    const pane = browser.evaluate(`(() => {
+      const pane = document.querySelector('[data-slot="changes-tree-pane"]')
+      if (!pane) return null
+      const scroller = ${MAIN}
+      return {
+        rows: pane.querySelectorAll('[data-slot="tree-file"]').length,
+        overflow: Math.round(pane.scrollHeight - pane.clientHeight),
+        height: Math.round(pane.clientHeight),
+        room: Math.round(scroller.clientHeight),
+        mainTop: Math.round(scroller.scrollTop),
+      }
+    })()`) as { rows: number; overflow: number; height: number; room: number; mainTop: number } | null
+
+    expect(pane, 'the tree pane did not render — is the viewport below md?').not.toBeNull()
+    // The premise: more files than fit. Without it the rest proves nothing.
+    expect(pane!.rows).toBeGreaterThan(FIXTURE_FILES / 2)
+    expect(pane!.overflow, 'the tree pane is unbounded — it grows the page instead of scrolling').toBeGreaterThan(0)
+    // Capped by the room under the sticky chrome, never taller than the scrollport itself.
+    expect(pane!.height).toBeLessThanOrEqual(pane!.room)
+
+    // The claim itself: the tree runs to its end while the diff stays exactly where it was.
+    // Compared against the offset measured a moment ago, not against 0 — the specs above share
+    // this page load and leave `main` scrolled, and where it sits is not this test's business.
+    const moved = browser.evaluate(`(() => {
+      const pane = document.querySelector('[data-slot="changes-tree-pane"]')
+      pane.scrollTop = pane.scrollHeight
+      return { paneTop: Math.round(pane.scrollTop), mainTop: Math.round(${MAIN}.scrollTop) }
+    })()`) as { paneTop: number; mainTop: number }
+
+    expect(moved.paneTop).toBeGreaterThan(0)
+    expect(moved.mainTop, 'scrolling the tree dragged the diff along').toBe(pane!.mainTop)
+  }, 120_000)
 })
