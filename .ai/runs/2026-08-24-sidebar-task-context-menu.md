@@ -125,19 +125,21 @@ PR: #921
 
 ### Phase 2: The context-menu primitive
 
-- [ ] 2.1 Add `components/ui/context-menu.tsx` mirroring `ui/dropdown-menu.tsx`
+- [x] 2.1 Add `components/ui/context-menu.tsx` mirroring `ui/dropdown-menu.tsx` — 4fba4051
 
 ### Phase 3: What the menu offers, and the menu itself
 
-- [ ] 3.1 Add `lib/task-row-menu.ts` — the pure item list — with a table test per run state
-- [ ] 3.2 Add `components/task-row-menu.tsx` — the menu, the mutations and the confirm dialog
-- [ ] 3.3 Add `components/task-row-menu.test.tsx`
+- [x] 3.1 Add `lib/task-row-menu.ts` — the pure item list — with a table test per run state — 4fba4051
+- [x] 3.2 Add `components/task-row-menu.tsx` — the menu, the mutations and the confirm dialog — 4fba4051
+- [x] 3.3 Add `components/task-row-menu.test.tsx` — 4fba4051
 
 ### Phase 4: Wire it into the sidebar rows
 
-- [ ] 4.1 Wrap `RunRow` in the menu and host the inline rename in `components/task-quick-list.tsx`
-- [ ] 4.2 Extend `components/task-quick-list.test.tsx` for the menu and the rename round trip
+- [x] 4.1 Wrap `RunRow` in the menu and host the inline rename in `components/task-quick-list.tsx` — 4fba4051
+- [x] 4.2 Extend `components/task-quick-list.test.tsx` for the menu and the rename round trip — 4fba4051
 
 ### Phase 5: Tests and the validation gate
 
-- [ ] 5.1 Run the full validation gate (`npm run typecheck`, `npm test`, `npm run test:unit`, `npm run build`, `npm run test:package`)
+- [x] 5.1 Run the full validation gate (`npm run typecheck`, `npm test`, `npm run test:unit`, `npm run build`, `npm run test:package`) — all green: typecheck clean, 6199 vitest tests in 328 files, 36 node:test units, build + check:pack ok, 15 package tests
+
+> Gate note: six server tests (`git-worktree`, `git.test.ts`, `git-changes`, `health-forge`, `projects-api`, `automations-api`) assert that a freshly-made temp directory is NOT inside a git repository. They fail in this sandbox only because `TMPDIR` is set to a path *inside* the cezar checkout (`.ai/cezar/tmp/<task-id>`), so `os.tmpdir()` is in a repo. With a normal `TMPDIR` all six pass, and the numbers above are from that run. Nothing in this branch touches them.
