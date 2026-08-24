@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueryClient } from '@/api/query-client'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
-import { TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { QuickListBuckets, TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
+import { groupRuns } from '@/lib/task-groups'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
@@ -30,12 +31,16 @@ function run(over: Partial<RunRecord> = {}): RunRecord {
   }
 }
 
+/** A query client, because every row now carries its right-click menu — whose actions are
+ *  mutations. The list itself still fetches nothing. */
 function renderList(props: Partial<Parameters<typeof TaskQuickList>[0]> = {}, route = '/') {
   const onViewChange = props.onViewChange ?? vi.fn()
   const utils = render(
-    <MemoryRouter initialEntries={[route]}>
-      <TaskQuickList runs={[]} view="active" now={NOW} {...props} onViewChange={onViewChange} />
-    </MemoryRouter>
+    <QueryClientProvider client={createQueryClient()}>
+      <MemoryRouter initialEntries={[route]}>
+        <TaskQuickList runs={[]} view="active" now={NOW} {...props} onViewChange={onViewChange} />
+      </MemoryRouter>
+    </QueryClientProvider>
   )
   return { ...utils, onViewChange }
 }
@@ -620,5 +625,144 @@ describe('TaskQuickListContainer', () => {
 
     await waitFor(() => expect(row('b')).not.toBeNull())
     expect(row('a')).toBeNull()
+  })
+})
+
+/**
+ * The right-click menu, as the SIDEBAR wires it (`components/task-row-menu.test.tsx` covers the
+ * menu itself). What is only true here: the row is the trigger, the rename input takes the
+ * LINK's place rather than nesting inside it, and the row's own furniture — status dot,
+ * reference chip — stays put while the name is being typed.
+ */
+describe('the row’s right-click menu', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }))
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    )
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+    )
+  })
+
+  afterEach(() => {
+    cleanup()
+    fetchMock.mockReset()
+    vi.unstubAllGlobals()
+  })
+
+  async function openRowMenu(id: string): Promise<HTMLElement> {
+    fireEvent.contextMenu(row(id) as HTMLElement)
+    return await waitFor(() => {
+      const menu = document.querySelector('[data-slot="task-row-menu"]')
+      if (!menu) throw new Error('the row did not open a menu')
+      return menu as HTMLElement
+    })
+  }
+
+  const pick = (menu: HTMLElement, action: string) => {
+    const item = menu.querySelector(`[data-action="${action}"]`)
+    if (!item) throw new Error(`no "${action}" item in the row menu`)
+    fireEvent.click(item)
+  }
+
+  const lastPath = () => String(fetchMock.mock.calls.at(-1)?.[0])
+
+  it('opens on a task row and offers the row’s actions', async () => {
+    renderList({ runs: [run({ id: 'a', title: 'Bump zod', status: 'done', finishedAt: ago(60_000), seenAt: ago(30_000) })] })
+    const menu = await openRowMenu('a')
+    expect([...menu.querySelectorAll('[data-slot="context-menu-item"]')].map((el) => el.textContent?.trim())).toEqual([
+      'Rename',
+      'Mark unread',
+      'Archive',
+      'Delete',
+    ])
+  })
+
+  it('archives the row it was opened on', async () => {
+    renderList({ runs: [run({ id: 'a' }), run({ id: 'b' })] })
+    pick(await openRowMenu('b'), 'archive')
+    await waitFor(() => expect(lastPath()).toBe('/api/v1/runs/b/archive'))
+  })
+
+  it('acts on the row’s own project when the list is scoped to one', async () => {
+    // What the multi-project sidebar renders: another project's rows, under an explicit scope.
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <QuickListBuckets
+            buckets={groupRuns([run({ id: 'a', title: 'Elsewhere' })], 'active')}
+            scope="proj-b"
+            now={NOW}
+          />
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    pick(await openRowMenu('a'), 'archive')
+    await waitFor(() => expect(lastPath()).toBe('/api/v1/p/proj-b/runs/a/archive'))
+  })
+
+  describe('rename', () => {
+    it('replaces the row’s link with an input, keeping the row’s own furniture', async () => {
+      renderList({ runs: [run({ id: 'a', title: 'Bump zod', status: 'running' })] })
+      pick(await openRowMenu('a'), 'rename')
+
+      const input = await waitFor(() => {
+        const node = row('a')?.querySelector('[data-slot="title-input"]')
+        if (!node) throw new Error('the row did not flip into an input')
+        return node as HTMLInputElement
+      })
+      // The link is gone — an input inside an anchor would turn every keystroke into a click on
+      // the row — but the status dot is a sibling of both, so it stays.
+      expect(row('a')?.querySelector('a')).toBeNull()
+      expect(dotOf('a')).not.toBeNull()
+      expect(input.value).toBe('Bump zod')
+    })
+
+    it('PATCHes the new title and puts the link back', async () => {
+      renderList({ runs: [run({ id: 'a', title: 'Bump zod' })] })
+      pick(await openRowMenu('a'), 'rename')
+
+      const input = await waitFor(() => {
+        const node = row('a')?.querySelector('[data-slot="title-input"]')
+        if (!node) throw new Error('no input')
+        return node as HTMLInputElement
+      })
+      fireEvent.change(input, { target: { value: 'Bump zod everywhere' } })
+      fireEvent.keyDown(input, { key: 'Enter' })
+
+      await waitFor(() => expect(lastPath()).toBe('/api/v1/runs/a'))
+      expect(JSON.parse(String(fetchMock.mock.calls.at(-1)?.[1]?.body))).toEqual({ title: 'Bump zod everywhere' })
+      await waitFor(() => expect(row('a')?.querySelector('a')).not.toBeNull())
+    })
+
+    it('edits the STORED title, not the shortened one the chip let the row drop', async () => {
+      // #788, option C: a row whose reference chip already paints `775` displays the title
+      // without its `775: ` prefix. Renaming must start from the record, or committing an
+      // untouched draft would quietly delete the number.
+      renderList({
+        runs: [
+          run({ id: 'a', title: '775: Fix the thing', pullRequestUrl: 'https://github.com/o/r/pull/775' }),
+        ],
+      })
+      pick(await openRowMenu('a'), 'rename')
+
+      const input = await waitFor(() => {
+        const node = row('a')?.querySelector('[data-slot="title-input"]')
+        if (!node) throw new Error('no input')
+        return node as HTMLInputElement
+      })
+      // The row itself shows the prefix-less form; the input does not.
+      expect(row('a')?.textContent).not.toContain('775: Fix the thing')
+      expect(input.value).toBe('775: Fix the thing')
+    })
   })
 })

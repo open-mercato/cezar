@@ -114,12 +114,14 @@ trip; then run the repo's full gate in order.
 
 ## Progress
 
+PR: #921
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Act on the row's own project
 
-- [ ] 1.1 Add `patchProjectRun`, `cancelProjectRun` and `deleteProjectRun` to `api/client.ts`, with rows in the `client.test.ts` request table
-- [ ] 1.2 Add the cross-project run-cache invalidation helper to `api/queries.ts`, with a test
+- [x] 1.1 Add `patchProjectRun`, `cancelProjectRun` and `deleteProjectRun` to `api/client.ts`, with rows in the `client.test.ts` request table — 4c4bfa51
+- [x] 1.2 Add the cross-project run-cache invalidation helper to `api/queries.ts`, with a test — 4c4bfa51
 
 ### Phase 2: The context-menu primitive
 
