@@ -140,6 +140,8 @@ PR: #921
 
 ### Phase 5: Tests and the validation gate
 
+- [x] 5.0 Review follow-up: collapse the row's five per-verb mutations into one, and add the keyboard-path and flag-leak tests — 6d519aaf
+
 - [x] 5.1 Run the full validation gate (`npm run typecheck`, `npm test`, `npm run test:unit`, `npm run build`, `npm run test:package`) — all green: typecheck clean, 6199 vitest tests in 328 files, 36 node:test units, build + check:pack ok, 15 package tests
 
 > Gate note: six server tests (`git-worktree`, `git.test.ts`, `git-changes`, `health-forge`, `projects-api`, `automations-api`) assert that a freshly-made temp directory is NOT inside a git repository. They fail in this sandbox only because `TMPDIR` is set to a path *inside* the cezar checkout (`.ai/cezar/tmp/<task-id>`), so `os.tmpdir()` is in a repo. With a normal `TMPDIR` all six pass, and the numbers above are from that run. Nothing in this branch touches them.
