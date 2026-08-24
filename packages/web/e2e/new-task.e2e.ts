@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, getJson } from './agent-browser'
 
 /**
  * The full-screen /new composer (R4 Steps 1.1 + 1.3) end-to-end against a LIVE dry-run server:
@@ -79,6 +79,17 @@ beforeAll(async () => {
     'utf8',
   )
 
+  // One real workflow file, so the picker has a Workflows group to render: the built-in
+  // `quick-task` is not a row of its own any more (it IS the "No skill" row), and a fixture with
+  // only the built-in would leave the group empty for reasons that have nothing to do with the
+  // grouping under test.
+  mkdirSync(join(dataRoot, '.ai/cezar/workflows'), { recursive: true })
+  writeFileSync(
+    join(dataRoot, '.ai/cezar/workflows/fix-and-verify.yaml'),
+    'name: fix-and-verify\ndescription: Fix, then prove it with the tests\nskills:\n  - lint-fix\n',
+    'utf8',
+  )
+
   const port = await freePort()
   baseUrl = `http://localhost:${port}`
   server = spawn(
@@ -118,11 +129,15 @@ describe('the full-screen /new against a live dry-run server', () => {
     expect(browser.count('[data-slot="suggested-chip"]')).toBe(3)
   })
 
-  it('the pill row resolves: project skill preselected, runner pill iff >1 backend, base: main, ×1', async () => {
-    // Sources are ready once the pill shows a real skill (the first project skill, #377 order).
+  it('the pill row resolves: no source picked, runner pill iff >1 backend, base: main, ×1', async () => {
+    // Sources are ready once the pill stops showing its loading ellipsis. A resolved composer
+    // picks NOTHING — the empty state is the default, so there is no name to wait for.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('lint-fix')`,
+      `!document.querySelector('[data-slot="source-pill"]')?.textContent.includes('…')`,
     )
+    expect(browser.evaluate(
+      `document.querySelector('[data-slot="source-pill"]')?.dataset.sourceKind`,
+    )).toBe('none')
     // Health must have SETTLED before judging the runner pill — the version chip renders from
     // the same response, so it is the "health arrived" signal.
     browser.waitForFunction(`document.querySelector('[data-slot="version-chip"]') !== null`)
@@ -141,7 +156,14 @@ describe('the full-screen /new against a live dry-run server', () => {
     } else {
       expect(browser.count('[data-slot="runner-pill"]')).toBe(0)
     }
-    expect(browser.text('[data-slot="model-pill"]')).toContain('auto')
+    // Same rule as the runner pill above, for the same reason: the model pill shows the HOST's
+    // native default when the installed agent pins one (`readAgentModelDefaults` seeds
+    // `defaultModels` from the agent's own settings), and `auto` only when it does not. Asserting
+    // `auto` unconditionally failed on any machine whose claude settings name a model.
+    const config = await getJson<{ defaultModels?: Record<string, string> }>(
+      `${baseUrl}/api/v1/config`,
+    )
+    expect(browser.text('[data-slot="model-pill"]')).toContain(config.defaultModels?.claude || 'auto')
     expect(browser.text('[data-slot="variants-pill"]')).toContain('×1')
     expect(browser.text('[data-slot="base-pill"]')).toContain('base: main')
     browser.screenshot(`${artifactsDir}/new-task-hero.png`)
@@ -153,10 +175,23 @@ describe('the full-screen /new against a live dry-run server', () => {
     const groups = browser.evaluate(`[...document.querySelectorAll('[cmdk-group-heading]')].map(h => h.textContent)`) as string[]
     expect(groups[0]).toBe('Project skills')
     expect(groups).toContain('Workflows')
-    const projectRefs = browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="source-option"][data-source-kind="skill"]')].slice(0, 2).map(o => o.dataset.sourceRef)`,
+    // The first row is the heading-less way out of any selection, and the built-in it runs has
+    // no second row under Workflows.
+    expect(browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="source-option"]')][0]?.textContent`,
+    )).toContain('No skill')
+    expect(browser.count('[data-slot="source-option"][data-source-ref="quick-task"]')).toBe(0)
+    const skillRefs = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="source-option"][data-source-kind="skill"]')].map(o => o.dataset.sourceRef)`,
     ) as string[]
-    expect(projectRefs).toEqual(['lint-fix', 'spec-writer'])
+    // The fixture's own two skills, in #377 order. Asserted by their relative order rather than
+    // by being the first two rows: a machine whose shared team-skill cache is populated
+    // (`getTeamSkillsCached`, global and unrelated to this repo) lists those here too, and they
+    // must not decide an assertion about the fixture's grouping.
+    expect(skillRefs.filter((ref) => ref === 'lint-fix' || ref === 'spec-writer')).toEqual([
+      'lint-fix',
+      'spec-writer',
+    ])
     browser.screenshot(`${artifactsDir}/new-task-source-menu.png`)
 
     browser.click('[data-slot="source-option"][data-source-ref="spec-writer"]')
@@ -164,6 +199,38 @@ describe('the full-screen /new against a live dry-run server', () => {
       `document.querySelector('[data-slot="source-pill"]').textContent.includes('spec-writer')`,
     )
     browser.waitForFunction(`document.querySelector('[data-slot="source-menu"]') === null`)
+  })
+
+  it('the ✕ takes the picked skill back off, and the selected row toggles it off too', () => {
+    // One click, no menu — the affordance the report asked for.
+    browser.click('[data-slot="source-pill-clear"]')
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="source-pill"]')?.dataset.sourceKind === 'none'`,
+    )
+    // Nothing picked, nothing to clear: the ✕ is gone with the selection.
+    expect(browser.count('[data-slot="source-pill-clear"]')).toBe(0)
+    browser.screenshot(`${artifactsDir}/new-task-source-empty.png`)
+
+    // The same state from inside the list: pick it, then pick it again.
+    const pickSpecWriter = () => {
+      browser.click('[data-slot="source-pill"]')
+      browser.waitForFunction(`document.querySelector('[data-slot="source-menu"]') !== null`)
+      browser.click('[data-slot="source-option"][data-source-ref="spec-writer"]')
+    }
+    pickSpecWriter()
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('spec-writer')`,
+    )
+    pickSpecWriter()
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="source-pill"]')?.dataset.sourceKind === 'none'`,
+    )
+
+    // Leave it picked: the next spec submits from here.
+    pickSpecWriter()
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('spec-writer')`,
+    )
   })
 
   it('type + submit → the thread; the run record carries the exact skill chain', async () => {
@@ -175,30 +242,38 @@ describe('the full-screen /new against a live dry-run server', () => {
     const runId = (browser.evaluate(`location.pathname.split('/').pop()`) as string) ?? ''
     expect(runId).not.toBe('')
     // API readback: the run started from the PICKED skill, as the one-step inline chain.
-    const record = (await (await fetch(`${baseUrl}/api/v1/runs/${runId}`)).json()) as {
+    const record = await getJson<{
       task: string
       workflowDef?: { steps?: Array<Record<string, unknown>> }
-    }
+    }>(`${baseUrl}/api/v1/runs/${runId}`)
     expect(record.task).toBe('Draft a spec for the new-task hero e2e.')
     expect(record.workflowDef?.steps).toEqual([
       expect.objectContaining({ id: 'task', name: 'spec-writer', skill: 'spec-writer', prompt: '{{task}}' }),
     ])
 
-    // And the source persisted as lastTask, so the next visit preselects it.
-    const uiState = (await (await fetch(`${baseUrl}/api/v1/ui-state`)).json()) as {
-      lastTask?: { source: string; ref: string }
-    }
+    // The source is recorded as lastTask — a record of what ran, not a preselection for the
+    // next task (see the next spec, and `resolveSource`).
+    const uiState = await getJson<{ lastTask?: { source: string; ref: string } | null }>(
+      `${baseUrl}/api/v1/ui-state`,
+    )
     expect(uiState.lastTask).toEqual({ source: 'skill', ref: 'spec-writer' })
 
     // The thread really rendered (the run parks at waiting under the dry-run mock).
     browser.waitForFunction(`document.querySelector('[data-slot="composer"] textarea') !== null`)
   }, 90_000)
 
-  it('back on /new the picked source stuck and the spent draft is gone; iPhone hero screenshot', () => {
+  it('back on /new the skill is gone with the task it ran; iPhone hero screenshot', () => {
     browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
+    // The started skill does NOT follow the user into the next task — the whole point of the
+    // empty state. A fresh composer picks nothing and shows the invitation. Waiting on the
+    // label rather than the kind: an unpicked pill reports `none` while still loading, and a
+    // "does not contain spec-writer" assertion would pass against the ellipsis for free.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('spec-writer')`,
+      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('Skill')`,
     )
+    expect(browser.evaluate(
+      `document.querySelector('[data-slot="source-pill"]')?.dataset.sourceKind`,
+    )).toBe('none')
     expect(
       browser.evaluate(`document.querySelector('[data-slot="composer"] textarea').value`),
     ).toBe('')
@@ -212,7 +287,7 @@ describe('the full-screen /new against a live dry-run server', () => {
 
 describe('the bookmarklet contract on full /new loads (spec 011, Step 1.3)', () => {
   const runCount = async (): Promise<number> =>
-    ((await (await fetch(`${baseUrl}/api/v1/runs`)).json()) as unknown[]).length
+    (await getJson<unknown[]>(`${baseUrl}/api/v1/runs`)).length
 
   it('auto=1 with the REAL launch key starts a run unattended and lands in its thread', async () => {
     // The documented on-disk contract: the server bakes this secret into the bookmarklets it
@@ -228,10 +303,10 @@ describe('the bookmarklet contract on full /new loads (spec 011, Step 1.3)', () 
     browser.waitForFunction(`location.pathname.startsWith('${scoped('/tasks/')}')`)
 
     const runId = (browser.evaluate(`location.pathname.split('/').pop()`) as string) ?? ''
-    const record = (await (await fetch(`${baseUrl}/api/v1/runs/${runId}`)).json()) as {
+    const record = await getJson<{
       task: string
       workflowDef?: { steps?: Array<Record<string, unknown>> }
-    }
+    }>(`${baseUrl}/api/v1/runs/${runId}`)
     expect(record.task).toBe('hello')
     expect(record.workflowDef?.steps).toEqual([
       expect.objectContaining({ id: 'task', name: 'lint-fix', skill: 'lint-fix', prompt: '{{task}}' }),

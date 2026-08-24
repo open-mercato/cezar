@@ -683,11 +683,15 @@ const appearanceSchema = z.object({
 
 const uiStateSchema = z
   .object({
+    // `null` clears the recorded choice — the composer's "no skill, no workflow" state,
+    // which is a plain quick-task run. Written through to the file like any other value, so an
+    // older cockpit reading it falls back to its own default instead of restoring a stale skill.
     lastTask: z
       .object({
         source: z.enum(['workflow', 'skill']),
         ref: z.string().min(1).max(200),
       })
+      .nullable()
       .optional(),
     // Composer picker recency (newest first, capped) + the remembered worktree
     // choice for single-skill runs. Additive prefs, like the rest of ui-state.

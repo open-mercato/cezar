@@ -147,25 +147,26 @@ describe('model option resolution', () => {
   })
 })
 
-describe('resolveSource (candidate validation + cold quick-task default)', () => {
+describe('resolveSource (the draft pick, validated — no cold default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]
 
-  it('takes the first candidate that still exists', () => {
-    expect(
-      resolveSource(
-        [{ source: 'skill', ref: 'gone' }, { source: 'workflow', ref: 'fix-and-verify' }],
-        skills,
-        workflows,
-      ),
-    ).toEqual({ source: 'workflow', ref: 'fix-and-verify' })
+  it('keeps a pick the catalog still has', () => {
+    expect(resolveSource({ source: 'workflow', ref: 'fix-and-verify' }, skills, workflows))
+      .toEqual({ source: 'workflow', ref: 'fix-and-verify' })
+    expect(resolveSource({ source: 'skill', ref: 'om-fix' }, skills, workflows))
+      .toEqual({ source: 'skill', ref: 'om-fix' })
   })
 
-  it('defaults cold to quick-task, then first skill when quick-task is unavailable', () => {
-    expect(resolveSource([], skills, workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
-    expect(resolveSource([], skills, [workflow('fix-and-verify')])).toEqual({ source: 'skill', ref: 'om-fix' })
-    expect(resolveSource([], [], workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
-    expect(resolveSource([], [], [])).toEqual({ source: 'workflow', ref: 'quick-task' })
+  it('resolves to NOTHING when there is no pick, or the pick is gone', () => {
+    // The empty composer state: `/new` opens here, and nothing preselects it away.
+    expect(resolveSource(null, skills, workflows)).toBeNull()
+    expect(resolveSource(undefined, skills, workflows)).toBeNull()
+    // A skill deleted since it was drafted must not stay in the pill.
+    expect(resolveSource({ source: 'skill', ref: 'gone' }, skills, workflows)).toBeNull()
+    expect(resolveSource({ source: 'workflow', ref: 'gone' }, skills, workflows)).toBeNull()
+    // An empty catalog is the same answer, with no quick-task/first-skill fallback left.
+    expect(resolveSource({ source: 'skill', ref: 'om-fix' }, [], [])).toBeNull()
   })
 
   it('sourceExists checks the matching catalog only', () => {
@@ -196,6 +197,21 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     })
     // What actually goes over the wire: the undefineds vanish.
     expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'do the thing', workflow: 'quick-task' })
+  })
+
+  it('NO source → the built-in quick-task, because the route demands workflow XOR steps', () => {
+    const body = buildCreateRunBody({
+      task: 'just do it',
+      source: null,
+      model: '',
+      runner: 'claude',
+      defaultRunner: 'claude',
+      variants: 1,
+      images: [],
+    })
+    // Byte-identical to picking quick-task by hand — which is why the picker stopped offering
+    // both. `POST /runs` 400s on a body carrying neither key, so "nothing" cannot go out bare.
+    expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'just do it', workflow: 'quick-task' })
   })
 
   it('skill source → the one-step inline chain (spec 008: same shape as inbox/bookmarklet)', () => {

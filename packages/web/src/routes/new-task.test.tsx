@@ -332,8 +332,15 @@ const textarea = () => screen.getByLabelText('Describe a task for the agent') as
 const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
 const location = () => screen.getByTestId('location').textContent
 
-/** The pickers resolve once workflows+skills+ui-state answered — wait for the real label. */
-async function pillReady(label = 'quick-task') {
+/** Seed the composer draft with a picked source — the ONLY thing that preselects one now.
+ *  The persisted `lastTask` deliberately no longer does (see `resolveSource`), which is what
+ *  keeps a skill from following the user into every task after the one they picked it for. */
+const draftSource = (source: { source: 'skill' | 'workflow'; ref: string }) =>
+  writeDraft({ ...readDraft(), source })
+
+/** The pickers resolve once workflows+skills+ui-state answered — wait for the real label.
+ *  The default is the EMPTY source pill: `/new` opens with no skill and no workflow picked. */
+async function pillReady(label = 'Skill') {
   await waitFor(() => {
     expect(sourcePill().textContent).toContain(label)
     expect(textarea().disabled).toBe(false)
@@ -567,16 +574,30 @@ describe('picker data flows', () => {
     })
   })
 
-  it('preselects the persisted lastTask when it still exists', async () => {
-    serve({ uiState: { lastTask: { source: 'workflow', ref: 'fix-and-verify' } } })
+  it('opens with NOTHING picked, whatever the last run used', async () => {
+    // The report this fixes: a skill picked once sat in the pill for every task afterwards,
+    // and the composer offered no way to take it out. `lastTask` is still recorded — it just
+    // no longer decides what the next task runs.
+    serve({ uiState: { lastTask: { source: 'skill', ref: 'om-fix' } } })
     renderNewTask()
-    await pillReady('fix-and-verify')
+    await pillReady()
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
+    expect(sourcePill().textContent).not.toContain('om-fix')
   })
 
-  it('falls back to quick-task when lastTask names something gone', async () => {
-    serve({ uiState: { lastTask: { source: 'skill', ref: 'deleted-skill' } } })
+  it('preselects the draft pick, and drops it when the catalog no longer has it', async () => {
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
+    serve()
     renderNewTask()
-    await pillReady('quick-task')
+    await pillReady('fix-and-verify')
+
+    cleanup()
+    resetDraft()
+    draftSource({ source: 'skill', ref: 'deleted-skill' })
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
   })
 
   it('the source menu groups: Project skills (bold), Workflows, Global last', async () => {
@@ -587,9 +608,14 @@ describe('picker data flows', () => {
     await screen.findByPlaceholderText('search skills & workflows…')
 
     const options = [...document.querySelectorAll('[data-slot="source-option"]')]
-    expect(options.map((o) => o.getAttribute('data-source-ref'))).toEqual([
-      'om-fix', 'quick-task', 'fix-and-verify', 'deploy',
+    // "No skill" leads, heading-less; `quick-task` is NOT a row of its own — that row is it.
+    expect(options.map((o) => o.getAttribute('data-source-kind'))).toEqual([
+      'none', 'skill', 'workflow', 'skill',
     ])
+    expect(options.map((o) => o.getAttribute('data-source-ref'))).toEqual([
+      null, 'om-fix', 'fix-and-verify', 'deploy',
+    ])
+    expect(options[0]!.textContent).toContain('No skill')
     const headings = [...document.querySelectorAll('[cmdk-group-heading]')].map((h) => h.textContent)
     expect(headings).toEqual(['Project skills', 'Workflows', 'Global'])
   })
@@ -626,6 +652,121 @@ describe('picker data flows', () => {
   })
 })
 
+// ---- clearing the source (the reported bug: no way to deselect a skill) -----------------------
+
+describe('clearing the picked skill or workflow', () => {
+  const clearButton = () => document.querySelector<HTMLButtonElement>('[data-slot="source-pill-clear"]')
+  const openMenu = async () => {
+    fireEvent.click(sourcePill())
+    await screen.findByPlaceholderText('search skills & workflows…')
+  }
+  const option = (kind: string, ref?: string) =>
+    document.querySelector<HTMLElement>(
+      ref === undefined
+        ? `[data-slot="source-option"][data-source-kind="${kind}"]`
+        : `[data-slot="source-option"][data-source-kind="${kind}"][data-source-ref="${ref}"]`,
+    )
+
+  it('the ✕ clears in one click, without opening the menu', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve()
+    renderNewTask()
+    await pillReady('om-fix')
+
+    expect(clearButton()?.getAttribute('aria-label')).toBe('Clear the skill om-fix')
+    fireEvent.click(clearButton()!)
+
+    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+    // No menu was ever opened — the whole point of the affordance.
+    expect(screen.queryByPlaceholderText('search skills & workflows…')).toBeNull()
+    // And the run really does go out as the plain built-in.
+    fireEvent.change(textarea(), { target: { value: 'Ship it plain' } })
+    await startTask()
+    expect(postedBody()).toEqual({ task: 'Ship it plain', workflow: 'quick-task' })
+  })
+
+  it('offers no ✕ while nothing is picked — there is nothing to clear', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(clearButton()).toBeNull()
+  })
+
+  it('Backspace on the focused pill clears it, like a token in a tag field', async () => {
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
+    serve()
+    renderNewTask()
+    await pillReady('fix-and-verify')
+
+    fireEvent.keyDown(sourcePill(), { key: 'Backspace' })
+    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+  })
+
+  it('leaves the pill alone on ⌘/Ctrl+Backspace — that is a text gesture, not a picker one', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve()
+    renderNewTask()
+    await pillReady('om-fix')
+
+    fireEvent.keyDown(sourcePill(), { key: 'Backspace', metaKey: true })
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('skill')
+  })
+
+  it('picking the SELECTED row again clears it — for a skill and for a workflow', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve()
+    renderNewTask()
+    await pillReady('om-fix')
+
+    await openMenu()
+    fireEvent.click(option('skill', 'om-fix')!)
+    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+
+    await openMenu()
+    fireEvent.click(option('workflow', 'fix-and-verify')!)
+    await waitFor(() => expect(sourcePill().textContent).toContain('fix-and-verify'))
+    await openMenu()
+    fireEvent.click(option('workflow', 'fix-and-verify')!)
+    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+  })
+
+  it('the "No skill" row clears the picker, and answers to a search for quick-task', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve()
+    renderNewTask()
+    await pillReady('om-fix')
+
+    await openMenu()
+    const input = screen.getByPlaceholderText('search skills & workflows…')
+    // The built-in has no row of its own any more — typing its name finds the row that runs it.
+    fireEvent.change(input, { target: { value: 'quick' } })
+    await waitFor(() => {
+      const visible = [...document.querySelectorAll('[data-slot="source-option"]')]
+      expect(visible.map((o) => o.getAttribute('data-source-kind'))).toEqual(['none'])
+    })
+
+    fireEvent.click(option('none')!)
+    await waitFor(() => expect(sourcePill().getAttribute('data-source-kind')).toBe('none'))
+  })
+
+  it('a cleared pill stays cleared for the NEXT task, and the started one is not remembered', async () => {
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve({ createRun: { id: 'run-2' } })
+    renderNewTask()
+    await pillReady('om-fix')
+    fireEvent.change(textarea(), { target: { value: 'Fix it with the skill' } })
+    await startTask()
+    await waitFor(() => expect(location()).toBe('/tasks/run-2'))
+
+    // Same browser, same project, next visit: the skill went with the task it ran.
+    cleanup()
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
+  })
+})
+
 // ---- provider authentication gate -------------------------------------------------------------
 
 describe('provider authentication gate', () => {
@@ -639,7 +780,7 @@ describe('provider authentication gate', () => {
     })
     renderNewTask()
 
-    await waitFor(() => expect(sourcePill().textContent).toContain('quick-task'))
+    await waitFor(() => expect(sourcePill().textContent).toContain('Skill'))
     expect(textarea().disabled).toBe(true)
     expect(textarea().placeholder).toBe('Checking agent providers…')
     expect(screen.queryByRole('link', { name: 'Configure providers' })).toBeNull()
@@ -775,10 +916,8 @@ describe('provider authentication gate', () => {
 
 describe('submit', () => {
   it('a SKILL source posts the one-step inline chain and persists lastTask, then navigates', async () => {
-    serve({
-      createRun: { id: 'run-9' },
-      uiState: { lastTask: { source: 'skill', ref: 'om-fix' } },
-    })
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve({ createRun: { id: 'run-9' } })
     renderNewTask()
     await pillReady('om-fix')
     fireEvent.change(textarea(), { target: { value: 'Fix the flaky worktree test' } })
@@ -827,33 +966,56 @@ describe('submit', () => {
   })
 
   it('a WORKFLOW source posts { workflow, task }', async () => {
-    serve({ uiState: { lastTask: { source: 'workflow', ref: 'quick-task' } } })
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
+    serve()
     renderNewTask()
-    await pillReady('quick-task')
+    await pillReady('fix-and-verify')
+    fireEvent.change(textarea(), { target: { value: 'Ship it' } })
+    await startTask()
+
+    expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'fix-and-verify' })
+  })
+
+  it('NO source posts the plain quick-task, records lastTask:null and no recency entry', async () => {
+    serve({ createRun: { id: 'run-plain' } })
+    renderNewTask()
+    await pillReady()
     fireEvent.change(textarea(), { target: { value: 'Ship it' } })
     await startTask()
 
     expect(postedBody()).toEqual({ task: 'Ship it', workflow: 'quick-task' })
+    await waitFor(() =>
+      expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/ui-state')?.body).toEqual({
+        // An honest record of a run that picked nothing — and the value that stops an older
+        // cockpit restoring a stale skill from this same file.
+        lastTask: null,
+        // Nothing was picked, so nothing joins the recency list or the frequency map.
+        lastGenerateFollowups: true,
+      }),
+    )
   })
 
   it('posts worktree:false after opt-out for every single-step source shape', async () => {
     const cases: Array<{
       label: string
+      source?: { source: 'skill' | 'workflow'; ref: string }
       overrides: NonNullable<Parameters<typeof serve>[0]>
       expected: Record<string, unknown>
     }> = [
       {
-        label: 'quick-task',
+        label: 'Skill',
         overrides: {},
         expected: { workflow: 'quick-task' },
       },
       {
         label: 'om-fix',
-        overrides: { uiState: { lastTask: { source: 'skill', ref: 'om-fix' } } },
+        source: { source: 'skill', ref: 'om-fix' },
+        overrides: {},
         expected: { steps: [{ id: 'task', name: 'om-fix', skill: 'om-fix', prompt: '{{task}}' }] },
       },
       {
         label: 'one-step',
+        source: { source: 'workflow', ref: 'one-step' },
         overrides: {
           workflows: {
             workflows: [
@@ -862,7 +1024,6 @@ describe('submit', () => {
             ],
             issues: [],
           },
-          uiState: { lastTask: { source: 'workflow', ref: 'one-step' } },
         },
         expected: { workflow: 'one-step' },
       },
@@ -871,6 +1032,7 @@ describe('submit', () => {
     for (const testCase of cases) {
       cleanup()
       resetDraft()
+      if (testCase.source) draftSource(testCase.source)
       serve(testCase.overrides)
       renderNewTask()
       await pillReady(testCase.label)
@@ -1032,12 +1194,10 @@ describe('submit', () => {
   })
 
   it('applies an interactive skill hint to untouched controls while keeping both overridable', async () => {
-    // The cold default is now quick-task, so an interactive skill only drives the recommendation
-    // once it is the selected source — here via the persisted lastTask.
-    serve({
-      skills: [{ ...SKILLS[0]!, interactive: true }, SKILLS[1]!],
-      uiState: { lastTask: { source: 'skill', ref: 'om-fix' } },
-    })
+    // The composer opens on no source, so an interactive skill only drives the recommendation
+    // once it is the selected one — here from the draft.
+    draftSource({ source: 'skill', ref: 'om-fix' })
+    serve({ skills: [{ ...SKILLS[0]!, interactive: true }, SKILLS[1]!] })
     renderNewTask()
     await pillReady('om-fix')
 
@@ -1056,6 +1216,7 @@ describe('submit', () => {
   })
 
   it('lets a multi-step workflow opt out and submits worktree:false', async () => {
+    draftSource({ source: 'workflow', ref: 'fix-and-verify' })
     serve({
       workflows: {
         workflows: [
@@ -1071,7 +1232,6 @@ describe('submit', () => {
         ],
         issues: [],
       },
-      uiState: { lastTask: { source: 'workflow', ref: 'fix-and-verify' } },
     })
     renderNewTask()
     await pillReady('fix-and-verify')
@@ -1444,7 +1604,9 @@ describe('bookmarklet auto-start', () => {
     await screen.findByText('Unknown skill "ghost" — prefilled for quick-task; review and press Start')
     // Legacy initFromQuery verbatim: the intent goes into the text, quick-task resolves it.
     expect(textarea().value).toBe('Use the "ghost" skill on: hello')
-    await pillReady('quick-task')
+    // "quick-task" IS the empty picker now — the prefill lands on it by picking nothing.
+    await pillReady()
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
     expect(runsPosted()).toHaveLength(0)
   })
 
@@ -1882,8 +2044,8 @@ describe('prompt templates on the new-task composer', () => {
     renderNewTask()
     await pillReady()
 
-    await pickSource('quick-task')
-    await waitFor(() => expect(sourcePill().textContent).toContain('quick-task'))
+    await pickSource('fix-and-verify')
+    await waitFor(() => expect(sourcePill().textContent).toContain('fix-and-verify'))
     expect(textarea().value).toBe('')
   })
 
