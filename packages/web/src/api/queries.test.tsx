@@ -9,6 +9,7 @@ import { setApiScope } from '@open-mercato/cezar-api-client'
 import { ProjectScopeContext } from './project-scope-context'
 import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
 import {
+  invalidateRunCaches,
   refStatusRecheckAfter,
   useReferenceProjectId,
   useProjectRepoBase,
@@ -1095,5 +1096,30 @@ describe('refStatusRecheckAfter', () => {
     // Still loading, or errored out — `retry` owns the immediate attempt; this is the backstop
     // that keeps the query from going silent forever.
     expect(refStatusRecheckAfter(undefined)).toBeGreaterThan(0)
+  })
+})
+
+describe('invalidateRunCaches', () => {
+  /** The sidebar's row actions run from a row whose project may not be the mounted scope, so
+   *  "invalidate the runs" has to mean every project's list — and the boot project's, which is
+   *  cached under the `'default'` alias rather than under its own id. */
+  it('reaches every project’s run caches and the workspace index, and nothing else', () => {
+    const client = createQueryClient()
+    const runKeys = [
+      ['default', 'runs', 'list'],
+      ['proj-a', 'runs', 'list'],
+      ['default', 'runs', 'detail', 'run-1'],
+      [...workspaceQueryKeys.runsIndex],
+    ]
+    for (const key of runKeys) client.setQueryData(key, [])
+    // A neighbour under the same scope: an archive must not re-fetch the inbox.
+    client.setQueryData(['default', 'todos'], [])
+
+    invalidateRunCaches(client)
+
+    for (const key of runKeys) {
+      expect(client.getQueryState(key)?.isInvalidated, key.join('/')).toBe(true)
+    }
+    expect(client.getQueryState(['default', 'todos'])?.isInvalidated).toBe(false)
   })
 })

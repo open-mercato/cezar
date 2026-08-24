@@ -1206,6 +1206,28 @@ function invalidateRunsIndex(queryClient: QueryClient): void {
 }
 
 /**
+ * Mark EVERY project's run caches stale, plus the workspace index — what an action taken on a
+ * row whose project may not be the mounted scope has to do.
+ *
+ * A predicate rather than `queryKeys.runs.all`, and both halves of that are load-bearing. The
+ * sidebar paints run rows from two places: the mounted scope's own list, and — through
+ * `ProjectGroups` — one list per OTHER registered project, each cached under its own id
+ * (`useProjectRuns`). A scoped invalidation can only ever reach the first, so archiving from a
+ * foreign project's group would leave that group's row exactly where it was until the next
+ * expand. And the boot project is not reachable by its id either: its list is aliased to the
+ * `'default'` scope key (see `useProjectRuns`' `boot` parameter), so even naming the row's own
+ * project would miss it.
+ *
+ * The cost of the wider reach is nil in practice: `invalidateQueries` only refetches ACTIVE
+ * queries, and a collapsed project group's list is parked (`enabled: false`). Everything else is
+ * simply marked stale for whenever it is next observed.
+ */
+export function invalidateRunCaches(queryClient: QueryClient): void {
+  void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[1] === 'runs' })
+  invalidateRunsIndex(queryClient)
+}
+
+/**
  * Mark one run read (#unread-done-items): `POST /api/runs/:id/read`. Opening a finished task's
  * thread fires this so the unread dot clears without waiting for the round-trip — the list and
  * detail caches are stamped with `seenAt` optimistically, then reconciled to the server's exact

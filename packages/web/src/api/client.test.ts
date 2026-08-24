@@ -4,10 +4,12 @@ import {
   ApiError,
   archiveFinished,
   archiveRun,
+  cancelProjectRun,
   cancelRun,
   connectProvider,
   continueRun,
   createRun,
+  deleteProjectRun,
   deleteRun,
   finishRun,
   getGithub,
@@ -30,6 +32,7 @@ import {
   getUiState,
   getWorkflows,
   openRunInCli,
+  patchProjectRun,
   patchRun,
   pickVariant,
   putUiState,
@@ -286,6 +289,29 @@ describe('request shapes', () => {
       path: '/api/v1/runs/run-1',
       method: 'PATCH',
       body: { title: 'New name' },
+    },
+    // The three EXPLICIT-project twins the sidebar's right-click menu uses. Their whole reason
+    // for existing is in the path: a row painted by another project's group must act on THAT
+    // project, not on the mounted scope, or a colliding run id renames — or deletes — the wrong
+    // task in the wrong repository.
+    {
+      name: 'patchProjectRun (explicit project, not the active scope)',
+      call: () => patchProjectRun('api', 'run-1', { title: 'New name' }),
+      path: '/api/v1/p/api/runs/run-1',
+      method: 'PATCH',
+      body: { title: 'New name' },
+    },
+    {
+      name: 'cancelProjectRun (explicit project, not the active scope)',
+      call: () => cancelProjectRun('api', 'run-1'),
+      path: '/api/v1/p/api/runs/run-1/cancel',
+      method: 'POST',
+    },
+    {
+      name: 'deleteProjectRun (explicit project, not the active scope)',
+      call: () => deleteProjectRun('api', 'run-1'),
+      path: '/api/v1/p/api/runs/run-1',
+      method: 'DELETE',
     },
     {
       name: 'sendMessage',
