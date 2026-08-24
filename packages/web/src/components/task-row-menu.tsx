@@ -129,8 +129,14 @@ function ActionIcon({ action }: { action: TaskRowAction }) {
 
 type TaskRowActions = ReturnType<typeof useTaskRowActions>
 
+/** What the row asks the server to do. Rename carries its payload; every other verb is its own
+ *  name, which is what lets the whole row share one mutation. */
+type RowCommand =
+  | { action: 'rename'; title: string }
+  | { action: Exclude<TaskRowAction, 'rename'>; title?: undefined }
+
 /**
- * One mutation per verb, all addressed to the row's OWN project.
+ * Every verb the row can perform, all addressed to the row's OWN project.
  *
  * `scope ?? queryScope()` is the load-bearing line. The sidebar paints rows from two places: the
  * mounted scope's list (scope null) and, in a multi-project workspace, one list per other
@@ -148,44 +154,45 @@ function useTaskRowActions(run: RunRecord, scope: string | null, active: boolean
   const renaming = useRef(false)
   const projectId = scope ?? queryScope()
 
-  const onError = (error: Error) => toast(error.message, { tone: 'danger' })
-  const onSuccess = () => invalidateRunCaches(queryClient)
-
-  const rename = useMutation({
-    mutationFn: (title: string) => patchProjectRun(projectId, run.id, { title }),
-    onSuccess,
-    onError,
-  })
-  const archive = useMutation({
-    mutationFn: (archived: boolean) => archiveProjectRun(projectId, run.id, archived),
-    onSuccess,
-    onError,
-  })
-  const read = useMutation({
-    mutationFn: (isRead: boolean) => setProjectRunRead(projectId, run.id, isRead),
-    onSuccess,
-    onError,
-  })
-  const cancel = useMutation({
-    mutationFn: () => cancelProjectRun(projectId, run.id),
-    onSuccess,
-    onError,
-  })
-  const remove = useMutation({
-    mutationFn: () => deleteProjectRun(projectId, run.id),
-    onSuccess: () => {
-      onSuccess()
-      // Only when the page the user is on IS this run. Deleting a row from the sidebar while
-      // reading a different task must not move them somewhere they did not ask to go.
-      if (active) void navigate('/')
+  // ONE mutation for the whole row, not one per verb. Five `useMutation` calls would mean five
+  // MutationObservers subscribed per row, and this component is mounted once per row in a list
+  // that is hundreds of rows long in a busy workspace; the verbs are mutually exclusive anyway —
+  // a row runs one action at a time.
+  // `unknown` for the result: each endpoint answers with a different shape and none of them is
+  // read — the cache is reconciled by invalidation, from the server's own next answer.
+  const act = useMutation<unknown, Error, RowCommand>({
+    mutationFn: (command: RowCommand) => {
+      switch (command.action) {
+        case 'rename':
+          return patchProjectRun(projectId, run.id, { title: command.title })
+        case 'archive':
+          return archiveProjectRun(projectId, run.id, true)
+        case 'unarchive':
+          return archiveProjectRun(projectId, run.id, false)
+        case 'mark-read':
+          return setProjectRunRead(projectId, run.id, true)
+        case 'mark-unread':
+          return setProjectRunRead(projectId, run.id, false)
+        case 'cancel':
+          return cancelProjectRun(projectId, run.id)
+        case 'delete':
+          return deleteProjectRun(projectId, run.id)
+      }
     },
-    onError,
+    onSuccess: (_result, command) => {
+      invalidateRunCaches(queryClient)
+      // Only a delete moves the user, and only when the page they are on IS this run. Deleting a
+      // row from the sidebar while reading a different task must not take them somewhere they did
+      // not ask to go.
+      if (command.action === 'delete' && active) void navigate('/')
+    },
+    onError: (error) => toast(error.message, { tone: 'danger' }),
   })
 
   // The stored title, not the displayed one: a row may drop a `NNN: ` prefix its reference chip
   // is already painting (#788), and an edit that started from the shortened text would silently
   // delete the number from the record.
-  const editor = useTitleEditor(runTitle(run), (next) => rename.mutate(next))
+  const editor = useTitleEditor(runTitle(run), (title) => act.mutate({ action: 'rename', title }))
 
   return {
     editor,
@@ -200,11 +207,11 @@ function useTaskRowActions(run: RunRecord, scope: string | null, active: boolean
       } else if (action === 'cancel' || action === 'delete') {
         setConfirming(action)
       } else {
-        perform(action)
+        act.mutate({ action })
       }
     },
     /** The confirmed half of the two destructive verbs. */
-    perform,
+    perform: (action: 'cancel' | 'delete') => act.mutate({ action }),
     /**
      * Where a rename actually BEGINS: once the menu has finished closing.
      *
@@ -225,31 +232,6 @@ function useTaskRowActions(run: RunRecord, scope: string | null, active: boolean
       event.preventDefault()
       editor.begin()
     },
-  }
-
-  function perform(action: TaskRowAction): void {
-    switch (action) {
-      case 'archive':
-        archive.mutate(true)
-        break
-      case 'unarchive':
-        archive.mutate(false)
-        break
-      case 'mark-read':
-        read.mutate(true)
-        break
-      case 'mark-unread':
-        read.mutate(false)
-        break
-      case 'cancel':
-        cancel.mutate()
-        break
-      case 'delete':
-        remove.mutate()
-        break
-      case 'rename':
-        break
-    }
   }
 }
 

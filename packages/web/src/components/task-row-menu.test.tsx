@@ -152,6 +152,17 @@ describe('TaskRowMenu', () => {
     expect(rowLink()?.getAttribute('href')).toBe('/tasks/r1')
   })
 
+  it('opens from the keyboard too — the context-menu key fires on the focused link', async () => {
+    renderMenu()
+    // Shift+F10 and the Menu key dispatch a `contextmenu` event at the FOCUSED element. The row's
+    // link is focusable and the event bubbles to the trigger, so the menu has a keyboard path
+    // without the row growing a kebab it has no width for.
+    const link = screen.getByRole('link', { name: 'Bump zod to v4' })
+    link.focus()
+    fireEvent.contextMenu(link)
+    await waitFor(() => expect(document.querySelector('[data-slot="task-row-menu"]')).not.toBeNull())
+  })
+
   it('archives through the archive endpoint', async () => {
     renderMenu()
     pick(await openMenu(), 'archive')
@@ -232,6 +243,20 @@ describe('TaskRowMenu', () => {
 
       await waitFor(() => expect(fetchMock).toHaveBeenCalled())
       expect(lastRequest().path).toBe('/api/v1/p/proj-b/runs/r1')
+    })
+
+    it('does not re-enter the rename when a LATER menu is merely dismissed', async () => {
+      // The "a rename was asked for" flag is consumed by the close that starts the edit. If it
+      // ever leaked, the next menu the user dismissed would silently put the row into edit mode.
+      renderMenu()
+      pick(await openMenu(), 'rename')
+      const input = await renameInput()
+      fireEvent.keyDown(input, { key: 'Escape' })
+      await waitFor(() => expect(rowLink()).not.toBeNull())
+
+      fireEvent.keyDown(await openMenu(), { key: 'Escape' })
+      await waitFor(() => expect(document.querySelector('[data-slot="task-row-menu"]')).toBeNull())
+      expect(document.querySelector('[data-slot="title-input"]')).toBeNull()
     })
   })
 
