@@ -25,7 +25,7 @@
     "react-router": "^7.18.1"
   },
   "scripts": {
-    "build": "vite build && node scripts/scope-css.mjs && node scripts/verify-css.mjs dist/styles.css && tsc --emitDeclarationOnly -p tsconfig.json",
+    "build": "vite build && node scripts/scope-css.mjs && node scripts/verify-css.mjs dist/styles.css && tsc --emitDeclarationOnly -p tsconfig.json && node scripts/verify-cockpit-artifact.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
