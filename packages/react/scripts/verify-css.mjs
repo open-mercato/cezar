@@ -5,6 +5,7 @@ import selectorParser from 'postcss-selector-parser'
 import valueParser from 'postcss-value-parser'
 
 const DOCUMENT_TAGS = new Set(['html', 'body'])
+const VENDOR_CUSTOM_PROPERTY_PREFIXES = ['--radix-']
 const GENERIC_FONT_FAMILIES = new Set([
   'cursive',
   'emoji',
@@ -204,6 +205,7 @@ function isAnimationCustomProperty(property) {
 
 function assertNamespacedCustomPropertyReference(identifier) {
   if (identifier.startsWith('--tw-')) throw new Error(`raw --tw-* identifier: ${identifier}`)
+  if (VENDOR_CUSTOM_PROPERTY_PREFIXES.some((prefix) => identifier.startsWith(prefix))) return
   if (!identifier.startsWith('--cezar-')) {
     throw new Error(`non-Cezar custom property reference: ${identifier}`)
   }
@@ -214,7 +216,11 @@ function verifyIdentifiers(root) {
     if (declaration.prop.startsWith('--tw-')) {
       throw new Error(`raw --tw-* identifier: ${declaration.prop}`)
     }
-    if (declaration.prop.startsWith('--') && !declaration.prop.startsWith('--cezar-')) {
+    if (
+      declaration.prop.startsWith('--')
+      && !declaration.prop.startsWith('--cezar-')
+      && !VENDOR_CUSTOM_PROPERTY_PREFIXES.some((prefix) => declaration.prop.startsWith(prefix))
+    ) {
       throw new Error(`non-Cezar custom property declaration: ${declaration.prop}`)
     }
 

@@ -49,6 +49,7 @@ describe('verifyCss', () => {
       '.cezar-root .peer-checked\\:block:is(:where(.peer):checked~*),.cezar-root .group-hover\\:block:is(:where(.group):hover *){display:block}',
       '.cezar-root{font:400 1rem/1.5 cezar-Cezar Sans,"cezar-Other Font",var(--cezar-font-host),sans-serif}',
       '.cezar-root{font:var(--cezar-font-sans)}',
+      '.cezar-root .popover{transform-origin:var(--radix-popover-content-transform-origin);max-height:var(--radix-popover-content-available-height)}',
     ].join('')
 
     await expect(verifyCss(css)).resolves.toBeUndefined()
@@ -60,6 +61,11 @@ describe('verifyCss', () => {
     expect(css).toContain('.cezar-root .grid-cols-\\[264px_1fr\\]')
     expect(css).toContain('.cezar-root .bg-sidebar')
     expect(css).toContain('.cezar-root .text-soft-foreground')
+    expect(css).toContain('transform-origin:var(--radix-popover-content-transform-origin)')
+    expect(css).toContain('max-height:var(--radix-dropdown-menu-content-available-height)')
+    expect(css).toContain('min-width:var(--radix-select-trigger-width)')
+    expect(css).toContain('transform-origin:var(--radix-tooltip-content-transform-origin)')
+    expect(css).not.toContain('--cezar-tw-radix-')
     expect(css).toMatch(/@font-face\{font-family:cezar-/)
     expect(css).toMatch(/url\(\/assets\/inter-latin-wght-normal\.woff2\)/)
     expect(css).not.toMatch(/(^|[^-])--tw-/)

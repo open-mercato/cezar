@@ -46,6 +46,18 @@ describe('scopeCss', () => {
     ].join(''))
   })
 
+  it('preserves Radix runtime properties while namespacing repository-owned properties', async () => {
+    const css = [
+      '.popover{--radix-popover-content-transform-origin:top left;transform-origin:var(--radix-popover-content-transform-origin);',
+      '--spacing:.25rem;gap:var(--spacing)}',
+    ].join('')
+
+    expect(await scopeCss(css)).toBe([
+      '.cezar-root .popover{--radix-popover-content-transform-origin:top left;transform-origin:var(--radix-popover-content-transform-origin);',
+      '--cezar-tw-spacing:.25rem;gap:var(--cezar-tw-spacing)}',
+    ].join(''))
+  })
+
   it('renames complete font-family groups only in font semantic positions', async () => {
     const css = [
       '@font-face{font-family:"Cezar Sans";src:url(cezar.woff2)}',

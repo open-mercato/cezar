@@ -7,6 +7,7 @@ import valueParser from 'postcss-value-parser'
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DOCUMENT_TAGS = new Set(['html', 'body'])
+const VENDOR_CUSTOM_PROPERTY_PREFIXES = ['--radix-']
 
 function isInsideKeyframes(rule) {
   for (let parent = rule.parent; parent; parent = parent.parent) {
@@ -53,6 +54,7 @@ function firstIdentifier(value) {
 }
 
 function namespaceCustomProperty(identifier) {
+  if (VENDOR_CUSTOM_PROPERTY_PREFIXES.some((prefix) => identifier.startsWith(prefix))) return identifier
   if (identifier.startsWith('--cezar-')) return identifier
   if (identifier.startsWith('--tw-')) return `--cezar-tw-${identifier.slice('--tw-'.length)}`
   return `--cezar-tw-${identifier.slice(2)}`
