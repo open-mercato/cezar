@@ -33,6 +33,7 @@ export default defineConfig({
     outDir: resolve(packageDir, 'dist'),
     emptyOutDir: true,
     rolldownOptions: {
+      preserveEntrySignatures: 'exports-only',
       input: {
         index: resolve(packageDir, 'src/index.ts'),
         cockpit: resolve(packageDir, 'src/cockpit.tsx'),
