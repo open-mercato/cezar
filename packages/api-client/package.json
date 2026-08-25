@@ -3,7 +3,6 @@
   "version": "0.10.0",
   "description": "Typed client and shared contract types for the cezar cockpit HTTP API.",
   "license": "MIT",
-  "private": true,
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -37,7 +36,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/open-mercato/cezar",
-    "directory": "web/api-client"
+    "directory": "packages/api-client"
   },
   "publishConfig": {
     "access": "public"

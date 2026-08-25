@@ -23,5 +23,12 @@
   "dependencies": {
     "zod": "^4.4.3"
   },
-  "private": true
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/open-mercato/cezar",
+    "directory": "packages/contract"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
 }

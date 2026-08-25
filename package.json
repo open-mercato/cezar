@@ -35,6 +35,7 @@
     "test:watch": "vitest",
     "test:unit": "npm run test:unit -w @open-mercato/cezar",
     "test:package": "npm run test:package -w @open-mercato/cezar",
+    "test:cockpit-package": "node --test scripts/check-cockpit-pack.test.mjs && node scripts/check-cockpit-pack.mjs",
     "test:e2e": "sh .ai/scripts/e2e.sh",
     "pretypecheck": "npm run build:contract && npm run build:client && npm run build:server",
     "typecheck": "npm run typecheck:contract && npm run typecheck:client && npm run typecheck:react && npm run typecheck:server && npm run typecheck:web",

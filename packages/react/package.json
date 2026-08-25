@@ -1,7 +1,8 @@
 {
   "name": "@open-mercato/cezar-react",
   "version": "0.10.0",
-  "private": true,
+  "description": "React providers, components, and the complete embeddable Cezar cockpit.",
+  "license": "MIT",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -49,5 +50,8 @@
     "type": "git",
     "url": "https://github.com/open-mercato/cezar",
     "directory": "packages/react"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
