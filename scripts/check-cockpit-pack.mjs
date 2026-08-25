@@ -102,6 +102,26 @@ export async function assertCssUrlsResolve(cssFile, packageRoot) {
   return [...new Set(resolvedAssets)].sort()
 }
 
+function decodePercentData(payload) {
+  const bytes = []
+  for (let index = 0; index < payload.length;) {
+    if (payload[index] === '%') {
+      const encodedByte = payload.slice(index + 1, index + 3)
+      if (!/^[\da-f]{2}$/i.test(encodedByte)) {
+        throw new Error(`invalid percent-encoded data at offset ${index}`)
+      }
+      bytes.push(Number.parseInt(encodedByte, 16))
+      index += 3
+      continue
+    }
+    const codePoint = payload.codePointAt(index)
+    const character = String.fromCodePoint(codePoint)
+    bytes.push(...Buffer.from(character))
+    index += character.length
+  }
+  return Buffer.from(bytes)
+}
+
 async function embeddedCssFonts(cssFiles) {
   const embeddedFonts = []
   for (const cssFile of cssFiles) {
@@ -116,7 +136,7 @@ async function embeddedCssFonts(cssFiles) {
       embeddedFonts.push(
         /;base64(?:;|$)/i.test(metadata)
           ? Buffer.from(payload, 'base64')
-          : Buffer.from(decodeURIComponent(payload)),
+          : decodePercentData(payload),
       )
     }
   }

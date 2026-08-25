@@ -126,6 +126,21 @@ test('assertConsumerFontsMatch identifies emitted and embedded fonts by content'
   )
 })
 
+test('assertConsumerFontsMatch preserves binary bytes in percent-encoded data fonts', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'cezar-cockpit-percent-font-test-'))
+  t.after(async () => {
+    await import('node:fs/promises').then(({ rm }) => rm(root, { recursive: true, force: true }))
+  })
+  const installed = path.join(root, 'installed.woff2')
+  const css = path.join(root, 'consumer.css')
+  await writeFile(installed, Buffer.from([0x00, 0x7f, 0x80, 0xff]))
+  await writeFile(css, '@font-face{src:url(data:font/woff2,%00%7F%80%FF)}')
+
+  await assert.doesNotReject(async () => {
+    assert.equal(await assertConsumerFontsMatch([installed], [], [css]), 1)
+  })
+})
+
 test('assertConsumerFontsMatch rejects repeated and foreign payloads when installed fonts are missing', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'cezar-cockpit-font-identity-test-'))
   t.after(async () => {
