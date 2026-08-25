@@ -1,6 +1,10 @@
 @layer theme, base, components, utilities;
-@import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
+@import "../../../web/src/styles/index.css";
 @source "../**/*.{ts,tsx}";
-@import "./tokens.css";
-@import "./base.css";
+@source "../../../web/src/**/*.{ts,tsx}";
+@source inline("grid-cols-[264px_1fr]");
+
+.cezar-root[data-cezar-routing='memory'] [data-slot='app-shell'] {
+  height: 100%;
+  min-height: 0;
+}

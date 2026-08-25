@@ -72,7 +72,8 @@
 
 /* ---------- tokens: dark (default) ---------- */
 
-:root {
+:root,
+.cezar-root {
   color-scheme: dark;
 
   /* neutral ramp — elevation comes from surface steps, not shadows */
@@ -162,7 +163,8 @@
 
 /* ---------- tokens: light ---------- */
 
-.light {
+:root.light,
+.cezar-root[data-cezar-theme='light'] {
   color-scheme: light;
 
   --background: #ffffff;
@@ -212,7 +214,8 @@
 /* Violet accent: the `--primary` family swaps onto the existing violet tokens. An accent is
  * exactly a `--primary` family swap — a new accent = a new block here + one entry in
  * ACCENT_OPTIONS (routes/settings/appearance.tsx). */
-:root[data-accent='violet'] {
+:root[data-accent='violet'],
+.cezar-root[data-cezar-accent='violet'] {
   --primary: var(--violet);
   --primary-foreground: var(--violet-foreground);
   --ring: var(--violet);
@@ -223,20 +226,23 @@
  * to 3.5px/unit tightens paddings, gaps and control heights ~12% across the cockpit while the
  * type scale stays untouched. Declared on :root[…] (unlayered) so it outranks the
  * `@layer theme` default. */
-:root[data-density='compact'] {
+:root[data-density='compact'],
+.cezar-root[data-cezar-density='compact'] {
   --spacing: 0.21875rem;
 }
 
 /* "Compact for real": one more notch — 3px/unit (~25% tighter than comfortable). Same one-token
  * lever as compact, just smaller; the type scale still stays untouched. */
-:root[data-density='ultra'] {
+:root[data-density='ultra'],
+.cezar-root[data-cezar-density='ultra'] {
   --spacing: 0.1875rem;
 }
 
 /* Wide reading width (Settings → Appearance → Reading width): open the task-view column from the
  * default 820px to 1180px so long transcripts, diffs and command output use more of the screen.
  * One token, same `:root[…]` (unlayered) lever as density; narrow is the absence of the attribute. */
-:root[data-width='wide'] {
+:root[data-width='wide'],
+.cezar-root[data-cezar-width='wide'] {
   --measure: 1180px;
 }
 

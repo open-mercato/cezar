@@ -4,6 +4,8 @@ import * as React from "react"
 import { XIcon } from "lucide-react"
 import { Dialog as DialogPrimitive } from "radix-ui"
 
+import { useOptionalCezarPortal } from "@open-mercato/cezar-react"
+
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 
@@ -22,7 +24,9 @@ function DialogTrigger({
 function DialogPortal({
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Portal>) {
-  return <DialogPrimitive.Portal data-slot="dialog-portal" {...props} />
+  const portal = useOptionalCezarPortal()
+  const container = portal === undefined ? document.body : portal
+  return <DialogPrimitive.Portal container={container ?? undefined} data-slot="dialog-portal" {...props} />
 }
 
 function DialogClose({

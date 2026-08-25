@@ -44,7 +44,9 @@ export default defineConfig({
       external: isReactPackageExternal,
       output: {
         entryFileNames: '[name].js',
-        assetFileNames: '[name][extname]',
+        assetFileNames: (asset) => asset.name === 'styles.css'
+          ? '[name][extname]'
+          : 'assets/[name][extname]',
       },
     },
   },

@@ -1,5 +1,10 @@
+import { readFile } from 'node:fs/promises'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { verifyCss } from './verify-css.mjs'
+
+const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 describe('verifyCss', () => {
   it.each([
@@ -46,6 +51,19 @@ describe('verifyCss', () => {
       '.cezar-root{font:var(--cezar-font-sans)}',
     ].join('')
 
+    await expect(verifyCss(css)).resolves.toBeUndefined()
+  })
+
+  it('accepts the built complete cockpit stylesheet with scoped fonts and utilities', async () => {
+    const css = await readFile(resolve(packageDir, 'dist/styles.css'), 'utf8')
+
+    expect(css).toContain('.cezar-root .grid-cols-\\[264px_1fr\\]')
+    expect(css).toContain('.cezar-root .bg-sidebar')
+    expect(css).toContain('.cezar-root .text-soft-foreground')
+    expect(css).toMatch(/@font-face\{font-family:cezar-/)
+    expect(css).toMatch(/url\(\/assets\/inter-latin-wght-normal\.woff2\)/)
+    expect(css).not.toMatch(/(^|[^-])--tw-/)
+    expect(css).not.toMatch(/@keyframes (?!cezar-)/)
     await expect(verifyCss(css)).resolves.toBeUndefined()
   })
 })

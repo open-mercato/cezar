@@ -3,6 +3,8 @@
 import * as React from "react"
 import { Popover as PopoverPrimitive } from "radix-ui"
 
+import { useOptionalCezarPortal } from "@open-mercato/cezar-react"
+
 import { keyboardAwareCollisionPadding, useViewportInsets } from "@/lib/keyboard-inset"
 import { cn } from "@/lib/utils"
 
@@ -31,8 +33,10 @@ function PopoverContent({
   // Insets change re-render the content, which re-runs Radix's positioning. Desktop engines
   // report {0,0} and keep the exact previous behavior.
   const insets = useViewportInsets()
+  const portal = useOptionalCezarPortal()
+  const container = portal === undefined ? document.body : portal
   return (
-    <PopoverPrimitive.Portal>
+    <PopoverPrimitive.Portal container={container ?? undefined}>
       <PopoverPrimitive.Content
         data-slot="popover-content"
         align={align}

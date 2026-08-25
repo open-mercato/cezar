@@ -2,13 +2,15 @@ import { useEffect, useState, type ImgHTMLAttributes } from 'react'
 import { createPortal } from 'react-dom'
 
 import { resolveApiUrl } from '@open-mercato/cezar-api-client'
+import { useOptionalCezarPortal } from '@open-mercato/cezar-react'
 import { cn } from '@/lib/utils'
 
 /**
  * An image that enlarges to a full-screen lightbox on click (#image-zoom). Used for conversation
  * images — the agent's own screenshots and the user's attachments — so a thumbnail can be read
  * without leaving the thread. Dismiss by clicking the backdrop or pressing Escape. The overlay is
- * portalled to <body> so it escapes the thread's overflow/scroll containers.
+ * portalled to the provider-owned surface so it escapes the thread's overflow/scroll containers;
+ * isolated legacy renders fall back to <body> at render time.
  *
  * `src` is always a cockpit-served `/api/...` URL (the server persists them into the transcript
  * — `/api/runs/:id/images/…` — and `taskImages`/`runFileRawUrl` are the same origin), so the
@@ -28,6 +30,8 @@ export function ZoomableImage({
 } & Omit<ImgHTMLAttributes<HTMLImageElement>, 'src' | 'alt' | 'className' | 'onClick'>) {
   const [open, setOpen] = useState(false)
   const src = resolveApiUrl(rawSrc)
+  const portal = useOptionalCezarPortal()
+  const lightboxPortal = portal === undefined ? document.body : portal
 
   useEffect(() => {
     if (!open) return
@@ -48,7 +52,7 @@ export function ZoomableImage({
         onClick={() => setOpen(true)}
         className={cn('cursor-zoom-in', className)}
       />
-      {open
+      {open && lightboxPortal !== null
         ? createPortal(
             <div
               role="dialog"
@@ -64,7 +68,7 @@ export function ZoomableImage({
                 className="max-h-full max-w-full rounded-md object-contain shadow-2xl"
               />
             </div>,
-            document.body,
+            lightboxPortal,
           )
         : null}
     </>
