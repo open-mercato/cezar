@@ -21,6 +21,7 @@ export const isReactPackageExternal = (id: string) =>
   || runtimeDependencies.some((dependency) => id === dependency || id.startsWith(`${dependency}/`))
 
 export default defineConfig({
+  base: './',
   plugins: [tailwindcss()],
   resolve: {
     alias: {

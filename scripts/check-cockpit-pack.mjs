@@ -8,6 +8,7 @@ import {
   readFile,
   readdir,
   rm,
+  stat,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -30,6 +31,7 @@ const forbiddenRuntimeMarkers = [
 ]
 
 const runtimeFilePattern = /(?:\.(?:[cm]?js)|\.d\.[cm]?ts)$/
+const cssUrlPattern = /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/g
 
 export async function copyConsumerFixture(source, destination) {
   for (const relativePath of consumerFixtureFiles) {
@@ -71,6 +73,57 @@ export async function scanInstalledRuntime(root) {
   return { filesScanned: files.length, forbiddenMatches: 0 }
 }
 
+export async function assertCssUrlsResolve(cssFile, packageRoot) {
+  const css = await readFile(cssFile, 'utf8')
+  const resolvedAssets = []
+  for (const match of css.matchAll(cssUrlPattern)) {
+    const reference = (match[1] ?? match[2] ?? match[3] ?? '').trim()
+    if (
+      reference === ''
+      || reference.startsWith('#')
+      || reference.startsWith('//')
+      || /^[a-z][a-z\d+.-]*:/i.test(reference)
+    ) continue
+
+    const pathname = decodeURIComponent(reference.split(/[?#]/, 1)[0])
+    const resolved = path.resolve(path.dirname(cssFile), pathname)
+    const relative = path.relative(packageRoot, resolved)
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error(`local CSS URL ${JSON.stringify(reference)} escapes ${packageRoot} package root`)
+    }
+    try {
+      const metadata = await stat(resolved)
+      if (!metadata.isFile()) throw new Error('not a file')
+    } catch {
+      throw new Error(`missing local CSS asset ${JSON.stringify(reference)} resolved from ${cssFile}`)
+    }
+    resolvedAssets.push(resolved)
+  }
+  return [...new Set(resolvedAssets)].sort()
+}
+
+export async function countEmbeddedCssFonts(cssFile) {
+  const css = await readFile(cssFile, 'utf8')
+  let count = 0
+  for (const match of css.matchAll(cssUrlPattern)) {
+    const reference = (match[1] ?? match[2] ?? match[3] ?? '').trim()
+    if (/^data:font\//i.test(reference)) count += 1
+  }
+  return count
+}
+
+export async function withTemporaryPackageRoot(run) {
+  const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'cezar-cockpit-pack-'))
+  try {
+    return await run({
+      temporaryRoot,
+      npmCache: path.join(temporaryRoot, 'npm-cache'),
+    })
+  } finally {
+    await rm(temporaryRoot, { recursive: true, force: true })
+  }
+}
+
 function npmInvocation(args, options = {}) {
   const npmExecpath = process.env.npm_execpath
   const command = npmExecpath ? process.execPath : process.platform === 'win32' ? 'npm.cmd' : 'npm'
@@ -80,7 +133,7 @@ function npmInvocation(args, options = {}) {
     encoding: 'utf8',
     env: {
       ...process.env,
-      npm_config_cache: path.join(tmpdir(), 'cezar-npm-cache'),
+      npm_config_cache: options.npmCache,
     },
     stdio: options.capture ? ['ignore', 'pipe', 'pipe'] : 'inherit',
     maxBuffer: 64 * 1024 * 1024,
@@ -96,13 +149,13 @@ function npmInvocation(args, options = {}) {
   return result.stdout ?? ''
 }
 
-async function packWorkspace(packageDirectory, tarballDirectory) {
+async function packWorkspace(packageDirectory, tarballDirectory, npmCache) {
   const stdout = npmInvocation([
     'pack',
     '--json',
     '--pack-destination',
     tarballDirectory,
-  ], { cwd: packageDirectory, capture: true })
+  ], { cwd: packageDirectory, capture: true, npmCache })
   const [report] = JSON.parse(stdout)
   if (!report?.filename || !Array.isArray(report.files)) {
     throw new Error(`npm pack returned an invalid report for ${packageDirectory}`)
@@ -127,10 +180,9 @@ function assertReactTarball(files) {
 }
 
 async function main() {
-  const temporaryRoot = await mkdtemp(path.join(tmpdir(), 'cezar-cockpit-pack-'))
-  const tarballDirectory = path.join(temporaryRoot, 'tarballs')
-  const consumerDirectory = path.join(temporaryRoot, 'consumer')
-  try {
+  await withTemporaryPackageRoot(async ({ temporaryRoot, npmCache }) => {
+    const tarballDirectory = path.join(temporaryRoot, 'tarballs')
+    const consumerDirectory = path.join(temporaryRoot, 'consumer')
     await mkdir(tarballDirectory, { recursive: true })
     await copyConsumerFixture(path.join(repoRoot, 'fixtures/cockpit-consumer'), consumerDirectory)
 
@@ -139,11 +191,17 @@ async function main() {
       ['@open-mercato/cezar-api-client', 'packages/api-client'],
       ['@open-mercato/cezar-react', 'packages/react'],
     ]
-    for (const [workspace] of workspaces) npmInvocation(['run', 'build', '-w', workspace])
+    for (const [workspace] of workspaces) {
+      npmInvocation(['run', 'build', '-w', workspace], { npmCache })
+    }
 
     const packed = []
     for (const [workspace, packageDirectory] of workspaces) {
-      const tarball = await packWorkspace(path.join(repoRoot, packageDirectory), tarballDirectory)
+      const tarball = await packWorkspace(
+        path.join(repoRoot, packageDirectory),
+        tarballDirectory,
+        npmCache,
+      )
       packed.push([workspace, tarball])
       console.log(`packed ${workspace}: ${tarball.files.length} files`)
     }
@@ -158,9 +216,7 @@ async function main() {
       'react-dom@19.2.7',
       '--ignore-scripts',
       '--no-save',
-    ], { cwd: consumerDirectory })
-    npmInvocation(['run', 'typecheck'], { cwd: consumerDirectory })
-    npmInvocation(['run', 'build'], { cwd: consumerDirectory })
+    ], { cwd: consumerDirectory, npmCache })
 
     const installedReact = path.join(
       consumerDirectory,
@@ -168,11 +224,35 @@ async function main() {
       '@open-mercato',
       'cezar-react',
     )
+    const installedCss = path.join(installedReact, 'dist', 'styles.css')
+    const installedAssets = await assertCssUrlsResolve(installedCss, installedReact)
+    const installedFonts = installedAssets.filter((file) => /\.(?:woff2?|ttf|otf)$/.test(file))
+    if (installedFonts.length === 0) throw new Error('installed React CSS resolves no font assets')
+
+    npmInvocation(['run', 'typecheck'], { cwd: consumerDirectory, npmCache })
+    npmInvocation(['run', 'build'], { cwd: consumerDirectory, npmCache })
+
+    const consumerDist = path.join(consumerDirectory, 'dist')
+    const consumerCssFiles = (await readdir(consumerDist, { withFileTypes: true }))
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.css'))
+      .map((entry) => path.join(consumerDist, entry.name))
+    const consumerAssets = []
+    let embeddedConsumerFonts = 0
+    for (const cssFile of consumerCssFiles) {
+      consumerAssets.push(...await assertCssUrlsResolve(cssFile, consumerDist))
+      embeddedConsumerFonts += await countEmbeddedCssFonts(cssFile)
+    }
+    const emittedConsumerFonts = new Set(
+      consumerAssets.filter((file) => /\.(?:woff2?|ttf|otf)$/.test(file)),
+    )
+    const resolvedConsumerFonts = emittedConsumerFonts.size + embeddedConsumerFonts
+    if (resolvedConsumerFonts < installedFonts.length) {
+      throw new Error(`consumer build carried ${resolvedConsumerFonts} of ${installedFonts.length} installed fonts`)
+    }
+
     const { filesScanned } = await scanInstalledRuntime(installedReact)
-    console.log(`cold cockpit consumer ok — 3 tarballs installed, 1 typecheck, 1 Vite build, ${filesScanned} runtime/declaration files scanned`)
-  } finally {
-    await rm(temporaryRoot, { recursive: true, force: true })
-  }
+    console.log(`cold cockpit consumer ok — 3 tarballs installed, 1 typecheck, 1 Vite build, ${resolvedConsumerFonts} fonts resolved, ${filesScanned} runtime/declaration files scanned`)
+  })
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

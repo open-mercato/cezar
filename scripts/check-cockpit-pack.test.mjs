@@ -1,12 +1,15 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
 import {
+  assertCssUrlsResolve,
+  countEmbeddedCssFonts,
   copyConsumerFixture,
   scanInstalledRuntime,
+  withTemporaryPackageRoot,
 } from './check-cockpit-pack.mjs'
 
 test('copyConsumerFixture copies only the public consumer fixture files', async (t) => {
@@ -76,4 +79,66 @@ test('scanInstalledRuntime scans declarations and JavaScript but ignores README 
     filesScanned: 2,
     forbiddenMatches: 0,
   })
+})
+
+test('assertCssUrlsResolve accepts carried assets and rejects escaped or missing local URLs', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'cezar-cockpit-css-test-'))
+  t.after(async () => {
+    await import('node:fs/promises').then(({ rm }) => rm(root, { recursive: true, force: true }))
+  })
+  const css = path.join(root, 'dist/styles.css')
+  const font = path.join(root, 'dist/assets/font.woff2')
+  await mkdir(path.dirname(font), { recursive: true })
+  await writeFile(font, 'font bytes')
+  await writeFile(css, '@font-face{src:url(./assets/font.woff2)}')
+
+  assert.deepEqual(await assertCssUrlsResolve(css, root), [font])
+
+  await writeFile(css, '@font-face{src:url(/assets/font.woff2)}')
+  await assert.rejects(() => assertCssUrlsResolve(css, root), /escapes .* package root/)
+
+  await writeFile(css, '@font-face{src:url(.\/assets\/missing.woff2)}')
+  await assert.rejects(() => assertCssUrlsResolve(css, root), /missing local CSS asset/)
+})
+
+test('countEmbeddedCssFonts counts font payloads resolved into consumer CSS', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'cezar-cockpit-font-test-'))
+  t.after(async () => {
+    await import('node:fs/promises').then(({ rm }) => rm(root, { recursive: true, force: true }))
+  })
+  const css = path.join(root, 'consumer.css')
+  await writeFile(css, [
+    '@font-face{src:url(data:font/woff2;base64,Zm9udDE=)}',
+    '@font-face{src:url("data:font/woff2;base64,Zm9udDI=")}',
+    '.external{background:url(https://example.test/image.png)}',
+  ].join(''))
+
+  assert.equal(await countEmbeddedCssFonts(css), 2)
+})
+
+test('withTemporaryPackageRoot keeps the npm cache unique and removes it with the root', async () => {
+  let observedRoot
+  let observedCache
+  let failedRoot
+
+  await withTemporaryPackageRoot(async ({ temporaryRoot, npmCache }) => {
+    observedRoot = temporaryRoot
+    observedCache = npmCache
+    assert.equal(path.dirname(npmCache), temporaryRoot)
+    await mkdir(npmCache, { recursive: true })
+    await writeFile(path.join(npmCache, 'marker'), 'isolated')
+  })
+
+  await assert.rejects(() => access(observedCache), { code: 'ENOENT' })
+  await assert.rejects(() => access(observedRoot), { code: 'ENOENT' })
+
+  await assert.rejects(
+    () => withTemporaryPackageRoot(async ({ temporaryRoot, npmCache }) => {
+      failedRoot = temporaryRoot
+      await mkdir(npmCache, { recursive: true })
+      throw new Error('fixture failure')
+    }),
+    /fixture failure/,
+  )
+  await assert.rejects(() => access(failedRoot), { code: 'ENOENT' })
 })
