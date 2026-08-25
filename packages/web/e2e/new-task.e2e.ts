@@ -102,6 +102,12 @@ afterAll(() => {
 describe('the full-screen /new against a live dry-run server', () => {
   it('the sidebar CTA client-navigates to the React hero, focus already in the textarea', () => {
     browser.goto(`${baseUrl}${scoped('/')}`)
+    // The standalone entry point must use the public facade in browser-routing mode. This is a
+    // live Chrome assertion rather than a source-level import check: it catches a future App
+    // composition that accidentally bypasses the facade while leaving the private route tree
+    // otherwise healthy.
+    expect(browser.count('[data-cezar-routing="browser"]')).toBe(1)
+    expect(browser.count('iframe')).toBe(0)
     browser.waitForFunction(
       `document.querySelector('[data-slot="sidebar"] a[href="${scoped('/new')}"]') !== null`,
     )
@@ -168,7 +174,7 @@ describe('the full-screen /new against a live dry-run server', () => {
 
   it('type + submit → the thread; the run record carries the exact skill chain', async () => {
     browser.click('[data-slot="composer"] textarea')
-    browser.fill('[data-slot="composer"] textarea', 'Draft a spec for the new-task hero e2e.')
+    browser.fill('[data-slot="composer"] textarea', 'Verify the coarse cockpit facade')
     browser.click('[aria-label="Start task"]')
     browser.waitForFunction(`location.pathname.startsWith('${scoped('/tasks/')}')`)
 
@@ -179,7 +185,7 @@ describe('the full-screen /new against a live dry-run server', () => {
       task: string
       workflowDef?: { steps?: Array<Record<string, unknown>> }
     }
-    expect(record.task).toBe('Draft a spec for the new-task hero e2e.')
+    expect(record.task).toBe('Verify the coarse cockpit facade')
     expect(record.workflowDef?.steps).toEqual([
       expect.objectContaining({ id: 'task', name: 'spec-writer', skill: 'spec-writer', prompt: '{{task}}' }),
     ])
