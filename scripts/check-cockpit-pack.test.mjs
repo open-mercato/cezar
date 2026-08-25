@@ -7,6 +7,7 @@ import test from 'node:test'
 import {
   assertConsumerFontsMatch,
   assertCssUrlsResolve,
+  assertReactTarball,
   copyConsumerFixture,
   scanInstalledRuntime,
   withTemporaryPackageRoot,
@@ -164,6 +165,30 @@ test('assertConsumerFontsMatch rejects repeated and foreign payloads when instal
   await assert.rejects(
     () => assertConsumerFontsMatch(installedFonts, [], [css]),
     /consumer build is missing 3 of 4 installed fonts/,
+  )
+})
+
+test('the React tarball gate requires both bundled font notices', () => {
+  const complete = [
+    'dist/cockpit.js',
+    'dist/cockpit.d.ts',
+    'dist/styles.css',
+    'dist/assets/cockpit.js',
+    'dist/assets/inter.woff2',
+    'licenses/Inter-OFL.txt',
+    'licenses/JetBrains-Mono-OFL.txt',
+  ]
+
+  assert.doesNotThrow(() => assertReactTarball(complete))
+  assert.throws(
+    () => assertReactTarball(complete.filter((file) => file !== 'licenses/Inter-OFL.txt')),
+    /React tarball is missing licenses\/Inter-OFL\.txt/,
+  )
+  assert.throws(
+    () => assertReactTarball(
+      complete.filter((file) => file !== 'licenses/JetBrains-Mono-OFL.txt'),
+    ),
+    /React tarball is missing licenses\/JetBrains-Mono-OFL\.txt/,
   )
 })
 

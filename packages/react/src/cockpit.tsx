@@ -2,7 +2,11 @@ import type { QueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { BrowserRouter, MemoryRouter, useLocation, useNavigate } from 'react-router'
 
-import type { ApiError, CezarClient } from '@open-mercato/cezar-api-client'
+import {
+  setApiBaseUrl,
+  type ApiError,
+  type CezarClient,
+} from '@open-mercato/cezar-api-client'
 
 import { CezarCockpitImplementation } from '#cezar-web-cockpit'
 
@@ -28,6 +32,39 @@ export interface CezarCockpitProps<TClient extends CezarRuntimeClient = CezarCli
   className?: string
 }
 
+let activeLegacyTransportOwner: symbol | null = null
+
+/**
+ * The retained web composition still resolves its HTTP and workspace-SSE URLs through the
+ * api-client's legacy module-level base. Install the public client's authority synchronously so
+ * private render-time URL resolution sees it, then release only this mount's lease. The deferred
+ * generation check keeps React StrictMode's effect replay from clearing a live remount.
+ */
+function useLegacyTransportBaseUrl(baseUrl: string): void {
+  const owner = useRef<symbol | null>(null)
+  if (owner.current === null) owner.current = Symbol('cezar-cockpit-legacy-transport')
+  const mountGeneration = useRef(0)
+
+  activeLegacyTransportOwner = owner.current
+  setApiBaseUrl(baseUrl)
+
+  useEffect(() => {
+    const generation = ++mountGeneration.current
+    activeLegacyTransportOwner = owner.current
+    setApiBaseUrl(baseUrl)
+    return () => {
+      queueMicrotask(() => {
+        if (
+          mountGeneration.current !== generation
+          || activeLegacyTransportOwner !== owner.current
+        ) return
+        activeLegacyTransportOwner = null
+        setApiBaseUrl('')
+      })
+    }
+  }, [baseUrl])
+}
+
 function locationPath({ pathname, search, hash }: ReturnType<typeof useLocation>): string {
   return `${pathname}${search}${hash}`
 }
@@ -37,26 +74,27 @@ function MemoryPathBridge({ routing }: { routing: Extract<CezarCockpitRouting, {
   const navigate = useNavigate()
   const path = locationPath(location)
   const previousPath = useRef(path)
-  const controlledPath = useRef<string | null>(null)
+  const previousControlledPath = useRef(routing.path)
+  const hostDrivenPath = useRef<string | null>(null)
 
   useEffect(() => {
+    if (previousControlledPath.current === routing.path) return
+    previousControlledPath.current = routing.path
     if (routing.path === undefined || routing.path === path) return
-    controlledPath.current = routing.path
+    hostDrivenPath.current = routing.path
     navigate(routing.path, { replace: true })
   }, [navigate, path, routing.path])
 
   useEffect(() => {
-    if (controlledPath.current !== null) {
-      if (controlledPath.current === path) {
-        controlledPath.current = null
-        previousPath.current = path
-      }
+    if (hostDrivenPath.current === path) {
+      hostDrivenPath.current = null
+      previousPath.current = path
       return
     }
     if (previousPath.current === path) return
     previousPath.current = path
     routing.onPathChange?.(path)
-  }, [path, routing])
+  }, [path, routing.onPathChange])
 
   return null
 }
@@ -70,12 +108,27 @@ export function CezarCockpit<TClient extends CezarRuntimeClient = CezarClient>({
   onError,
   className,
 }: CezarCockpitProps<TClient>): React.JSX.Element {
+  useLegacyTransportBaseUrl(client.baseUrl)
+
   const ownedQueryClient = useRef<QueryClient | null>(null)
   if (suppliedQueryClient === undefined && ownedQueryClient.current === null) {
     ownedQueryClient.current = createCezarQueryClient()
   }
   const queryClient = suppliedQueryClient ?? ownedQueryClient.current
   if (queryClient === null) throw new Error('cezar: query client construction failed')
+
+  const queryClientMountGeneration = useRef(0)
+  useEffect(() => {
+    const generation = ++queryClientMountGeneration.current
+    return () => {
+      if (ownedQueryClient.current === null) return
+      queueMicrotask(() => {
+        if (queryClientMountGeneration.current === generation) {
+          ownedQueryClient.current?.clear()
+        }
+      })
+    }
+  }, [])
 
   const [rootElement, setRootElement] = useState<HTMLDivElement | null>(null)
   const content = rootElement ? (

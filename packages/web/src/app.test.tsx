@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import type { HealthResponse } from '@open-mercato/cezar-api-client'
@@ -6,10 +7,17 @@ import type { HealthResponse } from '@open-mercato/cezar-api-client'
 import { App } from './app'
 
 class FakeEventSource {
+  static instances: FakeEventSource[] = []
   readonly readyState = 0
+  closeCount = 0
+  constructor() {
+    FakeEventSource.instances.push(this)
+  }
   addEventListener(): void {}
   removeEventListener(): void {}
-  close(): void {}
+  close(): void {
+    this.closeCount += 1
+  }
 }
 
 const HEALTH: HealthResponse = {
@@ -40,6 +48,7 @@ function response(body: unknown): Response {
 }
 
 beforeEach(() => {
+  FakeEventSource.instances = []
   window.history.replaceState({}, '', '/p/project-a/new')
   vi.stubGlobal('EventSource', FakeEventSource)
   vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
@@ -63,10 +72,15 @@ afterEach(() => {
 })
 
 it('keeps standalone Cezar on the public browser-routed cockpit facade', async () => {
-  render(<App apiBase="https://cezar.example" />)
+  render(
+    <StrictMode>
+      <App apiBase="https://cezar.example" />
+    </StrictMode>,
+  )
 
   await waitFor(() => expect(document.querySelector('[data-route="new"]')).not.toBeNull())
   fireEvent.click(screen.getByRole('link', { name: 'Tasks' }))
 
   await waitFor(() => expect(window.location.pathname).toBe('/p/project-a/'))
+  expect(FakeEventSource.instances.filter((source) => source.closeCount === 0)).toHaveLength(1)
 })

@@ -6,7 +6,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "files": ["dist", "README.md"],
+  "files": ["dist", "licenses", "README.md"],
   "sideEffects": ["./dist/styles.css"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },

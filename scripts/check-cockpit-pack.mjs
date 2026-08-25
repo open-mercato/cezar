@@ -214,8 +214,14 @@ async function packWorkspace(packageDirectory, tarballDirectory, npmCache) {
   }
 }
 
-function assertReactTarball(files) {
-  const required = ['dist/cockpit.js', 'dist/cockpit.d.ts', 'dist/styles.css']
+export function assertReactTarball(files) {
+  const required = [
+    'dist/cockpit.js',
+    'dist/cockpit.d.ts',
+    'dist/styles.css',
+    'licenses/Inter-OFL.txt',
+    'licenses/JetBrains-Mono-OFL.txt',
+  ]
   for (const file of required) {
     if (!files.includes(file)) throw new Error(`React tarball is missing ${file}`)
   }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { createCezarClient, setApiBaseUrl } from '@open-mercato/cezar-api-client'
+import { createCezarClient } from '@open-mercato/cezar-api-client'
 import type { AppType } from '@open-mercato/cezar/app-type'
 import { CezarCockpit } from '@open-mercato/cezar-react/cockpit'
 
@@ -18,9 +18,6 @@ export function App({ apiBase }: AppProps) {
   // component body still yields exactly one client.
   const [queryClient] = useState(createQueryClient)
   const [cezarClient] = useState(() => createCezarClient<AppType>({ baseUrl: apiBase }))
-  // This must run before the child providers mount: their first query and the workspace event
-  // stream resolve their URLs at render/effect time.
-  setApiBaseUrl(apiBase)
 
   return (
     <CezarCockpit

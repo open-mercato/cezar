@@ -1,17 +1,44 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient } from '@tanstack/react-query'
+import { StrictMode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { CezarClient, CezarProjectClient, HealthResponse } from '@open-mercato/cezar-api-client'
+import {
+  createCezarClient,
+  getApiBaseUrl,
+  setApiBaseUrl,
+  type CezarClient,
+  type CezarProjectClient,
+  type HealthResponse,
+} from '@open-mercato/cezar-api-client'
 
-const { privateRender } = vi.hoisted(() => ({ privateRender: { throws: false } }))
+const { privateRender } = vi.hoisted(() => ({
+  privateRender: {
+    throws: false,
+    seedQueryClient: false,
+    queryClient: null as QueryClient | null,
+  },
+}))
 
 vi.mock('#cezar-web-cockpit', async (importOriginal) => {
   const actual = await importOriginal<typeof import('#cezar-web-cockpit')>()
+  const router = await import('react-router')
+  function NavigationTypeProbe() {
+    return <output data-testid="memory-navigation-type">{router.useNavigationType()}</output>
+  }
   return {
     CezarCockpitImplementation: (props: import('#cezar-web-cockpit').CezarCockpitImplementationProps) => {
       if (privateRender.throws) throw new Error('private render failed')
-      return <actual.CezarCockpitImplementation {...props} />
+      privateRender.queryClient = props.queryClient
+      if (privateRender.seedQueryClient) {
+        props.queryClient.setQueryData(['facade-owned-lifecycle'], 'retained')
+      }
+      return (
+        <>
+          <actual.CezarCockpitImplementation {...props} />
+          <NavigationTypeProbe />
+        </>
+      )
     },
   }
 })
@@ -87,6 +114,8 @@ function createQueryClient(): QueryClient {
 
 beforeEach(() => {
   privateRender.throws = false
+  privateRender.seedQueryClient = false
+  privateRender.queryClient = null
   FakeEventSource.instances = []
   window.history.replaceState({}, '', '/host/sandbox')
   vi.stubGlobal('EventSource', FakeEventSource)
@@ -108,6 +137,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup()
   document.body.replaceChildren()
+  setApiBaseUrl('')
   vi.unstubAllGlobals()
 })
 
@@ -131,7 +161,7 @@ describe('CezarCockpit', () => {
     expect(root?.classList.contains('min-w-0')).toBe(true)
   })
 
-  it('replaces a controlled memory path without changing the host URL', async () => {
+  it('reports controlled internal navigation, accepts the host echo, then replaces a later host path', async () => {
     const queryClient = createQueryClient()
     const onPathChange = vi.fn()
     const { rerender } = render(
@@ -143,6 +173,22 @@ describe('CezarCockpit', () => {
     )
 
     await waitFor(() => expect(document.querySelector('[data-route="new"]')).not.toBeNull())
+    fireEvent.click(screen.getByRole('link', { name: 'Tasks' }))
+
+    await waitFor(() => expect(onPathChange).toHaveBeenCalledWith('/p/project-a/'))
+    expect(document.querySelector('[data-route="tasks"]')).not.toBeNull()
+
+    rerender(
+      <CezarCockpit
+        client={fakeCezarClient()}
+        queryClient={queryClient}
+        routing={{ mode: 'memory', path: '/p/project-a/', onPathChange }}
+      />,
+    )
+
+    expect(document.querySelector('[data-route="tasks"]')).not.toBeNull()
+    expect(onPathChange).toHaveBeenCalledTimes(1)
+
     rerender(
       <CezarCockpit
         client={fakeCezarClient()}
@@ -152,8 +198,84 @@ describe('CezarCockpit', () => {
     )
 
     await waitFor(() => expect(document.querySelector('[data-route="global-tasks"]')).not.toBeNull())
+    expect(screen.getByTestId('memory-navigation-type').textContent).toBe('REPLACE')
     expect(window.location.pathname).toBe('/host/sandbox')
-    expect(onPathChange).not.toHaveBeenCalled()
+    expect(onPathChange).toHaveBeenCalledTimes(1)
+    expect(onPathChange).toHaveBeenLastCalledWith('/p/project-a/')
+  })
+
+  it('bridges the public client base URL into private fetch and workspace event transports', async () => {
+    const authority = 'https://cezar-api.example.test/root'
+    const client = createCezarClient({ baseUrl: `${authority}/`, credentials: 'include' })
+    const view = render(
+      <CezarCockpit
+        client={client}
+        queryClient={createQueryClient()}
+        routing={{ mode: 'memory', initialPath: '/p/project-a/new' }}
+      />,
+    )
+
+    await waitFor(() => {
+      expect(vi.mocked(fetch).mock.calls.some(([input]) =>
+        String(input).startsWith(`${authority}/api/v1/`),
+      )).toBe(true)
+    })
+    const privateRequest = vi.mocked(fetch).mock.calls.find(([input]) =>
+      String(input).startsWith(`${authority}/api/v1/`),
+    )
+    expect(privateRequest?.[1]).toMatchObject({ credentials: 'include' })
+    expect(FakeEventSource.instances).toHaveLength(1)
+    expect(FakeEventSource.instances[0]?.url).toBe(`${authority}/api/v1/workspace/events`)
+
+    view.unmount()
+    await waitFor(() => expect(getApiBaseUrl()).toBe(''))
+  })
+
+  it('clears its owned query client after ordinary unmount', async () => {
+    privateRender.seedQueryClient = true
+    const view = render(<CezarCockpit client={fakeCezarClient()} />)
+    await screen.findByRole('heading', { name: 'Tasks' })
+    const ownedQueryClient = privateRender.queryClient
+    expect(ownedQueryClient?.getQueryData(['facade-owned-lifecycle'])).toBe('retained')
+
+    view.unmount()
+
+    await waitFor(() => {
+      expect(ownedQueryClient?.getQueryData(['facade-owned-lifecycle'])).toBeUndefined()
+    })
+  })
+
+  it('does not clear a supplied query client after unmount', async () => {
+    const suppliedQueryClient = createQueryClient()
+    suppliedQueryClient.setQueryData(['host-owned-lifecycle'], 'retained')
+    const view = render(
+      <CezarCockpit client={fakeCezarClient()} queryClient={suppliedQueryClient} />,
+    )
+    await screen.findByRole('heading', { name: 'Tasks' })
+
+    view.unmount()
+    await Promise.resolve()
+
+    expect(suppliedQueryClient.getQueryData(['host-owned-lifecycle'])).toBe('retained')
+  })
+
+  it('retains its owned cache through the StrictMode effect replay and clears the final unmount', async () => {
+    privateRender.seedQueryClient = true
+    const view = render(
+      <StrictMode>
+        <CezarCockpit client={fakeCezarClient()} />
+      </StrictMode>,
+    )
+    await screen.findByRole('heading', { name: 'Tasks' })
+    const ownedQueryClient = privateRender.queryClient
+    await Promise.resolve()
+
+    expect(ownedQueryClient?.getQueryData(['facade-owned-lifecycle'])).toBe('retained')
+
+    view.unmount()
+    await waitFor(() => {
+      expect(ownedQueryClient?.getQueryData(['facade-owned-lifecycle'])).toBeUndefined()
+    })
   })
 
   it('reports an internal memory navigation as pathname, search, and hash', async () => {
