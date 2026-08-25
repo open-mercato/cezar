@@ -4,6 +4,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { join } from 'node:path';
 import { z } from 'zod';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
+import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 
@@ -375,6 +377,42 @@ function eventTextFragments(event: Record<string, unknown>): string[] {
   return fragments;
 }
 
+/**
+ * Where a CREATION CLAIM may come from — the trust boundary the created tier was missing.
+ *
+ * `CREATED_PR_RE` used to be matched against everything an event carried, tool OUTPUT included,
+ * so a transcript that merely QUOTES a `gh pr create` line handed the run a PR it never opened.
+ * Not hypothetical: the task that fixed the reference chips printed another run's stored events
+ * while investigating them, and cezar read `"title": "Ran gh pr create --repo …"` out of that
+ * dump and adopted a PR from a DIFFERENT repository as its own — permanently, because the first
+ * created URL wins and the real `gh pr create` that followed was never looked at.
+ *
+ * So the claim must come from the agent's own words, or from the tool title cezar itself renders
+ * from the command it saw run. Tool output and tool input are the transcript of the world, not a
+ * statement about this run. The URL is still read from the whole event — `gh` prints it in the
+ * output — because it is the CLAIM that needs a trustworthy source, not the link.
+ */
+function eventCreationClaimFragments(event: Record<string, unknown>): string[] {
+  const fragments: string[] = [];
+  // A `tool-result` event's `result` IS raw command output; on every other event the top-level
+  // text is the agent's own.
+  if (event.type !== 'tool-result') {
+    for (const key of ['text', 'result', 'message'] as const) {
+      const value = event[key];
+      if (typeof value === 'string') fragments.push(value);
+    }
+  }
+  const item = event.item;
+  if (item && typeof item === 'object') {
+    const it = item as Record<string, unknown>;
+    if (it.kind === 'message' && it.role === 'assistant' && typeof it.text === 'string') {
+      fragments.push(it.text);
+    }
+    if (it.kind === 'tool' && typeof it.title === 'string') fragments.push(it.title);
+  }
+  return fragments;
+}
+
 /** Agent-authored event text, matching the trust boundary used by task markers.
  * Tool titles, inputs, and outputs remain visible to the referenced-URL tier,
  * but must never promote an issue into the shared `issueNumber` field (#538). */
@@ -413,6 +451,35 @@ function resolveReferencedRef(candidates: string[], task: string, declared?: num
     return num !== '' && new RegExp(`(?<!\\d)#?${num}(?!\\d)`).test(task);
   });
   return named.length === 1 ? named[0] : undefined;
+}
+
+/** The number a forge URL's last segment names (`…/pull/402` → 402), or undefined. */
+function refUrlNumber(url: string | undefined): number | undefined {
+  if (!url) return undefined;
+  const n = Number(url.split('/').pop());
+  return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
+}
+
+/**
+ * The PR declaration the REFERENCED tier is allowed to act on.
+ *
+ * `CEZ:PR=N` means one of two things depending on when the agent writes it: on the way in it
+ * names the PR the task is ABOUT, and once the task has opened a PR of its own the marker
+ * contract asks it to re-declare with the new number ("Re-emit with the new number if the subject
+ * changes (e.g. you open a PR later in the task)"). A declaration naming the PR this run CREATED
+ * is therefore a statement about the CREATED tier, which `pullRequestUrl` already carries — and
+ * feeding it to the referenced tier ERASES the about-PR, because `resolveReferencedRef` clears
+ * the chip when no candidate matches the declared number (a task on #4326 that opened
+ * #5366 dropped from two chips to one the moment it declared #5366).
+ *
+ * Both tiers stay true instead: the created PR is the created PR, and the reference resolves as
+ * if that declaration had not been made — which is exactly what it was before the task opened
+ * anything.
+ */
+function referencedPrDeclaration(run: RunRecord): number | undefined {
+  const declared = run.markerRefs?.pr;
+  if (declared === undefined) return undefined;
+  return declared === refUrlNumber(run.pullRequestUrl) ? undefined : declared;
 }
 
 /**
@@ -476,6 +543,25 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
+  // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
+  // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
+  // could match the created number. The evidence is all still on the record — only the
+  // conclusion drawn from it was wrong — so re-resolve without that declaration instead of
+  // asking for a migration. Deliberately one-directional: it only runs on a record that HAS no
+  // referenced PR, so it can never take one away from a record written by an older cezar whose
+  // candidate list no longer explains it. `prNumber` is not recoverable this way (the
+  // declaration overwrote it) and is left alone — the restored URL is what paints the chip.
+  if (
+    run.referencedPullRequestUrl === undefined &&
+    run.markerRefs?.pr !== undefined &&
+    referencedPrDeclaration(run) === undefined
+  ) {
+    run.referencedPullRequestUrl = resolveReferencedRef(
+      run.referencedPrCandidates ?? [],
+      run.task,
+      undefined,
+    );
+  }
   return run;
 }
 
@@ -799,15 +885,34 @@ export class RunStore extends EventEmitter {
     // The janitor trick: agents print the PR URL after `gh pr create` — the
     // first one spotted in the transcript becomes the run's PR link. Scans v1
     // fields AND nested v2 `item.*` content (#407). A URL without the created
-    // phrasing still feeds the referenced tier (the PR the task is about).
+    // phrasing still feeds the referenced tier (the PR the task is about) —
+    // and the phrasing itself is only believed from a source that can speak
+    // FOR this run (`eventCreationClaimFragments`), never from quoted output.
     const haystack = eventTextFragments(full).join(' ');
     const agentHaystack = eventAgentTextFragments(full).join(' ');
+    // The creation CLAIM is read from a narrower source than the URL is
+    // (`eventCreationClaimFragments`), which is why the two are searched
+    // together rather than the haystack alone: the phrase must land in the
+    // trusted prefix, and the link may come from anywhere after it.
+    const claim = eventCreationClaimFragments(full).join(' ');
     if (haystack.length > 0) {
       let changed = false;
       if (!run.pullRequestUrl) {
-        const created = createdPrUrl(haystack);
+        const created = CREATED_PR_RE.test(claim) ? createdPrUrl(`${claim} ${haystack}`) : undefined;
         if (created) {
           this.updateRun(runId, { pullRequestUrl: created });
+          // Adopting the created tier can RELEASE a declaration the referenced tier was holding
+          // (see `referencedPrDeclaration`), so re-resolve here too: the about-PR must come back
+          // whether the marker arrived before the creation evidence or after it.
+          const resolved = resolveReferencedRef(
+            run.referencedPrCandidates ?? [],
+            run.task,
+            referencedPrDeclaration(run),
+          );
+          if (resolved !== run.referencedPullRequestUrl) {
+            run.referencedPullRequestUrl = resolved;
+            changed = true;
+          }
         } else if (PR_URL_RE.test(haystack) && this.trackReferencedPrs(run, haystack)) {
           changed = true;
         }
@@ -844,7 +949,7 @@ export class RunStore extends EventEmitter {
     run.referencedPullRequestUrl = resolveReferencedRef(
       run.referencedPrCandidates,
       run.task,
-      run.markerRefs?.pr,
+      referencedPrDeclaration(run),
     );
     return true;
   }
@@ -902,6 +1007,10 @@ export class RunStore extends EventEmitter {
    * against the candidate working set — including down to `undefined` when no
    * candidate matches (a wrong chip is worse than no chip). The created tier
    * (`pullRequestUrl`) is deliberately untouched.
+   *
+   * One declaration is NOT a statement about the referenced tier: the number of the PR this run
+   * itself created. See `referencedPrDeclaration` — the marker contract asks the agent to
+   * re-declare after it opens a PR, and taking that literally cost the task the PR it was about.
    */
   applyMarkerRefs(runId: string, refs: { pr?: number; issue?: number }): RunRecord | undefined {
     const run = this.runs.get(runId);
@@ -911,7 +1020,12 @@ export class RunStore extends EventEmitter {
       ...(refs.pr !== undefined ? { pr: refs.pr } : {}),
       ...(refs.issue !== undefined ? { issue: refs.issue } : {}),
     };
-    if (refs.pr !== undefined) run.prNumber = refs.pr;
+    // `prNumber` is the about-PR as well (it is what paints a numeric-only chip), so a
+    // re-declaration naming the created PR only FILLS it — it never overwrites the number the
+    // task came in with, which is still the PR this task is about.
+    if (refs.pr !== undefined && (run.prNumber === undefined || refs.pr !== refUrlNumber(run.pullRequestUrl))) {
+      run.prNumber = refs.pr;
+    }
     if (refs.issue !== undefined) {
       run.issueNumber = refs.issue;
       delete run.referencedIssueNumberSeeded;
@@ -920,7 +1034,7 @@ export class RunStore extends EventEmitter {
       run.referencedPullRequestUrl = resolveReferencedRef(
         run.referencedPrCandidates ?? [],
         run.task,
-        run.markerRefs.pr,
+        referencedPrDeclaration(run),
       );
     }
     if (run.markerRefs.issue !== undefined) {

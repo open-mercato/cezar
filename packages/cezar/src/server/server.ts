@@ -4155,13 +4155,19 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs/:id/git/push', async (c) => {
-      const { store } = c.get('project');
+      const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const result = await pushCurrentBranch(worktree);
       if (!result.ok) return c.json({ error: result.error }, 409);
+      // A push is the event that changes what the chips say about this task's pull requests —
+      // its checks start again, and its MERGEABILITY is recomputed from scratch. Both are cached
+      // per number, so without this the cockpit would keep showing the pre-push answer (up to a
+      // minute of "Ready to merge" for a branch that has just been rewritten) about a push the
+      // user watched this server make.
+      for (const number of runPrNumbers(run)) forgetRefStatus(repoRoot, number);
       return c.json({
         pushed: true,
         branch: result.branch,
@@ -4381,6 +4387,20 @@ export function createApp(deps: ServerDeps) {
       ? repoRoot
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
+
+  /** Every pull request number this run points at — the one it created and the one it is about
+   *  (#901), from whichever field carries it. Used to invalidate what the forge told us about
+   *  them when this server does something that changes the answer. Deliberately tolerant: an
+   *  unrecognized URL shape yields nothing rather than a guessed number. */
+  const runPrNumbers = (run: RunRecord): number[] => {
+    const numbers = [
+      run.prNumber,
+      ...[run.pullRequestUrl, run.referencedPullRequestUrl].map((url) =>
+        url ? refNumberFromUrl(url) : null,
+      ),
+    ];
+    return [...new Set(numbers.filter((n): n is number => typeof n === 'number'))];
+  };
 
   // ---- chained family: worktrees (project-scoped) ----
   const worktreesRoutes = new Hono<ProjectApiEnv>()
