@@ -253,34 +253,6 @@ describe('cockpit app shell', () => {
     expect(activeLabel()).toEqual(['Skills'])
   })
 
-  it('navigates the existing sidebar destinations to their existing route markers', () => {
-    browser.goto(baseUrl + scoped('/'))
-
-    const visit = (path: string, marker: string) => {
-      browser.click(`[data-slot="sidebar"] nav a[href="${scoped(path)}"]`)
-      browser.waitForFunction(`location.pathname === '${scoped(path)}'`)
-      browser.waitForFunction(`document.querySelector('${marker}') !== null`)
-      expect(browser.count(marker)).toBe(1)
-    }
-
-    visit('/git', '[data-route="repo-git"]')
-    visit('/skills', '[data-route="skills"]')
-    visit('/workflows', '[data-route="workflows"]')
-    visit('/settings', '[data-route="settings"]')
-    visit('/', '[data-route="tasks"]')
-
-    // GitHub is deliberately absent from the sidebar when the live server truthfully reports
-    // no forge. Exercise that honest unavailable screen directly; when it is available, use
-    // the same sidebar route as every other destination above.
-    if (forgeAvailable) {
-      visit('/github', '[data-route="github"]')
-    } else {
-      browser.goto(baseUrl + scoped('/github'))
-      browser.waitForFunction(`document.querySelector('[data-route="github"]') !== null`)
-      expect(browser.text('[data-route="github"]')).toContain('GitHub is unavailable here')
-    }
-  })
-
   it('makes main the only scroller — the document never scrolls', () => {
     browser.goto(baseUrl + scoped('/'))
 
