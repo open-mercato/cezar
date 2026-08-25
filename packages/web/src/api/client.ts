@@ -1217,15 +1217,18 @@ export async function finishRun(id: string): Promise<FinishResponse> {
   )
 }
 
-/** The follow-up composer's optional overrides for a Continue (#401): pick which backend and
- *  model handle the reopened session. Omitted fields keep the run's current backend/model.
- *  `text`/`images` are the prompt the reopened session starts on — omitted, the engine opens
- *  with its plain "Continue.". */
+/** The follow-up composer's optional overrides for a Continue (#401): pick which backend, model
+ *  and agent account handle the reopened session. Omitted fields keep the run's current
+ *  backend/model/account. `text`/`images` are the prompt the reopened session starts on — omitted,
+ *  the engine opens with its plain "Continue.". */
 export interface ContinueOptions {
   text?: string
   images?: ImageInput[]
   runner?: Runner
   model?: string
+  /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
+   *  starts a fresh session server-side — a session id lives inside ONE account's config dir. */
+  agentProfile?: string
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1237,6 +1240,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.images !== undefined ? { images: opts.images } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
@@ -1261,6 +1265,7 @@ export async function continueProjectRun(
         ...(opts.images !== undefined ? { images: opts.images } : {}),
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
       },
     }),
     runPath(id, '/continue'),
