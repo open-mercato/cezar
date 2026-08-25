@@ -1,10 +1,5 @@
-import { readFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { verifyCss } from './verify-css.mjs'
-
-const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+import { verifyBuiltCss, verifyCss } from './verify-css.mjs'
 
 describe('verifyCss', () => {
   it.each([
@@ -55,22 +50,18 @@ describe('verifyCss', () => {
     await expect(verifyCss(css)).resolves.toBeUndefined()
   })
 
-  it('accepts the built complete cockpit stylesheet with scoped fonts and utilities', async () => {
-    const css = await readFile(resolve(packageDir, 'dist/styles.css'), 'utf8')
+  it('accepts a representative built cockpit stylesheet contract', async () => {
+    const css = [
+      '@font-face{font-family:cezar-Sans;src:url(./assets/inter-latin-wght-normal.woff2)}',
+      '.cezar-root .grid-cols-\\[264px_1fr\\]{display:grid}',
+      '.cezar-root .bg-sidebar{background:#000}',
+      '.cezar-root .text-soft-foreground{color:#fff}',
+      '.cezar-root .popover{transform-origin:var(--radix-popover-content-transform-origin)}',
+      '.cezar-root .dropdown{max-height:var(--radix-dropdown-menu-content-available-height)}',
+      '.cezar-root .select{min-width:var(--radix-select-trigger-width)}',
+      '.cezar-root .tooltip{transform-origin:var(--radix-tooltip-content-transform-origin)}',
+    ].join('')
 
-    expect(css).toContain('.cezar-root .grid-cols-\\[264px_1fr\\]')
-    expect(css).toContain('.cezar-root .bg-sidebar')
-    expect(css).toContain('.cezar-root .text-soft-foreground')
-    expect(css).toContain('transform-origin:var(--radix-popover-content-transform-origin)')
-    expect(css).toContain('max-height:var(--radix-dropdown-menu-content-available-height)')
-    expect(css).toContain('min-width:var(--radix-select-trigger-width)')
-    expect(css).toContain('transform-origin:var(--radix-tooltip-content-transform-origin)')
-    expect(css).not.toContain('--cezar-tw-radix-')
-    expect(css).toMatch(/@font-face\{font-family:cezar-/)
-    expect(css).toMatch(/url\(\.\/assets\/inter-latin-wght-normal\.woff2\)/)
-    expect(css).not.toMatch(/url\(\/assets\//)
-    expect(css).not.toMatch(/(^|[^-])--tw-/)
-    expect(css).not.toMatch(/@keyframes (?!cezar-)/)
-    await expect(verifyCss(css)).resolves.toBeUndefined()
+    await expect(verifyBuiltCss(css)).resolves.toBeUndefined()
   })
 })

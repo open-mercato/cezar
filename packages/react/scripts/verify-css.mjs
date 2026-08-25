@@ -264,10 +264,37 @@ export async function verifyCss(css) {
   verifyIdentifiers(root)
 }
 
+const REQUIRED_COCKPIT_MARKERS = [
+  '.cezar-root .grid-cols-\\[264px_1fr\\]',
+  '.cezar-root .bg-sidebar',
+  '.cezar-root .text-soft-foreground',
+  'transform-origin:var(--radix-popover-content-transform-origin)',
+  'max-height:var(--radix-dropdown-menu-content-available-height)',
+  'min-width:var(--radix-select-trigger-width)',
+  'transform-origin:var(--radix-tooltip-content-transform-origin)',
+]
+
+/** Verify the contract of the actual post-build cockpit stylesheet. */
+export async function verifyBuiltCss(css) {
+  for (const marker of REQUIRED_COCKPIT_MARKERS) {
+    if (!css.includes(marker)) throw new Error(`missing cockpit CSS marker: ${marker}`)
+  }
+  if (!/@font-face\{font-family:cezar-/.test(css)) {
+    throw new Error('missing namespaced cockpit font face')
+  }
+  if (!/url\(\.\/assets\/inter-latin-wght-normal\.woff2\)/.test(css)) {
+    throw new Error('missing package-relative cockpit font URL')
+  }
+  if (/url\(\/assets\//.test(css)) {
+    throw new Error('root-relative cockpit asset URL')
+  }
+  await verifyCss(css)
+}
+
 async function main() {
   const file = process.argv[2]
   if (!file) throw new Error('usage: node scripts/verify-css.mjs <css-file>')
-  await verifyCss(await readFile(file, 'utf8'))
+  await verifyBuiltCss(await readFile(file, 'utf8'))
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
