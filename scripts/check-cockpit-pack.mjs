@@ -102,14 +102,42 @@ export async function assertCssUrlsResolve(cssFile, packageRoot) {
   return [...new Set(resolvedAssets)].sort()
 }
 
-export async function countEmbeddedCssFonts(cssFile) {
-  const css = await readFile(cssFile, 'utf8')
-  let count = 0
-  for (const match of css.matchAll(cssUrlPattern)) {
-    const reference = (match[1] ?? match[2] ?? match[3] ?? '').trim()
-    if (/^data:font\//i.test(reference)) count += 1
+async function embeddedCssFonts(cssFiles) {
+  const embeddedFonts = []
+  for (const cssFile of cssFiles) {
+    const css = await readFile(cssFile, 'utf8')
+    for (const match of css.matchAll(cssUrlPattern)) {
+      const reference = (match[1] ?? match[2] ?? match[3] ?? '').trim()
+      if (!/^data:font\//i.test(reference)) continue
+      const comma = reference.indexOf(',')
+      if (comma === -1) continue
+      const metadata = reference.slice(0, comma)
+      const payload = reference.slice(comma + 1)
+      embeddedFonts.push(
+        /;base64(?:;|$)/i.test(metadata)
+          ? Buffer.from(payload, 'base64')
+          : Buffer.from(decodeURIComponent(payload)),
+      )
+    }
   }
-  return count
+  return embeddedFonts
+}
+
+export async function assertConsumerFontsMatch(
+  installedFontFiles,
+  emittedFontFiles,
+  consumerCssFiles,
+) {
+  const installedFonts = await Promise.all(installedFontFiles.map((file) => readFile(file)))
+  const consumerFonts = await Promise.all(emittedFontFiles.map((file) => readFile(file)))
+  consumerFonts.push(...await embeddedCssFonts(consumerCssFiles))
+  const missing = installedFonts.filter(
+    (installed) => !consumerFonts.some((consumer) => consumer.equals(installed)),
+  )
+  if (missing.length > 0) {
+    throw new Error(`consumer build is missing ${missing.length} of ${installedFonts.length} installed fonts`)
+  }
+  return installedFonts.length
 }
 
 export async function withTemporaryPackageRoot(run) {
@@ -237,18 +265,17 @@ async function main() {
       .filter((entry) => entry.isFile() && entry.name.endsWith('.css'))
       .map((entry) => path.join(consumerDist, entry.name))
     const consumerAssets = []
-    let embeddedConsumerFonts = 0
     for (const cssFile of consumerCssFiles) {
       consumerAssets.push(...await assertCssUrlsResolve(cssFile, consumerDist))
-      embeddedConsumerFonts += await countEmbeddedCssFonts(cssFile)
     }
-    const emittedConsumerFonts = new Set(
-      consumerAssets.filter((file) => /\.(?:woff2?|ttf|otf)$/.test(file)),
+    const emittedConsumerFonts = consumerAssets.filter(
+      (file) => /\.(?:woff2?|ttf|otf)$/.test(file),
     )
-    const resolvedConsumerFonts = emittedConsumerFonts.size + embeddedConsumerFonts
-    if (resolvedConsumerFonts < installedFonts.length) {
-      throw new Error(`consumer build carried ${resolvedConsumerFonts} of ${installedFonts.length} installed fonts`)
-    }
+    const resolvedConsumerFonts = await assertConsumerFontsMatch(
+      installedFonts,
+      emittedConsumerFonts,
+      consumerCssFiles,
+    )
 
     const { filesScanned } = await scanInstalledRuntime(installedReact)
     console.log(`cold cockpit consumer ok — 3 tarballs installed, 1 typecheck, 1 Vite build, ${resolvedConsumerFonts} fonts resolved, ${filesScanned} runtime/declaration files scanned`)

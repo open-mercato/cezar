@@ -5,8 +5,8 @@ import path from 'node:path'
 import test from 'node:test'
 
 import {
+  assertConsumerFontsMatch,
   assertCssUrlsResolve,
-  countEmbeddedCssFonts,
   copyConsumerFixture,
   scanInstalledRuntime,
   withTemporaryPackageRoot,
@@ -101,19 +101,55 @@ test('assertCssUrlsResolve accepts carried assets and rejects escaped or missing
   await assert.rejects(() => assertCssUrlsResolve(css, root), /missing local CSS asset/)
 })
 
-test('countEmbeddedCssFonts counts font payloads resolved into consumer CSS', async (t) => {
+test('assertConsumerFontsMatch identifies emitted and embedded fonts by content', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'cezar-cockpit-font-test-'))
   t.after(async () => {
     await import('node:fs/promises').then(({ rm }) => rm(root, { recursive: true, force: true }))
   })
+  const installedOne = path.join(root, 'installed-one.woff2')
+  const installedTwo = path.join(root, 'installed-two.woff2')
+  const emittedOne = path.join(root, 'emitted-one.woff2')
   const css = path.join(root, 'consumer.css')
+  await Promise.all([
+    writeFile(installedOne, 'font1'),
+    writeFile(installedTwo, 'font2'),
+    writeFile(emittedOne, 'font1'),
+  ])
   await writeFile(css, [
-    '@font-face{src:url(data:font/woff2;base64,Zm9udDE=)}',
     '@font-face{src:url("data:font/woff2;base64,Zm9udDI=")}',
     '.external{background:url(https://example.test/image.png)}',
   ].join(''))
 
-  assert.equal(await countEmbeddedCssFonts(css), 2)
+  assert.equal(
+    await assertConsumerFontsMatch([installedOne, installedTwo], [emittedOne], [css]),
+    2,
+  )
+})
+
+test('assertConsumerFontsMatch rejects repeated and foreign payloads when installed fonts are missing', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'cezar-cockpit-font-identity-test-'))
+  t.after(async () => {
+    await import('node:fs/promises').then(({ rm }) => rm(root, { recursive: true, force: true }))
+  })
+  const installedFonts = await Promise.all(
+    ['installed-one', 'installed-two', 'installed-three', 'installed-four'].map(async (contents, index) => {
+      const font = path.join(root, `installed-${index + 1}.woff2`)
+      await writeFile(font, contents)
+      return font
+    }),
+  )
+  const repeated = Buffer.from('installed-one').toString('base64')
+  const foreign = Buffer.from('foreign-font').toString('base64')
+  const css = path.join(root, 'consumer.css')
+  await writeFile(css, [
+    ...Array.from({ length: 4 }, () => `@font-face{src:url(data:font/woff2;base64,${repeated})}`),
+    `@font-face{src:url(data:font/woff2;base64,${foreign})}`,
+  ].join(''))
+
+  await assert.rejects(
+    () => assertConsumerFontsMatch(installedFonts, [], [css]),
+    /consumer build is missing 3 of 4 installed fonts/,
+  )
 })
 
 test('withTemporaryPackageRoot keeps the npm cache unique and removes it with the root', async () => {
