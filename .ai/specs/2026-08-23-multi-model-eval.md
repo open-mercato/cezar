@@ -227,64 +227,78 @@ describe this lineup alongside the predecessor's.
 
 # Results (2026-08-23)
 
-10 runs, 5 tasks × 2 arms, eval-app at `e161420`. Scored by `postpass-2026-08-23.py`:
-task code only (handoff notes and the `node_modules` symlink excluded), and the gate re-run
-over each arm's **full deliverable** — worktree plus escaped writes — reassembled on a clean
-baseline, so arm A is credited generously for work it put in the wrong place.
+5 tasks × 2 arms, eval-app at `e161420`. Both arms scored identically by
+`postpass-2026-08-23.py` / `postpass-a2.py`: **task code only** (handoff notes and the
+`node_modules` symlink excluded), and the gate re-run over each arm's **full deliverable** —
+worktree plus escaped and committed writes — reassembled on a clean baseline. The single arm
+is therefore credited for work it misplaced.
 
-| task | arm | in worktree | escaped | contained | tests | gate | wall | cost | status | council |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |
-| T9 | A | 0 | 10 | 0% | 13 | 4/4 | 4m | $0.89 | done | — |
-| T9 | B | 17 | 0 | **100%** | 13 | 4/4 | 56m | $2.50 | review | 6 rounds, 18/18, 75 |
-| T3 | A | 0 | 1 | 0% | 0 | 4/4 | 17m | $0.27 | done | — |
-| T3 | B | 22 | 0 | **100%** | 7 | 4/4 | 64m | $3.03 | review | 6 rounds, 18/18, 81 |
-| T10 | A | 0 | 0 | — | 0 | 4/4 | 15m | $0.19 | done | — |
-| T10 | B | 11 | 0 | **100%** | 12 | 4/4 | 69m | $2.50 | review | 6 rounds, 18/18, 82 |
-| T6 | A | 0 | 4 | 0% | 26 | 4/4 | 4m | $0.48 | done | — |
-| T6 | B | 10 | 0 | **100%** | 23 | 4/4 | 57m | $2.39 | review | 6 rounds, 18/18, 69 |
-| T5 | A | 0 | 0 | — | 0 | 4/4 | 15m | $0.19 | done | — |
-| T5 | B | 27 | 0 | **100%** | 9 | 4/4 | 96m | $2.91 | review | 6 rounds, 18/18, 94 |
-
-| | Arm A — single | Arm B — multi-model |
+| task | single: contained / tests / gate / wall / cost | multi: contained / tests / gate / wall / cost / council |
 | --- | --- | --- |
-| Delivered to its own worktree | **0 / 5** | **5 / 5** |
-| Produced any code at all | 2 / 5 | 5 / 5 |
-| Tests written and green | 2 / 5 | **5 / 5** |
+| T9 | 100% · 13 · 4/4 · 21m · $0.77 | 100% · 13 · 4/4 · 56m · $2.50 · 18/18, 75f |
+| T3 | **0%** · 0 · 4/4 · 8m · $1.18 | 100% · 7 · 4/4 · 64m · $3.03 · 18/18, 81f |
+| T10 | **0%** · 6 · **3/4** · 10m · $1.25 | 100% · 12 · 4/4 · 69m · $2.50 · 18/18, 82f |
+| T6 | **0%** · 23 · 4/4 · 4m · $0.37 | 100% · 23 · 4/4 · 57m · $2.39 · 18/18, 69f |
+| T5 | 100% · 20 · 4/4 · 8m · $0.98 | 100% · 9 · 4/4 · 96m · $2.91 · 18/18, 94f |
+
+| | Single | Multi-model |
+| --- | --- | --- |
+| Delivered to its own worktree | **2 / 5** | **5 / 5** |
+| Tests written | 4 / 5 | 5 / 5 |
+| Gate 4/4, salvage credited | 4 / 5 | **5 / 5** |
 | Terminal state | 5 × `done` (success reported) | 5 × `review`, `ready`, staged |
-| Cost | $2.02 | $13.33 |
-| Wall clock | 57m | 343m |
+| Cost | $4.54 | $13.33 |
+| Wall clock | 53m | 343m |
 | Reviewer completions | — | **90 / 90**, 401 findings |
 
-Arm B costs 6.6× and takes 6× the wall clock. It is also the only arm that delivered anything
-to the worktree it was given.
-
-`gate 4/4` on an arm-A row is not a success signal: three of those runs produced no code, so
-the gate is the untouched baseline passing. The `tests` column is the honest one — 0 means the
-run wrote nothing to run.
-
-Two arm-A runs (T9, T6) did write working code — it passes the gate once salvaged onto a clean
-tree. Their failure is placement and honesty, not code quality.
+**The difference is reliability, not capability.** The single arm can do these tasks: T9, T6
+and T5 produced good code with real tests, and T6 wrote more tests than the harness did. It
+fails on consistency — 3 of 5 put the work in the wrong tree, T10 shipped a red gate, and all
+five reported success regardless. Multi-model was 5/5 on every axis at 2.9× the cost and 6.5×
+the wall clock.
 
 ## Council reliability
 
 90 of 90 reviewer invocations completed across 30 rounds and three provider families
 (anthropic, openai, opencode) — zero timeouts, zero drops, quorum never degraded. Every run
-used the free-tier `muse-spark-1.2-contributor-free` seat, which is seatable only because of
-the reviewer-guard fix in this branch.
+seated the free-tier `muse-spark-1.2-contributor-free` reviewer, which is only seatable
+because of this branch's reviewer-guard fix.
 
-## What this comparison does not show
+Findings split roughly 3:1 toward the SPEC councils over the implementation councils (T10-B:
+59 of 75 before any code existed). The blockers on T10 landed on the cross-organization
+scoping invariant the task was chosen to expose.
 
-The two arms differ in more than the harness: different implementer model, and ordinary runs
-load the operator's Claude settings, plugins and memory while harness runs disable them
-(`--setting-sources ''`, applied only when `CEZ_HARNESS_CLAUDE_SETTINGS` is set,
-`claude-cli-runner.ts`). Two arm-A runs were derailed into writing only a planning document by
-a globally installed `writing-plans` skill. So arm A's numbers describe **cezar's ordinary
-single-agent path as configured on this machine**, not a bare model, and no causal claim about
-*why* arm A escaped is supported by this data.
+## Fairness: the single arm was re-run
 
-Two defects it did surface, both independently verified:
+The first single-arm attempt is superseded and is recorded only as methodology. It scored
+0/5 containment and 3/5 no-code, but it was not a clean single-vs-multi comparison:
 
-1. **Nested-worktree root detection.** A run's worktree lives inside the checkout and its
-   `.git` is a file, so repo-root heuristics resolve to the parent. The harness names the root
-   explicitly in every phase prompt (`driver.ts`); ordinary runs get no such sentence.
-2. **An empty run settles as `done`.** No check that an ordinary run produced anything.
+- **Settings sources.** `--setting-sources ''` is applied only when
+  `CEZ_HARNESS_CLAUDE_SETTINGS` is set (`claude-cli-runner.ts`), so harness phases loaded no
+  operator plugins or memory while ordinary runs loaded all of them. Two runs were derailed
+  into writing only a planning document by a globally installed `writing-plans` skill.
+- **Location contract.** Harness phases are told which checkout they own; ordinary runs are
+  not.
+
+The re-run (`orchestrator-a2.py`, `eval-results-2026-08-23-a2/`) matches both: a
+`CEZ_CLAUDE_BIN` wrapper applies the same `--setting-sources ''`, and the harness's own
+location wording — including the `.git`-is-a-file warning — is passed as the run's
+`systemPrompt`. Same tasks, same model, same gate. Only the orchestration differs.
+
+Containment improved from 0/5 to 2/5 under those conditions, and no further. **Instruction
+does not contain a single agent; the harness's sandbox does.** On its first matched attempt at
+T9 the agent implemented the whole task in the main checkout, committed it there, and reported
+"all quality checks pass" — the same task it then delivered cleanly on the retry.
+
+## Measurement notes
+
+- **`gate 4/4` is not by itself a success signal.** A run that produced nothing gates the
+  untouched baseline. The `tests` column is the honest one: 0 means nothing ran.
+- **Escape detection must include commits.** A run that writes into the main checkout and
+  commits leaves `git status` clean; the first detector scored that `escaped=False`. Both
+  dirt and `baseline..HEAD` are compared now.
+- **Cleanup must not be scoped to `src/`.** An untracked escape elsewhere (`docs/`) survived
+  into every later capture, so one run was credited with another's file. The post-pass
+  deduplicates by content hash and credits the first producer.
+- Raw data: `eval-results-2026-08-23/` (multi) and `eval-results-2026-08-23-a2/` (single) in
+  `om-eval-sandboxes` — `results.jsonl`, `rescored.json`, gate logs, escape patches.
