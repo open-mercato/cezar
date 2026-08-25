@@ -46,7 +46,6 @@ import type {
 
 // Route-relative: `apiPath` adds the version (and would add the project scope, though this
 // stream is workspace-level and never scoped).
-const SSE_URL = apiPath('/workspace/events')
 
 /** `EventSource.CLOSED`. Spelled as the literal so nothing here depends on the global's statics —
  *  the same reason the constructor is read off `globalThis` below. */
@@ -234,7 +233,7 @@ function applyGlobalEvent(queryClient: QueryClient, usage: UsageStore, event: Gl
  * and a handful of components each opening their own stream would spend that budget on duplicate
  * copies of the same messages and then stall every other request behind them.
  */
-export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void {
+export function useGlobalEvents(usage: UsageStore, url: string = apiPath('/workspace/events')): void {
   const queryClient = useQueryClient()
 
   useEffect(() => {

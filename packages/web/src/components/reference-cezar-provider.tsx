@@ -9,11 +9,17 @@ import {
 } from '@open-mercato/cezar-react'
 import type { QueryClient } from '@tanstack/react-query'
 
+import { useAppearance } from './appearance-provider'
+import { useTheme } from './theme-provider'
+
 export interface ReferenceCezarProviderProps {
   client: CezarRuntimeClient
   queryClient: QueryClient
   rootElement: HTMLElement
   children: ReactNode
+  onAuthRequired?: (error: import('@open-mercato/cezar-api-client').ApiError) => void | Promise<void>
+  onError?: (error: import('@open-mercato/cezar-api-client').ApiError) => void
+  className?: string
 }
 
 function segment(value: string): string {
@@ -91,6 +97,9 @@ export function ReferenceCezarProvider({
   queryClient,
   rootElement,
   children,
+  onAuthRequired,
+  onError,
+  className,
 }: ReferenceCezarProviderProps) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -108,6 +117,8 @@ export function ReferenceCezarProvider({
     }),
     [href, navigate],
   )
+  const { theme } = useTheme()
+  const { accent, density, width } = useAppearance()
 
   return (
     <CezarProvider
@@ -116,6 +127,13 @@ export function ReferenceCezarProvider({
       queryClient={queryClient}
       navigation={navigation}
       rootElement={rootElement}
+      theme={theme}
+      accent={accent}
+      density={density}
+      width={width}
+      className={className}
+      onAuthRequired={onAuthRequired}
+      onError={onError}
     >
       {children}
     </CezarProvider>

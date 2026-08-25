@@ -1,20 +1,10 @@
-import { QueryClientProvider } from '@tanstack/react-query'
 import { useState } from 'react'
 import { BrowserRouter } from 'react-router'
-import { createCezarClient } from '@open-mercato/cezar-api-client'
+import { createCezarClient, setApiBaseUrl } from '@open-mercato/cezar-api-client'
 import type { AppType } from '@open-mercato/cezar/app-type'
 
-import { GlobalEventsProvider } from './api/global-events'
 import { createQueryClient } from './api/query-client'
-import { AppShellContainer } from './components/app-shell-container'
-import { AppearanceProvider } from './components/appearance-provider'
-import { LastLocationController } from './components/last-location-controller'
-import { ReferenceStatusRegistry } from './components/reference-status'
-import { ReferenceCezarProvider } from './components/reference-cezar-provider'
-import { RunNotifications } from './components/run-notifications'
-import { ThemeProvider } from './components/theme-provider'
-import { Toaster } from './components/ui/toaster'
-import { AppRoutes } from './routes'
+import { CezarCockpitImplementation } from './cockpit-implementation'
 
 /** Real URLs, no basename: the cockpit is always mounted at the origin root, and the server
  *  serves index.html for every non-/api GET (src/server/static-ui.ts), so a deep link like
@@ -39,42 +29,17 @@ export function App({ apiBase, rootElement }: AppProps) {
   // component body still yields exactly one client.
   const [queryClient] = useState(createQueryClient)
   const [cezarClient] = useState(() => createCezarClient<AppType>({ baseUrl: apiBase }))
+  // This must run before the child providers mount: their first query and the workspace event
+  // stream resolve their URLs at render/effect time.
+  setApiBaseUrl(apiBase)
 
   return (
-    <QueryClientProvider client={queryClient}>
-      <GlobalEventsProvider>
-        {/* Beside the stream on purpose: it watches the run-list cache the stream patches
-            (and reconciliation refetches), turning attention transitions into browser
-            notifications when the tab is hidden (R6 1.7). Renders nothing. */}
-        <RunNotifications />
-        <ThemeProvider>
-          {/* Beside ThemeProvider on purpose: appearance (accent/density) is the ui-state.json
-              half of the same boot contract — mirror pre-paints, server truth reconciles. */}
-          <AppearanceProvider>
-            <BrowserRouter>
-              <ReferenceCezarProvider
-                client={cezarClient}
-                queryClient={queryClient}
-                rootElement={rootElement}
-              >
-                <LastLocationController />
-                {/* At the root for the same reason the event stream is: the sidebar, the task table
-                    and an open run header all paint PR/issue chips, often the SAME ones, and each
-                    asking for itself was several round trips and a staggered wave of colour. They
-                    register what they are painting here instead, and it goes out as one request per
-                    project. */}
-                <ReferenceStatusRegistry>
-                  <AppShellContainer>
-                    <AppRoutes />
-                  </AppShellContainer>
-                </ReferenceStatusRegistry>
-                {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
-                <Toaster />
-              </ReferenceCezarProvider>
-            </BrowserRouter>
-          </AppearanceProvider>
-        </ThemeProvider>
-      </GlobalEventsProvider>
-    </QueryClientProvider>
+    <BrowserRouter>
+      <CezarCockpitImplementation
+        client={cezarClient}
+        queryClient={queryClient}
+        rootElement={rootElement}
+      />
+    </BrowserRouter>
   )
 }
