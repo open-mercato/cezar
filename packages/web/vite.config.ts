@@ -37,8 +37,10 @@ export default defineConfig({
   // in tsconfig.json `paths`.
   resolve: {
     alias: {
+      '#cezar-web-cockpit': resolve(appDir, 'src/cockpit-implementation.tsx'),
       '@': resolve(appDir, 'src'),
       '@open-mercato/cezar-api-client': resolve(packagesDir, 'api-client/src/index.ts'),
+      '@open-mercato/cezar-react/cockpit': resolve(packagesDir, 'react/src/cockpit.tsx'),
       '@open-mercato/cezar-react/styles.css': resolve(packagesDir, 'react/src/styles/index.css'),
       '@open-mercato/cezar-react': resolve(packagesDir, 'react/src/index.ts'),
     },

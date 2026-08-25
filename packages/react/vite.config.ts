@@ -22,12 +22,20 @@ export const isReactPackageExternal = (id: string) =>
 
 export default defineConfig({
   plugins: [tailwindcss()],
+  resolve: {
+    alias: {
+      '#cezar-web-cockpit': resolve(packageDir, '../web/src/cockpit-implementation.tsx'),
+      '@': resolve(packageDir, '../web/src'),
+      '@open-mercato/cezar-react': resolve(packageDir, 'src/index.ts'),
+    },
+  },
   build: {
     outDir: resolve(packageDir, 'dist'),
     emptyOutDir: true,
     rolldownOptions: {
       input: {
         index: resolve(packageDir, 'src/index.ts'),
+        cockpit: resolve(packageDir, 'src/cockpit.tsx'),
         tasks: resolve(packageDir, 'src/tasks.ts'),
         session: resolve(packageDir, 'src/session.ts'),
         styles: resolve(packageDir, 'src/styles/index.css'),

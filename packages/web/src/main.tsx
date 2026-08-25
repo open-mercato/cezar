@@ -30,6 +30,6 @@ if (!container) throw new Error('cezar: #root container is missing from index.ht
 
 createRoot(container).render(
   <StrictMode>
-    <App apiBase={apiBase} rootElement={container} />
+    <App apiBase={apiBase} />
   </StrictMode>,
 )

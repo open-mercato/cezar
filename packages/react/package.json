@@ -9,6 +9,7 @@
   "sideEffects": ["./dist/styles.css"],
   "exports": {
     ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
+    "./cockpit": { "types": "./dist/cockpit.d.ts", "import": "./dist/cockpit.js" },
     "./tasks": { "types": "./dist/tasks.d.ts", "import": "./dist/tasks.js" },
     "./session": { "types": "./dist/session.d.ts", "import": "./dist/session.js" },
     "./styles.css": "./dist/styles.css",
@@ -20,7 +21,8 @@
   },
   "dependencies": {
     "@open-mercato/cezar-api-client": "^0.10.0",
-    "@tanstack/react-query": "^5.101.2"
+    "@tanstack/react-query": "^5.101.2",
+    "react-router": "^7.18.1"
   },
   "scripts": {
     "build": "vite build && node scripts/scope-css.mjs && node scripts/verify-css.mjs dist/styles.css && tsc --emitDeclarationOnly -p tsconfig.json",

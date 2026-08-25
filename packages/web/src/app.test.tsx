@@ -1,30 +1,72 @@
-import { cleanup, render, screen } from '@testing-library/react'
-import { afterEach, expect, it, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-const { implementation } = vi.hoisted(() => ({
-  implementation: vi.fn(() => <div data-testid="cockpit-implementation" />),
-}))
-
-vi.mock('./cockpit-implementation', () => ({
-  CezarCockpitImplementation: implementation,
-}))
+import type { HealthResponse } from '@open-mercato/cezar-api-client'
 
 import { App } from './app'
 
-afterEach(() => {
-  cleanup()
-  implementation.mockClear()
+class FakeEventSource {
+  readonly readyState = 0
+  addEventListener(): void {}
+  removeEventListener(): void {}
+  close(): void {}
+}
+
+const HEALTH: HealthResponse = {
+  version: '0.1.3',
+  projects: [],
+  bootProject: 'project-a',
+  repoRoot: '/projects/project-a',
+  repo: { root: '/projects/project-a', branch: 'main', remote: 'origin' },
+  checks: [],
+  defaultRunner: 'claude',
+  forge: null,
+  capabilities: {
+    localHandoff: true,
+    tokenMetrics: true,
+    tokenUsageMetrics: true,
+    costMetrics: true,
+    followups: false,
+    singleProject: true,
+    automations: false,
+  },
+}
+
+function response(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
+beforeEach(() => {
+  window.history.replaceState({}, '', '/p/project-a/new')
+  vi.stubGlobal('EventSource', FakeEventSource)
+  vi.stubGlobal('fetch', vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.includes('/skills')) return response([])
+    if (url.includes('/workflows')) return response({ workflows: [] })
+    if (url.includes('/runs')) return response([])
+    if (url.includes('/todos')) return response([])
+    if (url.includes('/providers/status')) return response({ providers: [] })
+    if (url.includes('/workspace/ui-state')) return response({})
+    if (url.includes('/workspace/projects')) {
+      return response({ projects: [], bootProject: 'project-a', projectsDir: '/projects' })
+    }
+    return response(HEALTH)
+  }))
 })
 
-it('renders the shared private cockpit implementation from the standalone browser app', () => {
-  const rootElement = document.createElement('div')
-  document.body.append(rootElement)
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
 
-  render(<App apiBase="https://cezar.example" rootElement={rootElement} />, { container: rootElement })
+it('keeps standalone Cezar on the public browser-routed cockpit facade', async () => {
+  render(<App apiBase="https://cezar.example" />)
 
-  expect(screen.getByTestId('cockpit-implementation')).toBeTruthy()
-  expect(implementation).toHaveBeenCalledWith(
-    expect.objectContaining({ rootElement }),
-    undefined,
-  )
+  await waitFor(() => expect(document.querySelector('[data-route="new"]')).not.toBeNull())
+  fireEvent.click(screen.getByRole('link', { name: 'Tasks' }))
+
+  await waitFor(() => expect(window.location.pathname).toBe('/p/project-a/'))
 })
