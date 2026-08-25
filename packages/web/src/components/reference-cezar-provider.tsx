@@ -117,7 +117,7 @@ export function ReferenceCezarProvider({
     }),
     [href, navigate],
   )
-  const { theme } = useTheme()
+  const { resolvedTheme } = useTheme()
   const { accent, density, width } = useAppearance()
 
   return (
@@ -127,7 +127,7 @@ export function ReferenceCezarProvider({
       queryClient={queryClient}
       navigation={navigation}
       rootElement={rootElement}
-      theme={theme}
+      theme={resolvedTheme}
       accent={accent}
       density={density}
       width={width}
