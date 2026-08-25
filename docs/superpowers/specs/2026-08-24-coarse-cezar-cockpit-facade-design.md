@@ -45,8 +45,6 @@ The stable public surface is intentionally small:
 ```tsx
 import type { QueryClient } from '@tanstack/react-query'
 import type { ApiError, CezarClient } from '@open-mercato/cezar-api-client'
-import type { CezarAvailability } from '@open-mercato/cezar-react'
-
 export type CezarCockpitRouting =
   | { mode: 'browser' }
   | {
@@ -60,19 +58,18 @@ export interface CezarCockpitProps {
   client: CezarClient
   queryClient?: QueryClient
   routing?: CezarCockpitRouting
-  projectId?: string | null
   onAuthRequired?: (error: ApiError) => void | Promise<void>
   onError?: (error: ApiError) => void
-  availability?: CezarAvailability
-  theme?: 'dark' | 'light' | 'system'
-  accent?: 'lime' | 'violet'
-  density?: 'comfortable' | 'compact' | 'ultra'
-  width?: 'narrow' | 'wide'
   className?: string
 }
 ```
 
 The package continues to export `CezarProvider` for advanced composition, but consumers do not need to assemble the cockpit feature by feature. `TaskComposer` and `TaskSession` are not prerequisites for the facade and are not expanded as part of this lean change.
+
+Project selection and appearance are deliberately not duplicated as facade props. The complete
+route tree owns project scope, and the existing Appearance settings own theme, accent, density,
+and reading width. Advanced hosts that compose their own surfaces may continue configuring those
+values through `CezarProvider`; the standard cockpit has one owner for each value.
 
 ## Internal application composition
 
@@ -110,7 +107,12 @@ The sandbox retains the runtime already implemented in `cezar-workspace-runtime.
 - re-arming after a successful Cezar query or a newer apps-access result;
 - cache and renewal cleanup on unmount or authority change.
 
-`CezarCockpit` receives the client, query client, auth callback, availability, and error callback. It does not create a competing sandbox runtime, query cache, or event stream.
+`CezarCockpit` receives the client, query client, auth callback, and error callback. It does not create a competing sandbox runtime, query cache, or event stream.
+
+The lean sandbox integration mounts the cockpit only while the sandbox is running and Cezar access
+is available. It therefore does not add a facade-level read-only mode whose write semantics the
+existing private controllers do not implement. Paused, transitioning, and unavailable sandbox
+states remain host-owned placeholders outside the cockpit.
 
 Standalone Cezar may continue creating these values in its outer app wrapper.
 
@@ -131,7 +133,8 @@ The package stylesheet is compiled against both the public facade and the privat
 
 The existing provider configuration remains authoritative:
 
-- theme, accent, density, and width become `.cezar-root` data attributes;
+- theme, accent, density, and width selected by the existing Appearance settings become
+  `.cezar-root` data attributes;
 - all visual tokens are CSS variables owned by `.cezar-root`;
 - the cockpit root uses `size-full min-h-0 min-w-0` in the sandbox;
 - dialogs, sheets, menus, tooltips, and toasts render into a portal inside the Cezar root;
@@ -167,7 +170,10 @@ The portal keeps `CezarWorkspaceRuntime` and the current native-panel lifecycle.
 
 The “Open full Cezar for other features” limitation is removed because the native panel contains the complete cockpit. An external-open action may remain as an optional convenience, not a functional escape hatch.
 
-The panel remains mounted across Web, Editor, terminal, logs, and split-view changes. Exactly one cockpit subtree and one workspace subscription exist, and no Cezar iframe is created.
+The panel remains mounted across Web, Editor, terminal, logs, and split-view changes. A stable
+host-owned mount element may move between the preview and dock slots without remounting the React
+cockpit. Exactly one cockpit subtree and one workspace subscription exist, and no Cezar iframe is
+created.
 
 ## Error handling
 
@@ -196,5 +202,6 @@ The change is complete when:
 - Publishing every route or controller as an independent component.
 - Rewriting existing features to remove React Router before the first facade release.
 - Supporting multiple independently routed cockpit instances in one sandbox panel.
+- Adding feature-wide read-only semantics to the existing private controllers.
 - Removing the standalone Cezar application.
 - Publishing to npm before local tarball installation and sandbox browser validation succeed.
