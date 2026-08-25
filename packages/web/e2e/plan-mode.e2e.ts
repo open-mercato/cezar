@@ -189,6 +189,10 @@ describe('plan mode against a live dry-run server', () => {
   }, 90_000)
 
   it('on an iPhone the overlay is a full-screen sheet and the ↑/↓ buttons still reorder', async () => {
+    // The previous save intentionally raises a five-second success toast. At phone width it
+    // overlaps the first card's controls, so wait for the same pointer-clear state a user gets
+    // after the transient confirmation leaves instead of asking agent-browser to click through it.
+    browser.waitForFunction(`document.querySelector('[data-slot="toast"]') === null`)
     browser.setViewport(390, 844)
     // The reflow must LAND before anything measures or clicks: a click computed against the
     // pre-resize layout dispatches into the gap between cards and silently does nothing.

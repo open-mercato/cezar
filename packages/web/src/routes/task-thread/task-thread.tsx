@@ -220,7 +220,7 @@ export function ThreadView({
   const plan = latestPlanEntries(currentThread)
   const planTally = plan !== undefined && plan.length > 0 ? planCounts(plan) : undefined
   // The Agents dock's data: the current fan-out's sub-agents, or [] when there is none to
-  // show (#474). Derived from the same reduced turns the thread renders — no new subscription.
+  // show (#474). Derived from the compact current-state turns — no new subscription.
   // The legacy session-open rule (web/app.js `updateDetail`): the composer can deliver while
   // the engine owns a live session — running queues the message, waiting answers it.
   const sessionOpen = run.status === 'running' || run.status === 'waiting'
@@ -271,9 +271,13 @@ export function ThreadView({
       : findSubagent(currentThread.turns, openAgentId, runIsTerminal),
     [currentThread.turns, openAgentId, runIsTerminal],
   )
+  // Agent identity belongs to the compact current-state feed above, so a long transcript can
+  // still open its dock without loading every old page. The sheet body is history, though: read
+  // it from the visible paged thread. Otherwise progressive history reduces a long-running
+  // agent to the few tail items retained by `/history-context`.
   const openAgentChildren = useMemo(
-    () => (openAgentId === undefined ? [] : subagentChildren(currentThread.turns, openAgentId)),
-    [currentThread.turns, openAgentId],
+    () => (openAgentId === undefined ? [] : subagentChildren(thread.turns, openAgentId)),
+    [thread.turns, openAgentId],
   )
   const sendMessage = useSendMessage(run.id)
   const activeProvider = useActiveProviderAvailability(run)

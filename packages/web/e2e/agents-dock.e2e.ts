@@ -81,21 +81,45 @@ beforeAll(async () => {
       event.type === 'item.completed' &&
       (event.item as { id?: string } | undefined)?.id === 'toolu_task_a_1',
   )
-  const longChildren = Array.from({ length: 34 }, (_, index) => ({
-    type: 'item.completed',
-    item: {
-      kind: 'tool',
-      id: `toolu_sub_long_${index}`,
-      name: 'Bash',
-      toolKind: 'execute',
-      title: `Ran long check ${index + 1}`,
-      status: 'completed',
-      output: `long check ${index + 1} passed`,
-      exitCode: 0,
-      parentItemId: 'toolu_task_a_1',
+  const longChildren = Array.from({ length: 15 }, (_, index) => [
+    {
+      type: 'item.completed',
+      item: {
+        kind: 'tool',
+        id: `toolu_sub_long_${index}`,
+        name: 'Bash',
+        toolKind: 'execute',
+        title: `Ran long check ${index + 1}`,
+        status: 'completed',
+        output: `long check ${index + 1} passed`,
+        exitCode: 0,
+        parentItemId: 'toolu_task_a_1',
+      },
+      stepId: 'task',
     },
-    stepId: 'task',
-  }))
+    {
+      type: 'item.started',
+      item: {
+        kind: 'message',
+        id: `item_sub_long_${index}`,
+        role: 'assistant',
+        text: `Finished long check ${index + 1}.`,
+        parentItemId: 'toolu_task_a_1',
+      },
+      stepId: 'task',
+    },
+    {
+      type: 'item.completed',
+      item: {
+        kind: 'message',
+        id: `item_sub_long_${index}`,
+        role: 'assistant',
+        text: `Finished long check ${index + 1}.`,
+        parentItemId: 'toolu_task_a_1',
+      },
+      stepId: 'task',
+    },
+  ]).flat()
   recorded.splice(taskCompletion, 0, ...longChildren)
   const scaled = recorded
     .map((event, index) =>
@@ -168,7 +192,7 @@ describe('the Agents dock against a replayed fan-out', () => {
 
     expect(rows[0]!.text).toContain('Audit the auth flow')
     expect(rows[0]!.type).toBe('general-purpose')
-    expect(rows[0]!.tools).toBe('36 tools')
+    expect(rows[0]!.tools).toBe('17 tools')
     expect(rows[1]!.text).toContain('Review the store layer')
     expect(rows[1]!.type).toBe('code-reviewer')
     expect(rows[1]!.tools).toBe('1 tool')
@@ -210,11 +234,32 @@ describe('the Agents dock against a replayed fan-out', () => {
     expect(browser.evaluate(`document.querySelector('${DOCK}') !== null`)).toBe(true)
   }, 120_000)
 
-  it('the long agent panel scrolls, detaches from follow-tail, and exposes the jump pill', () => {
-    browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
-    browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
+  it('the long agent panel scrolls, detaches from follow-tail, and exposes the jump pill', async () => {
+    const history = (await (await fetch(`${baseUrl}/api/v1/runs/${RUN_ID}/history`)).json()) as {
+      events: Array<{ type: string; item?: { kind?: string; parentItemId?: string } }>
+    }
+    expect(
+      history.events.filter(
+        (event) =>
+          event.type === 'item.completed' &&
+          event.item?.kind === 'message' &&
+          event.item.parentItemId === 'toolu_task_a_1',
+      ),
+    ).toHaveLength(16)
+    // At the default 900px height this fixture now fits the redesigned sheet exactly. Use a
+    // shorter desktop viewport so this scenario exercises real overflow and follow-tail state.
+    browser.setViewport(1440, 600)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+    expandDock()
     browser.click(`${ROW}:nth-of-type(1) button`)
     browser.waitForFunction(`document.querySelector('[data-slot="transcript-viewport"]') !== null`)
+    browser.waitForFunction(
+      `document.querySelectorAll('[data-slot="transcript-viewport"] [data-slot="assistant-message"]').length > 10`,
+    )
+    browser.waitForFunction(`(() => {
+      const el = document.querySelector('[data-slot="transcript-viewport"]')
+      return el.scrollHeight > el.clientHeight
+    })()`)
 
     const metrics = JSON.parse(
       browser.evaluate(`JSON.stringify((() => {
@@ -244,6 +289,7 @@ describe('the Agents dock against a replayed fan-out', () => {
   }, 120_000)
 
   it('collapses to a one-line odometer', () => {
+    browser.setViewport(1440, 900)
     browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
     expandDock()
 
