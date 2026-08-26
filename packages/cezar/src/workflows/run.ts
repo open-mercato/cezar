@@ -2344,9 +2344,26 @@ export class RunManager {
     // Resuming reattaches to a session that lives inside ONE account's config dir, so the
     // continuation must run under the account that created it — not whatever the project has
     // been switched to since. The owning step is the one carrying this session id.
-    const resumedProfileId = sessionId === undefined
+    const owningStep = sessionId === undefined
       ? undefined
-      : record?.steps.find((s) => s.sessionId === sessionId)?.profileId;
+      : record?.steps.find((s) => s.sessionId === sessionId);
+    const resumedProfileId = owningStep?.profileId;
+    // The owning step also names the session's tools: resolve `allowedTools`/`bashAllowlist`
+    // from the persisted `workflowDef` exactly as the first spawn did (`runAgentStep`).
+    // Rebuilding with the bare DEFAULT_ALLOWED_TOOLS silently revoked every per-step grant
+    // (MCP servers, subagents) on Continue, restart recovery and the usage-limit auto-resume
+    // — and dropping `bashAllowlist` WIDENED Bash from an allowlist to unrestricted
+    // (`AgentRunSpec.allowedTools`, #430). Record steps share ids with `workflowDef.steps`;
+    // a synthetic `continue-N` owner and a fresh-session continuation (backend switch — no
+    // owning session) both extend the run's tail, so they resolve from the definition's last
+    // agent step. A legacy record without `workflowDef` (#367), or a session no step owns,
+    // keeps today's defaults.
+    const defSteps = record?.workflowDef?.steps;
+    const toolsStep =
+      defSteps === undefined || (sessionId !== undefined && owningStep === undefined)
+        ? undefined
+        : defSteps.find((s) => s.id === owningStep?.id)
+          ?? [...defSteps].reverse().find((s) => stepKind(s) === 'agent');
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
     // returns nothing is worse than a turn that refuses to start and says why.
@@ -2385,7 +2402,8 @@ export class RunManager {
           : openingPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
-        allowedTools: DEFAULT_ALLOWED_TOOLS,
+        allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+        bashAllowlist: toolsStep?.bashAllowlist,
         additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
         env: continueProfile.env,
         model: continueModel,
