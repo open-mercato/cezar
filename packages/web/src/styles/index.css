@@ -1,7 +1,8 @@
 /* cezar cockpit — Tailwind v4 entry point and the Mercato design-token definition site.
  *
  * Ported verbatim from the mockup token sheet (.ai/analysis/cockpit-ui-redesign/mercato-visuals.md §1).
- * Dark is the default theme; `.light` on <html> flips it.
+ * Dark is the default theme; `.light` on <html> flips it. The `light:` variant below lets
+ * markup follow the same switch.
  *
  * THIS FILE IS THE ONLY PLACE RAW HEX MAY APPEAR. Everything else — components, pages, tests —
  * goes through the tokens below (Tailwind utilities like `bg-card`, or `var(--…)` for the
@@ -9,6 +10,9 @@
  */
 
 @import "tailwindcss";
+
+/* Tailwind variant tracking the theme switch: dark is default, `.light` on <html> flips. */
+@custom-variant light (&:where(.light, .light *));
 
 /* Enter/exit animation utilities (`animate-in`, `fade-in-0`, `zoom-in-95`, `slide-in-from-*`) that the
  * shadcn primitives reference on their Radix `data-[state]` hooks. Tailwind v4 dropped the v3 plugin,

@@ -50,6 +50,7 @@ import { cn } from '@/lib/utils'
 /** The cezar mark (public/cezar-logo.svg): the Open Mercato brand-gradient tile (lime→violet)
  *  with the dark hexagonal C glyph. Also the favicon. */
 const brandLogoUrl = '/cezar-logo.svg'
+const brandLogoDarkUrl = '/cezar-logo-dark.svg'
 
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -859,13 +860,24 @@ function BrandTile() {
   return (
     // No plate: the artwork carries its own gradient tile and rounded corners. The rounded-md
     // clip only backstops the SVG's own radius at this size.
-    <img
-      src={brandLogoUrl}
-      alt=""
-      aria-hidden="true"
-      data-slot="brand-tile"
-      className="size-9 shrink-0 rounded-md object-contain"
-    />
+    // Two renders, one visible: the glyph is dark ink for light mode and near-white for dark
+    // (user decision) — an <img> cannot recolor its SVG, so the theme picks the file.
+    <>
+      <img
+        src={brandLogoUrl}
+        alt=""
+        aria-hidden="true"
+        data-slot="brand-tile"
+        className="hidden size-9 shrink-0 rounded-md object-contain light:block"
+      />
+      <img
+        src={brandLogoDarkUrl}
+        alt=""
+        aria-hidden="true"
+        data-slot="brand-tile-dark"
+        className="block size-9 shrink-0 rounded-md object-contain light:hidden"
+      />
+    </>
   )
 }
 
