@@ -55,6 +55,9 @@ import {
   getSkillsUpdate,
   checkSkillsUpdate,
   applySkillsUpdate,
+  getRemoteControl,
+  startRemoteControl,
+  stopRemoteControl,
   getWorktrees,
   editQueuedMessage,
   markRunSeen,
@@ -183,6 +186,10 @@ export const queryKeys = {
   /** The worktree management panel (`GET /api/worktrees`, #483). */
   get worktrees() {
     return [queryScope(), 'worktrees'] as const
+  },
+  /** Claude Remote Control (`GET /api/remote-control`, spec 2026-08-26). */
+  get remoteControl() {
+    return [queryScope(), 'remote-control'] as const
   },
   github: (params: { limit?: number } = {}) => [queryScope(), 'github', params.limit ?? null] as const,
   /** Lazy PR checks glyphs (`GET /api/github/checks`, #664), keyed by the sorted PR numbers so the
@@ -1068,6 +1075,34 @@ export function useWorktrees() {
   return useQuery({
     queryKey: queryKeys.worktrees,
     queryFn: ({ signal }) => getWorktrees({ signal }),
+  })
+}
+
+/** Claude Remote Control (spec 2026-08-26). No polling by design: both mutations answer with
+ *  the FINAL status, which lands in this cache; a crash after that surfaces on the next
+ *  window-focus refetch. */
+export function useRemoteControl() {
+  return useQuery({
+    queryKey: queryKeys.remoteControl,
+    queryFn: ({ signal }) => getRemoteControl({ signal }),
+  })
+}
+
+export function useStartRemoteControl() {
+  const queryClient = useQueryClient()
+  const key = queryKeys.remoteControl
+  return useMutation({
+    mutationFn: () => startRemoteControl(),
+    onSuccess: (status) => queryClient.setQueryData(key, status),
+  })
+}
+
+export function useStopRemoteControl() {
+  const queryClient = useQueryClient()
+  const key = queryKeys.remoteControl
+  return useMutation({
+    mutationFn: () => stopRemoteControl(),
+    onSuccess: (status) => queryClient.setQueryData(key, status),
   })
 }
 

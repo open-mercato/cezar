@@ -71,6 +71,7 @@ import type {
   RemoveProjectResponse,
   UpdateProjectInput,
   UpdateProjectResponse,
+  RemoteControlStatus,
   RemoveTodoResponse,
   RepoBranchResponse,
   RepoCommitPayload,
@@ -1893,6 +1894,39 @@ export async function putConfig(patch: SetConfigInput): Promise<SetConfigRespons
       json: patch,
     }),
     '/config',
+  )
+}
+
+/** Claude Remote Control (spec 2026-08-26-remote-control): the scoped project's
+ *  cockpit-managed `claude remote-control` server. */
+export async function getRemoteControl(opts?: ReadOptions): Promise<RemoteControlStatus> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['remote-control'].$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/remote-control',
+  )
+}
+
+/** Start (or confirm) the project's Remote Control server. The answer carries the FINAL
+ *  state — `running` with the claude.ai link, or `error` with the CLI's own words — so the
+ *  caller renders it directly and never polls. */
+export async function startRemoteControl(): Promise<RemoteControlStatus> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['remote-control'].start.$post({
+      param: { projectId: queryScope() },
+    }),
+    '/remote-control/start',
+  )
+}
+
+export async function stopRemoteControl(): Promise<RemoteControlStatus> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['remote-control'].stop.$post({
+      param: { projectId: queryScope() },
+    }),
+    '/remote-control/stop',
   )
 }
 

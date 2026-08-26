@@ -11,6 +11,7 @@ import {
   KeyboardIcon,
   NotebookPenIcon,
   PaletteIcon,
+  SmartphoneIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -24,6 +25,7 @@ import { BookmarkletsSection } from './bookmarklets-section'
 import { NotificationsSection } from './notifications-section'
 import { ProjectsSection } from './projects-section'
 import { PromptTemplatesSection } from './prompt-templates-section'
+import { RemoteControlSection } from './remote-control-section'
 import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
 import { WorktreesSection } from './worktrees-section'
@@ -51,6 +53,7 @@ export type SettingsSectionId =
   | 'agents'
   | 'agent-config'
   | 'resources'
+  | 'remote-control'
   | 'worktrees'
   | 'projects'
   | 'notifications'
@@ -113,6 +116,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'How many finished task worktrees this project keeps on disk.',
     icon: FolderGit2Icon,
     component: WorktreesSection,
+    scope: 'project',
+  },
+  {
+    id: 'remote-control',
+    title: 'Remote Control',
+    description: 'Open sessions in this repo from claude.ai or the Claude mobile app.',
+    icon: SmartphoneIcon,
+    component: RemoteControlSection,
     scope: 'project',
   },
   {

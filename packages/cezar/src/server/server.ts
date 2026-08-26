@@ -166,6 +166,7 @@ import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff,
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
+import { RemoteControlService } from './remote-control.ts';
 import { createDraftPr } from './pr.ts';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
@@ -259,6 +260,10 @@ export interface ServerDeps {
   socketHub?: SocketHub;
   /** Re-arm the workspace automation timer after definition mutations. */
   automationsChanged?: () => void;
+  /** Cockpit-managed `claude remote-control` processes (spec 2026-08-26-remote-control).
+   *  Injected by tests so the routes are exercised without registering a real machine
+   *  with claude.ai; createApp owns the default. */
+  remoteControl?: RemoteControlService;
 }
 
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
@@ -1100,6 +1105,7 @@ export function createApp(deps: ServerDeps) {
   const openFile = deps.openFile ?? openFileInDefaultApp;
   const openApp = deps.openApp ?? openInApp;
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService();
+  const remoteControl = deps.remoteControl ?? new RemoteControlService();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
@@ -2416,7 +2422,11 @@ export function createApp(deps: ServerDeps) {
       // gone, which is what the caller wanted, but say it honestly.
       if (!removed) return c.json({ error: `unknown project: ${id}` }, 404);
       // In-process handles for a project no route can reach any more: store
-      // closed (index flushed), manager's timers and usage subscription dropped.
+      // closed (index flushed), manager's timers and usage subscription dropped —
+      // and the project's Remote Control process, which only its routes could reach.
+      // Any RC start went through a project route, so the context was built: peek hits.
+      const built = contexts.peek(id);
+      if (built) remoteControl.dispose(built.root);
       contexts.dispose(id);
       workspaceEvents.emit('project-removed', { id });
       const body: RemoveProjectResponse = { removed: true, id };
@@ -4380,6 +4390,51 @@ export function createApp(deps: ServerDeps) {
       return c.json({ opened: true as const, path: root });
     });
 
+  // ---- chained family: Claude Remote Control (project-scoped) ----
+  // Spec 2026-08-26-remote-control: the cockpit's `/remote-control` — one cockpit-managed
+  // `claude remote-control` process per project, so sessions in this repo can be driven from
+  // claude.ai/code or the Claude mobile app. A local-machine affordance on the same terms as
+  // the terminal handoff: hosted mode hides the section and the mutations 409.
+  const RC_HOSTED_REFUSAL =
+    'Remote Control is started from the machine that owns the checkout (this cockpit runs in hosted mode)';
+  // Deliberately NOT annotated with the contract type: `contract-parity.remote-control.test.ts`
+  // compares `remoteControlStatusSchema` against what this actually builds, and an annotation
+  // here would make that check true by construction (see contract-parity.test.ts's header).
+  const remoteControlBody = (status: ReturnType<RemoteControlService['status']>) => {
+    const local = capabilities().localHandoff;
+    return {
+      available: local,
+      ...(local ? {} : { reason: RC_HOSTED_REFUSAL }),
+      ...status,
+    };
+  };
+  const remoteControlRoutes = new Hono<ProjectApiEnv>()
+    .get('/remote-control', (c) => {
+      const { root } = c.get('project');
+      return c.json(remoteControlBody(remoteControl.status(root)));
+    })
+
+    .post('/remote-control/start', async (c) => {
+      const { root } = c.get('project');
+      if (!capabilities().localHandoff) return c.json({ error: RC_HOSTED_REFUSAL }, 409);
+      // The project's current claude account, same resolution as the terminal handoff — a
+      // Remote Control talking to the wrong account would say nothing about why.
+      const account = await handoffEnv('claude', undefined);
+      if ('error' in account) return c.json({ error: account.error }, 409);
+      // Git repos isolate phone-spawned sessions in worktrees (house doctrine: agents never
+      // run in the protected checkout — see the `POST /open-in` refusal above); a non-git
+      // project has nothing to isolate and keeps the CLI's same-dir default.
+      const worktrees = Boolean(await getRepoInfo(root));
+      const status = await remoteControl.start(root, { extraEnv: account.env, worktrees });
+      return c.json(remoteControlBody(status));
+    })
+
+    .post('/remote-control/stop', async (c) => {
+      const { root } = c.get('project');
+      if (!capabilities().localHandoff) return c.json({ error: RC_HOSTED_REFUSAL }, 409);
+      return c.json(remoteControlBody(await remoteControl.stop(root)));
+    });
+
   // Agent screenshots — image blocks the run manager persisted out of tool
   // results (persistImage). `basename` pins reads inside the run's own dir.
   const IMAGE_TYPES: Record<string, string> = {
@@ -5284,6 +5339,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', runsRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
+    .route('/', remoteControlRoutes)
     .route('/', worktreesRoutes)
     .route('/', todosRoutes)
     .route('/', sseRoutes)
