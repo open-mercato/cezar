@@ -76,6 +76,15 @@ export type WorkspaceProject = z.infer<typeof workspaceProjectSchema>;
  */
 export const DEFAULT_MONITORING_WAKE_MINUTES = 5;
 
+/**
+ * Zero-config idle bound, in minutes, on a session parked at `waiting` — the
+ * timeout `workflows/run.ts` has always applied, extracted here so the schema
+ * default, `WorkspaceSemaphore`'s fallback and the lifecycle message all read
+ * one value. Like its sibling above: `null` (never close on idle) is a user
+ * choice and is never replaced by it.
+ */
+export const DEFAULT_SESSION_IDLE_MINUTES = 15;
+
 const resourcesSchema = z
   .object({
     /** Workspace-wide parallel-task cap (moved from per-repo config.json). */
@@ -104,6 +113,28 @@ const resourcesSchema = z
       .nullable()
       .default(DEFAULT_MONITORING_WAKE_MINUTES)
       .catch(DEFAULT_MONITORING_WAKE_MINUTES),
+    /**
+     * How long a session parked at `waiting` may sit idle before its agent session is
+     * closed; `null` never closes on idle (the same explicit opt-out shape as
+     * `monitoringWakeIntervalMinutes: null` above).
+     *
+     * Default 15 — the timeout the interactive branch has always had, so the zero-config
+     * path is unchanged. The precedent for `null` is #661: cezar already accepted that a
+     * parked session need not be bounded by this timer when it removed it from the
+     * monitoring branch, and a `waiting` run holds no `maxParallel` slot (#347), so a long
+     * park costs nothing. Unlike the #661 monitoring dead end, a waiting session stays
+     * visible in the cockpit with its ask card and Continue button, and the close was
+     * always recoverable via Continue/`--resume` — this knob only decides whether a human
+     * parked on a `CEZ:ASK` card mid-workshop must click every 15 minutes.
+     */
+    sessionIdleMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(1440)
+      .nullable()
+      .default(DEFAULT_SESSION_IDLE_MINUTES)
+      .catch(DEFAULT_SESSION_IDLE_MINUTES),
     /**
      * Resume a task the provider's usage limit stopped, once that limit resets
      * (spec 2026-08-03-auto-resume-after-usage-limit). ON by default, which is the one

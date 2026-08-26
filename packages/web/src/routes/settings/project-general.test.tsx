@@ -105,6 +105,7 @@ function seededClient({
       maxParallel: 4,
       maxMonitoringSessions: 2,
       monitoringWakeIntervalMinutes: null,
+      sessionIdleMinutes: 15,
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,
     },
