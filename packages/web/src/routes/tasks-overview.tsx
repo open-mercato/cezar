@@ -322,10 +322,10 @@ function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
         <CenteredState
           heading="h2"
           icon={<ListChecksIcon />}
-          // The brand cat and his legions (user request), reconstructed to the artwork's
-          // NATIVE 129x98 pixel grid and blown up 3x with pixelated rendering — integer
-          // scaling is what keeps pixel art razor-sharp.
-          art={<img src="/cezar-hero.png" alt="" aria-hidden="true" data-slot="empty-hero" width={387} height={294} className="max-w-full [image-rendering:pixelated]" />}
+          // The brand cat, alone but for three legionnaire mice marching where he points
+          // (user request). Native 94x98 pixel grid at an integer 2x with pixelated
+          // rendering — that is what keeps pixel art razor-sharp.
+          art={<img src="/cezar-hero.png" alt="" aria-hidden="true" data-slot="empty-hero" width={188} height={196} className="max-w-full [image-rendering:pixelated]" />}
           tone="primary"
           backdrop
           title="No tasks yet"
