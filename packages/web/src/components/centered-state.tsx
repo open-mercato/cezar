@@ -22,6 +22,7 @@ const tileTone: Record<CenteredStateTone, string> = {
  */
 export function CenteredState({
   icon,
+  art,
   tone = 'neutral',
   title,
   subtitle,
@@ -32,6 +33,9 @@ export function CenteredState({
   className,
 }: {
   icon: ReactNode
+  /** Full ARTWORK in the tile's place (the brand cat on hero empty states) — the icon is
+   *  ignored when this is given. */
+  art?: ReactNode
   tone?: CenteredStateTone
   title: string
   subtitle?: string
@@ -54,15 +58,17 @@ export function CenteredState({
     >
       {backdrop ? <TwinkleBackdrop /> : null}
       <div className="flex w-full max-w-md flex-col items-center gap-4">
-        <div
-          data-slot="centered-state-tile"
-          className={cn(
-            "flex size-[72px] items-center justify-center rounded-[18px] border [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-7",
-            tileTone[tone]
-          )}
-        >
-          {icon}
-        </div>
+        {art ?? (
+          <div
+            data-slot="centered-state-tile"
+            className={cn(
+              "flex size-[72px] items-center justify-center rounded-[18px] border [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-7",
+              tileTone[tone]
+            )}
+          >
+            {icon}
+          </div>
+        )}
         <Heading className="text-2xl font-semibold text-balance text-foreground">{title}</Heading>
         {subtitle ? <p className="text-sm text-pretty text-muted-foreground">{subtitle}</p> : null}
         {children ? <div className="w-full pt-2">{children}</div> : null}

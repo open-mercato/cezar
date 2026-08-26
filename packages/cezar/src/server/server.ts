@@ -1424,6 +1424,7 @@ export function createApp(deps: ServerDeps) {
   // for tabs that cached the old icon link.
   app.get('/cezar-logo.svg', staticFile('cezar-logo.svg', 'image/svg+xml'));
   app.get('/cezar-logo-dark.svg', staticFile('cezar-logo-dark.svg', 'image/svg+xml'));
+  app.get('/cezar-hero.png', staticFile('cezar-hero.png', 'image/png'));
   app.get('/open-mercato.svg', staticFile('open-mercato.svg', 'image/svg+xml'));
 
   // ---- meta ----------------------------------------------------------------
