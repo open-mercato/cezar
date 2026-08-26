@@ -39,6 +39,7 @@ describe('stampStableManifests', () => {
   const set = (): ReleaseManifests => ({
     contract: { name: '@scope/contract', version: '0.1.5' },
     apiClient: { name: '@scope/client', version: '0.1.5' },
+    react: { name: '@scope/react', version: '0.1.5', dependencies: { '@scope/client': '^0.1.5' } },
     cezar: {
       name: '@scope/impl',
       version: '0.1.5',
@@ -52,6 +53,10 @@ describe('stampStableManifests', () => {
     const stamped = stampStableManifests(set(), '0.1.6');
 
     expect(stamped.apiClient.version).toBe('0.1.6');
+    expect(stamped.react).toMatchObject({
+      version: '0.1.6',
+      dependencies: { '@scope/client': '^0.1.6' },
+    });
     expect(stamped.cezar.version).toBe('0.1.6');
     expect(stamped.alias.version).toBe('0.1.6');
     expect(stamped.cezar.files).toEqual(['dist']); // passthrough untouched

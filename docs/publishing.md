@@ -14,11 +14,13 @@ How cezar reaches npm. Two paths, deliberately separate
   cuts `main`'s tip every night under the `nightly` dist-tag, so `npx cezar-cli@nightly`
   is always the trunk. Also runnable on demand from the Actions tab.
 
-Three packages are in the release, always at the same version; two of them ship:
+Five packages are in the release, always at the same version, and all ship:
 
 | Package | Ships? | What it is |
 |---|---|---|
-| `@open-mercato/cezar-api-client` | **no — `private`** | the typed client and shared contract types (`packages/api-client`) |
+| `@open-mercato/cezar-contract` | yes | Zod schemas and inferred HTTP contract types (`packages/contract`) |
+| `@open-mercato/cezar-api-client` | yes | the typed client for Cezar's HTTP API (`packages/api-client`) |
+| `@open-mercato/cezar-react` | yes | the native embeddable React cockpit facade (`packages/react`) |
 | `@open-mercato/cezar` | yes | the service + CLI, ships the built cockpit (`packages/cezar`) |
 | `cezar-cli` | yes | the unscoped bin alias, so `npx cezar-cli` works (`alias-cezar`) |
 
@@ -27,16 +29,10 @@ depends on the one above it, so publishing a dependent first would briefly
 advertise a version of its dependency that is not on the registry yet. The
 workspace root itself is `private` and is not in the release at all.
 
-**Private ≠ excluded.** The api-client is stamped like everything else — its
-version moves in lockstep and the service's pin against it is rewritten — it is
-simply never handed to npm. It is consumed inside the workspace (the cockpit
-bundles it from source, the service's tests import it) and stays unpublished
-until its surface stops moving: it still carries the hand-written DTOs, which
-shrink family by family as routes are converted, so publishing now would
-advertise a contract that changes materially every release. Publishing it is one
-line — delete `"private": true` from its manifest; the release code reads npm's
-own flag and needs no change. Note the token requirement in step 3 below before
-doing so.
+**Private ≠ excluded.** A private workspace is still stamped in lockstep so its
+intra-release pins stay coherent, but it is not handed to npm. The current
+release set is public; the contract publishes before the API client, and the
+React facade publishes immediately after its API-client dependency.
 
 ## Stable releases
 
