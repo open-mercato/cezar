@@ -157,6 +157,7 @@ describe('resumeCommand — per backend, mirroring the server', () => {
     [undefined, 'claude --resume s1'], // legacy records predate the runner choice
     ['codex', 'codex resume s1'],
     ['opencode', 'opencode --session s1'],
+    ['cursor', 'agent --resume s1'],
   ] as Array<[RunRecord['runner'], string]>)('%s → %s', (runner, expected) => {
     expect(resumeCommand(runner, 's1')).toBe(expected)
   })
@@ -218,6 +219,7 @@ describe('cliTargetResumes — Open in… menu labeling (#402)', () => {
     ['claude', 'cli:claude'],
     ['codex', 'cli:codex'],
     ['opencode', 'cli:opencode'],
+    ['cursor', 'cli:cursor'],
   ] as Array<[RunRecord['runner'], string]>)('%s CLI resumes a %s run with a session', (runner, target) => {
     expect(cliTargetResumes(run('done', { runner }), target)).toBe(true)
   })

@@ -90,7 +90,30 @@ describe('workspace model catalog API', () => {
   it.each(['/api/v1/models', '/api/v1/models?runner=claude'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'runner must be codex or opencode' });
+    expect(await response.json()).toEqual({ error: 'runner must be codex, opencode, or cursor' });
+  });
+
+  it('returns a Cursor catalog when that adapter is registered', async () => {
+    const server = createApp({
+      repoRoot: root,
+      store,
+      manager: {} as RunManager,
+      version: 'test',
+      modelCatalog: new RunnerModelCatalog({
+        adapters: {
+          cursor: {
+            discover: async () => [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }],
+          },
+        },
+      }),
+    });
+    const response = await apiRequest(server, '/api/v1/models?runner=cursor');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runner: 'cursor',
+      models: [{ id: 'composer-2.5' }],
+      source: 'live',
+    });
   });
 
   it('is workspace-level rather than project-scoped', async () => {

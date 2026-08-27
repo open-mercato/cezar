@@ -37,6 +37,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   ],
   codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5-codex'],
   opencode: [],
+  // Cursor models are discovered from the CLI / Settings — no hard-coded presets
+  // that could conflict with another runner's ids.
+  cursor: [],
   // pi lists nothing for the same reason OpenCode does (#794), plus one of its own: it picks a
   // model with the canonical `provider/model` convention and has no default provider, so the
   // structural check in {@link modelConflictsWithRunner} already guards it without vendor

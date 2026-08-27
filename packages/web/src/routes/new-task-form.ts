@@ -46,6 +46,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
   { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
   { id: 'opencode', label: 'opencode', desc: 'OpenCode (serve)' },
+  { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
 ]
 
@@ -57,9 +58,9 @@ export interface ModelPreset {
 
 /** Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner
  *  decides. Claude takes tier aliases + pinned versions, the only runner with no host-local
- *  catalog to ask. Codex and OpenCode list `auto` alone: their entries come from discovery
- *  (`runnerDiscoversModels`), because a hard-coded list is stale the moment the host's provider
- *  ships a model — which is exactly what #794 reported for OpenCode. */
+ *  catalog to ask. Codex, OpenCode and Cursor list `auto` alone: their entries come from
+ *  discovery (`runnerDiscoversModels`), because a hard-coded list is stale the moment the host's
+ *  provider ships a model — which is exactly what #794 reported for OpenCode. */
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   claude: [
     { id: '', label: 'auto', desc: 'Pick the best model per step' },
@@ -76,6 +77,9 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   ],
   opencode: [
     { id: '', label: 'auto', desc: 'Use your OpenCode default model' },
+  ],
+  cursor: [
+    { id: '', label: 'auto', desc: 'Use your Cursor default model' },
   ],
   // pi selects a model with the same `provider/model` convention as opencode.
   pi: [
@@ -139,11 +143,12 @@ export function modelsForRunner(
 const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
 }
 
 export function modelCatalogStatus(
   runner: Runner,
-  catalog: RunnerModelCatalogResponse | undefined,
+  catalog?: RunnerModelCatalogResponse,
   failed = false,
 ): string | undefined {
   if (!runnerDiscoversModels(runner)) return undefined

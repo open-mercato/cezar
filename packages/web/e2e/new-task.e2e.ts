@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { runnerSchema } from '@open-mercato/cezar-api-client'
 import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
 
 /**
@@ -132,7 +133,9 @@ describe('the full-screen /new against a live dry-run server', () => {
     const health = (await (await fetch(`${baseUrl}/api/v1/health`)).json()) as {
       checks: Array<{ name: string; available: boolean }>
     }
-    const runners = ['claude', 'codex', 'opencode'].filter((id) =>
+    // Derived from the shared Runner union, not restated, so a future backend cannot silently
+    // fall out of sync the way this list did for cursor (#807 review).
+    const runners = runnerSchema.options.filter((id) =>
       health.checks.some((c) => c.name === id && c.available),
     )
     if (runners.length > 1) {

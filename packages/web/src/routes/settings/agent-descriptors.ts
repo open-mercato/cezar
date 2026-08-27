@@ -105,6 +105,20 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
       group('opencode', 'memory', 'Memory & instructions'),
     ],
   },
+  {
+    id: 'cursor',
+    label: 'Cursor',
+    note: 'Cursor Agent CLI (`agent`). Auth via `agent login` or CURSOR_API_KEY. No separate memory file — instructions live in rules/MCP elsewhere.',
+    groups: [
+      group('cursor', 'settings', 'Settings'),
+      group(
+        'cursor',
+        'mcp',
+        'MCP',
+        'User ~/.cursor/mcp.json and project .cursor/mcp.json.',
+      ),
+    ],
+  },
 ]
 
 export function descriptorFor(agent: Runner): AgentDescriptor {

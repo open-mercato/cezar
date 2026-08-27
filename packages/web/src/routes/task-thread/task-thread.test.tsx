@@ -37,6 +37,7 @@ function renderView(
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'not-installed', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   },
   health: Partial<HealthResponse> = {},
@@ -342,6 +343,7 @@ describe('ThreadView', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     )

@@ -249,11 +249,14 @@ export const workspaceQueryKeys = {
 
 /**
  * One runner's host-discovered catalog, cached per runner (#794 — this used to be hard-wired to
- * Codex, which is why OpenCode had nothing but stale presets to show).
+ * Codex, which is why OpenCode had nothing but stale presets to show). Cursor (#807) discovers
+ * the same way — nothing runner-specific lives here, `runnerDiscoversModels` already knows it.
  *
  * A runner with no host catalog (claude) never fetches and never resolves data, so its picker
  * falls back to static presets exactly as before — callers can pass any runner and read
- * `data`/`isError` without checking first.
+ * `data`/`isError` without checking first. Because each caller fetches only the runner it is
+ * actually about to render, one runner's catalog failure can never mark another runner's picker
+ * unavailable — there is no shared state left to poison.
  *
  * `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue — hooks
  * cannot be called conditionally) skip the fetch when it definitely won't.
@@ -285,8 +288,9 @@ export function useRunnerModelCatalogs(
   const claude = useRunnerModels('claude', enabled)
   const codex = useRunnerModels('codex', enabled)
   const opencode = useRunnerModels('opencode', enabled)
+  const cursor = useRunnerModels('cursor', enabled)
   const pi = useRunnerModels('pi', enabled)
-  return { claude, codex, opencode, pi }
+  return { claude, codex, opencode, cursor, pi }
 }
 
 export function useProviderStatus() {

@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveCursorAgentBin } from './cursor-agent-runner.ts';
 
 const exec = promisify(execFile);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'pi' | 'gh' | 'git';
+  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'gh' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -12,16 +13,17 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` / `pi` alternatives), `gh` (GitHub auth for
- * PR creation) and `git`. Nothing is required except at least one agent CLI —
- * the GUI degrades gracefully, only offers the runners that are present, and
- * shows the hints for the rest.
+ * the optional `codex` / `opencode` / `cursor` / `pi` alternatives), `gh`
+ * (GitHub auth for PR creation) and `git`. Nothing is required except at
+ * least one agent CLI — the GUI degrades gracefully, only offers the
+ * runners that are present, and shows the hints for the rest.
  */
 export async function detectEnvironment(): Promise<BackendCheck[]> {
   return Promise.all([
     probeClaude(),
     probeCodex(),
     probeOpencode(),
+    probeCursor(),
     probePi(),
     probeGh(),
     probeGit(),
@@ -98,6 +100,28 @@ async function probeOpencode(): Promise<BackendCheck> {
       name: 'opencode',
       available: false,
       hint: 'optional: install OpenCode (https://opencode.ai) and configure a provider to use the OpenCode runner',
+    };
+  }
+}
+
+async function probeCursor(): Promise<BackendCheck> {
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'cursor', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = resolveCursorAgentBin();
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'cursor',
+      available: true,
+      version: stdout.trim() || 'installed',
+      hint: 'if not authenticated, run `agent login` or set CURSOR_API_KEY',
+    };
+  } catch {
+    return {
+      name: 'cursor',
+      available: false,
+      hint: 'optional: install the Cursor CLI (curl https://cursor.com/install -fsS | bash) and run `agent login`',
     };
   }
 }

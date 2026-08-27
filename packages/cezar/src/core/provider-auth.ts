@@ -4,7 +4,7 @@ import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
 import { withEnvPrefix } from './shell-env.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -67,6 +67,18 @@ interface ProviderDescriptor {
   loginArgs: readonly string[];
   installHint: string;
   parse: (result: ProviderCommandResult) => ProviderConnectionState | null;
+  /**
+   * An answer available WITHOUT spawning the CLI at all, checked before `runCommand` — `undefined`
+   * defers to the normal probe. Every other backend's own CLI self-reports API-key vs. subscription
+   * auth in its status command (codex literally prints "logged in using an API key"), so nothing
+   * needs this. Cursor's `agent status` does not, which used to mean `CURSOR_API_KEY` support lived
+   * ONLY inside `parseCursorStatus` — reachable when the command's own answer was inconclusive, but
+   * never when the command hung: `probe()`'s `timedOut` branch returns before `parse()` runs, so a
+   * status call that blocks on a network check (plausible with a key but no cached browser session)
+   * silently ate the fallback and reported 'unknown' no matter how valid the key was. Skipping the
+   * spawn entirely removes that race instead of racing to out-guess it.
+   */
+  precheck?: () => ProviderConnectionState | undefined;
 }
 
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -253,6 +265,17 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     parse: parseOpenCodeStatus,
   },
   {
+    id: 'cursor',
+    executable: () => process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent',
+    statusArgs: ['status', '--format', 'json'],
+    loginArgs: ['login'],
+    installHint:
+      'Install the Cursor CLI (`curl https://cursor.com/install -fsS | bash`), then run `agent login` (or set CURSOR_API_KEY).',
+    parse: parseCursorStatus,
+    // `agent status` doesn't itself know about CURSOR_API_KEY — see the `precheck` field's doc.
+    precheck: () => (process.env.CURSOR_API_KEY?.trim() ? 'connected' : undefined),
+  },
+  {
     id: 'pi',
     executable: () => process.env.CEZ_PI_BIN ?? 'pi',
     statusArgs: ['--list-models'],
@@ -261,6 +284,27 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     parse: parsePiStatus,
   },
 ];
+
+function parseCursorStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  // probe() already handles ENOENT / any other errorCode before calling parse() — result here
+  // always ran successfully at the process level. It also never reaches this function at all when
+  // CURSOR_API_KEY is set (the cursor descriptor's `precheck` answers first), so this is purely
+  // the `agent login` (browser OAuth) read.
+  try {
+    const parsed: unknown = JSON.parse(result.stdout);
+    if (parsed && typeof parsed === 'object') {
+      const row = parsed as Record<string, unknown>;
+      if (row.isAuthenticated === true || row.status === 'authenticated') return 'connected';
+      if (row.isAuthenticated === false || row.status === 'unauthenticated') return 'disconnected';
+    }
+  } catch {
+    /* fall through */
+  }
+  // Malformed or unrecognized JSON is inconclusive, not a confirmed unauthenticated state —
+  // return null so probe() reports 'unknown' instead of telling the user to reconnect an
+  // account that was never actually checked.
+  return null;
+}
 
 function defaultRunProviderCommand(
   executable: string,
@@ -590,6 +634,8 @@ export class ProviderAuthService {
   }
 
   private async probe(descriptor: ProviderDescriptor, configDir?: string | null): Promise<ProviderStatus> {
+    const precheck = descriptor.precheck?.();
+    if (precheck !== undefined) return { provider: descriptor.id, status: precheck };
     let result: ProviderCommandResult;
     // The default profile is probed with the SAME three-argument call it always was — no
     // trailing `undefined`. `runCommand` is an injected seam, and handing every existing

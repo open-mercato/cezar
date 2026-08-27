@@ -33,6 +33,9 @@ import type { ProviderId } from './provider-auth.ts';
  *   would say "Work" and the run would not be — so OpenCode is unsupported until it documents a
  *   single home variable. `XDG_CONFIG_HOME` is rejected regardless: it is machine-wide and would
  *   relocate every other XDG-aware tool the agent's own Bash calls touch.
+ * - **cursor** → `CURSOR_CONFIG_DIR` exists and is honoured for the default profile's home
+ *   (`paths.ts`), but a second-account carry through it is unverified against a real Cursor
+ *   login the way Claude's was. `null` until that is confirmed rather than assumed.
  * - **pi** → nothing documented. pi ships no per-user home variable of its own, so — exactly like
  *   OpenCode — a second account cannot be carried without silently billing the wrong one. `null`
  *   until pi documents a single home variable that moves credentials as well as config.
@@ -41,6 +44,7 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   claude: 'CLAUDE_CONFIG_DIR',
   codex: 'CODEX_HOME',
   opencode: null,
+  cursor: null,
   pi: null,
 };
 
@@ -92,6 +96,7 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   claude: ['.claude.json', 'settings.json', 'projects', 'sessions'],
   codex: ['auth.json', 'config.toml'],
   opencode: [],
+  cursor: ['cli-config.json'],
   // pi cannot carry profiles (`PROFILE_ENV_VAR.pi === null`), so nothing ever probes a pi
   // profile dir; the entry exists to keep this table exhaustive over `ProviderId`.
   pi: [],

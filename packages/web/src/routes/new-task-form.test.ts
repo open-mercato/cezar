@@ -75,10 +75,37 @@ describe('model option resolution', () => {
     expect(modelsForRunner('codex', catalog, ['legacy-id']).at(-1)?.desc).toBe('Custom or legacy model')
   })
 
+  it('cursor: auto alone until the host catalog answers, plus host-discovered ids once it does', () => {
+    expect(modelsForRunner('cursor').map((m) => m.id)).toEqual([''])
+    expect(
+      modelsForRunner('cursor', {
+        runner: 'cursor',
+        models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
+  it('a pinned Cursor id the host no longer offers stays selectable', () => {
+    expect(
+      modelsForRunner(
+        'cursor',
+        { runner: 'cursor', models: [], source: 'unavailable', stale: false },
+        ['composer-2.5'],
+      ).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
   it('reports stale and unavailable Codex catalogs without exposing reasons', () => {
     expect(modelCatalogStatus('codex', { runner: 'codex', models: [], source: 'cache', stale: true, reason: 'raw' })).toBe('Using cached Codex model list')
     expect(modelCatalogStatus('codex', { runner: 'codex', models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe('Latest Codex models unavailable')
     expect(modelCatalogStatus('claude', undefined, true)).toBeUndefined()
+  })
+
+  it('reports Cursor catalog status the same way', () => {
+    expect(modelCatalogStatus('cursor', { runner: 'cursor', models: [], source: 'unavailable', stale: false })).toBe('Latest Cursor models unavailable')
+    expect(modelCatalogStatus('cursor', undefined, true)).toBe('Latest Cursor models unavailable')
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {

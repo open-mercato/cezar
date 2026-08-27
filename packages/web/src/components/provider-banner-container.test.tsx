@@ -16,6 +16,7 @@ const INCIDENTS: ProviderStatusResponse = {
     { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -142,6 +143,7 @@ describe('ProviderBannerContainer', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'disconnected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     })
     const answerPuts: Array<(response: Response) => void> = []
@@ -164,6 +166,7 @@ describe('ProviderBannerContainer', () => {
           { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'claude-1' },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       })
     })

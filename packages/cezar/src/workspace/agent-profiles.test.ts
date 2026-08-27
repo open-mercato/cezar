@@ -49,11 +49,17 @@ describe('agent profile resolution', () => {
       expect(defaultAgentProfile('claude', env).path).toBe('/home/u/.claude');
       expect(defaultAgentProfile('codex', env).path).toBe('/home/u/.codex');
       expect(defaultAgentProfile('opencode', env).path).toBe('/home/u/.config/opencode');
+      expect(defaultAgentProfile('cursor', env).path).toBe('/home/u/.cursor');
     });
 
     it('follows the vendor env vars, so setting one moves the DEFAULT profile', () => {
-      const relocated = { HOME: '/home/u', CLAUDE_CONFIG_DIR: '/opt/claude' } as NodeJS.ProcessEnv;
+      const relocated = {
+        HOME: '/home/u',
+        CLAUDE_CONFIG_DIR: '/opt/claude',
+        CURSOR_CONFIG_DIR: '/opt/cursor',
+      } as NodeJS.ProcessEnv;
       expect(defaultAgentProfile('claude', relocated).path).toBe('/opt/claude');
+      expect(defaultAgentProfile('cursor', relocated).path).toBe('/opt/cursor');
     });
 
     it('is marked default so the UI can refuse to edit or delete it', () => {

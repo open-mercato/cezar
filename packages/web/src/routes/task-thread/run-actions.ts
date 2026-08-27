@@ -31,8 +31,21 @@ export function lastSessionId(run: RunRecord): string | undefined {
  */
 const SAFE_SESSION_ID = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,199}$/
 
-/** The per-backend take-over command — mirrors the server's `resumeCommand` (server.ts), and
- *  like it treats records without a runner as Claude (they predate the choice).
+/** The per-backend take-over prefix — mirrors the server's `resumeCommand` (server.ts). A
+ *  `Record<Runner, string>` rather than a `switch`/`default`: the previous shape silently
+ *  mislabelled an unhandled runner as Claude instead of failing to compile, which is exactly
+ *  how the cursor gap here stayed invisible through two reviews and a full green gate (#807) —
+ *  adding a fifth backend without a row here is now a type error, not a silent wrong command. */
+const RESUME_COMMAND_PREFIX: Record<Runner, string> = {
+  claude: 'claude --resume',
+  codex: 'codex resume',
+  opencode: 'opencode --session',
+  cursor: 'agent --resume',
+  pi: 'pi --session',
+}
+
+/** The per-backend take-over command. Records without a runner recorded predate the runner
+ *  choice and default to Claude, same as the server.
  *
  *  Undefined for an id the server would refuse (#431): this string is offered to the user as a
  *  one-click copy for pasting into a terminal, so it is a shell splice of an agent-recorded id
@@ -41,14 +54,7 @@ const SAFE_SESSION_ID = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,199}$/
  *  either. Fails closed: no hint beats a hint that runs `rm -rf ~` on paste. */
 export function resumeCommand(runner: Runner | undefined, sessionId: string): string | undefined {
   if (!SAFE_SESSION_ID.test(sessionId)) return undefined
-  switch (runner) {
-    case 'codex':
-      return `codex resume ${sessionId}`
-    case 'opencode':
-      return `opencode --session ${sessionId}`
-    default:
-      return `claude --resume ${sessionId}`
-  }
+  return `${RESUME_COMMAND_PREFIX[runner ?? 'claude']} ${sessionId}`
 }
 
 /** The copyable "take over interactively" line under the header — only once the engine has

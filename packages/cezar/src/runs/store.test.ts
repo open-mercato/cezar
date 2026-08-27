@@ -1548,6 +1548,25 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
     expect(store.getRun('modern')?.runner).toBe('codex');
   });
 
+  it('a `cursor` record and a `claude-cli` record round-trip together — neither evicts the file (#807)', () => {
+    // The regression this guards: widening `storedRunnerSchema` for the fourth backend without
+    // keeping the legacy `claude-cli` member (or vice versa) would make one of the two records
+    // a parse failure, and since the loader `safeParse`s the WHOLE array, that drops every run
+    // in the file — not just the one carrying the id neither side kept.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: 'legacy-cli', runner: 'claude-cli' },
+        { ...LEGACY_RUN, id: 'cursor-run', runner: 'cursor' },
+      ]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('legacy-cli')?.runner).toBe('claude');
+    expect(store.getRun('cursor-run')?.runner).toBe('cursor');
+  });
+
   it('rewrites the folded id on the next save, so the narrowing is one-way', () => {
     writeFileSync(
       join(dataDir, 'runs.json'),

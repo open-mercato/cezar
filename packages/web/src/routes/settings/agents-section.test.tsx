@@ -87,6 +87,7 @@ function serve({
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'connected', enabled: true },
       { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'connected', enabled: true },
       { provider: 'pi', status: 'connected', enabled: true },
     ],
   },
@@ -266,6 +267,7 @@ describe('the agents form', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'disconnected', enabled: true },
           { provider: 'opencode', status: 'connected', enabled: true },
+          { provider: 'cursor', status: 'connected', enabled: true },
         ],
       },
     })
@@ -290,6 +292,7 @@ describe('the agents form', () => {
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: false },
           { provider: 'opencode', status: 'connected', enabled: true },
+          { provider: 'cursor', status: 'connected', enabled: true },
         ],
       },
     })
@@ -565,7 +568,7 @@ describe('the agents form', () => {
     const selections = () =>
       requests.filter((r) => r.url === '/api/v1/workspace/agent-profiles/selection')
 
-    it('stays exactly three rows when only the discovered profiles exist', async () => {
+    it('stays exactly five rows when only the discovered profiles exist', async () => {
       serve({
         agentProfiles: {
           defaults: {},
@@ -579,7 +582,13 @@ describe('the agents form', () => {
       await waitFor(() => expect(form()).not.toBeNull())
       // Settled: the default-models field below it has rendered, so the pane is not mid-load.
       await screen.findByLabelText('Default model for claude')
-      expect(rows().map((r) => r.getAttribute('data-value'))).toEqual(['claude', 'codex', 'opencode', 'pi'])
+      expect(rows().map((r) => r.getAttribute('data-value'))).toEqual([
+        'claude',
+        'codex',
+        'opencode',
+        'cursor',
+        'pi',
+      ])
       // …and it is still called what it always was, because there is no account in play.
       expect(document.body.textContent).toContain('Default runner')
     })
@@ -588,12 +597,13 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(5))
+      await waitFor(() => expect(rows()).toHaveLength(6))
       expect(rows().map((r) => r.textContent)).toEqual([
         'claude · Default/home/u/.claude',
         'claude · Klaudiusz~/.claude-klaudiusz',
         'codexOpenAI Codex (app-server)',
         'opencodeOpenCode (serve)',
+        'cursorCursor Agent CLI',
         'pipi CLI (provider/model)',
       ])
       // The discovered account is the checked row until the repo says otherwise.
@@ -617,7 +627,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(5))
+      await waitFor(() => expect(rows()).toHaveLength(6))
       fireEvent.click(rowFor('claude', 'klaudiusz')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -640,7 +650,7 @@ describe('the agents form', () => {
 
       // Wait for the SPLIT state: until the accounts land, claude is one plain row, and clicking
       // that one writes no selection — which is correct, and would make this pass for no reason.
-      await waitFor(() => expect(rows()).toHaveLength(5))
+      await waitFor(() => expect(rows()).toHaveLength(6))
       fireEvent.click(rowFor('claude', '')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -655,7 +665,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(5))
+      await waitFor(() => expect(rows()).toHaveLength(6))
       fireEvent.click(rowFor('codex')!)
 
       await waitFor(() => expect(puts()).toHaveLength(1))
@@ -687,7 +697,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(5))
+      await waitFor(() => expect(rows()).toHaveLength(6))
       const pane = document.querySelector('[data-slot="agents-runner"]')?.closest('section')
       expect(pane?.textContent).toContain('never committed')
       // The consequence a reader cannot guess: sessions live in the account's own folder.
