@@ -1,4 +1,5 @@
-import { useAgentProfiles, useConfig, useProviderStatus, useRepo, useRunnerModels } from '@/api/queries'
+import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
+import { useConfig, useProviderStatus, useRunnerModels } from '@/api/queries'
 import type { CreateRunInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill, type RunnerAccountChoice } from '@/components/picker-pill'
 import { usableRunners } from '@/lib/provider-status'
@@ -75,27 +76,14 @@ export function useResolvedEngine(pick: EnginePick): ResolvedEngine {
   // Resolved first: each runner has its own host catalog (#794), so the fetch follows the pick.
   const catalog = useRunnerModels(runner)
   const modelsLocked = config.data?.modelsLocked === true
-  // Agent accounts (spec 2026-07-29-agent-profiles), resolved the same way the /new composer
-  // resolves them (new-task.tsx) so the two start surfaces cannot disagree about which login runs.
-  const profiles = useAgentProfiles()
-  const repo = useRepo()
-  const accounts = (profiles.data?.profiles ?? []).map((profile) => ({
-    provider: profile.provider as Runner,
-    id: profile.id,
-    label: profile.label,
-    configDir: profile.configDir,
-  }))
+  // Agent accounts (spec 2026-07-29-agent-profiles), read through the shared hook the /new composer
+  // and the thread's Continue read, so no start surface can disagree about which login runs.
+  const { accounts, repoAccount } = useAgentAccounts()
   // An account belonging to ANOTHER runner is dropped rather than sent: switching runner must not
   // silently carry the previous runner's login along. Same guard as the composer's.
   const account = accounts.some((choice) => choice.provider === runner && choice.id === pick.account)
     ? pick.account
     : null
-  // Selections are keyed by the project's realpath'd ROOT — the key the store itself uses — and
-  // `useRepo` is project-scoped, so it already answers for the ACTIVE project.
-  const repoRoot = repo.data?.info?.root
-  const repoAccount = (repoRoot ? profiles.data?.selections[repoRoot] : undefined) as
-    | Partial<Record<Runner, string>>
-    | undefined
   return {
     runner,
     runnerExplicit: pick.runner !== null,
@@ -186,8 +174,7 @@ export function EnginePills({
   // Shown when there is a choice to make: more than one runner, or — where accounts are offered —
   // more than one login for one of them. A host with neither sees no pill, exactly as before.
   const showRunnerPill =
-    runners.length > 1
-    || runners.some((id) => accountChoices.filter((c) => c.provider === id).length > 1)
+    runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id))
 
   return (
     <>
