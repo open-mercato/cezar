@@ -47,8 +47,8 @@ export function RepoGitRoute({ tab }: { tab: RepoTab }) {
       <div data-route="repo-git" className="flex min-h-full flex-col">
         <CenteredState
           icon={<GitBranchIcon />}
-          // The court scene (user artwork), same pipeline as the Tasks hero: native pixel
-          // grid at 1x CSS — an exact 2x on retina — with pixelated rendering.
+          // The court scene (user artwork), same pipeline and the same shared 232x122
+          // canvas as the Tasks hero (user decision: no size jump between screens).
           art={<img src="/cezar-hero-git.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={122} className="max-w-full [image-rendering:pixelated]" />}
           tone="neutral"
           backdrop
