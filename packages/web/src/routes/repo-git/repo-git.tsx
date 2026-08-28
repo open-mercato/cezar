@@ -47,7 +47,11 @@ export function RepoGitRoute({ tab }: { tab: RepoTab }) {
       <div data-route="repo-git" className="flex min-h-full flex-col">
         <CenteredState
           icon={<GitBranchIcon />}
+          // The court scene (user artwork), same pipeline as the Tasks hero: native pixel
+          // grid at 1x CSS — an exact 2x on retina — with pixelated rendering.
+          art={<img src="/cezar-hero-git.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={122} className="max-w-full [image-rendering:pixelated]" />}
           tone="neutral"
+          backdrop
           title="Not a git repository"
           subtitle="cezar is running outside a git repository — start it inside one to browse changes, commits and branches."
         />
