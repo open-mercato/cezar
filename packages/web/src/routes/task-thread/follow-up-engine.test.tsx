@@ -455,7 +455,7 @@ const serveAccounts = (
 
 /**
  * The thread's Continue carries the SAME flat runner pill the /new composer does — `claude ·
- * Default` / `claude · Klaudiusz` / `codex` — so "continue this on my other Claude login" is
+ * Default` / `claude (Klaudiusz)` / `codex` — so "continue this on my other Claude login" is
  * sayable after the task has started, not only when it is created.
  */
 describe('the follow-up runner pill carries the account', () => {
@@ -475,8 +475,8 @@ describe('the follow-up runner pill carries the account', () => {
     fireEvent.pointerDown(runnerPill()!)
     const options = await screen.findAllByRole('menuitemradio')
     expect(options.map((o) => o.textContent)).toEqual([
-      'claude · Default/home/u/.claude',
-      'claude · Klaudiusz~/.claude-klaudiusz',
+      'claude (Default)/home/u/.claude',
+      'claude (Klaudiusz)~/.claude-klaudiusz',
     ])
   })
 
@@ -485,7 +485,7 @@ describe('the follow-up runner pill carries the account', () => {
     // to Klaudiusz, and that must not relabel a run that ran on the discovered account.
     serveAccounts({ ...ACCOUNTS, selections: { '/repo': { claude: 'klaudiusz' } } })
     renderAction(makeRun({ steps: [step({ sessionId: 'sess-1', profileId: 'default' })] }))
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Default'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Default)'))
 
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     // Untouched, the Continue says nothing about the account — the run keeps the one it is on.
@@ -495,7 +495,7 @@ describe('the follow-up runner pill carries the account', () => {
   it('shows the account the run recorded even when it is not the discovered one', async () => {
     serveAccounts()
     renderAction(makeRun({ steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })] }))
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Klaudiusz)'))
   })
 
   it('sends the picked account through to /continue', async () => {
@@ -504,7 +504,7 @@ describe('the follow-up runner pill carries the account', () => {
     await waitFor(() => expect(runnerPill()).not.toBeNull())
 
     await pickFrom(runnerPill()!, 'Klaudiusz')
-    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude · Klaudiusz'))
+    await waitFor(() => expect(runnerPill()?.textContent).toContain('claude (Klaudiusz)'))
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
 
     // The runner did not change, so only the account rides the request.
