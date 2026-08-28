@@ -74,15 +74,16 @@ describe('tools menu', () => {
     const blocker = blockerFor(health)
     const missing = health.checks.filter((c) => !c.available).map((c) => c.name)
     let expectedTitle = `cezar v${health.version}`
-    if (blocker) expectedTitle += ` · ${blocker}`
-    else if (missing.length > 0) expectedTitle += ` · optional: ${missing.join(', ')} not installed`
+    // Parentheses, not middots (house rule): the tooltip reads as one sentence.
+    if (blocker) expectedTitle += ` (${blocker})`
+    else if (missing.length > 0) expectedTitle += ` (optional: ${missing.join(', ')} not installed)`
     expect(browser.evaluate(`document.querySelector('${TRIGGER}').getAttribute('title')`)).toBe(expectedTitle)
 
-    // Aggregate dot: amber only when something genuinely stops a task from starting — a missing
-    // optional tool leaves it green, which is the whole point of the blocker rule.
+    // The aggregate state rides the wrench itself now (#884): violet only when something
+    // genuinely stops a task from starting — a missing optional tool leaves the trigger quiet.
     expect(
-      browser.evaluate(`document.querySelector('${TRIGGER} [data-slot="status-dot"]').dataset.tone`)
-    ).toBe(blocker ? 'pending' : 'success')
+      browser.evaluate(`document.querySelector('${TRIGGER}').getAttribute('data-attention')`)
+    ).toBe(blocker ? 'true' : null)
   })
 
   it('opens a menu listing exactly the tools /api/v1/health reports', () => {
@@ -93,7 +94,7 @@ describe('tools menu', () => {
       name: row.dataset.tool,
       available: row.dataset.available,
       version: row.querySelector('[data-slot="tool-version"]')?.textContent ?? null,
-      hint: row.querySelector('[data-slot="tool-hint"]')?.textContent ?? null,
+      hint: row.getAttribute('title') ?? row.closest('a')?.getAttribute('title') ?? null,
       setupHref: (row.closest('a') ?? row.querySelector('a'))?.getAttribute('href') ?? null,
     }))`) as Array<{
       name: string
@@ -110,30 +111,36 @@ describe('tools menu', () => {
       const row = rows.find((r) => r.name === check.name)
       expect(row?.available).toBe(String(check.available))
       if (check.available) {
-        // The server's version string, verbatim (the shared env runs CEZ_DRY_RUN, so claude's
-        // may legitimately be "mock (CEZ_DRY_RUN=1)" — the point is fidelity, not the value).
-        expect(row?.version).toBe(check.version ?? 'not found')
+        // The row shows the CONCISE version (the dotted number, or the first word of a
+        // versionless probe like "mock (CEZ_DRY_RUN=1)"); the verbatim string is its tooltip.
+        if (check.version) {
+          const concise = check.version.match(/\d+(?:\.\d+)+\S*/)?.[0]
+            ?? check.version.split(/[\s(]/, 1)[0]
+          expect(row?.version).toBe(concise)
+        }
         expect(row?.setupHref).toBeNull()
       } else {
-        expect(row?.version).toBe('not found')
+        // An unavailable row spends no words on a version — the hint and Set up carry it.
+        expect(row?.version).toBeNull()
         if (check.hint) expect(row?.hint).toBe(check.hint)
-        expect(row?.setupHref).toBe(scoped('/settings/agents'))
+        // Machine-level setup lives in Workspace settings → Agent accounts now.
+        expect(row?.setupHref).toBe('/settings/global/accounts')
       }
     }
 
     browser.screenshot(`${artifactsDir}/tools-menu-open.png`)
   })
 
-  it('routes the cog row to Settings → Agents and closes the menu', () => {
+  it('routes the cog row to Workspace settings → Agent accounts and closes the menu', () => {
     // Still open from the previous test — the cog row is its footer.
     expect(
       browser.evaluate(`document.querySelector('${MENU} [data-slot="tools-settings"]').getAttribute('href')`)
-    ).toBe(scoped('/settings/agents'))
+    ).toBe('/settings/global/accounts')
 
     browser.click(`${MENU} [data-slot="tools-settings"]`)
-    browser.waitForFunction(`location.pathname === '${scoped('/settings/agents')}'`)
+    browser.waitForFunction(`location.pathname === '/settings/global/accounts'`)
     browser.waitForFunction(`document.querySelector('${MENU}') === null`)
     expect(browser.count(MENU)).toBe(0)
-    expect(browser.url()).toContain('/settings/agents')
+    expect(browser.url()).toContain('/settings/global/accounts')
   })
 })

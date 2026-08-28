@@ -14,7 +14,9 @@ const runId = `e2e-palette-${process.pid}`
 
 const ROOT = '[cmdk-root]'
 const INPUT = '[cmdk-input]'
-const HINT = '[data-slot="command-palette-hint"]'
+// The desktop launcher is the search icon beside the brand (user decision); the labeled
+// full-width hint lives only in the mobile drawer now.
+const HINT = '[data-slot="sidebar-search"]'
 
 let browser: AgentBrowser
 let baseUrl: string
@@ -58,7 +60,7 @@ describe('command palette', () => {
     expect(browser.count(ROOT)).toBe(0)
   })
 
-  it('opens from the sidebar footer hint and closes on Escape', () => {
+  it('opens from the sidebar search icon and closes on Escape', () => {
     browser.waitForFunction(`document.querySelector('${HINT}') !== null`)
     browser.click(HINT)
     browser.waitForFunction(`document.querySelector('${ROOT}') !== null`)

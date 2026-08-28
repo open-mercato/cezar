@@ -91,8 +91,14 @@ describe('tasks overview — no tasks yet', () => {
     expect(
       browser.evaluate(`document.querySelector('[data-slot="tasks-empty"] ${STATE}').dataset.tone`)
     ).toBe('primary')
-    expect(browser.text(`[data-slot="tasks-empty"] h2`)).toBe('No tasks yet')
-    expect(browser.text(`[data-slot="tasks-empty"] p`)).toBe('Describe a task to get started.')
+    // Caesar-voiced copy (user decision) with the litter-borne cat above it.
+    expect(browser.text(`[data-slot="tasks-empty"] h2`)).toBe('The legion awaits orders')
+    expect(browser.text(`[data-slot="tasks-empty"] p`)).toBe(
+      'Caesar finds no tasks worthy of note. Describe one, the empire will not build itself.',
+    )
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="empty-hero"]').getAttribute('src')`)
+    ).toBe('/cezar-hero.png')
     expect(
       browser.evaluate(
         `document.querySelector('[data-slot="tasks-empty"] a[href="${scoped('/new')}"]').textContent.trim()`
@@ -102,15 +108,16 @@ describe('tasks overview — no tasks yet', () => {
     expect(browser.count('[data-slot="task-table-row"]')).toBe(0)
   })
 
-  it('carries the decorative backdrop, marked decorative', () => {
+  it('carries the decorative grid ground, marked decorative', () => {
+    // The twinkle dots left the hero states (user decision); the graph-paper grid is the one
+    // texture, and it stays out of the accessibility tree.
     const backdrop = browser.evaluate(`(() => {
-      const el = document.querySelector('[data-slot="tasks-empty"] [data-slot="twinkle-backdrop"]')
-      return el && { ariaHidden: el.getAttribute('aria-hidden'), squares: el.children.length }
-    })()`) as { ariaHidden: string; squares: number } | null
+      const el = document.querySelector('[data-slot="tasks-empty"] [data-slot="grid-backdrop"]')
+      return el && { ariaHidden: el.getAttribute('aria-hidden') }
+    })()`) as { ariaHidden: string } | null
 
     expect(backdrop).not.toBeNull()
     expect(backdrop?.ariaHidden).toBe('true')
-    expect(backdrop?.squares).toBeGreaterThan(5)
 
     browser.screenshot(`${artifactsDir}/tasks-empty-no-tasks.png`)
   })
