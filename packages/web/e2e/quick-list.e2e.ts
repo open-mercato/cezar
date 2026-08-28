@@ -168,14 +168,6 @@ const scoped = (path: string) => `/p/${bootProject}${path}`
 const textOf = (selector: string) =>
   browser.evaluate(`document.querySelector(${JSON.stringify(selector)}).textContent`) as string
 
-/** The rendered rows/tiles under one bucket header, in DOM order. */
-const rowsIn = (label: string) =>
-  browser.evaluate(`(() => {
-    const bucket = document.querySelector('[data-bucket=${JSON.stringify(label)}]')
-    if (!bucket) return null
-    return [...bucket.querySelectorAll('${ROW}, ${TILE}')].map((el) => el.textContent.trim())
-  })()`) as string[] | null
-
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-'))
   mkdirSync(join(dataRoot, '.ai/cezar'), { recursive: true })
@@ -202,109 +194,86 @@ afterAll(() => {
   if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
 })
 
-describe('task quick-list', () => {
+describe('the sidebar Projects tree', () => {
   beforeAll(() => {
     browser.goto(`${baseUrl}${scoped('/')}`)
-    // The list is async — it renders once `/api/v1/runs` answers.
-    browser.waitForFunction(`document.querySelector('[data-slot="quick-list"]') !== null`)
+    // The tree is async — it renders once the registry and the runs index answer.
+    browser.waitForFunction(`document.querySelector('[data-slot="project-task-group"] [data-slot="task-row"]') !== null`)
   })
 
   it('serves the fixture through the real API', async () => {
-    // The store parsed and kept every record: if the shape were wrong, zod would have dropped the
-    // index and the sidebar below would be asserting against an empty list that "passes" nothing.
     const runs = (await fetch(`${baseUrl}/api/v1/runs`).then((r) => r.json())) as Array<{ id: string }>
     expect(runs.map((r) => r.id).sort()).toEqual(
       ['fix-archived', 'fix-done', 'fix-failed', 'fix-review-pr', 'fix-var-a', 'fix-var-b'].sort()
     )
   })
 
-  it('groups the runs under Needs you / Recent, in that order', () => {
-    expect(
-      browser.evaluate(`[...document.querySelectorAll('[data-slot="quick-list-bucket"] h2')].map((h) => h.textContent)`)
-    ).toEqual(['Needs you', 'Recent'])
-
-    // The review runs are what wants you; the terminal ones are history. The variant pair is one
-    // tile, not two rows — so "Needs you" holds two things, not three.
-    // Both are `review`, so the tie breaks on recency: the variant group started 30 minutes ago,
-    // the PR review 40 — newest first. The PR row reads title (the auto-SUMMARY, not the raw
-    // fixture title), then its `+128 −14` diff pair, then the PR chip.
-    expect(rowsIn('Needs you')).toEqual([
-      'Add skills autocomplete to composer×2',
-      'Structured changes endpoint for the git view+128 −14PR',
-    ])
-    // fix-done recorded a diff on its last turn; fix-failed predates diffStat and shows none.
-    expect(rowsIn('Recent')).toEqual(['README parallel-agents tagline+9 −22h', 'Bump zod to v43h'])
+  it('hangs the tasks off the project row: rows, the variant tile, no archived leak', () => {
+    // One group for the boot project (Replit-style tree, user decision) — open, because the
+    // active project always starts expanded.
+    const group = `[data-slot="project-task-group"][data-project-id="${bootProject}"]`
+    expect(browser.count(group)).toBe(1)
+    // The three standalone runs are rows; the variant pair folds into one ×2 tile.
+    for (const id of ['fix-review-pr', 'fix-done', 'fix-failed']) {
+      expect(browser.count(`${group} [data-slot="task-row"][data-run-id="${id}"]`)).toBe(1)
+    }
+    expect(browser.text(`${group} [data-slot="group-tile"]`)).toContain('×2')
+    // Archived stays out of the tree entirely.
+    expect(browser.count(`[data-slot="task-row"][data-run-id="fix-archived"]`)).toBe(0)
+    // The row titles show the auto-SUMMARY, never the raw prompt-ish title behind it.
+    expect(browser.text(`${group} [data-slot="task-row"][data-run-id="fix-review-pr"]`)).toContain(
+      'Structured changes endpoint for the git view',
+    )
+    expect(browser.text(group)).not.toContain('add a structured changes endpoint plz')
   })
 
-  it('renders the diff pair through the success/danger tokens, not as plain text', () => {
-    const pair = browser.evaluate(`(() => {
-      const el = document.querySelector('[data-slot="task-row"][data-run-id="fix-review-pr"] [data-slot="diff-stat"]')
-      if (!el) return null
-      const [adds, dels] = el.querySelectorAll('span')
-      return {
-        adds: adds.textContent, dels: dels.textContent,
-        // Resolved by the real CSS: green ≠ red proves the two tokens actually applied.
-        addsColor: getComputedStyle(adds).color, delsColor: getComputedStyle(dels).color,
-      }
-    })()`) as { adds: string; dels: string; addsColor: string; delsColor: string } | null
-
-    expect(pair?.adds).toBe('+128')
-    expect(pair?.dels).toBe('−14')
-    expect(pair?.addsColor).not.toBe(pair?.delsColor)
-  })
-
-  it('paints one dot per row, in the tone deriveAttention picked', () => {
-    const tones = browser.evaluate(`(() => {
+  it('marks each row with the StatusMark deriveAttention picked', () => {
+    const marks = browser.evaluate(`(() => {
       const of = (id) => {
-        const dot = document.querySelector('[data-run-id="' + id + '"] [data-slot="status-dot"]')
-        return dot && { tone: dot.dataset.tone, pulses: getComputedStyle(dot).animationName !== 'none' }
+        const mark = document.querySelector('[data-run-id="' + id + '"] [data-slot="status-mark"]')
+        return mark && { kind: mark.dataset.kind, tone: mark.dataset.tone }
       }
       return { review: of('fix-review-pr'), done: of('fix-done'), failed: of('fix-failed') }
-    })()`) as Record<string, { tone: string; pulses: boolean }>
+    })()`) as Record<string, { kind: string; tone: string }>
 
-    expect(tones.review).toEqual({ tone: 'violet', pulses: true })
-    // Terminal rows are still — the pulse means "transitioning", and these are not.
-    expect(tones.done).toEqual({ tone: 'success', pulses: false })
-    expect(tones.failed).toEqual({ tone: 'danger', pulses: false })
-
-    // The design system's size rule, resolved by the real CSS rather than asserted from a class.
-    expect(
-      browser.evaluate(
-        `getComputedStyle(document.querySelector('[data-run-id="fix-done"] [data-slot="status-dot"]')).width`
-      )
-    ).toBe('7px')
+    expect(marks.review).toEqual({ kind: 'review', tone: 'pending' })
+    expect(marks.done).toEqual({ kind: 'done', tone: 'success' })
+    expect(marks.failed).toEqual({ kind: 'failed', tone: 'danger' })
   })
 
-  it('links a row to its task, and the PR chip to the PR', () => {
+  it('links a row to its task, and the compact reference chip to the PR', () => {
     expect(browser.evaluate(`document.querySelector('[data-run-id="fix-done"] a').getAttribute('href')`)).toBe(
       scoped('/tasks/fix-done')
     )
 
     const chip = browser.evaluate(`(() => {
       const el = document.querySelector('[data-run-id="fix-review-pr"] [data-slot="pr-chip"]')
-      return { href: el.href, target: el.target }
-    })()`) as { href: string; target: string }
+      return { href: el.href, target: el.target, text: el.textContent }
+    })()`) as { href: string; target: string; text: string }
     expect(chip.href).toBe('https://github.com/open-mercato/cezar/pull/396')
     expect(chip.target).toBe('_blank')
+    // Compact grammar: the number alone carries the reference in the slim row.
+    expect(chip.text).toContain('#396')
 
     // Only the run that has one.
     expect(browser.count('[data-run-id="fix-done"] [data-slot="pr-chip"]')).toBe(0)
   })
 
-  it('expands the variant group into per-variant rows, and collapses it again', () => {
-    // Scoped to the quick-list's rows: the Tasks table (Step 3.4) legitimately lists each
-    // variant as its own row, so a bare data-run-id would match the table too.
+  it('expands the variant tile into per-variant rows, and collapses it again', () => {
     expect(browser.count(`${ROW}[data-run-id="fix-var-a"]`)).toBe(0)
 
     browser.click(TILE)
     browser.waitForFunction(`document.querySelector('${ROW}[data-run-id="fix-var-a"]') !== null`)
-    // What actually differs between A and B — the backend and the spend.
-    expect(textOf(`${ROW}[data-run-id="fix-var-a"]`)).toBe('Aclaude · 96.2k')
-    expect(textOf(`${ROW}[data-run-id="fix-var-b"]`)).toBe('Bcodex · 41.8k')
-    // Each variant is still its own deep link.
+    // Each member row wears its variant letter and stays its own deep link.
+    expect(textOf(`${ROW}[data-run-id="fix-var-a"]`)).toContain('A')
+    expect(textOf(`${ROW}[data-run-id="fix-var-b"]`)).toContain('B')
     expect(
       browser.evaluate(`document.querySelector('${ROW}[data-run-id="fix-var-b"] a').getAttribute('href')`)
     ).toBe(scoped('/tasks/fix-var-b'))
+    // …and the tile's scale icon is the door to the compare view.
+    expect(
+      browser.evaluate(`document.querySelector('a[href="${scoped('/compare/fix-group-1')}"]') !== null`)
+    ).toBe(true)
 
     browser.screenshot(`${artifactsDir}/quick-list-expanded.png`)
 
@@ -323,24 +292,6 @@ describe('task quick-list', () => {
       ['fix-done']
     )
     browser.screenshot(`${artifactsDir}/quick-list-active-row.png`)
-  })
-
-  it('switches to the archived view, and back', () => {
-    browser.goto(`${baseUrl}${scoped('/')}`)
-    browser.waitForFunction(`document.querySelector('[data-slot="quick-list"]') !== null`)
-    expect(textOf('[data-slot="view-tab"][data-view="active"]')).toBe('Active5')
-    expect(textOf('[data-slot="view-tab"][data-view="archived"]')).toBe('Archived1')
-
-    browser.click('[data-slot="view-tab"][data-view="archived"]')
-    browser.waitForFunction(`document.querySelector('[data-bucket="Archived"]') !== null`)
-    expect(rowsIn('Archived')).toEqual(['Sync merged PR issues1d'])
-    // The active runs are gone, not merely restyled.
-    expect(browser.count('[data-run-id="fix-review-pr"]')).toBe(0)
-
-    browser.screenshot(`${artifactsDir}/quick-list-archived.png`)
-
-    browser.click('[data-slot="view-tab"][data-view="active"]')
-    browser.waitForFunction(`document.querySelector('[data-run-id="fix-review-pr"]') !== null`)
   })
 })
 
@@ -385,7 +336,8 @@ describe('tasks table overview', () => {
       const pr = tr.querySelector('[data-slot="pr-chip"]')
       return { text: tr.textContent, prHref: pr.href, prTarget: pr.target }
     })()`) as { text: string; prHref: string; prTarget: string }
-    expect(reviewRow.text).toContain('128.4k')
+    // (The tokens column became the usage-stream IN/OUT pair, which a static fixture cannot
+    // feed — the formatting is covered by the jsdom table tests.)
     expect(reviewRow.text).toContain('Structured changes endpoint for the git view')
     expect(reviewRow.text).not.toContain('add a structured changes endpoint plz')
     expect(reviewRow.prHref).toBe('https://github.com/open-mercato/cezar/pull/396')
@@ -403,12 +355,13 @@ describe('tasks table overview', () => {
       ])
     )`) as Record<string, string>
 
+    // Empty cells are BLANK (house rule): no dash placeholders where nothing was recorded.
     expect(diffs).toEqual({
       'fix-review-pr': '+128 −14',
-      'fix-var-a': '—', // no diffStat on these fixture records — nothing is fabricated
-      'fix-var-b': '—',
+      'fix-var-a': '',
+      'fix-var-b': '',
       'fix-done': '+9 −2',
-      'fix-failed': '—',
+      'fix-failed': '',
     })
   })
 
@@ -421,30 +374,23 @@ describe('tasks table overview', () => {
     ).toBe(scoped('/compare/fix-group-1'))
   })
 
-  it('flips both the table and the sidebar from the header tabs — one shared state', () => {
+  it('flips the table from the header tabs; the sidebar tree stays active-only', () => {
     browser.click('[data-slot="overview-tab"][data-view="archived"]')
     browser.waitForFunction(`document.querySelector('${TABLE_ROW}[data-run-id="fix-archived"]') !== null`)
     expect(browser.count(TABLE_ROW)).toBe(1)
-    // The sidebar followed without being touched.
-    expect(
-      browser.evaluate(
-        `document.querySelector('[data-slot="view-tab"][data-view="archived"]').getAttribute('aria-pressed')`
-      )
-    ).toBe('true')
-    expect(browser.count('[data-slot="task-row"][data-run-id="fix-review-pr"]')).toBe(0)
+    // The sidebar tree keeps its active rows — archived is the TABLE's view, the tree never
+    // lists archived work (user decision).
+    expect(browser.count('[data-slot="task-row"][data-run-id="fix-review-pr"]')).toBe(1)
+    expect(browser.count('[data-slot="task-row"][data-run-id="fix-archived"]')).toBe(0)
 
-    // And back, this time from the sidebar: the table follows.
-    browser.click('[data-slot="view-tab"][data-view="active"]')
+    browser.click('[data-slot="overview-tab"][data-view="active"]')
     browser.waitForFunction(`document.querySelector('${TABLE_ROW}[data-run-id="fix-review-pr"]') !== null`)
-    expect(
-      browser.evaluate(
-        `document.querySelector('[data-slot="overview-tab"][data-view="active"]').getAttribute('aria-pressed')`
-      )
-    ).toBe('true')
     expect(browser.count(`${TABLE_ROW}[data-run-id="fix-archived"]`)).toBe(0)
   })
 
   it('opens the task from a row click', () => {
+    browser.goto(`${baseUrl}${scoped('/')}`)
+    browser.waitForFunction(`document.querySelector('${TABLE_ROW}[data-run-id="fix-done"]') !== null`)
     browser.click(`${TABLE_ROW}[data-run-id="fix-done"]`)
     browser.waitForFunction(`location.pathname === '${scoped('/tasks/fix-done')}'`)
     expect(browser.url()).toContain(scoped('/tasks/fix-done'))
@@ -454,6 +400,8 @@ describe('tasks table overview', () => {
 
   it('renames a task inline from its row — the hover pencil, committed by Enter, stored for real', async () => {
     const row = `${TABLE_ROW}[data-run-id="fix-failed"]`
+    browser.goto(`${baseUrl}${scoped('/')}`)
+    browser.waitForFunction(`document.querySelector('${row}') !== null`)
     // The pencil is a hover affordance (mockup `.task-title .pencil`): produce a real pointer.
     browser.hover(row)
     browser.click(`${row} [data-slot="row-rename"]`)
@@ -474,7 +422,10 @@ describe('tasks table overview', () => {
 
     // Then the record: the server stored the edit as BOTH title and the displayed summary
     // (an edit must beat any past or future auto-summary).
-    const runs = (await fetch(`${baseUrl}/api/v1/runs`).then((r) => r.json())) as Array<{
+    // A fresh request, retried once: undici's pooled keep-alive socket to the fixture server
+    // can be minutes idle by now and answer only ECONNRESET on first reuse.
+    const readRuns = () => fetch(`${baseUrl}/api/v1/runs`).then((r) => r.json())
+    const runs = (await readRuns().catch(readRuns)) as Array<{
       id: string
       title: string
       titleSummary?: string
@@ -644,29 +595,28 @@ describe('a row under width contention, in a column the user can widen', () => {
     expect(painted.tooltip).toBe(FULL_TITLE)
   })
 
-  it('gives the name real width at the default 264px, and drops the diff pair to do it', () => {
+  it('gives the name real width at the default 264px', () => {
     expect(sidebarWidth()).toBe(264)
 
     const measured = browser.evaluate(`(() => {
       const row = document.querySelector('${ROW_ID}')
       const title = row.querySelector('[data-slot="task-row-title"]')
-      const diff = row.querySelector('[data-slot="diff-stat"]')
-      const scroller = document.querySelector('[data-slot="task-quick-list"]')
+      const sidebar = document.querySelector('[data-slot="sidebar"]')
+      const edge = sidebar.getBoundingClientRect().right
+      // The drag handle legitimately overhangs the edge by 2px for grabbability — anything
+      // ELSE past the edge is the horizontal-scroll regression this guards.
+      const escaped = [...sidebar.querySelectorAll('*')]
+        .filter((el) => el.dataset.slot !== 'sidebar-resize-handle')
+        .filter((el) => el.getBoundingClientRect().right > edge + 0.5).length
       return {
         titleWidth: title.getBoundingClientRect().width,
-        // The real CSS, not the class: this is the container query resolving at 264px.
-        diffDisplay: getComputedStyle(diff).display,
-        diffTooltip: diff.getAttribute('title'),
-        overflows: scroller.scrollWidth > scroller.clientWidth,
+        overflows: escaped > 0,
       }
-    })()`) as { titleWidth: number; diffDisplay: string; diffTooltip: string; overflows: boolean }
+    })()`) as { titleWidth: number; overflows: boolean }
 
-    // The floor from the width-priority rule, honored by the real layout — before this change the
-    // same row gave its title ~68px.
+    // The floor from the width-priority rule, honored by the real layout. (The diff pair left
+    // the sidebar rows with the Projects-tree redesign — the meta line is age + reference.)
     expect(measured.titleWidth).toBeGreaterThanOrEqual(112)
-    expect(measured.diffDisplay).toBe('none')
-    // Dropped from view, not from reach.
-    expect(measured.diffTooltip).toBe('+59514 −12160 across 208 files')
     // A floor must not buy readability with a horizontal scrollbar.
     expect(measured.overflows).toBe(false)
 
@@ -674,36 +624,24 @@ describe('a row under width contention, in a column the user can widen', () => {
   })
 
   it('grows the name as the column grows, without ever shrinking it', () => {
-    // The cliff this guards against: a threshold placed where the diff pair merely *fits* makes
-    // dragging the column WIDER produce a SHORTER name, which is the exact bargain #788 exists
-    // to stop making. At every width the name is at least as long as it was at the default.
-    const baseline = titleWidth()
-    let previousBelowThreshold = baseline
+    // The cliff this guards against (#788): dragging the column WIDER must never produce a
+    // SHORTER name. At every width the name is at least as long as the previous one.
+    let previous = titleWidth()
     for (const width of [280, 320, 360, 368, 400, 420]) {
       setStoredWidth(width)
       expect(sidebarWidth()).toBe(width)
-      expect(titleWidth()).toBeGreaterThanOrEqual(baseline)
-      if (diffDisplay() === 'none') {
-        // Below the threshold the name grows monotonically — every px goes to it.
-        expect(titleWidth()).toBeGreaterThanOrEqual(previousBelowThreshold)
-        previousBelowThreshold = titleWidth()
-      }
+      expect(titleWidth()).toBeGreaterThanOrEqual(previous)
+      previous = titleWidth()
     }
   })
 
-  it('drags wider, brings the diff pair back, and remembers the width across a reload', () => {
+  it('drags wider and remembers the width across a reload', () => {
     dragHandle(100)
     expect(sidebarWidth()).toBe(364)
     expect(browser.evaluate(`document.querySelector('${HANDLE}').getAttribute('aria-valuenow')`)).toBe('364')
-    // Still below 23rem: the column is wider, and all of it went to the name.
-    expect(diffDisplay()).toBe('none')
 
     dragHandle(56)
     expect(sidebarWidth()).toBe(420)
-    // Past 23rem the row can afford its diff numbers again — the whole point of making the
-    // metadata droppable rather than deleting it. `block`, not `inline`: the utility says
-    // `inline`, and CSS blockifies the display of a flex item, which this span is.
-    expect(diffDisplay()).not.toBe('none')
 
     browser.screenshot(`${artifactsDir}/quick-list-width-contention-420.png`, { viewport: true })
 
@@ -786,11 +724,11 @@ describe('empty quick-list', () => {
 
   it('shows the honest empty state — a fresh cezar has nothing to list', () => {
     browser.goto(`${emptyUrl}/p/${emptyProject}/`)
-    browser.waitForFunction(`document.querySelector('[data-slot="quick-list"]') !== null`)
+    // The tree still lists the project itself; its children say the truth quietly.
+    browser.waitForFunction(`document.querySelector('[data-slot="group-empty"]') !== null`)
 
-    expect(browser.text('[data-slot="quick-list"]')).toContain('No tasks yet — describe one.')
+    expect(browser.text('[data-slot="group-empty"]')).toContain('No tasks yet')
     expect(browser.count(ROW)).toBe(0)
-    expect(browser.count('[data-slot="quick-list-bucket"]')).toBe(0)
 
     browser.screenshot(`${artifactsDir}/quick-list-empty.png`)
   })
