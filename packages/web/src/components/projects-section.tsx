@@ -169,7 +169,7 @@ function ProjectRow({
     <section data-slot="project-task-group" data-project-id={project.id} className="flex flex-col">
       <div
         className={cn(
-          'group/row flex h-9 items-center gap-1 rounded-md pr-1 pl-1 transition-colors hover:bg-muted md:h-8',
+          'group/row flex h-11 items-center gap-1 rounded-md pr-1 pl-1 transition-colors hover:bg-muted md:h-8',
           active && 'bg-muted',
         )}
       >

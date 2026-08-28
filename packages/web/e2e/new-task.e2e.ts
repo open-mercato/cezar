@@ -135,14 +135,15 @@ describe('the full-screen /new against a live dry-run server', () => {
     const runners = ['claude', 'codex', 'opencode'].filter((id) =>
       health.checks.some((c) => c.name === id && c.available),
     )
-    if (runners.length > 1) {
-      expect(browser.count('[data-slot="runner-pill"]')).toBe(1)
-      expect(browser.text('[data-slot="runner-pill"]')).toContain('claude')
-    } else {
-      expect(browser.count('[data-slot="runner-pill"]')).toBe(0)
-    }
-    expect(browser.text('[data-slot="model-pill"]')).toContain('auto')
-    expect(browser.text('[data-slot="variants-pill"]')).toContain('×1')
+    // Agent and model merged into ONE pill (user decision): it renders regardless — the
+    // agent section inside its menu is what the >1-backend rule now gates.
+    void runners
+    expect(browser.count('[data-slot="runner-pill"]')).toBe(1)
+    expect(browser.text('[data-slot="runner-pill"]')).toContain('claude')
+    expect(browser.text('[data-slot="runner-pill"]')).toContain('auto')
+    // Variants moved behind the run-options disclosure; at the default ×1 it carries no marker.
+    expect(browser.count('[data-slot="run-options"]')).toBe(1)
+    expect(browser.count('[data-slot="run-options-marker"]')).toBe(0)
     expect(browser.text('[data-slot="base-pill"]')).toContain('base: main')
     browser.screenshot(`${artifactsDir}/new-task-hero.png`)
   })

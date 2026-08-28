@@ -1235,6 +1235,8 @@ function RunOptionsMenu({
             <DropdownMenuRadioItem
               key={option.value}
               value={option.value}
+              data-slot="option-variants"
+              data-variants={option.value}
               disabled={!hasGit && option.value !== '1'}
               title={!hasGit && option.value !== '1' ? 'Parallel variants need a git repository' : undefined}
               className="gap-2.5"
@@ -1249,6 +1251,7 @@ function RunOptionsMenu({
         <DropdownMenuSeparator />
         {worktreeShown ? (
           <DropdownMenuCheckboxItem
+            data-slot="option-worktree"
             checked={worktreeOn}
             disabled={worktreeForced}
             title={worktreeForced ? 'Parallel variants always use isolated worktrees' : undefined}
@@ -1259,6 +1262,7 @@ function RunOptionsMenu({
           </DropdownMenuCheckboxItem>
         ) : null}
         <DropdownMenuCheckboxItem
+          data-slot="option-autonomous"
           checked={autonomousOn}
           disabled={autonomousDisabled}
           title={autonomousDisabled ? 'Plan-first runs are interactive, so autonomous is unavailable' : undefined}
@@ -1269,6 +1273,7 @@ function RunOptionsMenu({
         </DropdownMenuCheckboxItem>
         {followupsShown ? (
           <DropdownMenuCheckboxItem
+            data-slot="option-followups"
             checked={followupsOn}
             onCheckedChange={onFollowups}
             onSelect={(event) => event.preventDefault()}

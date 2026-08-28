@@ -25,6 +25,9 @@ const repoRoot = resolve(import.meta.dirname, '../../..')
 const skillsDir = resolve(repoRoot, '.ai/skills')
 const ALPHA = 'e2e-wb-alpha'
 const BETA = 'e2e-wb-beta'
+// The cap test needs DISTINCT skills now: the builder refuses duplicates (user decision),
+// so filling to the 8-step cap takes six more sources plus one to be refused.
+const EXTRAS = Array.from({ length: 7 }, (_, i) => `e2e-wb-c${i + 1}`)
 const FLOW = 'e2e-wb-flow'
 const savedFlowPath = resolve(repoRoot, `.ai/cezar/workflows/${FLOW}.yaml`)
 
@@ -48,6 +51,13 @@ beforeAll(() => {
     `---\nname: ${BETA}\ndescription: Second e2e-seeded skill\n---\n\nDo the beta thing.\n`,
     'utf8',
   )
+  for (const name of EXTRAS) {
+    writeFileSync(
+      resolve(skillsDir, `${name}.md`),
+      `---\nname: ${name}\ndescription: Cap-filler e2e skill\n---\n\nDo the ${name} thing.\n`,
+      'utf8',
+    )
+  }
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
 })
@@ -56,6 +66,7 @@ afterAll(() => {
   // Never leave test skills or test workflow files in a developer's repo.
   rmSync(resolve(skillsDir, `${ALPHA}.md`), { force: true })
   rmSync(resolve(skillsDir, `${BETA}.md`), { force: true })
+  for (const name of EXTRAS) rmSync(resolve(skillsDir, `${name}.md`), { force: true })
   if (createdSkillsDir) rmSync(skillsDir, { recursive: true, force: true })
   rmSync(savedFlowPath, { force: true })
   browser?.close()
@@ -163,12 +174,20 @@ describe('workflow builder against the live dry-run server', () => {
     browser.screenshot(`${artifactsDir}/workflows-imported.png`)
   })
 
+  it('a skill already in the flow loses its add button and wears the in-flow check', () => {
+    // The imported flow's first step runs ALPHA, so the palette must refuse a second copy
+    // (user decision: no duplicate steps) — the + gives way to the check marker.
+    expect(browser.count(addButton(ALPHA))).toBe(0)
+    expect(browser.count(`${palettePill(ALPHA)} [data-slot="wb-skill-in-flow"]`)).toBe(1)
+  })
+
   it('refuses the 9th step with the legacy limit message', () => {
-    // 2 imported steps on the canvas — fill up to the server's cap of 8, then one more.
-    for (let i = 0; i < 6; i++) browser.click(addButton(ALPHA))
+    // 2 imported steps on the canvas — fill to the server's cap of 8 with DISTINCT skills
+    // (duplicates are refused before the cap can even speak), then one more.
+    for (const name of EXTRAS.slice(0, 6)) browser.click(addButton(name))
     browser.waitForFunction(`document.querySelectorAll('[data-slot="wb-step"]').length === 8`)
 
-    browser.click(addButton(ALPHA))
+    browser.click(addButton(EXTRAS[6]!))
     browser.waitForFunction(
       `document.querySelector('[data-slot="toaster"]')?.textContent.includes('at most 8 steps')`,
     )

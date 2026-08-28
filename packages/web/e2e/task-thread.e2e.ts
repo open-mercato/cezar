@@ -269,11 +269,14 @@ describe('task thread', () => {
     expect(rail.bar).toBe('100%') // both steps terminal — (1 + 1) / 2
   })
 
-  it('the plan dock shows the LATEST snapshot (2/4), expanded on desktop, mirrored in the header', () => {
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('open')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-mirror"]').textContent`)).toBe('Plan 2/4')
+  it('the plan chip shows the LATEST snapshot (2/4) and opens the checklist', () => {
+    // The dock became a context-bar CHIP under the composer (user decision: the header lost
+    // its mirror, the tally lives in one place).
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-chip"]') !== null`)
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('2/4')
 
+    browser.click('[data-slot="plan-chip"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-list"]') !== null`)
     // The turn-2 snapshot won (turn 1 said 0/4 with "Read README and docs" in progress).
     const items = browser.evaluate(`[...document.querySelectorAll('[data-slot="plan-item"]')].map((el) => ({
       status: el.dataset.status,
@@ -283,20 +286,9 @@ describe('task thread', () => {
     expect(items[2]!.text).toContain('Summarize cockpit features')
     expect(items[2]!.text).toContain('in progress')
 
-    // It sits in the dock region above the composer area, not in the thread flow.
-    expect(browser.evaluate(`document.querySelector('[data-slot="thread-dock"] [data-slot="plan-dock"]') !== null`)).toBe(true)
-  })
-
-  it('collapsing the dock folds it to the odometer + the activeForm of the current item', () => {
-    browser.click('[data-slot="plan-dock"] button')
-    browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'collapsed'`)
-    expect(browser.count('[data-slot="plan-list"]')).toBe(0)
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-current"]').textContent`)).toBe(
-      '— Summarizing cockpit features',
-    )
-    // Re-expand so the desktop screenshot below captures the full checklist.
-    browser.click('[data-slot="plan-dock"] button')
-    browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'open'`)
+    // Close the popover so later steps interact with the thread unobstructed.
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-list"]') === null`)
   })
 
   it('a card is closed by default and expands to its mono output (the #381 behavior)', () => {
@@ -430,9 +422,8 @@ describe('task thread', () => {
       })()`),
     ).toBe(true)
 
-    // Phone default: the dock collapses to the odometer (the mockup's mobile reflow).
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('collapsed')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
+    // Phone default: the plan is its context-bar chip with the odometer, same as desktop.
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('2/4')
 
     browser.screenshot(`${artifactsDir}/thread-mobile.png`)
     browser.setViewport(1440, 900)
