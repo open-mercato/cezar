@@ -323,9 +323,9 @@ function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
           heading="h2"
           icon={<ListChecksIcon />}
           // The brand cat borne on a litter by his mouse legion (user artwork). Native
-          // 180x122 pixel grid at an integer 2x with pixelated rendering — that is what
-          // keeps pixel art razor-sharp.
-          art={<img src="/cezar-hero.png" alt="" aria-hidden="true" data-slot="empty-hero" width={360} height={244} className="max-w-full [image-rendering:pixelated]" />}
+          // 180x122 pixel grid drawn at 1x CSS (an exact 2x on retina) with pixelated
+          // rendering — integer scales are what keep pixel art razor-sharp.
+          art={<img src="/cezar-hero.png" alt="" aria-hidden="true" data-slot="empty-hero" width={180} height={122} className="max-w-full [image-rendering:pixelated]" />}
           tone="primary"
           backdrop
           title="No tasks yet"
