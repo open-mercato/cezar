@@ -1,8 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState, type ReactNode } from 'react'
 
+import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
+import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ContinueResponse, ImageInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
 import {
@@ -49,10 +51,11 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const queryClient = useQueryClient()
   const available = runActionFlags(run).continueRun
   const config = useConfig()
-  // null = "not touched": the pills fall back to the run's current backend/model, so an
+  // null = "not touched": the pills fall back to the run's current backend/model/account, so an
   // untouched Continue behaves exactly as before this feature existed.
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
   const [pickedModel, setPickedModel] = useState<string | null>(null)
+  const [pickedAccount, setPickedAccount] = useState<string | null>(null)
 
   const continuation = useContinuationProvider(run, pickedRunner)
   const { runners, canContinue, currentRunner, runner } = continuation
@@ -73,6 +76,29 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
   const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
 
+  // Agent accounts (spec 2026-07-29-agent-profiles): rows of the RUNNER pill, exactly as the /new
+  // composer offers them — `claude · Default` / `claude · Klaudiusz` / `codex`. Without them a
+  // thread could switch agent but not login, so "continue this on my other Claude account" was
+  // unsayable anywhere except at task creation.
+  const { accounts, repoAccount } = useAgentAccounts()
+  // Which account this run is ON: the STEP that spawned, never the project's current selection —
+  // `sessionId` and `profileId` are a pair, so that step is the account a resume reattaches to and
+  // therefore the row that is selected until the user picks another. A run from before accounts
+  // existed recorded none and ran under the discovered one.
+  const runAccount =
+    [...run.steps].reverse().find((step) => step.profileId)?.profileId
+    ?? run.agentProfile
+    ?? DEFAULT_AGENT_ACCOUNT_ID
+  // The run's own account stands in for the project's selection only while the runner is
+  // unchanged; switching backend falls back to what the project resolves to for THAT agent, since
+  // an account belongs to one agent (same rule the model pill above follows).
+  const accountDefaults = runnerChanged ? repoAccount : { ...repoAccount, [currentRunner]: runAccount }
+  // A pick belonging to ANOTHER runner is dropped rather than sent: switching runner must not
+  // silently carry the previous runner's login along (the composer's guard, verbatim).
+  const account = accounts.some((choice) => choice.provider === runner && choice.id === pickedAccount)
+    ? pickedAccount
+    : null
+
   const mutation = useMutation({
     mutationFn: ({ text, images }: { text: string; images: ImageInput[] }) => {
       if (!canContinue) {
@@ -88,6 +114,10 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // connected fallback must be explicit even when the pills were untouched.
         runner: continuation.runnerOverride,
         model: !modelsLocked && pickedModel !== null ? model : undefined,
+        // Only a login the user actually picked rides the request. Omitted, the run keeps the
+        // account it is on — and the reopened session still resumes, which an explicit switch
+        // deliberately does not (a session id lives inside ONE account's config dir).
+        agentProfile: account ?? undefined,
       })
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
@@ -100,13 +130,26 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     providerPending: continuation.providerPending,
     pills: (
       <div data-slot="follow-up-engine" className="flex flex-wrap items-center gap-1.5">
-        {runners.length > 1 ? (
+        {/* Shown when there is a choice to make: more than one runner, or more than one login for
+            one of them. A host with neither sees no pill, exactly as before. */}
+        {runners.length > 1 || runners.some((id) => hasAccountChoice(accounts, id)) ? (
           <RunnerPill
             runners={runners}
             value={runner}
-            onPick={(next) => {
-              setPickedRunner(next)
-              setPickedModel(null) // a runner switch invalidates the previous model pick
+            accounts={accounts}
+            account={account}
+            repoAccount={accountDefaults}
+            onPick={(next, picked) => {
+              setPickedAccount(picked)
+              // Picking another LOGIN of the agent already in force is not a backend choice, so it
+              // must not become one: recording it would put a `runner` on the wire that the run is
+              // already on. Changing the AGENT does invalidate the model pick — presets are
+              // per-runner — while an account switch keeps it, the catalog being the same either
+              // way.
+              if (next !== runner) {
+                setPickedRunner(next)
+                setPickedModel(null)
+              }
             }}
           />
         ) : null}
