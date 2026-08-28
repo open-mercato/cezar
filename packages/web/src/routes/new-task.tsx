@@ -1221,14 +1221,16 @@ function RunOptionsMenu({
           data-slot="run-options"
           aria-label="Run options"
           title="Run options: variants, worktree, autonomous, follow-ups"
-          className="relative flex size-[26px] shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          // The same size-8 ghost grammar as the attach / mic / template helpers (user
+          // decision: the in-between icons read as one family).
+          className="relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
         >
-          <SlidersHorizontalIcon aria-hidden="true" className="size-3.5" />
+          <SlidersHorizontalIcon aria-hidden="true" className="size-4" />
           {nonDefault ? (
             <span
               data-slot="run-options-marker"
               aria-hidden="true"
-              className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-violet"
+              className="absolute top-0.5 right-0.5 size-2 rounded-full bg-violet"
             />
           ) : null}
         </button>

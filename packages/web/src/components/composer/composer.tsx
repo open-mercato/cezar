@@ -507,7 +507,7 @@ export function Composer({
                     className="size-8 px-0 text-muted-foreground"
                     onClick={dictation.start}
                   >
-                    <MicIcon aria-hidden="true" className="size-3.5" />
+                    <MicIcon aria-hidden="true" className="size-4" />
                   </Button>
                 ) : null}
                 {footerEnd ? (
@@ -616,7 +616,7 @@ function AttachButton({
         className="size-8 text-muted-foreground"
         onClick={() => inputRef.current?.click()}
       >
-        <PaperclipIcon aria-hidden="true" className="size-[15px]" />
+        <PaperclipIcon aria-hidden="true" className="size-4" />
       </Button>
       <input
         ref={inputRef}
