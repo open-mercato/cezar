@@ -320,6 +320,9 @@ function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
           backdrop
           title="The archives stand empty"
           subtitle="Caesar's scribes have nothing to shelve. Archive a finished task and it will rest here."
+          // An invisible stand-in for the Active tab's New-task button (user decision): both
+          // empty states occupy the same height, so flipping Active/Archived moves nothing.
+          actions={<div aria-hidden="true" className="invisible h-9" />}
         />
       ) : (
         <CenteredState
