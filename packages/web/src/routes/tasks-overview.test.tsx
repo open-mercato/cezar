@@ -748,7 +748,7 @@ describe('TasksOverview — empty and loading states', () => {
 
     expect(empty.getAttribute('data-empty-kind')).toBe('no-tasks')
     expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('primary')
-    expect(within(empty).getByRole('heading', { name: 'No tasks yet' })).not.toBeNull()
+    expect(within(empty).getByRole('heading', { name: 'The legion awaits orders' })).not.toBeNull()
     expect(within(empty).getByText('Describe a task to get started.')).not.toBeNull()
     // Scoped inside the state — the mobile FAB is also a link named "New task".
     expect(within(empty).getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/new')

@@ -328,8 +328,9 @@ function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
           art={<img src="/cezar-hero.png" alt="" aria-hidden="true" data-slot="empty-hero" width={180} height={122} className="max-w-full [image-rendering:pixelated]" />}
           tone="primary"
           backdrop
-          title="No tasks yet"
-          subtitle="Describe a task to get started."
+          // Caesar-voiced empty copy (user request): no tasks, so get to work.
+          title="The legion awaits orders"
+          subtitle="Caesar finds no tasks worthy of note. Describe one, the empire will not build itself."
           actions={
             <Button asChild>
               <Link to="/new">

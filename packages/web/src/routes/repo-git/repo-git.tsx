@@ -53,7 +53,7 @@ export function RepoGitRoute({ tab }: { tab: RepoTab }) {
           tone="neutral"
           backdrop
           title="Not a git repository"
-          subtitle="cezar is running outside a git repository — start it inside one to browse changes, commits and branches."
+          subtitle="cezar is running outside a git repository. Start it inside one to browse changes, commits and branches."
         />
       </div>
     )
