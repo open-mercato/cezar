@@ -478,8 +478,8 @@ export function ThreadView({
             placeholder={
               queued ? 'Add to the prompt — sent when the run starts…'
               : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
-              : run.status === 'waiting' ? 'Reply to Cezar — / for skills, @ for files…'
-              : 'Message Cezar — / for skills, @ for files…'
+              : run.status === 'waiting' ? 'Reply to Cezar (/ for skills, @ for files)…'
+              : 'Message Cezar (/ for skills, @ for files)…'
             }
             autocompleteSkills
             quickReplies

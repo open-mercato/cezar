@@ -234,7 +234,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="thread-footer"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
-    expect(textarea.placeholder).toBe('Reply to Cezar — / for skills, @ for files…')
+    expect(textarea.placeholder).toBe('Reply to Cezar (/ for skills, @ for files)…')
   })
 
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
@@ -303,7 +303,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
-    expect(textarea.placeholder).toBe('Message Cezar — / for skills, @ for files…')
+    expect(textarea.placeholder).toBe('Message Cezar (/ for skills, @ for files)…')
   })
 
   it.each([
@@ -360,7 +360,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
-    expect(textarea.placeholder).toBe('Message Cezar — / for skills, @ for files…')
+    expect(textarea.placeholder).toBe('Message Cezar (/ for skills, @ for files)…')
   })
 
   /** A closed run with a session to resume is still AUTHORABLE: Continue takes a prompt, so

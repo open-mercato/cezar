@@ -37,7 +37,7 @@ import type {
   Skill,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
-import { TwinkleBackdrop } from '@/components/centered-state'
+import { GridBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
 import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
@@ -428,7 +428,7 @@ export function NewTaskRoute() {
     }
     if (!sourcesReady) {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
-      throw new Error('Still loading workflows and skills — try again in a second.')
+      throw new Error('Still loading workflows and skills. Try again in a second.')
     }
     if (draft.planFirst) {
       // Plan mode: submit means PLAN. A rejection propagates — the composer toasts and
@@ -539,11 +539,11 @@ export function NewTaskRoute() {
         data-route="new"
         className="relative isolate flex min-h-full flex-col items-center justify-center overflow-x-clip px-6"
       >
-        <TwinkleBackdrop />
+        <GridBackdrop />
         <div data-slot="auto-starting" role="status" className="text-center">
           <h1 className="animate-pulse text-lg font-semibold tracking-tight">Starting task…</h1>
           <p className="mt-1.5 text-[13.5px] text-muted-foreground">
-            Launched from a bookmarklet — taking you to the run.
+            Launched from a bookmarklet, taking you to the run.
           </p>
         </div>
       </div>
@@ -555,7 +555,7 @@ export function NewTaskRoute() {
       data-route="new"
       className="relative isolate flex min-h-full flex-col items-center overflow-x-clip px-6 pt-[clamp(32px,7vh,84px)] pb-16 max-md:px-3.5 max-md:pt-7"
     >
-      <TwinkleBackdrop />
+      <GridBackdrop />
       <GhostCodeBackdrop />
 
       <div className="w-full max-w-[720px]">
@@ -577,7 +577,7 @@ export function NewTaskRoute() {
           value={draft.text}
           onValueChange={(text) => update({ text })}
           autoFocus
-          placeholder="Describe a task for the agent — / for skills…"
+          placeholder="Describe a task for the agent (/ for skills)…"
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={draft.planFirst ? 'Plan task' : 'Start task'}
           disabled={!providersReady || starting}
@@ -671,8 +671,8 @@ export function NewTaskRoute() {
                 disabledHint="Parallel variants need a git repository — each variant runs in its own worktree."
                 options={[
                   { value: '1', label: '×1', desc: 'One run' },
-                  { value: '2', label: '×2 variants', desc: 'Two competing runs — pick the diff you keep' },
-                  { value: '3', label: '×3 variants', desc: 'Three competing runs — pick the diff you keep' },
+                  { value: '2', label: '×2 variants', desc: 'Two competing runs, pick the diff you keep' },
+                  { value: '3', label: '×3 variants', desc: 'Three competing runs, pick the diff you keep' },
                 ]}
               />
               {worktreeToggleShown ? (
@@ -781,8 +781,8 @@ function WorktreeToggle({
         disabled
           ? disabledReason
           : on
-          ? 'Runs in an isolated worktree — uncheck to run in the repo working tree'
-          : 'Runs in the repo working tree — check to isolate in a worktree'
+          ? 'Runs in an isolated worktree. Uncheck to run in the repo working tree'
+          : 'Runs in the repo working tree. Check to isolate in a worktree'
       }
       className={cn(chipClass, on && 'border-primary/60 text-foreground')}
     >
@@ -817,10 +817,10 @@ function AutonomousToggle({
       onClick={() => onChange(!on)}
       title={
         disabled
-          ? 'Plan-first runs are interactive — autonomous is unavailable'
+          ? 'Plan-first runs are interactive, so autonomous is unavailable'
           : on
-            ? 'Autonomous — the agent runs to completion without pausing for you'
-            : 'Runs interactively — check to let the agent finish without pausing for you'
+            ? 'Autonomous: the agent runs to completion without pausing for you'
+            : 'Runs interactively. Check to let the agent finish without pausing for you'
       }
       className={cn(chipClass, on && !disabled && 'border-primary/60 text-foreground')}
     >

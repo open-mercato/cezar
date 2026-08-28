@@ -91,7 +91,7 @@ export function resolveComposerRunMode(input: ComposerRunModeInput): {
 export function composerRunModeNote(input: { worktree: boolean; hasGit: boolean }): string {
   if (input.worktree) return 'Runs in an isolated worktree — review everything before it lands.'
   if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
-  return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'
+  return 'Runs in place. No git repository detected, so there is no worktree to isolate in.'
 }
 
 const EMPTY: NewTaskDraft = {

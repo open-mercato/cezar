@@ -350,12 +350,12 @@ const postedBody = () => requests.find((r) => r.method === 'POST' && r.url === '
 // ---- the hero surface -------------------------------------------------------------------------
 
 describe('the hero surface', () => {
-  it('renders the mockup hero: title, subtitle, twinkles, and focus lands in the textarea', async () => {
+  it('renders the mockup hero: title, subtitle, the grid ground, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
     expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
-    expect(document.querySelector('[data-route="new"] [data-slot="twinkle-backdrop"]')).not.toBeNull()
+    expect(document.querySelector('[data-route="new"] [data-slot="grid-backdrop"]')).not.toBeNull()
     // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
     // unconditionally, so it also claimed isolation for runs that had opted out of it — the
     // per-state cases live in "the run-mode note" below.
@@ -496,7 +496,7 @@ describe('picker data flows', () => {
       renderNewTask()
       await pillReady()
       expect(note())
-        .toBe('Runs in place — no git repository detected, so there is no worktree to isolate in.')
+        .toBe('Runs in place. No git repository detected, so there is no worktree to isolate in.')
     })
 
     it('follows the workspace Worktree-off policy, not just an explicit click', async () => {

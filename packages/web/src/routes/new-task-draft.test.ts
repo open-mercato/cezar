@@ -201,7 +201,7 @@ describe('composerRunModeNote (#793)', () => {
     {
       worktree: false,
       hasGit: false,
-      expected: 'Runs in place — no git repository detected, so there is no worktree to isolate in.',
+      expected: 'Runs in place. No git repository detected, so there is no worktree to isolate in.',
     },
   ]
 

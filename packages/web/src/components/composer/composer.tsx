@@ -116,7 +116,7 @@ export function Composer({
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
   allowEmptySubmit = false,
-  placeholder = 'Reply — / for skills, @ for files…',
+  placeholder = 'Reply (/ for skills, @ for files)…',
   ariaLabel = 'Reply to the agent',
   autocompleteSkills = true,
   quickReplies = false,

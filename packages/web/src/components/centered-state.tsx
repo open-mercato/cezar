@@ -56,16 +56,8 @@ export function CenteredState({
         className
       )}
     >
-      {/* A faint pixel grid (user decision — the twinkle dots left these states): a
-          graph-paper ground fading out radially, framing the art without striping the
-          whole viewport. Border token only — it follows the theme. */}
-      {backdrop ? (
-        <div
-          data-slot="grid-backdrop"
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 -z-10 opacity-40 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:28px_28px] [mask-image:radial-gradient(ellipse_55%_50%_at_50%_42%,black,transparent_78%)]"
-        />
-      ) : null}
+      {/* A faint pixel grid (user decision — the twinkle dots left these states). */}
+      {backdrop ? <GridBackdrop /> : null}
       <div className="flex w-full max-w-md flex-col items-center gap-4">
         {art ?? (
           <div
@@ -131,6 +123,22 @@ const twinkleTone: Record<Twinkle['tone'], string> = {
  * `motion-safe:` — under `prefers-reduced-motion` the squares render static at their base
  * opacity, exactly as the spec's motion rules require.
  */
+/** The hero surfaces' one texture (user decision): a graph-paper ground fading out
+ *  radially, framing the content without striping the whole viewport. Border token only —
+ *  it follows the theme. */
+export function GridBackdrop({ className }: { className?: string }) {
+  return (
+    <div
+      data-slot="grid-backdrop"
+      aria-hidden="true"
+      className={cn(
+        'pointer-events-none absolute inset-0 -z-10 opacity-40 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:28px_28px] [mask-image:radial-gradient(ellipse_55%_50%_at_50%_42%,black,transparent_78%)]',
+        className,
+      )}
+    />
+  )
+}
+
 export function TwinkleBackdrop({ className }: { className?: string }) {
   return (
     <div
