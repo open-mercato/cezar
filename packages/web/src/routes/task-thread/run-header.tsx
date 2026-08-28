@@ -78,6 +78,7 @@ import {
   taskIssueUrl,
   taskPrUrl,
   taskReferences,
+  workflowLabel,
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { chipClass, chevron } from '@/components/picker-pill'
@@ -157,7 +158,7 @@ export function RunHeader({
         {/* Below md only (user decision, UX pass): everything — tabs, chips, actions — lives
             on the app bar via the bar-actions portal on desktop; this row is the mobile
             stand-in, where no bar exists. */}
-        <div data-slot="run-tabs" className="flex items-end gap-1 md:hidden">
+        <div data-slot="run-tabs" className="flex flex-wrap items-end gap-1 md:hidden">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
             Session
@@ -697,6 +698,11 @@ export function RunMetaFooter({ run, pickers }: { run: ApiRun; pickers?: ReactNo
   const showCost = metricVisibility.cost && !!run.costUsd
   return (
     <div data-slot="run-meta-footer" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+      {/* The workflow's one remaining home on the thread (the header chip retired with the
+          meta line): which pipeline ran this task. */}
+      <FooterStat label="Workflow">
+        <span className="truncate">{workflowLabel(run)}</span>
+      </FooterStat>
       {showCost ? (
         <FooterStat label="Cost">
           <span className="tabular-nums">{formatCost(run.costUsd!)}</span>
