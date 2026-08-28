@@ -1426,6 +1426,7 @@ export function createApp(deps: ServerDeps) {
   app.get('/cezar-logo-dark.svg', staticFile('cezar-logo-dark.svg', 'image/svg+xml'));
   app.get('/cezar-hero.png', staticFile('cezar-hero.png', 'image/png'));
   app.get('/cezar-hero-git.png', staticFile('cezar-hero-git.png', 'image/png'));
+  app.get('/cezar-hero-archive.png', staticFile('cezar-hero-archive.png', 'image/png'));
   app.get('/open-mercato.svg', staticFile('open-mercato.svg', 'image/svg+xml'));
 
   // ---- meta ----------------------------------------------------------------

@@ -47,9 +47,9 @@ export function RepoGitRoute({ tab }: { tab: RepoTab }) {
       <div data-route="repo-git" className="flex min-h-full flex-col">
         <CenteredState
           icon={<GitBranchIcon />}
-          // The court scene (user artwork), same pipeline and the same shared 232x122
+          // The court scene (user artwork), same pipeline and the same shared 232x130
           // canvas as the Tasks hero (user decision: no size jump between screens).
-          art={<img src="/cezar-hero-git.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={122} className="max-w-full [image-rendering:pixelated]" />}
+          art={<img src="/cezar-hero-git.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={130} className="max-w-full [image-rendering:pixelated]" />}
           tone="neutral"
           backdrop
           // Caesar-voiced, like the Tasks empty state (user request) — the scribes are the

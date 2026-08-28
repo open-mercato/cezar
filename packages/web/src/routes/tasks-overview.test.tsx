@@ -756,15 +756,16 @@ describe('TasksOverview — empty and loading states', () => {
     expect(empty.querySelector('[data-slot="grid-backdrop"]')).not.toBeNull()
   })
 
-  it('says the archive is empty, plainly — neutral, no backdrop', () => {
+  it("says the archive is empty in Caesar's voice, with the scriptorium hero", () => {
     renderOverview({ runs: [run({ status: 'done' })], view: 'archived' })
     const empty = document.querySelector<HTMLElement>('[data-slot="tasks-empty"]')
     if (!empty) throw new Error('no empty state rendered')
 
     expect(empty.getAttribute('data-empty-kind')).toBe('archive')
     expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
-    expect(within(empty).getByRole('heading', { name: 'Nothing archived yet' })).not.toBeNull()
-    expect(empty.querySelector('[data-slot="grid-backdrop"]')).toBeNull()
+    expect(within(empty).getByRole('heading', { name: 'The archives stand empty' })).not.toBeNull()
+    expect(empty.querySelector('[data-slot="grid-backdrop"]')).not.toBeNull()
+    expect(empty.querySelector('[data-slot="empty-hero"]')?.getAttribute('src')).toBe('/cezar-hero-archive.png')
   })
 
   it('says what the search missed, quoting it, with no backdrop', () => {

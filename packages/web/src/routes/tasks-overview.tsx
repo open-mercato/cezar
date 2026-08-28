@@ -314,18 +314,21 @@ function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
         <CenteredState
           heading="h2"
           icon={<ArchiveIcon />}
+          // The scriptorium scene (user artwork), on the heroes' shared 232x130 canvas.
+          art={<img src="/cezar-hero-archive.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={130} className="max-w-full [image-rendering:pixelated]" />}
           tone="neutral"
-          title="Nothing archived yet"
-          subtitle="Finished tasks you archive land here."
+          backdrop
+          title="The archives stand empty"
+          subtitle="Caesar's scribes have nothing to shelve. Archive a finished task and it will rest here."
         />
       ) : (
         <CenteredState
           heading="h2"
           icon={<ListChecksIcon />}
           // The brand cat borne on a litter by his mouse legion (user artwork). Both heroes
-          // share one 232x122 canvas (user decision: no size jump between screens), drawn
+          // share one 232x130 canvas (user decision: no size jump between screens), drawn
           // at 1x CSS (an exact 2x on retina) with pixelated rendering.
-          art={<img src="/cezar-hero.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={122} className="max-w-full [image-rendering:pixelated]" />}
+          art={<img src="/cezar-hero.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={130} className="max-w-full [image-rendering:pixelated]" />}
           tone="primary"
           backdrop
           // Caesar-voiced empty copy (user request): no tasks, so get to work.
