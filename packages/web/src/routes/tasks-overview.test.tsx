@@ -741,7 +741,7 @@ describe('TasksOverview — empty and loading states', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Tasks')
   })
 
-  it('celebrates no-tasks-yet: primary tone, the twinkle backdrop, a New-task action', () => {
+  it('celebrates no-tasks-yet: primary tone, the grid backdrop, a New-task action', () => {
     renderOverview({ runs: [] })
     const empty = document.querySelector<HTMLElement>('[data-slot="tasks-empty"]')
     if (!empty) throw new Error('no empty state rendered')
@@ -753,7 +753,7 @@ describe('TasksOverview — empty and loading states', () => {
     // Scoped inside the state — the mobile FAB is also a link named "New task".
     expect(within(empty).getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/new')
     // The hero moment: this is the one overview state that gets the decorative backdrop.
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).not.toBeNull()
+    expect(empty.querySelector('[data-slot="grid-backdrop"]')).not.toBeNull()
   })
 
   it('says the archive is empty, plainly — neutral, no backdrop', () => {
@@ -764,7 +764,7 @@ describe('TasksOverview — empty and loading states', () => {
     expect(empty.getAttribute('data-empty-kind')).toBe('archive')
     expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
     expect(within(empty).getByRole('heading', { name: 'Nothing archived yet' })).not.toBeNull()
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
+    expect(empty.querySelector('[data-slot="grid-backdrop"]')).toBeNull()
   })
 
   it('says what the search missed, quoting it, with no backdrop', () => {
@@ -777,7 +777,7 @@ describe('TasksOverview — empty and loading states', () => {
     expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
     expect(screen.getByText('No tasks match “quaternion”.')).not.toBeNull()
     // A missed search is not a hero surface.
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
+    expect(empty.querySelector('[data-slot="grid-backdrop"]')).toBeNull()
   })
 })
 

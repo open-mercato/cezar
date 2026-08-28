@@ -64,13 +64,14 @@ describe('CenteredState', () => {
   it('has no backdrop unless requested', () => {
     const { container } = render(<CenteredState icon={<SearchXIcon />} title="T" />)
 
-    expect(container.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
+    expect(container.querySelector('[data-slot="grid-backdrop"]')).toBeNull()
   })
 
-  it('mounts the twinkle backdrop when requested', () => {
+  it('mounts the grid backdrop when requested — the twinkle dots left these states', () => {
     const { container } = render(<CenteredState icon={<SearchXIcon />} title="T" backdrop />)
 
-    expect(container.querySelector('[data-slot="twinkle-backdrop"]')).not.toBeNull()
+    expect(container.querySelector('[data-slot="grid-backdrop"]')).not.toBeNull()
+    expect(container.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
   })
 })
 

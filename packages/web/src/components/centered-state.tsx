@@ -56,18 +56,15 @@ export function CenteredState({
         className
       )}
     >
+      {/* A faint pixel grid (user decision — the twinkle dots left these states): a
+          graph-paper ground fading out radially, framing the art without striping the
+          whole viewport. Border token only — it follows the theme. */}
       {backdrop ? (
-        <>
-          {/* A faint pixel grid under the twinkles (user decision): the hero surfaces get a
-              graph-paper ground that fades out radially, so it frames the art without
-              striping the whole viewport. Border token only — it follows the theme. */}
-          <div
-            data-slot="grid-backdrop"
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 -z-10 opacity-40 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:28px_28px] [mask-image:radial-gradient(ellipse_55%_50%_at_50%_42%,black,transparent_78%)]"
-          />
-          <TwinkleBackdrop />
-        </>
+        <div
+          data-slot="grid-backdrop"
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 -z-10 opacity-40 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:28px_28px] [mask-image:radial-gradient(ellipse_55%_50%_at_50%_42%,black,transparent_78%)]"
+        />
       ) : null}
       <div className="flex w-full max-w-md flex-col items-center gap-4">
         {art ?? (
