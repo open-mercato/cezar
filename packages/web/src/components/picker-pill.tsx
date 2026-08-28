@@ -7,8 +7,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { RUNNERS } from '@/routes/new-task-form'
@@ -229,5 +231,135 @@ export function RunnerPill({
       }}
       options={options}
     />
+  )
+}
+
+/**
+ * Agent AND model in ONE pill (user decision: the composer row was carrying too much — the
+ * model is an attribute of the agent, so one chip, one menu, two sections). The agent section
+ * appears only when there is an agent/account choice to make; the model section always does.
+ */
+export function RunnerModelPill({
+  runners,
+  value,
+  onPick,
+  accounts = [],
+  account = null,
+  repoAccount,
+  models,
+  model,
+  onPickModel,
+  modelsLocked = false,
+  modelStatus,
+  disabled = false,
+}: {
+  runners: readonly Runner[]
+  value: Runner
+  onPick: (runner: Runner, account: string | null) => void
+  accounts?: readonly RunnerAccountChoice[]
+  account?: string | null
+  repoAccount?: Partial<Record<Runner, string>>
+  models: ReadonlyArray<{ id: string; label: string; desc?: string }>
+  model: string
+  onPickModel: (model: string) => void
+  modelsLocked?: boolean
+  modelStatus?: string
+  disabled?: boolean
+}) {
+  const available = RUNNERS.filter((r) => runners.includes(r.id))
+  const agentChoices = available.flatMap(
+    (runner): Array<{ value: string; label: string; desc?: string }> => {
+      const logins = accounts.filter((entry) => entry.provider === runner.id)
+      if (logins.length < 2) return [{ value: choiceValue(runner.id, null), label: runner.id }]
+      return logins.map((login) => ({
+        value: choiceValue(runner.id, login.id),
+        label: `${runner.id} (${login.label})`,
+        desc: login.configDir,
+      }))
+    },
+  )
+  const hasAgentChoice =
+    runners.length > 1 || runners.some((id) => accounts.filter((c) => c.provider === id).length > 1)
+  const selected = account ?? repoAccount?.[value] ?? DEFAULT_AGENT_ACCOUNT_ID
+  const agentValue = agentChoices.some((option) => option.value === choiceValue(value, selected))
+    ? choiceValue(value, selected)
+    : choiceValue(value, null)
+  const modelLabel = models.find((m) => m.id === model)?.label ?? 'auto'
+
+  const trigger = (
+    <button
+      type="button"
+      data-slot="runner-pill"
+      aria-label="Agent and model"
+      disabled={disabled}
+      className={chipClass}
+    >
+      <span className="inline-flex items-center gap-1.5">
+        <RunnerLogo runner={value} className="size-4" />
+        {agentChoices.find((option) => option.value === agentValue)?.label ?? value}, {modelLabel}
+      </span>
+      {chevron}
+    </button>
+  )
+  if (disabled) return <span className="inline-flex">{trigger}</span>
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
+      <DropdownMenuContent align="start" data-testid="runner-pill-menu">
+        {hasAgentChoice ? (
+          <>
+            <DropdownMenuLabel className="text-[10.5px] font-semibold tracking-[0.05em] text-soft-foreground uppercase">
+              Agent
+            </DropdownMenuLabel>
+            <DropdownMenuRadioGroup
+              value={agentValue}
+              onValueChange={(next) => {
+                const [runner, picked] = next.split(':')
+                onPick(runner as Runner, picked ?? null)
+              }}
+            >
+              {agentChoices.map((option) => (
+                <DropdownMenuRadioItem key={option.value} value={option.value} data-kind="agent-option" className="gap-2.5">
+                  <span className="flex size-4 shrink-0 items-center justify-center">
+                    <RunnerLogo runner={option.value.split(':')[0] as Runner} className="size-4" />
+                  </span>
+                  <span className="flex min-w-0 flex-col">
+                    <span className="text-[12.5px] font-medium">{option.label}</span>
+                    {option.desc ? (
+                      <span className="text-[11.5px] text-muted-foreground">{option.desc}</span>
+                    ) : null}
+                  </span>
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
+        <DropdownMenuLabel className="text-[10.5px] font-semibold tracking-[0.05em] text-soft-foreground uppercase">
+          Model
+        </DropdownMenuLabel>
+        {modelsLocked ? (
+          <DropdownMenuItem disabled className="text-[11.5px] text-muted-foreground">
+            Model selection is locked to native coding-agent settings.
+          </DropdownMenuItem>
+        ) : (
+          <DropdownMenuRadioGroup value={model} onValueChange={onPickModel}>
+            {models.map((m) => (
+              <DropdownMenuRadioItem key={m.id} value={m.id} data-kind="model-option" className="gap-2.5">
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-[12.5px] font-medium">{m.label}</span>
+                  {m.desc ? <span className="text-[11.5px] text-muted-foreground">{m.desc}</span> : null}
+                </span>
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+        )}
+        {modelStatus ? (
+          <DropdownMenuItem disabled className="border-t border-border text-[11.5px] text-muted-foreground">
+            {modelStatus}
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

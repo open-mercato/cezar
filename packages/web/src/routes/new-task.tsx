@@ -7,6 +7,7 @@ import {
   SparklesIcon,
   SquareIcon,
   WorkflowIcon,
+  SlidersHorizontalIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, useSearchParams } from 'react-router'
@@ -40,7 +41,17 @@ import type {
 import { GridBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
 import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
-import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
+import { PickerPill, RunnerModelPill, chevron, chipClass } from '@/components/picker-pill'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
@@ -591,21 +602,8 @@ export function NewTaskRoute() {
           autocompleteSkills
           footerStart={
             <>
-              {/* The project pill LEADS the row (mockup new-task-project.html): everything to
-                  its right is resolved against it, so it reads left-to-right as "in this
-                  project, run this skill, with this model". Rendered only once the workspace
-                  actually holds more than one project — with a single one the control offers
-                  nothing and the composer keeps the shape it has always had, the same rule the
-                  sidebar's project groups follow. */}
-              {projectList.length > 1 && urlProjectId !== undefined ? (
-                <ProjectPill
-                  projects={projectList}
-                  projectId={urlProjectId}
-                  // An explicit `/p/<id>` target: the scoped navigate wrapper passes already
-                  // scoped paths through untouched, so this is a genuine cross-project jump.
-                  onPick={(next) => navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })}
-                />
-              ) : null}
+              {/* No project pill (user decision): the sidebar and the app bar already name
+                  the project this composer runs in — the row stays about the task itself. */}
               <SourcePill
                 source={source}
                 ready={sourcesReady}
@@ -614,79 +612,49 @@ export function NewTaskRoute() {
                 workflows={workflowList}
                 onPick={(next) => update({ source: next })}
               />
-              {/* Icon-only: this row already carries source/runner/model/variants/worktree/
-                  autonomous/branch, and templates is the least-used of them. */}
+              {/* Icon-only: templates are the least-used control on the row. */}
               <PromptTemplateMenu
                 templates={templates}
                 iconOnly
                 onInsert={(text) => composerRef.current?.insertAtCaret(text)}
               />
-              {/* Shown when there is a choice to make: more than one runner, or more than one
-                  login for one of them. A host with neither sees no pill, exactly as before. */}
-              {runners.length > 1
-              || runners.some((id) => accountChoices.filter((c) => c.provider === id).length > 1) ? (
-                <RunnerPill
-                  runners={runners}
-                  value={displayRunner}
-                  accounts={accountChoices}
-                  account={agentProfile}
-                  repoAccount={repoAccount}
-                  // Changing the AGENT clears the model pin: presets are per-runner, so a kept
-                  // model would be one the new runner does not have. Changing only the account
-                  // keeps it — the model catalog is the same either way.
-                  onPick={(next, picked) =>
-                    update({
-                      runner: next,
-                      agentProfile: picked,
-                      ...(next === displayRunner ? {} : { model: null }),
-                    })
-                  }
-                  disabled={!providersReady}
-                />
-              ) : null}
-              <PickerPill
-                slot="model-pill"
-                ariaLabel="Model"
-                label={models.find((m) => m.id === model)?.label ?? 'auto'}
-                value={model}
-                disabled={!providersReady}
-                readOnly={modelsLocked}
-                disabledHint={
-                  modelsLocked
-                    ? 'Model selection is locked to native coding-agent settings.'
-                    : undefined
+              {/* Agent and model as ONE pill (user decision: the row carried too much). */}
+              <RunnerModelPill
+                runners={runners}
+                value={displayRunner}
+                accounts={accountChoices}
+                account={agentProfile}
+                repoAccount={repoAccount}
+                onPick={(next, picked) =>
+                  update({
+                    runner: next,
+                    agentProfile: picked,
+                    ...(next === displayRunner ? {} : { model: null }),
+                  })
                 }
-                onPick={(next) => update({ model: next })}
-                options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
-                status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+                models={models}
+                model={model}
+                onPickModel={(next) => update({ model: next })}
+                modelsLocked={modelsLocked}
+                modelStatus={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+                disabled={!providersReady}
               />
-              <PickerPill
-                slot="variants-pill"
-                ariaLabel="Parallel variants"
-                label={variants > 1 ? `×${variants} variants` : '×1'}
-                value={String(variants)}
-                onPick={(next) => update({ variants: Number(next) })}
-                disabled={!hasGit}
-                hint="How many times to run this task in parallel — each variant gets its own worktree, and you pick the diff you keep. ×1 runs it once."
-                disabledHint="Parallel variants need a git repository — each variant runs in its own worktree."
-                options={[
-                  { value: '1', label: '×1', desc: 'One run' },
-                  { value: '2', label: '×2 variants', desc: 'Two competing runs, pick the diff you keep' },
-                  { value: '3', label: '×3 variants', desc: 'Three competing runs, pick the diff you keep' },
-                ]}
-              />
-              {worktreeToggleShown ? (
-                <WorktreeToggle
-                  on={worktreeOn}
-                  disabled={worktreeForced}
-                  disabledReason="Parallel variants always use isolated worktrees"
-                  onChange={(on) => update({ worktree: on })}
-                />
-              ) : null}
-              <AutonomousToggle
-                on={autonomousOn}
-                disabled={draft.planFirst}
-                onChange={(on) => update({ autonomous: on })}
+              {/* The rare knobs fold behind one disclosure (user decision): variants,
+                  worktree, autonomous, follow-ups. A violet dot marks a non-default. */}
+              <RunOptionsMenu
+                variants={variants}
+                hasGit={hasGit}
+                onVariants={(next) => update({ variants: next })}
+                worktreeShown={worktreeToggleShown}
+                worktreeOn={worktreeOn}
+                worktreeForced={worktreeForced}
+                onWorktree={(on) => update({ worktree: on })}
+                autonomousOn={autonomousOn}
+                autonomousDisabled={draft.planFirst}
+                onAutonomous={(on) => update({ autonomous: on })}
+                followupsShown={followupsToggleShown === true}
+                followupsOn={generateFollowupsOn}
+                onFollowups={(on) => update({ generateFollowups: on })}
               />
               {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
                 <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
@@ -712,17 +680,12 @@ export function NewTaskRoute() {
                   Configure providers
                 </Link>
               ) : null}
+              {/* No kbd chip (user decision): the shortcut lives in the send button's title. */}
               <ModeSegment
                 planFirst={draft.planFirst}
                 planning={planning}
                 onModeChange={(planFirst) => update({ planFirst })}
               />
-              <kbd
-                aria-hidden="true"
-                className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-              >
-                {submitShortcutHint()}
-              </kbd>
             </>
           }
         />
@@ -1214,6 +1177,120 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
  *  "Start" selected keeps the quiet card fill; "Plan first" selected takes the mockup's
  *  contrast fill + focus ring (`.seg .plan-active`) — plan mode must never be ambient. The
  *  active plan segment doubles as the busy indicator while `POST /api/plan` is in flight. */
+/**
+ * The rare run knobs behind one disclosure (user decision: the composer row carried too
+ * much): parallel variants, the worktree opt-out, autonomous, follow-up generation. A violet
+ * dot on the trigger says something is set off its default.
+ */
+function RunOptionsMenu({
+  variants,
+  hasGit,
+  onVariants,
+  worktreeShown,
+  worktreeOn,
+  worktreeForced,
+  onWorktree,
+  autonomousOn,
+  autonomousDisabled,
+  onAutonomous,
+  followupsShown,
+  followupsOn,
+  onFollowups,
+}: {
+  variants: number
+  hasGit: boolean
+  onVariants: (next: number) => void
+  worktreeShown: boolean
+  worktreeOn: boolean
+  worktreeForced: boolean
+  onWorktree: (on: boolean) => void
+  autonomousOn: boolean
+  autonomousDisabled: boolean
+  onAutonomous: (on: boolean) => void
+  followupsShown: boolean
+  followupsOn: boolean
+  onFollowups: (on: boolean) => void
+}) {
+  const nonDefault = variants > 1 || autonomousOn || (worktreeShown && !worktreeOn) || followupsOn
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-slot="run-options"
+          aria-label="Run options"
+          title="Run options: variants, worktree, autonomous, follow-ups"
+          className="relative flex size-[26px] shrink-0 items-center justify-center rounded-full border border-border bg-card text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        >
+          <SlidersHorizontalIcon aria-hidden="true" className="size-3.5" />
+          {nonDefault ? (
+            <span
+              data-slot="run-options-marker"
+              aria-hidden="true"
+              className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-violet"
+            />
+          ) : null}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" data-slot="run-options-menu" className="min-w-56">
+        <DropdownMenuLabel className="text-[10.5px] font-semibold tracking-[0.05em] text-soft-foreground uppercase">
+          Parallel variants
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={String(variants)} onValueChange={(next) => onVariants(Number(next))}>
+          {[
+            { value: '1', label: '×1', desc: 'One run' },
+            { value: '2', label: '×2 variants', desc: 'Two competing runs, pick the diff you keep' },
+            { value: '3', label: '×3 variants', desc: 'Three competing runs, pick the diff you keep' },
+          ].map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              disabled={!hasGit && option.value !== '1'}
+              title={!hasGit && option.value !== '1' ? 'Parallel variants need a git repository' : undefined}
+              className="gap-2.5"
+            >
+              <span className="flex min-w-0 flex-col">
+                <span className="text-[12.5px] font-medium">{option.label}</span>
+                <span className="text-[11.5px] text-muted-foreground">{option.desc}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        {worktreeShown ? (
+          <DropdownMenuCheckboxItem
+            checked={worktreeOn}
+            disabled={worktreeForced}
+            title={worktreeForced ? 'Parallel variants always use isolated worktrees' : undefined}
+            onCheckedChange={onWorktree}
+            onSelect={(event) => event.preventDefault()}
+          >
+            Isolated worktree
+          </DropdownMenuCheckboxItem>
+        ) : null}
+        <DropdownMenuCheckboxItem
+          checked={autonomousOn}
+          disabled={autonomousDisabled}
+          title={autonomousDisabled ? 'Plan-first runs are interactive, so autonomous is unavailable' : undefined}
+          onCheckedChange={onAutonomous}
+          onSelect={(event) => event.preventDefault()}
+        >
+          Autonomous
+        </DropdownMenuCheckboxItem>
+        {followupsShown ? (
+          <DropdownMenuCheckboxItem
+            checked={followupsOn}
+            onCheckedChange={onFollowups}
+            onSelect={(event) => event.preventDefault()}
+          >
+            Generate follow-ups
+          </DropdownMenuCheckboxItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 function ModeSegment({
   planFirst,
   planning,

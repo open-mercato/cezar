@@ -105,11 +105,12 @@ describe('formatElapsed', () => {
 })
 
 describe('the dictation overlay (paseo pattern)', () => {
-  it('the mic renders labeled "Dictation" when the API exists, left of send', () => {
+  it('the mic renders icon-only when the API exists, left of send (user decision: quiet row)', () => {
     stubSpeech()
     renderComposer()
     const mic = screen.getByLabelText('Start dictation')
-    expect(mic.textContent).toContain('Dictation')
+    expect(mic.textContent?.trim()).toBe('')
+    expect(mic.getAttribute('title')).toBe('Dictation')
     const bar = mic.parentElement!
     const children = [...bar.children]
     expect(children.indexOf(mic)).toBeLessThan(children.indexOf(screen.getByLabelText('Send')))

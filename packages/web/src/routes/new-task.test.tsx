@@ -333,6 +333,32 @@ const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or w
 const location = () => screen.getByTestId('location').textContent
 
 /** The pickers resolve once workflows+skills+ui-state answered — wait for the real label. */
+/** The merged agent+model pill (user decision: one chip). Agent rows exist only when there
+ *  is an agent/account choice; model rows always do. */
+const runnerPill = () => document.querySelector('[data-slot="runner-pill"]') as HTMLElement
+const openRunnerMenu = async () => {
+  fireEvent.pointerDown(runnerPill())
+  await waitFor(() => expect(document.querySelectorAll('[data-kind="model-option"]').length).toBeGreaterThan(0))
+}
+/** Same, for a menu that may hold no model radios (locked models). */
+const openRunnerMenu2 = async () => {
+  fireEvent.pointerDown(runnerPill())
+  await waitFor(() => expect(document.querySelector('[data-testid="runner-pill-menu"]')).not.toBeNull())
+}
+const agentOptions = () => [...document.querySelectorAll<HTMLElement>('[data-kind="agent-option"]')]
+const modelOptions = () => [...document.querySelectorAll<HTMLElement>('[data-kind="model-option"]')]
+const closeMenu = async () => {
+  fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
+  await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
+}
+/** The run-options disclosure holding variants / worktree / autonomous / follow-ups. */
+const openRunOptions = async () => {
+  fireEvent.pointerDown(document.querySelector('[data-slot="run-options"]') as HTMLElement)
+  await waitFor(() => expect(document.querySelector('[data-slot="run-options-menu"]')).not.toBeNull())
+}
+const optionsCheckbox = (name: string) =>
+  screen.getAllByRole('menuitemcheckbox').find((el) => el.textContent?.includes(name)) as HTMLElement
+
 async function pillReady(label = 'quick-task') {
   await waitFor(() => {
     expect(sourcePill().textContent).toContain(label)
@@ -381,12 +407,13 @@ describe('the hero surface', () => {
 // ---- picker data flows ------------------------------------------------------------------------
 
 describe('picker data flows', () => {
-  it('hides the runner pill on a single-backend host (legacy rule)', async () => {
+  it('offers no agent section on a single-backend host (legacy rule), models only', async () => {
     serve()
     renderNewTask()
     await pillReady()
-    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
-    expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull()
+    await openRunnerMenu()
+    expect(agentOptions()).toHaveLength(0)
+    expect(modelOptions().length).toBeGreaterThan(0)
   })
 
   it('shows the runner pill with >1 backend, and switching runner swaps the model presets', async () => {
@@ -394,30 +421,23 @@ describe('picker data flows', () => {
     renderNewTask()
     await pillReady()
 
-    const runnerPill = () => document.querySelector('[data-slot="runner-pill"]') as HTMLElement
     await waitFor(() => expect(runnerPill()).not.toBeNull())
     expect(runnerPill().textContent).toContain('claude')
 
     // claude's presets first…
-    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
-    let options = await screen.findAllByRole('menuitemradio')
-    expect(options.map((o) => o.textContent)).toEqual(
+    await openRunnerMenu()
+    expect(modelOptions().map((o) => o.textContent)).toEqual(
       expect.arrayContaining([expect.stringContaining('opus'), expect.stringContaining('sonnet')]),
     )
-    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
-
-    // …pick codex…
-    fireEvent.pointerDown(runnerPill())
-    options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((o) => o.textContent?.includes('codex')) as HTMLElement)
+    // …pick codex from the agent section of the same menu…
+    fireEvent.click(agentOptions().find((o) => o.textContent?.includes('codex')) as HTMLElement)
     await waitFor(() => expect(runnerPill().textContent).toContain('codex'))
     // …the model reset to auto and the presets are codex's now.
-    expect((document.querySelector('[data-slot="model-pill"]') as HTMLElement).textContent).toContain('auto')
-    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    expect(runnerPill().textContent).toContain('auto')
+    await openRunnerMenu()
     // codex's catalog is fetched for the runner now SELECTED (#794), so it lands after the switch.
     await waitFor(() => {
-      const labels = screen.getAllByRole('menuitemradio').map((o) => o.textContent ?? '')
+      const labels = modelOptions().map((o) => o.textContent ?? '')
       expect(labels.some((l) => l.includes('gpt-future'))).toBe(true)
       expect(labels.some((l) => l.includes('opus'))).toBe(false)
     })
@@ -428,14 +448,12 @@ describe('picker data flows', () => {
     renderNewTask()
     await pillReady()
 
-    const runnerPill = document.querySelector('[data-slot="runner-pill"]') as HTMLElement
-    fireEvent.pointerDown(runnerPill)
-    const options = await screen.findAllByRole('menuitemradio')
-    expect(options.map((option) => option.textContent)).toEqual([
+    await openRunnerMenu()
+    expect(agentOptions().map((option) => option.textContent)).toEqual([
       expect.stringContaining('claude'),
       expect.stringContaining('codex'),
     ])
-    expect(options.some((option) => option.textContent?.includes('opencode'))).toBe(false)
+    expect(agentOptions().some((option) => option.textContent?.includes('opencode'))).toBe(false)
   })
 
   it('excludes connected but disabled providers while retaining an enabled runner choice', async () => {
@@ -452,7 +470,8 @@ describe('picker data flows', () => {
     renderNewTask()
     await pillReady()
 
-    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    await openRunnerMenu()
+    expect(agentOptions()).toHaveLength(0)
     expect(textarea().disabled).toBe(false)
   })
 
@@ -465,11 +484,9 @@ describe('picker data flows', () => {
     renderNewTask()
     await pillReady()
 
-    const modelPill = document.querySelector('[data-slot="model-pill"]') as HTMLElement
-    await waitFor(() => expect(modelPill.textContent).toContain('auto'))
-    fireEvent.pointerDown(modelPill)
-    const options = await screen.findAllByRole('menuitemradio')
-    expect(options.some((option) => option.textContent?.includes('claude-opus-4-8'))).toBe(false)
+    await waitFor(() => expect(runnerPill().textContent).toContain('auto'))
+    await openRunnerMenu()
+    expect(modelOptions().some((option) => option.textContent?.includes('claude-opus-4-8'))).toBe(false)
   })
 
   describe('the run-mode note (#793)', () => {
@@ -484,7 +501,8 @@ describe('picker data flows', () => {
       // Unchecking the chip changes where the work lands, so it has to change what the header
       // says. This is the regression: the line was printed unconditionally, so it kept promising
       // isolation for a run that was about to edit the user's checkout directly.
-      fireEvent.click(document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement)
+      await openRunOptions()
+      fireEvent.click(optionsCheckbox('Isolated worktree'))
       await waitFor(() => expect(note())
         .toBe('Runs in the repo working tree — your checkout is modified directly.'))
     })
@@ -519,9 +537,10 @@ describe('picker data flows', () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO_NO_GIT })
     renderNewTask()
     await pillReady()
-    const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
-    expect(pill.disabled).toBe(true)
-    expect(pill.title).toContain('need a git repository')
+    await openRunOptions()
+    const two = screen.getAllByRole('menuitemradio').find((el) => el.textContent?.includes('×2')) as HTMLElement
+    expect(two.getAttribute('aria-disabled')).toBe('true')
+    expect(two.title).toContain('need a git repository')
     expect(document.querySelector('[data-slot="base-pill"]')).toBeNull()
   })
 
@@ -532,9 +551,11 @@ describe('picker data flows', () => {
     serve({ health: HEALTH_NO_GIT, repo: REPO })
     renderNewTask()
     await pillReady()
-    const pill = document.querySelector('[data-slot="variants-pill"]') as HTMLButtonElement
-    expect(pill.disabled).toBe(false)
-    expect(document.querySelector('[data-slot="worktree-toggle"]')).not.toBeNull()
+    await openRunOptions()
+    const two = screen.getAllByRole('menuitemradio').find((el) => el.textContent?.includes('×2')) as HTMLElement
+    expect(two.getAttribute('aria-disabled')).not.toBe('true')
+    expect(optionsCheckbox('Isolated worktree')).not.toBeUndefined()
+    await closeMenu()
     fireEvent.change(textarea(), { target: { value: 'Fix the composer git detection' } })
     await startTask()
     // `worktree` is sent only when explicitly OFF (new-task-form.ts): an absent key IS the
@@ -695,7 +716,9 @@ describe('provider authentication gate', () => {
     renderNewTask()
     await pillReady()
 
-    expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
+    await openRunnerMenu()
+    expect(agentOptions()).toHaveLength(0)
+    await closeMenu()
     fireEvent.change(textarea(), { target: { value: 'Use the only connected provider' } })
     expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(false)
   })
@@ -874,9 +897,11 @@ describe('submit', () => {
       serve(testCase.overrides)
       renderNewTask()
       await pillReady(testCase.label)
-      const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+      await openRunOptions()
+      const worktree = optionsCheckbox('Isolated worktree')
       fireEvent.click(worktree)
-      expect(worktree.getAttribute('aria-checked')).toBe('false')
+      await waitFor(() => expect(optionsCheckbox('Isolated worktree').getAttribute('aria-checked')).toBe('false'))
+      await closeMenu()
       fireEvent.change(textarea(), { target: { value: `Run ${testCase.label} in place` } })
       await startTask()
       expect(postedBody()).toMatchObject({ ...testCase.expected, worktree: false })
@@ -895,8 +920,9 @@ describe('submit', () => {
     })
     renderNewTask()
     await pillReady()
-    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    await openRunOptions()
+    expect(optionsCheckbox('Isolated worktree').getAttribute('aria-checked')).toBe('false')
+    await closeMenu()
     fireEvent.change(textarea(), { target: { value: 'Use the environment seed' } })
     await startTask()
     expect(postedBody()).toMatchObject({ workflow: 'quick-task', worktree: false })
@@ -907,16 +933,14 @@ describe('submit', () => {
     renderNewTask()
     await pillReady()
 
-    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
-    let options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((o) => o.textContent?.includes('sonnet')) as HTMLElement)
+    await openRunnerMenu()
+    fireEvent.click(modelOptions().find((o) => o.textContent?.includes('sonnet')) as HTMLElement)
     await waitFor(() => expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0))
 
-    fireEvent.pointerDown(document.querySelector('[data-slot="variants-pill"]') as HTMLElement)
-    options = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(options.find((o) => o.textContent?.includes('×2')) as HTMLElement)
+    await openRunOptions()
+    fireEvent.click(screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes('×2')) as HTMLElement)
     await waitFor(() =>
-      expect((document.querySelector('[data-slot="variants-pill"]') as HTMLElement).textContent).toContain('×2'),
+      expect(document.querySelector('[data-slot="run-options-marker"]')).not.toBeNull(),
     )
 
     fireEvent.change(textarea(), { target: { value: 'Race two attempts' } })
@@ -943,17 +967,14 @@ describe('submit', () => {
     renderNewTask()
     await pillReady()
 
-    const modelPill = document.querySelector('[data-slot="model-pill"]') as HTMLElement
-    expect(modelPill.textContent).toContain('native-sonnet')
-    expect(modelPill.textContent).not.toContain('opus')
-    expect(modelPill.tagName).toBe('SPAN')
-    expect(modelPill.querySelector('svg')).toBeNull()
-    expect(screen.queryByRole('button', { name: 'Model' })).toBeNull()
-
-    fireEvent.pointerDown(screen.getByRole('button', { name: 'Runner' }))
-    const runnerOptions = await screen.findAllByRole('menuitemradio')
-    fireEvent.click(runnerOptions.find((option) => option.textContent?.includes('codex')) as HTMLElement)
-    await waitFor(() => expect(modelPill.textContent).toContain('gpt-5.6-codex'))
+    expect(runnerPill().textContent).toContain('native-sonnet')
+    expect(runnerPill().textContent).not.toContain('opus')
+    // Locked models are stated inside the menu, not offered as radios.
+    await openRunnerMenu2()
+    expect(modelOptions()).toHaveLength(0)
+    expect(screen.getByText('Model selection is locked to native coding-agent settings.')).toBeTruthy()
+    fireEvent.click(agentOptions().find((option) => option.textContent?.includes('codex')) as HTMLElement)
+    await waitFor(() => expect(runnerPill().textContent).toContain('gpt-5.6-codex'))
 
     fireEvent.change(textarea(), { target: { value: 'Use native settings' } })
     await startTask()
@@ -1041,18 +1062,17 @@ describe('submit', () => {
     renderNewTask()
     await pillReady('om-fix')
 
-    const autonomous = document.querySelector(
-      '[data-slot="autonomous-toggle"]',
-    ) as HTMLButtonElement
-    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(autonomous.getAttribute('aria-checked')).toBe('false')
-    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    await openRunOptions()
+    expect(optionsCheckbox('Autonomous').getAttribute('aria-checked')).toBe('false')
+    expect(optionsCheckbox('Isolated worktree').getAttribute('aria-checked')).toBe('false')
     expect(screen.getByText(/recommends an interactive run in the current checkout/i)).toBeTruthy()
 
-    fireEvent.click(autonomous)
-    fireEvent.click(worktree)
-    expect(autonomous.getAttribute('aria-checked')).toBe('true')
-    expect(worktree.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(optionsCheckbox('Autonomous'))
+    fireEvent.click(optionsCheckbox('Isolated worktree'))
+    await waitFor(() => {
+      expect(optionsCheckbox('Autonomous').getAttribute('aria-checked')).toBe('true')
+      expect(optionsCheckbox('Isolated worktree').getAttribute('aria-checked')).toBe('true')
+    })
   })
 
   it('lets a multi-step workflow opt out and submits worktree:false', async () => {
@@ -1076,10 +1096,12 @@ describe('submit', () => {
     renderNewTask()
     await pillReady('fix-and-verify')
 
-    const worktree = document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
-    expect(worktree.disabled).toBe(false)
+    await openRunOptions()
+    const worktree = optionsCheckbox('Isolated worktree')
+    expect(worktree.getAttribute('aria-disabled')).not.toBe('true')
     fireEvent.click(worktree)
-    expect(worktree.getAttribute('aria-checked')).toBe('false')
+    await waitFor(() => expect(optionsCheckbox('Isolated worktree').getAttribute('aria-checked')).toBe('false'))
+    await closeMenu()
     fireEvent.change(textarea(), { target: { value: 'Run the whole workflow in place' } })
     await startTask()
     expect(postedBody()).toMatchObject({ workflow: 'fix-and-verify', worktree: false })
@@ -1097,9 +1119,11 @@ describe('submit', () => {
     serve({ health: inboxOffHealth })
     renderNewTask()
     await pillReady()
-    await waitFor(() => expect(followupsToggle()).toBeNull())
-    // The neighbouring toggles are untouched — the gate owns exactly one control.
-    expect(document.querySelector('[data-slot="autonomous-toggle"]')).not.toBeNull()
+    await openRunOptions()
+    expect(screen.queryAllByRole('menuitemcheckbox').some((el) => el.textContent?.includes('Generate follow-ups'))).toBe(false)
+    // The neighbouring options are untouched — the gate owns exactly one control.
+    expect(optionsCheckbox('Autonomous')).not.toBeUndefined()
+    await closeMenu()
   })
 
   it('posts generateFollowups:false from an inbox-less server', async () => {
@@ -1514,14 +1538,14 @@ describe('the Start | Plan first toggle', () => {
     serve()
     renderNewTask()
     await pillReady()
-    const autonomous = () =>
-      document.querySelector('[data-slot="autonomous-toggle"]') as HTMLButtonElement
-
-    // Off plan mode the toggle is interactive.
-    expect(autonomous().disabled).toBe(false)
+    // Off plan mode the option is interactive.
+    await openRunOptions()
+    expect(optionsCheckbox('Autonomous').getAttribute('aria-disabled')).not.toBe('true')
+    await closeMenu()
     fireEvent.click(planToggle())
-    expect(autonomous().disabled).toBe(true)
-    expect(autonomous().getAttribute('aria-checked')).toBe('false')
+    await openRunOptions()
+    expect(optionsCheckbox('Autonomous').getAttribute('aria-disabled')).toBe('true')
+    expect(optionsCheckbox('Autonomous').getAttribute('aria-checked')).toBe('false')
   })
 
   it('persists in the draft store across unmount/remount', async () => {
@@ -1654,9 +1678,7 @@ describe('the plan flow', () => {
     })
     renderNewTask()
     await planTask('Plan with native settings')
-    expect((document.querySelector('[data-slot="model-pill"]') as HTMLElement).textContent).toContain(
-      'native-sonnet',
-    )
+    expect(runnerPill().textContent).toContain('native-sonnet')
 
     fireEvent.click(document.querySelector('[data-slot="plan-start"]') as HTMLElement)
     await waitFor(() => expect(postedBody()).toBeDefined())
@@ -1940,9 +1962,6 @@ const ACCOUNTS: AgentProfilesResponse = {
   ],
 }
 
-/** The one pill that now carries both: which agent, and which of that agent's logins. */
-const runnerPill = () => document.querySelector('[data-slot="runner-pill"]') as HTMLElement | null
-
 /** Open a PickerPill and click the option whose label contains `match`. */
 const pickFrom = async (pill: HTMLElement, match: string) => {
   fireEvent.pointerDown(pill)
@@ -1962,10 +1981,10 @@ describe('the composer runner pill carries the account', () => {
     })
     renderNewTask()
     await pillReady()
-    // Settled: the model pill (rendered unconditionally beside it) is up, so this is not a race.
-    await waitFor(() => expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull())
-    // One runner and no accounts leaves nothing to choose, so the pill stays away entirely.
-    expect(runnerPill()).toBeNull()
+    // One runner and no accounts leaves nothing agent-shaped to choose: the merged pill offers
+    // models only.
+    await openRunnerMenu()
+    expect(agentOptions()).toHaveLength(0)
     expect(document.querySelector('[data-slot="account-pill"]')).toBeNull()
   })
 
@@ -1979,8 +1998,8 @@ describe('the composer runner pill carries the account', () => {
     await pillReady()
     await waitFor(() => expect(runnerPill()).not.toBeNull())
 
-    fireEvent.pointerDown(runnerPill()!)
-    const options = await screen.findAllByRole('menuitemradio')
+    await openRunnerMenu()
+    const options = agentOptions()
     expect(options.map((o) => o.textContent?.replace(/\s+/g, ' '))).toEqual([
       'claude (Default)/home/u/.claude'.replace(/\s+/g, ' '),
       'claude (Klaudiusz)~/.claude-klaudiusz'.replace(/\s+/g, ' '),
@@ -2081,7 +2100,10 @@ describe('the composer runner pill carries the account', () => {
     await pickFrom(runnerPill()!, 'codex')
 
     // Codex has no second login, so the account group goes away and the pill is a runner again…
-    await waitFor(() => expect(runnerPill()?.textContent?.trim()).toBe('codex'))
+    await waitFor(() => {
+      expect(runnerPill()?.textContent).toContain('codex')
+      expect(runnerPill()?.textContent).not.toContain('Klaudiusz')
+    })
     fireEvent.change(textarea(), { target: { value: 'do the thing' } })
     await startTask()
     // …and nothing account-shaped reaches the wire.

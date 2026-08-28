@@ -218,7 +218,6 @@ function renderAt(entry: string) {
 }
 
 const textarea = () => screen.getByLabelText('Describe a task for the agent') as HTMLTextAreaElement
-const projectPill = () => screen.getByRole('button', { name: 'Project' })
 const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
 const pathname = () => screen.getByTestId('location').textContent
 
@@ -230,11 +229,11 @@ async function composerReady(sourceLabel: string) {
   })
 }
 
-/** Open the project pill and pick a project by id. */
-async function switchProject(projectId: string) {
-  fireEvent.click(projectPill())
-  await screen.findByPlaceholderText('search projects…')
-  fireEvent.click(document.querySelector(`[data-slot="project-option"][data-project-id="${projectId}"]`)!)
+/** The project pill left the composer (user decision: the sidebar and the bar own the project),
+ *  so "switching" is what it is in the real app now — arriving at the other project's URL. */
+function switchProject(projectId: string) {
+  cleanup()
+  renderAt(`/p/${projectId}/new`)
 }
 
 const sourceRefs = () =>
@@ -245,17 +244,15 @@ const sourceRefs = () =>
 // ---- the pill itself -------------------------------------------------------------------------
 
 describe('the new-task project pill', () => {
-  it('is preselected from the URL scope and lists the registry with branches', async () => {
+  it('renders NO project pill (user decision): the URL scope alone selects the project', async () => {
     serve()
     renderAt(`/p/${OTHER}/new`)
     await composerReady('ship-storefront')
 
-    expect(projectPill().textContent).toContain('shop-frontend')
-    fireEvent.click(projectPill())
-    await screen.findByPlaceholderText('search projects…')
-    const options = [...document.querySelectorAll(String.raw`[data-slot="project-option"]`)]
-    expect(options.map((o) => o.getAttribute('data-project-id'))).toEqual([BOOT, OTHER])
-    expect(options[1]!.textContent).toContain('develop')
+    expect(screen.queryByRole('button', { name: 'Project' })).toBeNull()
+    expect(document.querySelector('[data-slot="project-pill"]')).toBeNull()
+    // …and the scoped surfaces prove which project this composer is: the other one's.
+    expect(requests.some((r) => r.url === `/api/v1/p/${OTHER}/skills`)).toBe(true)
   })
 
   it('stays hidden when single-project mode pins the registry to the boot project', async () => {
@@ -289,7 +286,7 @@ describe('switching project', () => {
     expect(sourceRefs()).toEqual(['om-fix', 'quick-task'])
     fireEvent.keyDown(document.body, { key: 'Escape' })
 
-    await switchProject(OTHER)
+    switchProject(OTHER)
     await waitFor(() => expect(pathname()).toBe(`/p/${OTHER}/new`))
     await composerReady('ship-storefront')
 
@@ -301,9 +298,9 @@ describe('switching project', () => {
     await screen.findByPlaceholderText('search skills & workflows…')
     expect(sourceRefs()).toEqual(['ship-storefront', 'release-train'])
 
-    // Config too: the Model pill's preset comes from the project's `defaultModels`.
+    // Config too: the merged agent pill's model preset comes from the project's `defaultModels`.
     await waitFor(() =>
-      expect(document.querySelector('[data-slot="model-pill"]')!.textContent).toContain('opus'),
+      expect(document.querySelector('[data-slot="runner-pill"]')!.textContent).toContain('opus'),
     )
   })
 
@@ -313,7 +310,7 @@ describe('switching project', () => {
     await composerReady('quick-task')
     fireEvent.change(textarea(), { target: { value: 'fix the cezar flake' } })
 
-    await switchProject(OTHER)
+    switchProject(OTHER)
     await composerReady('ship-storefront')
     // The arriving project starts from ITS draft, which is empty — not the departing text.
     expect(textarea().value).toBe('')
@@ -329,7 +326,7 @@ describe('switching project', () => {
     })
 
     // Switching back restores what was typed there, untouched by the detour.
-    await switchProject(BOOT)
+    switchProject(BOOT)
     await waitFor(() => expect(pathname()).toBe(`/p/${BOOT}/new`))
     await composerReady('quick-task')
     expect(textarea().value).toBe('fix the cezar flake')
@@ -341,7 +338,7 @@ describe('switching project', () => {
     await composerReady('quick-task')
     fireEvent.change(textarea(), { target: { value: 'left behind in cezar' } })
 
-    await switchProject(OTHER)
+    switchProject(OTHER)
     await composerReady('ship-storefront')
     fireEvent.change(textarea(), { target: { value: 'Ship the storefront' } })
     fireEvent.click(screen.getByRole('button', { name: 'Start task' }))

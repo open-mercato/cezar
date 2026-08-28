@@ -503,11 +503,11 @@ export function Composer({
                     disabled={disabled}
                     aria-label="Start dictation"
                     title="Dictation"
-                    className="h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground"
+                    // Icon-only (user decision: the row carried too much) — the title says it.
+                    className="size-8 px-0 text-muted-foreground"
                     onClick={dictation.start}
                   >
                     <MicIcon aria-hidden="true" className="size-3.5" />
-                    Dictation
                   </Button>
                 ) : null}
                 {footerEnd ? (
