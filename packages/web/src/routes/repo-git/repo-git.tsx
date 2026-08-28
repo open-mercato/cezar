@@ -52,8 +52,10 @@ export function RepoGitRoute({ tab }: { tab: RepoTab }) {
           art={<img src="/cezar-hero-git.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={122} className="max-w-full [image-rendering:pixelated]" />}
           tone="neutral"
           backdrop
-          title="Not a git repository"
-          subtitle="cezar is running outside a git repository. Start it inside one to browse changes, commits and branches."
+          // Caesar-voiced, like the Tasks empty state (user request) — the scribes are the
+          // mice with the scrolls in the artwork.
+          title="No repository to rule"
+          subtitle="Caesar holds court outside a git repository. Start cezar inside one and the scribes will bring changes, commits and branches."
         />
       </div>
     )
