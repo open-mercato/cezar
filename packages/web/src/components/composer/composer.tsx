@@ -64,6 +64,9 @@ export interface ComposerProps {
   footerStart?: ReactNode
   /** Rendered between Dictation and the send button — the /new mode segment + kbd hint. */
   footerEnd?: ReactNode
+  /** The /new hero's roomier draft field (user decision: more space for the text); replies
+   *  keep the compact two-row start. */
+  tall?: boolean
   /** The send button's accessible name. */
   sendAriaLabel?: string
   disabled?: boolean
@@ -112,6 +115,7 @@ export function Composer({
   autoFocus = false,
   footerStart,
   footerEnd,
+  tall = false,
   sendAriaLabel = 'Send',
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
@@ -457,7 +461,7 @@ export function Composer({
 
           <textarea
             ref={textareaRef}
-            rows={2}
+            rows={tall ? 5 : 2}
             value={text}
             disabled={disabled}
             aria-label={ariaLabel}
@@ -465,7 +469,10 @@ export function Composer({
             // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
             // One fixed size for the writing surface — placeholder inherits it, and there's no
             // responsive 16→14 shift — so what you read and what you type never change size.
-            className="block max-h-[220px] min-h-[54px] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[15px] leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+            className={cn(
+              'block w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[15px] leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed',
+              tall ? 'max-h-[320px] min-h-[128px]' : 'max-h-[220px] min-h-[54px]',
+            )}
             onChange={(event) => {
               setText(event.target.value)
               syncTrigger()

@@ -600,6 +600,7 @@ export function NewTaskRoute() {
                 : 'Connect an agent provider before starting a task.'
           }
           autocompleteSkills
+          tall
           footerStart={
             <>
               {/* No project pill (user decision): the sidebar and the app bar already name
