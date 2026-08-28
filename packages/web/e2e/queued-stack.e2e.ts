@@ -186,6 +186,12 @@ describe('a queued run’s prompt is amendable (#472)', () => {
     browser.screenshot(`${artifactsDir}/queued-editing.png`)
     browser.click('[data-slot="user-bubble"][data-editing="true"] button:last-of-type')
 
+    // Settled means the EDITOR closed, not merely that the text exists somewhere (the open
+    // textarea contains it too, which used to satisfy a body-text wait while the bubble was
+    // still editing — and the next test then found no Remove affordance).
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="user-bubble"][data-editing="true"]') === null`,
+    )
     browser.waitForFunction(
       `document.body.textContent.includes('also update the changelog and the README')`,
     )

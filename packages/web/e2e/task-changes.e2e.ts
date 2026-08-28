@@ -137,8 +137,9 @@ afterAll(async () => {
 describe('the Changes tab against a live dry run', () => {
   it('the Session header tab navigates to /changes: tree, toolbar and the real diff', () => {
     browser.goto(`${baseUrl}${scoped(`/tasks/${runId}`)}`)
-    browser.waitForFunction(`document.querySelector('[data-slot="run-tabs"]') !== null`)
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/changes`)}"]`)
+    // Desktop: the task's views ride the app bar as icon tabs (the underline row is mobile's).
+    browser.waitForFunction(`document.querySelector('[data-slot="bar-tabs"]') !== null`)
+    browser.click(`[data-slot="bar-tabs"] a[href="${scoped(`/tasks/${runId}/changes`)}"]`)
 
     // Client-side navigation into the lazy chunk — wait for the toolbar to exist.
     browser.waitForFunction(`document.querySelector('[data-slot="git-toolbar"]') !== null`)
@@ -147,9 +148,9 @@ describe('the Changes tab against a live dry run', () => {
     // The Changes tab is the active one now.
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="bar-tabs"] a[aria-current="page"]').getAttribute('href')`,
       ),
-    ).toBe('Changes')
+    ).toBe(scoped(`/tasks/${runId}/changes`))
 
     // The tree shows the mock's real change: notes.md, one added line.
     browser.waitForFunction(`document.querySelector('[data-slot="changes-tree"]') !== null`)
@@ -161,8 +162,8 @@ describe('the Changes tab against a live dry run', () => {
 
     // The diff facade renders the same file (engine chunk is lazy — wait).
     browser.waitForFunction(`document.querySelector('[data-slot="diff-file"][data-path="notes.md"]') !== null`)
-    // The aggregate stat agrees.
-    expect(browser.text('[data-slot="changes-stat"]')).toContain('+1')
+    // The aggregate stat agrees — it rides the bar's git tab now (user decision).
+    expect(browser.text('[data-slot="bar-tabs"] a[aria-current="page"]')).toContain('+1')
   })
 
   it('the toolbar comes from the policy: Push, Create PR, Commit, and kebab', () => {
@@ -183,8 +184,9 @@ describe('the Changes tab against a live dry run', () => {
     ])
     // Terminal handoff is capability-gated and covered against both states in component tests;
     // this fixture pins only the primary policy actions.
-    // The branch chip names the run's real branch.
-    expect(browser.text('[data-slot="git-toolbar"] [data-slot="branch-chip"]')).toContain('cez/')
+    // The branch left the toolbar for the app bar's git tab; the local lenses lead the row.
+    expect(browser.text('[data-slot="git-toolbar"] [data-slot="git-subtabs"]')).toContain('Commits')
+    expect(browser.text('[data-slot="bar-tabs"]')).toContain('cez/')
 
     browser.screenshot(`${artifactsDir}/changes-desktop.png`)
   })
@@ -227,14 +229,14 @@ describe('the Changes tab against a live dry run', () => {
   })
 
   it('the Files tab opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]`)
+    browser.click(`[data-slot="bar-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]`)
     browser.waitForFunction(`document.querySelector('[data-route="task-files"] [data-slot="files-tree"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/files`)}`)
     expect(
       browser.evaluate(
-        `document.querySelector('[data-slot="run-tabs"] a[aria-current="page"]').textContent`,
+        `document.querySelector('[data-slot="bar-tabs"] a[aria-current="page"]').getAttribute('href')`,
       ),
-    ).toBe('Files')
+    ).toBe(scoped(`/tasks/${runId}/files`))
   })
 
   it('below md the segments stay tappable and the diff forces unified+wrap (toggles gone)', () => {
@@ -258,7 +260,7 @@ describe('the Changes tab against a live dry run', () => {
     ).toBe(true)
     // The tabs remain a tappable segment row and the page does not overflow sideways.
     // Session / Changes / Commits / Files — the whole row survives the phone framing.
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(4)
+    expect(browser.count('[data-slot="run-tabs"] > a')).toBe(4)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/changes-mobile.png`)

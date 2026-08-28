@@ -28,9 +28,14 @@ let bootProject: string
 const scoped = (path: string) => `/p/${bootProject}${path}`
 
 async function api<T>(path: string): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`)
-  if (!res.ok) throw new Error(`cezar e2e: GET ${path} answered ${res.status}`)
-  return (await res.json()) as T
+  // Retried once: undici's pooled keep-alive socket to the shared env can be minutes idle by
+  // now and answer only ECONNRESET on first reuse.
+  const get = async () => {
+    const res = await fetch(`${baseUrl}${path}`)
+    if (!res.ok) throw new Error(`cezar e2e: GET ${path} answered ${res.status}`)
+    return (await res.json()) as T
+  }
+  return get().catch(get)
 }
 
 interface RepoPayload {

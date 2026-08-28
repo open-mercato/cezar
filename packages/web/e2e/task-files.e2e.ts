@@ -197,7 +197,7 @@ describe('the Files tab against a live dry-run worktree', () => {
       ),
     ).toBe(true)
     // Session / Changes / Commits / Files.
-    expect(browser.count('[data-slot="run-tabs"] a')).toBe(4)
+    expect(browser.count('[data-slot="run-tabs"] > a')).toBe(4)
     expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
 
     browser.screenshot(`${artifactsDir}/files-mobile.png`)
