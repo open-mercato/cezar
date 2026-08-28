@@ -612,12 +612,6 @@ export function NewTaskRoute() {
                 workflows={workflowList}
                 onPick={(next) => update({ source: next })}
               />
-              {/* Icon-only: templates are the least-used control on the row. */}
-              <PromptTemplateMenu
-                templates={templates}
-                iconOnly
-                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
-              />
               {/* Agent and model as ONE pill (user decision: the row carried too much). */}
               <RunnerModelPill
                 runners={runners}
@@ -680,6 +674,13 @@ export function NewTaskRoute() {
                   Configure providers
                 </Link>
               ) : null}
+              {/* Templates sit with the WRITING helpers (user decision: the left group is what
+                  runs, the right group is how you write) — beside the mic, before the modes. */}
+              <PromptTemplateMenu
+                templates={templates}
+                iconOnly
+                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
+              />
               {/* No kbd chip (user decision): the shortcut lives in the send button's title. */}
               <ModeSegment
                 planFirst={draft.planFirst}
