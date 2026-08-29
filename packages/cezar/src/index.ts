@@ -667,6 +667,13 @@ function ensureDataGitignore(repoRoot: string): void {
     'runs.json',
     'runs.json.tmp',
     'runs/',
+    // The per-project attachments library (#attachments-library): every file a user drags onto
+    // the composer is copied here. It is USER CONTENT — a CSV export, a production log, a
+    // screenshot of a dashboard — so it must never surface in the user's `git status`, let alone
+    // ride a `git add -A` into a public repo. This list is a per-entry allowlist rather than a
+    // blanket `*` on purpose (`workflows/` and `skills/` are meant to be committable), so a new
+    // state directory that is not named here is not covered by anything.
+    'attachments/',
     'worktrees/',
     'tmp/', // per-run agent temp directories (#785)
     'todos.json',

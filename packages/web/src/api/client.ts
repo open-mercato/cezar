@@ -1266,6 +1266,9 @@ export async function continueProjectRun(
       json: {
         ...(opts.text !== undefined ? { text: opts.text } : {}),
         ...(opts.images !== undefined ? { images: opts.images } : {}),
+        // Mirrors the unscoped `continueRun`: `ContinueOptions` carries `files` now, so a spread
+        // that stops short of it accepts attachments and silently drops them.
+        ...(opts.files !== undefined ? { files: opts.files } : {}),
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
@@ -1479,7 +1482,11 @@ export async function sendProjectRunMessage(
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
       param: { projectId, id: encodeURIComponent(id) },
-      json: { text: message.text ?? '', images: message.images ?? [] },
+      // `files` rides here for the same reason `images` does — this helper takes the SAME widened
+      // `MessageInput` as its unscoped twin, so omitting the field would let a caller attach
+      // files, get a 200, and have them vanish: the route defaults an absent `files` to `[]`, so
+      // nothing anywhere would report a problem. `client.test.ts` pins both shapes side by side.
+      json: { text: message.text ?? '', images: message.images ?? [], files: message.files ?? [] },
     }),
     runPath(id, '/messages'),
   )

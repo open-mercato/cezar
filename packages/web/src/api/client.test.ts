@@ -37,6 +37,8 @@ import {
   removeTodo,
   runFileRawUrl,
   sendMessage,
+  sendProjectRunMessage,
+  continueProjectRun,
   setProviderEnabled,
   startTodo,
   retryProviderAuth,
@@ -302,6 +304,39 @@ describe('request shapes', () => {
       path: '/api/v1/runs/run-1/messages',
       method: 'POST',
       body: { text: '', images: [{ mediaType: 'image/png', data: 'AAA' }], files: [] },
+    },
+    {
+      // The scoped twin takes the SAME widened `MessageInput`, so it must put the same shape on
+      // the wire. It used to stop at `images`, which meant a caller could attach files, get a
+      // 200, and have them vanish — the route defaults an absent `files` to `[]`, so nothing
+      // anywhere reported a problem. Pinned beside its sibling so the two cannot drift again.
+      name: 'sendProjectRunMessage (carries files like its unscoped twin)',
+      call: () =>
+        sendProjectRunMessage('proj-a', 'run-1', {
+          text: 'hi',
+          files: [{ name: 'q3.csv', mediaType: 'text/csv', data: 'QUI=' }],
+        }),
+      path: '/api/v1/p/proj-a/runs/run-1/messages',
+      method: 'POST',
+      body: {
+        text: 'hi',
+        images: [],
+        files: [{ name: 'q3.csv', mediaType: 'text/csv', data: 'QUI=' }],
+      },
+    },
+    {
+      name: 'continueProjectRun (carries files like its unscoped twin)',
+      call: () =>
+        continueProjectRun('proj-a', 'run-1', {
+          text: 'go on',
+          files: [{ name: 'q3.csv', mediaType: 'text/csv', data: 'QUI=' }],
+        }),
+      path: '/api/v1/p/proj-a/runs/run-1/continue',
+      method: 'POST',
+      body: {
+        text: 'go on',
+        files: [{ name: 'q3.csv', mediaType: 'text/csv', data: 'QUI=' }],
+      },
     },
   ]
 

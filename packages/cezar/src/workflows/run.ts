@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
   parseAskMarkerResult,
@@ -192,6 +192,10 @@ interface ActiveRun {
     recordedTurns: Set<string>;
   };
 }
+
+/** Ceiling on the per-project attachments library (#attachments-library). Half a gigabyte is
+ *  far above any realistic working set of uploads, and far below "noticed the disk fill up". */
+const ATTACHMENTS_LIBRARY_MAX_BYTES = 512 * 1024 * 1024;
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever. */
 const MAX_AUTO_CONTINUES = 40;
@@ -771,10 +775,23 @@ export class RunManager {
     // needs to survive in memory or be re-encoded the way task images are.
     if (input.files?.length) {
       const persistedFiles = input.files
-        .map((f) => this.persistFile(run.id, f.name, f.data))
+        .map((f) => ({ name: f.name, saved: this.persistFile(run.id, f.name, f.data) }));
+      const survived = persistedFiles
+        .map((entry) => entry.saved)
         .filter((saved): saved is PersistedAttachment => saved !== null);
-      if (persistedFiles.length) {
-        this.store.updateRun(run.id, { taskFiles: persistedFiles.map((saved) => saved.url) });
+      if (survived.length) {
+        this.store.updateRun(run.id, { taskFiles: survived.map((saved) => saved.url) });
+      }
+      // Refusing to start the run over a failed attachment would be too aggressive — the prompt
+      // itself is usually still worth running. But it must not start SILENTLY: the transcript is
+      // the only place the loss can still be recorded, and without this line the user gets a
+      // normally-started run, no attachments, and no error anywhere.
+      const lost = persistedFiles.filter((entry) => entry.saved === null).map((entry) => entry.name);
+      if (lost.length) {
+        this.store.appendEvent(run.id, {
+          type: 'note',
+          message: `⚠ ${lost.length} of ${input.files.length} attachments could not be saved to disk and were NOT given to the agent: ${lost.join(', ')}`,
+        });
       }
     }
     // Step-0 reference extraction (task auto-naming spec): the regex layer's
@@ -3422,7 +3439,11 @@ export class RunManager {
         }
         // Only what the USER uploaded belongs in the library — `pasted` marks user
         // attachments; agent screenshots (`screenshot`) are working output, not uploads.
-        if (namePrefix === 'pasted') this.copyToAttachmentsLibrary(name, bytes);
+        // Prefixed with the run id, because `name` here is a bare sequence number that RESTARTS
+        // per run: run A's `pasted-1.png` and run B's different `pasted-1.png` would collide, and
+        // the archive would fill with `pasted-N-M.png` carrying no run, no date and no original
+        // name — the opposite of the browsable folder this is meant to be.
+        if (namePrefix === 'pasted') this.copyToAttachmentsLibrary(`${runId.slice(0, 8)}-${name}`, bytes);
         this.queuedImageSeq.set(runId, seq);
         // Versioned, because that is the only surface served now. The cockpit still upgrades
         // the unversioned URLs sitting in OLD transcripts when it renders them
@@ -3439,7 +3460,13 @@ export class RunManager {
    * Best-effort per-project attachments library (#attachments-library): every file the
    * user uploads — non-image files and pasted images alike, but never the agent's own
    * screenshots — also lands as a copy under `.ai/cezar/attachments/`, one flat folder
-   * per project. Uploads then survive run cleanup and are browsable in one place.
+   * per project, so an upload survives its run's cleanup.
+   *
+   * No surface browses this folder YET — it is a durable archive on disk, and naming it
+   * "browsable" before something browses it would be a promise the code does not keep.
+   * That is also why it is bounded here rather than in `runs/retention.ts`: retention
+   * reclaims worktrees per run, and this folder outlives every run in it.
+   *
    * Written, never required (AGENTS.md): a failure degrades silently (the run-dir
    * original is the source of truth), and deleting the folder loses only duplicates.
    * Same-name collisions get a `-2`, `-3`… suffix — unless the existing bytes are
@@ -3449,6 +3476,7 @@ export class RunManager {
     try {
       const dir = join(this.dataDir, 'attachments');
       mkdirSync(dir, { recursive: true });
+      this.trimAttachmentsLibrary(dir, data.length);
       const dot = name.lastIndexOf('.');
       const stem = dot > 0 ? name.slice(0, dot) : name;
       const ext = dot > 0 ? name.slice(dot) : '';
@@ -3469,6 +3497,45 @@ export class RunManager {
       }
     } catch {
       // Best-effort copy — never let the library break the upload itself.
+    }
+  }
+
+  /**
+   * Keep the library under `ATTACHMENTS_LIBRARY_MAX_BYTES`, oldest first (#attachments-library).
+   *
+   * Without a bound this folder only ever grows: every upload is duplicated into it for the life
+   * of the project, nothing consumes it and nothing reclaims it. A size cap rather than an age
+   * cap because the failure being prevented is disk, not staleness — a year-old CSV that fits is
+   * exactly what an archive is for, while a week of screenshot-heavy work is not.
+   *
+   * Same "written, never required" contract as its caller: an unreadable directory or a file that
+   * vanished under us just means no pruning this time, never a failed upload.
+   */
+  private trimAttachmentsLibrary(dir: string, incoming: number): void {
+    try {
+      const entries = readdirSync(dir)
+        .map((name) => {
+          try {
+            const stat = statSync(join(dir, name));
+            return stat.isFile() ? { name, size: stat.size, mtime: stat.mtimeMs } : null;
+          } catch {
+            return null;
+          }
+        })
+        .filter((entry): entry is { name: string; size: number; mtime: number } => entry !== null);
+      let total = entries.reduce((sum, entry) => sum + entry.size, 0) + incoming;
+      if (total <= ATTACHMENTS_LIBRARY_MAX_BYTES) return;
+      for (const entry of entries.sort((a, b) => a.mtime - b.mtime)) {
+        if (total <= ATTACHMENTS_LIBRARY_MAX_BYTES) return;
+        try {
+          rmSync(join(dir, entry.name), { force: true });
+          total -= entry.size;
+        } catch {
+          /* keep going — one undeletable file must not stop the sweep */
+        }
+      }
+    } catch {
+      // Best-effort, exactly like the copy it guards.
     }
   }
 

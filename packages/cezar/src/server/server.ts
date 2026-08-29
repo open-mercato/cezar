@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
@@ -833,6 +833,15 @@ const queuedMessagePatchSchema = z
 const MAX_QUEUED_MESSAGES = 20;
 const MAX_QUEUED_IMAGES = 8;
 const MAX_FOLDED_TASK_CHARS = 200_000;
+
+/** One human line for an attachment write that did not fully succeed (#file-attachments). Names
+ *  the COUNT, because "some of them" is the difference between "retry" and "your disk is full",
+ *  and because a partial loss used to be reported as no loss at all. */
+function attachmentSaveError(saved: number, requested: number): string {
+  return saved === 0
+    ? 'attachments could not be saved to disk'
+    : `${requested - saved} of ${requested} attachments could not be saved to disk`;
+}
 
 /** Length of the prompt a run would execute with — `task` plus its whole stack,
  *  composed exactly as `hydrateQueuedInput` composes it. Checked against the
@@ -3730,8 +3739,12 @@ export function createApp(deps: ServerDeps) {
       const persistedFiles = parsed.data.files
         .map((f) => manager.persistUserFile(id, f.name, f.data))
         .filter((saved): saved is PersistedAttachment => saved !== null);
-      if (parsed.data.files.length > 0 && persistedFiles.length === 0) {
-        return c.json({ error: 'attachments could not be saved to disk' }, 500);
+      // ANY loss fails the request, not just total loss. A partial write — a full disk, a
+      // permission problem, a name that exhausted the collision loop — used to answer 200 with a
+      // path note listing the survivors, so the agent worked from an incomplete set believing it
+      // had everything, and nobody was told. That is the expensive kind of quiet wrongness.
+      if (persistedFiles.length !== parsed.data.files.length) {
+        return c.json({ error: attachmentSaveError(persistedFiles.length, parsed.data.files.length) }, 500);
       }
       const text = persistedFiles.length
         ? [parsed.data.text.trim(), pastedAttachmentsText(persistedFiles)].filter(Boolean).join('\n\n')
@@ -3752,6 +3765,20 @@ export function createApp(deps: ServerDeps) {
 
       const currentRun = store.getRun(id);
       const stack = currentRun?.queuedMessages ?? [];
+      // The attachments were written above, before the ladder could know which rung this
+      // message lands on — the live path needs their paths inside the text. So every rejection
+      // below has to take them back out: a 400 used to leave the files on disk with nothing
+      // referencing them, and `dropOrphanImages` cannot reclaim those because it only knows
+      // about URLs recorded in `queuedMessages[].images`, while attachments live in the text.
+      const dropPersistedFiles = () => {
+        for (const saved of persistedFiles) {
+          try {
+            rmSync(saved.path, { force: true });
+          } catch {
+            /* best effort — a leftover file is harmless and goes with the run */
+          }
+        }
+      };
       // Bounds apply only to a message that is actually about to be stacked. Without this
       // gate an over-long message posted to a *finished* run would answer `400 prompt too
       // long` when the truthful answer is `409 session closed`. The status read is safe
@@ -3759,14 +3786,23 @@ export function createApp(deps: ServerDeps) {
       // re-checks against the engine's own queue before writing anything.
       if (currentRun?.status === 'queued') {
         if (stack.length >= MAX_QUEUED_MESSAGES) {
+          dropPersistedFiles();
           return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
         }
         const stackedImages = stack.reduce((n, m) => n + (m.images?.length ?? 0), 0);
-        if (stackedImages + parsed.data.images.length > MAX_QUEUED_IMAGES) {
+        // Incoming FILES count against the cap too — it is an attachment ceiling, and letting one
+        // kind through uncounted meant a stack could hold twenty CSVs under an eight-image limit.
+        // Known residual: attachments already stacked are invisible here, because the stack
+        // records image URLs only and files ride inside each message's text. Closing that needs
+        // the stack to record a file count, which is a record change and belongs on its own.
+        const incomingAttachments = parsed.data.images.length + parsed.data.files.length;
+        if (stackedImages + incomingAttachments > MAX_QUEUED_IMAGES) {
+          dropPersistedFiles();
           return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
         }
         const prospective = foldedLength(currentRun.task, [...stack, { text }]);
         if (prospective > MAX_FOLDED_TASK_CHARS) {
+          dropPersistedFiles();
           return c.json(
             {
               error: `prompt too long — ${MAX_FOLDED_TASK_CHARS} character limit across the task and its queued messages (would be ${prospective})`,
@@ -3879,11 +3915,13 @@ export function createApp(deps: ServerDeps) {
       }
       // Same up-front materialization as `/messages` (#file-attachments): the path note
       // rides in the continuation text, so the reopened session needs no new field.
-      const persistedFiles = (parsed.data.files ?? [])
+      const requestedFiles = parsed.data.files ?? [];
+      const persistedFiles = requestedFiles
         .map((f) => manager.persistUserFile(id, f.name, f.data))
         .filter((saved): saved is PersistedAttachment => saved !== null);
-      if ((parsed.data.files?.length ?? 0) > 0 && persistedFiles.length === 0) {
-        return c.json({ error: 'attachments could not be saved to disk' }, 500);
+      // Same all-or-nothing rule as `/messages` above — see the comment there.
+      if (persistedFiles.length !== requestedFiles.length) {
+        return c.json({ error: attachmentSaveError(persistedFiles.length, requestedFiles.length) }, 500);
       }
       const continueText = persistedFiles.length
         ? [parsed.data.text?.trim(), pastedAttachmentsText(persistedFiles)].filter(Boolean).join('\n\n')
@@ -4076,10 +4114,30 @@ export function createApp(deps: ServerDeps) {
       const file = basename(c.req.param('file'));
       const path = join(dataDir, 'runs', `${run.id}-images`, file);
       if (!existsSync(path)) return c.json({ error: 'not found' }, 404);
-      const type = IMAGE_TYPES[file.split('.').pop() ?? ''] ?? 'application/octet-stream';
+      // This directory used to hold only `persistImage` output, whose extension could only come
+      // from an image media type — so "image bytes" was a property of the WRITER and the response
+      // headers could rest on it. `persistFile` (#file-attachments) now writes user-chosen names
+      // here too, so the guarantee is gone and the route has to assert what it serves.
+      //
+      // Same hardening the sibling raw-file branch of `GET /runs/:id/files` applies: `nosniff` so
+      // the declared type is the only type, and a sandbox CSP so nothing that does render can
+      // reach this same origin — the one holding the launch key and an agent with file access.
+      const extension = file.split('.').pop()?.toLowerCase() ?? '';
+      const known = IMAGE_TYPES[extension];
+      const type = known ?? 'application/octet-stream';
       return new Response(readFileSync(path), {
         headers: {
           'content-type': type,
+          'x-content-type-options': 'nosniff',
+          'content-security-policy': "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+          // Anything outside the image map is an ATTACHMENT, not a page: downloading it is the
+          // only honest thing to do with bytes whose type the server cannot vouch for. The name
+          // is re-sanitized rather than trusted: `persistFile` already writes only
+          // `[A-Za-z0-9._-]`, so this can never fire in practice — but a header value assembled
+          // from a path param is not the place to rely on a guarantee made somewhere else.
+          ...(known
+            ? {}
+            : { 'content-disposition': `attachment; filename="${file.replace(/[^A-Za-z0-9._-]+/g, '-')}"` }),
           'cache-control': 'private, max-age=31536000, immutable',
         },
       });

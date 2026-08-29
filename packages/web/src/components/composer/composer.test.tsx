@@ -89,9 +89,20 @@ const type = (textarea: HTMLTextAreaElement, value: string) =>
 const pngFile = (name = 'shot.png', bytes: number[] = [1, 2, 3]) =>
   new File([new Uint8Array(bytes)], name, { type: 'image/png' })
 
+/** `kind` is part of the real `DataTransferItem` and is what the composer filters on — a stub
+ *  without it was passing only because the old filter looked at `type` instead. */
 const paste = (textarea: HTMLTextAreaElement, files: File[]) =>
   fireEvent.paste(textarea, {
-    clipboardData: { items: files.map((file) => ({ type: file.type, getAsFile: () => file })) },
+    clipboardData: {
+      items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+    },
+  })
+
+/** Pasting plain TEXT: one item, `kind: 'string'`, no file behind it. The composer must let this
+ *  through to the textarea untouched — the paste handler only claims file items. */
+const pasteText = (textarea: HTMLTextAreaElement) =>
+  fireEvent.paste(textarea, {
+    clipboardData: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }] },
   })
 
 describe('submit shortcuts', () => {
@@ -159,6 +170,37 @@ describe('failure restores the draft (nothing the user typed is ever lost)', () 
     type(textarea, 'meanwhile')
     reject(new Error('boom'))
     await waitFor(() => expect(textarea.value).toBe('first message\nmeanwhile'))
+  })
+})
+
+describe('paste accepts any file, not only images (#file-attachments)', () => {
+  it('⌘V of a CSV attaches it, like the paperclip and drag-drop already did', async () => {
+    const { onSubmit, textarea } = renderComposer()
+    const csv = new File([new Uint8Array([65, 66])], 'q3.csv', { type: 'text/csv' })
+    paste(textarea, [csv])
+
+    expect(await screen.findByLabelText('Remove q3.csv')).toBeTruthy()
+    type(textarea, 'check this export')
+    fireEvent.keyDown(textarea, { key: 'Enter' })
+    // A non-image rides the `files` field, never the inline `images` one.
+    expect(onSubmit).toHaveBeenCalledWith('check this export', [], [
+      { name: 'q3.csv', mediaType: 'text/csv', data: btoa('AB') },
+    ])
+  })
+
+  it('pasting plain text still just types — no attachment, no preventDefault', () => {
+    const { textarea } = renderComposer()
+    pasteText(textarea)
+    expect(screen.queryByLabelText(/^Remove /)).toBeNull()
+  })
+
+  it('a 0-byte file is refused with one human line, not a schema error from the server', async () => {
+    const { textarea } = renderComposer()
+    const empty = new File([new Uint8Array([])], 'empty.csv', { type: 'text/csv' })
+    paste(textarea, [empty])
+
+    expect(await screen.findByText('empty.csv is empty')).toBeTruthy()
+    expect(screen.queryByLabelText('Remove empty.csv')).toBeNull()
   })
 })
 

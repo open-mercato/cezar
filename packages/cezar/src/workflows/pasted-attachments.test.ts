@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -343,6 +343,49 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
       'dedupe.csv',
     ]);
     expect(readFileSync(join(dataDir, 'attachments', 'dedupe-2.csv'), 'utf8')).toBe('other bytes');
+  });
+
+  it('archives a pasted screenshot under its RUN, not a bare sequence number', () => {
+    // `pasted-N` restarts per run, so without provenance run A's and run B's DIFFERENT first
+    // screenshots would collide in one flat folder and archive as `pasted-1.png` + `pasted-1-2.png`
+    // — no run, no date, no original name.
+    const shot = (bytes: string) => ({
+      type: 'image' as const,
+      source: { type: 'base64' as const, media_type: 'image/png', data: Buffer.from(bytes).toString('base64') },
+    });
+    const workflow: WorkflowDef = {
+      name: 'library-provenance-test',
+      source: 'built-in',
+      steps: [{ id: 'work', prompt: '{{task}}' }],
+    };
+    const a = manager.startRun(workflow, { task: 'a', images: [shot('aaa')], worktree: false });
+    const b = manager.startRun(workflow, { task: 'b', images: [shot('bbb')], worktree: false });
+
+    // Scoped to THESE two runs: earlier cases in this file archive their own screenshots into
+    // the same shared library folder.
+    const mine = [a.id.slice(0, 8), b.id.slice(0, 8)];
+    const archived = readdirSync(join(dataDir, 'attachments'))
+      .filter((n) => mine.some((prefix) => n.startsWith(prefix)))
+      .sort();
+    expect(archived).toEqual([`${a.id.slice(0, 8)}-pasted-1.png`, `${b.id.slice(0, 8)}-pasted-1.png`].sort());
+  });
+
+  it('bounds the library, dropping the oldest copies rather than growing without limit', () => {
+    const record = store.createRun({ title: 'cap', workflow: '(planned)', task: 'cap', steps: [] });
+    const dir = join(dataDir, 'attachments');
+    mkdirSync(dir, { recursive: true });
+    // Stand in for a library already at the ceiling: one big, OLD file. `trimAttachmentsLibrary`
+    // reads real sizes and mtimes, so the fixture has to be real bytes with a real timestamp.
+    const old = join(dir, 'ancient.bin');
+    writeFileSync(old, Buffer.alloc(520 * 1024 * 1024));
+    utimesSync(old, new Date(2020, 0, 1), new Date(2020, 0, 1));
+
+    manager.persistUserFile(record.id, 'fresh.csv', Buffer.from('fresh', 'utf8').toString('base64'));
+
+    // The oldest went; the upload itself never depended on the sweep succeeding.
+    expect(existsSync(old)).toBe(false);
+    expect(readFileSync(join(dir, 'fresh.csv'), 'utf8')).toBe('fresh');
+    expect(existsSync(join(dataDir, 'runs', `${record.id}-images`, 'fresh.csv'))).toBe(true);
   });
 
   it('persistUserFile strips paths, sanitizes hostile characters and suffixes collisions', () => {

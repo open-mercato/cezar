@@ -74,6 +74,14 @@ export function screenFiles(files: readonly File[], alreadyAttached: number): Im
       rejected.push(`${file.name || 'attachment'} is too large (max 5 MB)`)
       continue
     }
+    // Only the upper bound was checked, because before non-image attachments a 0-byte file
+    // could not arrive: browsers do not paste empty images. An empty file encodes to `data: ''`,
+    // which the server's `fileInputSchema` rejects with `min(1)` — bouncing the WHOLE message
+    // with a raw zod error instead of one human line about one file.
+    if (file.size === 0) {
+      rejected.push(`${file.name || 'attachment'} is empty`)
+      continue
+    }
     if (count >= MAX_IMAGES) {
       rejected.push(`${file.name || 'attachment'} skipped — max ${MAX_IMAGES} attachments per message`)
       continue

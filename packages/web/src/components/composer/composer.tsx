@@ -291,8 +291,13 @@ export function Composer({
   )
 
   const onPaste = (event: ClipboardEvent) => {
+    // `kind === 'file'`, not `type.startsWith('image/')`: the feature advertises paperclip,
+    // paste and drag-drop as equivalent, and the other two accept any file. Filtering to
+    // images here made ⌘V of a CSV do nothing at all — no attachment, no rejection, no
+    // explanation. The caps and the size screen still run in `screenFiles`, as for the
+    // other two paths. Plain text keeps flowing to the textarea because it is not a file.
     const files = [...(event.clipboardData?.items ?? [])]
-      .filter((item) => item.type.startsWith('image/'))
+      .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null)
     if (files.length === 0) return

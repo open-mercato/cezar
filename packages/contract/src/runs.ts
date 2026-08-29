@@ -146,6 +146,15 @@ export const runRecordSchema = z.object({
   queuedMessages: z.array(queuedMessageSchema).optional(),
   /** URLs of images attached to the initial task prompt (#image-display). */
   taskImages: z.array(z.string()).optional(),
+  /** URLs of NON-image files attached to the initial task prompt (#file-attachments). Kept
+   *  separate from `taskImages` on purpose, mirroring the store: hydration re-encodes
+   *  `taskImages` into inline image blocks at dequeue, which must never happen to a CSV — these
+   *  only feed the on-disk path note in the opening prompt.
+   *
+   *  The routes have been handing this field out since the store gained it; the mirror here was
+   *  missed, and the compile-time `Mutual<>` check cannot catch that (an added OPTIONAL property
+   *  is assignable both ways), so the drift passed typecheck in silence. */
+  taskFiles: z.array(z.string()).optional(),
   model: z.string().optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
