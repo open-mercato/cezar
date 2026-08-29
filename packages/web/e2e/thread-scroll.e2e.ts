@@ -116,6 +116,31 @@ function openThread(query = '') {
   )
 }
 
+/** Grow the retained window by N earlier pages through the accessible boundary control. */
+function loadEarlierPages(n: number): void {
+  for (let i = 0; i < n; i += 1) {
+    const before = Number(
+      browser.evaluate(`document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages ?? '1'`),
+    )
+    // The explicit button needs no arming — click it directly and wait out the page.
+    browser.waitForFunction(
+      `(() => { const b = document.querySelector('[data-slot="history-boundary"] button'); return !!b && !b.disabled })()`,
+    )
+    browser.evaluate(`document.querySelector('[data-slot="history-boundary"] button').click()`)
+    try {
+      browser.waitForFunction(
+        `Number(document.querySelector('[data-slot="history-boundary"]')?.dataset.retainedPages ?? '1') === ${before + 1}`,
+      )
+    } catch (error) {
+      console.log('DBG boundary', browser.evaluate(`(() => { const b=document.querySelector('[data-slot="history-boundary"]'); return { text: b?.textContent, pages: b?.dataset.retainedPages, rows: document.querySelectorAll('[data-slot="thread-row"]').length } })()`))
+      throw error
+    }
+    // The anchor-preserving load releases its in-flight guard one frame AFTER the data lands —
+    // give it that frame, or the next click falls into the gap and no-ops.
+    browser.evaluate(`new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))`)
+  }
+}
+
 beforeAll(async () => {
   dataRoot = mkdtempSync(join(tmpdir(), 'cezar-e2e-thread-scroll-'))
   mkdirSync(join(dataRoot, '.ai/cezar/runs'), { recursive: true })
@@ -160,28 +185,29 @@ describe('thread virtualization on a 1,000-row transcript', () => {
   let flatDom = 0
   let flatAssistantWidth = 0
 
-  it('force-flat renders every row (the before measurement)', () => {
-    openThread('?thread=flat')
+  it('starts flat on the tail page (the before measurement)', () => {
+    // Progressive history loads the TAIL page first (its own spec covers the paging): under
+    // the ~300-row threshold the thread honestly renders flat.
+    openThread()
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('false')
     flatRows = rowCount()
     flatDom = domSize()
     flatAssistantWidth = assistantWidth()
-    expect(flatRows).toBe(ROWS) // the generator's own arithmetic, end to end
+    expect(flatRows).toBeGreaterThan(50)
     expect(flatAssistantWidth).toBeGreaterThan(200)
   }, 90_000)
 
-  it('auto mode virtualizes past the threshold and keeps the DOM bounded', () => {
-    openThread()
-    expect(browser.evaluate(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized`)).toBe('true')
+  it('virtualizes once the retained window crosses the threshold, and keeps the DOM bounded', () => {
+    loadEarlierPages(3)
+    browser.waitForFunction(`document.querySelector('[data-slot="thread-rows"]').dataset.virtualized === 'true'`)
 
     const virtualRows = rowCount()
     const virtualDom = domSize()
-    // The honest metric, same transcript, same browser: virtua holds a viewport window plus
-    // overscan, not the list. The exact window varies with row heights — the bound is what
-    // matters: an order of magnitude fewer live rows than flat mode.
+    // The honest metric: with FOUR retained pages on screen, virtua holds a viewport window
+    // plus overscan — fewer live rows and elements than even the flat single tail page.
     expect(virtualRows).toBeGreaterThan(0)
-    expect(virtualRows).toBeLessThan(flatRows / 10)
-    expect(virtualDom).toBeLessThan(flatDom / 2)
+    expect(virtualRows).toBeLessThan(flatRows / 2)
+    expect(virtualDom).toBeLessThan(flatDom)
     const virtualAssistantWidth = assistantWidth()
     expect(virtualAssistantWidth).toBeGreaterThan(200)
     expect(Math.abs(virtualAssistantWidth - flatAssistantWidth)).toBeLessThan(2)
@@ -189,19 +215,23 @@ describe('thread virtualization on a 1,000-row transcript', () => {
     mkdirSync(artifactsDir, { recursive: true })
     writeFileSync(
       join(artifactsDir, 'thread-scroll-metrics.json'),
-      JSON.stringify({ transcriptEvents: largeThreadEvents(TURNS).length, rows: { flat: flatRows, virtualized: virtualRows }, domElements: { flat: flatDom, virtualized: virtualDom } }, null, 2),
+      JSON.stringify({ transcriptEvents: largeThreadEvents(TURNS).length, rows: { flatTail: flatRows, virtualized: virtualRows }, domElements: { flatTail: flatDom, virtualized: virtualDom } }, null, 2),
       'utf8',
     )
   }, 90_000)
 
   it('arrives pinned to the live tail (bottom-anchored), with no jump pill', () => {
+    openThread()
     expect(browser.evaluate(nearBottom)).toBe(true)
     expect(browser.count('[data-slot="jump-to-latest"]')).toBe(0)
     browser.screenshot(`${artifactsDir}/thread-long-desktop.png`)
   })
 
   it('scrolling up shows the jump pill; clicking it returns to the tail', () => {
-    parkAt('0')
+    // A fresh tail-page thread, parked MID-transcript: at the very top the history boundary
+    // owns the intent (it loads an earlier page), so the pill's home is the detached middle.
+    openThread()
+    parkAt(`Math.round((m.scrollHeight - m.clientHeight) / 2)`)
     browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
     // Viewport shot: full-page capture scroll-stitches 48k px and re-pins the thread,
     // unmounting the very pill this is photographing.
