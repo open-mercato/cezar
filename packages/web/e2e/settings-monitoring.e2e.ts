@@ -78,14 +78,30 @@ describe('global Resources monitoring controls', () => {
     gotoResources()
     // Settle the config QUERY, not just the section shell: a change dispatched while the
     // form still renders its defaults gets swallowed by the arriving server values.
+    // Settle the HYDRATED form, not just the section shell: the select must show the server's
+    // own baseline before a change means anything.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="resources-max-monitoring"]')?.value !== undefined && !document.querySelector('[data-slot="resources-max-monitoring"]').disabled`,
+      `document.querySelector('[data-slot="resources-max-monitoring"]')?.value === '2'`,
     )
     choose('[data-slot="resources-max-monitoring"]', '3')
     await waitForResources((resources) => resources.maxMonitoringSessions === 3)
 
     choose('[data-slot="resources-monitoring-wake-mode"]', 'interval')
-    browser.fill('[data-slot="resources-monitoring-wake-interval"]', '7')
+    // Same hydration rule for the interval input: the baseline 5 must be on screen first.
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="resources-monitoring-wake-interval"]')?.value === '5'`,
+    )
+    // Through React's synthetic input, like `choose`: the provider's fill can land as an
+    // append on a controlled input.
+    browser.evaluate(`(() => {
+      const element = document.querySelector('[data-slot="resources-monitoring-wake-interval"]')
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      setter.call(element, '7')
+      element.dispatchEvent(new Event('input', { bubbles: true }))
+    })()`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="resources-monitoring-wake-interval"]')?.value === '7'`,
+    )
     browser.click('[data-action="resources-save-monitoring-wake"]')
     await waitForResources((resources) => resources.monitoringWakeIntervalMinutes === 7)
 
