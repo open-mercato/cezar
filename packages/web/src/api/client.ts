@@ -1107,6 +1107,33 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
   )
 }
 
+/** Pins by default; pass `false` to drop the task back into its ordinary bucket (#935). */
+export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { pinned },
+    }),
+    runPath(id, '/pin'),
+  )
+}
+
+/**
+ * The same pin by EXPLICIT project — the twin of `archiveProjectRun` below, and needed for the
+ * same reason one step closer to home: the multi-project sidebar paints a quick-list per
+ * REGISTERED project, so a pin toggle on another project's row would otherwise be sent with the
+ * scope of whichever project the URL happens to name.
+ */
+export async function pinProjectRun(projectId: string, id: string, pinned = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { pinned },
+    }),
+    runPath(id, '/pin'),
+  )
+}
+
 /**
  * The same route by EXPLICIT project — the twin of `getProjectRuns`, and for the same reason:
  * the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would send the

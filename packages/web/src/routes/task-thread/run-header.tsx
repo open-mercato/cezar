@@ -10,6 +10,8 @@ import {
   FileTextIcon,
   MailIcon,
   PencilIcon,
+  PinIcon,
+  PinOffIcon,
   PlayIcon,
   SquareTerminalIcon,
   Trash2Icon,
@@ -26,6 +28,7 @@ import {
   useMarkRunUnseen,
   useOpenTargets,
   usePatchRun,
+  usePinRun,
   useProjectRepoBase,
   useReferenceProjectId,
   useProviderStatus,
@@ -221,6 +224,24 @@ export function RunHeader({
                 Mark unread
               </Button>
             ) : null}
+            {flags.pin ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-slot="pin-run"
+                aria-pressed={Boolean(run.pinned)}
+                title={
+                  run.pinned
+                    ? 'Unpin from the top of this project’s task list'
+                    : 'Pin to the top of this project’s task list'
+                }
+                disabled={actions.pin.isPending}
+                onClick={() => actions.pin.mutate()}
+              >
+                {run.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
+                {run.pinned ? 'Unpin' : 'Pin'}
+              </Button>
+            ) : null}
             {flags.archive ? (
               <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
                 {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
@@ -374,6 +395,14 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     onSuccess: invalidate,
     onError,
   })
+  // Pin/unpin (#935) — the shared hook rather than a local mutation, because the sidebar and the
+  // Tasks table drive the same action and the cache rule belongs in one place. Toggling off the
+  // record, exactly like archive above.
+  const pinMutation = usePinRun()
+  const pin = {
+    isPending: pinMutation.isPending,
+    mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),
+  }
   // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
   // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in
   // queries.ts, and no `invalidate` is wanted here — an invalidation would refetch the list
@@ -416,6 +445,7 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     continuation,
     continueRun: continueMutation,
     archive,
+    pin,
     markUnread,
     cancel,
     delete: deleteMutation,
@@ -833,6 +863,16 @@ function ActionsKebab({
             onSelect={() => actions.markUnread.mutate()}
           >
             <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
+        {flags.pin ? (
+          <DropdownMenuItem
+            data-slot="pin-run"
+            disabled={actions.pin.isPending}
+            onSelect={() => actions.pin.mutate()}
+          >
+            {run.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
+            {run.pinned ? 'Unpin' : 'Pin'}
           </DropdownMenuItem>
         ) : null}
         {flags.archive ? (

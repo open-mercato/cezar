@@ -60,6 +60,8 @@ import {
   markRunSeen,
   markRunUnseen,
   patchRun,
+  pinProjectRun,
+  pinRun,
   removeQueuedMessage,
   registerProject,
   openAgentAccountFile,
@@ -1322,6 +1324,37 @@ export function useMarkRunUnseen() {
 function withoutReceipt(run: RunRecord): RunRecord {
   const { seenAt: _dropped, ...rest } = run
   return rest
+}
+
+/**
+ * Pin one task to the top of its project's list, or unpin it (#935) — `POST /api/runs/:id/pin`.
+ *
+ * Invalidate rather than patch, like the header's archive and unlike the read receipt: the answer
+ * moves the row between buckets, so the list has to be re-bucketed from the authoritative record
+ * anyway, and a pin is not fired at the busy moment a run finishes (the race that makes the
+ * receipt hooks patch a single field instead).
+ *
+ * Both parameters exist for the multi-project sidebar, which paints a quick-list per REGISTERED
+ * project and therefore acts on rows outside the scope the URL names:
+ *  - `projectId` sends the request to the run's OWN project (`queryScope()` would name whichever
+ *    project the page is standing in, which 404s — or, with a colliding run id, pins the wrong
+ *    task). Absent is the ordinary case: the caller is already inside the run's project.
+ *  - `cacheScope` is the key that project's run list is cached under. It is NOT always the
+ *    project id: `useProjectRuns` caches the boot project under `'default'`, because that is the
+ *    scope it mounts unscoped under, and invalidating `[<bootId>, 'runs']` would leave the
+ *    sidebar's boot group showing the pre-pin order.
+ */
+export function usePinRun(projectId?: string, cacheScope?: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
+      projectId === undefined ? pinRun(id, pinned) : pinProjectRun(projectId, id, pinned),
+    // Hierarchical keys: this covers the list AND the open thread's own record.
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
+      }),
+  })
 }
 
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself

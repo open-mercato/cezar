@@ -25,7 +25,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
-import { queryKeys, useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
+import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRuns } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -33,6 +33,7 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
+import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
@@ -87,6 +88,7 @@ export function TasksOverview({
   onArchiveFinished,
   onMarkAllRead,
   onRename,
+  onTogglePin,
   now = Date.now(),
   showTokens = true,
   showCost = true,
@@ -105,6 +107,10 @@ export function TasksOverview({
   /** Inline rename from the table's Task cell (spec step 15) — the route wires this to
    *  `PATCH /api/runs/:id`, the same flow as the run header's pencil. */
   onRename: (id: string, title: string) => void
+  /** Pin/unpin one task (#935). Pinned rows sort to the top of the table — `sortRuns` does that
+   *  for every surface at once — so the row's own control is also the only thing on this page
+   *  that explains why one is up there. */
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
   /** Presentation capability; defaults visible for older health responses and direct renders. */
@@ -232,6 +238,7 @@ export function TasksOverview({
                         run={run}
                         queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
                         onRename={onRename}
+                        onTogglePin={onTogglePin}
                         now={now}
                         columns={columns}
                         expandedColumns={expandedColumns}
@@ -252,6 +259,7 @@ export function TasksOverview({
                   now={now}
                   showTokens={showTokens}
                   showCost={showCost}
+                  onTogglePin={onTogglePin}
                 />
               ))}
             </div>
@@ -496,6 +504,7 @@ function TableRow({
   run,
   queuePosition,
   onRename,
+  onTogglePin,
   now,
   columns,
   expandedColumns,
@@ -503,6 +512,7 @@ function TableRow({
   run: RunRecord
   queuePosition: number | null
   onRename: (id: string, title: string) => void
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
   now: number
   columns: readonly TaskColumnDefinition[]
   expandedColumns: NormalizedExpandedColumns
@@ -558,6 +568,7 @@ function TableRow({
             cost={cost}
             to={to}
             onRename={onRename}
+            onTogglePin={onTogglePin}
             now={now}
           />
         )
@@ -576,6 +587,7 @@ function TaskTableCell({
   cost,
   to,
   onRename,
+  onTogglePin,
   now,
 }: {
   column: TaskColumnDefinition
@@ -587,6 +599,7 @@ function TaskTableCell({
   cost: string
   to: string
   onRename: (id: string, title: string) => void
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
   now: number
 }) {
   if (!expanded) return <FoldedTd column={column.id} />
@@ -606,7 +619,7 @@ function TaskTableCell({
     case 'task':
       return (
         <td data-column-id={column.id} className={cn(TD_BASE, 'min-w-[220px] max-w-0')}>
-          <TitleCell run={run} to={to} onRename={onRename} />
+          <TitleCell run={run} to={to} onRename={onRename} onTogglePin={onTogglePin} />
         </td>
       )
     case 'workflow':
@@ -687,10 +700,12 @@ function TitleCell({
   run,
   to,
   onRename,
+  onTogglePin,
 }: {
   run: RunRecord
   to: string
   onRename: (id: string, title: string) => void
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const title = runTitle(run)
   const editor = useTitleEditor(title, (next) => onRename(run.id, next))
@@ -734,6 +749,16 @@ function TitleCell({
       >
         <PencilIcon className="size-3" aria-hidden="true" />
       </button>
+      {/* The pin (#935), beside the pencil and revealed the same way — except when the row IS
+          pinned, where it stays lit: this table has no `Pinned` header, so the filled pin is the
+          whole explanation for why the row sorted to the top. */}
+      {onTogglePin ? (
+        <PinToggle
+          pinned={Boolean(run.pinned)}
+          onToggle={(pinned) => onTogglePin(run, pinned)}
+          className="size-[19px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 data-[pinned=true]:opacity-100"
+        />
+      ) : null}
     </span>
   )
 }
@@ -789,12 +814,14 @@ function TaskCard({
   now,
   showTokens,
   showCost,
+  onTogglePin,
 }: {
   run: RunRecord
   queuePosition: number | null
   now: number
   showTokens: boolean
   showCost: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -812,7 +839,9 @@ function TaskCard({
       data-slot="task-card"
       data-run-id={run.id}
       onClick={(event) => {
-        if ((event.target as Element).closest('a')) return
+        // `button` as well as `a` since the card grew the pin (#935): a control inside the card
+        // owns its own click, exactly as the desktop row has always had it.
+        if ((event.target as Element).closest('a, button')) return
         navigate(to)
       }}
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
@@ -844,6 +873,15 @@ function TaskCard({
         <span className="mt-0.5 shrink-0 text-[11.5px] text-soft-foreground tabular-nums">
           {shortAge(run.finishedAt ?? run.createdAt, now)}
         </span>
+        {/* Always visible here, not hover-revealed: a card has no hover to speak of on the
+            device it exists for, and it is the only place a pin can be set or seen on mobile. */}
+        {onTogglePin ? (
+          <PinToggle
+            pinned={Boolean(run.pinned)}
+            onToggle={(pinned) => onTogglePin(run, pinned)}
+            className="-mr-1 mt-px"
+          />
+        ) : null}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-[11.5px] font-medium text-muted-foreground tabular-nums">
         <span>{workflowLabel(run)}</span>
@@ -940,6 +978,8 @@ export function TasksOverviewRoute() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
+  // Pinning (#935) — this page is the scoped project's own table, so no explicit project id.
+  const pin = usePinRun()
   const now = useNow(30_000)
   const taskTableColumns = useTaskTableColumns()
   // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
@@ -969,6 +1009,12 @@ export function TasksOverviewRoute() {
         onArchiveFinished={() => archive.mutate()}
         onMarkAllRead={() => markAllRead.mutate()}
         onRename={(id, title) => rename.mutate({ id, title })}
+        onTogglePin={(run, pinned) =>
+          pin.mutate(
+            { id: run.id, pinned },
+            { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+          )
+        }
         now={now}
         showTokens={metricVisibility.tokens}
         showCost={metricVisibility.cost}
