@@ -193,7 +193,8 @@ describe('the variants compare view against two settled dry runs', () => {
   it('✔ Pick A confirms, archives B with its worktree removed, and lands on A at the gate', async () => {
     browser.click(`[data-slot="variant-column"][data-variant="A"] [data-slot="variant-pick"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="confirm-pick"]') !== null`)
-    browser.click(`[data-slot="confirm-pick"]`)
+    // A DOM click: the dialog zoom leaves its overlay over the click point for a beat.
+    browser.evaluate(`document.querySelector('[data-slot="confirm-pick"]').click()`)
 
     // Navigation to the winner's thread, where the review gate renders (A parked at review).
     browser.waitForFunction(`location.pathname === '${scoped(`/tasks/${idA}`)}'`)

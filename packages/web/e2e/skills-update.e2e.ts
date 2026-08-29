@@ -68,7 +68,9 @@ describe('automatic Open Mercato skills updates', () => {
     }
     expect(config.skillsAutoUpdate).toBe(false)
     // The section reflects the stored override: the toggle is off and Use default is offered.
-    expect(browser.evaluate(`document.querySelector('[data-slot="skills-auto-update"]').getAttribute('aria-checked')`)).toBe('false')
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="skills-auto-update"]').getAttribute('aria-checked') === 'false'`,
+    )
     expect(browser.count('[data-action="skills-use-default"]')).toBe(1)
 
     browser.click('[data-action="skills-use-default"]')
