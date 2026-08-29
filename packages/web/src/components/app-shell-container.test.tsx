@@ -628,14 +628,14 @@ describe('document title wiring', () => {
     })
     renderShell('/p/shop/git')
 
-    await waitFor(() => expect(document.title).toBe('Storefront — Git · cezar'))
+    await waitFor(() => expect(document.title).toBe('Storefront / Git (cezar)'))
   })
 
   it('falls back to the boot repository name when the registry is unavailable', async () => {
     serve({ '/api/v1/health': HEALTH_WITH_BOOT, '/api/v1/todos': [], '/api/v1/runs': [] })
     renderShell('/p/cezar/')
 
-    await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar / Tasks (cezar)'))
   })
 
   it('keeps global settings and a no-repo task route free of invented project context', async () => {
@@ -647,7 +647,7 @@ describe('document title wiring', () => {
     })
     const global = renderShell('/settings/global/projects')
 
-    await waitFor(() => expect(document.title).toBe('Settings · cezar'))
+    await waitFor(() => expect(document.title).toBe('Settings (cezar)'))
     global.unmount()
 
     renderShell('/tasks/missing')
@@ -663,10 +663,10 @@ describe('document title wiring', () => {
     })
     renderShell('/p/cezar/')
 
-    await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar / Tasks (cezar)'))
     await waitFor(() => expect(document.querySelector('[data-slot="project-tabs"]')).not.toBeNull())
     fireEvent.click(within(document.querySelector('[data-slot="project-tabs"]') as HTMLElement).getByRole('link', { name: 'Git' }))
-    await waitFor(() => expect(document.title).toBe('cezar — Git · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar / Git (cezar)'))
   })
 
   it('reacts to live project and task title cache updates', async () => {
@@ -684,7 +684,7 @@ describe('document title wiring', () => {
     const { client } = renderShell('/p/shop/tasks/run-1')
 
     await waitFor(() =>
-      expect(document.title).toBe('Storefront — Implement page titles · cezar'),
+      expect(document.title).toBe('Storefront / Implement page titles (cezar)'),
     )
 
     act(() => {
@@ -698,7 +698,7 @@ describe('document title wiring', () => {
     })
 
     await waitFor(() =>
-      expect(document.title).toBe('Renamed storefront — Rename browser titles · cezar'),
+      expect(document.title).toBe('Renamed storefront / Rename browser titles (cezar)'),
     )
   })
 })

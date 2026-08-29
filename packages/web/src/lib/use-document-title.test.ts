@@ -13,22 +13,22 @@ describe('documentTitleOf', () => {
       name: 'project and page',
       projectName: 'Storefront',
       pageLabel: 'Tasks',
-      expected: 'Storefront — Tasks · cezar',
+      expected: 'Storefront / Tasks (cezar)',
     },
     {
       name: 'project only',
       projectName: 'Storefront',
       pageLabel: null,
-      expected: 'Storefront · cezar',
+      expected: 'Storefront (cezar)',
     },
     {
       name: 'page only',
       projectName: null,
       pageLabel: 'Settings',
-      expected: 'Settings · cezar',
+      expected: 'Settings (cezar)',
     },
     { name: 'neither part', projectName: null, pageLabel: null, expected: 'cezar' },
-    { name: 'empty project', projectName: '', pageLabel: 'Tasks', expected: 'Tasks · cezar' },
+    { name: 'empty project', projectName: '', pageLabel: 'Tasks', expected: 'Tasks (cezar)' },
     { name: 'blank parts', projectName: '  ', pageLabel: '\t', expected: 'cezar' },
   ])('formats $name', ({ projectName, pageLabel, expected }) => {
     expect(documentTitleOf({ projectName, pageLabel })).toBe(expected)
@@ -50,8 +50,8 @@ describe('useDocumentTitle', () => {
       { initialProps },
     )
 
-    expect(document.title).toBe('Storefront — Tasks · cezar')
+    expect(document.title).toBe('Storefront / Tasks (cezar)')
     rerender({ projectName: 'Back office', pageLabel: null })
-    expect(document.title).toBe('Back office · cezar')
+    expect(document.title).toBe('Back office (cezar)')
   })
 })

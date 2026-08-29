@@ -13,7 +13,7 @@ import { gitActionPolicy, type GitActionId } from '@/lib/git-actions'
 import { useIsDesktop } from '@/lib/use-desktop'
 
 import { isRunActive, lastSessionId } from '../task-thread/run-actions'
-import { RunHeader } from '../task-thread/run-header'
+import { RunHeader, RunPrimaryCta } from '../task-thread/run-header'
 import { ChangesTree } from './changes-tree'
 import { CommitDialog } from './commit-dialog'
 import { buildFileTree } from './file-tree'
@@ -152,6 +152,7 @@ function ChangesView({ run }: { run: ApiRun }) {
       <GitToolbar
         bar={bar}
         runId={run.id}
+        cta={<RunPrimaryCta run={run} />}
         mode={effectiveMode}
         wrap={effectiveWrap}
         onModeChange={setMode}

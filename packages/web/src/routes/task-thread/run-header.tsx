@@ -12,6 +12,7 @@ import {
   FileTextIcon,
   GitBranchIcon,
   GitCommitHorizontalIcon,
+  LogOutIcon,
   MailIcon,
   MessageSquareTextIcon,
   PencilIcon,
@@ -245,21 +246,26 @@ export function RunHeader({
       {/* A full-width frosted band under the bar carries the button (user decision): the CTA
           reads as chrome, and thread text slides under a soft blur instead of colliding with
           a naked pill. The mask fades the blur out toward the bottom edge. */}
-      <div
-        data-slot="floating-cta"
-        className={cn(
-          'pointer-events-none absolute inset-x-0 top-0 z-30 hidden justify-center pt-2 pb-7 md:flex',
-          // The frosted band belongs to SESSION, where thread text scrolls underneath. The git
-          // and files tabs have their own toolbar on this line — there the button floats alone
-          // in the toolbar's empty middle, and a full-width wash would gray the controls out.
-          tab === 'session' &&
-            'bg-gradient-to-b from-background/80 via-background/40 to-transparent backdrop-blur-[3px] [mask-image:linear-gradient(to_bottom,black_45%,transparent)]',
-        )}
-      >
-        <span className="pointer-events-auto">
-          <PrimaryCtaButton run={run} actions={actions} floating />
-        </span>
-      </div>
+      {/* SESSION and FILES only (design review): the git tabs' toolbar occupies this exact
+          line, and the absolutely-centered float overlapped its Unified/Split control — there
+          the toolbar reserves a real flex slot in its middle and docks `RunPrimaryCta`, which
+          flex layout can never overlap. */}
+      {tab === 'session' || tab === 'files' ? (
+        <div
+          data-slot="floating-cta"
+          className={cn(
+            'pointer-events-none absolute inset-x-0 top-0 z-30 hidden justify-center pt-2 pb-7 md:flex',
+            // The frosted band belongs to SESSION, where thread text scrolls underneath. Files
+            // starts its panes flush under the bar — a full-width wash would gray them out.
+            tab === 'session' &&
+              'bg-gradient-to-b from-background/80 via-background/40 to-transparent backdrop-blur-[3px] [mask-image:linear-gradient(to_bottom,black_45%,transparent)]',
+          )}
+        >
+          <span className="pointer-events-auto">
+            <PrimaryCtaButton run={run} actions={actions} floating />
+          </span>
+        </div>
+      ) : null}
 
       <ConfirmDialog run={run} actions={actions} />
     </header>
@@ -524,6 +530,20 @@ function PrimaryCtaButton({ run, actions, floating = false }: { run: ApiRun; act
       {icon}
       {cta.label}
     </Button>
+  )
+}
+
+/** The primary CTA and its confirm dialog as ONE self-contained unit, for surfaces outside this
+ *  header: the git toolbars dock it in their middle flex slot (design review — the centered
+ *  float overlapped their controls). Its own `useRunActions` instance: the mutations are
+ *  per-mount and the Stop confirm must open next to the button that asked for it. */
+export function RunPrimaryCta({ run }: { run: ApiRun }) {
+  const actions = useRunActions(run)
+  return (
+    <>
+      <PrimaryCtaButton run={run} actions={actions} />
+      <ConfirmDialog run={run} actions={actions} />
+    </>
   )
 }
 
@@ -927,6 +947,13 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
 }
 
 
+/** The finish item's icon follows its label (design review): "Accept without PR" earns the
+ *  check, "Close session" is a leave — a checkmark beside a closing action read as a confirm
+ *  tick, not as what the row does. */
+function FinishIcon({ status }: { status: ApiRun['status'] }) {
+  return status === 'review' ? <CheckIcon aria-hidden="true" /> : <LogOutIcon aria-hidden="true" />
+}
+
 /** The <md action surface: everything the desktop bar offers, folded into a kebab menu next to
  *  the pill (the mockup's mobile pattern — `.tabs-row .actions { display:none }` under 768px). */
 function ActionsKebab({
@@ -954,7 +981,7 @@ function ActionsKebab({
         </DropdownMenuItem>
         {flags.finish ? (
           <DropdownMenuItem title={finishTitle(run.status)} onSelect={() => actions.finish.mutate()}>
-            <CheckIcon aria-hidden="true" /> {finishLabel(run.status)}
+            <FinishIcon status={run.status} /> {finishLabel(run.status)}
           </DropdownMenuItem>
         ) : null}
         {flags.continueRun ? (
@@ -1032,7 +1059,7 @@ function SecondaryActionsMenu({
             accepting a review without a PR are different acts and read as such here. */}
         {flags.finish ? (
           <DropdownMenuItem data-action="finish" title={finishTitle(run.status)} onSelect={() => actions.finish.mutate()}>
-            <CheckIcon aria-hidden="true" /> {finishLabel(run.status)}
+            <FinishIcon status={run.status} /> {finishLabel(run.status)}
           </DropdownMenuItem>
         ) : null}
         <DropdownMenuItem data-action="rename" onSelect={onRename}>

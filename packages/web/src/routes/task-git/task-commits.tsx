@@ -1,5 +1,5 @@
 import { ArrowLeftIcon, GitCommitHorizontalIcon, SearchXIcon, TriangleAlertIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useParams } from 'react-router'
 
 import { Link } from '@/lib/project-router'
@@ -15,7 +15,7 @@ import { Button } from '@/components/ui/button'
 import { useIsDesktop } from '@/lib/use-desktop'
 
 import { isRunActive } from '../task-thread/run-actions'
-import { RunHeader } from '../task-thread/run-header'
+import { RunHeader, RunPrimaryCta } from '../task-thread/run-header'
 import { CommitList } from './commit-list'
 import { GitTabLoadError, GitTabLoading } from './git-tab-loading'
 import { DiffViewToggles } from './diff-controls'
@@ -46,10 +46,16 @@ function CommitsView({ run }: { run: ApiRun }) {
       {!sha ? (
         <div className="hidden items-center border-b border-border px-4 py-2 md:flex md:px-6">
           <GitSubTabs runId={run.id} active="commits" />
+          {/* The run's primary CTA docks in this row's middle, same as the Changes toolbar
+              (design review): a flex child instead of the centered float that overlapped the
+              toolbar controls. The header skips its float on the git tabs. */}
+          <span data-slot="toolbar-cta-slot" className="flex min-w-0 flex-1 justify-center">
+            <RunPrimaryCta run={run} />
+          </span>
         </div>
       ) : null}
       {sha ? (
-        <CommitDiffView runId={run.id} sha={sha} />
+        <CommitDiffView runId={run.id} sha={sha} cta={<RunPrimaryCta run={run} />} />
       ) : commits.isPending ? (
         <p data-slot="commits-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
           Loading commits…
@@ -89,7 +95,7 @@ function CommitsView({ run }: { run: ApiRun }) {
   )
 }
 
-function CommitDiffView({ runId, sha }: { runId: string; sha: string }) {
+function CommitDiffView({ runId, sha, cta }: { runId: string; sha: string; cta?: ReactNode }) {
   const commit = useRunCommit(runId, sha)
   const desktop = useIsDesktop()
   const [mode, setMode] = useState<DiffMode>('unified')
@@ -109,6 +115,10 @@ function CommitDiffView({ runId, sha }: { runId: string; sha: string }) {
           </Link>
         </Button>
         {commit.data ? <DiffStatLabel stat={commit.data.stat} /> : null}
+        {/* Same docked-CTA slot as the list row above — one CTA home per git surface. */}
+        <span data-slot="toolbar-cta-slot" className="hidden min-w-0 flex-1 justify-center md:flex">
+          {cta}
+        </span>
         <span className="ml-auto hidden items-center gap-1 md:flex">
           <DiffViewToggles mode={mode} wrap={wrap} onModeChange={setMode} onWrapChange={setWrap} />
         </span>

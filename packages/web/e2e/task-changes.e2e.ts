@@ -191,6 +191,26 @@ describe('the Changes tab against a live dry run', () => {
     browser.screenshot(`${artifactsDir}/changes-desktop.png`)
   })
 
+  it('the primary CTA docks in the toolbar slot and overlaps none of its controls (design review)', () => {
+    // The centered float is the Session/Files pattern — on the git tabs it overlapped the
+    // toolbar's own Unified/Split control, so here the CTA is a flex child of the row.
+    expect(browser.count('[data-slot="floating-cta"]')).toBe(0)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="toolbar-cta-slot"] [data-slot="primary-cta"]') !== null`,
+    )
+    const overlap = browser.evaluate(`(() => {
+      const cta = document.querySelector('[data-slot="toolbar-cta-slot"] [data-slot="primary-cta"]')
+      const r = cta.getBoundingClientRect()
+      return [...document.querySelectorAll('[data-slot="git-toolbar"] button, [data-slot="git-toolbar"] a')]
+        .filter((el) => el !== cta && !cta.contains(el) && !el.contains(cta))
+        .some((el) => {
+          const o = el.getBoundingClientRect()
+          return o.left < r.right && o.right > r.left && o.top < r.bottom && o.bottom > r.top
+        })
+    })()`)
+    expect(overlap).toBe(false)
+  })
+
   it('deep-linking /tasks/:id/changes cold-loads the same surface', () => {
     browser.goto(`${baseUrl}${scoped(`/tasks/${runId}/changes`)}`)
     browser.waitForFunction(`document.querySelector('[data-slot="diff-file"][data-path="notes.md"]') !== null`)

@@ -62,6 +62,7 @@ export function GitSubTabs({ runId, active }: { runId: string; active: 'changes'
 export function GitToolbar({
   bar,
   runId,
+  cta,
   mode,
   wrap,
   onModeChange,
@@ -70,6 +71,10 @@ export function GitToolbar({
 }: {
   bar: GitActionBar
   runId: string
+  /** The run's primary CTA, docked in the row's real middle (design review): as a flex child
+   *  it can never overlap the toolbar's own controls the way the absolutely-centered float
+   *  did. The parent passes `RunPrimaryCta`; the header skips its float on this tab. */
+  cta?: ReactNode
   mode: DiffMode
   wrap: boolean
   onModeChange: (mode: DiffMode) => void
@@ -82,6 +87,10 @@ export function GitToolbar({
       className="flex flex-wrap items-center gap-x-2.5 gap-y-1.5 border-b border-border px-4 py-2 md:px-6"
     >
       <GitSubTabs runId={runId} active="changes" />
+
+      <span data-slot="toolbar-cta-slot" className="hidden min-w-0 flex-1 justify-center md:flex">
+        {cta}
+      </span>
 
       <span className="ml-auto flex items-center gap-1">
         {/* View toggles — layout preferences, not git actions, so not the policy's business.

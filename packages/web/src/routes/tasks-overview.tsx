@@ -443,7 +443,9 @@ function TaskColumnHeader({
             disabled={disabled}
             onClick={() => onToggle(column.id)}
             className={cn(
-              'inline-flex h-8 w-full items-center gap-1 rounded-sm px-0.5 text-inherit outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-wait disabled:opacity-60',
+              // `uppercase` restated: the th's transform does not reach into the button in
+              // every engine, and one header row must not mix two casings (design review).
+              'inline-flex h-8 w-full items-center gap-1 rounded-sm px-0.5 text-inherit uppercase outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-wait disabled:opacity-60',
               column.align === 'right' ? 'justify-end' : 'justify-start',
               !expanded && 'justify-center px-0',
             )}
@@ -461,7 +463,7 @@ function TaskColumnHeader({
             )}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="top">{column.label} · {action} column</TooltipContent>
+        <TooltipContent side="top">{action} {column.label} column</TooltipContent>
       </Tooltip>
     </Th>
   )

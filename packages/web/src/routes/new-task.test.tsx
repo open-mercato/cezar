@@ -682,7 +682,7 @@ describe('provider authentication gate', () => {
       expect(textarea().placeholder).toBe('Connect an agent provider before starting a task.'),
     )
     expect((screen.getByRole('button', { name: 'Start task' }) as HTMLButtonElement).disabled).toBe(true)
-    fireEvent.click(screen.getByRole('radio', { name: 'Plan first' }))
+    fireEvent.click(screen.getByRole('switch', { name: 'Plan first' }))
     expect((screen.getByRole('button', { name: 'Plan task' }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
       '/settings/global/accounts#providers',
@@ -1496,8 +1496,7 @@ describe('bookmarklet auto-start', () => {
 
 // ---- plan mode (#383 + spec 008) ----------------------------------------------------------------
 
-const planToggle = () => screen.getByRole('radio', { name: /Plan first|Planning…/ })
-const startToggle = () => screen.getByRole('radio', { name: 'Start' })
+const planToggle = () => screen.getByRole('switch', { name: /Plan first|Planning…/ })
 const stepIds = () =>
   [...document.querySelectorAll('[data-slot="plan-step"]')].map((el) =>
     el.getAttribute('data-step-id'),
@@ -1512,26 +1511,26 @@ async function planTask(text = 'Tighten the flaky suite') {
   await screen.findByText('Proposed chain')
 }
 
-describe('the Start | Plan first toggle', () => {
-  it('flips the selected state (#383): aria-checked moves, the submit becomes "Plan task"', async () => {
+describe('the Plan first toggle', () => {
+  it('flips the switch (#383, design review): aria-checked moves, the submit becomes "Plan task"', async () => {
     serve()
     renderNewTask()
     await pillReady()
 
-    expect(startToggle().getAttribute('aria-checked')).toBe('true')
+    // ONE switch, off by default — no "Start" segment competing with the send arrow.
     expect(planToggle().getAttribute('aria-checked')).toBe('false')
+    expect(screen.queryByRole('radio', { name: 'Start' })).toBeNull()
     expect(screen.queryByRole('button', { name: 'Start task' })).not.toBeNull()
 
     fireEvent.click(planToggle())
     expect(planToggle().getAttribute('aria-checked')).toBe('true')
-    expect(startToggle().getAttribute('aria-checked')).toBe('false')
-    // The selected plan segment takes the contrast fill — the unmistakable state.
+    // The engaged switch takes the contrast fill — the unmistakable state.
     expect(planToggle().className).toContain('bg-contrast')
     expect(screen.queryByRole('button', { name: 'Plan task' })).not.toBeNull()
 
-    fireEvent.click(startToggle())
+    fireEvent.click(planToggle())
     expect(planToggle().getAttribute('aria-checked')).toBe('false')
-    expect(startToggle().getAttribute('aria-checked')).toBe('true')
+    expect(screen.queryByRole('button', { name: 'Start task' })).not.toBeNull()
   })
 
   it('disables the Autonomous toggle in plan mode (planning is interactive)', async () => {
@@ -1594,7 +1593,7 @@ describe('the plan flow', () => {
     expect(stepIds()).toEqual(['task'])
   })
 
-  it('shows the busy state while planning: "Planning…" on the segment, submit disabled', async () => {
+  it('shows the busy state while planning: "Planning…" on the switch, submit disabled', async () => {
     let release!: () => void
     serve({
       plan: () =>

@@ -367,8 +367,8 @@ describe('TasksOverview — the table', () => {
   })
 
   it.each([
-    { name: 'both visible', showTokens: true, showCost: true, headers: ['IN / OUT', 'Cost'], tokens: true, cost: true },
-    { name: 'tokens only', showTokens: true, showCost: false, headers: ['IN / OUT'], tokens: true, cost: false },
+    { name: 'both visible', showTokens: true, showCost: true, headers: ['In / out', 'Cost'], tokens: true, cost: true },
+    { name: 'tokens only', showTokens: true, showCost: false, headers: ['In / out'], tokens: true, cost: false },
     { name: 'cost only', showTokens: false, showCost: true, headers: ['Cost'], tokens: false, cost: true },
     { name: 'both hidden', showTokens: false, showCost: false, headers: [], tokens: false, cost: false },
   ])('keeps desktop and mobile metrics independent when $name', ({ showTokens, showCost, headers, tokens, cost }) => {
@@ -389,7 +389,7 @@ describe('TasksOverview — the table', () => {
     const allHeaders = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
       (cell) => cell.textContent,
     )
-    expect(allHeaders.filter((header) => header === 'IN / OUT' || header === 'Cost')).toEqual(headers)
+    expect(allHeaders.filter((header) => header === 'In / out' || header === 'Cost')).toEqual(headers)
     const rowText = tableRow('visibility')?.textContent ?? ''
     const cardText = card('visibility')?.textContent ?? ''
     expect(rowText.includes('184.7k / 2.4k')).toBe(tokens)

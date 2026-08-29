@@ -669,7 +669,10 @@ export function NewTaskRoute() {
                 onInsert={(text) => composerRef.current?.insertAtCaret(text)}
               />
               {/* No kbd chip (user decision): the shortcut lives in the send button's title. */}
-              <ModeSegment
+              {/* ONE toggle, not a `Start | Plan first` segment (design review): a verb-labelled
+                  segment read as the submit button and swallowed the click meant for the send
+                  arrow — the arrow is the only start control, this only bends its meaning. */}
+              <PlanFirstToggle
                 planFirst={draft.planFirst}
                 planning={planning}
                 onModeChange={(planFirst) => update({ planFirst })}
@@ -1161,10 +1164,6 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
   )
 }
 
-/** The `Start | Plan first` segment (#383): a real toggle with an UNMISTAKABLE selected state.
- *  "Start" selected keeps the quiet card fill; "Plan first" selected takes the mockup's
- *  contrast fill + focus ring (`.seg .plan-active`) — plan mode must never be ambient. The
- *  active plan segment doubles as the busy indicator while `POST /api/plan` is in flight. */
 /**
  * The rare run knobs behind one disclosure (user decision: the composer row carried too
  * much): parallel variants, the worktree opt-out, autonomous, follow-up generation. A violet
@@ -1286,7 +1285,12 @@ function RunOptionsMenu({
   )
 }
 
-function ModeSegment({
+/** Plan mode as ONE switch (#383, design review): off is the default run, on drafts a plan for
+ *  review — with the mockup's contrast fill + ring, because plan mode must never be ambient.
+ *  It doubles as the busy indicator while `POST /api/plan` is in flight. The old
+ *  `Start | Plan first` segment is gone: its verb-labelled "Start" half read as the submit
+ *  button, competing with the send arrow that actually starts the task. */
+function PlanFirstToggle({
   planFirst,
   planning,
   onModeChange,
@@ -1296,44 +1300,24 @@ function ModeSegment({
   onModeChange: (planFirst: boolean) => void
 }) {
   return (
-    <div
-      data-slot="mode-seg"
-      role="radiogroup"
-      aria-label="Run mode"
-      className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-[3px]"
+    <button
+      type="button"
+      role="switch"
+      aria-checked={planFirst}
+      aria-busy={planning || undefined}
+      data-slot="mode-plan"
+      title={planFirst ? 'Submitting drafts a plan to review first' : 'Draft a plan to review before the run starts'}
+      onClick={() => onModeChange(!planFirst)}
+      className={cn(
+        'h-7 rounded-md px-2.5 text-xs transition-colors',
+        planFirst
+          ? 'bg-contrast font-semibold text-contrast-foreground ring-2 ring-ring/55'
+          : 'font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
+        planning && 'animate-pulse',
+      )}
     >
-      <button
-        type="button"
-        role="radio"
-        aria-checked={!planFirst}
-        onClick={() => onModeChange(false)}
-        className={cn(
-          'h-6 rounded-md px-2 text-xs transition-colors',
-          !planFirst
-            ? 'bg-card font-semibold text-foreground shadow-xs'
-            : 'font-medium text-muted-foreground hover:text-foreground',
-        )}
-      >
-        Start
-      </button>
-      <button
-        type="button"
-        role="radio"
-        aria-checked={planFirst}
-        aria-busy={planning || undefined}
-        data-slot="mode-plan"
-        onClick={() => onModeChange(true)}
-        className={cn(
-          'h-6 rounded-md px-2 text-xs transition-colors',
-          planFirst
-            ? 'bg-contrast font-semibold text-contrast-foreground ring-2 ring-ring/55'
-            : 'font-medium text-muted-foreground hover:text-foreground',
-          planning && 'animate-pulse',
-        )}
-      >
-        {planning ? 'Planning…' : 'Plan first'}
-      </button>
-    </div>
+      {planning ? 'Planning…' : 'Plan first'}
+    </button>
   )
 }
 

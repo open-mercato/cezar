@@ -288,12 +288,18 @@ export function AppShell({
         <MobileNavDrawer {...nav} onNavigate={() => setMenuOpen(false)} />
 
         <div className="grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden">
-          <MobileTopBar title={current?.label ?? 'cezar'} />
+          {/* The crumb outranks the area label (design review): a task thread's bar must say
+              the task, not "Tasks" — the phone has no second breadcrumb line to say it on. */}
+          <MobileTopBar title={crumb ?? current?.label ?? 'cezar'} />
           {/* Same grid row as the mobile top bar — the two are breakpoint-exclusive, so they
               never render together. The bar is where the ACTIVE PROJECT lives now: above the
               content on every route, instead of buried in the sidebar lockup. */}
+          {/* `projectName` alone — no `repo?.name` fallback (design review): the container
+              already resolves its own fallback and passes null ON PURPOSE for workspace-level
+              views (Skills, global settings), where resurrecting the boot repo's name here put
+              a project over a view that belongs to no project. */}
           <ProjectBar
-            name={projectName ?? repo?.name ?? null}
+            name={projectName}
             crumb={crumb}
             projectSwitcher={projectSwitcher}
           />

@@ -230,7 +230,9 @@ describe('AppShell', () => {
     })
 
     it('renders the repo chip and version chip from props', () => {
-      renderShell('/', { repo: { name: 'my-app', branch: 'main' }, version: '1.2.3' })
+      // `projectName` feeds the bar chip — the `repo` prop no longer falls back into it
+      // (design review): the container passes null ON PURPOSE for workspace-level views.
+      renderShell('/', { repo: { name: 'my-app', branch: 'main' }, version: '1.2.3', projectName: 'my-app' })
       // The chip carries the project NAME only — the branch is a git detail the Git view owns.
       expect(document.querySelector('[data-slot="repo-chip"]')?.textContent).toBe('my-app')
       // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
