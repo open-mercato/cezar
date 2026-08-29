@@ -109,7 +109,7 @@ describe('the full-screen /new against a live dry-run server', () => {
     browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped('/new')}`)
     expect(browser.text('h1')).toBe('What should the agent work on?')
-    expect(browser.isVisible('[data-slot="twinkle-backdrop"]')).toBe(true)
+    expect(browser.isVisible('[data-slot="grid-backdrop"]')).toBe(true)
     expect(
       browser.evaluate(
         `document.activeElement === document.querySelector('[data-slot="composer"] textarea')`,
@@ -118,10 +118,10 @@ describe('the full-screen /new against a live dry-run server', () => {
     expect(browser.count('[data-slot="suggested-chip"]')).toBe(3)
   })
 
-  it('the pill row resolves: project skill preselected, runner pill iff >1 backend, base: main, ×1', async () => {
-    // Sources are ready once the pill shows a real skill (the first project skill, #377 order).
+  it('the pill row resolves: quick-task cold default, merged agent pill, base: main', async () => {
+    // The COLD default is quick-task now (a project skill is a pick, not a preselection).
     browser.waitForFunction(
-      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('lint-fix')`,
+      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('quick-task')`,
     )
     // Health must have SETTLED before judging the runner pill — the version chip renders from
     // the same response, so it is the "health arrived" signal.
@@ -154,10 +154,17 @@ describe('the full-screen /new against a live dry-run server', () => {
     const groups = browser.evaluate(`[...document.querySelectorAll('[cmdk-group-heading]')].map(h => h.textContent)`) as string[]
     expect(groups[0]).toBe('Project skills')
     expect(groups).toContain('Workflows')
+    // The group holds the seeded pair AND the auto-loaded team collection (om-*): 'team'
+    // skills are project-scoped by design, so containment is the honest assertion.
     const projectRefs = browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="source-option"][data-source-kind="skill"]')].slice(0, 2).map(o => o.dataset.sourceRef)`,
+      `(() => {
+        const group = [...document.querySelectorAll('[cmdk-group]')]
+          .find((g) => g.querySelector('[cmdk-group-heading]')?.textContent === 'Project skills')
+        return [...group.querySelectorAll('[data-slot="source-option"]')].map((o) => o.dataset.sourceRef)
+      })()`,
     ) as string[]
-    expect(projectRefs).toEqual(['lint-fix', 'spec-writer'])
+    expect(projectRefs[0]).toBe('lint-fix')
+    expect(projectRefs).toContain('spec-writer')
     browser.screenshot(`${artifactsDir}/new-task-source-menu.png`)
 
     browser.click('[data-slot="source-option"][data-source-ref="spec-writer"]')
