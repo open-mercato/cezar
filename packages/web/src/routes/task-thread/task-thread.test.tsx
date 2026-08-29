@@ -116,7 +116,7 @@ describe('ThreadView', () => {
 
     expect(screen.getByRole('alert').textContent).toContain('This run needed Codex authorization')
     expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
   })
 
@@ -216,10 +216,13 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="reasoning"]')?.textContent).toContain('Thinking — Considering the layout…')
   })
 
-  it('shows the header title (auto-summary, never the raw title) and the status pill', () => {
+  it('shows the header title (auto-summary, never the raw title); status reads from the paused hint', () => {
     renderView(<ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />)
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Do the thing')
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('needs you')
+    // The Status stat left the header — a waiting run says so in the paused hint by the composer.
+    expect(document.querySelector('[data-slot="paused-hint"]')?.textContent).toContain(
+      'The agent is paused, waiting for your reply',
+    )
   })
 
   it('waiting → the paused hint (pulsing dot) in the dock, right above an ENABLED composer', () => {
@@ -231,7 +234,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="thread-footer"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
-    expect(textarea.placeholder).toBe('Reply — / for skills, @ for files…')
+    expect(textarea.placeholder).toBe('Reply to Cezar (/ for skills, @ for files)…')
   })
 
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
@@ -300,7 +303,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
-    expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
+    expect(textarea.placeholder).toBe('Message Cezar (/ for skills, @ for files)…')
   })
 
   it.each([
@@ -350,14 +353,14 @@ describe('ThreadView', () => {
     await waitFor(() => expect(textarea.disabled).toBe(false))
   })
 
-  it('monitoring → no paused hint, "message" placeholder, and a "monitoring" pill (#490)', () => {
+  it('monitoring → no paused hint and a "message" placeholder, not "reply" (#490)', () => {
     renderView(<ThreadView run={run('running', { activity: 'monitoring' })} thread={reduceThread(EVENTS)} />)
-    // Still working on downstream work, not on you: never the "paused, waiting for your reply" banner.
+    // Still working on downstream work, not on you: never the "paused, waiting for your reply" banner
+    // (the Status stat that used to label this left the header).
     expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
-    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('monitoring')
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     expect(textarea.disabled).toBe(false)
-    expect(textarea.placeholder).toBe('Message the agent — / for skills, @ for files…')
+    expect(textarea.placeholder).toBe('Message Cezar (/ for skills, @ for files)…')
   })
 
   /** A closed run with a session to resume is still AUTHORABLE: Continue takes a prompt, so
@@ -774,7 +777,7 @@ describe('ThreadView', () => {
     renderView(<ThreadView run={run('queued')} thread={reduceThread([])} />)
     const placeholder = document.querySelector('[data-slot="queued-state"]')
     expect(placeholder?.textContent).toContain('Waiting for a free agent slot')
-    expect(placeholder?.textContent).toContain('quick-task · starts automatically')
+    expect(placeholder?.textContent).toContain('quick-task, starts automatically')
     expect(document.querySelector('[data-slot="thread-empty"]')).toBeNull()
   })
 
@@ -784,7 +787,7 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="note-line"]')?.textContent).toContain('re-queued')
   })
 
-  it('no plan → no dock, no header mirror; steps present → the rail renders in the header', () => {
+  it('no plan → no plan chip; steps present → a collapsed Steps chip above the composer', () => {
     renderView(
       <ThreadView
         run={run('running', {
@@ -796,20 +799,18 @@ describe('ThreadView', () => {
         thread={reduceThread(EVENTS)}
       />,
     )
-    expect(document.querySelector('[data-slot="plan-dock"]')).toBeNull()
-    expect(document.querySelector('[data-slot="plan-mirror"]')).toBeNull()
-    // The header shows the compact one-line summary (collapsed by default): a dot per step and
-    // the active step's name + position. The full rows only mount once it's expanded.
-    const summary = document.querySelector('[data-slot="workflow-steps"]')
-    expect(summary).not.toBeNull()
-    expect(summary!.textContent).toContain('Do the task')
-    expect(summary!.textContent).toContain('step 1 of 2')
-    const dots = [...document.querySelectorAll('[data-slot="step-dot"]')]
-    expect(dots.map((dot) => dot.getAttribute('data-visual'))).toEqual(['active', 'pending'])
+    expect(document.querySelector('[data-slot="plan-chip"]')).toBeNull()
+    // The context bar's Steps chip (collapsed): a dot per step and the active step's name +
+    // position. The full rail only mounts once its popover opens.
+    const chip = document.querySelector('[data-slot="steps-chip"]')
+    expect(chip).not.toBeNull()
+    expect(chip!.textContent).toContain('Do the task')
+    expect(chip!.textContent).toContain('1/2')
+    // The full rail only mounts once its popover opens.
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 
-  it('a plan in the stream → the dock above the composer area + the compact header mirror', () => {
+  it('a plan in the stream → a collapsed Plan chip (the header Plan stat is gone)', () => {
     const withPlan: RunEvent[] = [
       ...EVENTS,
       line(8, 'plan.updated', {
@@ -821,11 +822,11 @@ describe('ThreadView', () => {
       }),
     ]
     renderView(<ThreadView run={run('running')} thread={reduceThread(withPlan)} />)
-    expect(document.querySelector('[data-slot="plan-dock"]')).not.toBeNull()
-    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('· 1/3')
-    expect(document.querySelector('[data-slot="plan-mirror"]')?.textContent).toBe('Plan 1/3')
-    // No steps on this run — the rail knows to stay away.
-    expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
+    expect(document.querySelector('[data-slot="plan-chip"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="plan-count"]')?.textContent).toBe('1/3')
+    // The Plan stat left the header — the collapsed Plan chip is now the only tally.
+    // No steps on this run — no Steps chip.
+    expect(document.querySelector('[data-slot="steps-chip"]')).toBeNull()
   })
 
   it('plan-kind tool cards stay out of the thread — the dock is their surface (#382)', () => {
@@ -847,7 +848,7 @@ describe('ThreadView', () => {
     ]
     renderView(<ThreadView run={run('running')} thread={reduceThread(events)} />)
     expect(document.querySelector('[data-slot="tool-card"]')).toBeNull()
-    expect(document.querySelector('[data-slot="plan-dock"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="plan-chip"]')).not.toBeNull()
   })
 })
 
@@ -1027,6 +1028,12 @@ describe('TaskThreadRoute — read receipts', () => {
   const posted = (sent: Array<{ path: string; method: string }>, path: string) =>
     sent.filter((r) => r.method === 'POST' && r.path === path).length
 
+  /** Mark unread now lives in the desktop overflow (#765): open it, then pick the item. */
+  const openMarkUnread = async () => {
+    fireEvent.pointerDown((await screen.findAllByRole('button', { name: 'More actions' }))[0]!)
+    return screen.findByRole('menuitem', { name: 'Mark unread' })
+  }
+
   it('opening an unread finished task marks it read', async () => {
     const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
     visit('r1')
@@ -1042,7 +1049,7 @@ describe('TaskThreadRoute — read receipts', () => {
     )
     visit('r1')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    fireEvent.click(await openMarkUnread())
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/unread')).toBe(1))
 
     // Let every settled mutation, cache write and re-render drain before judging.
@@ -1060,7 +1067,7 @@ describe('TaskThreadRoute — read receipts', () => {
     )
     const first = visit('r1')
 
-    fireEvent.click(await screen.findByRole('button', { name: 'Mark unread' }))
+    fireEvent.click(await openMarkUnread())
     await waitFor(() => expect(currentRecord().seenAt).toBeUndefined())
     expect(posted(sent, '/api/v1/runs/r1/read')).toBe(0)
     first.unmount()
@@ -1078,6 +1085,6 @@ describe('TaskThreadRoute — read receipts', () => {
     const { sent } = stubReceiptServer(run('done', { finishedAt: FINISHED_AT }))
     visit('r1')
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
-    expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
+    expect(await openMarkUnread()).not.toBeNull()
   })
 })

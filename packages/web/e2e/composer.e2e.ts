@@ -127,7 +127,7 @@ describe('the thread composer against a live waiting session', () => {
       return { disabled: textarea.disabled, placeholder: textarea.placeholder }
     })()`) as { disabled: boolean; placeholder: string }
     expect(composer.disabled).toBe(false)
-    expect(composer.placeholder).toBe('Reply — / for skills, @ for files…')
+    expect(composer.placeholder).toBe('Reply to Cezar (/ for skills, @ for files)…')
     // Chrome has the Web Speech API — the labeled mic must be there, left of send.
     expect(browser.isVisible('[aria-label="Start dictation"]')).toBe(true)
     browser.screenshot(`${artifactsDir}/composer-idle.png`)

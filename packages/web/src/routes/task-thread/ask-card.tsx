@@ -101,7 +101,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       </div>
       {oneTap ? (
         resuming ? (
-          <p data-slot="ask-resume-hint" className="mt-3 text-[11.5px] text-soft-foreground">
+          <p data-slot="ask-resume-hint" className="mt-3 text-xs text-soft-foreground">
             The session has ended — your answer reopens it and goes to the agent.
           </p>
         ) : null
@@ -114,7 +114,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
               "pick one or more" hint a live run shows. */}
           <span
             data-slot={resuming ? 'ask-resume-hint' : 'ask-hint'}
-            className="text-[11.5px] text-soft-foreground"
+            className="text-xs text-soft-foreground"
           >
             {resuming
               ? 'the session has ended — sending reopens it'
@@ -125,7 +125,7 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
       {delivery.blockedBy === 'provider' ? (
         <div data-slot="ask-provider-gate" className="mt-3 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
           <span>{delivery.reason}</span>
-          <Link to="/settings/agents#providers" className="font-medium text-foreground underline underline-offset-4">
+          <Link to="/settings/global/accounts#providers" className="font-medium text-foreground underline underline-offset-4">
             Configure providers
           </Link>
         </div>
@@ -175,10 +175,10 @@ function AskQuestionBlock({
           {question.header}
         </span>
         {multiSelect ? (
-          <span className="ml-auto text-[10.5px] text-soft-foreground">select all that apply</span>
+          <span className="ml-auto text-[10px] text-soft-foreground">select all that apply</span>
         ) : null}
       </div>
-      <p className="mb-2.5 break-words text-sm font-semibold text-foreground">{question.question}</p>
+      <p className="mb-2.5 break-words text-[13px] font-semibold text-foreground">{question.question}</p>
       <div className="flex flex-col gap-2">
         {question.options.map((option) => {
           const isSelected = selected.includes(option.label)
@@ -195,7 +195,7 @@ function AskQuestionBlock({
                 isSelected ? 'border-primary/60 bg-primary/[0.06]' : 'border-border bg-card',
               )}
             >
-              <span className="flex min-w-0 items-start gap-2 text-[13.5px] font-semibold text-foreground">
+              <span className="flex min-w-0 items-start gap-2 text-[13px] font-semibold text-foreground">
                 {multiSelect ? (
                   <span
                     aria-hidden

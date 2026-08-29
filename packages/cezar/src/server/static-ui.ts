@@ -23,9 +23,10 @@ export function resolveIndexHtml(opts: { distExists: boolean }): IndexTarget {
 export type GetTarget = IndexTarget | 'passthrough';
 
 /** Paths owned by routes registered before the catch-all: the built app's
- *  hashed bundles and the favicon. */
+ *  hashed bundles and the favicons (the cat is the app icon; the legacy mark
+ *  stays servable for cached tabs). */
 function isStaticAsset(path: string): boolean {
-  return path.startsWith('/assets/') || path === '/open-mercato.svg';
+  return path.startsWith('/assets/') || path === '/cezar-logo.svg' || path === '/cezar-hero.png' || path === '/cezar-hero-git.png' || path === '/cezar-hero-archive.png' || path === '/cezar-logo-dark.svg' || path === '/open-mercato.svg';
 }
 
 /** Decide what any GET gets, so every route in the spec's map (`/tasks/:id/changes`,

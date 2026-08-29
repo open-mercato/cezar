@@ -57,7 +57,7 @@ export function ResolveConflictsButton({
       if (failure) toast(failure, { tone: 'danger' })
       else {
         toast(
-          `${reopened ? 'Task reopened' : 'Sent to the task'} — resolving conflicts${
+          `${reopened ? 'Task reopened' : 'Sent to the task'}, resolving conflicts${
             prNumber ? ` in PR #${prNumber}` : ''
           }`,
         )

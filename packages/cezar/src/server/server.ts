@@ -1423,7 +1423,13 @@ export function createApp(deps: ServerDeps) {
     });
   });
 
-  // The favicon packages/web/index.html points at (`/open-mercato.svg`).
+  // The favicon/brand mark packages/web/index.html points at (the cat), plus the legacy mark
+  // for tabs that cached the old icon link.
+  app.get('/cezar-logo.svg', staticFile('cezar-logo.svg', 'image/svg+xml'));
+  app.get('/cezar-logo-dark.svg', staticFile('cezar-logo-dark.svg', 'image/svg+xml'));
+  app.get('/cezar-hero.png', staticFile('cezar-hero.png', 'image/png'));
+  app.get('/cezar-hero-git.png', staticFile('cezar-hero-git.png', 'image/png'));
+  app.get('/cezar-hero-archive.png', staticFile('cezar-hero-archive.png', 'image/png'));
   app.get('/open-mercato.svg', staticFile('open-mercato.svg', 'image/svg+xml'));
 
   // ---- meta ----------------------------------------------------------------
@@ -5342,6 +5348,8 @@ export function createApp(deps: ServerDeps) {
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
+    ...(run.groupId !== undefined ? { groupId: run.groupId } : {}),
+    ...(run.variant !== undefined ? { variant: run.variant } : {}),
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
     // The tracker-reference inputs, verbatim — the cockpit's `taskReference()` owns the rule
     // that picks between them (see the schema's note).

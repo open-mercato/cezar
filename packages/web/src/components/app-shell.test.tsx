@@ -3,7 +3,7 @@ import type { ReactNode } from 'react'
 import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { AppShell, routeOwnsScrollArrival, type AppShellProps } from './app-shell'
+import { AppShell, routeOwnsScrollArrival, useSidebarNavigate, type AppShellProps } from './app-shell'
 import { NAV_ITEMS } from './nav-items'
 import { ThemeProvider } from './theme-provider'
 
@@ -58,11 +58,11 @@ describe('AppShell', () => {
   })
 
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
-    renderShell('/')
+    renderShell('/', {}, <RouterLink to="/github">Go to GitHub</RouterLink>)
     const main = screen.getByRole('main')
     main.scrollTop = 640
     expect(main.scrollTop).toBe(640) // jsdom kept the write — the reset below is the effect's
-    fireEvent.click(within(nav()).getByRole('link', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Go to GitHub' }))
     expect(screen.getByTestId('location').textContent).toBe('/github')
     expect(main.scrollTop).toBe(0)
   })
@@ -83,11 +83,11 @@ describe('AppShell', () => {
   })
 
   it('restores the generic top reset when leaving a task thread (#761)', () => {
-    renderShell('/tasks/source')
+    renderShell('/tasks/source', {}, <RouterLink to="/github">Go to GitHub</RouterLink>)
     const main = screen.getByRole('main')
     main.scrollTop = 640
 
-    fireEvent.click(within(nav()).getByRole('link', { name: 'GitHub' }))
+    fireEvent.click(screen.getByRole('link', { name: 'Go to GitHub' }))
 
     expect(screen.getByTestId('location').textContent).toBe('/github')
     expect(main.scrollTop).toBe(0)
@@ -101,105 +101,22 @@ describe('AppShell', () => {
     expect(routeOwnsScrollArrival('/tasks')).toBe(false)
   })
 
-  it('renders the whole nav as real router links', () => {
-    renderShell()
-    const links = within(nav()).getAllByRole('link')
-    expect(links.map((a) => a.textContent)).toEqual([
-      'Tasks',
-      'Inbox',
-      'Git',
-      'GitHub',
-      'Automations',
-      'Skills',
-      'Workflows',
-      'Settings',
-    ])
-    // Deep-linkable per Step 2.1: every nav row is an <a href>, not a button with an onClick.
-    expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      '/',
-      '/inbox',
-      '/git',
-      '/github',
-      '/automations',
-      '/skills',
-      '/workflows',
-      '/settings',
-    ])
-  })
-
-  // R6 Step 1.1: no forge, no GitHub tab — the nav item disappears entirely (spec's
-  // degradation table), it does not render disabled.
-  it('drops the GitHub item when the forge is unavailable', () => {
-    renderShell('/', { forgeAvailable: false })
-    const links = within(nav()).getAllByRole('link')
-    expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge).length)
-  })
-
-  // #801: same degradation for the opt-in automations capability — the item disappears, it does
-  // not render disabled. The two gates on that item are independent: a forge alone is not enough.
-  it('drops the Automations item when the capability is off', () => {
-    renderShell('/', { automationsAvailable: false })
-    const links = within(nav()).getAllByRole('link')
-    expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.automations).length)
-  })
-
-  it('shows the Automations item once the capability is on', () => {
-    renderShell('/', { automationsAvailable: true })
-    expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href')))
-      .toContain('/automations')
-  })
-
-  describe('active nav state follows the current route', () => {
-    const cases: Array<[entry: string, active: string]> = [
-      ['/', 'Tasks'],
-      ['/git', 'Git'],
-      ['/skills', 'Skills'],
-      // Tasks stays lit while a task thread is open (spec's "Task list & table").
-      ['/tasks/abc123', 'Tasks'],
-    ]
-
-    for (const [entry, active] of cases) {
-      it(`${entry} → ${active}`, () => {
-        renderShell(entry)
-        const current = within(nav()).getAllByRole('link', { current: 'page' })
-        // Exactly one — two lit rows is as wrong as none.
-        expect(current).toHaveLength(1)
-        expect(current[0]?.textContent).toBe(active)
-      })
-    }
-
-    it('lights nothing on a full-screen surface like /new', () => {
-      renderShell('/new')
-      expect(within(nav()).queryAllByRole('link', { current: 'page' })).toHaveLength(0)
-    })
-  })
-
-  describe('New task button', () => {
-    it('links to /new', () => {
-      renderShell()
-      expect(within(sidebar()).getByRole('link', { name: /New task/ }).getAttribute('href')).toBe('/new')
+  describe('project bar breadcrumb', () => {
+    it('carries no Add project any more — that moved to the Projects page', () => {
+      renderShell('/', { projectName: 'cezar' })
+      const bar = document.querySelector('[data-slot="project-bar"]') as HTMLElement
+      expect(within(bar).queryByRole('button', { name: 'Add project' })).toBeNull()
     })
 
-    it('renders the C hint (the browser-usable accelerator; ⌘N only fires in the desktop shell)', () => {
-      renderShell()
-      const link = within(sidebar()).getByRole('link', { name: /New task/ })
-      expect(within(link).getByText('C').tagName).toBe('KBD')
-    })
-  })
-
-  describe('Add project menu', () => {
-    it('is shown by default', () => {
-      renderShell()
-      expect(within(sidebar()).getByRole('button', { name: 'Add project' })).toBeTruthy()
+    it('shows the second step after the project — the open task, or the view', () => {
+      renderShell('/tasks/abc', { projectName: 'cezar', crumb: 'Fix the checkout' })
+      const bar = document.querySelector('[data-slot="project-bar"]') as HTMLElement
+      expect(bar.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('Fix the checkout')
     })
 
-    it('is omitted in single-project mode while normal navigation remains', () => {
+    it('is omitted in single-project mode', () => {
       renderShell('/', { singleProject: true })
       expect(within(sidebar()).queryByRole('button', { name: 'Add project' })).toBeNull()
-      expect(within(nav()).getByRole('link', { name: 'Tasks' })).toBeTruthy()
-      expect(within(sidebar()).getByRole('link', { name: /New task/ })).toBeTruthy()
     })
   })
 
@@ -221,51 +138,62 @@ describe('AppShell', () => {
       expect(footer().className).not.toContain('flex-wrap')
     })
 
-    it('has exactly two children: the search bar, then the controls row', () => {
-      renderShell('/', { version: '1.2.3' })
+    it('stacks Settings and Tools as menu rows, with the utility line beneath', () => {
+      renderShell('/', { version: '1.2.3', toolsMenu: <button type="button">Tools</button> })
+      // The footer is now three stacked children (user decision): the Settings ROW, the Tools
+      // ROW, then the slim controls line holding version + theme toggle.
+      // Skills (the workspace library) sits above Settings (user decision); it has no
+      // data-slot, so assert by order of what identifies each row.
       const children = Array.from(footer().children) as HTMLElement[]
-      expect(children.map((child) => child.dataset.slot)).toEqual([
-        'command-palette-hint',
+      expect(children.map((child) => child.dataset.slot ?? child.textContent?.trim())).toEqual([
+        'Skills',
+        'footer-settings',
+        'tools-menu',
         'sidebar-footer-controls',
       ])
+      const settings = footer().querySelector('[data-slot="footer-settings"]') as HTMLElement
+      expect(settings.getAttribute('href')).toBe('/settings/global')
+      // …and the drawer's search launcher stays ABOVE the bordered bar, not inside it.
+      const search = document.querySelector('[data-slot="command-palette-hint"]') as HTMLElement
+      expect(search.closest('[data-slot="sidebar-footer"]')).toBeNull()
+      expect(footer().previousElementSibling?.contains(search)).toBe(true)
     })
 
-    it('keeps every control a sibling inside the one controls row', () => {
+    it('keeps version and theme toggle siblings inside the controls line', () => {
       renderShell('/', { version: '1.2.3', toolsMenu: <button type="button">Tools</button> })
-      // The gear and the toggle are the pair that came apart in #702 — assert they share a parent,
-      // and that the row is the whole of the footer's chrome rather than a subset of it.
       const row = controls()
-      expect(row.querySelector('[data-slot="global-settings-link"]')).not.toBeNull()
+      expect(row.querySelector('[data-slot="global-settings-link"]')).toBeNull()
       expect(row.querySelector('[data-slot="theme-toggle"]')).not.toBeNull()
-      expect(row.querySelector('[data-slot="tools-menu"]')).not.toBeNull()
       expect(row.querySelector('[data-slot="version-chip"]')).not.toBeNull()
-      // The gear pushes itself right; the toggle rides along at the end of the same row.
-      const gear = row.querySelector('[data-slot="global-settings-link"]') as HTMLElement
-      expect(gear.closest('a,button')?.parentElement).toBe(row)
     })
 
-    it('renders search as a full-width launcher that still opens the palette', () => {
+    it('renders search as a BUTTON-shaped launcher that still opens the palette', () => {
       renderShell()
       // Named by its own visible label, not by an aria-label that would diverge from it
       // (WCAG 2.5.3) — jsdom reports no `navigator.platform`, so the chord reads Ctrl+K.
-      const search = within(footer()).getByRole('button', { name: 'Search…' })
-      expect(search.dataset.slot).toBe('command-palette-hint')
-      expect(search.className).toContain('w-full')
-      expect(search.textContent).toContain('Search…')
-      expect(search.querySelector('kbd')?.textContent).toBe('Ctrl+K')
+      // Two copies by design: the app bar (desktop) and the drawer's md:hidden one.
+      // Two copies by design: the top-of-sidebar icon (desktop) and the drawer's md:hidden
+      // full-width launcher, which keeps its visible label and Ctrl+K chord (WCAG 2.5.3).
+      const buttons = within(sidebar()).getAllByRole('button', { name: 'Search' })
+      const icon = buttons.find((el) => el.dataset.slot === 'sidebar-search')!
+      const hint = buttons.find((el) => el.dataset.slot === 'command-palette-hint')!
+      expect(hint.textContent).toContain('Search')
+      expect(hint.querySelector('kbd')?.textContent).toBe('Ctrl+K')
 
       const opened = vi.fn()
       window.addEventListener('cezar:open-command-palette', opened)
-      fireEvent.click(search)
+      fireEvent.click(icon)
+      fireEvent.click(hint)
       window.removeEventListener('cezar:open-command-palette', opened)
-      expect(opened).toHaveBeenCalledTimes(1)
+      expect(opened).toHaveBeenCalledTimes(2)
     })
 
     it('still shows the version chip update affordance (#368) in the narrower row', () => {
       renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
       const chip = controls().querySelector('[data-slot="version-chip"]') as HTMLElement
       expect(chip.getAttribute('data-update-available')).toBe('true')
-      expect(chip.querySelector('[data-slot="status-dot"]')).not.toBeNull()
+      // Violet text, not a dot — the label is plain text now (no border, no button cosplay).
+      expect(chip.className).toContain('text-violet')
     })
 
     /* The two-row footer holds only while something in the controls row can give: every icon
@@ -280,17 +208,16 @@ describe('AppShell', () => {
       const chip = controls().querySelector('[data-slot="version-chip"]') as HTMLElement
       expect(chip.className).not.toContain('shrink-0')
       expect(chip.className).toContain('min-w-0')
-      // The text truncates inside the pill rather than widening it past what the row can hold.
-      const label = chip.querySelector('span:not([data-slot])') as HTMLElement
-      expect(label.className).toContain('truncate')
-      expect(label.textContent).toBe('v0.9.2-nightly.20260813.1')
+      // The label truncates in place rather than widening past what the row can hold — the
+      // plain-text label IS the truncating element (no inner pill structure).
+      expect(chip.className).toContain('truncate')
+      expect(chip.textContent).toBe('v0.9.2-nightly.20260813.1')
       // …and the full string stays legible on hover, since the visible one may be clipped.
       expect(chip.getAttribute('title')).toBe('v0.9.2-nightly.20260813.1')
-      // Everything else in the row still refuses to shrink — that is what keeps them readable.
-      for (const slot of ['tools-menu', 'global-settings-link', 'theme-toggle']) {
-        const el = controls().querySelector(`[data-slot="${slot}"]`) as HTMLElement
-        expect(el.className).toContain('shrink-0')
-      }
+      // The theme toggle still refuses to shrink — that is what keeps it readable. (Tools is
+      // its own full-width row above the line now, so it no longer competes for this space.)
+      const toggle = controls().querySelector('[data-slot="theme-toggle"]') as HTMLElement
+      expect(toggle.className).toContain('shrink-0')
     })
   })
 
@@ -303,8 +230,11 @@ describe('AppShell', () => {
     })
 
     it('renders the repo chip and version chip from props', () => {
-      renderShell('/', { repo: { name: 'cezar', branch: 'main' }, version: '1.2.3' })
-      expect(screen.getByText('cezar / main')).toBeTruthy()
+      // `projectName` feeds the bar chip — the `repo` prop no longer falls back into it
+      // (design review): the container passes null ON PURPOSE for workspace-level views.
+      renderShell('/', { repo: { name: 'my-app', branch: 'main' }, version: '1.2.3', projectName: 'my-app' })
+      // The chip carries the project NAME only — the branch is a git detail the Git view owns.
+      expect(document.querySelector('[data-slot="repo-chip"]')?.textContent).toBe('my-app')
       // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
       expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
     })
@@ -327,40 +257,16 @@ describe('AppShell', () => {
         expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
       })
 
-      it('pulses and names the newer version when one exists', () => {
+      it('turns violet and names the newer version when one exists', () => {
         renderShell('/', { version: '1.2.3', latestVersion: '1.3.0' })
         expect(chip().getAttribute('data-update-available')).toBe('true')
-        expect(chip().getAttribute('title')).toBe('v1.2.3 — update available: v1.3.0')
-        const dot = chip().querySelector('[data-slot="status-dot"]') as HTMLElement
-        expect(dot.getAttribute('data-tone')).toBe('pending')
-        expect(dot.className).toContain('animate-pulse')
+        expect(chip().getAttribute('title')).toBe('v1.2.3 (update available: v1.3.0)')
+        // Violet text is the affordance — the dot went with the button-shaped border.
+        expect(chip().className).toContain('text-violet')
+        expect(chip().querySelector('[data-slot="status-dot"]')).toBeNull()
         // The version shown is still the one actually running.
         expect(chip().textContent).toContain('v1.2.3')
       })
-    })
-
-    it('renders the Inbox badge only for a non-zero count', () => {
-      renderShell('/', { inboxCount: 2 })
-      const inbox = within(nav()).getByRole('link', { name: /Inbox/ })
-      expect(within(inbox).getByText('2')).toBeTruthy()
-
-      cleanup()
-      renderShell('/', { inboxCount: 0 })
-      expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
-    })
-
-    it('renders a quiet accessible Skills update marker in desktop and mobile navigation', () => {
-      renderShell('/', { skillsUpdateAvailable: true })
-      expect(document.querySelectorAll('[data-slot="nav-update-marker"]')).toHaveLength(1)
-      fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
-      const markers = document.querySelectorAll('[data-slot="nav-update-marker"]')
-      expect(markers).toHaveLength(2)
-      for (const marker of markers) {
-        expect(marker.textContent).toBe('Skills update available')
-        expect(marker.innerHTML).not.toContain('animate-')
-      }
-      // Radix hides the desktop app from the accessibility tree while the mobile drawer is modal.
-      expect(screen.getAllByRole('link', { name: /Skills update available/ })).toHaveLength(1)
     })
 
     it('renders no Skills marker without an actionable update', () => {
@@ -769,63 +675,30 @@ describe('AppShell', () => {
       await waitFor(() => expect(drawer()).toBeNull())
     })
 
-    it('renders the same nav as the desktop sidebar', () => {
-      renderShell()
+    it('carries the sidebar along — the Projects menu row slot and the theme toggle', () => {
+      renderShell('/', { projectsMenu: <button type="button">Projects</button> })
       openMenu()
-
       const inDrawer = within(drawer() as HTMLElement)
-        .getByRole('navigation', { name: 'Main' })
-      const links = within(inDrawer).getAllByRole('link')
-
-      // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
-      // reuses the sidebar's content, so adding a nav item must not need a second edit here.
-      expect(links.map((a) => a.getAttribute('href'))).toEqual(NAV_ITEMS.map((item) => item.to))
-      expect(links.map((a) => a.textContent)).toEqual(NAV_ITEMS.map((item) => item.label))
-
-      // …and the rest of the sidebar came along, not just the nav.
-      expect(within(drawer() as HTMLElement).getByRole('link', { name: /New task/ })).toBeTruthy()
-      expect(within(drawer() as HTMLElement).getByRole('button', { name: /^Theme:/ })).toBeTruthy()
+      expect(within(inDrawer.getByRole('navigation', { name: 'Main' })).getByRole('button', { name: 'Projects' })).toBeTruthy()
+      expect(inDrawer.getByRole('button', { name: /^Theme:/ })).toBeTruthy()
     })
 
-    it('marks the active nav item inside the drawer too', () => {
-      renderShell('/skills')
+    it('closes when a quick-list row fires the sidebar-navigate callback on a same-path click', async () => {
+      // No pathname change, so the route-change effect cannot fire — the quick-list row's own
+      // sidebar-navigate callback is what has to close it (the TASKS rows replaced the Tasks
+      // nav item). A stand-in consumes the same context the real container does.
+      function FakeQuickList() {
+        const onNavigate = useSidebarNavigate()
+        return (
+          <button type="button" onClick={() => onNavigate?.()}>
+            Active
+          </button>
+        )
+      }
+      renderShell('/', { taskQuickList: <FakeQuickList /> })
       openMenu()
-      const current = within(drawer() as HTMLElement).getAllByRole('link', { current: 'page' })
-      expect(current).toHaveLength(1)
-      expect(current[0]?.textContent).toBe('Skills')
-    })
-
-    it('closes when a nav item inside it navigates', async () => {
-      renderShell('/')
-      openMenu()
-
-      fireEvent.click(within(drawer() as HTMLElement).getByRole('link', { name: 'Git' }))
-
-      // Both halves matter: an open drawer sitting on top of the newly routed view is the whole
-      // bug this guards, and a drawer that closed without navigating would be just as wrong.
+      fireEvent.click(within(drawer() as HTMLElement).getByRole('button', { name: 'Active' }))
       await waitFor(() => expect(drawer()).toBeNull())
-      expect(screen.getByTestId('location').textContent).toBe('/git')
-    })
-
-    it('closes when the already-active nav item is re-clicked', async () => {
-      // No pathname change, so the route-change effect cannot fire — the link's own onNavigate
-      // is what has to close it. Tasks navigating home while already active is a spec behavior.
-      renderShell('/')
-      openMenu()
-      fireEvent.click(within(drawer() as HTMLElement).getByRole('link', { name: 'Tasks' }))
-      await waitFor(() => expect(drawer()).toBeNull())
-      expect(screen.getByTestId('location').textContent).toBe('/')
-    })
-
-    it('closes before the New task anchor hands off to the legacy document', async () => {
-      renderShell('/')
-      openMenu()
-      const link = within(drawer() as HTMLElement).getByRole('link', { name: /New task/ })
-      // jsdom does not implement full document navigation; suppress only that browser default.
-      link.addEventListener('click', (event) => event.preventDefault(), { once: true })
-      fireEvent.click(link)
-      await waitFor(() => expect(drawer()).toBeNull())
-      expect(link.getAttribute('href')).toBe('/new')
       expect(screen.getByTestId('location').textContent).toBe('/')
     })
 

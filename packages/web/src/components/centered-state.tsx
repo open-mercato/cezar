@@ -22,6 +22,7 @@ const tileTone: Record<CenteredStateTone, string> = {
  */
 export function CenteredState({
   icon,
+  art,
   tone = 'neutral',
   title,
   subtitle,
@@ -32,6 +33,9 @@ export function CenteredState({
   className,
 }: {
   icon: ReactNode
+  /** Full ARTWORK in the tile's place (the brand cat on hero empty states) — the icon is
+   *  ignored when this is given. */
+  art?: ReactNode
   tone?: CenteredStateTone
   title: string
   subtitle?: string
@@ -52,17 +56,20 @@ export function CenteredState({
         className
       )}
     >
-      {backdrop ? <TwinkleBackdrop /> : null}
+      {/* A faint pixel grid (user decision — the twinkle dots left these states). */}
+      {backdrop ? <GridBackdrop /> : null}
       <div className="flex w-full max-w-md flex-col items-center gap-4">
-        <div
-          data-slot="centered-state-tile"
-          className={cn(
-            "flex size-[72px] items-center justify-center rounded-[18px] border [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-7",
-            tileTone[tone]
-          )}
-        >
-          {icon}
-        </div>
+        {art ?? (
+          <div
+            data-slot="centered-state-tile"
+            className={cn(
+              "flex size-[72px] items-center justify-center rounded-[18px] border [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-7",
+              tileTone[tone]
+            )}
+          >
+            {icon}
+          </div>
+        )}
         <Heading className="text-2xl font-semibold text-balance text-foreground">{title}</Heading>
         {subtitle ? <p className="text-sm text-pretty text-muted-foreground">{subtitle}</p> : null}
         {children ? <div className="w-full pt-2">{children}</div> : null}
@@ -116,6 +123,22 @@ const twinkleTone: Record<Twinkle['tone'], string> = {
  * `motion-safe:` — under `prefers-reduced-motion` the squares render static at their base
  * opacity, exactly as the spec's motion rules require.
  */
+/** The hero surfaces' one texture (user decision): a graph-paper ground fading out
+ *  radially, framing the content without striping the whole viewport. Border token only —
+ *  it follows the theme. */
+export function GridBackdrop({ className }: { className?: string }) {
+  return (
+    <div
+      data-slot="grid-backdrop"
+      aria-hidden="true"
+      className={cn(
+        'pointer-events-none absolute inset-0 -z-10 opacity-40 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:28px_28px] [mask-image:radial-gradient(ellipse_55%_50%_at_50%_42%,black,transparent_78%)]',
+        className,
+      )}
+    />
+  )
+}
+
 export function TwinkleBackdrop({ className }: { className?: string }) {
   return (
     <div

@@ -221,7 +221,7 @@ describe('the repo view Changes segment', () => {
     })
     renderAt('/git')
     await waitFor(() =>
-      expect(screen.getByRole('heading', { level: 1, name: 'Not a git repository' })).toBeTruthy(),
+      expect(screen.getByRole('heading', { level: 1, name: 'No repository to rule' })).toBeTruthy(),
     )
     expect(document.querySelector('[data-slot="repo-tabs"]')).toBeNull()
   })

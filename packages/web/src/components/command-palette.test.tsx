@@ -448,8 +448,8 @@ describe('Tasks group', () => {
     const tasks = [...document.querySelectorAll('[data-slot="palette-task"]')]
     expect(tasks.map((task) => task.getAttribute('data-run-id'))).toEqual(['r-new', 'r-old'])
     // The dot is deriveAttention's, not a re-derivation: waiting → pending, done → success.
-    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
-    expect(tasks[1]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    expect(tasks[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(tasks[1]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('success')
 
     fireEvent.click(tasks[0] as HTMLElement)
 
@@ -587,7 +587,7 @@ describe('Recently finished group', () => {
     expect(groups).not.toContain('Recently finished')
     // And it wears the parked dot the rest of the cockpit gives it, not the failure red.
     const row = document.querySelector('[data-run-id="r-parked"]')
-    expect(row?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(row?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
   })
 
   it('leaves archived runs out — archiving is a stronger "done with this" than reading', async () => {
@@ -768,8 +768,9 @@ describe('Tasks across projects', () => {
 
     const tasks = [...document.querySelectorAll('[data-slot="palette-task"]')]
     expect(tasks.map((task) => task.getAttribute('data-run-id'))).toEqual(['r-mine', 'r-shop'])
-    // review → violet, not the index's stale running.
-    expect(tasks[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    // review → amber (the user's move), not the index's stale running (violet, the agent's).
+    expect(tasks[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(tasks[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-kind')).toBe('review')
   })
 
   it('lists the boot project once from an unscoped screen like global settings', async () => {
@@ -816,13 +817,20 @@ describe('Tasks across projects', () => {
 })
 
 describe('Actions group', () => {
-  it('Toggle theme cycles exactly like the toggle button (light → dark), persists, and closes', async () => {
+  it('the theme rows pick a theme DIRECTLY (no toggle cycle), persist, mark the active one, and close', async () => {
     renderPalette({ theme: 'light' })
     expect(document.documentElement.classList.contains('light')).toBe(true)
     openWith({ metaKey: true })
     await screen.findByRole('dialog')
 
-    fireEvent.click(document.querySelector('[data-action="toggle-theme"]') as HTMLElement)
+    // All three spelled out; the active one carries the check.
+    const rows = [...document.querySelectorAll('[data-slot="palette-action"]')].map((row) =>
+      row.getAttribute('data-action'),
+    )
+    expect(rows).toEqual(['theme-light', 'theme-dark', 'theme-system'])
+    expect(document.querySelector('[data-action="theme-light"] svg.lucide-check')).not.toBeNull()
+
+    fireEvent.click(document.querySelector('[data-action="theme-dark"]') as HTMLElement)
 
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe('dark')
     expect(document.documentElement.classList.contains('light')).toBe(false)
@@ -894,6 +902,24 @@ describe('Skills group', () => {
 
     const item = await screen.findByText('Deploy from anywhere')
     expect(item.closest('[data-slot="palette-skill"]')?.getAttribute('data-skill')).toBe('global-deploy')
+  })
+
+  it('the default view caps the catalog and says how to reach the rest; typing searches all', async () => {
+    const many = Array.from({ length: 9 }, (_, i) => skill({ name: `om-skill-${i}`, source: 'ai' }))
+    renderPalette({ skills: many })
+    openWith({ metaKey: true })
+    await screen.findByText('om-skill-0')
+
+    // Unfiltered: the usage-ordered top 6, plus one non-selectable "3 more" hint row.
+    expect(document.querySelectorAll('[data-slot="palette-skill"]')).toHaveLength(6)
+    expect(document.querySelector('[data-slot="palette-skills-more"]')?.textContent).toContain(
+      '3 more',
+    )
+
+    // A query searches the WHOLE catalog — including rows the preview hid — and drops the hint.
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'om-skill-8' } })
+    await screen.findByText('om-skill-8')
+    expect(document.querySelector('[data-slot="palette-skills-more"]')).toBeNull()
   })
 })
 

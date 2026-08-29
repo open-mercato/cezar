@@ -46,19 +46,19 @@ beforeAll(async () => {
   bootProject = await bootProjectId(baseUrl)
 })
 
-/** The nav the shell renders — GitHub, Inbox and Automations all gate on live health
- *  capabilities, so the expectation must too. Automations carries BOTH gates (#801): it needs a
- *  forge to poll AND the operator's opt-in to exist at all. */
-function expectedNavLabels(): string[] {
+/** The project's tab band over its views (sidebar redesign): GitHub, Inbox and Automations
+ *  all gate on live health capabilities, so the expectation must too. Automations carries
+ *  BOTH gates (#801): it needs a forge to poll AND the operator's opt-in to exist at all.
+ *  Skills and Settings are not the band's: the workspace library and settings live in the
+ *  sidebar footer, the project's settings on the bar. */
+function expectedBandLabels(): string[] {
   return [
     'Tasks',
     ...(followupsAvailable ? ['Inbox'] : []),
     'Git',
     ...(forgeAvailable ? ['GitHub'] : []),
     ...(forgeAvailable && automationsAvailable ? ['Automations'] : []),
-    'Skills',
     'Workflows',
-    'Settings',
   ]
 }
 
@@ -105,70 +105,60 @@ describe('cockpit app shell', () => {
     expect(browser.evaluate('document.getElementById("brand") === null')).toBe(true)
   })
 
-  it('renders the sidebar brand and the whole nav', () => {
+  it('renders the sidebar anatomy: brand, search, the Projects tree, the footer rows', () => {
     browser.goto(baseUrl + scoped('/'))
 
     expect(browser.isVisible('[data-slot="sidebar"]')).toBe(true)
-    expect(browser.isVisible('[data-slot="brand-tile"]')).toBe(true)
-    expect(browser.text('[data-slot="sidebar"] nav')).toContain('Tasks')
+    // Two brand tiles by design (theme-picked); the dark one is the visible one here.
+    expect(browser.isVisible('[data-slot="brand-tile-dark"]')).toBe(true)
+    expect(browser.isVisible('[data-slot="sidebar-search"]')).toBe(true)
 
-    // The GitHub item waits on the health answer — settle it before sampling the nav.
-    if (forgeAvailable) {
-      browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav a[href="${scoped('/github')}"]') !== null`)
-    }
-    // Read the label without the inbox badge — a populated shared env legitimately has todos,
-    // and the badge digit must not leak into the nav-label assertion.
-    const labels = browser.evaluate(
-      `Array.from(document.querySelectorAll('[data-slot="sidebar"] nav a')).map(a => {
-        const clone = a.cloneNode(true)
-        clone.querySelector('[data-slot="nav-badge"]')?.remove()
-        return clone.textContent.trim()
-      })`
+    // The PROJECTS heading is the door to the registry screen, and the boot project has a row
+    // with its own New-task +.
+    expect(browser.evaluate(`document.querySelector('[data-slot="projects-heading"]').getAttribute('href')`)).toBe(
+      '/settings/global/projects',
     )
-    expect(labels).toEqual(expectedNavLabels())
+    browser.waitForFunction(`document.querySelector('[data-slot="project-row"][data-project-id="${bootProject}"]') !== null`)
+    expect(browser.count(`[data-slot="group-new-task"][href="${scoped('/new')}"]`)).toBe(1)
 
-    // The "New task" CTA and its browser-usable accelerator hint. The desktop shell also
-    // registers ⌘N, but browsers reserve that chord for opening a window.
-    expect(browser.text(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)).toContain('New task')
-    expect(browser.text(`[data-slot="sidebar"] a[href="${scoped('/new')}"] kbd`)).toBe('C')
-
-    // The theme toggle lives in the footer.
+    // The workspace's own doors gather at the bottom: Skills above Settings above Tools, then
+    // the version + theme line.
+    expect(browser.evaluate(`document.querySelector('[data-slot="sidebar-footer"] a[href="${scoped('/skills')}"]') !== null`)).toBe(true)
+    expect(browser.evaluate(`document.querySelector('[data-slot="footer-settings"]').getAttribute('href')`)).toBe('/settings/global')
+    expect(browser.isVisible('[data-slot="tools-menu-trigger"]')).toBe(true)
     expect(browser.isVisible('[data-slot="sidebar-footer"] [data-slot="theme-toggle"]')).toBe(true)
 
-    // …on the footer's SECOND row, beside the gear — never stranded on a third line of its own
-    // (#702). Only a real layout engine can answer this: jsdom measures nothing, so the unit
-    // suite can pin the structure but not the geometry the 264px column actually produces.
     const footerRows = browser.evaluate(`(() => {
       const footer = document.querySelector('[data-slot="sidebar-footer"]')
-      // Centers, not tops: the gear (28px) and the toggle (30px) are different heights, and
-      // 'items-center' aligns them by center — comparing tops would fail a correct layout.
       const centerOf = (el) => {
         const rect = el.getBoundingClientRect()
         return rect.top + rect.height / 2
       }
       const center = (sel) => centerOf(footer.querySelector(sel))
-      const controls = [
-        '[data-slot="command-palette-hint"]',
-        '[data-slot="tools-menu-trigger"]',
-        '[data-slot="version-chip"]',
-        '[data-slot="global-settings-link"]',
-        '[data-slot="theme-toggle"]',
-      ]
       return {
-        search: center('[data-slot="command-palette-hint"]'),
-        gear: center('[data-slot="global-settings-link"]'),
+        skills: center('a[href="${scoped('/skills')}"]'),
+        settings: center('[data-slot="footer-settings"]'),
+        tools: center('[data-slot="tools-menu-trigger"]'),
+        version: center('[data-slot="version-chip"]'),
         theme: center('[data-slot="theme-toggle"]'),
-        rowCount: new Set(
-          [...footer.querySelectorAll(controls.join(','))].map((el) => Math.round(centerOf(el)))
-        ).size,
       }
-    })()`) as { search: number; gear: number; theme: number; rowCount: number }
+    })()`) as { skills: number; settings: number; tools: number; version: number; theme: number }
+    expect(footerRows.skills).toBeLessThan(footerRows.settings)
+    expect(footerRows.settings).toBeLessThan(footerRows.tools)
+    expect(footerRows.tools).toBeLessThan(footerRows.version)
+    // The controls line: the version and the theme toggle share one centerline (#702).
+    expect(Math.abs(footerRows.theme - footerRows.version)).toBeLessThanOrEqual(1)
 
-    // Row 1 is the search bar; row 2 carries the gear and the toggle on one shared centerline.
-    expect(footerRows.search).toBeLessThan(footerRows.gear)
-    expect(Math.abs(footerRows.theme - footerRows.gear)).toBeLessThanOrEqual(1)
-    // Exactly two rows — every other footer control shares the controls row's centerline.
-    expect(footerRows.rowCount).toBe(2)
+    // The project's views ride the BAND over the content, gated on live health.
+    browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"]') !== null`)
+    const labels = browser.evaluate(
+      `Array.from(document.querySelectorAll('[data-slot="project-tabs"] a')).map(a => {
+        const clone = a.cloneNode(true)
+        clone.querySelector('[data-slot="nav-badge"]')?.remove()
+        return clone.textContent.trim()
+      })`
+    )
+    expect(labels).toEqual(expectedBandLabels())
   })
 
   it('keeps the footer controls inside the 264px column even on a nightly-length version', () => {
@@ -176,19 +166,17 @@ describe('cockpit app shell', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="version-chip"]') !== null`)
 
     // The e2e server reports this checkout's own (short) semver, which never overflowed. The
-    // string that DID is the nightly dist-tag of #876 — so write it into the chip and measure
-    // what the real layout engine does with it. Every control in the row but the chip is
-    // `shrink-0`, so before the chip could give, this pushed the gear and the theme toggle
-    // bodily outside the sidebar's right edge instead of clipping anything.
+    // controls line is roomier since the footer became menu rows, so the probe string grows
+    // past any line: the invariant is that the CHIP gives (truncates) before anything is
+    // pushed bodily outside the sidebar's right edge (#876).
     const overflow = browser.evaluate(`(() => {
       const chip = document.querySelector('[data-slot="version-chip"]')
-      const label = chip.querySelector('span:not([data-slot])')
-      label.textContent = 'v0.9.2-nightly.20260813.1'
+      chip.textContent = 'v0.9.2-nightly.20260813.1+build.abcdefghijklmnopqrstuvwxyz0123456789'
       const sidebarRight = document.querySelector('[data-slot="sidebar"]').getBoundingClientRect().right
-      const escaped = [...document.querySelectorAll('[data-slot="sidebar-footer-controls"] > *')]
+      const escaped = [...document.querySelectorAll('[data-slot="sidebar-footer-controls"] *')]
         .filter((el) => el.getBoundingClientRect().right > sidebarRight)
         .map((el) => el.dataset.slot)
-      return { escaped, truncated: label.scrollWidth > Math.ceil(label.getBoundingClientRect().width) }
+      return { escaped, truncated: chip.scrollWidth > Math.ceil(chip.getBoundingClientRect().width) }
     })()`) as { escaped: string[]; truncated: boolean }
 
     expect(overflow.escaped).toEqual([])
@@ -216,7 +204,9 @@ describe('cockpit app shell', () => {
     // the client → query → chip path really carries live API data, and stays true wherever the
     // suite runs (any checkout, any branch).
     const repoName = health.repoRoot.replace(/[\\/]+$/, '').split(/[\\/]/).pop()
-    expect(browser.text('[data-slot="repo-chip"]')).toBe(`${repoName} / ${health.repo?.branch}`)
+    // The bar chip is the project's NAME alone now — the branch belongs to each task's own
+    // Commits control, not the workspace chrome.
+    expect(browser.text('[data-slot="repo-chip"]')).toBe(repoName)
     expect(browser.text('[data-slot="version-chip"]')).toBe(`v${health.version}`)
 
     // Real values, not a placeholder that happens to match itself.
@@ -226,31 +216,31 @@ describe('cockpit app shell', () => {
     browser.screenshot(`${artifactsDir}/shell-repo-chip.png`)
   })
 
-  it('marks exactly one nav item active, following the route', () => {
-    const activeLabel = () =>
+  it('marks exactly one view active, following the route', () => {
+    const activeTab = () =>
       browser.evaluate(
-        `Array.from(document.querySelectorAll('[data-slot="sidebar"] nav a[aria-current="page"]')).map(a => a.textContent.trim())`
+        `Array.from(document.querySelectorAll('[data-slot="project-tabs"] a[aria-current="page"]')).map(a => a.textContent.trim())`
       )
-
-    // Every URL below is a LEGACY flat one, so each load settles in two hops: the boot-project
-    // redirect, then whatever the route itself redirects to. Sampling the nav before the last
-    // hop reads the wrong screen's answer, so wait for the settled pathname each time.
     const settleAt = (pathname: string) =>
       browser.waitForFunction(`location.pathname === '${pathname}'`)
 
     browser.goto(baseUrl + '/')
     settleAt(scoped('/'))
-    expect(activeLabel()).toEqual(['Tasks'])
+    browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"]') !== null`)
+    expect(activeTab()).toEqual(['Tasks'])
 
     browser.goto(baseUrl + '/git')
     settleAt(scoped('/git'))
-    expect(activeLabel()).toEqual(['Git'])
+    expect(activeTab()).toEqual(['Git'])
 
-    // The nested Settings area: the more specific item wins, and only it. `/settings/skills`
-    // is itself a redirect onto the top-level catalog, so this asserts both hops.
+    // The workspace LIBRARY: `/settings/skills` still redirects onto the catalog, which has no
+    // project band — the sidebar footer's Skills row is what lights up.
     browser.goto(baseUrl + '/settings/skills')
     settleAt(scoped('/skills'))
-    expect(activeLabel()).toEqual(['Skills'])
+    expect(browser.count('[data-slot="project-tabs"]')).toBe(0)
+    expect(browser.evaluate(
+      `document.querySelector('[data-slot="sidebar-footer"] a[href="${scoped('/skills')}"]').getAttribute('aria-current')`
+    )).toBe('page')
   })
 
   it('makes main the only scroller — the document never scrolls', () => {
@@ -284,10 +274,17 @@ describe('cockpit app shell', () => {
 
     setTheme('light')
     expect(browser.evaluate('document.documentElement.classList.contains("light")')).toBe(true)
-    // The palette really flipped: light `--background` is white, dark is near-black.
+    // The palette really flipped: the shell paints whatever the light token resolves to.
     expect(
-      browser.evaluate(`getComputedStyle(document.querySelector('[data-slot="app-shell"]')).backgroundColor`)
-    ).toBe('rgb(255, 255, 255)')
+      browser.evaluate(`(() => {
+        const probe = document.createElement('div')
+        probe.style.backgroundColor = 'var(--background)'
+        document.body.appendChild(probe)
+        const token = getComputedStyle(probe).backgroundColor
+        probe.remove()
+        return getComputedStyle(document.querySelector('[data-slot="app-shell"]')).backgroundColor === token
+      })()`)
+    ).toBe(true)
     browser.screenshot(`${artifactsDir}/shell-light.png`)
 
     setTheme('dark')
@@ -363,15 +360,13 @@ describe('mobile shell', () => {
       expect(browser.isVisible(DRAWER)).toBe(true)
       expect(browser.isVisible('[data-slot="sheet-overlay"]')).toBe(true)
 
-      // The drawer nav mirrors the desktop one, including the forge-gated GitHub item — settle
-      // the health answer before sampling the labels.
-      if (forgeAvailable) {
-        browser.waitForFunction(`document.querySelector('${DRAWER} nav a[href="${scoped('/github')}"]') !== null`)
-      }
+      // The drawer mirrors the desktop sidebar — the Projects tree plus the footer rows —
+      // settle the registry before sampling.
+      browser.waitForFunction(`document.querySelector('${DRAWER} [data-slot="project-row"]') !== null`)
 
       const box = browser.evaluate(`(() => {
         const rect = document.querySelector('${DRAWER}').getBoundingClientRect()
-        const links = Array.from(document.querySelectorAll('${DRAWER} nav a'))
+        const rows = Array.from(document.querySelectorAll('${DRAWER} [data-slot="project-row"], ${DRAWER} [data-slot="sidebar-footer"] a'))
         const overlay = document.querySelector('[data-slot="sheet-overlay"]').getBoundingClientRect()
         return {
           left: rect.left,
@@ -382,14 +377,12 @@ describe('mobile shell', () => {
           viewportWidth: window.innerWidth,
           overlayWidth: overlay.width,
           overlayHeight: overlay.height,
-          minLinkHeight: Math.min(...links.map((a) => a.getBoundingClientRect().height)),
-          labels: links.map((a) => {
-            const clone = a.cloneNode(true)
-            clone.querySelector('[data-slot="nav-badge"]')?.remove()
-            return clone.textContent.trim()
-          }),
+          minLinkHeight: Math.min(...rows.map((a) => a.getBoundingClientRect().height)),
+          hasProjects: document.querySelector('${DRAWER} [data-slot="projects-heading"]') !== null,
+          hasSkills: document.querySelector('${DRAWER} [data-slot="sidebar-footer"] a[href="${scoped('/skills')}"]') !== null,
+          hasSettings: document.querySelector('${DRAWER} [data-slot="footer-settings"]') !== null,
         }
-      })()`) as Record<string, number | string[]>
+      })()`) as Record<string, number | boolean>
 
       // Anchored to the left edge, full height, and the sidebar's own width.
       expect(box.left).toBe(0)
@@ -401,24 +394,26 @@ describe('mobile shell', () => {
       expect(box.overlayWidth).toBe(box.viewportWidth)
       expect(box.overlayHeight).toBe(box.viewportHeight)
 
-      // The same nav the desktop sidebar renders — at touch size, not the 34px desktop row.
-      expect(box.labels).toEqual(expectedNavLabels())
+      // The same anatomy the desktop sidebar renders — at touch size.
+      expect(box.hasProjects).toBe(true)
+      expect(box.hasSkills).toBe(true)
+      expect(box.hasSettings).toBe(true)
       expect(box.minLinkHeight).toBeGreaterThanOrEqual(44)
 
-      browser.screenshot(`${artifactsDir}/drawer-iphone.png`)
+            browser.screenshot(`${artifactsDir}/drawer-iphone.png`)
     })
 
     it('navigates and closes when a nav item is tapped', () => {
       browser.goto(baseUrl + scoped('/'))
       openDrawer()
 
-      browser.click(`${DRAWER} nav a[href="${scoped('/git')}"]`)
+      browser.click(`${DRAWER} [data-slot="sidebar-footer"] a[href="${scoped('/skills')}"]`)
       browser.waitForFunction(GONE)
 
       // Both halves: it routed, *and* the drawer is not still sitting on top of the new view.
-      expect(browser.url()).toBe(baseUrl + scoped('/git'))
+      expect(browser.url()).toBe(baseUrl + scoped('/skills'))
       expect(browser.count(DRAWER)).toBe(0)
-      expect(browser.text('[data-slot="mobile-top-bar"]')).toContain('Git')
+      expect(browser.text('[data-slot="mobile-top-bar"]')).toContain('Skills')
     })
 
     it('closes when the backdrop is tapped, without navigating', () => {
@@ -560,6 +555,8 @@ describe('global SSE stream', () => {
 describe('legacy cockpit retirement (R7)', () => {
   it('the React shell New task CTA stays in the SPA — the React composer, not legacy (R4 1.1)', () => {
     browser.goto(baseUrl + scoped('/'))
+    // The + rides the boot project's row, which mounts once the registry answers.
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] a[href="${scoped('/new')}"]') !== null`)
     browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
     // Client-side navigation: the React /new hero renders and no legacy markup ever loads.
     browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)

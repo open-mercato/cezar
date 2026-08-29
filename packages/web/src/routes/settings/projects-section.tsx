@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { FoldersIcon, XIcon } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
+import { Link as RouterLink } from 'react-router'
 
 import { putWorkspaceConfig } from '@/api/client'
 import {
@@ -71,7 +72,7 @@ export const STATUS_LABEL: Record<ProjectListEntry['status'], string> = {
  *  unparseable one (hand-edited config) degrades to an em dash rather than `Invalid Date`. */
 function shortDate(iso: string): string {
   const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return '—'
+  if (Number.isNaN(at.getTime())) return ''
   return at.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
@@ -342,7 +343,21 @@ function ProjectRow({
   return (
     <tr data-slot="project-row" data-project={project.id} className="border-b border-border last:border-0">
       <th scope="row" className="max-w-0 px-3 py-2 text-left font-normal">
-        <span className="block truncate text-foreground">{project.name}</span>
+        {/* The name opens the project's tasks (user decision: from the projects list you must be
+            able to reach a project's work, not only manage its registration). Disabled-looking
+            text, not a link, for a project whose folder is gone. */}
+        {project.status === 'missing' ? (
+          <span className="block truncate text-foreground">{project.name}</span>
+        ) : (
+          <RouterLink
+            to={`/p/${project.id}/`}
+            data-slot="project-open-tasks"
+            title={`Open the tasks of ${project.name}`}
+            className="block truncate text-foreground underline-offset-2 hover:underline"
+          >
+            {project.name}
+          </RouterLink>
+        )}
         <span className="block truncate font-mono text-[11px] text-soft-foreground" title={project.root}>
           {project.root}
         </span>
@@ -355,7 +370,7 @@ function ProjectRow({
           {STATUS_LABEL[project.status]}
         </span>
         {project.status !== 'missing' ? (
-          <span className="ml-1 text-[11px] text-soft-foreground">· {project.source}</span>
+          <span className="ml-1 text-[11px] text-soft-foreground">({project.source})</span>
         ) : null}
       </td>
       <td className="px-3 py-2">

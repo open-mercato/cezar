@@ -47,9 +47,15 @@ export function RepoGitRoute({ tab }: { tab: RepoTab }) {
       <div data-route="repo-git" className="flex min-h-full flex-col">
         <CenteredState
           icon={<GitBranchIcon />}
+          // The court scene (user artwork), same pipeline and the same shared 232x130
+          // canvas as the Tasks hero (user decision: no size jump between screens).
+          art={<img src="/cezar-hero-git.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={130} className="max-w-full [image-rendering:pixelated]" />}
           tone="neutral"
-          title="Not a git repository"
-          subtitle="cezar is running outside a git repository — start it inside one to browse changes, commits and branches."
+          backdrop
+          // Caesar-voiced, like the Tasks empty state (user request) — the scribes are the
+          // mice with the scrolls in the artwork.
+          title="No repository to rule"
+          subtitle="Caesar holds court outside a git repository. Start cezar inside one and the scribes will bring changes, commits and branches."
         />
       </div>
     )

@@ -2,6 +2,7 @@ import {
   BotIcon,
   BrainIcon,
   ChevronRightIcon,
+  CircleXIcon,
   FileTextIcon,
   FolderInputIcon,
   GlobeIcon,
@@ -115,7 +116,7 @@ export function UserBubble({
       <div
         data-slot="user-bubble"
         data-editing="true"
-        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+        className="max-w-[78%] self-end rounded-2xl rounded-br-md bg-bubble px-[15px] py-2.5 text-[15px] leading-[1.65] text-bubble-foreground md:max-w-[70%]"
       >
         <textarea
           autoFocus
@@ -133,7 +134,7 @@ export function UserBubble({
               void save()
             }
           }}
-          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-[13.5px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          className="block max-h-[220px] min-h-[60px] w-full resize-none rounded-md bg-background px-2 py-1.5 text-[15px] outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
         />
         <span className="mt-1.5 flex justify-end gap-1.5">
           <button
@@ -160,8 +161,10 @@ export function UserBubble({
 
   return (
     <div
+      // Chrome-dark (user decision): the user's own words sit on the same near-black surface as
+      // the chrome CTAs — light theme gets a dark bubble, dark theme its pale inverse.
       data-slot="user-bubble"
-      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-muted px-[15px] py-2.5 text-[13.5px] leading-[1.55] md:max-w-[70%]"
+      className="group max-w-[78%] min-w-0 self-end rounded-2xl rounded-br-md bg-bubble px-[15px] py-2.5 text-[15px] leading-[1.65] text-bubble-foreground md:max-w-[70%]"
     >
       {onEdit || onRemove ? (
         <span
@@ -226,14 +229,20 @@ export function AssistantMessage({ text }: { text: string }) {
 
 /** A dim (lifecycle/note) or danger (error) transcript line. */
 export function NoteLine({ note }: { note: ThreadNote }) {
+  const danger = note.tone === 'danger'
   return (
     <div
       data-slot="note-line"
       data-tone={note.tone}
-      className={cn('px-0.5 text-xs', note.tone === 'danger' ? 'text-danger' : 'text-soft-foreground')}
+      // No leading middot (house rule): a dim line is marker enough; a failure earns a real icon.
+      // Capped at the reading measure like other flowing text — only blocks fill the wide column.
+      className={cn(
+        'flex max-w-[var(--prose)] items-start gap-1.5 px-0.5 text-xs',
+        danger ? 'text-danger' : 'text-soft-foreground',
+      )}
     >
-      {note.tone === 'danger' ? '✗ ' : '· '}
-      {note.text}
+      {danger ? <CircleXIcon aria-hidden className="mt-[1px] size-3 shrink-0" /> : null}
+      <span className="min-w-0">{note.text}</span>
     </div>
   )
 }
@@ -265,7 +274,7 @@ export function ProviderAuthRequiredCard({
         Review {label} settings before retrying.
       </p>
       <Link
-        to="/settings/agents#providers"
+        to="/settings/global/accounts#providers"
         className="mt-2 inline-flex text-xs font-medium text-foreground underline-offset-2 hover:underline"
       >
         Open provider settings
@@ -308,7 +317,9 @@ export function ReasoningItem({ text }: { text: string }) {
         />
       </div>
       <CollapsibleContent>
-        <div className="px-6 py-1.5 text-[13px] leading-[1.6] text-soft-foreground">
+        {/* leading-[1.8] (user feedback): reasoning runs long and soft-colored — without the
+            extra air the lines fuse and reading it is squint work. */}
+        <div className="px-6 py-1.5 text-[13px] leading-[1.8] text-soft-foreground">
           <Markdown>{text}</Markdown>
         </div>
       </CollapsibleContent>
@@ -404,7 +415,7 @@ function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
           type="button"
           data-slot="tool-output-toggle"
           onClick={() => setExpanded((value) => !value)}
-          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-[11px] font-medium text-soft-foreground hover:text-foreground"
+          className="block w-full border-t border-border/50 px-4 py-1.5 text-left text-xs font-medium text-soft-foreground hover:text-foreground"
         >
           {expanded ? 'Show less' : `Show all ${lines} lines`}
         </button>
@@ -423,7 +434,7 @@ export function InlineDiffPreview({ diffs }: { diffs: FileDiff[] }) {
     <>
       {diffs.map((diff, index) => (
         <div key={`${diff.path}:${index}`} data-slot="diff-preview" className="min-w-0">
-          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-[11px] text-soft-foreground">
+          <div className="border-b border-border/50 px-4 py-1.5 font-mono text-xs text-soft-foreground">
             {diff.path}
           </div>
           <pre className="overflow-x-auto py-2 font-mono text-xs leading-[1.7] whitespace-pre">
@@ -564,7 +575,7 @@ export function ToolCard({
             <span
               data-slot="tool-exit"
               className={cn(
-                'rounded-full px-2 py-px font-mono text-[10.5px] font-semibold',
+                'rounded-full px-2 py-px font-mono text-[10px] font-semibold',
                 item.exitCode === 0 ? 'bg-success/10 text-success' : 'bg-danger/10 text-danger',
               )}
             >
@@ -643,7 +654,11 @@ export function ImageItem({ image }: { image: ThreadImage }) {
     <ZoomableImage
       data-slot="thread-image"
       src={image.url}
-      alt={image.name ?? 'image from the agent session'}
+      // A11y (audit A4): the persisted name is a filename ("screenshot-1.png"), not a
+      // description — a poor accessible name. Describe what it is; keep the filename as a
+      // hover title for sighted users.
+      alt="Image the agent captured during the session"
+      title={image.name}
       className="max-h-72 max-w-full self-start rounded-lg border border-border"
     />
   )

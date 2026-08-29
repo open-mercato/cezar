@@ -16,6 +16,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import type * as React from 'react'
 import type { ReferenceStatus } from '@open-mercato/cezar-api-client'
 
+import { GithubIcon } from '@/components/icons'
 import { useReferenceStatus } from '@/components/reference-status'
 import type { ReferenceStatusEntry } from '@/api/queries'
 import { StatusDot } from '@/components/status-dot'
@@ -33,7 +34,7 @@ import { cn, isHttpUrl } from '@/lib/utils'
 const TONE_CLASS: Record<ReferenceStatusTone, string> = {
   success: 'border-success/40 text-success',
   danger: 'border-danger/40 text-danger',
-  violet: 'border-violet/35 text-violet',
+  violet: 'border-violet/35 text-violet-strong',
   info: 'border-info/40 text-info',
   neutral: 'border-border text-muted-foreground',
   // The WHOLE chip goes amber while checks run, not just its dot: "something is happening to this
@@ -57,6 +58,16 @@ const TONE_HOVER: Record<ReferenceStatusTone, string> = {
   neutral: 'hover:bg-muted',
   pending: 'hover:bg-pending-strong/10',
   conflict: 'hover:bg-conflict/10',
+}
+
+/** A github.com link earns the mark; other forges stay neutral until they have their own. */
+function isGithubUrl(url: string | undefined): boolean {
+  if (!url) return false
+  try {
+    return new URL(url).hostname.endsWith('github.com')
+  } catch {
+    return false
+  }
 }
 
 /** One glyph per status, borrowed from the vocabulary GitHub itself uses, so the icon is legible
@@ -96,6 +107,7 @@ export function ReferenceChip({
   projectId,
   className,
   compact = false,
+  bare = false,
 }: {
   reference: { kind: 'PR' | 'Issue'; number?: number; url?: string }
   taskTitle: string
@@ -114,6 +126,9 @@ export function ReferenceChip({
    *  them may each have a #42. Elsewhere the provider's own project is right. */
   projectId?: string
   className?: string
+  /** The app bar's grammar (user decision: every bar control shares one style): a quiet
+   *  rounded-md ghost, no border ring — the status keeps only its ink. */
+  bare?: boolean
   /**
    * The narrow sidebar row (#788, option C): the number ALONE — `#402` — with no `Issue ` word
    * and no `PR` label. There the chip is the row's leading identifier and every glyph it spends
@@ -145,19 +160,29 @@ export function ReferenceChip({
   const conflicting = kind === 'PR' && (explicitConflicting ?? entry.conflicting) === true
   const presentation = conflicting ? REFERENCE_CONFLICT : statusPresentation
   const chipClass = cn(
-    'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-[11px] font-semibold',
-    TONE_CLASS[presentation?.tone ?? 'violet'],
+    bare
+      ? 'inline-flex h-7 items-center gap-1 rounded-sm px-2 font-mono text-[11px] font-semibold transition-colors hover:bg-muted'
+      : 'inline-flex h-[22px] items-center gap-1 rounded-full border px-2 font-mono text-[11px] font-semibold',
+    TONE_CLASS[presentation?.tone ?? 'neutral'],
+    bare && 'border-0',
     className,
   )
   // The overridden status rides along into the tooltip whenever the conflict took the chip.
   const tooltip = statusTooltip(entry, presentation, conflicting ? statusPresentation : undefined)
-  const label = number ? `${!compact && kind === 'Issue' ? 'Issue ' : ''}#${number}` : kind
+  // Source + kind + number, the way a tracker chip reads elsewhere (user reference: `PR-001`
+  // beside a GitHub mark): `PR #402`, `Issue #788`. The compact sidebar row keeps the bare
+  // number (#788, option C) — there the glyphs cost the task its name.
+  const label = number ? `${compact ? '' : `${kind} `}#${number}` : kind
+  const forgeMark = !compact && isGithubUrl(url)
   const kindWord = kind === 'PR' ? 'pull request' : 'issue'
   // The accessible name carries the status too — a screen reader gets what the color says.
-  const ariaLabel = `Open the ${kindWord} for ${taskTitle}${presentation ? ` — ${presentation.label}` : ''}`
+  const ariaLabel = `Open the ${kindWord} for ${taskTitle}${presentation ? `, ${presentation.label}` : ''}`
 
   const body = (
     <>
+      {/* The forge mark leads (user decision): it says WHERE this lives before the number says
+          which. Only a github.com link earns it; other hosts stay unmarked until they have one. */}
+      {forgeMark ? <GithubIcon className="size-3 shrink-0" aria-hidden="true" /> : null}
       {/* `presentation ? status : undefined` — one gate for every status channel, so an unknown
           value cannot paint a glyph either. The conflict overrides the glyph as it overrides the
           colour, including `checks-pending`'s pulsing dot: a branch that will not merge is not a
@@ -181,7 +206,7 @@ export function ReferenceChip({
         // second axis turned true. What the conflict adds is its own attribute.
         data-status={status}
         {...(conflicting ? { 'data-conflicting': 'true' } : {})}
-        aria-label={presentation ? `${kindWord} ${label} — ${presentation.label}` : undefined}
+        aria-label={presentation ? `${kindWord} ${label}, ${presentation.label}` : undefined}
         className={chipClass}
       >
         {body}
@@ -199,7 +224,7 @@ export function ReferenceChip({
         // element is a browser popup fighting a designed one.
         title={tooltip ? undefined : url}
         aria-label={ariaLabel}
-        className={cn(chipClass, TONE_HOVER[presentation?.tone ?? 'violet'])}
+        className={cn(chipClass, TONE_HOVER[presentation?.tone ?? 'neutral'])}
       >
         {body}
         <ArrowUpRightIcon className="size-2.5" aria-hidden="true" />
@@ -212,7 +237,7 @@ export function ReferenceChip({
     <>
       <span className="block font-medium">
         {kind === 'PR' ? 'Pull request' : 'Issue'}
-        {number ? ` #${number}` : ''} · {tooltip.headline}
+        {number ? ` #${number}` : ''}: {tooltip.headline}
       </span>
       <span className="block">{tooltip.detail}</span>
       {/* The status the conflict painted over. It is still true — a conflicting PR can also be
@@ -431,7 +456,7 @@ function statusTooltip(
     if (entry.state === 'unavailable') {
       return {
         headline: label,
-        detail: `last known — GitHub is unreachable${entry.reason ? ` (${entry.reason})` : ''}`,
+        detail: `last known (GitHub is unreachable${entry.reason ? `: ${entry.reason}` : ''})`,
         ...(also ? { also } : {}),
       }
     }
@@ -443,12 +468,12 @@ function statusTooltip(
     case 'unavailable':
       return {
         headline: 'Status unavailable',
-        detail: entry.reason ?? 'GitHub could not be reached — the chip says nothing rather than guessing',
+        detail: entry.reason ?? 'GitHub could not be reached, so the chip says nothing rather than guessing',
       }
     case 'unknown':
       return {
         headline: 'Not found on this repository',
-        detail: 'GitHub has no such number here — the reference may point at another repo',
+        detail: 'GitHub has no such number here, so the reference may point at another repo',
       }
     default:
       return null

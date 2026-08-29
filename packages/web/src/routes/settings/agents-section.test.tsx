@@ -246,18 +246,6 @@ afterEach(() => {
 })
 
 describe('the agents form', () => {
-  it('puts the anchored Providers section first', async () => {
-    serve()
-    renderAt('/settings/agents')
-
-    await waitFor(() => expect(form()).not.toBeNull())
-    const providers = document.querySelector<HTMLElement>('[data-slot="provider-settings"]')!
-    expect(providers.id).toBe('providers')
-    expect(providers.className).toContain('scroll-mt-20')
-    expect(providers.className).not.toContain('scroll-mt-6')
-    expect(form()?.firstElementChild).toBe(providers)
-  })
-
   it('keeps a saved disconnected runner selected while disabling its runner and model controls', async () => {
     serve({
       config: { defaultRunner: 'codex', defaultModels: { codex: 'gpt-5-codex' } },
@@ -319,8 +307,11 @@ describe('the agents form', () => {
     serve({ providerStatus: { error: 'probe failed' }, providerStatusCode: 500 })
     renderAt('/settings/agents')
 
-    expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
-    expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
+    // The Providers block (and its error banner) moved to workspace Agent accounts; here the
+    // provider-fed controls simply disable.
+    await waitFor(() =>
+      expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true),
+    )
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
     expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
     expect(screen.getByLabelText<HTMLButtonElement>('Review changes before finishing').disabled).toBe(false)
@@ -333,8 +324,11 @@ describe('the agents form', () => {
     })
     renderAt('/settings/agents')
 
-    expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
-    expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true)
+    // The Providers block (and its error banner) moved to workspace Agent accounts; here the
+    // provider-fed controls simply disable.
+    await waitFor(() =>
+      expect((screen.getByRole('radio', { name: 'claude' }) as HTMLButtonElement).disabled).toBe(true),
+    )
     expect(screen.getByLabelText<HTMLSelectElement>('Default model for claude').disabled).toBe(true)
     expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
     expect(screen.queryByText(secret)).toBeNull()
@@ -348,8 +342,8 @@ describe('the agents form', () => {
     expect((claude as HTMLButtonElement).disabled).toBe(false)
     await act(() => client.refetchQueries({ queryKey: workspaceQueryKeys.providerStatus }))
 
-    expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
-    expect((claude as HTMLButtonElement).disabled).toBe(true)
+    // The status banner lives with the Providers block in workspace Agent accounts now.
+    await waitFor(() => expect((claude as HTMLButtonElement).disabled).toBe(true))
     expect(screen.getByLabelText<HTMLTextAreaElement>('System prompt').disabled).toBe(false)
   })
 
@@ -590,8 +584,8 @@ describe('the agents form', () => {
 
       await waitFor(() => expect(rows()).toHaveLength(5))
       expect(rows().map((r) => r.textContent)).toEqual([
-        'claude · Default/home/u/.claude',
-        'claude · Klaudiusz~/.claude-klaudiusz',
+        'claude (Default)/home/u/.claude',
+        'claude (Klaudiusz)~/.claude-klaudiusz',
         'codexOpenAI Codex (app-server)',
         'opencodeOpenCode (serve)',
         'pipi CLI (provider/model)',

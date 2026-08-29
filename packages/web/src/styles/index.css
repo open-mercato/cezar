@@ -1,7 +1,8 @@
 /* cezar cockpit — Tailwind v4 entry point and the Mercato design-token definition site.
  *
  * Ported verbatim from the mockup token sheet (.ai/analysis/cockpit-ui-redesign/mercato-visuals.md §1).
- * Dark is the default theme; `.light` on <html> flips it.
+ * Dark is the default theme; `.light` on <html> flips it. The `light:` variant below lets
+ * markup follow the same switch.
  *
  * THIS FILE IS THE ONLY PLACE RAW HEX MAY APPEAR. Everything else — components, pages, tests —
  * goes through the tokens below (Tailwind utilities like `bg-card`, or `var(--…)` for the
@@ -9,6 +10,9 @@
  */
 
 @import "tailwindcss";
+
+/* Tailwind variant tracking the theme switch: dark is default, `.light` on <html> flips. */
+@custom-variant light (&:where(.light, .light *));
 
 /* Enter/exit animation utilities (`animate-in`, `fade-in-0`, `zoom-in-95`, `slide-in-from-*`) that the
  * shadcn primitives reference on their Radix `data-[state]` hooks. Tailwind v4 dropped the v3 plugin,
@@ -70,6 +74,18 @@
     U+2C60-2C7F, U+A720-A7FF;
 }
 
+/* Press Start 2P (SIL OFL 1.1, CodeMan38) — the 80s-arcade display face, vendored latin subset.
+ * BRAND WORDMARK ONLY: it pairs with the pixel cat; body text stays Inter. */
+@font-face {
+  font-family: 'Press Start 2P';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/press-start-2p-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304,
+    U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 /* ---------- tokens: dark (default) ---------- */
 
 :root {
@@ -81,27 +97,39 @@
   --card: #171717;
   --card-2: #1c1c1c;
   /* The sidebar's surface. Its own token because the two themes disagree about what it is:
-   * dark wants the card step, light wants a tint *below* the white card so the rail reads as
-   * chrome rather than page. See the `.light` block. */
-  --sidebar: var(--card);
+   * light wants a tint below the white card so the rail reads as chrome rather than page, and
+   * dark wants a step BELOW the card too — the selection language lifts rows onto --card, and
+   * with the rail sitting on the card step itself (the old `var(--card)`) a selected or
+   * hovered row was card-on-card: invisible. */
+  --sidebar: #121212;
   --muted: #262626;
   --muted-foreground: #a3a3a3;
-  --soft-foreground: #7b7b7b;
+  /* AA-checked (audit 2026-08-08): ≥4.5:1 on --background, --card and --card-2 — the three
+   * surfaces soft text renders on. Don't darken back below #848484. */
+  --soft-foreground: #848484;
   --border: #262626;
   --input: #262626;
   --contrast: #ebebeb;
   --contrast-foreground: #171717;
+  /* The user bubble's own surface — decoupled from --contrast so the thread can soften
+   * without dragging the New-task CTA with it. Dark theme keeps the light-on-dark bubble. */
+  --bubble: #ebebeb;
+  --bubble-foreground: #171717;
 
-  /* accents — `--accent-lime` is the stable name for the brand lime; `--primary` points at
-   * whichever accent family is active (Settings → Appearance swaps it via [data-accent]). */
+  /* accents — `--accent-lime` / `--violet` are the stable family names; `--primary` points at
+   * whichever family is active (Settings → Appearance swaps it via [data-accent]). Violet is
+   * the DEFAULT accent; the [data-accent='lime'] block below swaps back to the brand lime. */
   --accent-lime: #a8f372;
-  --primary: var(--accent-lime);
-  --primary-foreground: #0d0d0d;
-  --violet: #8f86e8;
-  /* Text/icons printed *on* --violet (the Inbox count badge). White in both themes — the violet
-   * never lightens enough for ink to pass AA against it. */
+  --violet: #9655fd;
+  /* Text/icons printed *on* --violet (the Inbox count badge and now every primary control).
+   * White in both themes — the violet never lightens enough for ink to pass AA against it. */
   --violet-foreground: #ffffff;
-  --ring: #a8f372;
+  /* The accent's TEXT-SAFE shade (review: purple-700-style ink for soft-purple chips): dark
+   * enough for AA on the pale violet washes in light, bright enough on dark surfaces here. */
+  --violet-strong: #c0a5ff;
+  --primary: var(--violet);
+  --primary-foreground: var(--violet-foreground);
+  --ring: var(--violet);
 
   /* status */
   --danger: #ef4444;
@@ -143,11 +171,15 @@
   --sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
 
-  /* reading measure — the max width of the task view's column (header, thread, changes,
-   * commits). The default is the shipped 820px reading column; Settings → Appearance → Reading
-   * width flips it to `wide` (see the `:root[data-width]` block). Consumed as
-   * `max-w-[var(--measure)]` so one token moves every column together. */
-  --measure: 820px;
+  /* The task view's COLUMN width (header, thread, changes, commits) — wide enough that tables,
+   * code, diffs and tool output use the screen. Flowing TEXT is capped tighter at `--prose`
+   * (below), so long lines stay readable while wide blocks fill the column: the "readable column,
+   * full-width blocks" pattern. Settings → Appearance → Reading width flips both to `wide`.
+   * Consumed as `max-w-[var(--measure)]` so one token moves every column together. */
+  --measure: 1040px;
+  /* The reading measure for flowing text (paragraphs, lists, notes) — narrower than the column
+   * on purpose, so prose never runs to a fatiguing line length even when the column is wide. */
+  --prose: 720px;
 
   /* shiki syntax highlighting (dark) */
   --syn-key: #c4b5fd;
@@ -175,18 +207,37 @@
 .light {
   color-scheme: light;
 
-  --background: #ffffff;
-  --foreground: #171717;
+  /* CRISP light ("soap dish" feedback + the ElevenLabs reference): the wash came from a violet
+   * cast on every neutral, not from the values being too light. Neutrals go truly NEUTRAL —
+   * white cards on a barely-gray page, structure from borders and dark text — and violet
+   * appears only where the brand or an action speaks (CTA, accents, the user bubble). */
+  --background: #f7f7f8;
+  --foreground: #18171b;
   --card: #ffffff;
-  --card-2: #fbfbfb;
+  --card-2: #f0f0f2;
   --sidebar: #fafafa;
-  --muted: #f7f7f7;
-  --muted-foreground: #5c5c5c;
-  --soft-foreground: #a3a3a3;
-  --border: #ebebeb;
-  --input: #ebebeb;
+  --muted: #f0f0f2;
+  /* Selection/hover surface stays GRAY (user decision): the shared `--accent: --muted`
+   * mapping holds in light too — violet is a signal, never a hover wash. */
+  --muted-foreground: #5c5a63;
+  /* AA-checked (audit 2026-08-08): ≥4.5:1 on every light surface incl. --muted; #a3a3a3 was
+   * 2.52:1 on white across ~300 call sites. Don't lighten back above #6f6f6f — the review's
+   * #96939C tertiary is 2.9:1 and would reopen finding A1. */
+  --soft-foreground: #6f6f6f;
+  /* violet-700-style ink: 6.5:1 on white / the pale soft-purple washes. */
+  --violet-strong: #6d28d9;
+  --border: #e2e2e6;
+  /* AA-checked (audit 2026-08-08, X1): the interactive field/control border, kept separate
+   * from the decorative --border (#ebebeb) precisely so it can meet 1.4.11's 3:1 for UI
+   * components. #ebebeb was 1.19:1 on white — the Search box had almost no boundary. Don't
+   * lighten back above #949494. */
+  --input: #949494;
   --contrast: #262626;
   --contrast-foreground: #ffffff;
+  /* Dark GRAY, deliberately not the CTA's near-black (user: "ciemno szary, nie czarny") —
+   * zinc-700-ish keeps the bubble clearly a surface, and white ink stays >8:1 on it. */
+  --bubble: #3f3f46;
+  --bubble-foreground: #fafafa;
 
   --ring: #171717;
 
@@ -219,17 +270,17 @@
 /* ---------- appearance: accent + density (Settings → Appearance, redesign R6) ----------
  * `data-accent` / `data-density` land on <html> before first paint (the index.html pre-paint
  * script reads the localStorage mirror; ui-state.json is the authoritative store — see
- * src/lib/appearance.ts). The default (lime / comfortable) is the ABSENCE of the attribute,
+ * src/lib/appearance.ts). The default (violet / comfortable) is the ABSENCE of the attribute,
  * so these blocks only name the deviations.
  */
 
-/* Violet accent: the `--primary` family swaps onto the existing violet tokens. An accent is
+/* Lime accent: the `--primary` family swaps back onto the brand lime tokens. An accent is
  * exactly a `--primary` family swap — a new accent = a new block here + one entry in
  * ACCENT_OPTIONS (routes/settings/appearance.tsx). */
-:root[data-accent='violet'] {
-  --primary: var(--violet);
-  --primary-foreground: var(--violet-foreground);
-  --ring: var(--violet);
+:root[data-accent='lime'] {
+  --primary: var(--accent-lime);
+  --primary-foreground: #0d0d0d;
+  --ring: var(--accent-lime);
 }
 
 /* Compact density: Tailwind v4's whole numeric spacing scale keys off ONE token (`--spacing`,
@@ -251,7 +302,8 @@
  * default 820px to 1180px so long transcripts, diffs and command output use more of the screen.
  * One token, same `:root[…]` (unlayered) lever as density; narrow is the absence of the attribute. */
 :root[data-width='wide'] {
-  --measure: 1180px;
+  --measure: 1320px;
+  --prose: 760px;
 }
 
 /* ---------- tokens: radius + shadow ----------
@@ -298,10 +350,13 @@
   --color-input: var(--input);
   --color-contrast: var(--contrast);
   --color-contrast-foreground: var(--contrast-foreground);
+  --color-bubble: var(--bubble);
+  --color-bubble-foreground: var(--bubble-foreground);
 
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-violet: var(--violet);
+  --color-violet-strong: var(--violet-strong);
   --color-violet-foreground: var(--violet-foreground);
   --color-ring: var(--ring);
 
@@ -482,11 +537,14 @@
  * silently lose the cascade and replies would render page-sized. `em`-based so the whole
  * scale keys off the message's own font size. */
 
+/* 1.75, up from 1.6 (user feedback): multi-line reasoning and replies were too dense to scan —
+ * chat text is read in long runs, and the extra leading is what keeps the eye on the line. */
 .thread-markdown {
-  line-height: 1.6;
+  line-height: 1.75;
 }
 .thread-markdown :is(h1, h2, h3, h4, h5, h6) {
   margin: 0.9em 0 0.35em;
+  max-width: var(--prose);
   font-size: 1.05em;
   font-weight: 600;
 }
@@ -496,7 +554,12 @@
 .thread-markdown h2 {
   font-size: 1.15em;
 }
-.thread-markdown :is(p, ul, ol, table, blockquote) {
+/* Flowing text is capped at the reading measure; tables and code (below) keep the full column. */
+.thread-markdown :is(p, ul, ol, blockquote) {
+  margin: 0.6em 0;
+  max-width: var(--prose);
+}
+.thread-markdown table {
   margin: 0.45em 0;
 }
 .thread-markdown :is(ul, ol) {
@@ -513,6 +576,11 @@
   padding-left: 0.9em;
   color: var(--muted-foreground);
 }
+/* Links in the deep indigo ink (--violet-strong), not the bright brand violet Streamdown's
+ * text-primary utilities would paint — readable at paragraph size, still clearly a link. */
+.thread-markdown a {
+  color: var(--violet-strong);
+}
 .thread-markdown [data-streamdown='inline-code'] {
   border-radius: 5px;
   background: var(--muted);
@@ -522,4 +590,17 @@
 .thread-markdown [data-streamdown='code-block'] pre {
   font-size: 12px;
   line-height: 1.55;
+}
+/* Code cards and tables sit on the raised card surface (white in light), not the page/muted
+ * tint — Streamdown's own utilities paint them with the page background, which stopped reading
+ * as cards once the light theme moved off pure white. The table HEADER keeps its muted band on
+ * purpose: that is the DS table's header treatment. */
+.thread-markdown
+  :is(
+    [data-streamdown='code-block'],
+    [data-streamdown='code-block-body'],
+    [data-streamdown='code-block-actions'],
+    [data-streamdown='table-wrapper']
+  ) {
+  background: var(--card);
 }

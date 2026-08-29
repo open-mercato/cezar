@@ -10,15 +10,14 @@ function titlePart(value: string | null): string | null {
   return trimmed ? trimmed : null
 }
 
-/** The browser-tab grammar, kept pure so loading and fallback states are exhaustive in tests. */
+/** The browser-tab grammar, kept pure so loading and fallback states are exhaustive in tests.
+ *  Slash between the parts, the app name in parens (house rule: no "—"/"·" separators). */
 export function documentTitleOf({ projectName, pageLabel }: DocumentTitleParts): string {
   const project = titlePart(projectName)
   const page = titlePart(pageLabel)
 
-  if (project && page) return `${project} — ${page} · cezar`
-  if (project) return `${project} · cezar`
-  if (page) return `${page} · cezar`
-  return 'cezar'
+  const parts = [project, page].filter((part): part is string => part !== null)
+  return parts.length > 0 ? `${parts.join(' / ')} (cezar)` : 'cezar'
 }
 
 /** The cockpit's single runtime document-title writer. */

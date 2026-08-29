@@ -489,7 +489,7 @@ describe('Run — backend selection (#401)', () => {
       true,
     )
     expect(screen.getAllByRole('link', { name: 'Configure providers' })[0]?.getAttribute('href')).toBe(
-      '/p/acme/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
 
     // Defense in depth: bypass the DOM's disabled affordance and make the React handler fire.

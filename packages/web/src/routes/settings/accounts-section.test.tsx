@@ -214,6 +214,19 @@ const openDetails = async (id: string) => {
 }
 
 describe('the agent accounts section', () => {
+  it('opens with the machine Providers block, anchored for the #providers deep links', async () => {
+    serve({ editable: true, profileCapableProviders: ['claude'], profiles: [], defaults: {}, selections: {} })
+    renderAccounts()
+    const section = await screen.findByRole('heading', { level: 2, name: 'Agent accounts' })
+    const providers = document.querySelector<HTMLElement>('[data-slot="provider-settings"]')!
+    expect(providers.id).toBe('providers')
+    // Providers first (moved here from the project Agents settings, user decision): the
+    // machine's agents above the machine's logins.
+    expect(
+      providers.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
   it('lists the discovered account with no edit controls at all', async () => {
     serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
       defaults: {},

@@ -324,6 +324,11 @@ export const runIndexEntrySchema = z.object({
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
+  /** Parallel variants (spec 010): runs sharing a `groupId` are one group, `variant` the
+   *  member's letter. Carried so the sidebar's project groups can collapse a ×N the way the
+   *  per-project list always has, and keep the compare view reachable from it. */
+  groupId: z.string().optional(),
+  variant: z.string().optional(),
   /** When the agent actually started, as opposed to when the task was created. The global page's
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),

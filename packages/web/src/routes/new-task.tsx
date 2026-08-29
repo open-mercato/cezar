@@ -7,6 +7,7 @@ import {
   SparklesIcon,
   SquareIcon,
   WorkflowIcon,
+  SlidersHorizontalIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, useSearchParams } from 'react-router'
@@ -37,10 +38,20 @@ import type {
   Skill,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
-import { TwinkleBackdrop } from '@/components/centered-state'
+import { GridBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
 import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
-import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
+import { PickerPill, RunnerModelPill, chevron, chipClass } from '@/components/picker-pill'
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { SkillPreviewDialog } from '@/components/skill-detail'
 import {
@@ -414,7 +425,7 @@ export function NewTaskRoute() {
     }
     if (!sourcesReady) {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
-      throw new Error('Still loading workflows and skills — try again in a second.')
+      throw new Error('Still loading workflows and skills. Try again in a second.')
     }
     if (draft.planFirst) {
       // Plan mode: submit means PLAN. A rejection propagates — the composer toasts and
@@ -525,11 +536,11 @@ export function NewTaskRoute() {
         data-route="new"
         className="relative isolate flex min-h-full flex-col items-center justify-center overflow-x-clip px-6"
       >
-        <TwinkleBackdrop />
+        <GridBackdrop />
         <div data-slot="auto-starting" role="status" className="text-center">
           <h1 className="animate-pulse text-lg font-semibold tracking-tight">Starting task…</h1>
           <p className="mt-1.5 text-[13.5px] text-muted-foreground">
-            Launched from a bookmarklet — taking you to the run.
+            Launched from a bookmarklet, taking you to the run.
           </p>
         </div>
       </div>
@@ -541,13 +552,13 @@ export function NewTaskRoute() {
       data-route="new"
       className="relative isolate flex min-h-full flex-col items-center overflow-x-clip px-6 pt-[clamp(32px,7vh,84px)] pb-16 max-md:px-3.5 max-md:pt-7"
     >
-      <TwinkleBackdrop />
+      <GridBackdrop />
       <GhostCodeBackdrop />
 
       <div className="w-full max-w-[720px]">
         <header className="mb-6 text-center max-md:mb-4">
           <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
-            What should the agent work on?
+            What are we conquering today?
           </h1>
           {/* Follows the resolved run mode (#793). Printing the isolation promise
               unconditionally made this line false for every run the user opted out of — and
@@ -563,7 +574,7 @@ export function NewTaskRoute() {
           value={draft.text}
           onValueChange={(text) => update({ text })}
           autoFocus
-          placeholder="Describe a task for the agent — / for skills…"
+          placeholder="Describe a task for the agent (/ for skills)…"
           ariaLabel="Describe a task for the agent"
           sendAriaLabel={draft.planFirst ? 'Plan task' : 'Start task'}
           disabled={!providersReady || starting}
@@ -575,23 +586,11 @@ export function NewTaskRoute() {
                 : 'Connect an agent provider before starting a task.'
           }
           autocompleteSkills
+          tall
           footerStart={
             <>
-              {/* The project pill LEADS the row (mockup new-task-project.html): everything to
-                  its right is resolved against it, so it reads left-to-right as "in this
-                  project, run this skill, with this model". Rendered only once the workspace
-                  actually holds more than one project — with a single one the control offers
-                  nothing and the composer keeps the shape it has always had, the same rule the
-                  sidebar's project groups follow. */}
-              {projectList.length > 1 && urlProjectId !== undefined ? (
-                <ProjectPill
-                  projects={projectList}
-                  projectId={urlProjectId}
-                  // An explicit `/p/<id>` target: the scoped navigate wrapper passes already
-                  // scoped paths through untouched, so this is a genuine cross-project jump.
-                  onPick={(next) => navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })}
-                />
-              ) : null}
+              {/* No project pill (user decision): the sidebar and the app bar already name
+                  the project this composer runs in — the row stays about the task itself. */}
               <SourcePill
                 source={source}
                 ready={sourcesReady}
@@ -600,78 +599,43 @@ export function NewTaskRoute() {
                 workflows={workflowList}
                 onPick={(next) => update({ source: next })}
               />
-              {/* Icon-only: this row already carries source/runner/model/variants/worktree/
-                  autonomous/branch, and templates is the least-used of them. */}
-              <PromptTemplateMenu
-                templates={templates}
-                iconOnly
-                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
-              />
-              {/* Shown when there is a choice to make: more than one runner, or more than one
-                  login for one of them. A host with neither sees no pill, exactly as before. */}
-              {runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id)) ? (
-                <RunnerPill
-                  runners={runners}
-                  value={displayRunner}
-                  accounts={accountChoices}
-                  account={agentProfile}
-                  repoAccount={repoAccount}
-                  // Changing the AGENT clears the model pin: presets are per-runner, so a kept
-                  // model would be one the new runner does not have. Changing only the account
-                  // keeps it — the model catalog is the same either way.
-                  onPick={(next, picked) =>
-                    update({
-                      runner: next,
-                      agentProfile: picked,
-                      ...(next === displayRunner ? {} : { model: null }),
-                    })
-                  }
-                  disabled={!providersReady}
-                />
-              ) : null}
-              <PickerPill
-                slot="model-pill"
-                ariaLabel="Model"
-                label={models.find((m) => m.id === model)?.label ?? 'auto'}
-                value={model}
-                disabled={!providersReady}
-                readOnly={modelsLocked}
-                disabledHint={
-                  modelsLocked
-                    ? 'Model selection is locked to native coding-agent settings.'
-                    : undefined
+              {/* Agent and model as ONE pill (user decision: the row carried too much). */}
+              <RunnerModelPill
+                runners={runners}
+                value={displayRunner}
+                accounts={accountChoices}
+                account={agentProfile}
+                repoAccount={repoAccount}
+                onPick={(next, picked) =>
+                  update({
+                    runner: next,
+                    agentProfile: picked,
+                    ...(next === displayRunner ? {} : { model: null }),
+                  })
                 }
-                onPick={(next) => update({ model: next })}
-                options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
-                status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+                models={models}
+                model={model}
+                onPickModel={(next) => update({ model: next })}
+                modelsLocked={modelsLocked}
+                modelStatus={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+                disabled={!providersReady}
               />
-              <PickerPill
-                slot="variants-pill"
-                ariaLabel="Parallel variants"
-                label={variants > 1 ? `×${variants} variants` : '×1'}
-                value={String(variants)}
-                onPick={(next) => update({ variants: Number(next) })}
-                disabled={!hasGit}
-                hint="How many times to run this task in parallel — each variant gets its own worktree, and you pick the diff you keep. ×1 runs it once."
-                disabledHint="Parallel variants need a git repository — each variant runs in its own worktree."
-                options={[
-                  { value: '1', label: '×1', desc: 'One run' },
-                  { value: '2', label: '×2 variants', desc: 'Two competing runs — pick the diff you keep' },
-                  { value: '3', label: '×3 variants', desc: 'Three competing runs — pick the diff you keep' },
-                ]}
-              />
-              {worktreeToggleShown ? (
-                <WorktreeToggle
-                  on={worktreeOn}
-                  disabled={worktreeForced}
-                  disabledReason="Parallel variants always use isolated worktrees"
-                  onChange={(on) => update({ worktree: on })}
-                />
-              ) : null}
-              <AutonomousToggle
-                on={autonomousOn}
-                disabled={draft.planFirst}
-                onChange={(on) => update({ autonomous: on })}
+              {/* The rare knobs fold behind one disclosure (user decision): variants,
+                  worktree, autonomous, follow-ups. A violet dot marks a non-default. */}
+              <RunOptionsMenu
+                variants={variants}
+                hasGit={hasGit}
+                onVariants={(next) => update({ variants: next })}
+                worktreeShown={worktreeToggleShown}
+                worktreeOn={worktreeOn}
+                worktreeForced={worktreeForced}
+                onWorktree={(on) => update({ worktree: on })}
+                autonomousOn={autonomousOn}
+                autonomousDisabled={draft.planFirst}
+                onAutonomous={(on) => update({ autonomous: on })}
+                followupsShown={followupsToggleShown === true}
+                followupsOn={generateFollowupsOn}
+                onFollowups={(on) => update({ generateFollowups: on })}
               />
               {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
                 <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
@@ -691,23 +655,28 @@ export function NewTaskRoute() {
             <>
               {!providersReady && !providers.isPending ? (
                 <Link
-                  to="/settings/agents#providers"
+                  to="/settings/global/accounts#providers"
                   className="text-xs font-medium text-foreground underline underline-offset-4"
                 >
                   Configure providers
                 </Link>
               ) : null}
-              <ModeSegment
+              {/* Templates sit with the WRITING helpers (user decision: the left group is what
+                  runs, the right group is how you write) — beside the mic, before the modes. */}
+              <PromptTemplateMenu
+                templates={templates}
+                iconOnly
+                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
+              />
+              {/* No kbd chip (user decision): the shortcut lives in the send button's title. */}
+              {/* ONE toggle, not a `Start | Plan first` segment (design review): a verb-labelled
+                  segment read as the submit button and swallowed the click meant for the send
+                  arrow — the arrow is the only start control, this only bends its meaning. */}
+              <PlanFirstToggle
                 planFirst={draft.planFirst}
                 planning={planning}
                 onModeChange={(planFirst) => update({ planFirst })}
               />
-              <kbd
-                aria-hidden="true"
-                className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
-              >
-                {submitShortcutHint()}
-              </kbd>
             </>
           }
         />
@@ -729,7 +698,7 @@ export function NewTaskRoute() {
           }
           startUnavailableAction={
             !providers.isPending ? (
-              <Link to="/settings/agents#providers">Configure providers</Link>
+              <Link to="/settings/global/accounts#providers">Configure providers</Link>
             ) : undefined
           }
           onStepsChange={(steps) => setPlan((current) => (current ? { ...current, steps } : current))}
@@ -766,8 +735,8 @@ function WorktreeToggle({
         disabled
           ? disabledReason
           : on
-          ? 'Runs in an isolated worktree — uncheck to run in the repo working tree'
-          : 'Runs in the repo working tree — check to isolate in a worktree'
+          ? 'Runs in an isolated worktree. Uncheck to run in the repo working tree'
+          : 'Runs in the repo working tree. Check to isolate in a worktree'
       }
       className={cn(chipClass, on && 'border-primary/60 text-foreground')}
     >
@@ -802,10 +771,10 @@ function AutonomousToggle({
       onClick={() => onChange(!on)}
       title={
         disabled
-          ? 'Plan-first runs are interactive — autonomous is unavailable'
+          ? 'Plan-first runs are interactive, so autonomous is unavailable'
           : on
-            ? 'Autonomous — the agent runs to completion without pausing for you'
-            : 'Runs interactively — check to let the agent finish without pausing for you'
+            ? 'Autonomous: the agent runs to completion without pausing for you'
+            : 'Runs interactively. Check to let the agent finish without pausing for you'
       }
       className={cn(chipClass, on && !disabled && 'border-primary/60 text-foreground')}
     >
@@ -1195,11 +1164,133 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
   )
 }
 
-/** The `Start | Plan first` segment (#383): a real toggle with an UNMISTAKABLE selected state.
- *  "Start" selected keeps the quiet card fill; "Plan first" selected takes the mockup's
- *  contrast fill + focus ring (`.seg .plan-active`) — plan mode must never be ambient. The
- *  active plan segment doubles as the busy indicator while `POST /api/plan` is in flight. */
-function ModeSegment({
+/**
+ * The rare run knobs behind one disclosure (user decision: the composer row carried too
+ * much): parallel variants, the worktree opt-out, autonomous, follow-up generation. A violet
+ * dot on the trigger says something is set off its default.
+ */
+function RunOptionsMenu({
+  variants,
+  hasGit,
+  onVariants,
+  worktreeShown,
+  worktreeOn,
+  worktreeForced,
+  onWorktree,
+  autonomousOn,
+  autonomousDisabled,
+  onAutonomous,
+  followupsShown,
+  followupsOn,
+  onFollowups,
+}: {
+  variants: number
+  hasGit: boolean
+  onVariants: (next: number) => void
+  worktreeShown: boolean
+  worktreeOn: boolean
+  worktreeForced: boolean
+  onWorktree: (on: boolean) => void
+  autonomousOn: boolean
+  autonomousDisabled: boolean
+  onAutonomous: (on: boolean) => void
+  followupsShown: boolean
+  followupsOn: boolean
+  onFollowups: (on: boolean) => void
+}) {
+  const nonDefault = variants > 1 || autonomousOn || (worktreeShown && !worktreeOn) || followupsOn
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-slot="run-options"
+          aria-label="Run options"
+          title="Run options: variants, worktree, autonomous, follow-ups"
+          // The same size-8 ghost grammar as the attach / mic / template helpers (user
+          // decision: the in-between icons read as one family).
+          className="relative flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        >
+          <SlidersHorizontalIcon aria-hidden="true" className="size-4" />
+          {nonDefault ? (
+            <span
+              data-slot="run-options-marker"
+              aria-hidden="true"
+              className="absolute top-0.5 right-0.5 size-2 rounded-full bg-violet"
+            />
+          ) : null}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" data-slot="run-options-menu" className="min-w-56">
+        <DropdownMenuLabel className="text-[10.5px] font-semibold tracking-[0.05em] text-soft-foreground uppercase">
+          Parallel variants
+        </DropdownMenuLabel>
+        <DropdownMenuRadioGroup value={String(variants)} onValueChange={(next) => onVariants(Number(next))}>
+          {[
+            { value: '1', label: '×1', desc: 'One run' },
+            { value: '2', label: '×2 variants', desc: 'Two competing runs, pick the diff you keep' },
+            { value: '3', label: '×3 variants', desc: 'Three competing runs, pick the diff you keep' },
+          ].map((option) => (
+            <DropdownMenuRadioItem
+              key={option.value}
+              value={option.value}
+              data-slot="option-variants"
+              data-variants={option.value}
+              disabled={!hasGit && option.value !== '1'}
+              title={!hasGit && option.value !== '1' ? 'Parallel variants need a git repository' : undefined}
+              className="gap-2.5"
+            >
+              <span className="flex min-w-0 flex-col">
+                <span className="text-[12.5px] font-medium">{option.label}</span>
+                <span className="text-[11.5px] text-muted-foreground">{option.desc}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator />
+        {worktreeShown ? (
+          <DropdownMenuCheckboxItem
+            data-slot="option-worktree"
+            checked={worktreeOn}
+            disabled={worktreeForced}
+            title={worktreeForced ? 'Parallel variants always use isolated worktrees' : undefined}
+            onCheckedChange={onWorktree}
+            onSelect={(event) => event.preventDefault()}
+          >
+            Isolated worktree
+          </DropdownMenuCheckboxItem>
+        ) : null}
+        <DropdownMenuCheckboxItem
+          data-slot="option-autonomous"
+          checked={autonomousOn}
+          disabled={autonomousDisabled}
+          title={autonomousDisabled ? 'Plan-first runs are interactive, so autonomous is unavailable' : undefined}
+          onCheckedChange={onAutonomous}
+          onSelect={(event) => event.preventDefault()}
+        >
+          Autonomous
+        </DropdownMenuCheckboxItem>
+        {followupsShown ? (
+          <DropdownMenuCheckboxItem
+            data-slot="option-followups"
+            checked={followupsOn}
+            onCheckedChange={onFollowups}
+            onSelect={(event) => event.preventDefault()}
+          >
+            Generate follow-ups
+          </DropdownMenuCheckboxItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** Plan mode as ONE switch (#383, design review): off is the default run, on drafts a plan for
+ *  review — with the mockup's contrast fill + ring, because plan mode must never be ambient.
+ *  It doubles as the busy indicator while `POST /api/plan` is in flight. The old
+ *  `Start | Plan first` segment is gone: its verb-labelled "Start" half read as the submit
+ *  button, competing with the send arrow that actually starts the task. */
+function PlanFirstToggle({
   planFirst,
   planning,
   onModeChange,
@@ -1209,44 +1300,24 @@ function ModeSegment({
   onModeChange: (planFirst: boolean) => void
 }) {
   return (
-    <div
-      data-slot="mode-seg"
-      role="radiogroup"
-      aria-label="Run mode"
-      className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-[3px]"
+    <button
+      type="button"
+      role="switch"
+      aria-checked={planFirst}
+      aria-busy={planning || undefined}
+      data-slot="mode-plan"
+      title={planFirst ? 'Submitting drafts a plan to review first' : 'Draft a plan to review before the run starts'}
+      onClick={() => onModeChange(!planFirst)}
+      className={cn(
+        'h-7 rounded-md px-2.5 text-xs transition-colors',
+        planFirst
+          ? 'bg-contrast font-semibold text-contrast-foreground ring-2 ring-ring/55'
+          : 'font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
+        planning && 'animate-pulse',
+      )}
     >
-      <button
-        type="button"
-        role="radio"
-        aria-checked={!planFirst}
-        onClick={() => onModeChange(false)}
-        className={cn(
-          'h-6 rounded-md px-2 text-xs transition-colors',
-          !planFirst
-            ? 'bg-card font-semibold text-foreground shadow-xs'
-            : 'font-medium text-muted-foreground hover:text-foreground',
-        )}
-      >
-        Start
-      </button>
-      <button
-        type="button"
-        role="radio"
-        aria-checked={planFirst}
-        aria-busy={planning || undefined}
-        data-slot="mode-plan"
-        onClick={() => onModeChange(true)}
-        className={cn(
-          'h-6 rounded-md px-2 text-xs transition-colors',
-          planFirst
-            ? 'bg-contrast font-semibold text-contrast-foreground ring-2 ring-ring/55'
-            : 'font-medium text-muted-foreground hover:text-foreground',
-          planning && 'animate-pulse',
-        )}
-      >
-        {planning ? 'Planning…' : 'Plan first'}
-      </button>
-    </div>
+      {planning ? 'Planning…' : 'Plan first'}
+    </button>
   )
 }
 
@@ -1267,7 +1338,9 @@ function SuggestedChips({ onPick }: { onPick: (text: string) => void }) {
           type="button"
           data-slot="suggested-chip"
           onClick={() => onPick(suggestion)}
-          className="inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          // bg-background, not transparent: the composer's grid backdrop showed through the
+          // chips (user report) — they float over it, so they carry their own opaque ground.
+          className="inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border bg-background px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
           {suggestion}

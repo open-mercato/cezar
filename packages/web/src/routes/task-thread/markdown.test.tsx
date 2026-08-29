@@ -1,7 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { Markdown } from './markdown'
+import { Markdown, tagScrollableRegions } from './markdown'
 
 afterEach(cleanup)
 
@@ -74,6 +74,70 @@ describe('Markdown', () => {
     // the raw ``` never shows as text.
     expect(document.querySelector('[data-streamdown="code-block"]')).not.toBeNull()
     expect(document.body.textContent).not.toContain('```')
+  })
+
+  // GFM task-list checkboxes must carry an accessible name (audit B5, WCAG 1.3.1 / 3.3.2).
+  describe('task-list checkboxes', () => {
+    it('names each checkbox from its own item text, both states', () => {
+      const { container } = render(<Markdown>{'- [x] Ship the fix\n- [ ] Write the tests'}</Markdown>)
+      const boxes = [...container.querySelectorAll('input[type="checkbox"]')]
+      expect(boxes).toHaveLength(2)
+      expect(boxes.map((b) => b.getAttribute('aria-label'))).toEqual([
+        'Ship the fix',
+        'Write the tests',
+      ])
+    })
+
+    it('leaves ordinary list items untouched', () => {
+      const { container } = render(<Markdown>{'- one\n- two'}</Markdown>)
+      expect(container.querySelector('input[type="checkbox"]')).toBeNull()
+      expect(container.querySelectorAll('[data-streamdown="list-item"]')).toHaveLength(2)
+    })
+  })
+
+  // Scrollable regions must be keyboard-reachable (audit B1, WCAG 2.1.1).
+  describe('tagScrollableRegions', () => {
+    const widthProbe = (el: HTMLElement, scrollWidth: number, clientWidth: number) => {
+      Object.defineProperty(el, 'scrollWidth', { configurable: true, value: scrollWidth })
+      Object.defineProperty(el, 'clientWidth', { configurable: true, value: clientWidth })
+    }
+
+    it('makes an overflowing region focusable and named', () => {
+      const root = document.createElement('div')
+      const region = document.createElement('div')
+      region.className = 'overflow-x-auto'
+      widthProbe(region, 500, 100)
+      root.appendChild(region)
+      tagScrollableRegions(root)
+      expect(region.tabIndex).toBe(0)
+      expect(region.getAttribute('role')).toBe('group')
+      expect(region.getAttribute('aria-label')).toBe('Scrollable region')
+    })
+
+    it('leaves a non-overflowing region alone', () => {
+      const root = document.createElement('div')
+      const region = document.createElement('div')
+      region.className = 'overflow-x-auto'
+      widthProbe(region, 100, 100)
+      root.appendChild(region)
+      tagScrollableRegions(root)
+      expect(region.getAttribute('tabindex')).toBeNull()
+      expect(region.getAttribute('role')).toBeNull()
+    })
+
+    it('never overrides an existing role or label', () => {
+      const root = document.createElement('div')
+      const region = document.createElement('div')
+      region.className = 'overflow-x-auto'
+      region.setAttribute('role', 'table')
+      region.setAttribute('aria-label', 'Results')
+      widthProbe(region, 500, 100)
+      root.appendChild(region)
+      tagScrollableRegions(root)
+      expect(region.getAttribute('role')).toBe('table')
+      expect(region.getAttribute('aria-label')).toBe('Results')
+      expect(region.tabIndex).toBe(0)
+    })
   })
 
   // `breaks` — hard line breaks for human-typed text (#524).

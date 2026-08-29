@@ -47,7 +47,7 @@ describe('groupThreadItems — context groups', () => {
     expect(group.tools.map((t) => t.id)).toEqual(['a', 'b', 'c'])
     expect(group.files).toBe(2)
     expect(group.searches).toBe(1)
-    expect(group.label).toBe('Explored 2 files · 1 search')
+    expect(group.label).toBe('Explored 2 files, 1 search')
   })
 
   it('a single read stays an individual card — grouping needs at least two', () => {
@@ -194,12 +194,12 @@ describe('groupThreadItems — sub-agent nesting (golden subagent-task fixture)'
 
 describe('contextGroupLabel', () => {
   it.each([
-    [2, 1, 'Explored 2 files · 1 search'],
+    [2, 1, 'Explored 2 files, 1 search'],
     [1, 0, 'Explored 1 file'],
     [4, 0, 'Explored 4 files'],
     [0, 2, 'Explored 2 searches'],
     [0, 1, 'Explored 1 search'],
-    [1, 3, 'Explored 1 file · 3 searches'],
+    [1, 3, 'Explored 1 file, 3 searches'],
   ])('(%i files, %i searches) → %s', (files, searches, label) => {
     expect(contextGroupLabel(files, searches)).toBe(label)
   })

@@ -1,6 +1,8 @@
 import * as React from "react"
 
 import { StatusDot, type StatusDotTone } from "@/components/status-dot"
+import { StatusMark } from "@/components/status-mark"
+import type { Attention } from "@/lib/attention"
 import { cn } from "@/lib/utils"
 
 /* The neutral status chip from the mockups' `.pill` class.
@@ -10,12 +12,15 @@ import { cn } from "@/lib/utils"
 function Pill({
   className,
   dot,
+  mark,
   pulse = false,
   children,
   ...props
 }: React.ComponentProps<"span"> & {
   /** Render a leading StatusDot in this tone. Omit for a plain chip. */
   dot?: StatusDotTone
+  /** A run state: renders the glyph mark instead of a dot (sidebar redesign). Wins over `dot`. */
+  mark?: Attention
   /** Pulse the dot to mark a transitioning state. Ignored without `dot`. */
   pulse?: boolean
 }) {
@@ -28,7 +33,7 @@ function Pill({
       )}
       {...props}
     >
-      {dot ? <StatusDot tone={dot} pulse={pulse} /> : null}
+      {mark ? <StatusMark attention={mark} className="-ml-0.5" /> : dot ? <StatusDot tone={dot} pulse={pulse} /> : null}
       {children}
     </span>
   )

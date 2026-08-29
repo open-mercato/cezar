@@ -314,18 +314,29 @@ function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
         <CenteredState
           heading="h2"
           icon={<ArchiveIcon />}
+          // The scriptorium scene (user artwork), on the heroes' shared 232x130 canvas.
+          art={<img src="/cezar-hero-archive.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={130} className="max-w-full [image-rendering:pixelated]" />}
           tone="neutral"
-          title="Nothing archived yet"
-          subtitle="Finished tasks you archive land here."
+          backdrop
+          title="The archives stand empty"
+          subtitle="Caesar's scribes have nothing to shelve. Archive a finished task and it will rest here."
+          // An invisible stand-in for the Active tab's New-task button (user decision): both
+          // empty states occupy the same height, so flipping Active/Archived moves nothing.
+          actions={<div aria-hidden="true" className="invisible h-9" />}
         />
       ) : (
         <CenteredState
           heading="h2"
           icon={<ListChecksIcon />}
+          // The brand cat borne on a litter by his mouse legion (user artwork). Both heroes
+          // share one 232x130 canvas (user decision: no size jump between screens), drawn
+          // at 1x CSS (an exact 2x on retina) with pixelated rendering.
+          art={<img src="/cezar-hero.png" alt="" aria-hidden="true" data-slot="empty-hero" width={232} height={130} className="max-w-full [image-rendering:pixelated]" />}
           tone="primary"
           backdrop
-          title="No tasks yet"
-          subtitle="Describe a task to get started."
+          // Caesar-voiced empty copy (user request): no tasks, so get to work.
+          title="The legion awaits orders"
+          subtitle="Caesar finds no tasks worthy of note. Describe one, the empire will not build itself."
           actions={
             <Button asChild>
               <Link to="/new">
@@ -432,7 +443,9 @@ function TaskColumnHeader({
             disabled={disabled}
             onClick={() => onToggle(column.id)}
             className={cn(
-              'inline-flex h-8 w-full items-center gap-1 rounded-sm px-0.5 text-inherit outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-wait disabled:opacity-60',
+              // `uppercase` restated: the th's transform does not reach into the button in
+              // every engine, and one header row must not mix two casings (design review).
+              'inline-flex h-8 w-full items-center gap-1 rounded-sm px-0.5 text-inherit uppercase outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-wait disabled:opacity-60',
               column.align === 'right' ? 'justify-end' : 'justify-start',
               !expanded && 'justify-center px-0',
             )}
@@ -450,7 +463,7 @@ function TaskColumnHeader({
             )}
           </button>
         </TooltipTrigger>
-        <TooltipContent side="top">{column.label} · {action} column</TooltipContent>
+        <TooltipContent side="top">{action} {column.label} column</TooltipContent>
       </Tooltip>
     </Th>
   )
@@ -597,7 +610,7 @@ function TaskTableCell({
         <td data-column-id={column.id} className={TD_BASE}>
           {/* A scheduled run wears its appointment in the pill, the way a queued one wears its
               queue position — the row's whole answer to "what is this waiting for?". */}
-          <Pill dot={attention.tone} pulse={attention.pulse} title={scheduled?.title}>
+          <Pill mark={attention} title={scheduled?.title}>
             {attention.label}
             {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
           </Pill>
@@ -777,7 +790,7 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
         cell.kind === 'none' && 'text-xs text-soft-foreground'
       )}
     >
-      {cell.text || '—'}
+      {cell.text}
     </td>
   )
 }
@@ -818,7 +831,7 @@ function TaskCard({
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
     >
       <div className="flex items-start gap-2.5">
-        <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
+        <Pill mark={attention} className="mt-px shrink-0" title={scheduled?.title}>
           {attention.label}
           {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
         </Pill>
@@ -891,13 +904,16 @@ function TaskCard({
 
 /** An honest em dash: this cell has nothing true to show. */
 function Dash() {
-  return <span className="text-xs text-soft-foreground">—</span>
+  // Blank, not an em dash (house style: an absent value renders as nothing) — the empty cell
+  // is the honest answer, and a column of dashes reads as data that failed to load.
+  return null
 }
 
 function Sep() {
+  // A slash divider, not a middot (house style: no '·' separators).
   return (
     <span className="text-soft-foreground" aria-hidden="true">
-      ·
+      /
     </span>
   )
 }

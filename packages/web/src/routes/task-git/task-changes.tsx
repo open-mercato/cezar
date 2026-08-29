@@ -13,7 +13,7 @@ import { gitActionPolicy, type GitActionId } from '@/lib/git-actions'
 import { useIsDesktop } from '@/lib/use-desktop'
 
 import { isRunActive, lastSessionId } from '../task-thread/run-actions'
-import { RunHeader } from '../task-thread/run-header'
+import { RunHeader, RunPrimaryCta } from '../task-thread/run-header'
 import { ChangesTree } from './changes-tree'
 import { CommitDialog } from './commit-dialog'
 import { buildFileTree } from './file-tree'
@@ -128,8 +128,6 @@ function ChangesView({ run }: { run: ApiRun }) {
       case 'open-terminal':
         terminal.mutate()
         break
-      case 'view-pr':
-        break // the toolbar renders it as an <a> (safe href) or disabled (unsafe) — never routed here
     }
   }
 
@@ -153,8 +151,8 @@ function ChangesView({ run }: { run: ApiRun }) {
 
       <GitToolbar
         bar={bar}
-        branch={run.branch}
-        stat={changes.data?.stat}
+        runId={run.id}
+        cta={<RunPrimaryCta run={run} />}
         mode={effectiveMode}
         wrap={effectiveWrap}
         onModeChange={setMode}

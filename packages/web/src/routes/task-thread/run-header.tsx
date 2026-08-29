@@ -7,14 +7,24 @@ import {
   CircleStopIcon,
   CopyIcon,
   EllipsisVerticalIcon,
+  FileDiffIcon,
+  FilesIcon,
   FileTextIcon,
+  GitBranchIcon,
+  GitCommitHorizontalIcon,
+  LogOutIcon,
   MailIcon,
+  MessageSquareTextIcon,
   PencilIcon,
   PlayIcon,
+  RotateCcwIcon,
+  ScanEyeIcon,
+  SendHorizontalIcon,
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useMemo, useRef, useState, type ReactNode, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -30,12 +40,11 @@ import {
   useReferenceProjectId,
   useProviderStatus,
   useRunHandoff,
-  useRuns,
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { PixelHammerIcon, RunnerLogo } from '@/components/icons'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
-import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
@@ -62,8 +71,7 @@ import {
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { DirectionalUsage } from '@/components/directional-usage'
-import { deriveAttention } from '@/lib/attention'
-import { queuePositions, runTitle } from '@/lib/task-groups'
+import { runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
 import {
   formatCost,
@@ -74,12 +82,12 @@ import {
   workflowLabel,
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
-import { isHttpUrl } from '@/lib/utils'
+import { chipClass, chevron } from '@/components/picker-pill'
+import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
-import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
-import { WorkflowSteps } from './step-rail'
+import { cliTargetResumes, cliTargetRunner, finishLabel, finishTitle, primaryRunCta, resumeHint, runActionFlags } from './run-actions'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -101,156 +109,163 @@ export type RunTab = 'session' | 'changes' | 'commits' | 'files'
 
 export function RunHeader({
   run,
-  planTally,
   tab = 'session',
   onMarkedUnread,
 }: {
   run: ApiRun
-  planTally?: { done: number; total: number }
   tab?: RunTab
   /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
   onMarkedUnread?: () => void
 }) {
-  const attention = deriveAttention(run)
   const flags = runActionFlags(run)
-  const hint = resumeHint(run)
   const [notesOpen, setNotesOpen] = useState(false)
-  const actions = useRunActions(run, onMarkedUnread)
-
-  // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
-  // query — already warm from the sidebar quick-list — because position is a property of the
-  // whole queue, not of this record.
-  const runs = useRuns()
+  const [renaming, setRenaming] = useState(false)
+  // Deferred a tick: the menu's close restores focus to its trigger, which would blur (and so
+  // close) the rename input the moment it mounted. After the restore, autoFocus wins.
+  const beginRename = () => setTimeout(() => setRenaming(true), 0)
   const health = useHealth()
-  const metricVisibility = usageMetricVisibility(health.data)
-  const queuePosition =
-    run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
+  const actions = useRunActions(run, onMarkedUnread)
 
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur md:px-6"
+      // The after: strip is a background-colored SHADOW under the sticky edge: scrolling content
+      // fades into the page instead of guillotining on the border line. SESSION only — the
+      // Changes/Commits/Files views start their content flush under the header, so there the
+      // overlay would sit on the first rows instead of on scrolled-away text.
+      className={cn(
+        'sticky top-0 z-20 bg-background/95 px-4 backdrop-blur max-md:border-b max-md:border-border max-md:pt-4 md:px-6',
+        // On md+ the bar carries the whole header, so this strip only earns its border and
+        // padding when it actually shows something (a rename, the monitoring line, notes).
+        (renaming || notesOpen || (run.status === 'running' && run.activity === 'monitoring')) &&
+          'border-b border-border pt-3',
+        tab === 'session' &&
+          "after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-5 after:bg-gradient-to-b after:from-background after:to-transparent after:content-['']",
+      )}
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
-        <div className="flex min-w-0 items-center gap-2">
-          <EditableTitle run={run} />
-          <span className="ml-auto flex shrink-0 items-center gap-2.5">
-            {planTally ? (
-              // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
-              // the run header").
-              <span data-slot="plan-mirror" className="text-[11px] text-soft-foreground tabular-nums">
-                Plan {planTally.done}/{planTally.total}
-              </span>
-            ) : null}
-            <Pill dot={attention.tone} pulse={attention.pulse}>
-              {attention.label}
-              {queuePosition !== undefined ? ` #${queuePosition}` : ''}
-            </Pill>
-            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
-          </span>
-        </div>
+        {/* No visible title (user decision): the shell's bar crumb already says it. The h1
+            stays for assistive tech; renaming opens an inline input over the meta row. */}
+        <h1 className="sr-only">{runTitle(run)}</h1>
+        {renaming ? <RenameRow run={run} onDone={() => setRenaming(false)} /> : null}
 
-        <MetaRow
-          run={run}
-          showTokens={metricVisibility.tokens}
-          showCost={metricVisibility.cost}
-          // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
-          // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
-          // own test), so every capability read here tolerates an absent object. Absent stays
-          // fail-closed — the chip degrades to text rather than linking into a disabled view.
-          automationsAvailable={health.data?.capabilities?.automations === true}
-        />
-        <MonitoringSchedule run={run} />
-
-        <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
+        {/* The stat strip left the header: Plan is the context tab, Status duplicated the paused
+            hint, and Cost/Agent/Mode moved to a meta row UNDER the composer (task-thread.tsx). */}
+        {/* `capabilities?.` fail-closed (#801): this header renders against minimal health
+            payloads, and with automations off the chip degrades to text rather than linking
+            into a disabled view. */}
+        {/* Below md only (user decision, UX pass): everything — tabs, chips, actions — lives
+            on the app bar via the bar-actions portal on desktop; this row is the mobile
+            stand-in, where no bar exists. */}
+        <div data-slot="run-tabs" className="flex flex-wrap items-end gap-1 md:hidden">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
+            <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
             Session
           </TabLink>
           <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
+            <FileDiffIcon aria-hidden="true" className="size-3.5" />
             Changes
+            {/* The diffstat rides its own tab (UX pass): "+1 −0" is what Changes holds, not a
+                separate fact worth a chip of its own. */}
+            {run.diffStat ? <DiffStatLabel stat={run.diffStat} className="ml-0.5" /> : null}
           </TabLink>
           <TabLink to={`/tasks/${run.id}/commits`} active={tab === 'commits'}>
+            <GitCommitHorizontalIcon aria-hidden="true" className="size-3.5" />
             Commits
           </TabLink>
           <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
+            <FilesIcon aria-hidden="true" className="size-3.5" />
             Files
           </TabLink>
-
-          <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 pb-1 md:flex">
-            {flags.finish ? (
-              <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
-                <CheckIcon aria-hidden="true" />
-                Finish
-              </Button>
-            ) : null}
-            {flags.continueRun ? (
-              <Button
-                variant="outline"
-                size="sm"
-                title={actions.continuation.reason ?? 'Reopen the session'}
-                disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
-                onClick={() => actions.continueRun.mutate()}
-              >
-                <PlayIcon aria-hidden="true" />
-                Continue
-              </Button>
-            ) : null}
-            {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
-            <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} />
-            <Button
-              variant="ghost"
-              size="sm"
-              title="Handoff notes — what the agent did and what's left"
-              aria-expanded={notesOpen}
-              onClick={() => setNotesOpen((open) => !open)}
-            >
-              <FileTextIcon aria-hidden="true" />
-              Notes
-            </Button>
-            {flags.markUnread ? (
-              <Button
-                variant="ghost"
-                size="sm"
-                title="Put this task back in the unread list"
-                disabled={actions.markUnread.isPending}
-                onClick={() => actions.markUnread.mutate()}
-              >
-                <MailIcon aria-hidden="true" />
-                Mark unread
-              </Button>
-            ) : null}
-            {flags.archive ? (
-              <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
-                {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
-                {run.archived ? 'Unarchive' : 'Archive'}
-              </Button>
-            ) : null}
-            {flags.cancel ? (
-              <Button variant="danger-ghost" size="sm" onClick={() => actions.setConfirming('cancel')}>
-                <CircleStopIcon aria-hidden="true" />
-                Cancel
-              </Button>
-            ) : null}
-            {flags.deleteRun ? (
-              <Button variant="danger-ghost" size="sm" onClick={() => actions.setConfirming('delete')}>
-                <Trash2Icon aria-hidden="true" />
-                Delete
-              </Button>
-            ) : null}
-          </div>
+          {/* Below md only: the bar (and its portal) does not exist there, so the chips and
+              the kebab keep the row's right side. */}
+          <span className="ml-auto flex min-w-0 shrink-0 items-center gap-2 pb-1.5 md:hidden">
+            <MetaRow run={run} automationsAvailable={health.data?.capabilities?.automations === true} />
+            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
+          </span>
         </div>
+        <BarActions>
+          {/* The task's views as compact icon tabs (user decision) — the bar carries the whole
+              header now: where you are, whose task it is, and what you can do to it. */}
+          <span data-slot="bar-tabs" role="tablist" aria-label="Task views" className="flex items-center gap-1.5">
+            <BarTab to={`/tasks/${run.id}`} active={tab === 'session'} label="Session">
+              <MessageSquareTextIcon aria-hidden="true" className="size-3.5" />
+              Session
+            </BarTab>
+            {/* ONE git entry (user decision): the changes live on the branch, so the branch
+                and its ± are one control. It opens the diff; the Changes/Commits split is a
+                local toggle inside that area. */}
+            <BarTab
+              to={`/tasks/${run.id}/changes`}
+              active={tab === 'changes' || tab === 'commits'}
+              label={run.branch ? `Changes on ${run.branch}` : 'Changes'}
+            >
+              <GitBranchIcon aria-hidden="true" className="size-3.5" />
+              {run.branch ? (
+                <span data-slot="bar-branch" className="max-w-[18ch] truncate font-mono">
+                  {run.branch}
+                </span>
+              ) : null}
+              {run.diffStat ? <DiffStatLabel stat={run.diffStat} /> : null}
+            </BarTab>
+            <BarTab to={`/tasks/${run.id}/files`} active={tab === 'files'} label="Files">
+              <FilesIcon aria-hidden="true" className="size-3.5" />
+              Files
+            </BarTab>
+          </span>
+          <span aria-hidden="true" className="h-4 w-px shrink-0 bg-border" />
+          {/* The task's context chips (PR, branch) live on the bar too (user decision) —
+              identity beside the verbs that act on it. */}
+          <MetaRow run={run} showBranch={false} bare automationsAvailable={health.data?.capabilities?.automations === true} />
+          {/* No stateful buttons here (user decision: the bar must not jump as the run moves
+              through its lifecycle). The ONE primary CTA floats over the content in a fixed
+              spot, and Finish lives in the More menu under its real name. */}
+          {/* Terminal is folded into the Open in… menu to save room in the actions row. */}
+          {/* Icon-only on the bar (user decision): the full "Open in" label outweighed the row. */}
+          <OpenInMenuForRun run={run} canResume={flags.terminal} onResume={() => actions.terminal.mutate()} iconOnly />
+          {/* Everything past the state's primary actions folds behind one disclosure (#765). */}
+          <SecondaryActionsMenu run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} onRename={beginRename} />
+        </BarActions>
 
-        {run.steps.length > 0 ? (
-          <div className="border-t border-border pt-2 pb-1">
-            <WorkflowSteps runId={run.id} steps={run.steps} />
-          </div>
-        ) : null}
+        <MonitoringSchedule run={run} />
 
-        {hint ? <ResumeHintLine hint={hint} /> : null}
+
+        {/* Workflow steps moved to the context bar above the composer, and the take-over command
+            moved to a button UNDER the composer (task-thread.tsx) — the sticky header stays shallow. */}
         {notesOpen ? <NotesPanel runId={run.id} /> : null}
       </div>
+
+      {/* The stateful CTA FLOATS top-center, just under the bar (user decision): one fixed
+          spot over the content, so the bar never reflows when Stop becomes Reply becomes
+          Review changes — and the eye finds it where a notification would land. Anchored to
+          this sticky header, so it centers on the CONTENT column whatever the sidebar's
+          width, and stays pinned while the thread scrolls. md+ only — the mobile kebab and
+          the composer itself cover small screens. */}
+      {/* A full-width frosted band under the bar carries the button (user decision): the CTA
+          reads as chrome, and thread text slides under a soft blur instead of colliding with
+          a naked pill. The mask fades the blur out toward the bottom edge. */}
+      {/* SESSION and FILES only (design review): the git tabs' toolbar occupies this exact
+          line, and the absolutely-centered float overlapped its Unified/Split control — there
+          the toolbar reserves a real flex slot in its middle and docks `RunPrimaryCta`, which
+          flex layout can never overlap. */}
+      {tab === 'session' || tab === 'files' ? (
+        <div
+          data-slot="floating-cta"
+          className={cn(
+            'pointer-events-none absolute inset-x-0 top-0 z-30 hidden justify-center pt-2 pb-7 md:flex',
+            // The frosted band belongs to SESSION, where thread text scrolls underneath. Files
+            // starts its panes flush under the bar — a full-width wash would gray them out.
+            tab === 'session' &&
+              'bg-gradient-to-b from-background/80 via-background/40 to-transparent backdrop-blur-[3px] [mask-image:linear-gradient(to_bottom,black_45%,transparent)]',
+          )}
+        >
+          <span className="pointer-events-auto">
+            <PrimaryCtaButton run={run} actions={actions} floating />
+          </span>
+        </div>
+      ) : null}
 
       <ConfirmDialog run={run} actions={actions} />
     </header>
@@ -270,10 +285,12 @@ function OpenInMenuForRun({
   run,
   canResume,
   onResume,
+  iconOnly,
 }: {
   run: ApiRun
   canResume: boolean
   onResume: () => void
+  iconOnly?: boolean
 }) {
   const targets = useOpenTargets()
   const providers = useProviderStatus()
@@ -321,6 +338,11 @@ function OpenInMenuForRun({
     <OpenInMenu
       choices={choices}
       onPick={(target) => open.mutate(target)}
+      // No trailing ellipsis (it read as a truncated label) — the chevron already says "menu".
+      label="Open in"
+      iconOnly={iconOnly}
+      // On the bar every control shares the quiet ghost grammar (user decision).
+      triggerVariant={iconOnly ? 'ghost' : 'outline'}
       title="Resume in a terminal, or open the worktree locally"
       leading={
         canResumeHere ? (
@@ -427,6 +449,104 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
 
 type RunActions = ReturnType<typeof useRunActions>
 
+/**
+ * The header's ONE stateful CTA (design review): a fixed slot whose label, tone and action follow
+ * the lifecycle — Stop while working, Reply when the agent waits, Review changes at the gate,
+ * Retry after a failure, Reopen once closed. `primaryRunCta` (run-actions.ts) owns the mapping;
+ * this renders it and wires each kind to its verb:
+ *  - stop    → the cancel confirm (the same dialog the kebab uses; stopping deserves a confirm)
+ *  - reply   → scroll to + focus the composer (the reply IS typing)
+ *  - review  → scroll the review panel into view
+ *  - retry / reopen → resume the session (gated on the provider's canContinue, like Continue was)
+ */
+function PrimaryCtaButton({ run, actions, floating = false }: { run: ApiRun; actions: RunActions; floating?: boolean }) {
+  const navigate = useNavigate()
+  const cta = primaryRunCta(run)
+  if (!cta) return null
+  const resumes = cta.kind === 'retry' || cta.kind === 'reopen'
+  const disabled = resumes && (actions.continueRun.isPending || !actions.continuation.canContinue)
+  const iconClass = undefined
+  const icon =
+    cta.kind === 'stop' ? <CircleStopIcon aria-hidden="true" className={iconClass} />
+    : cta.kind === 'reply' ? <SendHorizontalIcon aria-hidden="true" className={iconClass} />
+    : cta.kind === 'review' ? <ScanEyeIcon aria-hidden="true" className={iconClass} />
+    : cta.kind === 'retry' ? <RotateCcwIcon aria-hidden="true" className={iconClass} />
+    : <PlayIcon aria-hidden="true" className={iconClass} />
+  const title =
+    cta.kind === 'stop' ? 'Stop the run'
+    : cta.kind === 'reply' ? 'Reply to the agent'
+    : cta.kind === 'review' ? 'Jump to the review'
+    : (actions.continuation.reason ?? 'Reopen the session')
+  const onClick = () => {
+    if (cta.kind === 'stop') actions.setConfirming('cancel')
+    else if (cta.kind === 'reply') {
+      const focusComposer = () => {
+        const composer = document.querySelector<HTMLTextAreaElement>('textarea')
+        composer?.scrollIntoView({ block: 'center' })
+        composer?.focus()
+      }
+      if (document.querySelector('textarea')) focusComposer()
+      else {
+        // Same bar-wide rule as review: the composer is Session's — go there first.
+        navigate(`/tasks/${run.id}`)
+        requestAnimationFrame(() => requestAnimationFrame(focusComposer))
+      }
+    } else if (cta.kind === 'review') {
+      const panel = document.querySelector('[data-slot="review-panel"]')
+      if (panel) {
+        panel.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      } else {
+        // The button lives on the app bar now, visible from every tab — but the review panel
+        // only exists in Session. From elsewhere, go there first; the panel scrolls itself
+        // into view on the next frame, once Session has rendered.
+        navigate(`/tasks/${run.id}`)
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() =>
+            document
+              .querySelector('[data-slot="review-panel"]')
+              ?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+          ),
+        )
+      }
+    } else actions.continueRun.mutate()
+  }
+  return (
+    <Button
+      data-slot="primary-cta"
+      data-cta={cta.kind}
+      variant={cta.tone === 'primary' ? 'primary' : cta.tone === 'neutral' ? 'contrast' : 'outline'}
+      size={floating ? 'default' : 'sm'}
+      title={title}
+      disabled={disabled}
+      onClick={onClick}
+      // Calm states (Reopen, Stop) go SOLID contrast with a violet icon — chrome-black with the
+      // brand wink; urgent states keep full purple; failure keeps danger on an outline. The
+      // floating variant carries a real shadow — it sits OVER the content.
+      className={cn(
+        cta.tone === 'danger' && 'border-danger/40 text-danger hover:bg-danger/10',
+        floating && 'shadow-lg',
+      )}
+    >
+      {icon}
+      {cta.label}
+    </Button>
+  )
+}
+
+/** The primary CTA and its confirm dialog as ONE self-contained unit, for surfaces outside this
+ *  header: the git toolbars dock it in their middle flex slot (design review — the centered
+ *  float overlapped their controls). Its own `useRunActions` instance: the mutations are
+ *  per-mount and the Stop confirm must open next to the button that asked for it. */
+export function RunPrimaryCta({ run }: { run: ApiRun }) {
+  const actions = useRunActions(run)
+  return (
+    <>
+      <PrimaryCtaButton run={run} actions={actions} />
+      <ConfirmDialog run={run} actions={actions} />
+    </>
+  )
+}
+
 async function copyToClipboard(text: string, doneMessage: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(text)
@@ -437,58 +557,230 @@ async function copyToClipboard(text: string, doneMessage: string): Promise<void>
   }
 }
 
+/** One compact icon tab on the app bar — the underline grammar shrunk to the bar's height.
+ *  A real Link, like TabLink: every view is a URL. */
+function BarTab({ to, active, label, children }: { to: string; active: boolean; label: string; children: ReactNode }) {
+  return (
+    <Link
+      to={to}
+      role="tab"
+      aria-selected={active}
+      aria-label={label}
+      title={label}
+      aria-current={active ? 'page' : undefined}
+      className={cn(
+        'flex h-7 items-center gap-1 rounded-sm px-2 text-[11px] font-medium transition-colors',
+        active ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+      )}
+    >
+      {children}
+    </Link>
+  )
+}
+
 /**
- * The editable title (#389): a plain h1 with a pencil that only appears on hover (mockup
- * `.pencil-btn`), flipping into an inline input. Enter/blur commit through `usePatchRun`
- * (the server stores it as both `title` and `titleSummary`), Escape abandons the draft.
- * The rename machine itself is shared with the Tasks table (`components/editable-title.tsx`).
+ * The desktop actions, rendered onto the APP BAR's right side (user decision, UX pass) through
+ * the shell's `bar-actions` slot — the verbs act on the whole task, so they sit with its name,
+ * in view on every tab. Where no bar exists (mobile has none; bare test mounts), the buttons
+ * stay here in the header — the kebab still covers small screens, and nothing is lost.
  */
-function EditableTitle({ run }: { run: ApiRun }) {
+function BarActions({ children }: { children: ReactNode }) {
+  const [target, setTarget] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    setTarget(document.querySelector<HTMLElement>('[data-slot="bar-actions"]'))
+  }, [])
+  const content = (
+    <div data-slot="run-actions" className="hidden items-center gap-1.5 md:flex">
+      {children}
+    </div>
+  )
+  return target ? createPortal(content, target) : content
+}
+
+/**
+ * The rename input (#389), now opened from the actions menu (user decision: the header shows
+ * no title of its own — the shell's bar does). Renders in the title's old spot, already in
+ * edit mode; Enter/blur commit through `usePatchRun`, Escape closes it.
+ */
+function RenameRow({ run, onDone }: { run: ApiRun; onDone: () => void }) {
   const patch = usePatchRun(run.id)
   const title = runTitle(run)
   const editor = useTitleEditor(title, (next) =>
     patch.mutate({ title: next }, { onError: (error) => toast(error.message, { tone: 'danger' }) }),
   )
-
-  if (editor.editing) {
-    return <TitleEditInput editor={editor} className="flex-1 text-[15px] font-semibold" />
-  }
-
+  // Open on mount; close the row only after editing actually started, or the mount-time
+  // "not editing yet" state would call onDone before begin()'s set lands.
+  const startedRef = useRef(false)
+  if (editor.editing) startedRef.current = true
+  useEffect(() => {
+    editor.begin()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open once, on mount
+  }, [])
+  useEffect(() => {
+    if (startedRef.current && !editor.editing) onDone()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- editor object is not stable
+  }, [editor.editing])
+  if (!editor.editing) return null
   return (
-    <span className="group flex min-w-0 items-center gap-1">
-      <h1 className="min-w-0 truncate text-[15px] font-semibold" title={run.task}>
-        {title}
-      </h1>
-      <button
-        type="button"
-        aria-label="Rename task"
-        onClick={editor.begin}
-        className="shrink-0 rounded-sm p-1 text-soft-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-      >
-        <PencilIcon className="size-3.5" aria-hidden="true" />
-      </button>
+    <div className="mb-1 flex items-center">
+      <TitleEditInput editor={editor} className="flex-1 text-[15px] font-semibold" />
+    </div>
+  )
+}
+
+/** The Claude burst for a claude run, a neutral bot otherwise — the runner's face in the Agent
+ *  stat. */
+function RunnerIcon({ runner, className }: { runner: ApiRun['runner']; className?: string }) {
+  // Every known backend ships a brand logo; only a legacy record with no runner falls to the bot.
+  return runner ? (
+    <RunnerLogo runner={runner} className={className} />
+  ) : (
+    <BotIcon className={className} aria-hidden="true" />
+  )
+}
+
+/** The Agent stat's value: the runner's face and name, a button that opens the runner / account /
+ *  model breakdown (spec 2026-07-29-agent-profiles, #416). The account only ever had a home here,
+ *  so the click-through keeps it reachable while the strip stays to the mockup's icon + name. */
+function AgentStat({ run, runner }: { run: ApiRun; runner: NonNullable<ApiRun['runner']> }) {
+  const profiles = useAgentProfiles()
+  const model = run.model ?? 'auto'
+  // The account is read from the STEP that actually spawned (see the agent-profiles spec): a
+  // resumed run reattaches to the session's account, whatever the composer override said.
+  const accountId = [...run.steps].reverse().find((step) => step.profileId)?.profileId
+  const account =
+    accountId === undefined
+      ? undefined
+      : accountId === DEFAULT_AGENT_ACCOUNT_ID
+        ? 'default'
+        : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
+  // The canonical `provider/model` the run actually resolved to (#405), shown only when it says
+  // something `model` does not (#546): `model` is the free text the caller ASKED for, so on a
+  // runner pointed at a custom endpoint the two genuinely differ, and "which provider served
+  // this?" is a question only this field answers. Absent on pre-#405 records and skipped when it
+  // merely repeats `model` — an identity nothing wrote down is not one this menu may invent.
+  const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          data-slot="agent-badge"
+          aria-label={`Agent: ${runner}${account ? `, account ${account}` : ''}, model ${model}`}
+          className={cn(chipClass, 'text-foreground')}
+        >
+          <RunnerIcon runner={runner} className="size-4 shrink-0" />
+          {runner}
+          {chevron}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[9rem]">
+        <DropdownMenuLabel className="font-mono text-xs font-normal text-muted-foreground">
+          runner: {runner}
+        </DropdownMenuLabel>
+        {account ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-account"
+            className="font-mono text-xs font-normal text-muted-foreground"
+          >
+            account: {account}
+          </DropdownMenuLabel>
+        ) : null}
+        <DropdownMenuLabel className="font-mono text-xs font-normal text-muted-foreground">
+          model: {model}
+        </DropdownMenuLabel>
+        {identity ? (
+          <DropdownMenuLabel
+            data-slot="agent-badge-identity"
+            className="font-mono text-xs font-normal text-muted-foreground"
+          >
+            identity: {identity}
+          </DropdownMenuLabel>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** The run's read-only meta — Cost · Tokens · Agent · Mode — as a compact row UNDER the composer
+ *  (task-thread.tsx). Plan and Status left the old strip (they became the context tab and the
+ *  paused hint); these are the facts that still had nowhere else to live. Each renders only when
+ *  the record carries it — absence is absence, not a placeholder. */
+export function RunMetaFooter({ run, pickers }: { run: ApiRun; pickers?: ReactNode }) {
+  const config = useConfig()
+  const health = useHealth()
+  const metricVisibility = usageMetricVisibility(health.data)
+  // Same resolution as the run actually executes with (input.runner ?? config.defaultRunner).
+  const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
+  const model = run.model ?? 'auto'
+  const showTokens =
+    metricVisibility.tokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)
+  const showCost = metricVisibility.cost && !!run.costUsd
+  return (
+    <div data-slot="run-meta-footer" className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1">
+      {/* The workflow's one remaining home on the thread (the header chip retired with the
+          meta line): which pipeline ran this task. */}
+      <FooterStat label="Workflow">
+        <span className="truncate">{workflowLabel(run)}</span>
+      </FooterStat>
+      {showCost ? (
+        <FooterStat label="Cost">
+          <span className="tabular-nums">{formatCost(run.costUsd!)}</span>
+        </FooterStat>
+      ) : null}
+      {showTokens ? (
+        <FooterStat label="Tokens">
+          <DirectionalUsage inputTokens={run.inputTokens} outputTokens={run.outputTokens} />
+        </FooterStat>
+      ) : null}
+      {/* When the run can be continued, the runner/model PICKERS (moved out of the composer) go
+          here. Otherwise — a live session that can't switch backend — the same facts render as
+          read-only pills, so the row reads the same either way instead of flipping to a label list. */}
+      {pickers ?? (
+        <>
+          <AgentStat run={run} runner={runner} />
+          <span
+            aria-label={`Model ${model}`}
+            className={cn(chipClass, 'cursor-default hover:bg-card hover:text-muted-foreground')}
+          >
+            {model}
+          </span>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** One "LABEL value" pair on the meta footer — small-caps label, body-size value, inline. */
+function FooterStat({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <span data-slot="meta-stat" className="inline-flex items-center gap-1.5">
+      <span className="text-[10px] font-medium tracking-wide text-soft-foreground uppercase">{label}</span>
+      <span className="flex items-center gap-1.5 text-[13px] leading-none font-medium whitespace-nowrap text-foreground">
+        {children}
+      </span>
     </span>
   )
 }
 
-/** workflow · branch chip · ± on the left; tokens · cost · agent icon on the right (mockup
- *  `.meta-row`, #416). Each part renders only when the record carries it — absence is absence,
- *  not a placeholder. Runner and model no longer sit in the loose dot-list (#416): they read as
- *  a status for the *active* session, so they move into the agent badge next to the token
- *  count, revealed on hover/focus rather than always-on text. */
+/** workflow, branch chip, ± on the left; the labelled stat strip on the right (mockup
+ *  `.meta-row`). Each part renders only when the record carries it — absence is absence,
+ *  not a placeholder. */
 function MetaRow({
   run,
-  showTokens,
-  showCost,
-  automationsAvailable,
+  showBranch = true,
+  bare = false,
+  automationsAvailable = false,
 }: {
   run: ApiRun
-  showTokens: boolean
-  showCost: boolean
+  /** Off on the app bar, where the branch rides the Commits tab instead of a chip. */
+  showBranch?: boolean
+  /** The app bar's grammar: borderless ghost chips matching the icon tabs. */
+  bare?: boolean
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
-  automationsAvailable: boolean
+  automationsAvailable?: boolean
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
@@ -509,15 +801,13 @@ function MetaRow({
           })),
     [references, projectId],
   )
-  // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
-  // placeholder — which reads like a status next to the live status pill.
-  const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
-  if (run.branch) {
+  const parts: ReactNode[] = []
+  if (showBranch && run.branch) {
     parts.push(
       <span
         key="branch"
         data-slot="branch-chip"
-        className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium"
+        className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 font-mono text-xs font-medium"
       >
         {run.branch}
       </span>,
@@ -540,7 +830,8 @@ function MetaRow({
         key={`pr-${reference.number}`}
         reference={reference}
         taskTitle={runTitle(run)}
-        className="h-5"
+        bare={bare}
+        className={bare ? undefined : 'h-5'}
         // Shown only on a chip that IS conflicting — the chip decides that, being the thing that
         // knows — and mounted only while its panel is open. The same component the Tasks table
         // hands its chips, so both send the same prompt on the same seam.
@@ -561,7 +852,7 @@ function MetaRow({
         key="pr"
         reference={{ kind: 'PR', url: prUrl }}
         taskTitle={runTitle(run)}
-        className="h-5"
+        className="h-6"
       />,
     )
   }
@@ -573,11 +864,11 @@ function MetaRow({
         key="issue"
         reference={{ kind: 'Issue', ...(number ? { number: Number(number) } : {}), url: issueUrl }}
         taskTitle={runTitle(run)}
-        className="h-5"
+        bare={bare}
+        className={bare ? undefined : 'h-6'}
       />,
     )
   }
-  if (run.diffStat) parts.push(<DiffStatLabel key="diff" stat={run.diffStat} />)
   if (run.automation) {
     // Provenance is history and is always shown; only the LINK is gated. Following it with the
     // capability off would land on the disabled `/automations` state, which says nothing about
@@ -587,7 +878,7 @@ function MetaRow({
         <Link
           key="automation"
           to={`/automations/${encodeURIComponent(run.automation.automationId)}/log`}
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
+          className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs font-medium hover:text-foreground"
         >
           Automation
         </Link>
@@ -596,7 +887,7 @@ function MetaRow({
           key="automation"
           data-slot="automation-origin"
           title="Automations are off on this server (CEZ_AUTOMATIONS)"
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium"
+          className="rounded-sm inline-flex h-6 items-center border border-border bg-card px-2 text-xs font-medium"
         >
           Automation
         </span>
@@ -604,53 +895,20 @@ function MetaRow({
     )
   }
 
-  const usage: ReactNode[] = []
-  if (showTokens && (run.inputTokens !== undefined || run.outputTokens !== undefined)) {
-    usage.push(
-      <DirectionalUsage
-        key="tokens"
-        inputTokens={run.inputTokens}
-        outputTokens={run.outputTokens}
-      />,
-    )
-  }
-  if (showCost && run.costUsd) {
-    usage.push(
-      <span key="cost" className="tabular-nums">
-        {formatCost(run.costUsd)}
-      </span>,
-    )
-  }
-
+  // The provider (#871) is what lets the header's PR/issue chips carry live status — the
+  // same seam the task tables hydrate through, so the two surfaces answer identically.
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <div
         data-slot="run-meta"
-        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+        className="flex min-w-0 items-center gap-x-2 text-xs text-muted-foreground"
       >
+        {/* Identity chips, spaced by the row gap — no middot separators (house rule). The
+            workflow chip left (it lives under the composer) and the diffstat rides the
+            Changes tab now, so what remains is the task's references and its branch. */}
         {parts.map((part, index) => (
-          <Fragment key={index}>
-            {index > 0 ? (
-              <span className="text-soft-foreground" aria-hidden="true">
-                ·
-              </span>
-            ) : null}
-            {part}
-          </Fragment>
+          <Fragment key={index}>{part}</Fragment>
         ))}
-        <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {usage.map((part, index) => (
-            <Fragment key={index}>
-              {index > 0 ? (
-                <span className="text-soft-foreground" aria-hidden="true">
-                  ·
-                </span>
-              ) : null}
-              {part}
-            </Fragment>
-          ))}
-          <AgentBadge run={run} />
-        </span>
       </div>
     </ReferenceStatusProvider>
   )
@@ -688,101 +946,12 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
   )
 }
 
-/** The agent icon by the token counter (#416): hover/focus reveals the runner, account, model and
- *  canonical model identity — the answer to "what am I actually running here?" — without turning
- *  them into permanent text next to the live status pill. Always rendered (a run always has an
- *  effective runner, `model` reads "auto" when the runner picks it), and reuses the same
- *  click/keyboard-accessible `DropdownMenu` as the rest of this header instead of inventing a
- *  hover-only affordance.
- *
- *  This is the production reader for `RunRecord.modelIdentity` (#546): the field was persisted by
- *  #405 for cost attribution and replay and had none, which is how a persisted field rots into
- *  something nobody can tell is load-bearing. The menu is the right home for it — it answers a
- *  question only a user debugging "which provider actually served this?" asks, so it belongs
- *  behind the same disclosure as the account rather than in the truncating summary line. */
-function AgentBadge({ run }: { run: ApiRun }) {
-  // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
-  // `runner` (`src/runs/store.ts`), while the run actually executes as
-  // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
-  // hardcoding 'claude' would name the wrong agent on a repo whose `defaultRunner` is
-  // codex/opencode, and "which agent produced this?" is the one question #416 exists to answer.
-  // 'claude' stays the last resort only while the active project's config is in flight.
-  // `/api/health` describes the boot project and can name the wrong runner on scoped routes.
-  const config = useConfig()
-  const profiles = useAgentProfiles()
-  const runner = run.runner ?? config.data?.defaultRunner ?? 'claude'
-  const model = run.model ?? 'auto'
-  // The account is read from the STEP that actually spawned, never from the run's composer
-  // override or the project's current selection (spec 2026-07-29-agent-profiles): the override is
-  // absent whenever the run just followed the project, and the project's selection can have been
-  // changed since — both would name an account this run may never have touched. The last step that
-  // recorded one is what ran; `sessionId` and `profileId` are a pair for exactly this reason.
-  const accountId = [...run.steps].reverse().find((step) => step.profileId)?.profileId
-  const account = accountId === undefined
-    ? undefined
-    : accountId === DEFAULT_AGENT_ACCOUNT_ID
-      ? 'default'
-      // A deleted account still names the folder this run's sessions live in, so the id is shown
-      // rather than swallowed — "gone" is the useful half of that answer.
-      : profiles.data?.profiles.find((p) => p.id === accountId)?.label ?? `${accountId} (removed)`
-  // The canonical `provider/model` the run actually resolved to (#405), shown only when it says
-  // something `model` does not (#546). `model` is the free-text the caller ASKED for — `opus`,
-  // `auto`, a gateway id — so on a repo whose Claude runner points at a custom endpoint the two
-  // genuinely differ, and "which provider served this?" is a question only this field answers.
-  // Absent on pre-#405 records and skipped when it merely repeats `model`, following the same
-  // omitted-not-guessed rule as the account line below: an identity nothing wrote down is not
-  // one this header may invent.
-  const identity = run.modelIdentity && run.modelIdentity !== model ? run.modelIdentity : undefined
-  const summary = [runner, account, model].filter(Boolean).join(' · ')
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          data-slot="agent-badge"
-          title={summary}
-          aria-label={`Agent: ${runner}, ${account ? `account ${account}, ` : ''}model ${model}`}
-          className="flex min-w-0 shrink items-center gap-1.5 rounded-sm px-1 py-1 text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-        >
-          <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
-          {/* READ, not just reachable. This was an icon alone, and "which agent, account and model
-              produced this?" turned out to be unanswerable without knowing to click it — the whole
-              point of the badge. #416 moved runner/model out of the loose dot-list to cut noise;
-              this puts them back as ONE quiet, truncating string rather than three chips, and the
-              menu still carries the labelled breakdown. */}
-          <span data-slot="agent-badge-summary" className="truncate font-mono text-[11px]">
-            {summary}
-          </span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[9rem]">
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
-          runner: {runner}
-        </DropdownMenuLabel>
-        {/* Omitted, not guessed, when no step recorded one: a run from before accounts existed
-            cannot be said to have used the discovered account — nothing wrote that down. */}
-        {account ? (
-          <DropdownMenuLabel
-            data-slot="agent-badge-account"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
-          >
-            account: {account}
-          </DropdownMenuLabel>
-        ) : null}
-        <DropdownMenuLabel className="font-mono text-[11px] font-normal text-muted-foreground">
-          model: {model}
-        </DropdownMenuLabel>
-        {identity ? (
-          <DropdownMenuLabel
-            data-slot="agent-badge-identity"
-            className="font-mono text-[11px] font-normal text-muted-foreground"
-          >
-            identity: {identity}
-          </DropdownMenuLabel>
-        ) : null}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  )
+
+/** The finish item's icon follows its label (design review): "Accept without PR" earns the
+ *  check, "Close session" is a leave — a checkmark beside a closing action read as a confirm
+ *  tick, not as what the row does. */
+function FinishIcon({ status }: { status: ApiRun['status'] }) {
+  return status === 'review' ? <CheckIcon aria-hidden="true" /> : <LogOutIcon aria-hidden="true" />
 }
 
 /** The <md action surface: everything the desktop bar offers, folded into a kebab menu next to
@@ -791,10 +960,12 @@ function ActionsKebab({
   run,
   actions,
   onToggleNotes,
+  onRename,
 }: {
   run: ApiRun
   actions: RunActions
   onToggleNotes: () => void
+  onRename: () => void
 }) {
   const flags = runActionFlags(run)
   return (
@@ -805,9 +976,12 @@ function ActionsKebab({
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu">
+        <DropdownMenuItem data-action="rename" onSelect={onRename}>
+          <PencilIcon aria-hidden="true" /> Rename
+        </DropdownMenuItem>
         {flags.finish ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
-            <CheckIcon aria-hidden="true" /> Finish
+          <DropdownMenuItem title={finishTitle(run.status)} onSelect={() => actions.finish.mutate()}>
+            <FinishIcon status={run.status} /> {finishLabel(run.status)}
           </DropdownMenuItem>
         ) : null}
         {flags.continueRun ? (
@@ -824,6 +998,73 @@ function ActionsKebab({
             <SquareTerminalIcon aria-hidden="true" /> Terminal
           </DropdownMenuItem>
         ) : null}
+        <DropdownMenuItem onSelect={onToggleNotes}>
+          <FileTextIcon aria-hidden="true" /> Notes
+        </DropdownMenuItem>
+        {flags.markUnread ? (
+          <DropdownMenuItem
+            disabled={actions.markUnread.isPending}
+            onSelect={() => actions.markUnread.mutate()}
+          >
+            <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
+        {flags.archive ? (
+          <DropdownMenuItem onSelect={() => actions.archive.mutate()}>
+            {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
+            {run.archived ? 'Unarchive' : 'Archive'}
+          </DropdownMenuItem>
+        ) : null}
+        {flags.cancel || flags.deleteRun ? <DropdownMenuSeparator /> : null}
+        {flags.cancel ? (
+          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('cancel')}>
+            <CircleStopIcon aria-hidden="true" /> Cancel
+          </DropdownMenuItem>
+        ) : null}
+        {flags.deleteRun ? (
+          <DropdownMenuItem variant="destructive" onSelect={() => actions.setConfirming('delete')}>
+            <Trash2Icon aria-hidden="true" /> Delete
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** The desktop overflow (#765): the secondary actions that used to crowd the row, folded behind
+ *  one "More actions" disclosure. The state's primary actions (Finish / Continue / Open in…) stay
+ *  inline beside it; the mobile kebab still carries the full set, so this is desktop-only. Renders
+ *  nothing when there is no secondary action for the current state. */
+function SecondaryActionsMenu({
+  run,
+  actions,
+  onToggleNotes,
+  onRename,
+}: {
+  run: ApiRun
+  actions: RunActions
+  onToggleNotes: () => void
+  onRename: () => void
+}) {
+  const flags = runActionFlags(run)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon-sm" aria-label="More actions">
+          <EllipsisVerticalIcon aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" data-slot="run-actions-overflow">
+        {/* Finish under its REAL name per state (user decision): closing a waiting session and
+            accepting a review without a PR are different acts and read as such here. */}
+        {flags.finish ? (
+          <DropdownMenuItem data-action="finish" title={finishTitle(run.status)} onSelect={() => actions.finish.mutate()}>
+            <FinishIcon status={run.status} /> {finishLabel(run.status)}
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuItem data-action="rename" onSelect={onRename}>
+          <PencilIcon aria-hidden="true" /> Rename
+        </DropdownMenuItem>
         <DropdownMenuItem onSelect={onToggleNotes}>
           <FileTextIcon aria-hidden="true" /> Notes
         </DropdownMenuItem>
@@ -897,20 +1138,23 @@ function ConfirmDialog({ run, actions }: { run: ApiRun; actions: RunActions }) {
   )
 }
 
-/** "take over interactively: cd … && claude --resume …" — the legacy `#d-resume` line, now
- *  copyable. Local-machine phrasing; hosted mode (R5, `capabilities.localHandoff`) will swap the
- *  cd-prefix for a bare resume command. */
-function ResumeHintLine({ hint }: { hint: string }) {
+/** "Take over in terminal" — the resume/handoff command (`cd … && claude --resume …`) copied on
+ *  click, collapsed from the old full-width monospace line so the raw path never sits on screen.
+ *  Mounted UNDER the composer (task-thread.tsx). Renders nothing when the run can't be resumed.
+ *  Local-machine phrasing; hosted mode (R5, `capabilities.localHandoff`) will swap the cd-prefix. */
+export function TakeOverButton({ run }: { run: ApiRun }) {
+  const hint = resumeHint(run)
+  if (!hint) return null
   return (
     <button
       type="button"
       data-slot="resume-hint"
-      title="Copy the command"
+      title={`Copy: ${hint}`}
       onClick={() => void copyToClipboard(hint, 'Command copied to clipboard.')}
-      className="mb-2 flex w-full min-w-0 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left font-mono text-[11px] text-soft-foreground hover:bg-muted hover:text-foreground"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-soft-foreground hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
     >
-      <CopyIcon className="size-3 shrink-0" aria-hidden="true" />
-      <span className="truncate">take over interactively: {hint}</span>
+      <SquareTerminalIcon className="size-3.5 shrink-0" aria-hidden="true" />
+      Take over in terminal
     </button>
   )
 }

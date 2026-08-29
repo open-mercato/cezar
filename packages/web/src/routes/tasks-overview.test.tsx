@@ -151,8 +151,8 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('v')?.textContent).toBe('needs review')
     expect(pillOf('d')?.textContent).toBe('done')
     expect(pillOf('f')?.textContent).toBe('failed')
-    expect(pillOf('w')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
-    expect(pillOf('d')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    expect(pillOf('w')?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(pillOf('d')?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('success')
   })
 
   it('shows a usage-limit wait as "scheduled" with its time, not as a red failure', () => {
@@ -169,10 +169,10 @@ describe('TasksOverview — the table', () => {
     expect(pillOf('sched')?.textContent).toContain('scheduled')
     // The time itself, locale-formatted — assert it is there rather than its spelling.
     expect(pillOf('sched')?.querySelector('.tabular-nums')?.textContent).toMatch(/\d{1,2}[:.]\d{2}/)
-    expect(pillOf('sched')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
+    expect(pillOf('sched')?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
     // …and an ordinary failure is untouched.
     expect(pillOf('broke')?.textContent).toBe('failed')
-    expect(pillOf('broke')?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+    expect(pillOf('broke')?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('danger')
   })
 
   it('shows a queued issue reference before the agent starts', () => {
@@ -191,7 +191,7 @@ describe('TasksOverview — the table', () => {
     expect(chip?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/554')
   })
 
-  it('fills the columns with the run facts, and honest dashes where no fact exists', () => {
+  it('fills the columns with the run facts, and honest blanks where no fact exists', () => {
     renderOverview({
       runs: [
         run({
@@ -220,17 +220,17 @@ describe('TasksOverview — the table', () => {
       'feat',
       'cez/8f31ab02',
       '+128 −14', // the ± column (R2 #389) — adds and dels, the mockup's pair
-      '#402',
+      'PR #402',
       '184.7k / 2.4k',
       '$0.31',
-      '—', // no live sample, CPU has no persisted peak
-      '—',
+      '', // no live sample, CPU has no persisted peak
+      '',
       '12m',
     ])
-    // No branch, no PR, no diff recorded, no cost yet — dashes, not zeros (a pre-R2 record has
+    // No branch, no PR, no diff recorded, no cost yet — blanks, not zeros (a pre-R2 record has
     // no diffStat, and `+0 −0` would claim a measurement that never happened). Started falls
     // back to createdAt.
-    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '—', '—', '—', '— / —', '—', '—', '—', '26m'])
+    expect(cellsOf('bare')).toEqual(['needs you', 'Bare minimum', 'default', '', '', '', '', '', '', '', '26m'])
     // The pair is two colored halves, not one string — green adds, red dels (design tokens).
     const diff = tableRow('full')?.querySelector('[data-slot="diff-stat"]')
     expect(diff?.querySelector('.text-success')?.textContent).toBe('+128')
@@ -281,11 +281,11 @@ describe('TasksOverview — the table', () => {
       'done',
       'Hidden metrics',
       'default',
-      '—',
-      '—',
-      '—',
-      '—',
-      '—',
+      '',
+      '',
+      '',
+      '',
+      '',
       '1m',
     ])
 
@@ -367,8 +367,8 @@ describe('TasksOverview — the table', () => {
   })
 
   it.each([
-    { name: 'both visible', showTokens: true, showCost: true, headers: ['IN / OUT', 'Cost'], tokens: true, cost: true },
-    { name: 'tokens only', showTokens: true, showCost: false, headers: ['IN / OUT'], tokens: true, cost: false },
+    { name: 'both visible', showTokens: true, showCost: true, headers: ['In / out', 'Cost'], tokens: true, cost: true },
+    { name: 'tokens only', showTokens: true, showCost: false, headers: ['In / out'], tokens: true, cost: false },
     { name: 'cost only', showTokens: false, showCost: true, headers: ['Cost'], tokens: false, cost: true },
     { name: 'both hidden', showTokens: false, showCost: false, headers: [], tokens: false, cost: false },
   ])('keeps desktop and mobile metrics independent when $name', ({ showTokens, showCost, headers, tokens, cost }) => {
@@ -389,11 +389,11 @@ describe('TasksOverview — the table', () => {
     const allHeaders = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
       (cell) => cell.textContent,
     )
-    expect(allHeaders.filter((header) => header === 'IN / OUT' || header === 'Cost')).toEqual(headers)
+    expect(allHeaders.filter((header) => header === 'In / out' || header === 'Cost')).toEqual(headers)
     const rowText = tableRow('visibility')?.textContent ?? ''
     const cardText = card('visibility')?.textContent ?? ''
     expect(rowText.includes('184.7k / 2.4k')).toBe(tokens)
-    expect(cardText.includes('IN 184.7k · OUT 2.4k')).toBe(tokens)
+    expect(cardText.includes('IN 184.7k / OUT 2.4k')).toBe(tokens)
     expect(rowText.includes('$0.31')).toBe(cost)
     expect(cardText.includes('$0.31')).toBe(cost)
   })
@@ -614,7 +614,7 @@ describe('TasksOverview — usage cells', () => {
     renderWithUsage([run({ id: 'live1', status: 'running' })])
 
     // Before the first tick: nothing to say, honestly.
-    expect(usageCell('live1', 'cpu')?.textContent).toBe('—')
+    expect(usageCell('live1', 'cpu')?.textContent).toBe('')
 
     act(() => FakeEventSource.last?.emit('usage', JSON.stringify({ project: 'boot', usage: { live1: SAMPLE } })))
 
@@ -630,10 +630,10 @@ describe('TasksOverview — usage cells', () => {
     // Even a stale tick that still names the run must not paint it live — it is done.
     act(() => FakeEventSource.last?.emit('usage', JSON.stringify({ project: 'boot', usage: { done1: SAMPLE } })))
 
-    expect(usageCell('done1', 'cpu')?.textContent).toBe('—')
+    expect(usageCell('done1', 'cpu')?.textContent).toBe('')
     expect(usageCell('done1', 'mem')?.textContent).toBe('peak 401 MB')
     expect(usageCell('done1', 'mem')?.getAttribute('data-usage-kind')).toBe('peak')
-    expect(usageCell('done1', 'mem')?.getAttribute('title')).toBe('peak — run finished · 7 procs')
+    expect(usageCell('done1', 'mem')?.getAttribute('title')).toBe('peak — run finished (7 procs)')
   })
 })
 
@@ -741,30 +741,31 @@ describe('TasksOverview — empty and loading states', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Tasks')
   })
 
-  it('celebrates no-tasks-yet: primary tone, the twinkle backdrop, a New-task action', () => {
+  it('celebrates no-tasks-yet: primary tone, the grid backdrop, a New-task action', () => {
     renderOverview({ runs: [] })
     const empty = document.querySelector<HTMLElement>('[data-slot="tasks-empty"]')
     if (!empty) throw new Error('no empty state rendered')
 
     expect(empty.getAttribute('data-empty-kind')).toBe('no-tasks')
     expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('primary')
-    expect(within(empty).getByRole('heading', { name: 'No tasks yet' })).not.toBeNull()
-    expect(within(empty).getByText('Describe a task to get started.')).not.toBeNull()
+    expect(within(empty).getByRole('heading', { name: 'The legion awaits orders' })).not.toBeNull()
+    expect(within(empty).getByText('Caesar finds no tasks worthy of note. Describe one, the empire will not build itself.')).not.toBeNull()
     // Scoped inside the state — the mobile FAB is also a link named "New task".
     expect(within(empty).getByRole('link', { name: 'New task' }).getAttribute('href')).toBe('/new')
     // The hero moment: this is the one overview state that gets the decorative backdrop.
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).not.toBeNull()
+    expect(empty.querySelector('[data-slot="grid-backdrop"]')).not.toBeNull()
   })
 
-  it('says the archive is empty, plainly — neutral, no backdrop', () => {
+  it("says the archive is empty in Caesar's voice, with the scriptorium hero", () => {
     renderOverview({ runs: [run({ status: 'done' })], view: 'archived' })
     const empty = document.querySelector<HTMLElement>('[data-slot="tasks-empty"]')
     if (!empty) throw new Error('no empty state rendered')
 
     expect(empty.getAttribute('data-empty-kind')).toBe('archive')
     expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
-    expect(within(empty).getByRole('heading', { name: 'Nothing archived yet' })).not.toBeNull()
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
+    expect(within(empty).getByRole('heading', { name: 'The archives stand empty' })).not.toBeNull()
+    expect(empty.querySelector('[data-slot="grid-backdrop"]')).not.toBeNull()
+    expect(empty.querySelector('[data-slot="empty-hero"]')?.getAttribute('src')).toBe('/cezar-hero-archive.png')
   })
 
   it('says what the search missed, quoting it, with no backdrop', () => {
@@ -777,7 +778,7 @@ describe('TasksOverview — empty and loading states', () => {
     expect(empty.querySelector('[data-slot="centered-state"]')?.getAttribute('data-tone')).toBe('neutral')
     expect(screen.getByText('No tasks match “quaternion”.')).not.toBeNull()
     // A missed search is not a hero surface.
-    expect(empty.querySelector('[data-slot="twinkle-backdrop"]')).toBeNull()
+    expect(empty.querySelector('[data-slot="grid-backdrop"]')).toBeNull()
   })
 })
 
@@ -842,7 +843,7 @@ describe('TasksOverview — mobile cards and FAB', () => {
     expect(c.textContent).toContain('cez/8f31ab02')
     // The meta row carries the diff pair, like the mockup card (branch · ± · tokens).
     expect(c.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+128 −14')
-    expect(c.textContent).toContain('IN 184.7k · OUT 2.4k')
+    expect(c.textContent).toContain('IN 184.7k / OUT 2.4k')
     expect(c.textContent).toContain('$0.31')
     expect(c.textContent).toContain('12m')
     expect(c.querySelector('[data-slot="pr-chip"]')?.getAttribute('href')).toBe('https://github.com/o/r/pull/402')
@@ -967,21 +968,21 @@ describe('TasksOverviewRoute — wired to the app', () => {
     document.querySelector(`[data-slot="overview-tab"][data-view="${view}"]`) as HTMLElement
   const sidebarRow = (id: string) => document.querySelector(`[data-slot="task-row"][data-run-id="${id}"]`)
 
-  it('shares the Active/Archived state with the sidebar — either set of tabs flips both', async () => {
+  it('the rail is a flat live list — the overview tabs flip only the table', async () => {
     renderApp([run({ id: 'act', status: 'running' }), run({ id: 'arc', status: 'done', archived: true })])
     await waitFor(() => expect(tableRow('act')).not.toBeNull())
     expect(sidebarRow('act')).not.toBeNull()
 
-    // Flip in the table header → the sidebar follows.
+    // Flip in the table header: the TABLE shows the archive; the rail (a flat quick list of
+    // live work — the archive lives only behind this tab now) keeps its rows untouched.
     fireEvent.click(overviewTab('archived'))
-    expect(sidebarTab('archived').getAttribute('aria-pressed')).toBe('true')
     expect(tableRow('arc')).not.toBeNull()
     expect(tableRow('act')).toBeNull()
-    expect(sidebarRow('arc')).not.toBeNull()
-    expect(sidebarRow('act')).toBeNull()
+    expect(sidebarRow('act')).not.toBeNull()
+    expect(sidebarRow('arc')).toBeNull()
 
-    // Flip back in the sidebar → the table follows.
-    fireEvent.click(sidebarTab('active'))
+    // And back.
+    fireEvent.click(overviewTab('active'))
     expect(overviewTab('active').getAttribute('aria-pressed')).toBe('true')
     expect(tableRow('act')).not.toBeNull()
     expect(tableRow('arc')).toBeNull()

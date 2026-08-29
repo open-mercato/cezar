@@ -164,7 +164,7 @@ describe('ProviderBanner', () => {
     })
 
     expect(screen.getByRole('link', { name: 'Open agent settings' }).getAttribute('href')).toBe(
-      '/p/cezar/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
   })
 
@@ -227,7 +227,7 @@ describe('ProviderBanner', () => {
     renderBanner()
 
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/p/cezar/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
   })
 

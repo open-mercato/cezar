@@ -241,7 +241,7 @@ function VariantColumn({
         >
           {variant.variant}
         </span>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
+        <Pill mark={attention}>
           {attention.label}
         </Pill>
         {(showTokens && hasDirectionalUsage) || (showCost && cost) ? (
@@ -254,9 +254,6 @@ function VariantColumn({
                 inputTokens={variant.inputTokens}
                 outputTokens={variant.outputTokens}
               />
-            ) : null}
-            {showTokens && hasDirectionalUsage && showCost && cost ? (
-              <span aria-hidden="true">·</span>
             ) : null}
             {showCost && cost ? <span className="font-mono tabular-nums">{cost}</span> : null}
           </span>
@@ -295,19 +292,44 @@ function VariantColumn({
         )}
       </div>
 
-      <Button
-        data-slot="variant-pick"
-        title={
-          allTerminal
-            ? `Keep variant ${variant.variant}'s changes and archive the others`
-            : 'Every variant must finish before you can pick'
-        }
-        disabled={!allTerminal || pickPending}
-        onClick={onPick}
-      >
-        <CheckIcon aria-hidden="true" />
-        Pick this one
-      </Button>
+      {/* The CTA block (audit D1). While any variant is still working, the pick button drops its
+          accent (outline, not a primary that looks clickable), the REASON is inline text rather
+          than a hover-only title, and a variant that is itself still open gets the way forward —
+          its own thread, where it can be answered or finished. */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-1.5">
+          <Button
+            data-slot="variant-pick"
+            variant={allTerminal ? 'primary' : 'outline'}
+            title={
+              allTerminal
+                ? `Keep variant ${variant.variant}'s changes and archive the others`
+                : undefined
+            }
+            disabled={!allTerminal || pickPending}
+            onClick={onPick}
+            className={cn(!allTerminal && 'flex-1')}
+          >
+            <CheckIcon aria-hidden="true" />
+            Pick this one
+          </Button>
+          {!TERMINAL_STATUSES.has(variant.status) ? (
+            <Button asChild variant="outline" data-slot="variant-open-thread">
+              <Link to={`/tasks/${variant.id}`}>
+                {variant.status === 'waiting' ? 'Reply in thread' : 'Open thread'}
+                <ChevronRightIcon aria-hidden="true" className="size-3.5" />
+              </Link>
+            </Button>
+          ) : null}
+        </div>
+        {!allTerminal ? (
+          <p data-slot="variant-pick-reason" className="text-[11.5px] text-soft-foreground">
+            {TERMINAL_STATUSES.has(variant.status)
+              ? 'Waiting for the other variants to finish before picking.'
+              : `Variant ${variant.variant} is still ${variant.status} — every variant must finish before you can pick.`}
+          </p>
+        ) : null}
+      </div>
     </article>
   )
 }

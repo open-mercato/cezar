@@ -193,7 +193,7 @@ describe('AskCard', () => {
     expect((screen.getByRole('button', { name: /date-fns/ }) as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText(reason)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
     expect(mutateAsync).not.toHaveBeenCalled()
   })

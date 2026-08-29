@@ -102,12 +102,17 @@ describe('configurable composer run defaults', () => {
         `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('quick-task')`,
       )
       expect(browser.text('[data-slot="source-pill"]')).toContain('quick-task')
+      // Worktree and Autonomous live in the run-options menu now (user decision).
+      browser.click('[data-slot="run-options"]')
+      browser.waitForFunction(`document.querySelector('[data-slot="run-options-menu"]') !== null`)
       expect(browser.evaluate(
-        `document.querySelector('[data-slot="worktree-toggle"]')?.getAttribute('aria-checked')`,
+        `document.querySelector('[data-slot="option-worktree"]')?.getAttribute('aria-checked')`,
       )).toBe('true')
       expect(browser.evaluate(
-        `document.querySelector('[data-slot="autonomous-toggle"]')?.getAttribute('aria-checked')`,
+        `document.querySelector('[data-slot="option-autonomous"]')?.getAttribute('aria-checked')`,
       )).toBe('false')
+      browser.press('Escape')
+      browser.waitForFunction(`document.querySelector('[data-slot="run-options-menu"]') === null`)
 
       browser.click('[data-slot="source-pill"]')
       browser.waitForFunction(`document.querySelector('[data-slot="source-menu"]') !== null`)
@@ -115,18 +120,22 @@ describe('configurable composer run defaults', () => {
       browser.waitForFunction(
         `document.querySelector('[data-slot="interactive-skill-hint"]') !== null`,
       )
-      for (const slot of ['worktree-toggle', 'autonomous-toggle']) {
+      browser.click('[data-slot="run-options"]')
+      browser.waitForFunction(`document.querySelector('[data-slot="run-options-menu"]') !== null`)
+      for (const slot of ['option-worktree', 'option-autonomous']) {
         expect(browser.evaluate(
           `document.querySelector('[data-slot="${slot}"]')?.getAttribute('aria-checked')`,
         )).toBe('false')
         expect(browser.evaluate(
-          `document.querySelector('[data-slot="${slot}"]')?.disabled`,
-        )).toBe(false)
+          `document.querySelector('[data-slot="${slot}"]')?.getAttribute('aria-disabled')`,
+        )).not.toBe('true')
         browser.click(`[data-slot="${slot}"]`)
-        expect(browser.evaluate(
-          `document.querySelector('[data-slot="${slot}"]')?.getAttribute('aria-checked')`,
-        )).toBe('true')
+        browser.waitForFunction(
+          `document.querySelector('[data-slot="${slot}"]')?.getAttribute('aria-checked') === 'true'`,
+        )
       }
+      browser.press('Escape')
+      browser.waitForFunction(`document.querySelector('[data-slot="run-options-menu"]') === null`)
 
       browser.goto(`${baseUrl}/settings/global/resources`)
       browser.waitForFunction(

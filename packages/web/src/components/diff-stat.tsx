@@ -32,6 +32,10 @@ import { cn } from '@/lib/utils'
  * numbers were taken.
  */
 export function DiffStatLabel({ stat, className }: { stat: DiffStat; className?: string }) {
+  // An all-zero stat is a measurement of "nothing changed" — success/danger are change tokens,
+  // and lighting them at zero made a clean tree read as activity (design review). The numbers
+  // stay (a measured zero is not the caller's absent-state dash), but in the quiet tone.
+  const zero = stat.adds === 0 && stat.dels === 0
   const counts = `+${stat.adds} −${stat.dels} across ${stat.files} ${stat.files === 1 ? 'file' : 'files'}`
   const caveat = stat.repointed
     ? `${counts} — measured against another branch checked out in this task's worktree, as this task found it`
@@ -47,7 +51,8 @@ export function DiffStatLabel({ stat, className }: { stat: DiffStat; className?:
         className
       )}
     >
-      <span className="text-success">+{stat.adds}</span> <span className="text-danger">−{stat.dels}</span>
+      <span className={zero ? 'text-soft-foreground' : 'text-success'}>+{stat.adds}</span>{' '}
+      <span className={zero ? 'text-soft-foreground' : 'text-danger'}>−{stat.dels}</span>
     </span>
   )
 }

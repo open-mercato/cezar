@@ -61,7 +61,15 @@ export function fixtureServeEnv(
   dataRoot: string,
   extra: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
-  return { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: resolve(dataRoot, '.cez-home'), ...extra }
+  return {
+    ...process.env,
+    CEZ_DRY_RUN: '1', CEZ_HOME: resolve(dataRoot, '.cez-home'),
+    // Hermetic HOME: the server also reads the OPERATOR'S user-level skill collections
+    // (~/.claude and friends), so on a developer machine every fixture's skill list silently
+    // grew by dozens of personal skills. Fixtures assert exactly what they seeded.
+    HOME: resolve(dataRoot, '.home'),
+    ...extra,
+  }
 }
 
 /**

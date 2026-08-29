@@ -305,3 +305,90 @@ export function filterSkills(
 ): Skill[] {
   return rankByQuery(orderSkillsByUsage(skills, usage), query, usage)
 }
+
+/** Human labels for the catalog's sources — the palette's section headers. */
+export const SKILL_SOURCE_LABEL: Record<Skill['source'], string> = {
+  ai: 'Project',
+  cezar: 'Built-in',
+  agents: 'Agents',
+  team: 'Team',
+  global: 'Global',
+}
+
+/** One palette section: a source, optionally narrowed to a name family within it. */
+export interface PaletteGroup {
+  key: string
+  source: Skill['source']
+  /** The section's own name — the family token (`auto`, `ux`) or `Other`; absent when the
+   *  source needed no families (it renders as the source label alone). */
+  family: string | null
+  skills: Skill[]
+}
+
+/** The smallest family worth its own header — two look like a coincidence, three like a set. */
+const FAMILY_MIN = 3
+
+/** The longest `-`-terminated prefix every name shares — `om-` across an `om-*` collection. */
+function commonVendorPrefix(names: readonly string[]): string {
+  if (names.length < 2) return ''
+  let prefix = names[0] ?? ''
+  for (const name of names) {
+    while (prefix && !name.startsWith(prefix)) prefix = prefix.slice(0, -1)
+    if (!prefix) return ''
+  }
+  const cut = prefix.lastIndexOf('-')
+  return cut === -1 ? '' : prefix.slice(0, cut + 1)
+}
+
+/**
+ * The workflow palette's sections (user request: 86 look-alike rows needed categories). Data
+ * decides them, not a hand-kept taxonomy: first by `source`, in the incoming project-first
+ * order; then, inside a source, by NAME FAMILY — the first token after the vendor prefix the
+ * whole source shares (`om-auto-fix-pr` → `auto`). A family earns a header from three members
+ * up; the stragglers gather under `Other`, last. A source with no family to speak of stays one
+ * plain section. Skills keep their incoming (server-alphabetical) order inside every section.
+ */
+export function paletteGroups(skills: readonly Skill[]): PaletteGroup[] {
+  const bySource = new Map<Skill['source'], Skill[]>()
+  for (const skill of skills) {
+    const list = bySource.get(skill.source)
+    if (list) list.push(skill)
+    else bySource.set(skill.source, [skill])
+  }
+  const groups: PaletteGroup[] = []
+  for (const [source, list] of bySource) {
+    // An author-declared `category` wins over anything inferred: when a collection carries
+    // themes, those are its sections (alphabetical), and the skills that declare none gather
+    // under `Other`, last. Only when nobody declared one do the name families below apply.
+    const themed = list.filter((skill) => skill.category)
+    if (themed.length > 0) {
+      const categories = [...new Set(themed.map((skill) => skill.category as string))].sort()
+      for (const category of categories) {
+        groups.push({ key: `${source}:${category}`, source, family: category, skills: list.filter((s) => s.category === category) })
+      }
+      const rest = list.filter((skill) => !skill.category)
+      if (rest.length > 0) groups.push({ key: `${source}:other`, source, family: 'Other', skills: rest })
+      continue
+    }
+    const prefix = commonVendorPrefix(list.map((skill) => skill.name))
+    const familyOf = (skill: Skill) => skill.name.slice(prefix.length).split('-')[0] || skill.name
+    const counts = new Map<string, number>()
+    for (const skill of list) counts.set(familyOf(skill), (counts.get(familyOf(skill)) ?? 0) + 1)
+    const families = [...counts].filter(([, n]) => n >= FAMILY_MIN).map(([name]) => name).sort()
+    // Families must carry the source, not decorate it. In a MIXED catalog (no vendor prefix)
+    // a first token is a coincidence more often than a set, so headers need to cover most of
+    // the list; inside a vendor collection (`om-*`) every family is a real one, and `auto (12)`
+    // against `Other (21)` is exactly the split a reader wants.
+    const covered = families.reduce((sum, name) => sum + (counts.get(name) ?? 0), 0)
+    if (families.length === 0 || (prefix === '' && covered * 2 < list.length)) {
+      groups.push({ key: source, source, family: null, skills: list })
+      continue
+    }
+    for (const family of families) {
+      groups.push({ key: `${source}:${family}`, source, family, skills: list.filter((s) => familyOf(s) === family) })
+    }
+    const other = list.filter((s) => !families.includes(familyOf(s)))
+    if (other.length > 0) groups.push({ key: `${source}:other`, source, family: 'Other', skills: other })
+  }
+  return groups
+}

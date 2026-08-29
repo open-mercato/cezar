@@ -20,6 +20,12 @@ export type NavItem = {
   match: string[]
   /** Optional trailing status affordance. Rendering/data stay with the shell. */
   badge?: 'inbox-count' | 'skills-update' | 'tasks-unread'
+  /** A workspace-level surface: linked with a plain router link (never `/p/<id>`-prefixed) and
+   *  hidden in single-project mode. */
+  global?: boolean
+  /** A workspace LIBRARY (scoped route, but not one project's view): rendered in the sidebar's
+   *  own nav rather than on the project's tab band or in its menu. */
+  library?: boolean
   /** Forge-gated (R6 Step 1.1): the item exists only while `/api/health` reports the forge
    *  driver available — see `visibleNavItems`. */
   forge?: boolean
@@ -46,7 +52,9 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], forge: true, automations: true },
-  { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
+  /** A LIBRARY, not a project view (user decision): the catalog spans user-global, team and
+   *  project skills, so it lives in the sidebar's workspace nav, not on the project's tab band. */
+  { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update', library: true },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
 ]
@@ -59,6 +67,8 @@ export type NavAvailability = {
   inbox?: boolean
   /** `capabilities.automations` — the opt-in GitHub automations (#801). */
   automations?: boolean
+  /** `capabilities.singleProject` — no registry to manage, so no Projects item. */
+  singleProject?: boolean
 }
 
 /**
@@ -80,11 +90,13 @@ export function visibleNavItems({
   forge = false,
   inbox = false,
   automations = false,
+  singleProject = false,
 }: NavAvailability = {}): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
-    && (item.automations ? automations : true))
+    && (item.automations ? automations : true)
+    && (item.global ? !singleProject : true))
 }
 
 /** Does `pathname` sit inside the area rooted at `prefix`?
@@ -106,6 +118,9 @@ function inArea(pathname: string, prefix: string): boolean {
  * `/settings/agents` lights Settings, `/git/commits` lights Git.
  */
 export function activeNavPath(pathname: string): string | null {
+  // Exactly `/tasks` is the workspace-wide page (#845, reachable from the palette): nobody's
+  // project, so no project item lights; the project's Tasks area claims only `/tasks/:id`.
+  if (pathname === '/tasks') return null
   let best: { to: string; length: number } | null = null
   for (const item of NAV_ITEMS) {
     for (const prefix of item.match) {

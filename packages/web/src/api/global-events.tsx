@@ -13,6 +13,7 @@ import {
   type UsageStore,
 } from './events'
 import { apiPath, getApiScope } from '@open-mercato/cezar-api-client'
+import { setConnectionOffline, setConnectionRetry } from './connection-state'
 import { queryKeys, useHealthSubscription, workspaceQueryKeys } from './queries'
 import type {
   ApiRun,
@@ -283,6 +284,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       source = new Source(url, { withCredentials: true })
 
       source.addEventListener('open', () => {
+        setConnectionOffline(false)
         // Not the first one: at boot the queries are fetching anyway, and invalidating them here
         // would only ask the same questions twice. Every later open is a *re*connect — we were
         // disconnected, events happened without us, and the cache is now a guess.
@@ -292,6 +294,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
 
       for (const name of EVENT_NAMES) {
         source.addEventListener(name, (event) => {
+          // Any event proves the stream is alive — including the server's periodic ping.
+          setConnectionOffline(false)
           const parsed = parseWorkspaceEvent(name, (event as MessageEvent<string>).data)
           if (!parsed) return
           // The cross-project index first, and BEFORE the scope filter below — it is the one
@@ -354,6 +358,9 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       })
 
       source.addEventListener('error', () => {
+        // Either way we are not receiving events right now — say so (audit C1: a dead server
+        // must not leave the cockpit looking live). The next 'open' or event clears it.
+        setConnectionOffline(true)
         // An ordinary drop leaves the stream CONNECTING and the browser retries it on its own —
         // touching that would just race its backoff. CLOSED means it gave up for good, which is
         // what a restarting server produces (the request is answered with a non-2xx while it
@@ -398,11 +405,20 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     document.addEventListener('visibilitychange', onVisibilityChange)
     window.addEventListener('pagehide', onPageHide)
     window.addEventListener('pageshow', onPageShow)
+    // The banner's Retry: don't wait out a backoff — reconnect NOW and re-ask the server for
+    // everything on screen (failed queries refetch as part of the reconcile).
+    setConnectionRetry(() => {
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      reconcile(queryClient)
+      connect()
+    })
     connect()
 
     return () => {
       disposed = true
       clearTimeout(reopenTimer)
+      setConnectionRetry(null)
       runsIndexRefresher.cancel()
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('pagehide', onPageHide)

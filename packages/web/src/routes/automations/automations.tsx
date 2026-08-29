@@ -107,14 +107,14 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
         <>
           <div className="mb-4 rounded-lg border bg-muted/30 px-4 py-3 text-sm">
             <span className="font-medium">GitHub {data.available ? 'available' : 'unavailable'}</span>
-            <span className="text-muted-foreground"> · Scheduler {data.scheduler.state}{data.reason ? ` · ${data.reason}` : ''}</span>
+            <span className="text-muted-foreground"> (Scheduler {data.scheduler.state}{data.reason ? `, ${data.reason}` : ''})</span>
           </div>
           {data.automations.length === 0 ? <PageState text="No automations yet. Create one paused, test its bounded filter, then enable it from a current-time baseline." /> : (
             <div className="grid gap-3">
               {data.automations.map((automation) => (
                 <article key={automation.id} className="rounded-xl border bg-card p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div><h2 className="font-semibold">{automation.name}</h2><p className="mt-1 text-sm text-muted-foreground">{automation.events.join(', ')} · every {Math.round(automation.intervalSeconds / 60)} min</p></div>
+                    <div><h2 className="font-semibold">{automation.name}</h2><p className="mt-1 text-sm text-muted-foreground">{automation.events.join(', ')}, every {Math.round(automation.intervalSeconds / 60)} min</p></div>
                     <span className="rounded-full border px-2 py-1 text-xs">{automation.enabled ? 'Enabled' : 'Paused'}</span>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
@@ -189,7 +189,7 @@ function AutomationEditor({ automation, onSaved }: { automation?: AutomationDefi
   }
   return <PageFrame title={automation ? 'Edit automation' : 'New automation'} subtitle="Define a bounded GitHub trigger and the ordinary cezar task it launches.">
     <form className="grid max-w-3xl gap-6" onSubmit={submit}>
-      <fieldset className="grid gap-4 rounded-xl border p-5"><legend className="px-2 font-semibold">When GitHub changes</legend><div className="grid gap-2"><Label htmlFor="automation-name">Name</Label><Input id="automation-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="flex items-center gap-2 text-sm"><ClockIcon className="size-4" />New issue · every 5 minutes · last 7 days · maximum 25 records</div></fieldset>
+      <fieldset className="grid gap-4 rounded-xl border p-5"><legend className="px-2 font-semibold">When GitHub changes</legend><div className="grid gap-2"><Label htmlFor="automation-name">Name</Label><Input id="automation-name" value={name} onChange={(event) => setName(event.target.value)} required /></div><div className="flex items-center gap-2 text-sm"><ClockIcon className="size-4" />New issue, every 5 minutes, last 7 days, maximum 25 records</div></fieldset>
       <fieldset className="grid gap-4 rounded-xl border p-5"><legend className="px-2 font-semibold">What task to run</legend><div className="grid gap-2"><Label htmlFor="automation-prompt">Prompt</Label><Textarea id="automation-prompt" value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={8} required /></div><p className="text-xs text-muted-foreground">Placeholders include {'{{github.number}}'}, {'{{github.title}}'}, {'{{github.url}}'}, and {'{{github.labels}}'}. GitHub content is appended as untrusted context.</p></fieldset>
       <fieldset className="rounded-xl border p-5"><legend className="px-2 font-semibold">Review and enable</legend><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enable} onChange={(event) => setEnable(event.target.checked)} />Save and enable from a current-time baseline (existing matches will not launch)</label></fieldset>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

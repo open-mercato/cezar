@@ -63,15 +63,16 @@ afterAll(() => {
 
 describe('the GitHub tab against the live dry-run server', () => {
   it('the nav gates on the live forge payload — item present iff the driver is available', () => {
+    // The GitHub view rides the project's tab BAND now (sidebar redesign).
     browser.goto(`${baseUrl}${scoped('/')}`)
-    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"]') !== null`)
     if (forgeAvailable) {
-      // The item waits on the health answer — poll rather than sample.
-      browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
+      // The tab waits on the health answer — poll rather than sample.
+      browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"] a[href="${scoped('/github')}"]') !== null`)
     } else {
-      // Health has answered (other chips render from it) and still no GitHub item.
+      // Health has answered (other chips render from it) and still no GitHub tab.
       browser.waitForFunction(`document.querySelector('[data-slot="version-chip"]') !== null`)
-      expect(browser.count(`nav a[href="${scoped('/github')}"]`)).toBe(0)
+      expect(browser.count(`[data-slot="project-tabs"] a[href="${scoped('/github')}"]`)).toBe(0)
     }
   })
 
@@ -89,8 +90,8 @@ describe('the GitHub tab against the live dry-run server', () => {
       `document.querySelectorAll('[data-slot="gh-row"]').length === ${gh.issues.length}`,
     )
 
-    expect(browser.text('[data-slot="gh-tabs"]')).toContain(`Issues · ${gh.issues.length}`)
-    expect(browser.text('[data-slot="gh-tabs"]')).toContain(`Pull requests · ${gh.prs.length}`)
+    expect(browser.text('[data-slot="gh-tabs"]')).toContain(`Issues (${gh.issues.length}`)
+    expect(browser.text('[data-slot="gh-tabs"]')).toContain(`Pull requests (${gh.prs.length}`)
     if (gh.repo) expect(browser.text('[data-slot="gh-repo"]')).toBe(gh.repo)
 
     // The PR tab is a URL of its own.
@@ -102,7 +103,7 @@ describe('the GitHub tab against the live dry-run server', () => {
 
     // Health answers after the github payload on this box — settle the forge-gated nav item
     // (an assertion of the gate on the tab's own page, and an honest screenshot).
-    browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"] a[href="${scoped('/github')}"]') !== null`)
     browser.screenshot(`${artifactsDir}/github-desktop.png`)
   })
 
@@ -147,8 +148,8 @@ describe('the GitHub tab against the live dry-run server', () => {
       `document.querySelectorAll('[data-slot="gh-workflow-option"]').length === 1`,
     )
 
-    // Same settle rule as above: the screenshot must show the whole truth, nav item included.
-    browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
+    // Same settle rule as above: the screenshot must show the whole truth, band tab included.
+    browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"] a[href="${scoped('/github')}"]') !== null`)
     browser.screenshot(`${artifactsDir}/github-detail.png`)
     browser.press('Escape')
   })
@@ -183,7 +184,8 @@ describe('the GitHub tab against the live dry-run server', () => {
         `document.querySelector('[data-slot="gh-commit-group"] button').getAttribute('aria-expanded')`,
       ),
     ).toBe('false')
-    browser.click('[data-slot="gh-commit-group"] button')
+    // A DOM click: the group sits deep in a scrolled thread where a coordinate click can miss.
+    browser.evaluate(`document.querySelector('[data-slot="gh-commit-group"] button').click()`)
 
     // Expanded: commit rows, each keeping its own message and CI glyph.
     browser.waitForFunction(
@@ -202,7 +204,7 @@ describe('the GitHub tab against the live dry-run server', () => {
       `document.querySelector('[data-slot="gh-event-row"][data-kind="labeled"]') !== null`,
     )
 
-    browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"] a[href="${scoped('/github')}"]') !== null`)
     browser.screenshot(`${artifactsDir}/github-thread-timeline.png`)
   })
 

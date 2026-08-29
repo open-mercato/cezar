@@ -417,7 +417,7 @@ describe('statuses survive a reload', () => {
     renderChip()
 
     await waitFor(() => expect(chip().getAttribute('data-status')).toBe('queued-for-merge'))
-    expect(chip().className).toContain('text-violet')
+    expect(chip().className).toContain('text-muted-foreground')
     expect(chip().getAttribute('aria-label')).toBe('Open the pull request for Add checkout')
   })
 })

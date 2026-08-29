@@ -13,6 +13,9 @@ export const skillSchema = z.object({
   description: z.string().optional(),
   /** Advisory hint for untouched composer run-mode choices. */
   interactive: z.literal(true).optional(),
+  /** An author-declared theme (`category:` in the frontmatter, trimmed, ≤40 chars) — what the
+   *  workflow palette groups by when a collection carries one. Absent = ungrouped. */
+  category: z.string().optional(),
   body: z.string(),
   path: z.string(),
   source: z.enum(['ai', 'cezar', 'agents', 'global', 'team']),

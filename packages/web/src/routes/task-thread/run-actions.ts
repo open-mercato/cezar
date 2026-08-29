@@ -119,6 +119,39 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
 }
 
 /**
+ * The header's ONE stateful CTA (design review): a fixed slot whose label, tone and action
+ * follow the run's lifecycle — the user always sees the main next step by name, instead of a
+ * generic Continue that ignores what the task is doing.
+ *
+ *   running/queued → Stop (neutral)     waiting → Reply (primary)
+ *   review → Review changes (primary)   failed → Retry (danger)
+ *   done/cancelled → Reopen (neutral)   — the session-backed ones need a session to resume.
+ */
+export type PrimaryCtaKind = 'stop' | 'reply' | 'review' | 'retry' | 'reopen'
+export interface PrimaryRunCta {
+  kind: PrimaryCtaKind
+  label: string
+  tone: 'primary' | 'neutral' | 'danger'
+}
+export function primaryRunCta(run: RunRecord): PrimaryRunCta | null {
+  const hasSession = lastSessionId(run) !== undefined
+  switch (run.status) {
+    case 'queued':
+    case 'running':
+      return { kind: 'stop', label: 'Stop', tone: 'neutral' }
+    case 'waiting':
+      return { kind: 'reply', label: 'Reply', tone: 'primary' }
+    case 'review':
+      return { kind: 'review', label: 'Review changes', tone: 'primary' }
+    case 'failed':
+      return hasSession ? { kind: 'retry', label: 'Retry', tone: 'danger' } : null
+    case 'done':
+    case 'cancelled':
+      return hasSession ? { kind: 'reopen', label: 'Reopen', tone: 'neutral' } : null
+  }
+}
+
+/**
  * The prompt behind the conflict chip's "Resolve conflicts" — the words the agent receives.
  *
  * It NAMES the pull request, and that is the load-bearing part: a task can point at several (the
@@ -141,6 +174,12 @@ export function resolveConflictsPrompt(prNumber?: number): string {
 /** The Finish button's tooltip — review-gate accept reads differently from closing a session. */
 export function finishTitle(status: RunStatus): string {
   return status === 'review' ? 'Accept the changes without a PR' : 'Close the session'
+}
+
+/** The menu label says what Finish MEANS in this state (user decision: one word for two
+ *  different acts read as one act). */
+export function finishLabel(status: RunStatus): string {
+  return status === 'review' ? 'Accept without PR' : 'Close session'
 }
 
 /**

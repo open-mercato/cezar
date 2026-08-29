@@ -198,13 +198,14 @@ export function useThreadScroll(
     if (!scroller) return
     pendingRestoreRef.current = null
     stuckRef.current = true
-    void (onJumpToLatest?.() ?? Promise.resolve()).finally(() => {
-      requestAnimationFrame(() => {
-        const current = scrollElRef.current
-        current?.scrollTo({ top: current.scrollHeight - current.clientHeight, behavior: 'smooth' })
-      })
-    })
-  }, [onJumpToLatest])
+    // Pin NOW through the machinery's own setOffset (a raw smooth scrollTo fights the anchor
+    // preservation, which re-applied the parked offset on every animation frame — the click
+    // read as dead), and reset the history window in parallel; `stuckRef` re-pins when the
+    // reset's content lands.
+    void onJumpToLatest?.()
+    toBottom()
+    requestAnimationFrame(() => toBottom())
+  }, [onJumpToLatest, toBottom])
 
   // Arrival is the route-owned pre-paint write. AppShell deliberately does not reset task
   // routes, so a destination thread never exposes an intermediate top-of-transcript frame.
@@ -488,7 +489,9 @@ export function JumpToLatestPill({ onJump }: { onJump: () => void }) {
       type="button"
       data-slot="jump-to-latest"
       onClick={onJump}
-      className="pointer-events-auto inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border bg-background px-3.5 text-xs font-medium text-muted-foreground shadow-modal hover:text-foreground"
+      // bg-card (not bg-background): the page is #f7f7fb now, so a white pill reads as floating,
+      // not blended. shadow-md gives a tight lift instead of shadow-modal's wide 48px halo.
+      className="pointer-events-auto inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border bg-card px-3.5 text-xs font-medium text-muted-foreground shadow-md hover:text-foreground"
     >
       <ArrowDownIcon aria-hidden className="size-3.5" />
       Jump to latest

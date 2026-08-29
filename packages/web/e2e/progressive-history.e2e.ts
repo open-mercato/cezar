@@ -192,7 +192,12 @@ afterAll(() => {
 describe('progressive long-session history', () => {
   it('paints the current tail and docks without requesting an earlier page', () => {
     expect(Number(browser.evaluate(cursorRequestCount))).toBe(0)
-    expect(browser.text('[data-slot="plan-dock"]')).toContain('Keep the current plan visible')
+    // The plan lives in the context-bar chip now; opening it proves the tail carried the
+    // latest snapshot without an earlier page.
+    browser.click('[data-slot="plan-chip"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-list"]') !== null`)
+    expect(browser.text('[data-slot="plan-list"]')).toContain('Keep the current plan visible')
+    browser.press('Escape')
     expect(browser.text('[data-slot="agents-dock"]')).toContain('0/1')
     expect(browser.count('[data-slot="thread-row"]')).toBeLessThan(300)
     browser.screenshot(join(artifactsDir, 'progressive-history-tail.png'), { viewport: true })

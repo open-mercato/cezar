@@ -276,7 +276,7 @@ export function HandToAgent({
               ? 'Provider authentication could not be verified.'
               : 'Connect an agent provider to run this item.'}
             <Link
-              to="/settings/agents#providers"
+              to="/settings/global/accounts#providers"
               className="font-medium text-foreground underline underline-offset-4"
             >
               Configure providers
@@ -520,7 +520,7 @@ function SkillsPicker({
             className={cn(chipClass, selected.length > 0 && 'border-foreground/60 font-semibold text-foreground')}
           >
             <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
-            skills{selected.length > 0 ? ` · ${selected.length}` : ''}
+            skills{selected.length > 0 ? ` (${selected.length})` : ''}
             <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
           </button>
         </PopoverTrigger>

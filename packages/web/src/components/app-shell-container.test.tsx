@@ -1,5 +1,5 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -122,6 +122,14 @@ function run(overrides: Partial<RunRecord> = {}): RunRecord {
   }
 }
 
+/** A one-project registry plus an empty index — enough for the active group (and its nav) to mount. */
+const REGISTRY_STUBS = {
+  '/api/v1/projects': { projects: [PROJECT], bootProject: 'cezar', projectsDir: '/home/me/cezar/projects' },
+  '/api/v1/workspace/ui-state': {},
+  '/api/v1/runs': [],
+  '/api/v1/workspace/runs-index': { runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} },
+}
+
 const repoChip = () => document.querySelector('[data-slot="repo-chip"]')
 const versionChip = () => document.querySelector('[data-slot="version-chip"]')
 const navBadge = () => document.querySelector('[data-slot="nav-badge"]')
@@ -161,6 +169,13 @@ describe('skillsUpdateMarkerOf', () => {
   })
 })
 
+/** The bar chip's menu (Radix opens on pointerdown) — where the project's views live now. */
+async function openProjectMenu(): Promise<HTMLElement> {
+  await waitFor(() => expect(document.querySelector('[data-slot="project-switcher"]')).not.toBeNull())
+  fireEvent.pointerDown(document.querySelector('[data-slot="project-switcher"]') as HTMLElement, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+  return await screen.findByRole('menu')
+}
+
 describe('sidebar wiring', () => {
   it('renders the repo and version chips from /api/v1/health', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
@@ -168,17 +183,87 @@ describe('sidebar wiring', () => {
 
     await waitFor(() => expect(repoChip()).not.toBeNull())
     // Basename of the root, then the branch — not the whole path.
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
+    expect(repoChip()?.textContent).toBe('cezar')
     expect(versionChip()?.textContent).toBe('v0.1.3')
   })
 
-  it('renders the inbox badge from /api/v1/todos', async () => {
-    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': TODOS })
+  it('renders the inbox badge from /api/v1/todos — on the project tab band\u2019s Inbox tab', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': TODOS, ...REGISTRY_STUBS })
     renderShell()
 
     await waitFor(() => expect(navBadge()).not.toBeNull())
     expect(navBadge()?.textContent).toBe('2')
-    expect(screen.getByRole('link', { name: /Inbox/ })).toBeTruthy()
+    expect(navBadge()?.closest('[data-slot="project-tabs"]')).not.toBeNull()
+  })
+
+  it('lists THIS project\u2019s views in the chip\u2019s menu — Tasks first, the gated views, Settings — lit from the URL', async () => {
+    // User decision: the bar's project menu is the project's, not a list of other projects
+    // (the sidebar's Projects section is that). HEALTH has no forge → no GitHub row.
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    // A task thread: no tab band there, so the chip carries the menu.
+    renderShell('/tasks/abc')
+
+    await waitFor(() => expect(repoChip()).not.toBeNull())
+    const menu = await openProjectMenu()
+    await waitFor(() => expect(menu.querySelectorAll('[data-nav-to]')).toHaveLength(5))
+    expect([...menu.querySelectorAll('[data-nav-to]')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Workflows', 'Settings'])
+    expect(menu.querySelector('[data-slot="project-open"]')?.getAttribute('href')).toBe('/')
+    expect(within(menu).getByRole('menuitem', { current: 'page' }).textContent).toBe('Tasks')
+    fireEvent.keyDown(menu, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+    expect(within(document.querySelector('[data-slot="sidebar"]') as HTMLElement).queryByRole('link', { name: 'Git' })).toBeNull()
+  })
+
+  it('on a project view the band lists the views and the chip is just the name — no menu', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    renderShell('/git')
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="project-tabs"] a')).toHaveLength(4))
+    const band = document.querySelector('[data-slot="project-tabs"]') as HTMLElement
+    expect([...band.querySelectorAll('a')].map((a) => a.textContent)).toEqual(['Tasks', 'Inbox', 'Git', 'Workflows'])
+    expect(within(band).getByRole('link', { current: 'page' }).textContent).toBe('Git')
+    expect(repoChip()?.textContent).toBe('cezar')
+    expect(document.querySelector('[data-slot="project-switcher"]')).toBeNull()
+    // Skills is a LIBRARY: a sidebar footer row above Settings, never a project tab.
+    const foot = document.querySelector('[data-slot="sidebar-footer"]') as HTMLElement
+    expect(within(foot).getByRole('link', { name: 'Skills' }).getAttribute('href')).toBe('/skills')
+  })
+
+  it('shows the project tab band on project views only — not inside a task thread', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    renderShell('/tasks/abc')
+    await waitFor(() => expect(repoChip()).not.toBeNull())
+    expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
+  })
+
+  it('names workspace settings on the bar, with no project chip', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    renderShell('/settings/global')
+    await waitFor(() => expect(document.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('Workspace settings'))
+    expect(document.querySelector('[data-slot="project-switcher"]')).toBeNull()
+    expect(repoChip()).toBeNull()
+  })
+
+  it('treats Skills as a workspace library: the bar says Skills, no project chip, no band', async () => {
+    serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [], ...REGISTRY_STUBS })
+    renderShell('/skills')
+    await waitFor(() => expect(document.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('Skills'))
+    expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
+    expect(repoChip()).toBeNull()
+  })
+
+  it('names the workspace-wide Tasks page on the bar and shows no project band there', async () => {
+    // `/tasks` is every project's work at once — nobody's project, so no project chip, no tabs;
+    // the bar says "All projects" so the page cannot read as one project holding them all.
+    serve({
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      ...REGISTRY_STUBS,
+      '/api/v1/projects': { projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop' }], bootProject: 'cezar', projectsDir: '/x' },
+    })
+    renderShell('/tasks')
+    await waitFor(() => expect(document.querySelector('[data-slot="project-bar-crumb"]')?.textContent).toBe('All projects'))
+    expect(document.querySelector('[data-slot="project-tabs"]')).toBeNull()
+    expect(repoChip()).toBeNull()
   })
 
   // #471 — the global inbox is opt-in; the shell must not offer what the server cannot fill.
@@ -186,21 +271,25 @@ describe('sidebar wiring', () => {
     serve({
       '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
+      ...REGISTRY_STUBS,
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.queryByRole('link', { name: /Inbox/ })).toBeNull()
+    await waitFor(() => expect(document.querySelector('[data-slot="project-tabs"]')).not.toBeNull())
+    const band = document.querySelector('[data-slot="project-tabs"]') as HTMLElement
+    expect(within(band).queryByRole('link', { name: /Inbox/ })).toBeNull()
     expect(navBadge()).toBeNull()
-    // Every other view is untouched — the gate owns exactly one item.
-    expect(screen.getByRole('link', { name: /Tasks/ })).toBeTruthy()
-    expect(screen.getByRole('link', { name: /Settings/ })).toBeTruthy()
+    // Every other view is untouched — the gate owns exactly one item. (Tasks is no longer a
+    // nav link; the quick-list's TASKS rows are that entry.)
+    expect(within(band).getByRole('link', { name: /Git/ })).toBeTruthy()
+    expect(screen.getAllByRole('link', { name: /Settings/ }).length).toBeGreaterThan(0)
   })
 
   it('never asks for todos on a server with the inbox off', async () => {
     serve({
       '/api/v1/health': { ...HEALTH, capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false } },
       '/api/v1/todos': TODOS,
+      ...REGISTRY_STUBS,
     })
     renderShell()
 
@@ -217,24 +306,27 @@ describe('sidebar wiring', () => {
   const WITH_FORGE = { ...HEALTH, forge: { kind: 'github' as const, available: true } }
 
   it('drops the Automations nav item when the server has automations off', async () => {
-    serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [] })
+    serve({ '/api/v1/health': WITH_FORGE, '/api/v1/todos': [], ...REGISTRY_STUBS })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.queryByRole('link', { name: /Automations/ })).toBeNull()
+    // GitHub arrives with health (the forge gate) — settle on it, not on the first paint.
+    await waitFor(() =>
+      expect(within(document.querySelector('[data-slot="project-tabs"]') as HTMLElement).getByRole('link', { name: /GitHub/ })).toBeTruthy(),
+    )
+    const band = document.querySelector('[data-slot="project-tabs"]') as HTMLElement
     // The gate owns exactly one item — GitHub is forge-gated, not automations-gated.
-    expect(screen.getByRole('link', { name: /GitHub/ })).toBeTruthy()
+    expect(within(band).queryByRole('link', { name: /Automations/ })).toBeNull()
   })
 
   it('shows the Automations nav item once health reports the capability', async () => {
     serve({
       '/api/v1/health': { ...WITH_FORGE, capabilities: { ...HEALTH.capabilities, automations: true } },
       '/api/v1/todos': [],
+      ...REGISTRY_STUBS,
     })
     renderShell()
 
-    await waitFor(() => expect(versionChip()).not.toBeNull())
-    expect(screen.getByRole('link', { name: /Automations/ })).toBeTruthy()
+    await waitFor(() => expect(within(document.querySelector('[data-slot="project-tabs"]') as HTMLElement).getByRole('link', { name: /Automations/ })).toBeTruthy())
   })
 
   it('renders no badge for an empty inbox', async () => {
@@ -291,7 +383,7 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="project-groups"]')).toBeNull()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
     expect(document.querySelector('[data-slot="task-quick-list"]')).not.toBeNull()
-    expect(repoChip()?.textContent).toBe('cezar / feat/cockpit')
+    expect(repoChip()?.textContent).toBe('cezar')
   })
 
   it('hides add-project chrome when health reports single-project mode', async () => {
@@ -308,11 +400,13 @@ describe('sidebar wiring', () => {
 
     await waitFor(() => expect(versionChip()).not.toBeNull())
     expect(screen.queryByRole('button', { name: 'Add project' })).toBeNull()
-    expect(screen.getByRole('link', { name: /New task/ })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
   })
 
-  it('renders one collapsible group per project once the workspace has two', async () => {
+  it('keeps the flat active-project sidebar with two projects — no groups, no second Tasks row', async () => {
+    // User decision (25-repo review): the sidebar never swaps to per-project groups — at 20+
+    // registered repos that column buried the active project's own nav in look-alike rows.
+    // Other projects are the topbar switcher's job; the flat shell only gains the global door.
     serve({
       '/api/v1/health': HEALTH,
       '/api/v1/todos': [],
@@ -326,14 +420,98 @@ describe('sidebar wiring', () => {
     })
     renderShell()
 
-    await waitFor(() =>
-      expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(2),
+    await waitFor(() => expect(repoChip()).not.toBeNull())
+    // No groups, ever — the flat nav and the shared quick-list stay; the workspace-wide list is
+    // a scope on the Tasks page, not a row of its own (user decision).
+    expect(document.querySelectorAll('[data-slot="project-group"]')).toHaveLength(0)
+    expect(document.querySelector('[data-slot="all-tasks-link"]')).toBeNull()
+    expect(screen.getByRole('navigation', { name: 'Main' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="task-quick-list"]')).not.toBeNull()
+    // The ACTIVE project still names itself on the project bar above the content.
+    expect(repoChip()?.closest('[data-slot="project-bar"]')).not.toBeNull()
+    expect(repoChip()?.textContent).toBe('cezar')
+  })
+
+  it('lists every project with tasks as a group, by last use, each with its own New-task +', async () => {
+    // User decision (Claude Code reference): the sidebar's top is projects, and tasks inside
+    // them — the active project first, then by `lastOpenedAt`; a project with no tasks stays out
+    // unless it is the active one. One index feeds every group.
+    const indexRun = {
+      projectId: 'shop',
+      id: 'r-shop-1',
+      title: 'Fix the checkout',
+      status: 'waiting' as const,
+      createdAt: '2026-07-20T11:00:00.000Z',
+      archived: false,
+      workflow: 'default',
+    }
+    serve({
+      '/api/v1/health': HEALTH,
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
+        projects: [
+          PROJECT,
+          { ...PROJECT, id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' },
+          { ...PROJECT, id: 'idle', name: 'idle', lastOpenedAt: '2026-07-21T00:00:00.000Z' },
+        ],
+        bootProject: 'cezar',
+        projectsDir: '/home/me/cezar/projects',
+      },
+      '/api/v1/workspace/ui-state': {},
+      '/api/v1/runs': [],
+      '/api/v1/workspace/runs-index': {
+        runs: [
+          indexRun,
+          { ...indexRun, id: 'r-shop-2', title: 'Old news', status: 'done' as const },
+          // Archived stays off the sidebar, as it always has.
+          { ...indexRun, id: 'r-shop-3', title: 'Buried', archived: true },
+          // A ×2 variant group (spec 010) folds into one tile with its compare link.
+          { ...indexRun, id: 'v-a', title: 'Pick a runner', status: 'done' as const, groupId: 'g1', variant: 'A' },
+          { ...indexRun, id: 'v-b', title: 'Pick a runner', status: 'done' as const, groupId: 'g1', variant: 'B' },
+        ],
+        perProjectLimit: 200,
+        truncated: [],
+        referenceStatuses: {},
+      },
+    })
+    renderShell()
+
+    await waitFor(
+      () => expect(document.querySelectorAll('[data-slot="project-task-group"]').length).toBeGreaterThan(0),
+      { timeout: 3000 },
     )
-    // The flat nav and the shared quick-list step aside — each group brings its own.
-    expect(screen.queryByRole('navigation', { name: 'Main' })).toBeNull()
-    expect(document.querySelector('[data-slot="task-quick-list"]')).toBeNull()
-    // …and so does the repo chip, which the boot project's own group header now carries.
-    expect(repoChip()).toBeNull()
+    const groups = [...document.querySelectorAll('[data-slot="project-task-group"]')]
+    // Every registered project, the active (boot) one first, then by last use — with or without tasks.
+    expect(groups.map((g) => g.getAttribute('data-project-id'))).toEqual(['cezar', 'idle', 'shop'])
+    expect(groups[0]?.querySelectorAll('[data-slot="task-row"]')).toHaveLength(0)
+    // Needs-you before finished, within the shop group.
+    // The index lands a beat after the registry — settle on the rows, not the groups.
+    await waitFor(() => expect(groups[2]?.querySelectorAll('[data-slot="task-row"]')).toHaveLength(2), { timeout: 3000 })
+    const rows = [...(groups[2]?.querySelectorAll('[data-slot="task-row"]') ?? [])]
+    expect(rows.map((r) => r.getAttribute('data-run-id'))).toEqual(['r-shop-1', 'r-shop-2'])
+    // The variant pair is one tile, not two rows, and the compare view stays one click away.
+    const tile = groups[2]?.querySelector('[data-slot="group-tile"][data-group-id="g1"]')
+    expect(tile?.textContent).toContain('×2')
+    expect(screen.getByRole('link', { name: 'Compare variants of Pick a runner' }).getAttribute('href')).toBe('/p/shop/compare/g1')
+    expect(rows[0]?.querySelector('a')?.getAttribute('href')).toBe('/p/shop/tasks/r-shop-1')
+    expect(rows[0]?.querySelector('[data-slot="status-mark"]')?.getAttribute('data-tone')).toBe('pending')
+    // Each group starts its own task in its own project, and names itself as the door to its table.
+    expect(screen.getByRole('link', { name: 'New task in shop' }).getAttribute('href')).toBe('/p/shop/new')
+    expect(screen.getByRole('link', { name: 'New task in cezar' })).toBeTruthy()
+    expect(groups[2]?.querySelector('[data-slot="project-row"]')?.getAttribute('href')).toBe('/p/shop/')
+    // No nav Tasks row any more; the nav's last row is the Projects MENU (the switcher's list,
+    // add, manage), not a page.
+    const nav = screen.getByRole('navigation', { name: 'Main' })
+    expect(within(nav).queryByRole('link', { name: 'Tasks' })).toBeNull()
+    const section = nav.querySelector('[data-slot="projects-section"]') as HTMLElement
+    expect([...section.querySelectorAll('[data-slot="project-row"]')].map((r) => r.getAttribute('data-project-id'))).toEqual(['cezar', 'idle', 'shop'])
+    expect(within(section).getByRole('link', { name: 'shop' }).getAttribute('href')).toBe('/p/shop/')
+    expect(within(section).queryByRole('link', { name: 'Manage projects' })).toBeNull()
+    expect(within(section).getByRole('button', { name: 'Clone from GitHub' })).toBeTruthy()
+    expect(within(section).getByRole('button', { name: 'Add local folder' })).toBeTruthy()
+    // No sidebar search (user decision): the PROJECTS heading is the door to the registry.
+    expect(within(section).queryByRole('button', { name: 'Search projects' })).toBeNull()
+    expect(within(section).getByRole('link', { name: 'Projects' }).getAttribute('href')).toBe('/settings/global/projects')
   })
 
   it('shows the version chip even outside a git repo', async () => {
@@ -450,14 +628,14 @@ describe('document title wiring', () => {
     })
     renderShell('/p/shop/git')
 
-    await waitFor(() => expect(document.title).toBe('Storefront — Git · cezar'))
+    await waitFor(() => expect(document.title).toBe('Storefront / Git (cezar)'))
   })
 
   it('falls back to the boot repository name when the registry is unavailable', async () => {
     serve({ '/api/v1/health': HEALTH_WITH_BOOT, '/api/v1/todos': [], '/api/v1/runs': [] })
     renderShell('/p/cezar/')
 
-    await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar / Tasks (cezar)'))
   })
 
   it('keeps global settings and a no-repo task route free of invented project context', async () => {
@@ -469,7 +647,7 @@ describe('document title wiring', () => {
     })
     const global = renderShell('/settings/global/projects')
 
-    await waitFor(() => expect(document.title).toBe('Settings · cezar'))
+    await waitFor(() => expect(document.title).toBe('Settings (cezar)'))
     global.unmount()
 
     renderShell('/tasks/missing')
@@ -485,9 +663,10 @@ describe('document title wiring', () => {
     })
     renderShell('/p/cezar/')
 
-    await waitFor(() => expect(document.title).toBe('cezar — Tasks · cezar'))
-    fireEvent.click(screen.getByRole('link', { name: 'Git' }))
-    await waitFor(() => expect(document.title).toBe('cezar — Git · cezar'))
+    await waitFor(() => expect(document.title).toBe('cezar / Tasks (cezar)'))
+    await waitFor(() => expect(document.querySelector('[data-slot="project-tabs"]')).not.toBeNull())
+    fireEvent.click(within(document.querySelector('[data-slot="project-tabs"]') as HTMLElement).getByRole('link', { name: 'Git' }))
+    await waitFor(() => expect(document.title).toBe('cezar / Git (cezar)'))
   })
 
   it('reacts to live project and task title cache updates', async () => {
@@ -505,7 +684,7 @@ describe('document title wiring', () => {
     const { client } = renderShell('/p/shop/tasks/run-1')
 
     await waitFor(() =>
-      expect(document.title).toBe('Storefront — Implement page titles · cezar'),
+      expect(document.title).toBe('Storefront / Implement page titles (cezar)'),
     )
 
     act(() => {
@@ -519,7 +698,7 @@ describe('document title wiring', () => {
     })
 
     await waitFor(() =>
-      expect(document.title).toBe('Renamed storefront — Rename browser titles · cezar'),
+      expect(document.title).toBe('Renamed storefront / Rename browser titles (cezar)'),
     )
   })
 })

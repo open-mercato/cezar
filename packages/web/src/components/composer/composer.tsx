@@ -64,6 +64,9 @@ export interface ComposerProps {
   footerStart?: ReactNode
   /** Rendered between Dictation and the send button — the /new mode segment + kbd hint. */
   footerEnd?: ReactNode
+  /** The /new hero's roomier draft field (user decision: more space for the text); replies
+   *  keep the compact two-row start. */
+  tall?: boolean
   /** The send button's accessible name. */
   sendAriaLabel?: string
   disabled?: boolean
@@ -112,11 +115,12 @@ export function Composer({
   autoFocus = false,
   footerStart,
   footerEnd,
+  tall = false,
   sendAriaLabel = 'Send',
   disabled = false,
   disabledReason = 'Session closed — Continue to reopen.',
   allowEmptySubmit = false,
-  placeholder = 'Reply — / for skills, @ for files…',
+  placeholder = 'Reply (/ for skills, @ for files)…',
   ariaLabel = 'Reply to the agent',
   autocompleteSkills = true,
   quickReplies = false,
@@ -457,13 +461,18 @@ export function Composer({
 
           <textarea
             ref={textareaRef}
-            rows={2}
+            rows={tall ? 5 : 2}
             value={text}
             disabled={disabled}
             aria-label={ariaLabel}
             placeholder={disabled ? disabledReason : placeholder}
             // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
-            className="block max-h-[220px] min-h-[54px] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
+            // One fixed size for the writing surface — placeholder inherits it, and there's no
+            // responsive 16→14 shift — so what you read and what you type never change size.
+            className={cn(
+              'block w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[15px] leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed',
+              tall ? 'max-h-[320px] min-h-[128px]' : 'max-h-[220px] min-h-[54px]',
+            )}
             onChange={(event) => {
               setText(event.target.value)
               syncTrigger()
@@ -501,11 +510,11 @@ export function Composer({
                     disabled={disabled}
                     aria-label="Start dictation"
                     title="Dictation"
-                    className="h-8 gap-1.5 px-2.5 text-xs font-medium text-muted-foreground"
+                    // Icon-only (user decision: the row carried too much) — the title says it.
+                    className="size-8 px-0 text-muted-foreground"
                     onClick={dictation.start}
                   >
-                    <MicIcon aria-hidden="true" className="size-3.5" />
-                    Dictation
+                    <MicIcon aria-hidden="true" className="size-4" />
                   </Button>
                 ) : null}
                 {footerEnd ? (
@@ -614,7 +623,7 @@ function AttachButton({
         className="size-8 text-muted-foreground"
         onClick={() => inputRef.current?.click()}
       >
-        <PaperclipIcon aria-hidden="true" className="size-[15px]" />
+        <PaperclipIcon aria-hidden="true" className="size-4" />
       </Button>
       <input
         ref={inputRef}
@@ -668,7 +677,7 @@ function DictationBar({
       <span
         data-slot="dictation-transcript"
         aria-live="polite"
-        className="min-w-0 flex-1 truncate text-sm text-foreground"
+        className="min-w-0 flex-1 truncate text-[13px] text-foreground"
       >
         {transcript === '' ? (
           <span className="text-muted-foreground">Listening…</span>

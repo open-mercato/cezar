@@ -43,7 +43,7 @@ import { SettingsField } from './settings-field'
  *  dash rather than `Invalid Date`. */
 function fullDate(iso: string): string {
   const at = new Date(iso)
-  if (Number.isNaN(at.getTime())) return '—'
+  if (Number.isNaN(at.getTime())) return ''
   return at.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
@@ -149,7 +149,7 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
         <dd className="text-foreground">
           {fullDate(project.addedAt)}
           <span className="text-soft-foreground">
-            {project.source === 'checkout' ? ' · cloned from GitHub' : ' · opened locally'}
+            {project.source === 'checkout' ? ' (cloned from GitHub)' : ' (opened locally)'}
           </span>
         </dd>
 

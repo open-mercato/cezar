@@ -197,7 +197,7 @@ describe('pageTitleContext', () => {
 const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
   ['/', 'tasks', 'Tasks'],
   // The real full-screen composer (R4 Step 1.1): the hero title is the page heading.
-  ['/new', 'new', 'What should the agent work on?'],
+  ['/new', 'new', 'What are we conquering today?'],
   // The real thread view (Step R3.1): with fetch never answering it is honestly loading.
   ['/tasks/abc123', 'task-thread', 'Loading task…'],
   // The real R5 tab routes: with fetch never answering they are honestly loading.
@@ -225,7 +225,7 @@ const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
   ['/skills', 'skills', 'Skills'],
   // Project settings only (step 3.5) — appearance/notifications/resources/projects moved to
   // the unscoped `/settings/global/*` area, covered in its own describe below.
-  ['/settings', 'settings', 'Settings'],
+  ['/settings', 'settings', 'Project settings'],
   ['/settings/agents', 'settings-agents', 'Agents'],
   ['/settings/agent-config', 'settings-agent-config', 'Agent config'],
   ['/settings/worktrees', 'settings-worktrees', 'Worktrees'],
@@ -332,7 +332,7 @@ describe('scoped route map (/p/:projectId)', () => {
  */
 describe('the global settings area (/settings/global)', () => {
   const GLOBAL_CASES: Array<[string, string, string]> = [
-    ['/settings/global', 'settings-global', 'Global settings'],
+    ['/settings/global', 'settings-global', 'Workspace settings'],
     ['/settings/global/appearance', 'settings-global-appearance', 'Appearance'],
     ['/settings/global/notifications', 'settings-global-notifications', 'Notifications'],
     ['/settings/global/resources', 'settings-global-resources', 'Resources'],

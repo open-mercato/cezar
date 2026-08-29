@@ -2,6 +2,7 @@ import {
   BotIcon,
   BoxesIcon,
   BracesIcon,
+  ChevronDownIcon,
   CodeIcon,
   CpuIcon,
   DiamondIcon,
@@ -112,6 +113,8 @@ export function OpenInMenu({
   /** Rendered BELOW it, separated — the run header's "Copy worktree path". */
   trailing,
   slot,
+  /** Icon-only trigger (the app bar's compact grammar): the label becomes the aria-label. */
+  iconOnly = false,
 }: {
   choices: OpenInChoice[]
   onPick: (targetId: string) => void
@@ -122,13 +125,28 @@ export function OpenInMenu({
   leading?: ReactNode
   trailing?: ReactNode
   slot?: string
+  iconOnly?: boolean
 }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant={triggerVariant} size="sm" title={title} disabled={disabled} data-slot={slot}>
+        {/* A chevron, not an ellipsis in the label: "Open in…" read as truncated text, while a
+            chevron says "menu" without pretending the name was cut off. */}
+        <Button
+          variant={triggerVariant}
+          size={iconOnly ? 'icon-sm' : 'sm'}
+          title={title ?? (iconOnly ? label : undefined)}
+          aria-label={iconOnly ? label : undefined}
+          disabled={disabled}
+          data-slot={slot}
+        >
           <ExternalLinkIcon aria-hidden="true" />
-          {label}
+          {iconOnly ? null : (
+            <>
+              {label}
+              <ChevronDownIcon aria-hidden="true" className="size-3 text-soft-foreground" />
+            </>
+          )}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

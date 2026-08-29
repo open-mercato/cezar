@@ -779,7 +779,7 @@ function TaskRow({
   return (
     <tr data-slot="global-task-row" data-run-id={run.id} data-project={run.projectId} className="hover:bg-muted">
       <td className={TD_BASE}>
-        <Pill dot={attention.tone} pulse={attention.pulse}>
+        <Pill mark={attention}>
           {attention.label}
         </Pill>
       </td>
@@ -1163,13 +1163,15 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
         cell.kind === 'none' && 'text-xs text-soft-foreground',
       )}
     >
-      {cell.text || '—'}
+      {cell.text}
     </td>
   )
 }
 
 function Dash() {
-  return <span className="text-xs text-soft-foreground">—</span>
+  // Blank, not an em dash (house style: an absent value renders as nothing) — the empty cell
+  // is the honest answer, and a column of dashes reads as data that failed to load.
+  return null
 }
 
 /** What an empty global list honestly means, given how it got empty. */

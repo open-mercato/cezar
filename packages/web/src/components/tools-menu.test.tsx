@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HealthResponse } from '@open-mercato/cezar-api-client'
 import { AppShell } from './app-shell'
 import { ThemeProvider } from './theme-provider'
-import { ToolsMenu, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
+import { ToolsMenu, conciseToolVersion, forgeNote, toolsBlocker, toolsTooltip } from './tools-menu'
 
 afterEach(cleanup)
 
@@ -95,8 +95,8 @@ function LocationProbe() {
 }
 
 const trigger = () => screen.getByRole('button', { name: /Tools/ })
-const triggerDot = () =>
-  document.querySelector('[data-slot="tools-menu-trigger"] [data-slot="status-dot"]') as HTMLElement
+const triggerWrench = () =>
+  document.querySelector('[data-slot="tools-menu-trigger"] svg') as SVGElement
 
 /** Radix opens the menu on pointerdown, not click. */
 async function openMenu(): Promise<HTMLElement> {
@@ -106,6 +106,17 @@ async function openMenu(): Promise<HTMLElement> {
 
 const rowsIn = (menu: HTMLElement) =>
   Array.from(menu.querySelectorAll<HTMLElement>('[data-slot="tool-row"]'))
+
+describe('conciseToolVersion', () => {
+  it.each([
+    ['git version 2.50.1 (Apple Git-155)', '2.50.1'],
+    ['mock (CEZ_DRY_RUN=1)', 'mock'],
+    ['2.0.44', '2.0.44'],
+    ['gh version 2.62.0 (2026-01-10)', '2.62.0'],
+  ])('%s → %s', (raw, expected) => {
+    expect(conciseToolVersion(raw)).toBe(expected)
+  })
+})
 
 describe('toolsTooltip', () => {
   it('is just the cezar version while everything is available', () => {
@@ -117,15 +128,15 @@ describe('toolsTooltip', () => {
       ...HEALTH,
       checks: [...HEALTH.checks, { name: 'opencode', available: false, hint: 'optional: install OpenCode' }],
     }
-    expect(toolsTooltip(twoDown)).toBe('cezar v0.1.3 · optional: codex, opencode not installed')
+    expect(toolsTooltip(twoDown)).toBe('cezar v0.1.3 (optional: codex, opencode not installed)')
   })
 
   it('names the default runner when it is the missing one', () => {
-    expect(toolsTooltip(DEFAULT_DOWN)).toBe('cezar v0.1.3 · default runner (codex) not found')
+    expect(toolsTooltip(DEFAULT_DOWN)).toBe('cezar v0.1.3 (default runner (codex) not found)')
   })
 
   it('says so when no agent CLI is present at all', () => {
-    expect(toolsTooltip(NO_RUNNER)).toBe('cezar v0.1.3 · no agent CLI found — install one to run tasks')
+    expect(toolsTooltip(NO_RUNNER)).toBe('cezar v0.1.3 (no agent CLI found, install one to run tasks)')
   })
 })
 
@@ -141,7 +152,7 @@ describe('toolsBlocker', () => {
 
   it('counts every runner the contract knows — a `pi`-only host can start tasks', () => {
     expect(toolsBlocker(PI_ONLY)).toBeNull()
-    expect(toolsTooltip(PI_ONLY)).toBe('cezar v0.1.3 · optional: claude, codex not installed')
+    expect(toolsTooltip(PI_ONLY)).toBe('cezar v0.1.3 (optional: claude, codex not installed)')
   })
 
   it('names `pi` when it is the configured default and the missing one', () => {
@@ -155,27 +166,31 @@ describe('ToolsMenu', () => {
     expect(document.querySelector('[data-slot="tools-menu-trigger"]')).toBeNull()
   })
 
-  it('shows a green aggregate dot when every check is available', () => {
+  it('shows a quiet wrench when every check is available', () => {
     renderMenu(ALL_GOOD)
-    expect(triggerDot().getAttribute('data-tone')).toBe('success')
+    expect(trigger().getAttribute('data-attention')).toBeNull()
+    expect(triggerWrench().getAttribute('class')).toContain('text-soft-foreground')
     expect(trigger().getAttribute('title')).toBe('cezar v0.1.3')
   })
 
-  it('stays green while the default runner works and only an optional tool is missing', () => {
+  it('keeps the wrench quiet while the default runner works and only an optional tool is missing (#884)', () => {
     renderMenu(HEALTH)
-    expect(triggerDot().getAttribute('data-tone')).toBe('success')
-    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 · optional: codex not installed')
+    expect(trigger().getAttribute('data-attention')).toBeNull()
+    expect(triggerWrench().getAttribute('class')).toContain('text-soft-foreground')
+    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 (optional: codex not installed)')
   })
 
-  it('goes amber when the default runner is the missing one', () => {
+  it('turns the wrench violet when the default runner is the missing one', () => {
     renderMenu(DEFAULT_DOWN)
-    expect(triggerDot().getAttribute('data-tone')).toBe('pending')
-    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 · default runner (codex) not found')
+    expect(trigger().getAttribute('data-attention')).toBe('true')
+    expect(triggerWrench().getAttribute('class')).toContain('text-violet')
+    expect(trigger().getAttribute('title')).toBe('cezar v0.1.3 (default runner (codex) not found)')
   })
 
-  it('goes amber when no agent CLI is installed at all', () => {
+  it('turns the wrench violet when no agent CLI is installed at all', () => {
     renderMenu(NO_RUNNER)
-    expect(triggerDot().getAttribute('data-tone')).toBe('pending')
+    expect(trigger().getAttribute('data-attention')).toBe('true')
+    expect(triggerWrench().getAttribute('class')).toContain('text-violet')
   })
 
   it('lists exactly the checks the server sent, in order — nothing invented', async () => {
@@ -201,43 +216,44 @@ describe('ToolsMenu', () => {
     expect(row.querySelector('[data-slot="tool-hint"]')).toBeNull()
   })
 
-  it('renders a missing tool with the server hint verbatim and a Set up link', async () => {
+  it('renders a missing tool as ONE line, the server hint as its tooltip, and a Set up link', async () => {
     renderMenu(HEALTH)
     const menu = await openMenu()
 
     const row = rowsIn(menu).find((el) => el.dataset.tool === 'codex') as HTMLElement
     expect(row.dataset.available).toBe('false')
     expect(row.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
-    expect(row.querySelector('[data-slot="tool-version"]')?.textContent).toBe('not found')
-    // The degradation doctrine: the server's human-written hint, word for word.
-    expect(row.querySelector('[data-slot="tool-hint"]')?.textContent).toBe(
+    // The degradation doctrine: the server's human-written hint, word for word — but as the
+    // row's tooltip, not an inline paragraph that turns the menu into a wall of text.
+    expect(row.getAttribute('title')).toBe(
       'optional: install the Codex CLI (npm i -g @openai/codex) and log in to use the Codex runner'
     )
+    expect(row.querySelector('[data-slot="tool-hint"]')).toBeNull()
     expect(row.querySelector('[data-slot="tool-setup"]')?.textContent).toBe('Set up →')
     // The whole row is the link into Settings → Agents.
-    expect(row.closest('a')?.getAttribute('href') ?? row.getAttribute('href')).toBe('/settings/agents')
+    expect(row.closest('a')?.getAttribute('href') ?? row.getAttribute('href')).toBe('/settings/global/accounts')
   })
 
-  it('navigates to /settings/agents from the Set up row and closes the menu', async () => {
+  it('navigates to workspace Agent accounts from the Set up row and closes the menu', async () => {
     renderMenu(HEALTH)
     const menu = await openMenu()
 
     fireEvent.click(rowsIn(menu).find((el) => el.dataset.tool === 'codex') as HTMLElement)
 
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
-    expect(screen.getByTestId('location').textContent).toBe('/settings/agents')
+    expect(screen.getByTestId('location').textContent).toBe('/settings/global/accounts')
   })
 
-  it('offers the cog row into Settings → Agents, and closes on navigation', async () => {
+  it('offers the cog row into Workspace settings → Agent accounts, and closes on navigation', async () => {
     renderMenu(ALL_GOOD)
     const menu = await openMenu()
 
     const settings = within(menu).getByRole('menuitem', { name: /Tool settings/ })
-    expect(settings.getAttribute('href')).toBe('/settings/agents')
+    expect(settings.getAttribute('href')).toBe('/settings/global/accounts')
 
     fireEvent.click(settings)
     await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
-    expect(screen.getByTestId('location').textContent).toBe('/settings/agents')
+    expect(screen.getByTestId('location').textContent).toBe('/settings/global/accounts')
   })
 })
 

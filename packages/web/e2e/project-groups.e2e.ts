@@ -47,7 +47,9 @@ let automationsAvailable = false
 const scoped = (projectId: string, path: string) => `/p/${projectId}${path}`
 
 /** The nav every group renders — the same health-gated list the flat shell uses. */
-function expectedNavHrefs(projectId: string): string[] {
+/** The project's tab BAND over its views (the sidebar tree carries no per-project nav rows any
+ *  more): Skills is the workspace library and Settings rides the bar, so neither is a tab. */
+function expectedBandHrefs(projectId: string): string[] {
   return [
     scoped(projectId, '/'),
     ...(followupsAvailable ? [scoped(projectId, '/inbox')] : []),
@@ -56,9 +58,7 @@ function expectedNavHrefs(projectId: string): string[] {
     // #801: the automations opt-in is workspace-wide, the forge gate is per project — the item
     // needs both.
     ...(forgeAvailable && automationsAvailable ? [scoped(projectId, '/automations')] : []),
-    scoped(projectId, '/skills'),
     scoped(projectId, '/workflows'),
-    scoped(projectId, '/settings'),
   ]
 }
 
@@ -71,9 +71,13 @@ function makeRepo(name: string): string {
 }
 
 async function workspaceUiState(): Promise<{ sidebar?: { collapsed?: Record<string, boolean> } }> {
-  return (await (await fetch(`${baseUrl}/api/v1/workspace/ui-state`)).json()) as {
-    sidebar?: { collapsed?: Record<string, boolean> }
-  }
+  // Retried once: undici's pooled keep-alive socket to the shared env can be minutes idle and
+  // answer only ECONNRESET on first reuse.
+  const read = async () =>
+    (await (await fetch(`${baseUrl}/api/v1/workspace/ui-state`)).json()) as {
+      sidebar?: { collapsed?: Record<string, boolean> }
+    }
+  return read().catch(read)
 }
 
 /** The collapse map as THIS browser holds it — the cockpit's own storage since the map stopped
@@ -148,15 +152,13 @@ function gotoGrouped(path: string): void {
     [bootProject, ALPHA.id, BETA.id]
       // `!== null`, not a bare querySelector: the CLI serializes whatever the expression
       // evaluates to, and handing it an Element back is a CDP error, not a wait.
-      .map((id) => `document.querySelector('[data-slot="project-group"][data-project="${id}"]') !== null`)
+      .map((id) => `document.querySelector('[data-slot="project-task-group"][data-project-id="${id}"]') !== null`)
       .join(' && ')
   )
 }
 
-const groupHeader = (projectId: string) =>
-  `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-header"]`
-const groupBody = (projectId: string) =>
-  `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-body"]`
+const group = (projectId: string) => `[data-slot="project-task-group"][data-project-id="${projectId}"]`
+const groupChevron = (projectId: string) => `${group(projectId)} button[aria-expanded]`
 
 /**
  * Toggle a group to `expanded` and wait until it really is.
@@ -175,7 +177,7 @@ const groupBody = (projectId: string) =>
  * a test never has to assume which state a previous test left behind.
  */
 function setGroupExpanded(projectId: string, expanded: boolean): void {
-  const header = groupHeader(projectId)
+  const header = groupChevron(projectId)
   const state = `document.querySelector('${header}')?.getAttribute('aria-expanded')`
   browser.waitForFunction(`${state} !== null && ${state} !== undefined`)
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -189,81 +191,65 @@ function setGroupExpanded(projectId: string, expanded: boolean): void {
     }
   }
   browser.waitForFunction(`${state} === '${expanded}'`)
-  browser.waitForFunction(
-    `document.querySelector('${groupBody(projectId)}') ${expanded ? '!==' : '==='} null`
-  )
 }
 
 describe('the grouped multi-project sidebar', () => {
-  it('replaces the flat nav with one group per registered project', ({ skip }) => {
+  it('lists one tree group per registered project, active first, active-only expanded', ({ skip }) => {
     if (singleProject) skip()
     gotoGrouped(scoped(bootProject, '/'))
 
-    expect(browser.isVisible('[data-slot="project-groups"]')).toBe(true)
-    // The flat shell is genuinely gone, not merely covered: its nav and its single quick-list
-    // are the two surfaces `AppShell` swaps out for the group list.
-    expect(browser.count('[data-slot="sidebar"] nav[aria-label="Main"]')).toBe(0)
-    expect(browser.count('[data-slot="task-quick-list"]')).toBe(0)
-    // …and so is the repo chip, which the first group's header now says instead.
-    expect(browser.count('[data-slot="repo-chip"]')).toBe(0)
+    // The flat shell is genuinely gone: no single quick-list, and the bar carries the identity
+    // the old repo chip used to (name only — asserted by the smoke spec).
+    expect(browser.count('[data-slot="quick-list"]')).toBe(0)
 
-    // Most-recently-opened first, and every seeded root probed `ok` — a wrong root would render
-    // the inert "folder not found" row and this would read `missing`.
+    // Most-recently-opened after the active one — the boot project leads because it is active.
     expect(
-      browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-group"]')).map(
-        (el) => [el.dataset.project, el.dataset.status]
+      browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-task-group"]')).map(
+        (el) => el.dataset.projectId
       )`)
-    ).toEqual([
-      [bootProject, 'ok'],
-      [ALPHA.id, 'ok'],
-      [BETA.id, 'ok'],
-    ])
+    ).toEqual([bootProject, ALPHA.id, BETA.id])
+    // Every seeded root probed ok — a wrong root renders the inert disabled row.
+    expect(browser.count('[data-slot="project-row"][aria-disabled]')).toBe(0)
 
-    // The project you are looking at is open, the rest are shut (the no-stored-state default).
-    expect(browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-group-header"]'))
-      .map((el) => el.getAttribute('aria-expanded'))`)).toEqual(['true', 'false', 'false'])
-    expect(browser.count('[data-slot="project-group-body"]')).toBe(1)
+    // Only ACTIVE projects start expanded (user decision): the one you are looking at, plus any
+    // with live work — these fixtures have none, so exactly the boot group is open.
+    expect(browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-task-group"]')).map(
+      (el) => el.querySelector('button[aria-expanded]').getAttribute('aria-expanded')
+    )`)).toEqual(['true', 'false', 'false'])
 
     browser.screenshot(`${artifactsDir}/sidebar-project-groups.png`)
   })
 
-  it('scopes every group nav to its own project, and lights only the active one', ({ skip }) => {
+  it('a group row is the door to its project, where the band scopes to it', ({ skip }) => {
     if (singleProject) skip()
     gotoGrouped(scoped(bootProject, '/git'))
-    setGroupExpanded(ALPHA.id, true)
-    // The GitHub row waits on the health answer — settle it before sampling any group's nav,
-    // exactly as the flat-shell specs do.
-    if (forgeAvailable) {
-      browser.waitForFunction(
-        `document.querySelector('${groupBody(ALPHA.id)} a[href="${scoped(ALPHA.id, '/github')}"]') !== null`
-      )
-    }
 
-    const hrefs = (projectId: string) =>
-      browser.evaluate(
-        `Array.from(document.querySelectorAll('${groupBody(projectId)} nav a')).map((a) => new URL(a.href).pathname)`
-      )
-
-    // The whole point of a group: it links into a project that is NOT the active one.
-    expect(hrefs(bootProject)).toEqual(expectedNavHrefs(bootProject))
-    expect(hrefs(ALPHA.id)).toEqual(expectedNavHrefs(ALPHA.id))
-
-    // `/git` is a flat, project-agnostic route, so exactly one Git row may claim the URL — the
-    // one in the scoped group. Alpha's Git link points elsewhere and must stay unmarked.
+    // The active project's band claims exactly one tab for the open URL.
+    browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"]') !== null`)
     expect(
-      browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-groups"] a[aria-current="page"]'))
+      browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-tabs"] a[aria-current="page"]'))
         .map((a) => new URL(a.href).pathname)`)
     ).toEqual([scoped(bootProject, '/git')])
 
-    // Each group's door into its own tasks pane.
+    // Clicking another project's row lands in THAT project, and the band re-scopes to it —
+    // the per-group nav rows died with the grouped sidebar (user decision: the tree holds
+    // tasks; the views ride the band).
+    browser.click(`${group(ALPHA.id)} [data-slot="project-row"]`)
+    browser.waitForFunction(`location.pathname === '${scoped(ALPHA.id, '/')}'`)
+    browser.waitForFunction(`document.querySelector('[data-slot="project-tabs"] a[href="${scoped(ALPHA.id, '/git')}"]') !== null`)
     expect(
       browser.evaluate(
-        `new URL(document.querySelector('${groupBody(ALPHA.id)} [data-slot="project-group-more"]').href).pathname`
+        `Array.from(document.querySelectorAll('[data-slot="project-tabs"] a')).map((a) => new URL(a.href).pathname)`
       )
-    ).toBe(scoped(ALPHA.id, '/'))
+    ).toEqual(expectedBandHrefs(ALPHA.id))
+
+    // …and each row's + starts a task in its own project.
+    expect(
+      browser.evaluate(`new URL(document.querySelector('${group(BETA.id)} [data-slot="group-new-task"]').href).pathname`)
+    ).toBe(scoped(BETA.id, '/new'))
   })
 
-  it('persists a collapse in THIS browser, so a reload keeps it and the workspace file does not', async ({
+  it('a collapse is session state: the active-project default wins again on reload', async ({
     skip,
   }) => {
     if (singleProject) skip()
@@ -272,26 +258,18 @@ describe('the grouped multi-project sidebar', () => {
     const workspaceSidebar = JSON.stringify((await workspaceUiState()).sidebar ?? null)
     gotoGrouped(scoped(bootProject, '/'))
 
-    // Shut the active group — the one case the default would re-open on its own, so a reload
-    // that still finds it shut can only mean the state was stored and read back.
+    // Shut the active group; the tree obeys the gesture immediately.
     setGroupExpanded(bootProject, false)
 
-    // Stored locally and synchronously: there is no debounced PUT to wait on any more, so the
-    // value is already there when the chevron has turned.
-    expect(storedCollapse()[bootProject]).toBe(true)
-
+    // Nothing is stored (user decision: expansion follows the active/live rule, not a saved
+    // map) — a reload re-opens the active project by that rule.
+    expect(browser.evaluate(`localStorage.getItem('cez-sidebar-collapsed')`)).toBe(null)
     gotoGrouped(scoped(bootProject, '/'))
-    expect(browser.count(groupBody(bootProject))).toBe(0)
-    expect(
-      browser.evaluate(`document.querySelector('${groupHeader(bootProject)}').getAttribute('aria-expanded')`)
-    ).toBe('false')
+    browser.waitForFunction(
+      `document.querySelector('${groupChevron(bootProject)}').getAttribute('aria-expanded') === 'true'`
+    )
 
-    // And back: the same gesture re-opens it, so the stored `true` is a toggle and not a trap.
-    setGroupExpanded(bootProject, true)
-    expect(storedCollapse()[bootProject]).toBe(false)
-
-    // The whole point of the move: a second cockpit — a phone, another window — keeps its own
-    // answer, which it cannot do if either toggle reached the shared workspace file.
+    // …and neither toggle reached the shared workspace file.
     expect(JSON.stringify((await workspaceUiState()).sidebar ?? null)).toBe(workspaceSidebar)
   })
 })
@@ -301,19 +279,17 @@ describe('the constrained single-project workspace', () => {
     if (!singleProject) skip()
 
     browser.goto(baseUrl + scoped(bootProject, '/'))
-    browser.waitForFunction(
-      `document.querySelector('[data-slot="sidebar"] nav[aria-label="Main"]') !== null`,
-    )
-    // Health resolves after the shell's first paint; before that the safe default preserves the
-    // ordinary Add-project control. Wait for the capability-driven repaint, not merely the nav.
-    browser.waitForFunction(`document.querySelector('button[aria-label="Add project"]') === null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"]') !== null`)
+    // Health resolves after the shell's first paint; wait for the capability-driven repaint.
+    browser.waitForFunction(`document.querySelector('[data-slot="projects-section"]') === null`)
 
     // The scratch registry still holds the two sibling rows seeded in beforeAll. The process
-    // capability, rather than destructive fixture trimming, must collapse every UI consumer.
+    // capability, rather than destructive fixture trimming, must collapse every UI consumer:
+    // the whole Projects section (tree, add-local, clone) stays out.
     expect(readSharedProjects().map((project) => project.id)).toEqual([bootProject, ALPHA.id])
-    expect(browser.count('[data-slot="project-groups"]')).toBe(0)
-    expect(browser.isVisible('[data-slot="sidebar"] nav[aria-label="Main"]')).toBe(true)
-    expect(browser.count('button[aria-label="Add project"]')).toBe(0)
+    expect(browser.count('[data-slot="project-task-group"]')).toBe(0)
+    expect(browser.count('[data-slot="add-project-local"]')).toBe(0)
+    expect(browser.count('[data-slot="add-project-clone"]')).toBe(0)
 
     browser.goto(`${baseUrl}/settings/global`)
     browser.waitForFunction(`document.querySelector('[data-slot="settings-nav"]') !== null`)

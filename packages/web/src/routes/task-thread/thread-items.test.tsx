@@ -48,7 +48,7 @@ describe('ProviderAuthRequiredCard', () => {
     )
     expect(screen.getByRole('alert').textContent).not.toContain(`${label} needs authorization`)
     const link = screen.getByRole('link', { name: 'Open provider settings' })
-    expect(link.getAttribute('href')).toBe('/p/acme/settings/agents#providers')
+    expect(link.getAttribute('href')).toBe('/settings/global/accounts#providers')
     expect(link.getAttribute('tabindex')).not.toBe('-1')
   })
 })

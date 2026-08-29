@@ -26,7 +26,7 @@ describe('PlanReview provider availability', () => {
           starting={false}
           startAvailable={false}
           startUnavailableReason="Connect an agent provider before starting this plan."
-          startUnavailableAction={<a href="/settings/agents#providers">Configure providers</a>}
+          startUnavailableAction={<a href="/settings/global/accounts#providers">Configure providers</a>}
           onStepsChange={vi.fn()}
           onStart={vi.fn()}
           onDiscard={vi.fn()}
@@ -39,7 +39,7 @@ describe('PlanReview provider availability', () => {
     expect(start.getAttribute('aria-describedby')).toBe('plan-start-guidance')
     expect(screen.getByText('Connect an agent provider before starting this plan.')).toBeTruthy()
     expect(screen.getByRole('link', { name: 'Configure providers' }).getAttribute('href')).toBe(
-      '/settings/agents#providers',
+      '/settings/global/accounts#providers',
     )
   })
 })

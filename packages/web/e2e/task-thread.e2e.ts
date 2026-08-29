@@ -252,6 +252,9 @@ describe('task thread', () => {
   })
 
   it('the step rail maps the record steps to checklist rows over the progress bar', () => {
+    // The rail lives in the steps CHIP's popover now (context bar under the composer).
+    browser.click('[data-slot="steps-chip"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="step-row"]') !== null`)
     const rail = browser.evaluate(`(() => {
       const rows = [...document.querySelectorAll('[data-slot="step-row"]')]
       return {
@@ -262,18 +265,25 @@ describe('task thread', () => {
     expect(rail.rows).toHaveLength(2)
     expect(rail.rows[0]).toMatchObject({ visual: 'done' })
     expect(rail.rows[0]!.text).toContain('Do the task')
-    expect(rail.rows[0]!.text).toContain('agent · step 1 of 2')
+    expect(rail.rows[0]!.text).toContain('agent')
+    expect(rail.rows[0]!.text).toContain('step 1 of 2')
     expect(rail.rows[1]).toMatchObject({ visual: 'done' })
     expect(rail.rows[1]!.text).toContain('Verify')
-    expect(rail.rows[1]!.text).toContain('check · step 2 of 2')
+    expect(rail.rows[1]!.text).toContain('check')
+    expect(rail.rows[1]!.text).toContain('step 2 of 2')
     expect(rail.bar).toBe('100%') // both steps terminal — (1 + 1) / 2
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[data-slot="step-row"]') === null`)
   })
 
-  it('the plan dock shows the LATEST snapshot (2/4), expanded on desktop, mirrored in the header', () => {
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('open')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-mirror"]').textContent`)).toBe('Plan 2/4')
+  it('the plan chip shows the LATEST snapshot (2/4) and opens the checklist', () => {
+    // The dock became a context-bar CHIP under the composer (user decision: the header lost
+    // its mirror, the tally lives in one place).
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-chip"]') !== null`)
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('2/4')
 
+    browser.click('[data-slot="plan-chip"]')
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-list"]') !== null`)
     // The turn-2 snapshot won (turn 1 said 0/4 with "Read README and docs" in progress).
     const items = browser.evaluate(`[...document.querySelectorAll('[data-slot="plan-item"]')].map((el) => ({
       status: el.dataset.status,
@@ -281,22 +291,10 @@ describe('task thread', () => {
     }))`) as Array<{ status: string; text: string }>
     expect(items.map((i) => i.status)).toEqual(['completed', 'completed', 'in_progress', 'pending'])
     expect(items[2]!.text).toContain('Summarize cockpit features')
-    expect(items[2]!.text).toContain('in progress')
 
-    // It sits in the dock region above the composer area, not in the thread flow.
-    expect(browser.evaluate(`document.querySelector('[data-slot="thread-dock"] [data-slot="plan-dock"]') !== null`)).toBe(true)
-  })
-
-  it('collapsing the dock folds it to the odometer + the activeForm of the current item', () => {
-    browser.click('[data-slot="plan-dock"] button')
-    browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'collapsed'`)
-    expect(browser.count('[data-slot="plan-list"]')).toBe(0)
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-current"]').textContent`)).toBe(
-      '— Summarizing cockpit features',
-    )
-    // Re-expand so the desktop screenshot below captures the full checklist.
-    browser.click('[data-slot="plan-dock"] button')
-    browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'open'`)
+    // Close the popover so later steps interact with the thread unobstructed.
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[data-slot="plan-list"]') === null`)
   })
 
   it('a card is closed by default and expands to its mono output (the #381 behavior)', () => {
@@ -316,76 +314,100 @@ describe('task thread', () => {
     ).toBe(`/api/v1/runs/${RUN_ID}/images/screenshot-1.png`)
   })
 
-  it('shows the auto-summary title and the done pill in the header', () => {
+  it('names the run for assistive tech and floats the closed-run CTA; no status pill', () => {
+    // The visible title is the app bar's crumb (asserted below); the header keeps an sr-only
+    // h1 for assistive tech, and the status pill left with the old header design.
     expect(browser.evaluate(`document.querySelector('[data-route="task-thread"] h1').textContent`)).toBe(
       'Explain what cezar does',
     )
-    expect(browser.evaluate(`document.querySelector('[data-slot="pill"]').textContent`)).toBe('done')
+    expect(browser.text('[data-slot="project-bar-crumb"]')).toContain('Explain what cezar does')
+    expect(browser.count('[data-slot="run-header"] [data-slot="pill"]')).toBe(0)
+    expect(browser.text('[data-slot="floating-cta"]')).toContain('Reopen')
     // The #381 money shot: tool cards (one expanded) + markdown + image, desktop width.
     browser.screenshot(`${artifactsDir}/thread-desktop.png`)
   })
 
-  it('the header meta line reads workflow · branch chip · ± · tokens · cost off the record', () => {
-    const meta = browser.evaluate(
-      `document.querySelector('[data-slot="run-meta"]').textContent`,
-    ) as string
-    expect(meta).toContain('quick-task')
-    expect(meta).toContain('cez/fcd519dd')
-    expect(meta).toContain('+1 −0')
-    expect(meta).toContain('3.6k tokens')
-    expect(meta).toContain('$0.04')
-    // The fixture is a claude run — the runner stays out of the line, like the mockup.
-    expect(meta).not.toContain('claude')
-    // Branch renders as the mono chip, not plain text.
+  it('spreads the old meta line to its new homes: bar chips, tab labels, the composer footer', () => {
+    // The workflow chip lives under the composer; the branch rides the Commits tab; the ±
+    // rides Changes; the PR chip stays a chip; tokens and cost sit in the run-meta footer.
+    expect(browser.text('[data-slot="bar-branch"]')).toBe('cez/fcd519dd')
+    expect(browser.text('[data-slot="run-tabs"] a[href$="/changes"]')).toContain('+1 −0')
     expect(
-      browser.evaluate(`document.querySelector('[data-slot="branch-chip"]').textContent`),
-    ).toBe('cez/fcd519dd')
+      browser.evaluate(`document.querySelector('[data-slot="run-meta"] [data-slot="pr-chip"]').textContent`),
+    ).toContain('#123')
+    const footer = browser.evaluate(
+      `document.querySelector('[data-slot="run-meta-footer"]').textContent`,
+    ) as string
+    expect(footer).toContain('quick-task')
+    expect(footer).toContain('$0.04')
   })
 
   it('tabs point at the routed Session/Changes/Files surfaces; the done run offers the closed-run actions', () => {
-    const tabs = browser.evaluate(`[...document.querySelectorAll('[data-slot="run-tabs"] a')].map((a) => ({
+    // The bar's icon tabs (desktop): the diffstat rides Changes, the branch rides Commits.
+    const tabs = browser.evaluate(`[...document.querySelectorAll('[data-slot="bar-tabs"] a')].map((a) => ({
       text: a.textContent,
       href: a.getAttribute('href'),
       current: a.getAttribute('aria-current'),
     }))`) as Array<{ text: string; href: string; current: string | null }>
-    expect(tabs).toEqual([
-      { text: 'Session', href: scoped(`/tasks/${RUN_ID}`), current: 'page' },
-      { text: 'Changes', href: scoped(`/tasks/${RUN_ID}/changes`), current: null },
-      { text: 'Commits', href: scoped(`/tasks/${RUN_ID}/commits`), current: null },
-      { text: 'Files', href: scoped(`/tasks/${RUN_ID}/files`), current: null },
+    // ONE git entry (user decision): the branch and its ± are one control opening the diff;
+    // Commits is a local lens inside that area.
+    expect(tabs.map((t) => t.href)).toEqual([
+      scoped(`/tasks/${RUN_ID}`),
+      scoped(`/tasks/${RUN_ID}/changes`),
+      scoped(`/tasks/${RUN_ID}/files`),
     ])
+    expect(tabs.map((t) => t.current)).toEqual(['page', null, null])
+    expect(tabs[1]!.text).toContain('cez/fcd519dd')
+    expect(tabs[1]!.text).toContain('+1 −0')
 
-    const actions = browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].map((b) => b.textContent.trim())`,
+    // The closed-run verbs: Reopen floats; Open in is the bar's icon; the rest fold behind
+    // the More menu.
+    expect(browser.text('[data-slot="floating-cta"]')).toContain('Reopen')
+    browser.evaluate(`document.querySelector('[data-slot="run-actions"] [aria-label="More actions"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
+    browser.waitForFunction(`document.querySelector('[data-slot="run-actions-overflow"]') !== null`)
+    const menu = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="run-actions-overflow"] [role="menuitem"]')].map((b) => b.textContent.trim())`,
     ) as string[]
-    expect(actions).toEqual(['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'])
+    // Continue is the floating Reopen now; a read done run also offers Mark unread (#775).
+    expect(menu).toEqual(['Rename', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[data-slot="run-actions-overflow"]') === null`)
 
-    // The take-over hint, per-backend (the fixture's last agent session, in its worktree).
+    // The take-over control carries the per-backend command as its title (the fixture's last
+    // agent session, in its worktree) — the visible label stays short.
     const hint = browser.evaluate(
-      `document.querySelector('[data-slot="resume-hint"]').textContent`,
+      `document.querySelector('[data-slot="resume-hint"]').getAttribute('title')`,
     ) as string
     expect(hint).toContain('claude --resume 40169e05-629f-4d7c-853c-8a2a197255e4')
     expect(hint).toContain('cd /tmp/cezar-fixture-hg7X')
   })
 
-  it('opens the Notes panel — an unseeded handoff reads as the honest empty state', () => {
-    browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].find((b) => b.textContent.trim() === 'Notes').click()`,
-    )
+  it('opens the Notes panel from the More menu — an unseeded handoff reads honestly empty', () => {
+    const toggleNotes = () => {
+      browser.evaluate(`document.querySelector('[data-slot="run-actions"] [aria-label="More actions"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
+      browser.waitForFunction(`document.querySelector('[data-slot="run-actions-overflow"]') !== null`)
+      browser.evaluate(
+        `[...document.querySelectorAll('[data-slot="run-actions-overflow"] [role="menuitem"]')].find((b) => b.textContent.trim() === 'Notes').click()`,
+      )
+      browser.waitForFunction(`document.querySelector('[data-slot="run-actions-overflow"]') === null`)
+    }
+    toggleNotes()
     browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') !== null`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="notes-panel"]').textContent.includes('No notes yet')`,
     )
-    // The 1.4 money shot: full header (title, meta, tabs+actions, rail, hint) + open notes.
+    // The 1.4 money shot: the bar (tabs + chips + verbs) with the notes panel open below.
     browser.screenshot(`${artifactsDir}/thread-header-desktop.png`)
-    browser.evaluate(
-      `[...document.querySelectorAll('[data-slot="run-actions"] button')].find((b) => b.textContent.trim() === 'Notes').click()`,
-    )
+    toggleNotes()
     browser.waitForFunction(`document.querySelector('[data-slot="notes-panel"]') === null`)
   })
 
-  it('renames the task inline and the PATCH persists server-side', async () => {
-    browser.click('[aria-label="Rename task"]')
+  it('renames the task from the More menu and the PATCH persists server-side', async () => {
+    browser.evaluate(`document.querySelector('[data-slot="run-actions"] [aria-label="More actions"]').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))`)
+    browser.waitForFunction(`document.querySelector('[data-slot="run-actions-overflow"]') !== null`)
+    browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="run-actions-overflow"] [role="menuitem"]')].find((b) => b.textContent.trim() === 'Rename').click()`,
+    )
     browser.waitForFunction(`document.querySelector('[data-slot="title-input"]') !== null`)
     expect(
       browser.evaluate(`document.querySelector('[data-slot="title-input"]').value`),
@@ -399,7 +421,9 @@ describe('task thread', () => {
       `document.querySelector('[data-route="task-thread"] h1')?.textContent === 'Renamed by the header e2e'`,
     )
     // …and the API readback proves it persisted rather than living in component state.
-    const record = (await (await fetch(`${baseUrl}/api/v1/runs/${RUN_ID}`)).json()) as {
+    // Retried once: undici's idle keep-alive socket can answer ECONNRESET on first reuse.
+    const readRecord = async () => (await fetch(`${baseUrl}/api/v1/runs/${RUN_ID}`)).json()
+    const record = (await readRecord().catch(readRecord)) as {
       title: string
       titleSummary: string
     }
@@ -430,15 +454,14 @@ describe('task thread', () => {
       })()`),
     ).toBe(true)
 
-    // Phone default: the dock collapses to the odometer (the mockup's mobile reflow).
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('collapsed')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
+    // Phone default: the plan is its context-bar chip with the odometer, same as desktop.
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('2/4')
 
     browser.screenshot(`${artifactsDir}/thread-mobile.png`)
     browser.setViewport(1440, 900)
   })
 
-  it('mobile header: the action bar folds into the kebab next to the pill', () => {
+  it('mobile header: the action bar folds into the kebab', () => {
     browser.setViewport(390, 844)
     browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
     browser.waitForFunction(`document.querySelector('[data-slot="run-header"]') !== null`)
@@ -454,9 +477,6 @@ describe('task thread', () => {
         `(() => { const el = document.querySelector('[aria-label="Run actions"]'); return el !== null && el.offsetParent !== null })()`,
       ),
     ).toBe(true)
-    // Title + pill still read in one compact row.
-    expect(browser.isVisible('[data-route="task-thread"] h1')).toBe(true)
-    expect(browser.evaluate(`document.querySelector('[data-slot="pill"]').textContent`)).toBe('done')
 
     browser.screenshot(`${artifactsDir}/thread-header-mobile.png`)
     browser.setViewport(1440, 900)

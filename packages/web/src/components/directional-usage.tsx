@@ -24,9 +24,15 @@ export function directionalUsageText(
   outputTokens?: number,
   variant: 'compact' | 'table' = 'compact',
 ): string {
-  const input = inputTokens === undefined ? '—' : compactTokens(inputTokens)
-  const output = outputTokens === undefined ? '—' : compactTokens(outputTokens)
-  return variant === 'table' ? `${input} / ${output}` : `IN ${input} · OUT ${output}`
+  // No dash placeholders (house rule: an absent value renders as nothing) — a missing side
+  // drops out of the phrase instead, and the lone survivor keeps its direction word so a
+  // bare number never has to be guessed at.
+  if (inputTokens === undefined && outputTokens === undefined) return ''
+  if (inputTokens === undefined) return `OUT ${compactTokens(outputTokens!)}`
+  if (outputTokens === undefined) return `IN ${compactTokens(inputTokens)}`
+  const input = compactTokens(inputTokens)
+  const output = compactTokens(outputTokens)
+  return variant === 'table' ? `${input} / ${output}` : `IN ${input} / OUT ${output}`
 }
 
 /** One honest input/output rendering shared by header, table, cards, quick lists, and variants. */

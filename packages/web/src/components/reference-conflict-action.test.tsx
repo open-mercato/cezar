@@ -96,7 +96,7 @@ describe('ResolveConflictsButton', () => {
     expect(posted()?.body).toMatchObject({ text: resolveConflictsPrompt(864) })
     // Said where the user pressed: three of the four surfaces that offer this button do not show
     // the transcript the prompt lands in, so the panel closing cannot be the only signal.
-    await waitFor(() => expect(screen.getByText(/Sent to the task — resolving conflicts in PR #864/)).not.toBeNull())
+    await waitFor(() => expect(screen.getByText(/Sent to the task, resolving conflicts in PR #864/)).not.toBeNull())
   })
 
   it('reopens a finished task rather than refusing to speak to it', async () => {
@@ -113,7 +113,7 @@ describe('ResolveConflictsButton', () => {
     expect(posted()?.body).toMatchObject({ text: resolveConflictsPrompt(864) })
     // And it SAYS the task was reopened: that is a state change the user did not ask for in so
     // many words, and it would otherwise show up only as a status pill quietly going green.
-    await waitFor(() => expect(screen.getByText(/Task reopened — resolving conflicts in PR #864/)).not.toBeNull())
+    await waitFor(() => expect(screen.getByText(/Task reopened, resolving conflicts in PR #864/)).not.toBeNull())
   })
 
   it('says why instead of pretending, when there is no session to reach', async () => {

@@ -1,6 +1,8 @@
 import {
+  ChevronRightIcon,
   FolderIcon,
   FolderOpenIcon,
+  FolderPlusIcon,
   LayersIcon,
   MenuIcon,
   PlusIcon,
@@ -45,7 +47,10 @@ import { cn } from '@/lib/utils'
 // a second, hashed URL for the same picture would be one cache entry too many. Vite serves
 // `public/` at the root in dev and copies it into the build, so the path holds in both.
 // Its own gradient + rounded corners ARE the tile.
-const brandLogoUrl = '/open-mercato.svg'
+/** The cezar mark (public/cezar-logo.svg): the Open Mercato brand-gradient tile (lime→violet)
+ *  with the dark hexagonal C glyph. Also the favicon. */
+const brandLogoUrl = '/cezar-logo.svg'
+const brandLogoDarkUrl = '/cezar-logo-dark.svg'
 
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -103,6 +108,21 @@ export type AppShellProps = {
    *  still loading, or unreachable — the shell renders the single-project sidebar it always
    *  did, which is the honest degradation, not a special case. */
   projectGroups?: ReactNode
+  /** More than one registered project (user decision, 25-repo review): the sidebar keeps the
+   *  flat ACTIVE-project layout and only pins the All-tasks door above it — the other projects
+   *  live in the switcher, not in a list of groups to scroll past. */
+  multiProject?: boolean
+  /** The ACTIVE project's display name for the project bar above the content (the container
+   *  resolves it from the registry; falls back to `repo.name`). Null hides the bar. */
+  projectName?: string | null
+  /** The registry-backed project SWITCHER for the bar's left side; when absent the bar falls
+   *  back to the static name chip (registry unknown / single project). */
+  projectSwitcher?: ReactNode
+  /** The bar's second breadcrumb step: the open task's title, else the view's name. */
+  crumb?: string | null
+  /** The Projects nav row (user decision): the same project menu as the bar's switcher, as the
+   *  nav's last row — the list, add, manage — never a page of its own. */
+  projectsMenu?: ReactNode
 }
 
 /**
@@ -160,11 +180,18 @@ export function AppShell({
   singleProject = false,
   banner,
   projectGroups,
+  multiProject = false,
+  projectName = null,
+  projectSwitcher,
+  crumb = null,
+  projectsMenu,
 }: AppShellProps) {
   const { pathname } = useLocation()
   // The nav's area rules reason about the flat route map — strip any `/p/:projectId` prefix
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
   const areaPathname = stripProjectPrefix(pathname)
+  // ONE Tasks row (user decision): the global `/tasks` page is the same list at workspace
+  // scope, so it lights Tasks too; the page header's scope switch is where the scope lives.
   const activeTo = activeNavPath(areaPathname)
   const current = activeNavItem(areaPathname)
   const [menuOpen, setMenuOpen] = React.useState(false)
@@ -216,7 +243,7 @@ export function AppShell({
 
   const nav = {
     activeTo,
-    items: visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable }),
+    items: visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, singleProject }),
     repo,
     // The badge belongs to the Inbox item — with the item gone there is nothing to badge.
     inboxCount: inboxAvailable ? inboxCount : null,
@@ -227,7 +254,10 @@ export function AppShell({
     taskQuickList,
     toolsMenu,
     projectGroups,
+    multiProject,
     singleProject,
+    projectName,
+    projectsMenu,
   }
 
   return (
@@ -238,13 +268,41 @@ export function AppShell({
         data-slot="app-shell"
         className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
       >
+        {/* WCAG 2.4.1: the sidebar is 7+ tab stops of repeated chrome on every page — keyboard
+            users get one jump past it. Visible only while focused. */}
+        <a
+          href="#main"
+          // Explicit focus: the SPA layer swallows same-page fragment navigation, so the
+          // native jump-to-target never fires (verified with a real keyboard).
+          onClick={(event) => {
+            event.preventDefault()
+            mainRef.current?.focus()
+          }}
+          className="sr-only focus-visible:not-sr-only focus-visible:absolute focus-visible:left-2 focus-visible:top-2 focus-visible:z-50 focus-visible:rounded-md focus-visible:bg-contrast focus-visible:px-3 focus-visible:py-2 focus-visible:text-sm focus-visible:font-medium focus-visible:text-contrast-foreground"
+        >
+          Skip to content
+        </a>
         <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} />
         {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
             there is no second column to trade width with and no pointer to drag a border. */}
         <MobileNavDrawer {...nav} onNavigate={() => setMenuOpen(false)} />
 
         <div className="grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden">
-          <MobileTopBar title={current?.label ?? 'cezar'} />
+          {/* The crumb outranks the area label (design review): a task thread's bar must say
+              the task, not "Tasks" — the phone has no second breadcrumb line to say it on. */}
+          <MobileTopBar title={crumb ?? current?.label ?? 'cezar'} />
+          {/* Same grid row as the mobile top bar — the two are breakpoint-exclusive, so they
+              never render together. The bar is where the ACTIVE PROJECT lives now: above the
+              content on every route, instead of buried in the sidebar lockup. */}
+          {/* `projectName` alone — no `repo?.name` fallback (design review): the container
+              already resolves its own fallback and passes null ON PURPOSE for workspace-level
+              views (Skills, global settings), where resurrecting the boot repo's name here put
+              a project over a view that belongs to no project. */}
+          <ProjectBar
+            name={projectName}
+            crumb={crumb}
+            projectSwitcher={projectSwitcher}
+          />
 
           {banner ? (
             <div data-slot="banner-slot" className="row-start-2">
@@ -254,8 +312,10 @@ export function AppShell({
 
           <main
             ref={mainRef}
+            id="main"
+            tabIndex={-1}
             data-slot="main"
-            className="row-start-3 min-h-0 overflow-y-auto overscroll-contain"
+            className="row-start-3 min-h-0 overflow-y-auto overscroll-contain outline-none"
           >
             {children}
           </main>
@@ -284,6 +344,13 @@ type NavProps = {
   taskQuickList?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
+  /** The active project's name — the task list's label. */
+  projectName?: string | null
+  projectsMenu?: ReactNode
+  /** More than one registered project: pins the All-tasks door above the flat sidebar. The
+   *  sidebar itself stays the ACTIVE project's (user decision, 25-repo review) — other
+   *  projects are the switcher's job, not a list to scroll past. */
+  multiProject?: boolean
   singleProject: boolean
 }
 
@@ -467,7 +534,10 @@ function SidebarContent({
   taskQuickList,
   toolsMenu,
   projectGroups,
+  multiProject,
   singleProject,
+  projectName = null,
+  projectsMenu,
   onNavigate,
   headerAction,
 }: NavProps & {
@@ -487,46 +557,47 @@ function SidebarContent({
       // an `@min-[…]/sidebar:` query and returns when the user drags the column wider.
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
+      {/* Two-line lockup (sidebar redesign): the product name on top, the motto beneath — the
+          ACTIVE PROJECT moved out of here onto the project bar above the content, where it stays
+          in view on every route instead of hiding in a drawer on mobile. */}
       <div className="flex items-center gap-[9px] px-3.5 pt-3.5 pb-2.5">
         <BrandTile />
-        <span className="text-[15px] font-semibold">cezar</span>
-        {/* With project groups mounted the boot repo/branch is one group header among many —
-            a chip repeating it up here would just be the first group's header said twice. */}
-        {repo && !projectGroups ? (
+        <span className="flex min-w-0 flex-col leading-tight">
+          {/* The wordmark in Press Start 2P — the 80s-arcade face that matches the pixel cat.
+              One step smaller than the old Inter title so its wide fixed grid doesn't stretch
+              the lockup. */}
+          <span className="font-['Press_Start_2P'] text-[12px] leading-[1.2]">cezar</span>
+          {/* No truncate: the motto is short and fixed — clipping it to "divide et imp…" would
+              undercut the whole joke. nowrap keeps it one line at every sidebar width. */}
           <span
-            data-slot="repo-chip"
-            className="ml-auto truncate font-mono text-[11px] font-medium text-soft-foreground"
+            data-slot="brand-motto"
+            className="text-[12px] whitespace-nowrap italic text-soft-foreground"
           >
-            {repo.name} / {repo.branch}
+            divide et impera
           </span>
-        ) : null}
-        {headerAction ? (
-          <div className={cn('shrink-0', (!repo || projectGroups) && 'ml-auto')}>{headerAction}</div>
-        ) : null}
+        </span>
+        {/* Add-project moved to the project bar, beside the repo context it actually concerns —
+            next to the brand it read as part of Cezar's profile. */}
+        <span className="ml-auto flex shrink-0 items-center gap-1">
+          {/* Search at the sidebar's top (user decision, Replit reference) — an icon opening
+              the ⌘K palette. The drawer keeps its full-width copy below md instead. */}
+          <button
+            type="button"
+            data-slot="sidebar-search"
+            title="Search — command palette (⌘K / Ctrl+K)"
+            aria-label="Search"
+            onClick={() => openCommandPalette()}
+            className="hidden size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:flex"
+          >
+            <SearchIcon className="size-4" aria-hidden="true" />
+          </button>
+          {headerAction ? <div className="shrink-0">{headerAction}</div> : null}
+        </span>
       </div>
 
-      <div className="flex gap-1.5 px-2.5 pt-1 pb-2">
-        <Button asChild variant="contrast" className="relative min-w-0 flex-1 justify-center">
-          {/* A Router Link since R4 Step 1.1: the React /new composer is real, so deliberate
-              New task affordances stay inside the SPA. Full document loads of /new (the
-              bookmarklet contract) land on the shell like any route (static-ui.ts) — the
-              React composer has owned auto-start parity since R4 Step 1.3. */}
-          <Link to="/new" onClick={onNavigate}>
-            <PlusIcon className="size-[15px]" aria-hidden="true" />
-            New task
-            {/* Decorative: the `c`-to-create accelerator is registered in the command palette.
-                (⌘N is also bound there, but only the desktop shell receives it — the browser
-                reserves ⌘N for a new window — so the chip advertises the one that always works.) */}
-            <kbd
-              aria-hidden="true"
-              className="absolute right-2.5 rounded-[5px] border border-b-2 border-contrast-foreground/25 bg-transparent px-[5px] py-px font-mono text-[10.5px] font-medium text-contrast-foreground/60"
-            >
-              C
-            </kbd>
-          </Link>
-        </Button>
-        {singleProject ? null : <AddProjectMenu />}
-      </div>
+      {/* No New-task slab here any more (user decision, Devin reference): the action is the
+          small + in the Recent header — one quiet row of verbs beside the list they act on. */}
+
 
       {projectGroups ? (
         <>
@@ -552,69 +623,32 @@ function SidebarContent({
         </>
       ) : (
         <>
-          <nav aria-label="Main" className="px-2.5 py-1.5">
-            {items.map((item) => {
-              const isActive = item.to === activeTo
-              const Icon = item.icon
-              // Link, not NavLink, on purpose. NavLink derives `aria-current` from its own prefix
-              // match against `to`, and that rule is wrong here: it would *not* light Tasks on
-              // /tasks/:id — which the spec requires. `aria-current` cannot be forced past NavLink's
-              // own matching, so the area rule lives in `activeNavPath` and this is a plain Link.
-              return (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  onClick={onNavigate}
-                  aria-current={isActive ? 'page' : undefined}
-                  className={cn(
-                    // h-[34px] is the mockup's desktop row. In the drawer these are touch targets, so
-                    // they relax to 44px — the one place the two framings legitimately differ.
-                    'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-[34px]',
-                    isActive && 'bg-muted font-semibold text-foreground'
-                  )}
-                >
-                  <Icon className="size-4 shrink-0" aria-hidden="true" />
-                  {item.label}
-                  {item.badge === 'inbox-count' && inboxCount ? (
-                    <span
-                      data-slot="nav-badge"
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
-                    >
-                      {inboxCount}
-                    </span>
-                  ) : null}
-                  {/* Unread done items (#unread-done-items): same violet count grammar as the
-                      Inbox badge — the two share the "needs a human" hue. */}
-                  {item.badge === 'tasks-unread' && unreadCount ? (
-                    <span
-                      data-slot="nav-unread-badge"
-                      title={`${unreadCount} unread finished ${unreadCount === 1 ? 'task' : 'tasks'}`}
-                      className="ml-auto rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
-                    >
-                      {unreadCount}
-                    </span>
-                  ) : null}
-                  {item.badge === 'skills-update' && skillsUpdateAvailable ? (
-                    <span
-                      data-slot="nav-update-marker"
-                      className="ml-auto flex items-center"
-                    >
-                      <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
-                      <span className="sr-only">Skills update available</span>
-                    </span>
-                  ) : null}
-                </Link>
-              )
-            })}
-          </nav>
-
-          {/* The single-project quick-list (Needs you / Working / Recent). */}
-          <div
-            data-slot="task-quick-list"
-            className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2.5 pb-2"
-          >
-            {taskQuickList}
+          {/* Multi-project, but the sidebar stays the ACTIVE project's (user decision, 25-repo
+              review): only the All-tasks door is pinned above the flat column — the same band
+              the groups view pins it in, so the two framings agree on where "everything" lives. */}
+        {/* Devin-style order (user decision): the PLACES first (one quiet nav, no section
+            label, Tasks back as a real row with its unread badge), then the WORK beneath as a
+            Recent list with its own header actions. The navigate context reaches the quick-list
+            rows so a same-path click still closes the mobile drawer (the route-change effect
+            cannot fire without a pathname change). */}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+          <div data-slot="task-quick-list" className="px-2.5">
+            <SidebarNavigateContext.Provider value={onNavigate}>
+              {taskQuickList}
+            </SidebarNavigateContext.Provider>
           </div>
+
+          {/* The group divider: the work above, the places below (user decision — nav first
+              read as the sidebar's subject, and it is not; the tasks are). */}
+          <hr aria-hidden="true" className="mx-5 mt-2 mb-1 border-border" />
+
+          {/* The workspace nav is the Projects SECTION (user decision): recent projects as rows,
+              load-more, and the section's verbs as header icons. Git / Skills / Workflows are a
+              project's and ride the app bar as tabs. */}
+          <nav aria-label="Main" className="flex flex-col gap-0.5 px-2.5 pt-1 pb-2">
+            {projectsMenu}
+          </nav>
+        </div>
         </>
       )}
 
@@ -622,19 +656,68 @@ function SidebarContent({
        *  line 2. `flex-col` rather than `flex-wrap` on purpose — the previous single wrapping row
        *  overflowed the 264px column and silently stranded the theme toggle on a line of its own,
        *  and a column cannot regress into that no matter what a future control's width is. */}
+      {/* Search moved to the app bar on desktop; the drawer (no app bar below md) keeps it. */}
+      <div className="px-3.5 pb-2 md:hidden">
+        <CommandPaletteHint />
+      </div>
+
+      {/* The sidebar's bottom (user decision): Settings and Tools as MENU ROWS — the same row
+          grammar as the nav above — pinned under the scroll column; the version and the theme
+          toggle keep a slim utility line beneath them. */}
       <div
         data-slot="sidebar-footer"
-        className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
+        className="flex flex-col gap-0.5 border-t border-border px-2.5 pt-1.5 pb-2"
       >
-        <CommandPaletteHint />
-        <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
-          {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
-          <div data-slot="tools-menu" className="shrink-0">
-            {toolsMenu}
-          </div>
+    {/* Workspace LIBRARIES (Skills) as rows above Settings (user decision): the sidebar's
+        top is the projects' alone; the workspace's own doors gather at the bottom. */}
+        {items
+          .filter((item) => item.library)
+          .map((item) => {
+            const isActive = item.to === activeTo
+            const Icon = item.icon
+            // A global row (All tasks) is never `/p/<id>`-prefixed.
+            const RowLink = item.global ? RouterLink : Link
+            return (
+              <RowLink
+                key={item.to}
+                to={item.to}
+                onClick={onNavigate}
+                aria-current={isActive ? 'page' : undefined}
+                className={cn(
+                  'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9',
+                  isActive && 'bg-muted font-semibold text-foreground hover:bg-muted',
+                )}
+              >
+                {isActive ? (
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
+                  />
+                ) : null}
+                <Icon className="size-4 shrink-0" aria-hidden="true" />
+                {item.label}
+                {item.badge === 'skills-update' && skillsUpdateAvailable ? (
+                  <span data-slot="nav-update-marker" className="ml-auto flex items-center">
+                    <span className="size-1.5 rounded-full bg-violet" aria-hidden="true" />
+                    <span className="sr-only">Skills update available</span>
+                  </span>
+                ) : null}
+              </RowLink>
+            )
+          })}
+        <RouterLink
+          to="/settings/global"
+          data-slot="footer-settings"
+          onClick={onNavigate}
+          className="flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9"
+        >
+          <SettingsIcon className="size-4 shrink-0" aria-hidden="true" />
+          Settings
+        </RouterLink>
+        <div data-slot="tools-menu">{toolsMenu}</div>
+        <div data-slot="sidebar-footer-controls" className="flex items-center gap-1.5 px-3 pt-1">
           {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
-          <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
-          <ThemeToggle />
+          <ThemeToggle className="ml-auto shrink-0" />
         </div>
       </div>
     </div>
@@ -659,19 +742,22 @@ function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
       data-slot="all-tasks-link"
       onClick={onNavigate}
       aria-current={isActive ? 'page' : undefined}
-      // Reads at the weight of a section header rather than a nav row: full-strength foreground
-      // and semibold, where the project groups below it are semibold-on-default and their nav
-      // rows are muted. The violet icon is the one spot of accent — the same hue the tag chips
-      // and this page's own selected filters use, so the door and the room match.
+      // The same row grammar as the WORKSPACE nav (sidebar redesign): muted ink at rest, GRAY
+      // surface on hover and when current (user decision: no white rows in the sidebar), the
+      // purple edge caret marking the active page. Purple is a signal, never a surface — so
+      // no tinted icon.
       className={cn(
-        'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9',
-        isActive && 'bg-muted',
+        'relative flex h-11 w-full items-center gap-2.5 rounded-md px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:h-9',
+        isActive && 'bg-muted font-semibold text-foreground hover:bg-muted',
       )}
     >
-      <LayersIcon
-        className={cn('size-4 shrink-0', isActive ? 'text-violet' : 'text-violet/70')}
-        aria-hidden="true"
-      />
+      {isActive ? (
+        <span
+          aria-hidden="true"
+          className="absolute top-1/2 -left-2.5 -translate-y-1/2 border-y-[5px] border-l-[6px] border-y-transparent border-l-primary"
+        />
+      ) : null}
+      <LayersIcon className="size-4 shrink-0" aria-hidden="true" />
       All tasks
     </RouterLink>
   )
@@ -708,58 +794,6 @@ function GlobalSettingsLink({
 }
 
 /**
- * The "Add project" dropdown beside the New task CTA (multi-project spec, "Sidebar → Header").
- *
- * "Open local folder…" opens the folder-browser dialog (step 4.2); "Clone from GitHub…" opens
- * the checkout dialog (step 4.3).
- *
- * Neither item is gh-gated here, deliberately. The spec's "disabled with a reason when `gh` is
- * unavailable" would mean reading `GET /api/health` from this component — and the dialogs are
- * mounted only while open precisely BECAUSE this shell must keep rendering where no QueryClient
- * is provided. So the degradation lands one click later instead, in the dialog, which shows the
- * server's own `gh CLI not found — install it and run 'gh auth login'` verbatim: the same
- * information, at the moment it is actionable, without a query in the shell.
- *
- * The dialogs are mounted only while open, ON PURPOSE: they are the one part of this shell that
- * talks to the API (queries + a mutation), and the shell itself must keep rendering in the
- * places that mount it without a QueryClient. The cost is no close animation, which is the
- * cheaper half of the trade.
- */
-function AddProjectMenu() {
-  const [browsing, setBrowsing] = React.useState(false)
-  const [cloning, setCloning] = React.useState(false)
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        {/* size-11 in the drawer (touch target), the CTA's height on desktop. */}
-        <Button
-          variant="outline"
-          size="icon"
-          aria-label="Add project"
-          title="Add project"
-          className="size-11 shrink-0 md:size-9"
-        >
-          <FolderOpenIcon className="size-4" aria-hidden="true" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="w-56">
-        <DropdownMenuLabel className="text-xs text-soft-foreground">Add project</DropdownMenuLabel>
-        <DropdownMenuItem data-slot="add-project-local" onSelect={() => setBrowsing(true)}>
-          <FolderIcon aria-hidden="true" />
-          Open local folder…
-        </DropdownMenuItem>
-        <DropdownMenuItem data-slot="add-project-clone" onSelect={() => setCloning(true)}>
-          <GithubIcon aria-hidden="true" />
-          Clone from GitHub…
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-      {browsing ? <AddProjectDialog open onOpenChange={setBrowsing} /> : null}
-      {cloning ? <CloneProjectDialog open onOpenChange={setCloning} /> : null}
-    </DropdownMenu>
-  )
-}
-
-/**
  * The ⌘K discoverability affordance (Step 4.3): the footer's first row, shaped like a search
  * input — magnifier, a muted `Search…` label, the chord parked on the right. It was a chip
  * cut from the version chip's cloth until #702, where the footer's five chips overflowed the
@@ -776,18 +810,20 @@ function AddProjectMenu() {
  */
 function CommandPaletteHint() {
   return (
+    // A BUTTON that looks like one (user feedback): the input costume promised in-place typing,
+    // but the control opens the ⌘K palette — so it dresses like its neighbours (Settings, Tools).
     <button
       type="button"
       data-slot="command-palette-hint"
       title="Search — command palette (⌘K / Ctrl+K)"
       onClick={() => openCommandPalette()}
-      className="flex w-full items-center gap-1.5 rounded-md border border-border bg-muted/30 px-2 py-1 text-left text-xs font-medium text-soft-foreground transition-colors hover:bg-muted hover:text-foreground"
+      className="flex h-7 w-full items-center gap-1.5 rounded-md px-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:w-auto"
     >
       <SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
-      <span className="truncate">Search…</span>
+      Search
       <kbd
         aria-hidden="true"
-        className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
+        className="ml-auto shrink-0 rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground md:ml-0.5"
       >
         {commandShortcutHint('k')}
       </kbd>
@@ -796,18 +832,16 @@ function CommandPaletteHint() {
 }
 
 /**
- * The footer's `v{version}` chip. When the server's npm-registry check found something newer
- * (`latestVersion`, #368), the chip grows a pulsing pending-tone dot and names the version in
- * its tooltip — an affordance, not an alert: updating is optional, so the chrome stays quiet.
+ * The footer's `v{version}` label. Plain quiet text — a border made it read as a button that
+ * goes nowhere. When the server's npm-registry check found something newer (`latestVersion`,
+ * #368) the label turns violet and the tooltip names the version — an affordance, not an alert:
+ * updating is optional, so the chrome stays quiet.
  *
- * The chip is the controls row's ONE elastic item, and that is load-bearing. Every other control
- * there is `shrink-0` (the icon buttons inherit it from the button base class), so whatever a
- * version string costs beyond the column's width has to come out of somewhere — and while this
- * chip was `shrink-0` too, there was nowhere for it to come from: a nightly version (#876's
- * dist-tag, some 173px of it) shoved the gear and the theme toggle clean outside the sidebar
- * rather than clipping anything. Truncating from the tail keeps the half that carries meaning,
- * the semver, and the `title` keeps the whole string — which is why the tooltip is now there
- * even with no update to announce.
+ * The label is the controls row's ONE elastic item, and that is load-bearing (#876): every other
+ * control there is `shrink-0`, so a nightly dist-tag version (~173px of it) used to shove the
+ * neighbouring controls clean outside the sidebar. Truncating from the tail keeps the half that
+ * carries meaning, the semver, and the `title` keeps the whole string — which is why the tooltip
+ * is there even with no update to announce.
  */
 function VersionChip({ version, latestVersion }: { version: string; latestVersion: string | null }) {
   const updateAvailable = Boolean(latestVersion && latestVersion !== version)
@@ -815,11 +849,13 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
     <span
       data-slot="version-chip"
       data-update-available={updateAvailable ? 'true' : undefined}
-      title={updateAvailable ? `v${version} — update available: v${latestVersion}` : `v${version}`}
-      className="flex min-w-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground"
+      title={updateAvailable ? `v${version} (update available: v${latestVersion})` : `v${version}`}
+      className={cn(
+        'min-w-0 truncate font-mono text-[10.5px] font-medium',
+        updateAvailable ? 'text-violet' : 'text-soft-foreground',
+      )}
     >
-      {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px] shrink-0" /> : null}
-      <span className="truncate">v{version}</span>
+      v{version}
     </span>
   )
 }
@@ -828,13 +864,82 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
  *  the tile — no wrapper background. */
 function BrandTile() {
   return (
-    <img
-      src={brandLogoUrl}
-      alt=""
-      aria-hidden="true"
-      data-slot="brand-tile"
-      className="size-[26px] shrink-0 rounded-sm"
-    />
+    // No plate: the artwork carries its own gradient tile and rounded corners. The rounded-md
+    // clip only backstops the SVG's own radius at this size.
+    // Two renders, one visible: the glyph is dark ink for light mode and near-white for dark
+    // (user decision) — an <img> cannot recolor its SVG, so the theme picks the file.
+    <>
+      <img
+        src={brandLogoUrl}
+        alt=""
+        aria-hidden="true"
+        data-slot="brand-tile"
+        className="hidden size-9 shrink-0 rounded-md object-contain light:block"
+      />
+      <img
+        src={brandLogoDarkUrl}
+        alt=""
+        aria-hidden="true"
+        data-slot="brand-tile-dark"
+        className="block size-9 shrink-0 rounded-md object-contain light:hidden"
+      />
+    </>
+  )
+}
+
+/**
+ * The desktop project bar (sidebar redesign): a slim breadcrumb strip above the content naming
+ * the ACTIVE project — always in view on every route, which is what a workspace identity needs
+ * and what the sidebar lockup (now brand + motto) could not give it on mobile. Shares grid row 1
+ * with the mobile top bar; the two are breakpoint-exclusive.
+ */
+function ProjectBar({
+  name,
+  crumb,
+  projectSwitcher,
+}: {
+  name: string | null
+  /** What the page is about, after the project: the open task's title, or the view's name. */
+  crumb?: string | null
+  projectSwitcher?: ReactNode
+}) {
+  if (!name && !projectSwitcher && !crumb) return null
+  return (
+    <div
+      data-slot="project-bar"
+      // Identity on the LEFT (where a breadcrumb reads) — the registry-backed switcher when the
+      // container provides one, the static chip otherwise — with add-project right beside it;
+      // utilities — Settings, Tools, theme — on the right.
+      className="row-start-1 hidden h-11 items-center gap-2.5 border-b border-border bg-background px-4 md:flex"
+    >
+      {projectSwitcher ??
+        (name ? (
+          <span className="flex min-w-0 items-center gap-2">
+            <FolderOpenIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+            <span data-slot="repo-chip" className="truncate font-mono text-[12px] font-medium text-muted-foreground">
+              {name}
+            </span>
+          </span>
+        ) : null)}
+      {/* The breadcrumb's second step (user decision: "project and task, here"): the open
+          task's title, or the view's name. Quiet, truncating, never a link — the page IS it. */}
+      {crumb ? (
+        <span className="flex min-w-0 items-center gap-2 text-[12.5px]">
+          {/* The chevron separates a crumb FROM a project; with no project on the bar (the
+              workspace-wide Tasks page) the crumb stands alone. */}
+          {projectSwitcher || name ? (
+            <ChevronRightIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+          ) : null}
+          <span data-slot="project-bar-crumb" className="truncate font-medium text-foreground" title={crumb}>
+            {crumb}
+          </span>
+        </span>
+      ) : null}
+      {/* The bar's right side hosts the OPEN PAGE's actions (user decision): a page with verbs
+          on its whole subject — today the task thread — portals its buttons here, where they
+          stay in view on every tab. No workspace utilities: those live in the sidebar. */}
+      <span data-slot="bar-actions" className="ml-auto flex min-w-0 shrink-0 items-center gap-2.5" />
+    </div>
   )
 }
 

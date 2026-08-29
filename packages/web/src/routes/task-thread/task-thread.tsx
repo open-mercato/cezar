@@ -30,12 +30,13 @@ import { AutoResumeHint } from './auto-resume-hint'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
-import { PlanDock, planCounts } from './plan-dock'
+import { RunStatusAnnouncer } from './status-announcer'
+import { ThreadContextBar } from './thread-context-bar'
 import { collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
-import { RunHeader } from './run-header'
+import { RunHeader, RunMetaFooter, TakeOverButton } from './run-header'
 import { AskCard } from './ask-card'
 import { useRunRecordReconcile } from './run-reconcile'
 import { useActiveProviderAvailability } from './active-provider'
@@ -179,7 +180,6 @@ export function ThreadView({
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
   const plan = latestPlanEntries(currentThread)
-  const planTally = plan !== undefined && plan.length > 0 ? planCounts(plan) : undefined
   // The Agents dock's data: the current fan-out's sub-agents, or [] when there is none to
   // show (#474). Derived from the same reduced turns the thread renders — no new subscription.
   // The legacy session-open rule (web/app.js `updateDetail`): the composer can deliver while
@@ -300,7 +300,7 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
-      <RunHeader run={run} planTally={planTally} onMarkedUnread={() => onMarkedUnread?.(run.id)} />
+      <RunHeader run={run} onMarkedUnread={() => onMarkedUnread?.(run.id)} />
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
@@ -340,6 +340,10 @@ export function ThreadView({
             the thread so quiet gaps between bursts don't read as "finished". `waiting` hands
             off to the dock's reply hint, `queued` to the placeholder above — so `running` only. */}
         {run.status === 'running' ? <WorkingIndicator /> : null}
+
+        {/* The audible twin of all the visual state above (audit B6) — announces status
+            TRANSITIONS to screen readers, stays silent on mount. */}
+        <RunStatusAnnouncer status={run.status} />
 
         {/* Closed states read as the body's last line; the WAITING state lives in the dock
             (mockup `.paused-hint`), right above the composer it is asking the user to use. */}
@@ -419,35 +423,30 @@ export function ThreadView({
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
 
-          {plan !== undefined && plan.length > 0 ? (
-            // Keyed by run id: the collapse default re-derives per task (see PlanDock).
-            <PlanDock key={run.id} runId={run.id} entries={plan} />
-          ) : null}
-
           {/* A usage-limit stop is the one `failed` state that is still going somewhere — the
               dock says so before the composer offers a Continue nobody needs to press. */}
           <AutoResumeHint run={run} />
 
-          {run.status === 'waiting' ? (
-            <div
-              data-slot="paused-hint"
-              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-            >
-              <StatusDot tone="pending" pulse />
-              The agent is paused, waiting for your reply
+          <div className="flex min-w-0 flex-col">
+          {/* The composer's top line sits at the tabs' height: the attention hint on the left
+              (Status left the header — it only echoed this), the Verify/Plan tabs on the right.
+              -mb-2 tucks the row's bottom a touch under the input's top edge. */}
+          <div data-slot="composer-topline" className="-mb-2 flex items-end justify-between gap-3 pl-1">
+            <div className="min-w-0 pb-3.5 text-xs text-muted-foreground">
+              {run.status === 'waiting' ? (
+                <span data-slot="paused-hint" className="flex items-center gap-2">
+                  <StatusDot tone="pending" pulse />
+                  The agent is paused, waiting for your reply
+                </span>
+              ) : queued ? (
+                <span data-slot="queued-hint" className="flex items-center gap-2">
+                  <StatusDot tone="pending" />
+                  Messages you add now are folded into the prompt before the run starts.
+                </span>
+              ) : null}
             </div>
-          ) : null}
-
-          {queued ? (
-            <div
-              data-slot="queued-hint"
-              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
-            >
-              <StatusDot tone="pending" />
-              Messages you add now are folded into the prompt before the run starts.
-            </div>
-          ) : null}
-
+            <ThreadContextBar steps={run.steps} plan={plan} settled={runIsTerminal} />
+          </div>
           <Composer
             onSubmit={
               continuable
@@ -461,15 +460,17 @@ export function ThreadView({
             disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
             // The engine pills ride the enabled footer, so the picked runner/model and the
             // typed prompt reach `POST /continue` in one request.
+            // The runner/model pickers moved OUT of the message field down to the meta row below;
+            // only the provider-config nudge still rides the composer footer.
             footerEnd={
               providerBlocked && !continueAction.providerPending ? (
                 <Link
-                  to="/settings/agents#providers"
+                  to="/settings/global/accounts#providers"
                   className="text-xs font-medium text-foreground underline underline-offset-4"
                 >
                   Configure providers
                 </Link>
-              ) : continuable ? continueAction.pills : undefined
+              ) : undefined
             }
             // Continuing with nothing typed is the legacy one-click Continue.
             allowEmptySubmit={continuable}
@@ -477,13 +478,24 @@ export function ThreadView({
             placeholder={
               queued ? 'Add to the prompt — sent when the run starts…'
               : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
-              : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
-              : 'Message the agent — / for skills, @ for files…'
+              : run.status === 'waiting' ? 'Reply to Cezar (/ for skills, @ for files)…'
+              : 'Message Cezar (/ for skills, @ for files)…'
             }
             autocompleteSkills
             quickReplies
             getMentionCandidates={() => threadFilePaths(thread)}
           />
+          {/* Under the input: the take-over-in-terminal handoff on the left, the run's read-only
+              meta (Cost/Agent/Mode) on the right. */}
+          <div data-slot="composer-underline" className="mt-2 flex items-center gap-3">
+            <TakeOverButton run={run} />
+            {/* ml-auto keeps the meta hard right even when the take-over button isn't rendered
+                (a live session has no resume command), so the row never drifts left. */}
+            <div className="ml-auto min-w-0">
+              <RunMetaFooter run={run} pickers={continuable ? continueAction.pills : undefined} />
+            </div>
+          </div>
+          </div>
         </div>
       </div>
     </div>
@@ -560,7 +572,7 @@ function QueuedPlaceholder({ run }: { run: ApiRun }) {
         Waiting for a free agent slot{position !== undefined ? ` — #${position} in queue` : ''}
       </p>
       <p className="text-xs text-soft-foreground">
-        {run.workflow} · starts automatically when a slot frees up
+        {run.workflow}, starts automatically when a slot frees up
       </p>
     </div>
   )

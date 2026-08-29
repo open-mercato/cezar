@@ -134,7 +134,7 @@ describe('the compare columns', () => {
     expect(b?.querySelector('[data-slot="pill"]')?.textContent).toContain('done')
 
     // Directional tokens and cost per column.
-    expect(a?.textContent).toContain('IN 92.0k · OUT 4.2k')
+    expect(a?.textContent).toContain('IN 92.0k / OUT 4.2k')
     expect(a?.textContent).toContain('$0.31')
 
     // The legacy `git diff --stat` text verbatim in the mono block, labeled as git's own words.
@@ -210,15 +210,25 @@ describe('the compare columns', () => {
 // ---- the pick flow ----------------------------------------------------------------------------
 
 describe('✔ Pick this one', () => {
-  it('is disabled while any variant is still non-terminal, with the reason in the title', async () => {
+  it('is disabled while any variant is still non-terminal, with the reason INLINE and a path to the open variant (audit D1)', async () => {
     stubFetch(group(variant('A', 'review'), variant('B', 'running')))
     renderCompare()
     await waitForColumns(2)
 
-    for (const button of pickButtons()) {
-      expect(button.disabled).toBe(true)
-      expect(button.title).toBe('Every variant must finish before you can pick')
-    }
+    for (const button of pickButtons()) expect(button.disabled).toBe(true)
+
+    // The reason is visible text per column, not a hover-only title.
+    const reasons = [...document.querySelectorAll('[data-slot="variant-pick-reason"]')]
+    expect(reasons.map((r) => r.textContent)).toEqual([
+      'Waiting for the other variants to finish before picking.',
+      'Variant B is still running — every variant must finish before you can pick.',
+    ])
+
+    // The still-open variant offers the way forward: its own thread.
+    const links = [...document.querySelectorAll('[data-slot="variant-open-thread"]')]
+    expect(links).toHaveLength(1)
+    expect(links[0]?.textContent).toContain('Open thread')
+    expect(links[0]?.getAttribute('href')).toContain('/tasks/vb')
   })
 
   it('review counts as terminal — the agent is done, a human is not', async () => {

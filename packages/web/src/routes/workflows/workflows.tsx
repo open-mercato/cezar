@@ -18,9 +18,9 @@ import {
   CheckIcon,
   CopyIcon,
   DownloadIcon,
+  ChevronDownIcon,
   GripVerticalIcon,
   PlusIcon,
-  SparklesIcon,
   SquareTerminalIcon,
   Trash2Icon,
   TriangleAlertIcon,
@@ -50,7 +50,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
-import { isProjectSkill, orderSkillsByUsage } from '@/lib/skills'
+import { SKILL_SOURCE_LABEL, isProjectSkill, paletteGroups, orderSkillsByUsage } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 import {
   WB_MAX_STEPS,
@@ -259,8 +259,15 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
   /** Palette → canvas, at `at` (or the end). One rule for drop, click and keyboard: the
    *  server's 8-step limit answers a toast, never a silent no-op. */
   const addSkill = (skill: string, at = steps.length) => {
+    // Once per flow (user report: the same skill could be stacked five times). A skill is a
+    // recipe, and applying it twice in one chain is never what was meant — the drop and the
+    // add button both land here, so one guard covers both.
     if (steps.length >= WB_MAX_STEPS) {
       toast(`A workflow holds at most ${WB_MAX_STEPS} steps.`, { tone: 'danger' })
+      return
+    }
+    if (steps.some((step) => step.skill === skill)) {
+      toast(`${skill} is already in the flow.`)
       return
     }
     setSteps(insertStep(steps, skillStep(skill, steps), at))
@@ -611,7 +618,12 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
             </div>
             <pre
               data-slot="wb-yaml"
-              className="mt-2 overflow-x-auto rounded-lg border border-border bg-card p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre text-muted-foreground shadow-xs"
+              // A11y (audit B1, WCAG 2.1.1): a horizontally scrollable region needs keyboard
+              // access. Focusable + named so it can be reached and scrolled without a mouse.
+              tabIndex={0}
+              role="group"
+              aria-label="workflow.yaml preview"
+              className="mt-2 overflow-x-auto rounded-lg border border-border bg-card p-3 font-mono text-[11.5px] leading-relaxed whitespace-pre text-muted-foreground shadow-xs outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               {yaml}
             </pre>
@@ -625,7 +637,6 @@ function WorkflowsBuilder({ routeName }: { routeName: string | undefined }) {
         <DragOverlay>
           {dragging?.type === 'palette' ? (
             <div className="flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 font-mono text-[13px] font-medium shadow-md">
-              <SparklesIcon aria-hidden="true" className="size-3.5 text-primary" />
               {dragging.skill}
             </div>
           ) : dragging?.type === 'step' ? (
@@ -866,11 +877,10 @@ function StepCardBody({
       <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
         {String(index + 1).padStart(2, '0')}
       </span>
-      {isCheck ? (
-        <SquareTerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" />
-      ) : (
-        <SparklesIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" />
-      )}
+      {/* Only a CHECK step carries a glyph — it is the one kind that is not a skill, and the
+          terminal mark is what says so. Skill steps are the default and wear nothing (user
+          feedback: the sparkle on every card was decoration). */}
+      {isCheck ? <SquareTerminalIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" /> : null}
       <div className="min-w-0 flex-1">
         <div className="truncate font-mono text-[13px] font-medium">{title}</div>
         {description ? (
@@ -935,11 +945,12 @@ function Palette({
       skill.name.toLowerCase().includes(needle) ||
       (skill.description ?? '').toLowerCase().includes(needle),
   )
+  const groups = paletteGroups(shown)
   return (
     <div data-slot="wb-palette" className="mt-2.5 flex flex-col gap-1">
-      {shown.length > 0 ? (
-        shown.map((skill) => (
-          <PaletteSkill key={skill.path} skill={skill} inFlow={inFlow.has(skill.name)} onAdd={onAdd} />
+      {groups.length > 0 ? (
+        groups.map((group) => (
+          <PaletteGroupSection key={group.key} group={group} inFlow={inFlow} onAdd={onAdd} />
         ))
       ) : (
         <p className="py-1 text-xs leading-relaxed text-soft-foreground">
@@ -947,6 +958,43 @@ function Palette({
         </p>
       )}
     </div>
+  )
+}
+
+/**
+ * One collapsible palette section (user request: categories). The header names the source and,
+ * when the source splits into name families, the family — `Global / auto (14)`. Open by default;
+ * folding is local view state, and a filter query keeps whatever still matches visible.
+ */
+function PaletteGroupSection({
+  group,
+  inFlow,
+  onAdd,
+}: {
+  group: ReturnType<typeof paletteGroups>[number]
+  inFlow: ReadonlySet<string>
+  onAdd: (skill: string) => void
+}) {
+  const [open, setOpen] = useState(true)
+  const label = group.family ? `${SKILL_SOURCE_LABEL[group.source]} / ${group.family}` : SKILL_SOURCE_LABEL[group.source]
+  return (
+    <section data-slot="wb-palette-group" data-group={group.key} className="flex flex-col gap-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="mt-1.5 flex h-6 w-full items-center gap-1.5 rounded-sm px-1 text-left text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        <ChevronDownIcon aria-hidden="true" className={cn('size-3 shrink-0 transition-transform', !open && '-rotate-90')} />
+        <span className="truncate">{label}</span>
+        <span className="ml-auto font-mono text-[10.5px] font-medium text-soft-foreground tabular-nums normal-case">{group.skills.length}</span>
+      </button>
+      {open
+        ? group.skills.map((skill) => (
+            <PaletteSkill key={skill.path} skill={skill} inFlow={inFlow.has(skill.name)} onAdd={onAdd} />
+          ))
+        : null}
+    </section>
   )
 }
 
@@ -961,27 +1009,37 @@ function PaletteSkill({
   inFlow: boolean
   onAdd: (skill: string) => void
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+  const { listeners, setNodeRef, isDragging } = useDraggable({
     id: `palette:${skill.name}`,
     data: { type: 'palette', skill: skill.name } satisfies DragItem,
+    // A skill already in the flow has nowhere to go: the row stops dragging and the add button
+    // below says why, instead of a drop that toasts after the fact.
+    disabled: inFlow,
   })
   return (
+    // Pointer-only drag surface, DELIBERATELY without dnd-kit's `attributes` (audit B2): the
+    // role="button" + tabIndex they add made this row an interactive element WRAPPING the real
+    // add-button — axe's nested-interactive, once per skill. The row stays a plain div that
+    // pointers can drag; the keyboard path is the labelled add button, which performs the same
+    // insert (position is then adjustable via the canvas grips, which are keyboard-accessible).
     <div
       ref={setNodeRef}
       data-slot="wb-skill"
       data-skill={skill.name}
       title={skill.description ?? ''}
       className={cn(
-        'flex cursor-grab items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 shadow-xs transition-colors hover:bg-muted',
+        'flex items-center gap-2 rounded-md border border-border bg-card px-2.5 py-1.5 shadow-xs transition-colors hover:bg-muted',
+        inFlow ? 'cursor-default' : 'cursor-grab',
         isDragging && 'opacity-40',
       )}
-      {...attributes}
       {...listeners}
     >
-      <SparklesIcon
-        aria-hidden="true"
-        className={cn('size-3.5 shrink-0', isProjectSkill(skill) ? 'text-violet' : 'text-soft-foreground')}
-      />
+      {/* The grip says "this row drags" (user feedback: the drag affordance was invisible).
+          Decorative — the whole row is the pointer surface; the add button is the keyboard path. */}
+      {/* Three things per row, no more (user feedback): the grip, the name, one control. The
+          sparkle went — every row had it, and project-vs-global already lives in the section
+          header. Check and + are mutually exclusive, so one slot carries whichever applies. */}
+      <GripVerticalIcon aria-hidden="true" className="-ml-0.5 size-3.5 shrink-0 text-soft-foreground/70" />
       <span
         className={cn(
           'min-w-0 flex-1 truncate font-mono text-[13px]',
@@ -990,17 +1048,32 @@ function PaletteSkill({
       >
         {skill.name}
       </span>
-      {inFlow ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-success" /> : null}
-      <button
-        type="button"
-        data-slot="wb-skill-add"
-        aria-label={`Add ${skill.name} to the flow`}
-        title="Add to the flow"
-        onClick={() => onAdd(skill.name)}
-        className="shrink-0 rounded p-0.5 text-soft-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
-      >
-        <PlusIcon aria-hidden="true" className="size-3.5" />
-      </button>
+      {inFlow ? (
+        <span
+          data-slot="wb-skill-in-flow"
+          role="img"
+          aria-label={`${skill.name} is already in the flow`}
+          title="Already in the flow"
+          className="flex size-6 shrink-0 items-center justify-center text-success"
+        >
+          <CheckIcon aria-hidden="true" className="size-3.5" />
+        </span>
+      ) : (
+        <button
+          type="button"
+          data-slot="wb-skill-add"
+          aria-label={`Add ${skill.name} to the flow`}
+          title="Add to the flow"
+          onClick={() => onAdd(skill.name)}
+          // Stop the pointerdown here: the row is a dnd-kit drag source with a 4px activation
+          // distance, and a click that slips those 4px on a 14px icon became a drag instead of an
+          // add (user report: "+ doesn't work"). The sensor never sees presses on the button now.
+          onPointerDown={(event) => event.stopPropagation()}
+          className="flex size-6 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors outline-none hover:bg-card hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        >
+          <PlusIcon aria-hidden="true" className="size-3.5" />
+        </button>
+      )}
     </div>
   )
 }

@@ -35,14 +35,15 @@ function chipOf(ui: React.ReactElement) {
 }
 
 describe('ReferenceChip without a status', () => {
-  it('is the neutral violet chip, with the URL as its native tooltip', () => {
+  it('is the quiet neutral chip, with the URL as its native tooltip', () => {
     // The pre-status treatment, unchanged: nothing is known about the PR, so nothing is claimed.
+    // Neutral, not violet (house rule: purple = action/active only) — metadata rests quiet.
     const chip = chipOf(<ReferenceChip reference={PR} taskTitle="Add checkout" />)
 
     expect(chip.getAttribute('data-status')).toBeNull()
-    expect(chip.className).toContain('text-violet')
+    expect(chip.className).toContain('text-muted-foreground')
     expect(chip.getAttribute('title')).toBe('https://github.com/o/r/pull/402')
-    expect(chip.textContent).toBe('#402')
+    expect(chip.textContent).toBe('PR #402')
   })
 
   it('carries no status glyph', () => {
@@ -134,7 +135,7 @@ describe('ReferenceChip with a status', () => {
       <ReferenceChip reference={PR} taskTitle="Add checkout" status={'queued-for-merge' as ReferenceStatus} />,
     )
 
-    expect(chip.className).toContain('text-violet')
+    expect(chip.className).toContain('text-muted-foreground')
     expect(chip.querySelector('svg[data-slot="status-dot"]')).toBeNull()
     // The neutral chip's own tooltip, not a described status: the URL, exactly as before statuses.
     expect(chip.getAttribute('title')).toBe('https://github.com/o/r/pull/402')

@@ -304,7 +304,7 @@ function ThreadEntryRenderer({
       return renderAsk !== undefined ? (
         renderAsk(entry)
       ) : (
-        <div data-slot="ask-card" className="rounded-lg border border-border bg-card px-4 py-3 text-sm">
+        <div data-slot="ask-card" className="rounded-lg border border-border bg-card px-4 py-3 text-[13px]">
           The agent asked a question. Open the main session to answer it.
         </div>
       )

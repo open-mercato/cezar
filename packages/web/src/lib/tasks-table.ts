@@ -332,7 +332,7 @@ export function usageCells(
       ? {
           text: `peak ${peakMem}`,
           kind: 'peak',
-          title: `peak — run finished${run.peakProcCount ? ` · ${run.peakProcCount} procs` : ''}`,
+          title: `peak — run finished${run.peakProcCount ? ` (${run.peakProcCount} procs)` : ''}`,
         }
       : { text: '', kind: 'none' },
   }

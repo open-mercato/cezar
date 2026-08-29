@@ -74,7 +74,9 @@ export const TASK_COLUMNS = [
   },
   {
     id: 'tokens',
-    label: 'IN / OUT',
+    // Title-case like every other label — the header row's `uppercase` owns the shouting, and
+    // prose surfaces (tooltips, aria) read "Fold In / out column", not a mid-sentence yell.
+    label: 'In / out',
     canFold: true,
     defaultExpanded: true,
     align: 'right',

@@ -167,7 +167,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
   {
     id: 'accounts',
     title: 'Agent accounts',
-    description: 'Second logins, and the agent and models a project uses when it has chosen none.',
+    description: 'Providers on this machine, second logins, and the defaults a project inherits.',
     icon: IdCardIcon,
     component: AccountsSection,
     scope: 'global',

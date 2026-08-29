@@ -21,6 +21,8 @@ export default defineConfig({
     // gitignored `.ai/qa/cez-home` decides whether the sidebar renders its flat or its grouped
     // shell, and every spec asserting flat-shell selectors becomes a coin flip. See the module.
     globalSetup: ['./workspace-registry.ts'],
+    // Stale keep-alive sockets to the long-lived fixture servers retry once (see the module).
+    setupFiles: ['./fetch-retry.ts'],
     // A real browser is slower than jsdom, but a smoke test that needs more than this is broken.
     testTimeout: 60_000,
     hookTimeout: 60_000,

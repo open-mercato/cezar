@@ -69,7 +69,7 @@ export function contextGroupLabel(files: number, searches: number): string {
   const parts: string[] = []
   if (files > 0) parts.push(plural(files, 'file', 'files'))
   if (searches > 0) parts.push(plural(searches, 'search', 'searches'))
-  return `Explored ${parts.join(' · ')}`
+  return `Explored ${parts.join(', ')}`
 }
 
 /** "3 earlier tool calls" — the legacy streak toggle line (chevron is the component's). */

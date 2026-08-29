@@ -63,13 +63,16 @@ export function PromptTemplateMenu({
           aria-label="Insert a prompt template"
           title="Insert a prompt template"
           disabled={disabled}
+          // Icon-only follows the composer's helper grammar (user decision: the in-between
+          // icons read as one family): a quiet size-8 ghost with a muted 16px glyph.
           className={cn(
-            'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
-            iconOnly ? 'w-[26px] justify-center px-0' : 'px-2.5',
+            iconOnly
+              ? 'inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50'
+              : 'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50',
             triggerClassName,
           )}
         >
-          <NotebookPenIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
+          <NotebookPenIcon aria-hidden="true" className={cn('shrink-0', iconOnly ? 'size-4' : 'size-3 text-violet')} />
           {iconOnly ? null : (
             <>
               templates

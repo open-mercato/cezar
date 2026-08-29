@@ -111,7 +111,7 @@ function CommitRow({ commit }: { commit: CommitListItem }) {
         <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{commit.shaLabel}</span>
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{commit.subject}</span>
         <span className="hidden shrink-0 text-[11px] text-soft-foreground sm:inline">
-          {commit.author} · {commit.when}
+          {commit.author}, {commit.when}
         </span>
       </Link>
     </div>

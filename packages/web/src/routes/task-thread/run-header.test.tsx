@@ -7,7 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
-import { RunHeader } from './run-header'
+import { RunHeader, RunMetaFooter, TakeOverButton } from './run-header'
 import { resolveConflictsPrompt } from './run-actions'
 
 afterEach(() => {
@@ -88,7 +88,17 @@ function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
         <Routes>
-          <Route path="/tasks/:id" element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} />} />
+          <Route
+            path="/tasks/:id"
+            element={
+              <>
+                <RunHeader run={record} onMarkedUnread={onMarkedUnread} />
+                {/* Cost/Agent/Mode/Tokens moved to the meta footer (mounted under the composer in
+                    production); render it here so the meta assertions still have a home. */}
+                <RunMetaFooter run={record} />
+              </>
+            }
+          />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
         <Toaster />
@@ -98,6 +108,22 @@ function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
 }
 
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
+
+/** Accessible name of each inline action (the icon-only "More actions" trigger reads its label). */
+const inlineActionNames = () =>
+  actionBar()
+    .getAllByRole('button')
+    .map((el) => el.getAttribute('aria-label') ?? el.textContent?.trim())
+
+/** The floating stateful CTA (user decision: it left the bar so the bar never jumps). */
+const floatingCta = () =>
+  document.querySelector('[data-slot="floating-cta"] [data-slot="primary-cta"]') as HTMLButtonElement
+
+/** Open the desktop overflow (#765) and return a scope over its folded secondary actions. */
+const openOverflow = async () => {
+  fireEvent.pointerDown(actionBar().getByRole('button', { name: 'More actions' }))
+  return within(await screen.findByRole('menu'))
+}
 
 describe('monitoring schedule', () => {
   it('shows the exact persisted deadline in a time element', () => {
@@ -123,13 +149,19 @@ describe('monitoring schedule', () => {
   })
 })
 
+const openRename = async () => {
+  const menu = await openOverflow()
+  fireEvent.click(menu.getByRole('menuitem', { name: 'Rename' }))
+  // The input mounts a tick later: the row opens itself in an effect.
+  return (await screen.findByLabelText('Task title')) as HTMLInputElement
+}
+
 describe('editable title (#389)', () => {
-  it('pencil flips the h1 into an input; Enter PATCHes the trimmed title exactly once', async () => {
+  it('Rename in the overflow opens the input; Enter PATCHes the trimmed title exactly once', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
-    const input = screen.getByLabelText('Task title') as HTMLInputElement
+    const input = await openRename()
     expect(input.value).toBe('Do the thing') // seeded with the displayed title, not the raw one
 
     fireEvent.change(input, { target: { value: '  New name  ' } })
@@ -151,8 +183,7 @@ describe('editable title (#389)', () => {
   it('blur commits like Enter', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
-    const input = screen.getByLabelText('Task title')
+    const input = await openRename()
     fireEvent.change(input, { target: { value: 'Renamed on blur' } })
     fireEvent.blur(input)
     await waitFor(() => {
@@ -160,11 +191,10 @@ describe('editable title (#389)', () => {
     })
   })
 
-  it('Escape abandons the draft — no PATCH, the old title stays', () => {
+  it('Escape abandons the draft — no PATCH, the old title stays', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
-    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
-    const input = screen.getByLabelText('Task title')
+    const input = await openRename()
     fireEvent.change(input, { target: { value: 'Never sent' } })
     fireEvent.keyDown(input, { key: 'Escape' })
 
@@ -172,12 +202,11 @@ describe('editable title (#389)', () => {
     expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
   })
 
-  it('an unchanged or emptied draft is not worth a request', () => {
+  it('an unchanged or emptied draft is not worth a request', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
     for (const value of ['Do the thing', '   ']) {
-      fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
-      const input = screen.getByLabelText('Task title')
+      const input = await openRename()
       fireEvent.change(input, { target: { value } })
       fireEvent.keyDown(input, { key: 'Enter' })
     }
@@ -185,32 +214,37 @@ describe('editable title (#389)', () => {
   })
 })
 
-describe('action bar visibility per status (the legacy rules, rendered)', () => {
-  const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Cancel'] },
-    // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
+describe('action bar visibility per status (#765: primaries inline, the rest folded)', () => {
+  // Inline = Finish (when flagged), then the ONE stateful primary CTA (its label follows the
+  // lifecycle — design review), then Open in… and the "More actions" disclosure; the secondary
+  // actions live in that overflow menu.
+  const matrix: Array<{ status: RunStatus; cta: string; inline: string[]; overflow: string[] }> = [
+    { status: 'queued', cta: 'Stop', inline: [], overflow: ['Rename', 'Notes', 'Cancel'] },
+    { status: 'running', cta: 'Stop', inline: [], overflow: ['Rename', 'Notes', 'Cancel'] },
+    { status: 'waiting', cta: 'Reply', inline: [], overflow: ['Close session', 'Rename', 'Notes', 'Cancel'] },
+    { status: 'review', cta: 'Review changes', inline: ['Open in'], overflow: ['Accept without PR', 'Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'done', cta: 'Reopen', inline: ['Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'failed', cta: 'Retry', inline: ['Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
+    { status: 'cancelled', cta: 'Reopen', inline: ['Open in'], overflow: ['Rename', 'Notes', 'Archive', 'Delete'] },
   ]
 
-  it.each(matrix)('$status → $visible', ({ status, visible }) => {
+  it.each(matrix)('$status → floating $cta, inline $inline, overflow $overflow', async ({ status, cta, inline, overflow }) => {
     stubFetch()
     renderHeader(run(status))
-    const names = within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
-      .getAllByRole('button')
-      .map((el) => el.textContent?.trim())
-    expect(names).toEqual(visible)
+    // The ONE stateful CTA floats in a fixed spot; the bar's inline set stays constant per
+    // lifecycle phase, so the bar never reflows between states.
+    expect(floatingCta()?.textContent?.trim()).toBe(cta)
+    expect(inlineActionNames()).toEqual([...inline, 'More actions'])
+    const menu = await openOverflow()
+    expect(menu.getAllByRole('menuitem').map((el) => el.textContent?.trim())).toEqual(overflow)
   })
 
-  it('an archived run offers Unarchive instead of Archive', () => {
+  it('an archived run offers Unarchive instead of Archive', async () => {
     stubFetch()
     renderHeader(run('done', { archived: true }))
-    expect(actionBar().queryByRole('button', { name: 'Archive' })).toBeNull()
-    expect(actionBar().getByRole('button', { name: 'Unarchive' })).not.toBeNull()
+    const menu = await openOverflow()
+    expect(menu.queryByRole('menuitem', { name: 'Archive' })).toBeNull()
+    expect(menu.getByRole('menuitem', { name: 'Unarchive' })).not.toBeNull()
   })
 
   it('VS Code is absent everywhere — the open-in-editor endpoint does not exist yet (R5)', () => {
@@ -233,13 +267,17 @@ describe('Mark unread (#775)', () => {
   const readDone = (extra: Partial<ApiRun> = {}) =>
     run('done', { finishedAt: FINISHED_AT, seenAt: SEEN_AT, ...extra })
 
-  it('offers the control for a read, finished run — next to Archive', () => {
+  it('offers the control for a read, finished run — in the overflow, before Archive', async () => {
     stubFetch()
     renderHeader(readDone())
-    const names = actionBar()
-      .getAllByRole('button')
-      .map((el) => el.textContent?.trim())
-    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+    const menu = await openOverflow()
+    expect(menu.getAllByRole('menuitem').map((el) => el.textContent?.trim())).toEqual([
+      'Rename',
+      'Notes',
+      'Mark unread',
+      'Archive',
+      'Delete',
+    ])
   })
 
   it.each([
@@ -248,16 +286,17 @@ describe('Mark unread (#775)', () => {
     ['a cancelled run', run('cancelled', { finishedAt: FINISHED_AT, seenAt: SEEN_AT })],
     ['a still-running run', run('running', { seenAt: SEEN_AT })],
     ['a done run caught with no finishedAt', run('done', { seenAt: SEEN_AT })],
-  ] as Array<[string, ApiRun]>)('hides the control for %s', (_name, record) => {
+  ] as Array<[string, ApiRun]>)('hides the control for %s', async (_name, record) => {
     stubFetch()
     renderHeader(record)
-    expect(actionBar().queryByRole('button', { name: 'Mark unread' })).toBeNull()
+    const menu = await openOverflow()
+    expect(menu.queryByRole('menuitem', { name: 'Mark unread' })).toBeNull()
   })
 
   it('Mark unread → POST /unread, bodyless like its read twin', async () => {
     const sent = stubFetch()
     renderHeader(readDone())
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Mark unread' }))
     await waitFor(() => {
       const request = sent.find((r) => r.path === '/api/v1/runs/r1/unread')
       expect(request?.method).toBe('POST')
@@ -274,7 +313,7 @@ describe('Mark unread (#775)', () => {
       expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(false)
     })
     renderHeader(readDone(), onMarkedUnread)
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Mark unread' }))
     expect(onMarkedUnread).toHaveBeenCalledTimes(1)
     await waitFor(() => expect(sent.some((r) => r.path === '/api/v1/runs/r1/unread')).toBe(true))
   })
@@ -287,7 +326,7 @@ describe('Mark unread (#775)', () => {
       '/api/v1/runs/r1/unread': () => jsonResponse({ error: 'not found' }, 404),
     })
     renderHeader(readDone())
-    fireEvent.click(actionBar().getByRole('button', { name: 'Mark unread' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Mark unread' }))
     await waitFor(() => expect(screen.getByText('not found')).not.toBeNull())
   })
 
@@ -301,10 +340,11 @@ describe('Mark unread (#775)', () => {
 })
 
 describe('actions hit their endpoints', () => {
-  it('Finish → POST /finish', async () => {
+  it('Close session (the old Finish) → POST /finish, from the overflow menu', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Finish' }))
+    const menu = await openOverflow()
+    fireEvent.click(menu.getByRole('menuitem', { name: 'Close session' }))
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/finish')).toBe(true)
     })
@@ -313,7 +353,7 @@ describe('actions hit their endpoints', () => {
   it('Continue → POST /continue', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    const button = floatingCta()
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
     await waitFor(() => {
@@ -334,7 +374,7 @@ describe('actions hit their endpoints', () => {
     })
     renderHeader(run('done', { runner: 'claude' }))
 
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    const button = floatingCta()
     await waitFor(() => expect(button.disabled).toBe(true))
     button.removeAttribute('disabled')
     fireEvent.click(button)
@@ -378,7 +418,7 @@ describe('actions hit their endpoints', () => {
     })
     renderHeader(run('done', { runner: 'claude' }))
 
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    const button = floatingCta()
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
 
@@ -392,7 +432,7 @@ describe('actions hit their endpoints', () => {
   it('Archive → POST /archive with the flipped flag', async () => {
     const sent = stubFetch()
     renderHeader(run('done', { archived: true }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Unarchive' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Unarchive' }))
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
@@ -401,7 +441,7 @@ describe('actions hit their endpoints', () => {
   it('Cancel asks first — the POST fires only after the confirm dialog', async () => {
     const sent = stubFetch()
     renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Cancel' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Cancel' }))
 
     // Nothing sent yet; the AlertDialog (never a native confirm) is up instead.
     expect(sent.some((r) => r.path === '/api/v1/runs/r1/cancel')).toBe(false)
@@ -415,7 +455,7 @@ describe('actions hit their endpoints', () => {
   it('Delete confirms, DELETEs, and navigates home', async () => {
     const sent = stubFetch()
     renderHeader(run('failed'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Delete' }))
 
     expect(sent.some((r) => r.method === 'DELETE')).toBe(false)
     const dialog = await screen.findByRole('alertdialog')
@@ -432,7 +472,7 @@ describe('actions hit their endpoints', () => {
   it('the delete confirm button stays "Delete" even for a long task name, which appears in the description instead (#403)', async () => {
     const longTitle = 'create a github issue for saving unsuccessfully finished tasks automatically'
     renderHeader(run('failed', { titleSummary: longTitle }))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Delete' }))
 
     const dialog = await screen.findByRole('alertdialog')
     expect(within(dialog).getByRole('button', { name: 'Delete' })).not.toBeNull()
@@ -442,7 +482,7 @@ describe('actions hit their endpoints', () => {
   it('dismissing the confirm keeps the run', async () => {
     const sent = stubFetch()
     renderHeader(run('done'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Delete' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Delete' }))
     const dialog = await screen.findByRole('alertdialog')
     fireEvent.click(within(dialog).getByRole('button', { name: 'Keep it' }))
     await waitFor(() => {
@@ -456,7 +496,7 @@ describe('actions hit their endpoints', () => {
       '/api/v1/runs/r1/continue': () => jsonResponse({ error: 'no agent session to resume' }, 409),
     })
     renderHeader(run('done'))
-    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    const button = floatingCta()
     await waitFor(() => expect(button.disabled).toBe(false))
     fireEvent.click(button)
     const item = await screen.findByRole('status')
@@ -468,7 +508,7 @@ describe('actions hit their endpoints', () => {
 /** Terminal now lives inside the Open in… menu: open it (Radix opens on pointerdown) and click
  *  the resume item. */
 async function clickTerminalResume(): Promise<void> {
-  fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in…' }))
+  fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in' }))
   const menu = await screen.findByRole('menu')
   fireEvent.click(within(menu).getByRole('menuitem', { name: /Terminal \(resume session\)/ }))
 }
@@ -529,7 +569,7 @@ describe('Open in… menu — agent CLI resume labeling (#402)', () => {
   async function openMenu(): Promise<HTMLElement> {
     // Without a resumable Terminal item, the button itself only appears once the async
     // worktreeTargets query resolves (empty-until-loaded) — findByRole waits it in.
-    const trigger = await actionBar().findByRole('button', { name: 'Open in…' })
+    const trigger = await actionBar().findByRole('button', { name: 'Open in' })
     fireEvent.pointerDown(trigger)
     return screen.findByRole('menu')
   }
@@ -621,7 +661,7 @@ describe('Open in… menu per-target icons (#361)', () => {
         }),
     })
     renderHeader(run('done', { worktreePath: '/tmp/wt' }))
-    fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in…' }))
+    fireEvent.pointerDown(actionBar().getByRole('button', { name: 'Open in' }))
     const menu = await screen.findByRole('menu')
 
     // The menu opens immediately; the worktree targets only appear once useOpenTargets resolves.
@@ -649,7 +689,7 @@ describe('notes panel', () => {
     })
     renderHeader(run('done'))
 
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Notes' }))
     await waitFor(() => {
       expect(document.querySelector('[data-slot="notes-panel"]')).not.toBeNull()
     })
@@ -657,7 +697,8 @@ describe('notes panel', () => {
     // Rendered markdown, not echoed source.
     expect(document.querySelector('[data-slot="notes-panel"]')?.textContent).not.toContain('#')
 
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    // Notes toggles: reopen the overflow and pick it again to close the panel.
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Notes' }))
     expect(document.querySelector('[data-slot="notes-panel"]')).toBeNull()
   })
 
@@ -666,13 +707,13 @@ describe('notes panel', () => {
       '/api/v1/runs/r1/handoff': () => new Response('', { status: 200 }),
     })
     renderHeader(run('running'))
-    fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
+    fireEvent.click((await openOverflow()).getByRole('menuitem', { name: 'Notes' }))
     await screen.findByText('No notes yet — the handoff file is seeded when the task starts.')
   })
 })
 
 describe('meta line, tabs, pill and resume hint', () => {
-  it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
+  it('meta shows the branch chip, the diffstat on its tab, and the agent summary in the badge', () => {
     stubFetch()
     renderHeader(
       run('done', {
@@ -684,25 +725,24 @@ describe('meta line, tabs, pill and resume hint', () => {
       }),
     )
     const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    expect(meta.textContent).toContain('quick-task')
-    // #416 pulled runner/model out of the loose dot-list to cut noise, and that still holds — they
-    // are not separate chips beside the workflow. But an icon ALONE made "which agent, account and
-    // model produced this?" unanswerable without knowing to click it, which is the one question the
-    // badge exists for. So they read as one quiet string ON the badge, and the menu keeps the
-    // labelled breakdown.
-    const badge = within(meta).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
-    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent)
-      .toBe('codex · gpt-5.2-codex')
-    // Still not loose text: everything runner/model-shaped is inside the badge, nowhere else.
-    expect(meta.textContent?.replace(badge.textContent ?? '', '')).not.toContain('codex')
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+    // The workflow chip left the header (it lives under the composer) and the diffstat rides
+    // the Changes tab now — the meta strip holds references and the branch only (UX pass).
+    expect(meta.textContent).not.toContain('quick-task')
     expect(within(meta).getByText('cez/r1').getAttribute('data-slot')).toBe('branch-chip')
-    expect(meta.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
-    expect(meta.textContent).toContain('IN 24.6k · OUT 2.4k')
-    expect(meta.textContent).toContain('$0.04')
-    // No context gauge: RunRecord carries no context-window data to draw one from.
-    expect(meta.querySelector('[data-slot="context-gauge"]')).toBeNull()
-
+    expect(meta.querySelector('[data-slot="diff-stat"]')).toBeNull()
+    const changesTab = screen.getByRole('link', { name: /Changes/ })
+    expect(changesTab.querySelector('[data-slot="diff-stat"]')?.textContent).toBe('+42 −7')
+    // The meta footer: the Agent stat names the runner (icon + name), a button that opens the
+    // runner/account/model breakdown; the Mode stat carries the model; Tokens and Cost their own.
+    const badge = within(footer).getByRole('button', { name: /Agent: codex, model gpt-5.2-codex/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
+    expect(badge.textContent).toContain('codex')
+    expect(footer.textContent).toContain('gpt-5.2-codex')
+    expect(footer.textContent).toContain('IN 24.6k / OUT 2.4k')
+    expect(footer.textContent).toContain('$0.04')
+    // No context gauge: RunRecord carries no context-window data to draw one from.
+    expect(footer.querySelector('[data-slot="context-gauge"]')).toBeNull()
   })
 
   // #801: automation provenance is history — a run launched while automations were on keeps it
@@ -731,8 +771,9 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(automated())
 
-    const link = await screen.findByRole('link', { name: 'Automation' })
-    expect(link.getAttribute('href')).toBe('/automations/a-1/log')
+    // Two chip strips by design now: the bar portal's (desktop) and the tab row's (mobile).
+    const links = await screen.findAllByRole('link', { name: 'Automation' })
+    for (const link of links) expect(link.getAttribute('href')).toBe('/automations/a-1/log')
   })
 
   it('degrades the automation chip to plain text while automations are off', async () => {
@@ -769,12 +810,12 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
     renderHeader(run('done', { costUsd: 0.04 }))
 
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
     await waitFor(() => {
-      expect(meta.textContent).not.toContain('IN 24.6k')
-      expect(meta.textContent).not.toContain('$0.04')
+      expect(footer.textContent).not.toContain('IN 24.6k')
+      expect(footer.textContent).not.toContain('$0.04')
     })
-    expect(within(meta).getByRole('button', { name: /Agent:/ })).not.toBeNull()
+    expect(within(footer).getByRole('button', { name: /Agent:/ })).not.toBeNull()
   })
 
   it.each([
@@ -813,7 +854,8 @@ describe('meta line, tabs, pill and resume hint', () => {
     if (prChip) {
       expect(prChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/534')
       expect(prChip.textContent).toContain('#534')
-      expect(branch?.nextElementSibling?.nextElementSibling).toBe(prChip)
+      // Chips sit adjacent now — no middot separator between them (house rule).
+      expect(branch?.nextElementSibling).toBe(prChip)
     }
     if (issueChip) {
       expect(issueChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/544')
@@ -941,8 +983,8 @@ describe('meta line, tabs, pill and resume hint', () => {
   it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: opencode/ }))
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+    fireEvent.pointerDown(within(footer).getByRole('button', { name: /Agent: opencode/ }))
     const menu = await screen.findByRole('menu')
     expect(within(menu).getByText('runner: opencode')).not.toBeNull()
     expect(within(menu).getByText('model: auto')).not.toBeNull()
@@ -959,8 +1001,8 @@ describe('meta line, tabs, pill and resume hint', () => {
       '/api/v1/config': () => jsonResponse({ defaultRunner: 'codex', defaultModels: {} }),
     })
     renderHeader(run('done', { runner: undefined }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = await within(meta).findByRole('button', { name: /Agent: codex, model auto/ })
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+    const badge = await within(footer).findByRole('button', { name: /Agent: codex, model auto/ })
     expect(badge.getAttribute('data-slot')).toBe('agent-badge')
   })
 
@@ -985,20 +1027,21 @@ describe('meta line, tabs, pill and resume hint', () => {
       ...extra,
     })
 
-    it('names the account the step recorded, by its label — visibly, not only on click', async () => {
+    it('names the account the step recorded, by its label — on the Agent tile and its menu', async () => {
       withAccounts()
       renderHeader(run('done', {
         runner: 'claude',
         model: 'opus',
         steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
       }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      const badge = await within(meta).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
-      // The regression this guards: it read as a bare bot icon, so the answer was there but nobody
-      // could find it without knowing to open a menu.
-      await waitFor(() => expect(
-        badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent,
-      ).toBe('claude · Klaudiusz · opus'))
+      const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+      // The accessible name carries the account; the menu spells it out (its only home — the strip
+      // shows runner + model, the account rides the click-through).
+      const badge = await within(footer).findByRole('button', { name: /Agent: claude, account Klaudiusz, model opus/ })
+      fireEvent.pointerDown(badge)
+      const menu = within(await screen.findByRole('menu'))
+      expect(menu.getByText('account: Klaudiusz')).not.toBeNull()
+      expect(menu.getByText('model: opus')).not.toBeNull()
     })
 
     it('prefers what RAN over what the composer asked for', async () => {
@@ -1010,17 +1053,17 @@ describe('meta line, tabs, pill and resume hint', () => {
         agentProfile: 'default',
         steps: [step({ sessionId: 'sess-1', profileId: 'klaudiusz' })],
       }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /account Klaudiusz/ })
+      const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+      await within(footer).findByRole('button', { name: /account Klaudiusz/ })
     })
 
     it('says nothing at all for a run from before accounts existed', async () => {
       // Nothing wrote it down, so claiming the discovered account would be an invention.
       withAccounts()
       renderHeader(run('done', { runner: 'claude', steps: [step({ sessionId: 'sess-1' })] }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /Agent: claude, model auto/ })
-      expect(meta.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
+      const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+      await within(footer).findByRole('button', { name: /Agent: claude, model auto/ })
+      expect(footer.querySelector('[data-slot="agent-badge-account"]')).toBeNull()
     })
 
     it('still names an account that has since been removed', async () => {
@@ -1030,15 +1073,16 @@ describe('meta line, tabs, pill and resume hint', () => {
         runner: 'claude',
         steps: [step({ sessionId: 'sess-1', profileId: 'deleted-one' })],
       }))
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-      await within(meta).findByRole('button', { name: /account deleted-one \(removed\)/ })
+      const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+      await within(footer).findByRole('button', { name: /account deleted-one \(removed\)/ })
     })
   })
 
   describe('the canonical model identity (#546)', () => {
-    /** Opens the agent badge's menu — `DropdownMenuContent` is not in the DOM until it does. */
+    /** Opens the agent badge's menu — `DropdownMenuContent` is not in the DOM until it does.
+     *  The badge lives on the meta FOOTER (under the composer), not the header's chip row. */
     const openAgentMenu = async () => {
-      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      const meta = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
       const badge = within(meta).getByRole('button', { name: /^Agent:/ })
       fireEvent.pointerDown(badge, { button: 0, ctrlKey: false, pointerType: 'mouse' })
       await waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
@@ -1089,11 +1133,11 @@ describe('meta line, tabs, pill and resume hint', () => {
   it('a claude run still gets an agent badge — Claude is the default, not a hidden runner', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'claude' }))
-    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
-    const badge = within(meta).getByRole('button', { name: /Agent: claude, model auto/ })
-    // Named on the badge like any other agent — claude being the default is not a reason to leave
-    // "what produced this?" unanswered.
-    expect(badge.querySelector('[data-slot="agent-badge-summary"]')?.textContent).toBe('claude · auto')
+    const footer = document.querySelector('[data-slot="run-meta-footer"]') as HTMLElement
+    const badge = within(footer).getByRole('button', { name: /Agent: claude, model auto/ })
+    // Named on the Agent tile like any other agent — claude being the default is not a reason to
+    // leave "what produced this?" unanswered.
+    expect(badge.textContent).toContain('claude')
   })
 
   it('tabs: Session is current; Changes and Files link to the routed surfaces', () => {
@@ -1105,37 +1149,27 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
 
-  it('a queued run shows its position in the pill, from the shared runs list', async () => {
-    stubFetch({
-      '/api/v1/runs': () =>
-        jsonResponse([
-          run('queued', { id: 'earlier', createdAt: '2026-07-14T11:00:00.000Z' }),
-          run('queued'),
-        ]),
-    })
-    renderHeader(run('queued'))
-    await waitFor(() => {
-      expect(document.querySelector('[data-slot="pill"]')?.textContent).toBe('queued #2')
-    })
-  })
+  // The Status stat left the header (it duplicated the paused/attention hint), so a queued run no
+  // longer shows its position here — the QueuedPlaceholder empty state carries it instead.
 
-  it('a closed run with a session shows the copyable per-backend resume hint', async () => {
-    stubFetch()
+  // The take-over line is now a compact button UNDER the composer (TakeOverButton) — it no longer
+  // prints the raw command; clicking it copies the per-backend resume command.
+  it('a closed run with a session shows a take-over button that copies the resume command', async () => {
     const writeText = vi.fn(() => Promise.resolve())
     vi.stubGlobal('navigator', { clipboard: { writeText } })
-    renderHeader(run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' }))
+    render(<TakeOverButton run={run('failed', { runner: 'opencode', worktreePath: '/tmp/wt' })} />)
 
-    const hint = document.querySelector('[data-slot="resume-hint"]') as HTMLElement
-    expect(hint.textContent).toContain('cd /tmp/wt && opencode --session sess-1')
-    fireEvent.click(hint)
+    const btn = document.querySelector('[data-slot="resume-hint"]') as HTMLElement
+    expect(btn).not.toBeNull()
+    expect(btn.getAttribute('title')).toContain('cd /tmp/wt && opencode --session sess-1')
+    fireEvent.click(btn)
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('cd /tmp/wt && opencode --session sess-1')
     })
   })
 
-  it('an active run has no resume hint — the engine still owns the session', () => {
-    stubFetch()
-    renderHeader(run('running'))
+  it('an active run has no take-over button — the engine still owns the session', () => {
+    render(<TakeOverButton run={run('running')} />)
     expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
   })
 })

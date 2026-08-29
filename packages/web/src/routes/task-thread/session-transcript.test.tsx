@@ -132,7 +132,11 @@ describe('SessionTranscript', () => {
       expect(document.querySelector('[data-slot="reasoning"]')?.textContent).toContain('Shared reasoning')
       expect(document.querySelector('[data-slot="tool-card"]')?.textContent).toContain('npm test')
       expect(document.querySelector('[data-slot="note-line"]')?.textContent).toContain('Lifecycle note')
-      expect(document.querySelector('img[alt="agent screenshot"]')).not.toBeNull()
+      // A11y (audit A4): the accessible name describes the image; the persisted filename is a
+      // hover title, not the alt.
+      const shot = document.querySelector<HTMLImageElement>('[data-slot="thread-image"]')
+      expect(shot?.getAttribute('alt')).toBe('Image the agent captured during the session')
+      expect(shot?.getAttribute('title')).toBe('agent screenshot')
     },
   )
 

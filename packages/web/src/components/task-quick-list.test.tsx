@@ -31,13 +31,11 @@ function run(over: Partial<RunRecord> = {}): RunRecord {
 }
 
 function renderList(props: Partial<Parameters<typeof TaskQuickList>[0]> = {}, route = '/') {
-  const onViewChange = props.onViewChange ?? vi.fn()
-  const utils = render(
+  return render(
     <MemoryRouter initialEntries={[route]}>
-      <TaskQuickList runs={[]} view="active" now={NOW} {...props} onViewChange={onViewChange} />
+      <TaskQuickList runs={[]} now={NOW} {...props} />
     </MemoryRouter>
   )
-  return { ...utils, onViewChange }
 }
 
 const bucket = (label: string): HTMLElement => {
@@ -47,7 +45,7 @@ const bucket = (label: string): HTMLElement => {
 }
 
 const row = (id: string) => document.querySelector(`[data-run-id="${id}"]`)
-const dotOf = (id: string) => document.querySelector(`[data-run-id="${id}"] [data-slot="status-dot"]`)
+const dotOf = (id: string) => document.querySelector(`[data-run-id="${id}"] [data-slot="status-mark"]`)
 
 /** The rendered text of each row under one bucket header, in order. */
 const rowsIn = (label: string): string[] =>
@@ -67,8 +65,12 @@ describe('TaskQuickList', () => {
       ],
     })
 
-    const headers = [...document.querySelectorAll('[data-slot="quick-list-bucket"] h2')].map((h) => h.textContent)
-    expect(headers).toEqual(['Needs you', 'Working', 'Recent'])
+    // Flat list: the buckets still ORDER the rows but paint no headings of their own.
+    const order = [...document.querySelectorAll('[data-slot="quick-list-bucket"]')].map((el) =>
+      el.getAttribute('data-bucket'),
+    )
+    expect(order).toEqual(['Needs you', 'Working', 'Recent'])
+    expect(document.querySelectorAll('[data-slot="quick-list-bucket"] h2')).toHaveLength(0)
     expect(rowsIn('Needs you')).toEqual(['Structured changes endpoint1m'])
     expect(rowsIn('Working')).toEqual(['Normalize agent-event protocol1m'])
     expect(rowsIn('Recent')).toEqual(['README parallel-agents tagline1m'])
@@ -163,20 +165,23 @@ describe('TaskQuickList', () => {
         ],
       })
       expect(dotOf('w')?.getAttribute('data-tone')).toBe('pending')
-      expect(dotOf('v')?.getAttribute('data-tone')).toBe('violet')
+      // Review is amber now — your move, like waiting — told apart from it by its glyph.
+      expect(dotOf('v')?.getAttribute('data-tone')).toBe('pending')
+      expect(dotOf('v')?.getAttribute('data-kind')).toBe('review')
       expect(dotOf('r')?.getAttribute('data-tone')).toBe('violet')
       expect(dotOf('d')?.getAttribute('data-tone')).toBe('success')
       expect(dotOf('f')?.getAttribute('data-tone')).toBe('danger')
 
       // Exactly one dot per row — the design system's "a single 7px dot per row" rule.
-      expect(document.querySelectorAll('[data-run-id="w"] [data-slot="status-dot"]')).toHaveLength(1)
+      expect(document.querySelectorAll('[data-run-id="w"] [data-slot="status-mark"]')).toHaveLength(1)
       expect(dotOf('w')?.getAttribute('aria-label')).toBe('needs you')
     })
 
     it('pulses the transitioning rows only', () => {
       renderList({ runs: [run({ id: 'r', status: 'running' }), run({ id: 'd', status: 'done' })] })
-      expect(dotOf('r')?.className).toContain('animate-pulse')
-      expect(dotOf('d')?.className).not.toContain('animate-pulse')
+      // Motion rides the glyph: a slow spin for the agent at work, nothing on a finished run.
+      expect(dotOf('r')?.querySelector('svg')?.getAttribute('class')).toContain('animate-spin')
+      expect(dotOf('d')?.querySelector('svg')?.getAttribute('class')).not.toMatch(/animate-/)
     })
   })
 
@@ -218,20 +223,20 @@ describe('TaskQuickList', () => {
 
     it('is a sibling of the row link, not nested inside it', () => {
       // Two independent targets: the row opens the task, the chip opens the PR. An anchor inside
-      // an anchor is invalid HTML, and only one of them would ever fire.
+      // an anchor is invalid HTML, and only one of them would ever fire — so the chip lives on
+      // the META line beside the title link, never inside it.
       renderList({ runs: [run({ id: 'x', pullRequestUrl: 'https://github.com/o/r/pull/7' })] })
       const chip = document.querySelector('[data-slot="pr-chip"]') as HTMLElement
       expect(chip.closest('a[href^="/tasks/"]')).toBeNull()
-      expect(chip.parentElement?.getAttribute('data-slot')).toBe('task-row')
+      expect(chip.parentElement?.getAttribute('data-slot')).toBe('task-row-meta')
     })
 
-    it('leads the row and takes the age slot, spelling the number rather than the word "PR" (#788)', () => {
+    it('sits on the meta line under the name, spelling the number rather than the word "PR" (#788)', () => {
       renderList({
         runs: [run({ id: 'x', title: 'Has a PR', status: 'review', pullRequestUrl: 'https://github.com/o/r/pull/7' })],
       })
-      // Chip first, then the name: the number is the row's leading identifier, and the age it
-      // displaces was the weaker of the two signals.
-      expect(rowsIn('Needs you')).toEqual(['#7Has a PR'])
+      // Two lines (Devin-style): the name first, then age and reference beneath it.
+      expect(rowsIn('Needs you')).toEqual(['Has a PR1m#7'])
     })
 
     it('carries the issue when no PR exists yet — the number the title prefix was about', () => {
@@ -331,21 +336,23 @@ describe('TaskQuickList', () => {
 
       const rowEl = row('worst') as HTMLElement
       const title = rowEl.querySelector('[data-slot="task-row-title"]') as HTMLElement
-      expect(title.className).toContain('min-w-[7rem]')
+      // The title owns its whole line now (two-line row): it grows, truncates, and competes with
+      // nothing but the unread marker.
       expect(title.className).toContain('flex-1')
+      expect(title.className).toContain('truncate')
       expect(title.textContent).toBe('implementing comment threads across the whole thread view')
 
       const diff = rowEl.querySelector('[data-slot="diff-stat"]') as HTMLElement
-      // Hidden by default at the 264px column, back once the column is dragged past 23rem —
-      // the width at which the pair fits without costing the name any of its default budget.
+      // On the meta line: hidden at the 264px column, back once the column is dragged past
+      // 20rem — the meta line has no name to protect, so it can afford the pair sooner.
       expect(diff.className).toContain('hidden')
-      expect(diff.className).toContain('@min-[23rem]/sidebar:inline')
+      expect(diff.className).toContain('@min-[20rem]/sidebar:inline')
       // Dropped from view, never from reach — the exact numbers stay in its tooltip.
       expect(diff.getAttribute('title')).toBe('+59514 −12160 across 208 files')
 
-      // Everything the row paints, in reading order: reference, name, diff, unread marker. No
-      // age — the reference took that slot.
-      expect(rowsIn('Recent')).toEqual(['#775implementing comment threads across the whole thread view+59514 −12160'])
+      // Everything the row paints, in reading order: name, then the meta line — age,
+      // reference, diff.
+      expect(rowsIn('Recent')).toEqual(['implementing comment threads across the whole thread viewunread1m#775+59514 −12160'])
     })
 
     it('gives the collapsed variant tile the same floor', () => {
@@ -374,7 +381,7 @@ describe('TaskQuickList', () => {
           run({ id: 'new', title: 'New', status: 'running', createdAt: ago(4 * 60_000) }),
         ],
       })
-      expect(row('old')?.textContent).toBe('Old2h')
+      expect(row('old')?.textContent).toBe('Oldunread2h')
       expect(row('new')?.textContent).toBe('New4m')
     })
 
@@ -385,8 +392,8 @@ describe('TaskQuickList', () => {
           run({ id: 'q2', title: 'Second', status: 'queued', createdAt: ago(60_000) }),
         ],
       })
-      expect(row('q1')?.textContent).toBe('First#1')
-      expect(row('q2')?.textContent).toBe('Second#2')
+      expect(row('q1')?.textContent).toBe('Firstqueue #1')
+      expect(row('q2')?.textContent).toBe('Secondqueue #2')
     })
 
     it('keeps the queue position even when the row has a reference chip', () => {
@@ -404,10 +411,10 @@ describe('TaskQuickList', () => {
           }),
         ],
       })
-      expect(row('qref')?.textContent).toBe('#788queued on an issue#1')
+      expect(row('qref')?.textContent).toBe('queued on an issuequeue #1#788')
     })
 
-    it('still drops the age for a referenced row that is not queued', () => {
+    it('keeps the age beside the reference on the meta line', () => {
       renderList({
         runs: [
           run({
@@ -419,7 +426,7 @@ describe('TaskQuickList', () => {
           }),
         ],
       })
-      expect(row('aged')?.textContent).toBe('#9Finished with a PR')
+      expect(row('aged')?.textContent).toBe('Finished with a PRunread2h#9')
     })
   })
 
@@ -468,8 +475,8 @@ describe('TaskQuickList', () => {
       expect(screen.getByRole('button', { expanded: true })).not.toBeNull()
 
       // The letter chip, its own dot, and what actually differs between the variants.
-      expect(row('va')?.textContent).toBe('Aclaude · IN 92.0k · OUT 4.2k · $0.31')
-      expect(row('vb')?.textContent).toBe('Bcodex · IN 40.0k · OUT 1.8k · $0.12')
+      expect(row('va')?.textContent).toBe('Aclaude, IN 92.0k / OUT 4.2k, $0.31')
+      expect(row('vb')?.textContent).toBe('Bcodex, IN 40.0k / OUT 1.8k, $0.12')
       expect(dotOf('va')?.getAttribute('data-tone')).toBe('violet')
       // Each variant is still its own deep link.
       expect(row('vb')?.querySelector('a')?.getAttribute('href')).toBe('/tasks/vb')
@@ -494,74 +501,50 @@ describe('TaskQuickList', () => {
         ),
       })
       fireEvent.click(screen.getByRole('button', { expanded: false }))
-      expect(row('va')?.textContent).toBe('Aclaude · $0.31')
+      expect(row('va')?.textContent).toBe('Aclaude, $0.31')
     })
 
     it('gates variant token directions and cost independently', () => {
       renderList({ runs: variants(), showTokens: false, showCost: true })
       fireEvent.click(screen.getByRole('button', { expanded: false }))
-      expect(row('va')?.textContent).toBe('Aclaude · $0.31')
-      expect(row('vb')?.textContent).toBe('Bcodex · $0.12')
+      expect(row('va')?.textContent).toBe('Aclaude, $0.31')
+      expect(row('vb')?.textContent).toBe('Bcodex, $0.12')
     })
   })
 
-  describe('the Active/Archived tabs', () => {
+  describe('the flat list (Claude-sessions style: no view rows, no bucket headings)', () => {
     const runs = () => [
       run({ id: 'a', status: 'running' }),
       run({ id: 'b', status: 'waiting' }),
       run({ id: 'c', status: 'done', archived: true }),
     ]
 
-    it('shows counts and which view is on', () => {
-      renderList({ runs: runs(), view: 'active' })
-      const active = screen.getByRole('button', { name: /Active/ })
-      const archived = screen.getByRole('button', { name: /Archived/ })
-      expect(active.textContent).toBe('Active2')
-      expect(archived.textContent).toBe('Archived1')
-      expect(active.getAttribute('aria-pressed')).toBe('true')
-      expect(archived.getAttribute('aria-pressed')).toBe('false')
+    it('renders the live tasks only — the archive lives behind the Tasks page tab', () => {
+      renderList({ runs: runs() })
+      expect(row('a')).not.toBeNull()
+      expect(row('b')).not.toBeNull()
+      expect(row('c')).toBeNull()
+      expect(screen.queryByRole('button', { name: /Active/ })).toBeNull()
+      expect(screen.queryByRole('button', { name: /Archived/ })).toBeNull()
     })
 
-    it('reports the view the user picked', () => {
-      const { onViewChange } = renderList({ runs: runs(), view: 'active' })
-      fireEvent.click(screen.getByRole('button', { name: /Archived/ }))
-      expect(onViewChange).toHaveBeenCalledWith('archived')
-    })
-
-    it('renders no count for an empty bucket', () => {
-      renderList({ runs: [run({ status: 'running' })] })
-      // "Archived 0" is noise — an empty bucket says so by being empty.
-      expect(screen.getByRole('button', { name: /Archived/ }).textContent).toBe('Archived')
-    })
-
-    it('flags waiting runs on the Active tab only while you are looking elsewhere', () => {
-      const { unmount } = renderList({ runs: runs(), view: 'archived' })
-      expect(document.querySelector('[data-slot="waiting-dot"]')?.getAttribute('data-tone')).toBe('pending')
-      unmount()
-
-      // On the Active view the rows themselves say it — the tab dot would be noise.
-      renderList({ runs: runs(), view: 'active' })
-      expect(document.querySelector('[data-slot="waiting-dot"]')).toBeNull()
-    })
-
-    it('shows the archived view when asked', () => {
-      renderList({ runs: runs(), view: 'archived' })
-      expect(rowsIn('Archived')).toHaveLength(1)
-      expect(row('a')).toBeNull()
-      expect(row('c')).not.toBeNull()
+    it('shows no bucket headings — order and the status dots carry the grouping', () => {
+      renderList({ runs: runs() })
+      // The bucket wrappers survive (order comes from them) but their labels do not render.
+      expect(document.querySelectorAll('[data-slot="quick-list-bucket"] h2')).toHaveLength(0)
+      // Needs-you ordering still leads: the waiting run's bucket precedes the working one's.
+      const order = [...document.querySelectorAll('[data-slot="quick-list-bucket"]')].map(
+        (el) => el.getAttribute('data-bucket'),
+      )
+      expect(order[0]).toBe('Needs you')
     })
   })
 
   describe('empty states', () => {
     it('says there are no tasks, without inventing any', () => {
-      renderList({ runs: [], view: 'active' })
+      renderList({ runs: [] })
       expect(screen.getByText('No tasks yet — describe one.')).not.toBeNull()
       expect(document.querySelectorAll('[data-slot="task-row"]')).toHaveLength(0)
-    })
-
-    it('says the archive is empty', () => {
-      renderList({ runs: [run({ status: 'done' })], view: 'archived' })
-      expect(screen.getByText('Nothing archived yet.')).not.toBeNull()
     })
   })
 })
@@ -613,12 +596,11 @@ describe('TaskQuickListContainer', () => {
     )
   })
 
-  it('drives the shared Active/Archived view', async () => {
+  it('stays pinned to active work — the archive is the Tasks page tab, not a rail view', async () => {
     renderContainer([run({ id: 'a', status: 'running' }), run({ id: 'b', status: 'done', archived: true })])
 
-    fireEvent.click(await screen.findByRole('button', { name: /Archived/ }))
-
-    await waitFor(() => expect(row('b')).not.toBeNull())
-    expect(row('a')).toBeNull()
+    await waitFor(() => expect(row('a')).not.toBeNull())
+    expect(row('b')).toBeNull()
+    expect(screen.queryByRole('button', { name: /Archived/ })).toBeNull()
   })
 })

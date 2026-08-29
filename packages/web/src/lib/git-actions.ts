@@ -35,7 +35,7 @@ export interface GitActionState {
   prUrl?: string
 }
 
-export type GitActionId = 'commit' | 'push' | 'create-pr' | 'view-pr' | 'open-terminal'
+export type GitActionId = 'commit' | 'push' | 'create-pr' | 'open-terminal'
 
 export interface GitAction {
   id: GitActionId
@@ -43,8 +43,6 @@ export interface GitAction {
   enabled: boolean
   /** Present exactly when disabled — the human sentence the button shows as its tooltip. */
   reason?: string
-  /** `view-pr` only: the PR's web URL. */
-  href?: string
 }
 
 export interface GitActionBar {
@@ -107,19 +105,18 @@ function createPrAction(state: GitActionState): GitAction {
 
 /**
  * The policy. Slots:
- *  - primary: **View PR** once a PR URL is known, otherwise **Commit** (the workhorse).
+ *  - primary: **Commit** — the workhorse. (View PR left the toolbar: the app bar's PR chip is
+ *    the one door to the PR now, so the policy never emits it.)
  *  - secondary: **Push**, then **Create PR** while there is no PR yet.
  *  - menu: **Open in terminal** (the open-in-cli session handoff) — present ONLY in local
  *    mode; hosted mode (`localHandoff: false`) hides it entirely, per the deployment-modes
  *    doctrine (hidden, not disabled — there is no "my machine" to explain a disable with).
  */
 export function gitActionPolicy(state: GitActionState): GitActionBar {
-  const primary: GitAction = state.prUrl
-    ? { id: 'view-pr', label: 'View PR', enabled: true, href: state.prUrl }
-    : commitAction(state)
+  const primary: GitAction = commitAction(state)
 
   const secondary: GitAction[] = state.prUrl
-    ? [commitAction(state), pushAction(state)]
+    ? [pushAction(state)]
     : [pushAction(state), createPrAction(state)]
 
   const menu: GitAction[] = []

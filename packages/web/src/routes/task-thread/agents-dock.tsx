@@ -69,7 +69,7 @@ export function AgentsDock({
         <BotIcon aria-hidden className="size-3.5 shrink-0 text-soft-foreground" />
         <span className="shrink-0 font-semibold">Agents</span>
         <span data-slot="agents-count" className="shrink-0 text-muted-foreground tabular-nums">
-          · {done}/{total}
+          ({done}/{total})
         </span>
         {!open && active !== undefined ? (
           <span data-slot="agents-current" className="min-w-0 truncate text-muted-foreground">
@@ -102,7 +102,7 @@ function AgentRow({ agent, onSelect }: { agent: SubagentSummary; onSelect?: (id:
       {agent.agentType !== undefined ? (
         <span
           data-slot="agent-type"
-          className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
+          className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"
         >
           {agent.agentType}
         </span>

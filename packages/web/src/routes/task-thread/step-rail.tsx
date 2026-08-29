@@ -1,8 +1,6 @@
-import { ChevronDownIcon, CircleCheckIcon, CircleIcon, CircleXIcon, LoaderCircleIcon } from 'lucide-react'
-import { useState } from 'react'
+import { CircleCheckIcon, CircleIcon, CircleXIcon, LoaderCircleIcon } from 'lucide-react'
 
 import type { StepState, StepStatus } from '@open-mercato/cezar-api-client'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { cn } from '@/lib/utils'
 
 /**
@@ -48,32 +46,66 @@ export function railProgress(steps: ReadonlyArray<Pick<StepState, 'status'>>): n
   return score / steps.length
 }
 
+/**
+ * The tone of the progress bar (audit A2). Amber is the RUNNING color; a bar left amber at 100%
+ * is why a finished run reads as still working. So: still an active step → amber; else a failed
+ * or cancelled step → danger; else the workflow ran to the end → success. Derived from the steps
+ * alone, so it settles the moment the run does — no run-status prop to thread.
+ */
+export type RailBarTone = 'active' | 'done' | 'failed'
+export function railBarTone(steps: ReadonlyArray<Pick<StepState, 'status'>>): RailBarTone {
+  if (steps.some((step) => railVisual(step.status) === 'active')) return 'active'
+  if (steps.some((step) => railVisual(step.status) === 'failed')) return 'failed'
+  return 'done'
+}
+
+const BAR_TONE_CLASS: Record<RailBarTone, string> = {
+  active: 'bg-pending',
+  done: 'bg-success',
+  failed: 'bg-danger',
+}
+
 export function StepRail({ steps }: { steps: StepState[] }) {
   if (steps.length === 0) return null
   const pct = railProgress(steps) * 100
   return (
-    <div data-slot="step-rail" className="flex min-w-0 flex-col gap-1">
+    // A 4-track grid (icon · name · kind · position) with each row a subgrid, so the columns line
+    // up across rows however wide the individual step names are.
+    <div
+      data-slot="step-rail"
+      className="grid grid-cols-[auto_auto_auto_auto] items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground"
+    >
       {steps.map((step, index) => (
         <div
           key={step.id}
           data-slot="step-row"
           data-visual={railVisual(step.status)}
-          className="flex min-h-[22px] min-w-0 items-center gap-2 text-[13px] text-muted-foreground"
+          className="col-span-4 grid min-h-[22px] grid-cols-subgrid items-center"
         >
           <RailIcon visual={railVisual(step.status)} />
-          <span className="min-w-0 truncate font-medium text-foreground">{step.name}</span>
-          {step.iterations > 1 ? (
-            <span data-slot="step-iterations" className="shrink-0 text-xs text-soft-foreground tabular-nums">
-              ×{step.iterations}
-            </span>
-          ) : null}
-          <span className="ml-auto shrink-0 pl-2 text-[11.5px] text-soft-foreground tabular-nums">
-            {step.kind} · step {index + 1} of {steps.length}
+          <span className="font-medium text-foreground">
+            {step.name}
+            {step.iterations > 1 ? (
+              <span data-slot="step-iterations" className="ml-1 text-xs text-soft-foreground tabular-nums">
+                ×{step.iterations}
+              </span>
+            ) : null}
+          </span>
+          {/* Kind as a subtle tag, not a dot-joined word — no middot separators (house rule). */}
+          <span className="justify-self-start rounded-sm bg-muted px-1.5 py-px text-[10px] font-medium tracking-wide uppercase">
+            {step.kind}
+          </span>
+          <span className="text-xs text-soft-foreground tabular-nums">
+            step {index + 1} of {steps.length}
           </span>
         </div>
       ))}
-      <div data-slot="step-progress" className="mt-1 h-0.5 overflow-hidden rounded-full bg-muted">
-        <div className="h-full rounded-full bg-pending" style={{ width: `${pct}%` }} />
+      <div data-slot="step-progress" className="col-span-4 mt-1 h-0.5 overflow-hidden rounded-full bg-muted">
+        <div
+          data-tone={railBarTone(steps)}
+          className={cn('h-full rounded-full', BAR_TONE_CLASS[railBarTone(steps)])}
+          style={{ width: `${pct}%` }}
+        />
       </div>
     </div>
   )
@@ -115,7 +147,7 @@ export function activeStepIndex(steps: ReadonlyArray<Pick<StepState, 'status'>>)
 
 /** One status dot in the collapsed summary — the rail's four glyphs compressed to a color.
  *  Amber (`bg-pending`) stays a dot-only color per the guardian rule. */
-function StepDot({ visual }: { visual: RailVisual }) {
+export function StepDot({ visual }: { visual: RailVisual }) {
   const tone =
     visual === 'done'
       ? 'bg-success'
@@ -134,57 +166,3 @@ function StepDot({ visual }: { visual: RailVisual }) {
   )
 }
 
-/** Expand memory per run id — the same module-level map the Agents dock keeps (`openByRun` in
- *  agents-dock.tsx), for the same reason: `RunHeader` is rendered separately by each of the four
- *  task routes, so without it a Session → Changes → Commits hop would throw the reader's explicit
- *  expand away every time. Session-lifetime only; no server persistence invented for it. */
-const openByRun = new Map<string, boolean>()
-
-/**
- * The step rail as it sits in the run header: a ONE-LINE summary by default — a dot per step,
- * the current step's name, its position, and the progress bar — so the sticky header stays
- * shallow and the thread gets the vertical room. Clicking it expands the full `StepRail`.
- * Collapsed by default because the summary already answers "where is this run?" at a glance;
- * an explicit expand is remembered for that run across tab switches.
- */
-export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepState[] }) {
-  const [open, setOpen] = useState(() => openByRun.get(runId) ?? false)
-  if (steps.length === 0) return null
-  const toggle = (next: boolean) => {
-    openByRun.set(runId, next)
-    setOpen(next)
-  }
-  const index = activeStepIndex(steps)
-  const current = steps[index]!
-  const pct = railProgress(steps) * 100
-  return (
-    <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="min-w-0">
-      <CollapsibleTrigger
-        aria-label={`Workflow: ${current.name}, step ${index + 1} of ${steps.length}`}
-        className="group flex min-h-[30px] w-full items-center gap-2.5 text-left text-xs text-muted-foreground hover:text-foreground"
-      >
-        <span data-slot="step-dots" className="flex shrink-0 items-center gap-1">
-          {steps.map((step) => (
-            <StepDot key={step.id} visual={railVisual(step.status)} />
-          ))}
-        </span>
-        <span className="min-w-0 max-w-[45%] shrink truncate font-semibold text-foreground">{current.name}</span>
-        <span className="shrink-0 text-soft-foreground tabular-nums">
-          step {index + 1} of {steps.length}
-        </span>
-        <span data-slot="step-summary-progress" className="h-0.5 min-w-[36px] flex-1 overflow-hidden rounded-full bg-muted">
-          <span className="block h-full rounded-full bg-pending" style={{ width: `${pct}%` }} />
-        </span>
-        <ChevronDownIcon
-          aria-hidden
-          className="size-4 shrink-0 text-soft-foreground transition-transform group-data-[state=open]:rotate-180"
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
-        <div className="pt-2">
-          <StepRail steps={steps} />
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
-  )
-}

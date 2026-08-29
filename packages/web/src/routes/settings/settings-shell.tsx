@@ -180,11 +180,6 @@ export function SettingsSectionRoute({
       <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
         <h1 className="text-base font-semibold">{section.title}</h1>
         <p className="text-[13px] text-soft-foreground">{section.description}</p>
-        {scope === 'global' ? (
-          <span data-slot="settings-scope-chip" className="ml-auto text-[11px] text-soft-foreground">
-            Global settings
-          </span>
-        ) : null}
       </header>
       <div className="flex flex-1 flex-col md:flex-row">
         <SectionNav scope={scope} activeId={section.id} capabilities={capabilities} />
@@ -207,14 +202,8 @@ export function SettingsIndexRoute({ scope, capabilities }: {
   const global = scope === 'global'
   return (
     <div data-route={global ? 'settings-global' : 'settings'} className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 hidden h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5 md:flex">
-        <h1 className="text-base font-semibold">{global ? 'Global settings' : 'Settings'}</h1>
-        <p className="text-[13px] text-soft-foreground">
-          {global
-            ? 'Preferences for you and this machine, shared by every project.'
-            : 'Configure this project and its agents.'}
-        </p>
-      </header>
+      {/* No page header: the shell's bar already names the area (user decision). */}
+      <h1 className="sr-only">{global ? 'Workspace settings' : 'Project settings'}</h1>
       <div className="flex flex-1 flex-col md:flex-row">
         <SectionNav scope={scope} activeId={null} capabilities={capabilities} />
         {/* No second h1 for small screens: the app shell's mobile top bar already titles the
