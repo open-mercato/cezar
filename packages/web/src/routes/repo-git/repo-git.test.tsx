@@ -170,6 +170,7 @@ describe('the repo view Changes segment', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="changes-tree"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="tree-dir"]')?.textContent).toContain('src/util')
     // …including its own bounded scroller, so a long list never drags the diff down with it.
+    await waitFor(() => expect(document.querySelector('[data-slot="changes-tree-pane"]')).not.toBeNull())
     const pane = document.querySelector('[data-slot="changes-tree-pane"]') as HTMLElement
     expect(pane.className).toContain('max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)]')
     expect(pane.className).toContain('overflow-y-auto')

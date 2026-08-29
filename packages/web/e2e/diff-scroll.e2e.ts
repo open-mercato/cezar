@@ -258,22 +258,36 @@ describe(`diff virtualization on a generated ${FIXTURE_FILES}-file changeset`, (
       return {
         rows: pane.querySelectorAll('[data-slot="tree-file"]').length,
         overflow: Math.round(pane.scrollHeight - pane.clientHeight),
-        height: Math.round(pane.clientHeight),
-        room: Math.round(scroller.clientHeight),
+        paneBottom: Math.round(pane.getBoundingClientRect().bottom),
+        scrollerBottom: Math.round(scroller.getBoundingClientRect().bottom),
         mainTop: Math.round(scroller.scrollTop),
       }
-    })()`) as { rows: number; overflow: number; height: number; room: number; mainTop: number } | null
+    })()`) as {
+      rows: number
+      overflow: number
+      paneBottom: number
+      scrollerBottom: number
+      mainTop: number
+    } | null
 
     expect(pane, 'the tree pane did not render — is the viewport below md?').not.toBeNull()
     // The premise: more files than fit. Without it the rest proves nothing.
     expect(pane!.rows).toBeGreaterThan(FIXTURE_FILES / 2)
     expect(pane!.overflow, 'the tree pane is unbounded — it grows the page instead of scrolling').toBeGreaterThan(0)
-    // Capped by the room under the sticky chrome, never taller than the scrollport itself.
-    expect(pane!.height).toBeLessThanOrEqual(pane!.room)
+    // Capped by the room under the sticky chrome: the pane's bottom edge sits inside the
+    // scrollport. Edges, not heights — a height comparison passes with the cap's whole slack to
+    // spare and so would stay green even with the pane hanging below the fold, which is the one
+    // failure mode this cap exists to prevent.
+    expect(pane!.paneBottom, 'the tree pane hangs below the fold').toBeLessThanOrEqual(pane!.scrollerBottom)
 
     // The claim itself: the tree runs to its end while the diff stays exactly where it was.
     // Compared against the offset measured a moment ago, not against 0 — the specs above share
     // this page load and leave `main` scrolled, and where it sits is not this test's business.
+    //
+    // This is a scripted scroll, so it proves the pane is its OWN scroller and that reaching the
+    // last file no longer moves `main`. It says nothing about `overscroll-contain`: a scripted
+    // scroll never chains to an ancestor whatever the overscroll-behavior is, and the driver's
+    // input ops are pointer-based, with no wheel to send. Wheel chaining stays manual-QA territory.
     const moved = browser.evaluate(`(() => {
       const pane = document.querySelector('[data-slot="changes-tree-pane"]')
       pane.scrollTop = pane.scrollHeight
