@@ -135,10 +135,20 @@ afterAll(() => {
 const DOCK = '[data-slot="agents-dock"]'
 const ROW = '[data-slot="agent-item"]'
 
+/** The dock starts COLLAPSED (a quiet odometer) — expand it before reading rows. */
+function expandDock(): void {
+  browser.waitForFunction(`document.querySelector('${DOCK}') !== null`)
+  if (browser.evaluate(`document.querySelector('${DOCK}').dataset.state`) === 'collapsed') {
+    browser.click(`${DOCK} button[aria-expanded]`)
+  }
+  browser.waitForFunction(`document.querySelector('${DOCK}').dataset.state === 'open'`)
+}
+
 describe('the Agents dock against a replayed fan-out', () => {
   it('docks both sub-agents with odometer, type badge, activity and tool count', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
-    // The dock mounts only once the replay has produced the fan-out.
+    // The dock mounts only once the replay has produced the fan-out — collapsed by default.
+    expandDock()
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="agents-count"]')?.textContent.includes('2/2')`,
@@ -167,6 +177,7 @@ describe('the Agents dock against a replayed fan-out', () => {
 
   it('a row opens the drill-down sheet with that agent’s output and nobody else’s', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    expandDock()
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
     // The second agent's row — a real dialog-opening button.
@@ -196,41 +207,36 @@ describe('the Agents dock against a replayed fan-out', () => {
     expect(browser.evaluate(`document.querySelector('${DOCK}') !== null`)).toBe(true)
   }, 120_000)
 
-  it('the long agent panel scrolls, detaches from follow-tail, and exposes the jump pill', () => {
+  it('summarizes a busy agent instead of streaming every card into the sheet', () => {
+    // The drill-down became a SUMMARY panel: a heavy child stream (34 seeded Bash checks)
+    // folds into activity counts rather than 34 cards — the raw transcript stays in the
+    // thread's own Task cards.
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    expandDock()
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
     browser.click(`${ROW}:nth-of-type(1) button`)
-    browser.waitForFunction(`document.querySelector('[data-slot="transcript-viewport"]') !== null`)
+    browser.waitForFunction(`document.querySelector('[data-slot="subagent-sheet"]') !== null`)
 
-    const metrics = JSON.parse(
-      browser.evaluate(`JSON.stringify((() => {
-        const el = document.querySelector('[data-slot="transcript-viewport"]')
-        const style = getComputedStyle(el)
-        return {
-          overflowY: style.overflowY,
-          scrollbarGutter: style.scrollbarGutter,
-          scrollHeight: el.scrollHeight,
-          clientHeight: el.clientHeight,
-        }
-      })())`) as string,
-    ) as { overflowY: string; scrollbarGutter: string; scrollHeight: number; clientHeight: number }
-    expect(metrics.overflowY).toBe('auto')
-    expect(metrics.scrollbarGutter).toContain('stable')
-    expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight)
+    const sheet = browser.evaluate(
+      `document.querySelector('[data-slot="subagent-sheet"]').textContent`,
+    ) as string
+    expect(sheet).toContain('Audit the auth flow')
+    expect(sheet).toContain('general-purpose')
+    expect(sheet).toContain('tool calls')
+    // Not one card per child — the sheet is a digest: the heavy 34-check stream folds into
+    // the activity counts, with at most a handful of representative cards.
+    expect(
+      browser.evaluate(`document.querySelectorAll('[data-slot="subagent-sheet"] [data-slot="tool-card"]').length`),
+    ).toBeLessThan(10)
 
-    browser.evaluate(`(() => {
-      const el = document.querySelector('[data-slot="transcript-viewport"]')
-      el.dispatchEvent(new WheelEvent('wheel', { deltaY: -120, bubbles: true }))
-      el.scrollTop = 0
-      el.dispatchEvent(new Event('scroll', { bubbles: true }))
-    })()`)
-    browser.waitForFunction(`document.querySelector('[data-slot="jump-to-latest"]') !== null`)
     browser.screenshot(join(artifactsDir, 'agents-dock-long-transcript.png'))
-    browser.click('[data-slot="jump-to-latest"]')
+    browser.press('Escape')
+    browser.waitForFunction(`document.querySelector('[data-slot="subagent-sheet"]') === null`)
   }, 120_000)
 
   it('collapses to a one-line odometer', () => {
     browser.goto(`${baseUrl}/tasks/${RUN_ID}`)
+    expandDock()
     browser.waitForFunction(`document.querySelectorAll('${ROW}').length === 2`)
 
     browser.click(`${DOCK} > button`)
