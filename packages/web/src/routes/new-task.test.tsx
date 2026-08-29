@@ -379,8 +379,8 @@ describe('the hero surface', () => {
   it('renders the mockup hero: title, subtitle, the grid ground, and focus lands in the textarea', async () => {
     serve()
     renderNewTask()
-    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What should the agent work on?')
-    expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('What are we conquering today?')
+    expect(screen.getByText('Caesar works in an isolated worktree. Nothing lands until you review it.')).toBeTruthy()
     expect(document.querySelector('[data-route="new"] [data-slot="grid-backdrop"]')).not.toBeNull()
     // Asserted here for the DEFAULT run mode only. #793: this line used to be printed
     // unconditionally, so it also claimed isolation for runs that had opted out of it — the
@@ -496,7 +496,7 @@ describe('picker data flows', () => {
       serve()
       renderNewTask()
       await pillReady()
-      expect(note()).toBe('Runs in an isolated worktree — review everything before it lands.')
+      expect(note()).toBe('Caesar works in an isolated worktree. Nothing lands until you review it.')
 
       // Unchecking the chip changes where the work lands, so it has to change what the header
       // says. This is the regression: the line was printed unconditionally, so it kept promising
@@ -504,7 +504,7 @@ describe('picker data flows', () => {
       await openRunOptions()
       fireEvent.click(optionsCheckbox('Isolated worktree'))
       await waitFor(() => expect(note())
-        .toBe('Runs in the repo working tree — your checkout is modified directly.'))
+        .toBe('Caesar works directly in your checkout. Changes land as he makes them.'))
     })
 
     it('explains a non-git folder rather than warning about a checkout', async () => {
@@ -514,7 +514,7 @@ describe('picker data flows', () => {
       renderNewTask()
       await pillReady()
       expect(note())
-        .toBe('Runs in place. No git repository detected, so there is no worktree to isolate in.')
+        .toBe('Caesar works in place. No git repository here, so there is nothing to isolate.')
     })
 
     it('follows the workspace Worktree-off policy, not just an explicit click', async () => {
@@ -529,7 +529,7 @@ describe('picker data flows', () => {
       renderNewTask()
       await pillReady()
       await waitFor(() => expect(note())
-        .toBe('Runs in the repo working tree — your checkout is modified directly.'))
+        .toBe('Caesar works directly in your checkout. Changes land as he makes them.'))
     })
   })
 

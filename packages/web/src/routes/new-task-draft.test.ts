@@ -191,17 +191,17 @@ describe('composerRunModeNote (#793)', () => {
     {
       worktree: true,
       hasGit: true,
-      expected: 'Runs in an isolated worktree — review everything before it lands.',
+      expected: 'Caesar works in an isolated worktree. Nothing lands until you review it.',
     },
     {
       worktree: false,
       hasGit: true,
-      expected: 'Runs in the repo working tree — your checkout is modified directly.',
+      expected: 'Caesar works directly in your checkout. Changes land as he makes them.',
     },
     {
       worktree: false,
       hasGit: false,
-      expected: 'Runs in place. No git repository detected, so there is no worktree to isolate in.',
+      expected: 'Caesar works in place. No git repository here, so there is nothing to isolate.',
     },
   ]
 

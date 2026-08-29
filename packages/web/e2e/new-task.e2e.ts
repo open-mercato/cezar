@@ -108,7 +108,7 @@ describe('the full-screen /new against a live dry-run server', () => {
     browser.click(`[data-slot="sidebar"] a[href="${scoped('/new')}"]`)
     browser.waitForFunction(`document.querySelector('[data-route="new"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped('/new')}`)
-    expect(browser.text('h1')).toBe('What should the agent work on?')
+    expect(browser.text('h1')).toBe('What are we conquering today?')
     expect(browser.isVisible('[data-slot="grid-backdrop"]')).toBe(true)
     expect(
       browser.evaluate(

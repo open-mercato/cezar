@@ -197,7 +197,7 @@ describe('pageTitleContext', () => {
 const ROUTE_CASES: Array<[url: string, route: string, title: string]> = [
   ['/', 'tasks', 'Tasks'],
   // The real full-screen composer (R4 Step 1.1): the hero title is the page heading.
-  ['/new', 'new', 'What should the agent work on?'],
+  ['/new', 'new', 'What are we conquering today?'],
   // The real thread view (Step R3.1): with fetch never answering it is honestly loading.
   ['/tasks/abc123', 'task-thread', 'Loading task…'],
   // The real R5 tab routes: with fetch never answering they are honestly loading.

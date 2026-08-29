@@ -558,7 +558,7 @@ export function NewTaskRoute() {
       <div className="w-full max-w-[720px]">
         <header className="mb-6 text-center max-md:mb-4">
           <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
-            What should the agent work on?
+            What are we conquering today?
           </h1>
           {/* Follows the resolved run mode (#793). Printing the isolation promise
               unconditionally made this line false for every run the user opted out of — and
@@ -1338,7 +1338,9 @@ function SuggestedChips({ onPick }: { onPick: (text: string) => void }) {
           type="button"
           data-slot="suggested-chip"
           onClick={() => onPick(suggestion)}
-          className="inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          // bg-background, not transparent: the composer's grid backdrop showed through the
+          // chips (user report) — they float over it, so they carry their own opaque ground.
+          className="inline-flex h-[30px] items-center gap-1.5 rounded-full border border-border bg-background px-3 text-[12.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-soft-foreground" />
           {suggestion}
