@@ -67,7 +67,9 @@ describe('automatic Open Mercato skills updates', () => {
       config = await api('/api/v1/workspace/config')
     }
     expect(config.skillsAutoUpdate).toBe(false)
-    expect(browser.text('[data-slot="skills-settings-section"]')).toContain('explicit workspace override')
+    // The section reflects the stored override: the toggle is off and Use default is offered.
+    expect(browser.evaluate(`document.querySelector('[data-slot="skills-auto-update"]').getAttribute('aria-checked')`)).toBe('false')
+    expect(browser.count('[data-action="skills-use-default"]')).toBe(1)
 
     browser.click('[data-action="skills-use-default"]')
     for (let attempt = 0; config.skillsAutoUpdate !== null && attempt < 40; attempt += 1) {
@@ -79,9 +81,10 @@ describe('automatic Open Mercato skills updates', () => {
 
   it('keeps the navigation marker absent for the dry-run current state', () => {
     browser.goto(`${baseUrl}/p/${projectId}/`)
-    browser.waitForFunction(`document.querySelector('[data-slot="sidebar"] nav') !== null`)
+    // Skills lives in the sidebar FOOTER now (workspace library, user decision).
+    browser.waitForFunction(`document.querySelector('[data-slot="sidebar-footer"]') !== null`)
     expect(browser.count('[data-slot="nav-update-marker"]')).toBe(0)
-    expect(browser.text('[data-slot="sidebar"] nav')).toContain('Skills')
+    expect(browser.text('[data-slot="sidebar-footer"]')).toContain('Skills')
     browser.screenshot(`${artifactsDir}/skills-navigation-current.png`)
   })
 
@@ -110,9 +113,9 @@ describe('automatic Open Mercato skills updates', () => {
     browser.goto(`${baseUrl}/p/${projectId}/`)
     browser.waitForFunction(`document.querySelector('[data-slot="mobile-top-bar"]') !== null`)
     browser.click('[data-slot="mobile-top-bar"] button[aria-label="Open menu"]')
-    browser.waitForFunction(`document.querySelector('[role="dialog"] nav') !== null`)
+    browser.waitForFunction(`document.querySelector('[role="dialog"] [data-slot="sidebar-footer"]') !== null`)
 
-    expect(browser.text('[role="dialog"] nav')).toContain('Skills')
+    expect(browser.text('[role="dialog"] [data-slot="sidebar-footer"]')).toContain('Skills')
     expect(browser.count('[role="dialog"] [data-slot="nav-update-marker"]')).toBe(0)
     browser.screenshot(`${artifactsDir}/skills-mobile-navigation.png`, { viewport: true })
   })

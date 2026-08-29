@@ -80,8 +80,9 @@ describe('settings → agents against the live dry-run server', () => {
   it('renders every knob, agent-agnostically named', () => {
     gotoAgents()
     browser.waitForFunction(`document.querySelector('[data-slot="agents-base-branch"]') !== null`)
-    expect(browser.count('[data-slot="agents-runner"] [role="radio"]')).toBe(3)
-    expect(browser.count('[data-slot="agents-model"]')).toBe(3)
+    // Four agents now (pi joined the roster upstream).
+    expect(browser.count('[data-slot="agents-runner"] [role="radio"]')).toBe(4)
+    expect(browser.count('[data-slot="agents-model"]')).toBe(4)
     expect(browser.count('[data-slot="agents-system-prompt"]')).toBe(1)
     // The dry-run repo is a git checkout, so the base-branch picker is the real control.
     expect(browser.count('[data-slot="agents-base-branch"]')).toBe(1)
@@ -91,14 +92,20 @@ describe('settings → agents against the live dry-run server', () => {
     gotoAgents()
     browser.click('[data-slot="agents-runner"] [data-value="codex"]')
     await waitForConfig((c) => c.defaultRunner === 'codex')
-    expect(browser.count('[data-slot="agents-runner"] [data-value="codex"][aria-checked="true"]')).toBe(1)
+    // The DOM reflects the write once its query refetches — wait, don't sample.
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="agents-runner"] [data-value="codex"][aria-checked="true"]') !== null`,
+    )
   })
 
   it('per-runner model preset: select writes the runner key, others untouched', async () => {
+    // The shared env's config may already hold OTHER runners' presets from earlier sessions —
+    // the invariant is that THIS write changes claude and leaves the rest exactly as read.
+    const before = await waitForConfig(() => true)
     setSelect('[data-slot="agents-model"][data-runner="claude"]', 'opus')
     const config = await waitForConfig((c) => c.defaultModels.claude === 'opus')
-    expect(config.defaultModels.codex).toBeUndefined()
-    expect(config.defaultModels.opencode).toBeUndefined()
+    expect(config.defaultModels.codex).toBe(before.defaultModels.codex)
+    expect(config.defaultModels.opencode).toBe(before.defaultModels.opencode)
   })
 
   it('system prompt: explicit save persists the trimmed text', async () => {

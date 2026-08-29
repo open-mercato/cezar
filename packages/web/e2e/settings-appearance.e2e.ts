@@ -61,10 +61,11 @@ describe('settings → appearance against the live dry-run server', () => {
     browser.goto(`${baseUrl}/settings/global/appearance`)
     browser.waitForFunction(`document.querySelector('[data-route="settings-global-appearance"]') !== null`)
 
-    // The GLOBAL nav: the original four sections plus the Open Mercato skills preference,
-    // and nothing project-scoped.
+    // The GLOBAL nav: appearance, notifications, resources, skills, agent accounts and
+    // projects — and nothing project-scoped.
     const nav = '[data-slot="settings-nav"][data-scope="global"]'
-    expect(browser.count(`${nav} [data-section]`)).toBe(5)
+    expect(browser.count(`${nav} [data-section]`)).toBe(6)
+    expect(browser.count(`${nav} [data-section="accounts"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="appearance"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="notifications"]`)).toBe(1)
     expect(browser.count(`${nav} [data-section="resources"]`)).toBe(1)
@@ -92,17 +93,19 @@ describe('settings → appearance against the live dry-run server', () => {
   })
 
   it('accent lands in ui-state.json and re-applies at boot', async () => {
-    browser.click('[data-slot="appearance-accent"] [data-value="violet"]')
-    browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
+    // Violet is the DEFAULT accent now and defaults write no data attribute — the non-default
+    // LIME is what proves the pipe.
+    browser.click('[data-slot="appearance-accent"] [data-value="lime"]')
+    browser.waitForFunction(`document.documentElement.dataset.accent === 'lime'`)
 
     // The server actually persisted it — not just the query cache.
-    const appearance = await waitForServerAppearance((a) => a.accent === 'violet')
-    expect(appearance.accent).toBe('violet')
+    const appearance = await waitForServerAppearance((a) => a.accent === 'lime')
+    expect(appearance.accent).toBe('lime')
 
-    // Cold load: pre-paint mirror + server truth both say violet.
+    // Cold load: pre-paint mirror + server truth both say lime.
     browser.goto(`${baseUrl}/settings/global/appearance`)
-    browser.waitForFunction(`document.documentElement.dataset.accent === 'violet'`)
-    expect(browser.count('[data-slot="appearance-accent"] [data-value="violet"][aria-checked="true"]')).toBe(1)
+    browser.waitForFunction(`document.documentElement.dataset.accent === 'lime'`)
+    expect(browser.count('[data-slot="appearance-accent"] [data-value="lime"][aria-checked="true"]')).toBe(1)
   })
 
   it('compact density measurably tightens the spacing scale', async () => {
@@ -118,9 +121,10 @@ describe('settings → appearance against the live dry-run server', () => {
 
     browser.screenshot(`${artifactsDir}/settings-appearance.png`)
 
-    // Neutralize for the rest of the suite run (afterAll restores the file itself too).
+    // Neutralize for the rest of the suite run (afterAll restores the file itself too):
+    // the defaults — comfortable, violet — write no data attributes.
     browser.click('[data-slot="appearance-density"] [data-value="comfortable"]')
-    browser.click('[data-slot="appearance-accent"] [data-value="lime"]')
+    browser.click('[data-slot="appearance-accent"] [data-value="violet"]')
     browser.waitForFunction(
       `document.documentElement.dataset.density === undefined && document.documentElement.dataset.accent === undefined`,
     )

@@ -59,6 +59,8 @@ function gotoResources(): void {
 beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   original = (await workspaceConfig()).resources
+  // A known baseline: residue from an interrupted earlier run must not pre-satisfy the waits.
+  await putResources({ maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5 })
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
 })
@@ -74,6 +76,11 @@ afterAll(async () => {
 describe('global Resources monitoring controls', () => {
   it('persists capacity and interval mode through a cold reload', async () => {
     gotoResources()
+    // Settle the config QUERY, not just the section shell: a change dispatched while the
+    // form still renders its defaults gets swallowed by the arriving server values.
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="resources-max-monitoring"]')?.value !== undefined && !document.querySelector('[data-slot="resources-max-monitoring"]').disabled`,
+    )
     choose('[data-slot="resources-max-monitoring"]', '3')
     await waitForResources((resources) => resources.maxMonitoringSessions === 3)
 
