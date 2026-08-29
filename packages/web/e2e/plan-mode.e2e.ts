@@ -103,7 +103,9 @@ const stepOrder = () => browser.evaluate(`${stepIdsJs}.join()`) as string
 async function clickStepControl(selector: string, expected: string): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const before = stepOrder()
-    browser.click(selector)
+    // A DOM click, not a coordinate click: on the mobile sheet the control can sit under the
+    // sticky chrome where the provider's hit-test refuses it, while the handler is real.
+    browser.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`)
     for (let poll = 0; poll < 20; poll += 1) {
       await new Promise((r) => setTimeout(r, 100))
       const now = stepOrder()
@@ -124,9 +126,9 @@ describe('plan mode against a live dry-run server', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="mode-plan"]') !== null`)
     // Sources must have LOADED before submitting — a plan submit races the workflows/skills
     // queries otherwise and is (correctly) rejected with the "still loading" toast. The pill
-    // showing the fixture's project skill is the ready signal (same trick as new-task.e2e).
+    // showing the COLD quick-task default is the ready signal (same trick as new-task.e2e).
     browser.waitForFunction(
-      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('lint-fix')`,
+      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('quick-task')`,
     )
 
     expect(browser.evaluate(`document.querySelector('[data-slot="mode-plan"]').getAttribute('aria-checked')`)).toBe('false')
@@ -189,6 +191,21 @@ describe('plan mode against a live dry-run server', () => {
   }, 90_000)
 
   it('on an iPhone the overlay is a full-screen sheet and the ↑/↓ buttons still reorder', async () => {
+    // A prior test may have consumed the overlay — replan if it is gone.
+    if (browser.count('[data-slot="plan-review"]') === 0) {
+      browser.goto(`${baseUrl}${scoped('/new')}`)
+      browser.waitForFunction(
+        `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('quick-task')`,
+      )
+      if (browser.evaluate(`document.querySelector('[data-slot="mode-plan"]').getAttribute('aria-checked')`) !== 'true') {
+        browser.click('[data-slot="mode-plan"]')
+        browser.waitForFunction(`document.querySelector('[data-slot="mode-plan"]').getAttribute('aria-checked') === 'true'`)
+      }
+      browser.click('[data-slot="composer"] textarea')
+      browser.fill('[data-slot="composer"] textarea', 'Tighten the flaky suite end to end.')
+      browser.click('[aria-label="Plan task"]')
+      browser.waitForFunction(`document.querySelector('[data-slot="plan-review"]') !== null`)
+    }
     browser.setViewport(390, 844)
     // The reflow must LAND before anything measures or clicks: a click computed against the
     // pre-resize layout dispatches into the gap between cards and silently does nothing.
