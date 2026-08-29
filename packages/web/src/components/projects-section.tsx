@@ -201,10 +201,11 @@ function ProjectRow({
         >
           <span className="min-w-0 flex-1 truncate">{project.name}</span>
         </RouterLink>
-        {/* The row's two actions (user decision): the PROJECT's settings and a new task there,
-            shown on hover or focus so the list reads as names. Active is the bold row. */}
+        {/* The row's two actions (user decision, revised): the PROJECT's settings and a new
+            task there, always visible — hover-reveal hid the affordances on a fresh start,
+            where nothing hinted the row had actions at all. Active is the bold row. */}
         {!missing ? (
-          <span className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/row:opacity-100 has-[:focus-visible]:opacity-100">
+          <span className="flex shrink-0 items-center gap-0.5">
             <RouterLink
               to={`/p/${project.id}/settings`}
               data-slot="group-settings"
