@@ -16,6 +16,25 @@
   is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
 
 ## 🐛 Fixes
+- 🐛 **A question one closing brace short is now a card, not a wall of JSON.** An agent that ended
+  its turn with a `CEZ:ASK` payload missing its final `}` — the single most common way a
+  hand-written one-line JSON blob gets mangled, and what an output-token limit does to one — lost
+  the whole question: no chips, ~760 characters of raw JSON left in the transcript, and a grey
+  footnote where a three-option card should have been. The task still parked at Needs you, so it
+  looked identical to a question that had never been asked. A bounded repair now sits under the
+  schema: the payload is scanned for its unclosed `{` and `[`, the missing closers are appended,
+  and the result goes through the **unchanged** validator. Only syntax is repaired, never
+  semantics — a stream cut mid-string, after a comma or after a colon is still refused, so is a
+  mismatched closer and an already-balanced payload that failed to parse for some other reason
+  (a trailing comma), and a repair that yields fewer than two options still degrades to plain text
+  exactly as before. A recovered card is never passed off as a clean one: the run records a note
+  saying the question was recovered from an unbalanced payload and asking you to check the options
+  match what was asked, and the raw marker is stripped along with the card it produced rather than
+  left sitting under it. The two forgiveness layers now read as a pair — presentation drift
+  (unknown keys, an over-long header) was already recovered above the parse; syntax drift is
+  recovered below it. Relatedly, a question that IS lost outright no longer whispers: that note
+  renders in the danger tone instead of as the dimmest line in the thread, and the marker contract
+  agents receive now says in as many words that the JSON must be syntactically valid.
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
   answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
   of that stays true of a branch GitHub is refusing to merge, so a conflicted PR sat there in

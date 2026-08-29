@@ -1185,6 +1185,29 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const assistantText = events.filter((e) => e.type === 'text');
     expect(assistantText.some((e) => String(e.text).includes('CEZ:ASK {"questions":[]}'))).toBe(true);
   }, 30_000);
+
+  // #936 — a payload one closing brace short used to die at `JSON.parse` and
+  // throw away a fully-formed card: no chips, the raw JSON left in the
+  // transcript, and a dim note where the question should have been. The closer
+  // repair recovers the card; the recovery is audited with its own note, and
+  // the raw marker (which ends on `]`) is stripped along with it.
+  it('a CEZ:ASK missing its final brace still renders one card, notes the recovery, and strips the marker', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-truncated choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(store.getRun(record.id)?.status).toBe('waiting');
+    const events = readEvents(record.id);
+    const asks = events.filter((e) => e.type === 'ask.requested');
+    expect(asks).toHaveLength(1);
+    const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
+    expect(questions[0]!.header).toBe('Lint scope');
+    expect(questions[0]!.options).toHaveLength(3);
+    expect(
+      events.filter((e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced')),
+    ).toHaveLength(1);
+    expect(events.some((e) => e.type === 'note' && String(e.message).includes('ignored'))).toBe(false);
+    expect(events.filter((e) => e.type === 'text').some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
+  }, 30_000);
 });
 
 /**

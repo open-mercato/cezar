@@ -116,7 +116,10 @@ function emitAskRequested(sink: UiEventSink, ask: AskRequest): string {
   return requestId;
 }
 /** A persisted, non-fatal explanation for protocol-shaped text that could not
- * become an ask card. Never include the raw payload in this diagnostic. */
+ * become an ask card. Never include the raw payload in this diagnostic. Carries
+ * `tone: 'danger'` (#936): the agent's question was lost outright, which is not
+ * a footnote — the cockpit renders an un-toned note as the dimmest line in the
+ * thread. Older events carry no `tone` and keep rendering dim. */
 function askMarkerRejection(result: AskMarkerParseResult): string | undefined {
   if (result.kind === 'invalid-json') {
     return 'structured question ignored — CEZ:ASK payload is not valid JSON';
@@ -125,6 +128,15 @@ function askMarkerRejection(result: AskMarkerParseResult): string | undefined {
   const issue = result.issues[0];
   const location = issue?.path.length ? ` at ${issue.path.join('.')}` : '';
   return `structured question ignored — CEZ:ASK payload failed validation${location}${issue ? `: ${issue.message}` : ''}`;
+}
+/** A persisted, auditable trace for a card that only rendered because the
+ * payload's missing closers were appended (#936) — a repair can only lose what
+ * the truncation already removed, so the recovery must stay visible rather than
+ * passing for a clean parse. */
+function askMarkerRecovery(result: AskMarkerParseResult): string | undefined {
+  return result.kind === 'valid' && result.repaired
+    ? 'structured question recovered from an unbalanced CEZ:ASK payload — check the options match what was asked'
+    : undefined;
 }
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
@@ -2258,10 +2270,13 @@ export class RunManager {
         const askResult = sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
         const ask = askResult?.kind === 'valid' ? askResult.request : null;
         const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
+        const askRecovery = askResult ? askMarkerRecovery(askResult) : undefined;
         const monitoring =
           sessionOpen && !done && !ask && MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
-        if (askRejection) this.store.appendEvent(runId, { type: 'note', message: askRejection, stepId });
+        if (askRejection)
+          this.store.appendEvent(runId, { type: 'note', message: askRejection, tone: 'danger', stepId });
+        if (askRecovery) this.store.appendEvent(runId, { type: 'note', message: askRecovery, stepId });
         if (done) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
@@ -2886,6 +2901,7 @@ export class RunManager {
         const askResult = interactive && sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
         const ask = askResult?.kind === 'valid' ? askResult.request : null;
         const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
+        const askRecovery = askResult ? askMarkerRecovery(askResult) : undefined;
         const monitoring =
           interactive &&
           sessionOpen &&
@@ -2893,7 +2909,8 @@ export class RunManager {
           !ask &&
           MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
-        if (askRejection) emit({ type: 'note', stepId: step.id, message: askRejection });
+        if (askRejection) emit({ type: 'note', stepId: step.id, message: askRejection, tone: 'danger' });
+        if (askRecovery) emit({ type: 'note', stepId: step.id, message: askRecovery });
         if (done) {
           // Goal achieved (agent contract, #347): close the session instead
           // of parking at `waiting` — the run completes and frees its slot.
