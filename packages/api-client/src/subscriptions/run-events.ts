@@ -18,8 +18,6 @@ export type CezarEventSourceFactory = (
 export interface RunEventSubscriptionOptions {
   cursor?: string
   afterSeq?: number
-  /** Number of accepted live events retained by an accumulating adapter. */
-  maxEvents?: number
   /** Ask the history owner to fold the live prefix into a persisted tail page. */
   compactAt?: number
   onCompact?: () => void

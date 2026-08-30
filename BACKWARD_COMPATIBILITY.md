@@ -119,12 +119,28 @@ The Manage-skills opt-out (`importedSkills` in the global `~/.cezar/ui-state.jso
 
 ## 6. npm package surface (`package.json`)
 
+### 6a. CLI package
+
 - Name `@open-mercato/cezar` (plus the `cezar-cli` npx alias documented in the README); `bin` entries `cezar` + `cez`; published `files`: `dist`, `packages/cezar/web/dist`, `packages/web/public/open-mercato.svg`, `scripts`, `README.md`; `engines.node >= 20`; `"type": "module"`.
-- There is **no** `exports`/library API — the package is CLI-only. Keep it that way deliberately: adding one creates a new compatibility surface; if it happens, this document gains a section first.
+- The service package's only library export is `./app-type`, which is type-only input for Hono's generated client. Runtime integration belongs in the packages below; do not grow `@open-mercato/cezar` into a second client API.
 - `dist/index.js` must remain the bin entry, and `web/` must stay resolvable relative to `dist/server` (`resolveWebDir` walks `../../web`; the built cockpit lives at `packages/cezar/web/dist`).
 - The tarball MUST contain the built UI (`packages/cezar/web/dist/index.html` + hashed `packages/cezar/web/dist/assets/*`) — `npm run check:pack` (`packages/cezar/scripts/check-pack.mjs`, run as the last leg of `npm run build`, hence by `prepublishOnly`) enforces this; do not remove it from the build chain.
 
 Breaking: dropping a bin alias, raising `engines.node`, removing `packages/cezar/web/dist/` or `scripts/` from `files`, renaming the package. Required path: raise `engines` only in a version bump flagged as breaking; keep old aliases through a deprecation release.
+
+### 6b. Public component-library packages
+
+The no-iframe embed is a deliberately coarse public surface made of three packages released in lockstep:
+
+- `@open-mercato/cezar-contract` exports its root zod schemas and inferred DTO types.
+- `@open-mercato/cezar-api-client` exports its root client, project domains, event subscription contract, `ApiError`, protocol types, and `CezarClientOptions`. A client's default `identity` is stable for the normalized authority and credential mode; consumers that host multiple logical installations at the same authority use the explicit `identity` option to isolate cache and browser-storage namespaces.
+- `@open-mercato/cezar-react` exports provider/adapters from `.`, the complete cockpit from `./cockpit`, and the required stylesheet from `./styles.css`. There are intentionally no per-feature `./tasks` or `./session` entries: the complete route tree and feature implementation remain behind `CezarCockpit` so functionality does not fragment into a second UI implementation.
+
+Protected React contracts are the exported names and prop shapes of `CezarProvider`, `CezarCockpit`, and their adapter interfaces; the `CezarCockpitRouting` browser/memory modes; and the stylesheet entry. The CSS isolation contract is `.cezar-root` plus the `data-cezar-theme`, `data-cezar-accent`, `data-cezar-density`, `data-cezar-width`, `data-cezar-routing`, and `data-cezar-portal` hooks. Hosts may rely on those hooks for sizing and theme integration; hashed chunks, Tailwind utility classes, and markup below the root are implementation details.
+
+The `/api/v1` schemas remain the wire authority. Response objects grow additively and readers must continue to salvage valid list entries when a newer server adds an unfamiliar row. Before 1.0, an intentional incompatible public-library change still requires a minor version bump, release-note callout, synchronized sibling pins, and a migration example; it is not permission to silently remove an export, prop, CSS hook, event discriminator, or previously accepted option. After 1.0, normal semver major-version rules apply.
+
+Breaking: removing/renaming a documented export, required stylesheet or protected CSS hook; making an optional prop required; changing memory routing so it mutates the host URL; changing client identity for an unchanged configuration; narrowing an accepted API/event shape. Required path: prefer additive props/exports and read old + new spellings during a deprecation window; otherwise follow the pre-1.0 minor or post-1.0 major path above. `npm run test:cockpit-package` is the installed-consumer gate and must remain in CI and release verification.
 
 ## 7. Agent event protocol (`packages/cezar/src/core/agent-runner.ts`, `packages/cezar/src/core/ui-events.ts`)
 

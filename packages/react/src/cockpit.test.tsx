@@ -231,6 +231,26 @@ describe('CezarCockpit', () => {
     await waitFor(() => expect(getApiBaseUrl()).toBe(''))
   })
 
+  it('warns when a second cockpit contends for the legacy transport lease', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    render(
+      <>
+        <CezarCockpit
+          client={createCezarClient({ baseUrl: 'https://first.example.test' })}
+          queryClient={createQueryClient()}
+        />
+        <CezarCockpit
+          client={createCezarClient({ baseUrl: 'https://second.example.test' })}
+          queryClient={createQueryClient()}
+        />
+      </>,
+    )
+
+    await waitFor(() => expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('multiple CezarCockpit instances'),
+    ))
+  })
+
   it('clears its owned query client after ordinary unmount', async () => {
     privateRender.seedQueryClient = true
     const view = render(<CezarCockpit client={fakeCezarClient()} />)

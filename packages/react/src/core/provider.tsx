@@ -6,6 +6,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -151,8 +152,10 @@ export function CezarProvider<TClient extends CezarRuntimeClient = CezarClient>(
 
   const onErrorRef = useRef(onError)
   const onAuthRequiredRef = useRef(onAuthRequired)
-  onErrorRef.current = onError
-  onAuthRequiredRef.current = onAuthRequired
+  useLayoutEffect(() => {
+    onErrorRef.current = onError
+    onAuthRequiredRef.current = onAuthRequired
+  }, [onError, onAuthRequired])
   const errorPrefix = useMemo(
     () => ['cezar', client.identity, projectId ?? 'boot'] as const,
     [client.identity, projectId],

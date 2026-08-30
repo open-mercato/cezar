@@ -22,12 +22,26 @@ export function createCezarBrowserStorage(
   projectId: string | null,
 ): CezarStorage {
   return {
-    getItem: (key) => localStorageWhenAvailable()?.getItem(storageKey(identity, projectId, key)) ?? null,
+    getItem: (key) => {
+      try {
+        return localStorageWhenAvailable()?.getItem(storageKey(identity, projectId, key)) ?? null
+      } catch {
+        return null
+      }
+    },
     setItem: (key, value) => {
-      localStorageWhenAvailable()?.setItem(storageKey(identity, projectId, key), value)
+      try {
+        localStorageWhenAvailable()?.setItem(storageKey(identity, projectId, key), value)
+      } catch {
+        // Persistence is an optional browser capability.
+      }
     },
     removeItem: (key) => {
-      localStorageWhenAvailable()?.removeItem(storageKey(identity, projectId, key))
+      try {
+        localStorageWhenAvailable()?.removeItem(storageKey(identity, projectId, key))
+      } catch {
+        // Persistence is an optional browser capability.
+      }
     },
   }
 }

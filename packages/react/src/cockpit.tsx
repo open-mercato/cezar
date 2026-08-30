@@ -1,5 +1,5 @@
 import type { QueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { BrowserRouter, MemoryRouter, useLocation, useNavigate } from 'react-router'
 
 import {
@@ -36,20 +36,26 @@ let activeLegacyTransportOwner: symbol | null = null
 
 /**
  * The retained web composition still resolves its HTTP and workspace-SSE URLs through the
- * api-client's legacy module-level base. Install the public client's authority synchronously so
- * private render-time URL resolution sees it, then release only this mount's lease. The deferred
- * generation check keeps React StrictMode's effect replay from clearing a live remount.
+ * api-client's legacy module-level base. Install the public client's authority before paint, then
+ * release only this mount's lease. The deferred generation check keeps React StrictMode's effect
+ * replay from clearing a live remount.
  */
 function useLegacyTransportBaseUrl(baseUrl: string): void {
   const owner = useRef<symbol | null>(null)
   if (owner.current === null) owner.current = Symbol('cezar-cockpit-legacy-transport')
   const mountGeneration = useRef(0)
 
-  activeLegacyTransportOwner = owner.current
-  setApiBaseUrl(baseUrl)
-
-  useEffect(() => {
+  useLayoutEffect(() => {
     const generation = ++mountGeneration.current
+    if (
+      activeLegacyTransportOwner !== null
+      && activeLegacyTransportOwner !== owner.current
+    ) {
+      console.warn(
+        'cezar: multiple CezarCockpit instances share a legacy transport; '
+        + 'only the most recently mounted authority can be active',
+      )
+    }
     activeLegacyTransportOwner = owner.current
     setApiBaseUrl(baseUrl)
     return () => {

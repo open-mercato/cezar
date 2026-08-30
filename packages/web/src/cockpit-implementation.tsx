@@ -1,5 +1,5 @@
 import { QueryClientProvider, type QueryKey, type QueryClient } from '@tanstack/react-query'
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 
 import { ApiError, type CezarClient } from '@open-mercato/cezar-api-client'
 import type { CezarRuntimeClient } from '@open-mercato/cezar-react'
@@ -51,8 +51,10 @@ export function CezarCockpitImplementation<TClient extends CezarRuntimeClient>({
 }: CezarCockpitImplementationProps<TClient>): React.JSX.Element {
   const onAuthRequiredRef = useRef(onAuthRequired)
   const onErrorRef = useRef(onError)
-  onAuthRequiredRef.current = onAuthRequired
-  onErrorRef.current = onError
+  useLayoutEffect(() => {
+    onAuthRequiredRef.current = onAuthRequired
+    onErrorRef.current = onError
+  }, [onAuthRequired, onError])
 
   useEffect(() => {
     const report = (error: unknown) => {

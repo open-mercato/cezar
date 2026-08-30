@@ -45,6 +45,39 @@ describe('createCezarClient', () => {
     expect(seen[1]?.headers.get('authorization')).toBe('Bearer fresh-token-2')
   })
 
+  it('derives a stable identity from the normalized authority and credential mode', () => {
+    const first = createCezarClient({
+      baseUrl: 'https://cezar.example.test/root/',
+      credentials: 'include',
+    })
+    const reconstructed = createCezarClient({
+      baseUrl: 'https://cezar.example.test/root',
+      credentials: 'include',
+    })
+    const sameAuthorityDifferentCredentials = createCezarClient({
+      baseUrl: 'https://cezar.example.test/root',
+      credentials: 'omit',
+    })
+    const explicitlyIsolated = createCezarClient({
+      baseUrl: 'https://cezar.example.test/root',
+      credentials: 'include',
+      identity: 'sandbox-b',
+    })
+
+    expect(reconstructed.identity).toBe(first.identity)
+    expect(sameAuthorityDifferentCredentials.identity).not.toBe(first.identity)
+    expect(explicitlyIsolated.identity).toBe('sandbox-b')
+  })
+
+  it('preserves a protocol-relative authority while projecting a legacy project URL', () => {
+    const project = createCezarClient({ baseUrl: 'https://cezar.example.test/root' })
+      .forProject('project-a')
+
+    expect(project.resolveUrl('//assets.example.test/api/runs/run-a/images/1')).toBe(
+      '//assets.example.test/api/v1/p/project-a/runs/run-a/images/1',
+    )
+  })
+
   it('normalizes non-2xx JSON responses through its private schema request path', async () => {
     const client = createCezarClient({
       baseUrl: 'https://cezar.example.test',

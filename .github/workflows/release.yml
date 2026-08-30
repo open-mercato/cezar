@@ -68,6 +68,9 @@ jobs:
       - name: Build application
         run: npm run build
 
+      - name: Verify installed cockpit consumer
+        run: npm run test:cockpit-package
+
       - name: Publish release
         id: release
         env:
@@ -93,7 +96,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add packages/api-client/package.json packages/cezar/package.json alias-cezar/package.json
+          git add packages/contract/package.json packages/api-client/package.json packages/react/package.json packages/cezar/package.json alias-cezar/package.json
           git commit -m "chore(release): v${VERSION}"
           git push origin "$BRANCH"
           gh pr create --base "${{ github.ref_name }}" --head "$BRANCH" \
@@ -105,23 +108,19 @@ jobs:
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
           RESULT: ${{ steps.release.outputs.version }}
-          ROOT_NAME: ${{ steps.release.outputs.rootName }}
-          API_CLIENT_NAME: ${{ steps.release.outputs.apiClientName }}
           ALIAS_NAME: ${{ steps.release.outputs.aliasName }}
+          PUBLISHED_NAMES: ${{ steps.release.outputs.publishedNames }}
         with:
           script: |
             const version = process.env.RESULT;
-            const root = process.env.ROOT_NAME;
-            const apiClient = process.env.API_CLIENT_NAME;
             const alias = process.env.ALIAS_NAME;
+            const packages = process.env.PUBLISHED_NAMES.split(',').filter(Boolean);
             const body = [
               '## Published packages',
               '',
               '| Package | Version |',
               '|---|---|',
-              `| \`${root}\` | \`${version}\` |`,
-              `| \`${apiClient}\` | \`${version}\` |`,
-              `| \`${alias}\` | \`${version}\` |`,
+              ...packages.map((name) => `| \`${name}\` | \`${version}\` |`),
               '',
               '### Install',
               '',

@@ -190,6 +190,10 @@ test('the React tarball gate requires both bundled font notices', () => {
     ),
     /React tarball is missing licenses\/JetBrains-Mono-OFL\.txt/,
   )
+  assert.throws(
+    () => assertReactTarball([...complete, 'dist/tasks.js']),
+    /React tarball exposes obsolete empty entry dist\/tasks\.js/,
+  )
 })
 
 test('withTemporaryPackageRoot keeps the npm cache unique and removes it with the root', async () => {

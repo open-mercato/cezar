@@ -10,8 +10,8 @@
 //
 // Reads the CI facts from GitHub Actions' env, decides via computeSnapshot,
 // stamps every manifest in the release set (intra-release dependencies pinned
-// exact), publishes the non-`private` ones in DEPENDENCY ORDER — api-client,
-// then the service, then the alias — always with an explicit --tag so a snapshot can never move
+// exact), publishes the non-`private` ones in DEPENDENCY ORDER — contract, API client,
+// React, service, then alias — always with an explicit --tag so a snapshot can never move
 // `latest`, then emits a one-line JSON result to $GITHUB_OUTPUT for the
 // PR-comment and summary steps.
 //

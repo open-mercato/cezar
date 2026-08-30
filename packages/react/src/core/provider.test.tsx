@@ -16,7 +16,7 @@ import {
   type CezarRuntime,
 } from './provider'
 import { useCezarPortal } from './portal'
-import { createCezarMemoryStorage } from './storage'
+import { createCezarBrowserStorage, createCezarMemoryStorage } from './storage'
 
 afterEach(() => {
   cleanup()
@@ -346,6 +346,23 @@ describe('adapters and boundaries', () => {
     const second = createCezarMemoryStorage()
     expect(first.getItem('draft')).toBe('first')
     expect(second.getItem('draft')).toBeNull()
+  })
+
+  it('degrades browser storage when an available storage object rejects operations', () => {
+    const unavailable = {
+      length: 0,
+      clear: vi.fn(),
+      getItem: vi.fn(() => { throw new DOMException('blocked', 'SecurityError') }),
+      key: vi.fn(() => null),
+      setItem: vi.fn(() => { throw new DOMException('full', 'QuotaExceededError') }),
+      removeItem: vi.fn(() => { throw new DOMException('blocked', 'SecurityError') }),
+    }
+    vi.stubGlobal('localStorage', unavailable)
+    const storage = createCezarBrowserStorage('client-a', 'project-a')
+
+    expect(storage.getItem('draft')).toBeNull()
+    expect(() => storage.setItem('draft', 'one')).not.toThrow()
+    expect(() => storage.removeItem('draft')).not.toThrow()
   })
 
   it('uses a no-op notification default without requesting permission', async () => {

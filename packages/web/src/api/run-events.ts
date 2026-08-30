@@ -15,7 +15,22 @@ export { parseRunEvent, RUN_EVENT_NAMES } from '@open-mercato/cezar-api-client'
  * Socket ownership, parsing, replay deduplication, and recovery live in the public API client;
  * this hook only selects the cockpit's current project and accumulates accepted events as state.
  */
-export interface RunEventStreamOptions extends RunEventSubscriptionOptions {}
+export interface RunEventStreamOptions extends RunEventSubscriptionOptions {
+  /** Number of accepted live events retained by this accumulating React adapter. */
+  maxEvents?: number
+}
+
+let cachedClientBaseUrl: string | undefined
+let cachedClient: ReturnType<typeof createCezarClient> | undefined
+
+function currentCockpitClient(): ReturnType<typeof createCezarClient> {
+  const baseUrl = getApiBaseUrl()
+  if (cachedClient === undefined || cachedClientBaseUrl !== baseUrl) {
+    cachedClientBaseUrl = baseUrl
+    cachedClient = createCezarClient({ baseUrl })
+  }
+  return cachedClient
+}
 
 export function useRunEvents(
   runId: string | undefined,
@@ -28,13 +43,12 @@ export function useRunEvents(
     setEvents([])
     if (!runId) return
 
-    // Runtime API-base configuration happens after module import. Constructing this private
-    // adapter client here captures the current value while EventSource itself remains lazily
-    // resolved by subscribeRun, preserving prerender/non-DOM safety.
-    const cockpitClient = createCezarClient({ baseUrl: getApiBaseUrl() })
-    return cockpitClient.forProject(getApiScope()).events.subscribeRun(
+    // The parent cockpit installs the legacy transport lease in a layout effect. Resolve the
+    // authority here, after that lease is active, while caching one client per authority so a
+    // React effect replay does not manufacture a new client identity.
+    return currentCockpitClient().forProject(getApiScope()).events.subscribeRun(
       runId,
-      { cursor, afterSeq, maxEvents, compactAt, onCompact, onReconnect },
+      { cursor, afterSeq, compactAt, onCompact, onReconnect },
       (event) => {
         setEvents((current) => {
           const next = [...current, event]

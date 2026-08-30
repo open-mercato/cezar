@@ -56,6 +56,14 @@ export interface CezarClientOptions {
   headers?: Record<string, string>
   /** Browser credential policy. Defaults to `'same-origin'`. */
   credentials?: RequestCredentials
+  /**
+   * Stable storage/cache namespace for this client.
+   *
+   * By default it is derived from the normalized service authority and credential mode. Set
+   * this when two logical Cezar installations share those transport settings but must not share
+   * persisted cockpit state.
+   */
+  identity?: string
   /** Custom fetch — for tests (dispatch straight into a Hono app) or a wrapped transport. */
   fetch?: typeof globalThis.fetch
   /** Custom EventSource factory. The browser global is resolved lazily when omitted. */
@@ -100,8 +108,6 @@ type UntypedCezarClient = Record<string, any> & {
   readonly events: CezarEventDomain
   forProject(projectId?: string | null): CezarProjectClient
 }
-
-let nextClientIdentity = 0
 
 type JsonSchema<T> = {
   safeParse(value: unknown): { success: true; data: T } | { success: false }
@@ -150,16 +156,32 @@ function createClientTransport(options: CezarClientOptions) {
   }
 }
 
+function clientIdentity(
+  options: CezarClientOptions,
+  transport: ReturnType<typeof createClientTransport>,
+): string {
+  if (options.identity !== undefined) return options.identity
+  const credentials = options.credentials ?? 'same-origin'
+  const authMode = options.auth !== undefined
+    ? 'dynamic-token'
+    : options.token !== undefined
+      ? 'token'
+      : 'anonymous'
+  return `cezar-client:${transport.baseUrl || 'same-origin'}:${credentials}:${authMode}`
+}
+
 class CezarClientCore<TApp extends Hono<any, any, any>> {
-  readonly identity = `cezar-client-${++nextClientIdentity}`
+  readonly identity: string
   readonly baseUrl: string
   readonly rpc: ReturnType<typeof hc<TApp>>
   readonly events: CezarEventDomain
 
   constructor(
     private readonly transport: ReturnType<typeof createClientTransport>,
-    private readonly eventSource?: CezarEventSourceFactory,
+    private readonly eventSource: CezarEventSourceFactory | undefined,
+    identity: string,
   ) {
+    this.identity = identity
     this.baseUrl = transport.baseUrl
     this.rpc = hc<TApp>(transport.baseUrl, { fetch: transport.fetch })
     this.events = {
@@ -211,6 +233,7 @@ class CezarClientCore<TApp extends Hono<any, any, any>> {
 
   private resolveProjectUrl(projectId: string | null, url: string): string {
     const absolute = /^[a-z][a-z\d+.-]*:\/\//i.test(url)
+    const protocolRelative = url.startsWith('//')
     const parsed = new URL(url, 'http://cezar.invalid')
     const legacyPrefix = parsed.pathname.startsWith('/api/v1/')
       ? '/api/v1'
@@ -223,7 +246,9 @@ class CezarClientCore<TApp extends Hono<any, any, any>> {
     const path = suffix.startsWith('/p/')
       ? `/api/v1${suffix}${parsed.search}${parsed.hash}`
       : `${projectApiPath(projectId, suffix as `/${string}`)}${parsed.search}${parsed.hash}`
-    return absolute ? `${parsed.origin}${path}` : resolveCezarUrl(this.baseUrl, path)
+    if (absolute) return `${parsed.origin}${path}`
+    if (protocolRelative) return `//${parsed.host}${path}`
+    return resolveCezarUrl(this.baseUrl, path)
   }
 }
 
@@ -245,7 +270,11 @@ export function createCezarClient<
   T extends Hono<any, any, any> = Hono<any, any, any>,
 >(options: CezarClientOptions = {}): CezarClient<T> | UntypedCezarClient {
   const transport = createClientTransport(options)
-  const client = new CezarClientCore<T>(transport, options.eventSource)
+  const client = new CezarClientCore<T>(
+    transport,
+    options.eventSource,
+    clientIdentity(options, transport),
+  )
   return new Proxy(client, {
     get(target, property, receiver) {
       if (property in target) return Reflect.get(target, property, receiver)

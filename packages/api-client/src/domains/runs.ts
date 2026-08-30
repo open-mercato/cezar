@@ -38,13 +38,25 @@ type JsonSchema<T> = {
 
 type RequestJson = <T>(schema: JsonSchema<T>, path: string, init?: RequestInit) => Promise<T>
 
+const apiRunListSchema: JsonSchema<ApiRun[]> = {
+  safeParse(value) {
+    if (!Array.isArray(value)) return { success: false }
+    const data: ApiRun[] = []
+    for (const item of value) {
+      const parsed = apiRunSchema.safeParse(item)
+      if (parsed.success) data.push(parsed.data)
+    }
+    return { success: true, data }
+  },
+}
+
 export function createCezarRunsDomain(projectId: string | null, requestJson: RequestJson): CezarRunsDomain {
   const path = (suffix: `/${string}`) => projectApiPath(projectId, suffix)
   const runPath = (runId: string, suffix = '') => path(`/runs/${encodeURIComponent(runId)}${suffix}`)
   const read = (options?: ReadOptions): RequestInit => ({ method: 'GET', signal: options?.signal })
 
   return {
-    list: (options) => requestJson(apiRunSchema.array(), path('/runs'), read(options)),
+    list: (options) => requestJson(apiRunListSchema, path('/runs'), read(options)),
     get: (runId, options) => requestJson(apiRunSchema, runPath(runId), read(options)),
     history: (runId, cursor, options) => {
       const query = cursor === undefined ? '' : `?${new URLSearchParams({ cursor }).toString()}`

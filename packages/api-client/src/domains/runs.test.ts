@@ -122,4 +122,13 @@ describe('CezarRunsDomain', () => {
       path: '/api/v1/runs',
     })
   })
+
+  it('drops malformed run rows without hiding the valid task list', async () => {
+    const second = { ...RUN, id: 'run-2', title: 'Keep checkout stable' }
+    const client = createCezarClient({
+      fetch: async () => Response.json([RUN, { ...RUN, status: 'future-status' }, second]),
+    })
+
+    await expect(client.forProject(null).runs.list()).resolves.toEqual([RUN, second])
+  })
 })

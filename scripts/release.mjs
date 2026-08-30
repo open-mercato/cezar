@@ -9,8 +9,8 @@
 // picks the bump (patch/minor/major, or `existing` to publish the version
 // already committed). It stamps every manifest in the release set (intra-release
 // dependencies kept as caret ranges so a stable cezar-cli follows compatible impl
-// releases), then publishes them in DEPENDENCY ORDER — api-client, then the
-// service, then the alias — always with `--tag latest`. Publishing a dependent
+// releases), then publishes them in DEPENDENCY ORDER — contract, API client, React,
+// service, then alias — always with `--tag latest`. Publishing a dependent
 // before its dependency would briefly advertise a version that is not on the
 // registry yet.
 //

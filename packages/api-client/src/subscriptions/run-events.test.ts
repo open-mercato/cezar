@@ -294,21 +294,4 @@ describe('run event subscriptions', () => {
     expect(onCompact).toHaveBeenCalledOnce()
   })
 
-  it('requests compaction from the pre-trim count when maxEvents is below compactAt', async () => {
-    const { client, sources } = setup()
-    const onCompact = vi.fn()
-    const stop = client.forProject(null).events.subscribeRun(
-      'run-1',
-      { maxEvents: 2, compactAt: 3, onCompact },
-      () => {},
-    )
-
-    sources[0]!.emit('run-event', { seq: 1, type: 'stdout' })
-    sources[0]!.emit('run-event', { seq: 2, type: 'stdout' })
-    sources[0]!.emit('run-event', { seq: 3, type: 'stdout' })
-    await Promise.resolve()
-
-    expect(onCompact).toHaveBeenCalledOnce()
-    stop()
-  })
 })

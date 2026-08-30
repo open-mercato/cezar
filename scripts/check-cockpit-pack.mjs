@@ -225,6 +225,9 @@ export function assertReactTarball(files) {
   for (const file of required) {
     if (!files.includes(file)) throw new Error(`React tarball is missing ${file}`)
   }
+  for (const obsolete of ['dist/tasks.js', 'dist/tasks.d.ts', 'dist/session.js', 'dist/session.d.ts']) {
+    if (files.includes(obsolete)) throw new Error(`React tarball exposes obsolete empty entry ${obsolete}`)
+  }
   if (!files.some((file) => /^dist\/assets\/.+\.js$/.test(file))) {
     throw new Error('React tarball is missing private JavaScript chunks under dist/assets')
   }

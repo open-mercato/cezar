@@ -38,8 +38,6 @@ export default defineConfig({
       input: {
         index: resolve(packageDir, 'src/index.ts'),
         cockpit: resolve(packageDir, 'src/cockpit.tsx'),
-        tasks: resolve(packageDir, 'src/tasks.ts'),
-        session: resolve(packageDir, 'src/session.ts'),
         styles: resolve(packageDir, 'src/styles/index.css'),
       },
       external: isReactPackageExternal,
