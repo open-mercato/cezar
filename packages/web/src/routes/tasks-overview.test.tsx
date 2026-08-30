@@ -576,6 +576,13 @@ describe('TasksOverview — pinned tasks (#935)', () => {
     expect(onTogglePin).toHaveBeenCalledTimes(2)
   })
 
+  it('the row pin stays reachable without a pointer (a tablet is >=md and cannot hover)', () => {
+    renderOverview({ runs: [run({ id: 'plain', status: 'done' })], onTogglePin: vi.fn() })
+    const pin = tableRow('plain')?.querySelector('[data-slot="pin-toggle"]') as HTMLElement
+    expect(pin.className).toContain('no-hover:opacity-100')
+    expect(pin.className).toContain('opacity-0')
+  })
+
   it('a pin click does not also open the task — the control owns its click', () => {
     renderOverview({ runs: [run({ id: 'kept', status: 'done' })], onTogglePin: vi.fn() })
     fireEvent.click(within(card('kept') as HTMLElement).getByRole('button', { name: 'Pin task' }))

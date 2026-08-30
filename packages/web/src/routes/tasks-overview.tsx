@@ -751,12 +751,16 @@ function TitleCell({
       </button>
       {/* The pin (#935), beside the pencil and revealed the same way — except when the row IS
           pinned, where it stays lit: this table has no `Pinned` header, so the filled pin is the
-          whole explanation for why the row sorted to the top. */}
+          whole explanation for why the row sorted to the top.
+
+          `no-hover:` covers the device this table still reaches without a pointer: it is hidden
+          below `md`, where the cards take over, but a tablet in landscape is ≥md and cannot
+          hover, so without it the pin would be invisible AND unreachable there. */}
       {onTogglePin ? (
         <PinToggle
           pinned={Boolean(run.pinned)}
           onToggle={(pinned) => onTogglePin(run, pinned)}
-          className="size-[19px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 data-[pinned=true]:opacity-100"
+          className="size-[19px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 no-hover:opacity-100 data-[pinned=true]:opacity-100"
         />
       ) : null}
     </span>

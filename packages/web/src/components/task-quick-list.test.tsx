@@ -536,6 +536,21 @@ describe('TaskQuickList', () => {
       expect(onTogglePin.mock.calls[1]?.[0]).toMatchObject({ id: 'kept' })
     })
 
+    it('stays reachable on a device that cannot hover — the drawer has no pointer', () => {
+      // The bug this pins: the control was revealed by `group-hover` and focus alone, so on a
+      // phone (where this same list IS the drawer) there was no way to reach it at all. The
+      // honest axis is the pointer, not the viewport — the drawer keeps the sidebar's fixed
+      // 264px, so a `md:` rule would have been wrong in both directions.
+      renderList({ runs: [run({ id: 'plain', status: 'done' })], onTogglePin: vi.fn() })
+      const pin = document.querySelector('[data-slot="pin-toggle"]') as HTMLElement
+      expect(pin.className).toContain('no-hover:opacity-100')
+      // …and big enough for a thumb there, where 20px is not a target.
+      expect(pin.className).toContain('no-hover:size-7')
+      // The quiet default survives for pointer devices: still zero-width until hovered.
+      expect(pin.className).toContain('w-0')
+      expect(pin.className).toContain('group-hover/task-row:w-5')
+    })
+
     it('paints no pin control at all when no container wired one', () => {
       renderList({ runs: [run({ id: 'plain', status: 'done' })] })
       expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
