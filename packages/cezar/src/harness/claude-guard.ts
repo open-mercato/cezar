@@ -12,12 +12,21 @@ let input = {}
 try { input = JSON.parse(Buffer.concat(chunks).toString('utf8')) } catch {}
 const command = typeof input?.tool_input?.command === 'string' ? input.tool_input.command : ''
 const filePath = typeof input?.tool_input?.file_path === 'string' ? input.tool_input.file_path : ''
-const worktree = realpathSync(process.env.CEZ_HARNESS_WORKTREE)
-const outputDir = realpathSync(process.env.CEZ_HARNESS_OUTPUT_DIR)
 
 const refuse = (message) => {
   process.stderr.write(\`[cez-harness] \${message}\\n\`)
   process.exit(2)
+}
+let worktree
+let outputDir
+try {
+  const worktreeInput = process.env.CEZ_HARNESS_WORKTREE
+  const outputInput = process.env.CEZ_HARNESS_OUTPUT_DIR
+  if (!worktreeInput || !outputInput) throw new Error('writable-root environment is incomplete')
+  worktree = realpathSync(worktreeInput)
+  outputDir = realpathSync(outputInput)
+} catch (error) {
+  refuse('guard initialization failed: ' + (error instanceof Error ? error.message : String(error)))
 }
 const canonicalTarget = (raw) => {
   const target = resolve(worktree, raw)
@@ -51,9 +60,13 @@ if (command && (gitWrite || ghWrite)) {
   refuse('stage-only boundary: git ref and GitHub tracker writes are disabled')
 }
 if (filePath) {
-  const target = canonicalTarget(filePath)
-  if (outsideEveryWritableRoot(target)) {
-    refuse(\`write outside the run worktree and phase-output directory is disabled: \${filePath}\`)
+  try {
+    const target = canonicalTarget(filePath)
+    if (outsideEveryWritableRoot(target)) {
+      refuse(\`write outside the run worktree and phase-output directory is disabled: \${filePath}\`)
+    }
+  } catch (error) {
+    refuse('write target could not be validated: ' + (error instanceof Error ? error.message : String(error)))
   }
 }
 `;

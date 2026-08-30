@@ -62,18 +62,39 @@ let scratchSeq = 0;
  * were mutating. Read paths must not write. Same technique as
  * `collectChanges({intentToAdd: false})` in server/git-changes.ts.
  *
- * Returns the env to run diffs under, or null when seeding failed (callers
- * then diff without untracked visibility rather than failing the read).
+ * Returns a disposable handle whose file must survive through the caller's
+ * final git command, or null when seeding failed (callers then diff without
+ * untracked visibility rather than failing the read).
  */
-async function scratchIndexEnv(worktreePath: string): Promise<Record<string, string> | null> {
+interface ScratchIndex {
+  env: Record<string, string>;
+  path: string;
+}
+
+async function scratchIndex(worktreePath: string): Promise<ScratchIndex | null> {
   scratchSeq += 1;
+  const path = join(tmpdir(), `cez-wt-scratch-${process.pid}-${scratchSeq}`);
   const env = {
-    GIT_INDEX_FILE: join(tmpdir(), `cez-wt-scratch-${process.pid}-${scratchSeq}`),
+    GIT_INDEX_FILE: path,
   };
-  const seed = await git(worktreePath, ['read-tree', 'HEAD'], env);
-  if (!seed.ok) return null;
-  const ita = await git(worktreePath, ['add', '-N', '.'], env);
-  return ita.ok ? env : null;
+  let ready = false;
+  try {
+    const seed = await git(worktreePath, ['read-tree', 'HEAD'], env);
+    if (!seed.ok) return null;
+    const ita = await git(worktreePath, ['add', '-N', '.'], env);
+    if (!ita.ok) return null;
+    ready = true;
+    return { env, path };
+  } finally {
+    // `read-tree` can create the file before failing. A failed setup has no
+    // caller-owned handle, so dispose it here; successful handles are removed
+    // after the last diff that uses them.
+    if (!ready) await rm(path, { force: true }).catch(() => {});
+  }
+}
+
+async function disposeScratchIndex(scratch: ScratchIndex | null): Promise<void> {
+  if (scratch) await rm(scratch.path, { force: true }).catch(() => {});
 }
 
 export function branchFor(runId: string): string {
@@ -525,13 +546,17 @@ export async function worktreeDiff(
   cap = DIFF_CAP,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '(diff failed: refusing option-like base ref)';
-  const env = (await scratchIndexEnv(worktreePath)) ?? undefined; // untracked files show up; real index untouched
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
-  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', base], env);
-  if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
-  if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
-  return res.stdout;
+  const scratch = await scratchIndex(worktreePath);
+  try {
+    const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+    const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+    const res = await git(worktreePath, ['diff', base], scratch?.env);
+    if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
+    if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
+    return res.stdout;
+  } finally {
+    await disposeScratchIndex(scratch);
+  }
 }
 
 /**
@@ -548,11 +573,15 @@ export async function worktreeDiffStat(
   baseBranch: string,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '';
-  const env = (await scratchIndexEnv(worktreePath)) ?? undefined; // untracked files show up; real index untouched
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
-  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', '--stat', base], env);
-  return res.ok ? res.stdout.trim() : '';
+  const scratch = await scratchIndex(worktreePath);
+  try {
+    const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+    const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+    const res = await git(worktreePath, ['diff', '--stat', base], scratch?.env);
+    return res.ok ? res.stdout.trim() : '';
+  } finally {
+    await disposeScratchIndex(scratch);
+  }
 }
 
 /** Aggregate diff numbers (#389) — the shape stored on `RunRecord.diffStat`. */
@@ -608,18 +637,22 @@ export async function worktreeShortstat(
   opts: { taskBranch?: string; runStartedAt?: string } = {},
 ): Promise<DiffStat | null> {
   if (!isSafeGitRef(baseBranch)) return null;
-  const env = (await scratchIndexEnv(worktreePath)) ?? undefined; // untracked files show up; real index untouched
-  const { base, repointedHead } = await resolveTaskDiffBase(
-    (args) => git(worktreePath, args),
-    baseBranch,
-    opts,
-  );
-  const res = await git(worktreePath, ['diff', '--shortstat', base], env);
-  if (!res.ok) return null;
-  // The key stays ABSENT (not `false`) on a normal run: `diffStat` is persisted in
-  // `runs.json` and served on the runs API, so the un-narrowed shape must keep
-  // round-tripping byte-identically.
-  return { ...parseShortstat(res.stdout), ...(repointedHead ? { repointed: true } : {}) };
+  const scratch = await scratchIndex(worktreePath);
+  try {
+    const { base, repointedHead } = await resolveTaskDiffBase(
+      (args) => git(worktreePath, args, scratch?.env),
+      baseBranch,
+      opts,
+    );
+    const res = await git(worktreePath, ['diff', '--shortstat', base], scratch?.env);
+    if (!res.ok) return null;
+    // The key stays ABSENT (not `false`) on a normal run: `diffStat` is persisted in
+    // `runs.json` and served on the runs API, so the un-narrowed shape must keep
+    // round-tripping byte-identically.
+    return { ...parseShortstat(res.stdout), ...(repointedHead ? { repointed: true } : {}) };
+  } finally {
+    await disposeScratchIndex(scratch);
+  }
 }
 
 /**

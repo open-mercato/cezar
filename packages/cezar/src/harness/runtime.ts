@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -264,12 +265,27 @@ export function resolveHarnessScript(cwd: string): string | null {
   return existsSync(path) ? path : null;
 }
 
-function copyTreeByValue(source: string, dest: string): void {
+const MAX_SEAL_DEPTH = 128;
+
+function copyTreeByValue(
+  source: string,
+  dest: string,
+  ancestors = new Set<string>(),
+  depth = 0,
+): void {
+  if (depth > MAX_SEAL_DEPTH) throw new Error('Harness runtime tree exceeds the seal depth limit');
   const stat = statSync(source); // statSync follows links, lstatSync would not
   if (stat.isDirectory()) {
-    mkdirSync(dest, { recursive: true });
-    for (const entry of readdirSync(source)) {
-      copyTreeByValue(join(source, entry), join(dest, entry));
+    const canonical = realpathSync(source);
+    if (ancestors.has(canonical)) throw new Error('Harness runtime tree contains a symlink cycle');
+    ancestors.add(canonical);
+    try {
+      mkdirSync(dest, { recursive: true });
+      for (const entry of readdirSync(source)) {
+        copyTreeByValue(join(source, entry), join(dest, entry), ancestors, depth + 1);
+      }
+    } finally {
+      ancestors.delete(canonical);
     }
     return;
   }
@@ -308,12 +324,20 @@ export function sealHarnessRuntime(
   const source = join(cwd, '.claude', 'skills');
   if (!existsSync(join(source, 'cez-harness', 'scripts', 'harness.mjs'))) return null;
   const skillsDest = join(destDir, 'skills');
-  rmSync(skillsDest, { recursive: true, force: true });
-  mkdirSync(destDir, { recursive: true });
-  copyTreeByValue(source, skillsDest);
-  const script = join(skillsDest, 'cez-harness', 'scripts', 'harness.mjs');
-  const sha256 = harnessScriptDigest(script);
-  return sha256 ? { script, sha256 } : null;
+  try {
+    rmSync(skillsDest, { recursive: true, force: true });
+    mkdirSync(destDir, { recursive: true });
+    copyTreeByValue(source, skillsDest);
+    const script = join(skillsDest, 'cez-harness', 'scripts', 'harness.mjs');
+    const sha256 = harnessScriptDigest(script);
+    return sha256 ? { script, sha256 } : null;
+  } catch {
+    // The source is model-writable and therefore untrusted. Cycles, excessive
+    // depth, vanished links, and unreadable entries fail this run's seal
+    // without escaping as a server-level exception or leaving a partial copy.
+    rmSync(skillsDest, { recursive: true, force: true });
+    return null;
+  }
 }
 
 export interface HarnessRuntimeInfo {

@@ -92,6 +92,16 @@ describe('sealHarnessRuntime', () => {
     rmSync(linkTarget, { recursive: true, force: true });
   });
 
+  it('refuses a symlink cycle instead of recursing through untrusted skill input', () => {
+    symlinkSync(
+      skillFile('cez-harness'),
+      skillFile('cez-harness', 'references', 'cycle'),
+      'dir',
+    );
+
+    expect(sealHarnessRuntime(worktree, dest)).toBeNull();
+  });
+
   it('returns null when there is no runtime to seal', () => {
     rmSync(skillFile('cez-harness'), { recursive: true, force: true });
 

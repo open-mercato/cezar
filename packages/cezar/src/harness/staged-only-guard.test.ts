@@ -165,6 +165,25 @@ describe('staged-only git guard', () => {
     expect(result.stagedPaths).toEqual(['base.txt']);
   });
 
+  it('round-trips non-ASCII, spaces, and quotes in staged path names', async () => {
+    const { repo, worktree, startState } = await fixture();
+    const unusual = ['café.txt', 'space "quote".txt'];
+    for (const name of unusual) writeFileSync(join(worktree, name), `content for ${name}\n`);
+    const paths = join(repo, 'paths.txt');
+    writeFileSync(paths, `${unusual.join('\n')}\n`);
+
+    const staged = await runtime(
+      ['stage', '--worktree', worktree, '--start-state', startState, '--paths-file', paths],
+      repo,
+    );
+
+    expect(staged.stderr).toBe('');
+    expect(staged.code).toBe(0);
+    const result = JSON.parse(staged.stdout) as { status: string; stagedPaths: string[] };
+    expect(result.status).toBe('ready');
+    expect(new Set(result.stagedPaths)).toEqual(new Set(unusual));
+  });
+
   it('still refuses a handoff when the run commits on its own branch', async () => {
     const { repo, worktree, startState } = await fixture();
     writeFileSync(join(worktree, 'feature.txt'), 'the run output\n');

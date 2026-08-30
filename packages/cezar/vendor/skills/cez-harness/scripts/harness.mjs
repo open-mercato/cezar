@@ -2203,7 +2203,7 @@ function commandStage(args) {
   } catch (error) {
     warnings.push(`whitespace findings in the staged diff (cosmetic — clean before committing if your CI checks them):\n${String(error.message || '').trim()}`)
   }
-  const stagedPaths = git(['diff', '--cached', '--name-only'], worktree).trim().split(/\r?\n/).filter(Boolean)
+  const stagedPaths = nullSeparated(git(['diff', '--cached', '--name-only', '-z'], worktree))
   const allowed = (entry) => paths.some((scope) => entry === scope || entry.startsWith(`${scope}/`))
   const unexpected = stagedPaths.filter((entry) => !allowed(entry))
   if (unexpected.length) throw new Error(`Staged paths outside allowlist: ${unexpected.join(', ')}`)

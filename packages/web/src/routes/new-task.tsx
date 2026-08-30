@@ -608,7 +608,7 @@ export function NewTaskRoute() {
       })
         .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
         .catch(() => {})
-      clearDraftText(draftProjectId)
+      clearStartedDraft(draftProjectId)
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       navigate(startedRunPath(created))
       return

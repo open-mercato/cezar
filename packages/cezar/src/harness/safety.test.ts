@@ -141,6 +141,20 @@ describe('harness safety primitives', () => {
     expect(() => invoke({ command: 'gh issue view 42 --json title' })).not.toThrow();
     expect(() => invoke({ command: 'printf "git"; echo push' })).not.toThrow();
 
+    const incompleteEnv = { ...process.env };
+    delete incompleteEnv.CEZ_HARNESS_WORKTREE;
+    let missingRootExit: number | undefined;
+    try {
+      execFileSync(process.execPath, [guardPath], {
+        input: JSON.stringify({ tool_input: { command: 'printf allowed' } }),
+        env: incompleteEnv,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch (error) {
+      missingRootExit = (error as { status?: number }).status;
+    }
+    expect(missingRootExit).toBe(2);
+
     if (process.platform === 'darwin') {
       const wrapper = guard.sandboxWrapperPath!;
       const worktreeFile = join(worktree, 'safe.txt');
