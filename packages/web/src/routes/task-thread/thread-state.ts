@@ -82,12 +82,18 @@ export interface ThreadTurn {
   /** The protocol-v2 turnId, once known. */
   turnId?: string
   /** The v1 `user-message` that opened this turn. The FIRST turn usually has none — the initial
-   *  prompt is the run's `task`, which the view renders from the run record. */
-  userMessage?: { text: string; imageCount: number; images: string[] }
+   *  prompt is the run's `task`, which the view renders from the run record. `ts` is when that
+   *  line was persisted (#941). */
+  userMessage?: { text: string; imageCount: number; images: string[]; ts?: string }
+  /** Wall clock of the event that OPENED this turn — the `user-message` line when there is one,
+   *  otherwise `turn.started` (#941). First stamp wins, so the v1 line and the v2 event that
+   *  follow each other for the same turn produce one coherent start rather than two. This is the
+   *  left-hand side of the turn duration. */
+  startedAt?: string
   items: ThreadEntry[]
   /** Latest `plan.updated` snapshot seen during this turn (full-replacement semantics). */
   planEntries?: PlanEntry[]
-  completed?: { stopReason: StopReason; costUsd?: number }
+  completed?: { stopReason: StopReason; costUsd?: number; ts?: string }
 }
 
 export interface ThreadState {
@@ -175,10 +181,11 @@ interface DraftEntry {
 interface DraftTurn {
   id: string
   turnId?: string
-  userMessage?: { text: string; imageCount: number; images: string[] }
+  userMessage?: { text: string; imageCount: number; images: string[]; ts?: string }
+  startedAt?: string
   entries: DraftEntry[]
   planEntries?: PlanEntry[]
-  completed?: { stopReason: StopReason; costUsd?: number }
+  completed?: { stopReason: StopReason; costUsd?: number; ts?: string }
   /** True once any v2 `item.*` event landed in this turn — the dedup latch. */
   v2Items: boolean
 }
@@ -189,6 +196,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function str(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * A wall-clock stamp the thread is willing to render (#941). `ts` is required on the wire and
+ * has always been written, but `runEventSchema` is deliberately loose and NDJSON transcripts are
+ * plain files people edit — so an absent, non-string or unparseable stamp becomes `undefined`
+ * here, and the turn renders exactly as it did before rather than printing `Invalid Date`.
+ */
+function stamp(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value === '') return undefined
+  return Number.isFinite(new Date(value).getTime()) ? value : undefined
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
@@ -386,11 +404,14 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           pendingAsk = undefined
         }
         const turn = newTurn(event.seq)
+        const ts = stamp(event.ts)
         turn.userMessage = {
           text,
           imageCount: typeof event.imageCount === 'number' ? event.imageCount : 0,
           images: Array.isArray(event.images) ? event.images.filter((u): u is string => typeof u === 'string') : [],
+          ...(ts !== undefined ? { ts } : {}),
         }
+        if (ts !== undefined) turn.startedAt = ts
         break
       }
       case 'turn.started': {
@@ -399,11 +420,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // A v1 `user-message` line precedes the v2 turn.started for the same turn (observed
         // wire order) — attach rather than opening a duplicate. A turn that already has a v2
         // identity or v2 items is someone else's; open fresh.
-        if (current && current.turnId === undefined && !current.v2Items) {
-          current.turnId = turnId
-        } else {
-          newTurn(event.seq).turnId = turnId
-        }
+        const attached = current && current.turnId === undefined && !current.v2Items ? current : newTurn(event.seq)
+        attached.turnId = turnId
+        // First stamp wins: when the v1 line opened this turn a moment ago, when the user sent
+        // it is the honest start — and the two must not disagree on one turn.
+        const startedAt = stamp(event.ts)
+        if (attached.startedAt === undefined && startedAt !== undefined) attached.startedAt = startedAt
         break
       }
       case 'turn.completed': {
@@ -416,9 +438,11 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         }
         const turn = matched ?? turns.at(-1)
         if (turn) {
+          const ts = stamp(event.ts)
           turn.completed = {
             stopReason: (str(event.stopReason) ?? 'end_turn') as StopReason,
             ...(typeof event.costUsd === 'number' ? { costUsd: event.costUsd } : {}),
+            ...(ts !== undefined ? { ts } : {}),
           }
         }
         break
@@ -690,6 +714,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         id: draft.id,
         ...(draft.turnId !== undefined ? { turnId: draft.turnId } : {}),
         ...(draft.userMessage !== undefined ? { userMessage: draft.userMessage } : {}),
+        ...(draft.startedAt !== undefined ? { startedAt: draft.startedAt } : {}),
         ...(draft.planEntries !== undefined ? { planEntries: draft.planEntries } : {}),
         ...(draft.completed !== undefined ? { completed: draft.completed } : {}),
         items: draft.entries.map(({ entry }) =>

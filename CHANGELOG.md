@@ -1,6 +1,23 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ **The task conversation has a clock.** Every other surface gave you a temporal anchor — the
+  tasks table shows relative times, the auto-resume hint an absolute one — while the thread, where
+  the actual work is, showed none: coming back to a task, nothing on screen said whether the last
+  agent message landed thirty seconds ago or last Tuesday, and a forty-message transcript spanning
+  two days read as one undifferentiated scroll. Each conversation turn now carries the two stamps
+  it always had on disk: a short local time at the foot of the user bubble that opened it, and the
+  agent's finishing time with how long the turn took (`14:36 · 4m 12s`) where it ended. Turns that
+  fall on different local days are parted by a dated rule — *Today*, *Yesterday*, or the date — so
+  a task resumed after a usage limit or a night reads as the two sittings it was. Times are
+  absolute and never tick: the exact instant is one hover away in the tooltip, and no row re-renders
+  on a timer or changes height under the virtualizer. Nothing new is persisted and no API changed —
+  every event has carried a required `ts` and every queued message a `createdAt` since the
+  beginning; the thread simply stopped throwing them away. A turn still running shows no completion
+  stamp rather than a placeholder that would jump when it fills in, and a transcript whose stamps
+  are missing or unreadable — an old recording, a hand-edited NDJSON — renders exactly as it did
+  before rather than printing `Invalid Date`. Sub-agent and panel transcripts read through the same
+  component, so they inherit it. Issue: #941.
 - ✨ **Continue a task on another agent account, not just another agent.** The thread's Continue
   carried a runner pill that could switch `claude → codex` but never offered the second Claude
   login the new-task composer has offered since accounts landed — so "finish this one on my other
