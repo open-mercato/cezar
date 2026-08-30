@@ -58,6 +58,15 @@ export interface ComposerProps {
    */
   value?: string
   onValueChange?: (text: string) => void
+  /**
+   * Controlled attachments (pass BOTH or neither) — the exact mirror of the text seam above, and
+   * it must stay that way: the thread host (#939) needs the images to survive navigation with the
+   * text, while `/new` deliberately keeps ITS images uncontrolled (multi-MB base64 has no business
+   * in localStorage). Every internal change — paste, drop, the paperclip, a thumbnail click, the
+   * optimistic clear, the on-error restore — flows through `onImagesChange`.
+   */
+  images?: PendingImage[]
+  onImagesChange?: (images: PendingImage[]) => void
   /** Focus the textarea on mount — the /new hero, where typing is the whole point of arriving. */
   autoFocus?: boolean
   /** Rendered in the footer bar after the paperclip — the /new picker pill row. */
@@ -109,6 +118,8 @@ export function Composer({
   onSubmit,
   value,
   onValueChange,
+  images: controlledImages,
+  onImagesChange,
   autoFocus = false,
   footerStart,
   footerEnd,
@@ -136,11 +147,27 @@ export function Composer({
     setInternalText(resolved)
     onValueChangeRef.current?.(resolved)
   }, [])
-  const [images, setImages] = useState<PendingImage[]>([])
+  // Optionally controlled, on the same terms as the text above: `controlledImages` (when given)
+  // shadows the internal state and every write is mirrored to both.
+  const [internalImages, setInternalImages] = useState<PendingImage[]>([])
+  const images = controlledImages ?? internalImages
   // Mirrors `images` for reads inside event handlers that must not run through a setState updater
-  // (StrictMode double-invokes those in dev — see addFiles / #double-paste).
+  // (StrictMode double-invokes those in dev — see addFiles / #double-paste). Updated INSIDE
+  // `setImages` as well as on render, so two async appends in one tick compose instead of the
+  // second clobbering the first — that is what the functional-setState form used to buy.
   const imagesRef = useRef(images)
   imagesRef.current = images
+  const onImagesChangeRef = useRef(onImagesChange)
+  onImagesChangeRef.current = onImagesChange
+  const setImages = useCallback(
+    (next: PendingImage[] | ((current: PendingImage[]) => PendingImage[])) => {
+      const resolved = typeof next === 'function' ? next(imagesRef.current) : next
+      imagesRef.current = resolved
+      setInternalImages(resolved)
+      onImagesChangeRef.current?.(resolved)
+    },
+    [],
+  )
   const [busy, setBusy] = useState(false)
   const [trigger, setTrigger] = useState<TriggerState | null>(null)
   const [menuValue, setMenuValue] = useState('')

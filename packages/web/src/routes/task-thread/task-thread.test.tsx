@@ -478,6 +478,116 @@ describe('ThreadView', () => {
     expect(screen.getAllByLabelText('Edit message')).toHaveLength(1)
   })
 
+  /**
+   * #939 — the thread is the draft store's first host. What is asserted here is the WIRING (the
+   * composer and the inline editors read the run's own drafts); the hook's own rules — debounce,
+   * seed-once, flush, clear-on-send — live in thread-draft.test.tsx.
+   */
+  describe('in-task drafts', () => {
+    const withDrafts = (surfaces: Record<string, { text: string }>) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) => {
+          const path = String(input)
+          const body =
+            path === '/api/v1/runs/r1/drafts'
+              ? {
+                  surfaces: Object.fromEntries(
+                    Object.entries(surfaces).map(([surface, entry]) => [
+                      surface,
+                      { ...entry, images: [], updatedAt: '2026-08-30T00:00:00.000Z' },
+                    ]),
+                  ),
+                }
+              : path === '/api/v1/providers/status'
+                ? { providers: [{ provider: 'claude', status: 'connected', enabled: true }] }
+                : []
+          return Promise.resolve(
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          )
+        }),
+      )
+      const queryClient = createQueryClient()
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      return queryClient
+    }
+
+    it('puts the stored reply back in the composer on arrival', async () => {
+      withDrafts({ composer: { text: 'the correction I was half-way through' } })
+
+      const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
+      await waitFor(() => expect(composer.value).toBe('the correction I was half-way through'))
+    })
+
+    it('leaves the composer empty when this task has no draft — including another surface\'s', async () => {
+      const queryClient = withDrafts({ 'review-notes': { text: 'notes, not a reply' } })
+
+      const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
+      // Wait for the answer to actually land — asserting "empty" before it arrives proves nothing.
+      await waitFor(() =>
+        expect(queryClient.getQueryData(queryKeys.runs.drafts('r1'))).toBeDefined(),
+      )
+      expect(composer.value).toBe('')
+    })
+
+    it('re-opens a queued message\'s editor holding its unsaved edit, and only that one', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) => {
+          const path = String(input)
+          const body =
+            path === '/api/v1/runs/r1/drafts'
+              ? {
+                  surfaces: {
+                    'message:m1': {
+                      text: 'the edit I never saved',
+                      images: [],
+                      updatedAt: '2026-08-30T00:00:00.000Z',
+                    },
+                  },
+                }
+              : []
+          return Promise.resolve(
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          )
+        }),
+      )
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MemoryRouter>
+            <ThreadView
+              run={run('queued', {
+                queuedMessages: [
+                  { id: 'm1', text: 'first', createdAt: '2026-07-21T10:00:00.000Z' },
+                  { id: 'm2', text: 'second', createdAt: '2026-07-21T10:01:00.000Z' },
+                ],
+              })}
+              thread={reduceThread([])}
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+
+      const editors = await screen.findAllByLabelText('Edit the message')
+      expect(editors).toHaveLength(1)
+      expect((editors[0] as HTMLTextAreaElement).value).toBe('the edit I never saved')
+      // The other message's bubble stays closed and untouched.
+      expect(screen.getByText('second')).toBeTruthy()
+    })
+  })
+
   /** #472 — the edit/remove affordances exist only while the run is queued. */
   it('offers edit + remove on stacked bubbles and edit-only on the prompt, while queued', () => {
     renderView(

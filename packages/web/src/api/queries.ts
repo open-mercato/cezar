@@ -39,6 +39,7 @@ import {
   getRun,
   getRunChanges,
   getRunDiff,
+  getRunDrafts,
   getRunFile,
   getRunHandoff,
   getRuns,
@@ -131,6 +132,9 @@ export const queryKeys = {
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
+    /** Unsent drafts for one task (#939). Read once per visit and never refetched in the
+     *  background — see `useRunDrafts`. */
+    drafts: (id: string) => [queryScope(), 'runs', 'drafts', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
   },
@@ -932,6 +936,28 @@ export function useRunHandoff(id: string | undefined, enabled = true) {
     queryKey: queryKeys.runs.handoff(id ?? ''),
     queryFn: ({ signal }) => getRunHandoff(id as string, { signal }),
     enabled: Boolean(id) && enabled,
+  })
+}
+
+/**
+ * The unsent drafts of one task's editable inputs (#939).
+ *
+ * `staleTime: Infinity` and no focus refetch, and both are load-bearing rather than tuning: this
+ * query seeds inputs the user is typing into, so a background refetch landing mid-sentence would
+ * overwrite live text with what the server last heard. The cockpit's own writes update the cache
+ * in place (`useDraft`), which is the only thing that ever changes it while a task is open.
+ */
+export function useRunDrafts(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.runs.drafts(id ?? ''),
+    queryFn: ({ signal }) => getRunDrafts(id as string, { signal }),
+    enabled: Boolean(id),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    // A draft is a convenience, not the page: a task whose drafts cannot be read still opens,
+    // with an empty composer, exactly as it did before this feature existed.
+    retry: false,
   })
 }
 

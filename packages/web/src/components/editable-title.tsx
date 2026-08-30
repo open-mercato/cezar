@@ -14,6 +14,11 @@ export interface TitleEditor {
   draft: string
   setDraft: (value: string) => void
   begin: () => void
+  /** Open on something other than the current title — the task thread re-opens a half-typed
+   *  rename restored from the draft store (#939). Deliberately NOT an optional argument to
+   *  `begin`: `begin` is wired straight to an `onClick` on both surfaces, and an overload would
+   *  quietly seed the editor with a MouseEvent. */
+  beginWith: (initial: string) => void
   commit: () => void
   cancel: () => void
 }
@@ -25,11 +30,12 @@ export function useTitleEditor(title: string, onCommit: (next: string) => void):
   // so one edit can never become two PATCHes.
   const committed = useRef(false)
 
-  const begin = () => {
-    setDraft(title)
+  const beginWith = (initial: string) => {
+    setDraft(initial)
     committed.current = false
     setEditing(true)
   }
+  const begin = () => beginWith(title)
   const commit = () => {
     if (committed.current) return
     committed.current = true
@@ -43,7 +49,7 @@ export function useTitleEditor(title: string, onCommit: (next: string) => void):
     setEditing(false)
   }
 
-  return { editing, draft, setDraft, begin, commit, cancel }
+  return { editing, draft, setDraft, begin, beginWith, commit, cancel }
 }
 
 /** The in-place input, wired to the machine: Enter commits, Escape abandons, blur commits.

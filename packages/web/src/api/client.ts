@@ -34,8 +34,15 @@ import type {
   CreatePrResponse,
   CreateRunInput,
   CreateRunResponse,
+  DeleteDraftResponse,
   DeleteRunResponse,
   DeleteWorkflowResponse,
+  DraftEntry,
+  DraftImage,
+  DraftImageContent,
+  DraftImageInput,
+  RunDraftsResponse,
+  SetRunDraftInput,
   FinishResponse,
   FsBrowseResponse,
   GitCommitResponse,
@@ -1507,6 +1514,100 @@ export async function removeQueuedMessage(
       param: { projectId: queryScope(), id: encodeURIComponent(id), msgId: encodeURIComponent(msgId) },
     }),
     runPath(id, `/queued-messages/${encodeURIComponent(msgId)}`),
+  )
+}
+
+// ---- in-task drafts (#939) ------------------------------------------------------------------
+//
+// The unsent text and attachments of a task's editable inputs. Server-side so a draft follows the
+// user across browsers and survives a reload and a `cez` restart — the one thing the localStorage
+// stores behind `/new` and the GitHub hand-off box cannot do. `routes/task-thread/thread-draft.ts`
+// is the cockpit's ONLY caller: no component talks to this API directly.
+
+/** Every surface of one run that holds a draft. */
+export async function getRunDrafts(id: string, opts?: ReadOptions): Promise<RunDraftsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/drafts'),
+  )
+}
+
+/** Replace one surface's draft. `images` are the ids `postRunDraftImage` minted; an empty write
+ *  (no text, no images) DELETES the entry — that is the server's rule, not a client courtesy. */
+export async function putRunDraft(
+  id: string,
+  surface: string,
+  body: SetRunDraftInput,
+  // `keepalive` is what makes the tab-close flush real: a page hidden mid-sentence dispatches one
+  // last write, and the browser is allowed to finish it after the document is gone.
+  opts?: { keepalive?: boolean },
+): Promise<DraftEntry> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].$put(
+      {
+        param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+        json: body,
+      },
+      { init: { keepalive: opts?.keepalive } },
+    ),
+    runPath(id, `/drafts/${surface}`),
+  )
+}
+
+export async function deleteRunDraft(id: string, surface: string): Promise<DeleteDraftResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+    }),
+    runPath(id, `/drafts/${surface}`),
+  )
+}
+
+/** Upload one attachment. Called when the image is ATTACHED, not when the message is sent, so a
+ *  draft record only ever references bytes the server already holds. */
+export async function postRunDraftImage(
+  id: string,
+  surface: string,
+  image: DraftImageInput,
+): Promise<DraftImage> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+      json: image,
+    }),
+    runPath(id, `/drafts/${surface}/images`),
+  )
+}
+
+/** The bytes behind a restored thumbnail, base64. */
+export async function getRunDraftImage(
+  id: string,
+  surface: string,
+  imageId: string,
+  opts?: ReadOptions,
+): Promise<DraftImageContent> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images[':imageId'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id), surface, imageId } },
+      init(opts),
+    ),
+    runPath(id, `/drafts/${surface}/images/${imageId}`),
+  )
+}
+
+export async function deleteRunDraftImage(
+  id: string,
+  surface: string,
+  imageId: string,
+): Promise<DeleteDraftResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images[':imageId'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface, imageId },
+    }),
+    runPath(id, `/drafts/${surface}/images/${imageId}`),
   )
 }
 

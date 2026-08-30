@@ -14,6 +14,13 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 export interface PendingImage extends ImageInput {
   preview: string
   name: string
+  /**
+   * The server-minted id of this attachment's stored draft blob (#939), when a host backs its
+   * composer with the draft store. Absent while the upload is still in flight, and absent
+   * entirely for hosts that keep no server draft (`/new`) — the composer itself neither sets it
+   * nor reads it; it only carries it through.
+   */
+  id?: string
 }
 
 /** File → base64 (chunked — `String.fromCharCode(...5MB)` would blow the arg limit). */
