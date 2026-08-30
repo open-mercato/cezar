@@ -97,6 +97,9 @@ function runScript(fixtureRoot: string, extraEnv: Record<string, string>, args: 
     GITHUB_OUTPUT: join(fixtureRoot, 'github-output.txt'),
     NODE_AUTH_TOKEN: '',
     GITHUB_ACTIONS: '',
+    // A rerun of this test job has GITHUB_RUN_ATTEMPT=2 in its ambient environment. Tests that
+    // exercise attempt suffixes opt in explicitly; every other fixture must remain attempt 1.
+    GITHUB_RUN_ATTEMPT: '',
     ...extraEnv,
   };
   return execFile(process.execPath, [script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
