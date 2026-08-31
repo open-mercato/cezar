@@ -434,6 +434,21 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
     expect(onSubmit).toHaveBeenCalledWith('Continue.', [])
   })
 
+  /** ⌥ is a CHARACTER modifier on macOS: ⌥C types `ć` on a Polish layout (`ç` on a US one) and
+   *  ⌥A types `ą`/`å` — each arriving with the very `event.code` this shortcut matches on. Typed
+   *  into the composer, that fired "Continue." at the agent and `preventDefault` swallowed the
+   *  letter. Someone with a caret in the textarea is writing, not reaching for an accelerator. */
+  it('leaves an Alt-composed character alone while the caret is in an editable', () => {
+    const { textarea, onSubmit } = renderComposer({ quickReplies: true })
+    type(textarea, 'popraw to')
+    const delivered = fireEvent.keyDown(textarea, { code: 'KeyC', key: 'ć', altKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+    // Not prevented either — the browser still gets to insert the character.
+    expect(delivered).toBe(true)
+    fireEvent.keyDown(textarea, { code: 'KeyA', key: 'ą', altKey: true })
+    expect(onSubmit).not.toHaveBeenCalled()
+  })
+
   it('does nothing without the flag, with other modifiers, or while disabled', () => {
     const { onSubmit } = renderComposer({ quickReplies: true, disabled: true })
     fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
