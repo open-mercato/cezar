@@ -23,6 +23,11 @@ import type {
  *  `ui-state.json` stores as `lastTask`, so persistence needs no mapping. */
 export type TaskSource = NonNullable<UiState['lastTask']>
 
+/** The zero-config built-in: one agent step that runs the prompt. It is what a task with NO
+ *  source picked runs as, which is why the composer's picker does not also offer it as a
+ *  workflow row — "No skill" and "quick-task" would be two names for one run. */
+export const QUICK_TASK = 'quick-task'
+
 /** Prepend `source` to the recency list (newest first), dropping any earlier occurrence of the
  *  same source+ref, and cap the length. Pure so the picker's recency sort is table-testable. */
 export function pushRecentSource(
@@ -215,23 +220,29 @@ export function sourceExists(
 }
 
 /**
- * The effective source: the first candidate that still exists (the draft pick, then the
- * persisted `lastTask`), else the zero-config cold default: built-in quick-task.
+ * The effective source: the draft's own pick when the catalog still has it, else NOTHING.
+ *
+ * `null` is the composer's empty state — no skill and no workflow — and it is what `/new` now
+ * opens on. Two mechanisms were removed here, both deliberately:
+ *
+ *  - the persisted `lastTask` no longer preselects. It was load-bearing for one thing: the
+ *    picker remembering a way of working across visits. It also meant a skill picked once sat
+ *    in the pill for every task afterwards, with no way out that reads as one (the composer
+ *    offered no deselect at all — the only exit was picking the `quick-task` WORKFLOW, which
+ *    is what this change is a fix for). `lastTask` is still WRITTEN, so an older cockpit reading
+ *    the same `ui-state.json` behaves exactly as it always did.
+ *  - the cold quick-task/first-skill fallback chain is gone with it: `null` says "nothing is
+ *    selected" honestly, and `buildCreateRunBody` is the one place that turns that into the
+ *    plain built-in run the server performs.
+ *
+ * The existence check stays: a skill deleted since it was drafted must not stay in the pill.
  */
 export function resolveSource(
-  candidates: ReadonlyArray<TaskSource | null | undefined>,
+  candidate: TaskSource | null | undefined,
   skills: readonly Skill[],
   workflows: readonly WorkflowDef[],
-): TaskSource {
-  for (const candidate of candidates) {
-    if (candidate && sourceExists(candidate, skills, workflows)) return candidate
-  }
-  if (workflows.some((workflow) => workflow.name === 'quick-task')) {
-    return { source: 'workflow', ref: 'quick-task' }
-  }
-  const firstSkill = skills[0]
-  if (firstSkill) return { source: 'skill', ref: firstSkill.name }
-  return { source: 'workflow', ref: workflows[0]?.name ?? 'quick-task' }
+): TaskSource | null {
+  return candidate && sourceExists(candidate, skills, workflows) ? candidate : null
 }
 
 /**
@@ -239,6 +250,10 @@ export function resolveSource(
  *  - a skill runs as a one-step inline chain (spec 008's API — the same shape the inbox and
  *    the bookmarklet auto-start use): `steps: [{ id: 'task', name, skill, prompt: '{{task}}' }]`;
  *  - a workflow goes by name;
+ *  - NO source (`null` — the composer's empty state) goes by the built-in `quick-task` name,
+ *    because `POST /runs` requires exactly one of `workflow`/`steps`. That name is also what
+ *    the server resolves an inbox/bookmarklet run to, so "nothing selected" and "quick-task
+ *    selected" are the same run, which is exactly why the picker offers only one of them;
  *  - an explicit/sticky `runner` always rides the request; an untouched runner is omitted only
  *    when it equals the active project's known default (unknown defaults and connected fallbacks
  *    stay explicit);
@@ -246,7 +261,8 @@ export function resolveSource(
  */
 export function buildCreateRunBody(opts: {
   task: string
-  source: TaskSource
+  /** `null` — nothing picked — runs the built-in `quick-task`. */
+  source: TaskSource | null
   model: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
@@ -290,9 +306,9 @@ export function buildCreateRunBody(opts: {
   } = opts
   return {
     task,
-    ...(source.source === 'skill'
+    ...(source?.source === 'skill'
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
-      : { workflow: source.ref }),
+      : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what

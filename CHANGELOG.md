@@ -1,5 +1,20 @@
 # Unreleased
 
+## ✨ Features
+- ✨ **Continue a task on another agent account, not just another agent.** The thread's Continue
+  carried a runner pill that could switch `claude → codex` but never offered the second Claude
+  login the new-task composer has offered since accounts landed — so "finish this one on my other
+  account" was sayable only when a task was created. It is the same flat control now, in both
+  places: `claude · Default`, `claude · Klaudiusz`, `codex` — one row per thing that can actually
+  run the work, each naming the folder it resolves to. The row selected until you pick another is
+  the account this run is ON (the step that spawned recorded it), not the project's current
+  setting, so switching a project's account never relabels work it did not do. Picking another
+  login starts a fresh session rather than resuming: a session id only resolves inside the config
+  dir that created it, and `claude --resume` under a different login would silently open an empty
+  conversation. A host with one agent and one login sees exactly the composer it always saw.
+  `POST /api/v1/runs/:id/continue` gained an optional `agentProfile`; an id that no longer exists
+  is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+
 ## 🐛 Fixes
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
   answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
