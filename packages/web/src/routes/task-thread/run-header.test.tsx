@@ -8,6 +8,7 @@ import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-clien
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { RunHeader } from './run-header'
+import { resolveConflictsPrompt } from './run-actions'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -818,6 +819,39 @@ describe('meta line, tabs, pill and resume hint', () => {
       expect(issueChip.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/issues/544')
       expect(issueChip.textContent).toContain('Issue #544')
     }
+  })
+
+  // The conflict chip's one-click prompt, end to end: the forge says a PR will not merge, the
+  // chip goes orange, and the panel it opens can send the agent the fix — into the very
+  // conversation under this header, which is what makes the button unambiguous here and nowhere
+  // else in the cockpit.
+  it('sends the resolve-conflicts prompt into this task’s own conversation', async () => {
+    const sent = stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'acme' }),
+      '/api/v1/p/acme/github/ref-status?prs=534': () =>
+        jsonResponse({ available: true, prs: { 534: 'ready' }, issues: {}, conflicts: [534], recheckAfterMs: null }),
+    })
+    renderHeader(
+      run('running', {
+        branch: 'cez/r1',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/534',
+      }),
+    )
+
+    const chip = await waitFor(() => {
+      const found = document.querySelector('[data-slot="pr-chip"][data-conflicting="true"]')
+      if (!found) throw new Error('the chip has not learned about the conflict yet')
+      return found as HTMLElement
+    })
+    fireEvent.focus(chip)
+    fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Resolve conflicts' })))
+
+    const message = await waitFor(() => {
+      const found = sent.find((request) => request.method === 'POST' && request.path.endsWith('/messages'))
+      if (!found) throw new Error('nothing was sent')
+      return found
+    })
+    expect(message.body).toMatchObject({ text: resolveConflictsPrompt(534) })
   })
 
   // A task opened on someone else's PR that pushes a follow-up of its own is about BOTH,

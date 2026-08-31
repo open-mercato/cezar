@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
 import {
-  clearDraftText,
+  clearStartedDraft,
   composerRunModeNote,
   readDraft,
   resetDraft,
@@ -96,10 +96,10 @@ describe('the new-task draft store', () => {
     expect(readDraft().text).toBe('fix it')
   })
 
-  it('clearDraftText spends the text but keeps the picker choices (legacy keeps its pills)', () => {
+  it('clearStartedDraft spends the text AND the source, keeping the way-of-working pills', () => {
     writeDraft({
       text: 'shipped',
-      source: { source: 'workflow', ref: 'quick-task' },
+      source: { source: 'skill', ref: 'om-fix' },
       runner: null,
       agentProfile: null,
       model: 'opus',
@@ -109,12 +109,14 @@ describe('the new-task draft store', () => {
       autonomous: null,
       generateFollowups: true,
     })
-    clearDraftText()
+    clearStartedDraft()
     expect(readDraft()).toEqual({
       text: '',
-      source: { source: 'workflow', ref: 'quick-task' },
+      // The skill goes with the task it ran: the next `/new` starts with none.
+      source: null,
       runner: null,
       agentProfile: null,
+      // Runner/model/variants/plan-first are a way of working — they survive, as they always did.
       model: 'opus',
       variants: 3,
       planFirst: true,

@@ -5,7 +5,7 @@ import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
-import { ReferenceChip } from '@/components/reference-chip'
+import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { deriveAttention } from '@/lib/attention'
@@ -362,9 +362,9 @@ function RunRow({
       {/* The reference, ONCE (#788, option C): the number that used to be both a `775: ` title
           prefix and a trailing `PR ↗` chip is now one leading chip that is itself the link. */}
       {reference ? (
-        <ReferenceChip
+        <TaskReferenceChip
+          run={run}
           reference={reference}
-          taskTitle={title}
           compact
           className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
         />
