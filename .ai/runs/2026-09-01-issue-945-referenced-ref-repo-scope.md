@@ -144,5 +144,5 @@ Full gate from `.ai/agentic.config.json`: `npm run typecheck`, `npm test`, `npm 
 
 ### Phase 3: Documentation
 
-- [ ] 3.1 Update the two referenced-detection specs with the repo clause
-- [ ] 3.2 Record the display-layer decision in the `tasks-table.ts` doc comment
+- [x] 3.1 Update the two referenced-detection specs with the repo clause — d09154c4
+- [x] 3.2 Record the display-layer decision in the `tasks-table.ts` doc comment — d09154c4
