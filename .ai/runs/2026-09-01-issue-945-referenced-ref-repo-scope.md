@@ -133,8 +133,8 @@ Full gate from `.ai/agentic.config.json`: `npm run typecheck`, `npm test`, `npm 
 
 ### Phase 1: Repo-scope the referenced tier's promotion
 
-- [ ] 1.1 Add the repo-handle corroboration helper and veto `resolveReferencedRef`
-- [ ] 1.2 Unit tests for the repo-scoped resolution rule
+- [x] 1.1 Add the repo-handle corroboration helper and veto `resolveReferencedRef` — ac02041f
+- [x] 1.2 Unit tests for the repo-scoped resolution rule — ac02041f
 
 ### Phase 2: Teach the store its repository and heal poisoned records
 
