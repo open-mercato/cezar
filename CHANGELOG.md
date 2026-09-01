@@ -8,7 +8,9 @@
   composer (text **and** pasted screenshots), the review-notes box, the inline prompt and
   queued-message editors, and the header's rename. Deliberately invisible — no toast, no badge, no
   "draft restored" banner: you return and the text is where you left it, thumbnails intact, and an
-  editor that had unsaved text re-opens holding it. Drafts live on the server (`.ai/cezar/drafts/`,
+  editor that had unsaved text re-opens holding it — a re-opened rename waits for you to confirm it
+  with Enter rather than applying itself on the next click elsewhere. Drafts live on the server
+  (`.ai/cezar/drafts/`,
   gitignored, `0600`), so they survive a reload, a second browser and a `cez` restart, and they are
   cleared only by sending them or emptying them — never by age or count. If the send is rejected,
   the message comes back with its attachments; if the draft cannot be written at all, the cockpit

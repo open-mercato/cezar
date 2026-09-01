@@ -22,16 +22,20 @@ import { atomicWriteJsonSync } from '../workspace/config.ts';
  *
  * ```
  * .ai/cezar/drafts/<runId>/
- *   draft.json                 { surfaces: { <surfaceId>: { text, images: [<imageId>], updatedAt } } }
- *   images/<imageId>.json      { id, mediaType, name, bytes, data }   ← one self-describing blob
+ *   draft.json                    { surfaces: { <surfaceId>: { text, images: [<imageId>], updatedAt } } }
+ *   images/<imageId>.json         { id, mediaType, name, bytes, data }   ← the blob
+ *   images/<imageId>.meta.json    { id, mediaType, name, bytes }         ← the same facts, without the bytes
  * ```
  *
  * One directory per run, so deleting a run's drafts is one `rm -rf` with no shared index to
- * rewrite. `draft.json` stores image IDS; the metadata lives with the bytes, in one atomically
- * written file per attachment. That is the one deliberate departure from the spec's sketch (raw
- * bytes plus a metadata index): a self-describing blob cannot diverge from an index that lists it,
- * and the read path answers base64 either way — `GET …/images/:imageId` is JSON, because the
- * composer's `PendingImage` is base64 and every response in this repo is a zod schema.
+ * rewrite. `draft.json` stores image IDS; the metadata lives beside the bytes, in a second tiny
+ * file written in the same breath as the blob. That sidecar is not an index and cannot diverge
+ * from one — it is written once, never rewritten, and its absence means exactly what a missing
+ * blob means (the attachment is gone). It exists because a LISTING must not cost a multi-megabyte
+ * `readFileSync` + `JSON.parse`: `cezar serve` is single-threaded and is streaming agent output
+ * over SSE while the user types, so a per-typing-pause draft write that parsed every attached
+ * screenshot would stall the whole cockpit. Only `GET …/images/:imageId` — the route that is
+ * ASKING for the bytes — reads the blob.
  *
  * House style, inherited rather than invented (`workspace/ui-state.ts`, `runs/store.ts`): reads
  * NEVER throw — missing, unreadable, malformed and corrupt all degrade to "no draft"; writes are
@@ -62,6 +66,13 @@ function imagesDir(dataDir: string, runId: string): string {
 
 function imagePath(dataDir: string, runId: string, imageId: string): string {
   return join(imagesDir(dataDir, runId), `${safeSegment(imageId)}.json`);
+}
+
+const IMAGE_META_SUFFIX = '.meta.json';
+
+/** The bytes-free half of a blob — see the module header for why it is a separate file. */
+function imageMetaPath(dataDir: string, runId: string, imageId: string): string {
+  return join(imagesDir(dataDir, runId), `${safeSegment(imageId)}${IMAGE_META_SUFFIX}`);
 }
 
 /** A path segment that cannot escape its directory. Anything else is refused outright — a draft
@@ -163,12 +174,39 @@ function readImage(dataDir: string, runId: string, imageId: string): DraftImageC
   };
 }
 
-/** The metadata half of a blob — what a draft listing carries. */
+/**
+ * The metadata half of a blob — what a draft listing carries.
+ *
+ * Reads the sidecar, never the bytes: this runs once per attached image on every debounced `PUT`
+ * and on every task open, and the bytes can be five megabytes each. The blob is confirmed with a
+ * single `existsSync` so an attachment whose bytes vanished still drops out of the listing.
+ */
 function imageMeta(dataDir: string, runId: string, imageId: string): DraftImage | undefined {
-  const blob = readImage(dataDir, runId, imageId);
-  if (!blob) return undefined;
-  const { data: _data, ...meta } = blob;
-  return meta;
+  if (!DRAFT_IMAGE_ID_RE.test(imageId)) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(imageMetaPath(dataDir, runId, imageId), 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const meta = raw as Partial<DraftImage>;
+  if (typeof meta.mediaType !== 'string') return undefined;
+  if (!existsSync(imagePath(dataDir, runId, imageId))) return undefined;
+  return {
+    id: imageId,
+    mediaType: meta.mediaType,
+    name: typeof meta.name === 'string' ? meta.name : 'image',
+    bytes: typeof meta.bytes === 'number' ? meta.bytes : 0,
+  };
+}
+
+/** Did this store mint `imageId`? Two `stat`s, no parse — the check a `PUT` runs per named image. */
+function imageExists(dataDir: string, runId: string, imageId: string): boolean {
+  if (!DRAFT_IMAGE_ID_RE.test(imageId)) return false;
+  return (
+    existsSync(imageMetaPath(dataDir, runId, imageId)) && existsSync(imagePath(dataDir, runId, imageId))
+  );
 }
 
 /** Resolve a stored entry's image ids to metadata, dropping any whose blob is gone. */
@@ -210,6 +248,16 @@ export function readRunDraftSurface(
   surface: string,
 ): DraftEntry | undefined {
   return readRunDrafts(dataDir, runId).surfaces[surface];
+}
+
+/** How many attachments one surface already holds — the per-draft cap, answered from `draft.json`
+ *  alone so an upload never touches the blobs it is about to sit beside. Never throws. */
+export function countRunDraftImages(dataDir: string, runId: string, surface: string): number {
+  try {
+    return readStored(dataDir, runId).surfaces[surface]?.images.length ?? 0;
+  } catch {
+    return 0;
+  }
 }
 
 export type DraftWriteResult =
@@ -254,7 +302,7 @@ function writeChecked(
   now: () => Date,
 ): DraftWriteResult {
   for (const id of input.images) {
-    if (imageMeta(dataDir, runId, id) === undefined) return { ok: false, error: `unknown image: ${id}` };
+    if (!imageExists(dataDir, runId, id)) return { ok: false, error: `unknown image: ${id}` };
   }
 
   const stamp = now().toISOString();
@@ -280,7 +328,7 @@ function writeChecked(
   }
 
   try {
-    enforceStoreBudget(dataDir, runId);
+    enforceStoreBudget(dataDir, runId, estimatedBytes(stored));
     atomicWriteJsonSync(draftPath(dataDir, runId), stored);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -339,13 +387,18 @@ export function writeRunDraftImage(
     bytes,
     data: image.data,
   };
+  const { data: _data, ...meta } = record;
   try {
-    enforceStoreBudget(dataDir, runId);
+    // `data` dominates the record; the envelope around it is noise at this scale.
+    enforceStoreBudget(dataDir, runId, image.data.length);
+    // Blob first, sidecar second: if the process dies between them the attachment is simply not
+    // listed (`imageMeta` needs the sidecar) and the orphan sweep reclaims the bytes. The other
+    // order would advertise an attachment whose bytes are not there yet.
     atomicWriteJsonSync(imagePath(dataDir, runId, id), record);
+    atomicWriteJsonSync(imageMetaPath(dataDir, runId, id), meta);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  const { data: _data, ...meta } = record;
   return { ok: true, image: meta };
 }
 
@@ -364,6 +417,7 @@ export function deleteRunDraftImage(dataDir: string, runId: string, imageId: str
   if (!DRAFT_IMAGE_ID_RE.test(imageId)) return;
   try {
     rmSync(imagePath(dataDir, runId, imageId), { force: true });
+    rmSync(imageMetaPath(dataDir, runId, imageId), { force: true });
   } catch {
     // best effort
   }
@@ -410,7 +464,11 @@ function sweepOrphanImages(dataDir: string, runId: string, stored: StoredDraft, 
   }
   for (const file of files) {
     if (!file.endsWith('.json')) continue;
-    const id = file.slice(0, -'.json'.length);
+    // A blob and its sidecar sweep independently, each on its own mtime — they are written
+    // together, so in practice they go together too.
+    const id = file.endsWith(IMAGE_META_SUFFIX)
+      ? file.slice(0, -IMAGE_META_SUFFIX.length)
+      : file.slice(0, -'.json'.length);
     if (referenced.has(id)) continue;
     const path = join(imagesDir(dataDir, runId), file);
     try {
@@ -454,17 +512,52 @@ function lastTouched(dataDir: string, runId: string): string {
   return newest;
 }
 
+/** Roughly what this draft record will occupy. An estimate on purpose: the exact figure costs a
+ *  second `JSON.stringify` of the user's text, and it is only ever compared to a 64 MiB backstop. */
+function estimatedBytes(stored: StoredDraft): number {
+  let total = 0;
+  for (const [surface, entry] of Object.entries(stored.surfaces)) {
+    total += surface.length + entry.text.length + entry.updatedAt.length + 64;
+    for (const id of entry.images) total += id.length + 8;
+  }
+  return total;
+}
+
+/** The fullness at which the cheap estimate below stops being trusted and the tree is walked. */
+const BUDGET_RECHECK_BYTES = Math.floor(DRAFT_STORE_MAX_BYTES * 0.8);
+
+/**
+ * A running estimate of each store's size, so the exact walk happens near the ceiling rather than
+ * on every typing pause.
+ *
+ * Deliberately one-directional: it only grows between walks, so a deletion leaves it reading HIGH
+ * and the next write pays for a walk it did not need — the safe direction. It can never read low
+ * enough to let the store past its ceiling unnoticed, because every walk resets it to the truth.
+ */
+const storeBytesEstimate = new Map<string, number>();
+
 /**
  * Keep the whole store under {@link DRAFT_STORE_MAX_BYTES}, evicting least-recently-touched run
  * directories until it fits. `keepRunId` — the run being written right now — is never evicted, so
- * a write can't delete the draft it is in the middle of saving. One log line per sweep, because a
- * silent deletion of the user's own unsent text would be the wrong kind of quiet.
+ * a write can't delete the draft it is in the middle of saving. `incomingBytes` is what is about
+ * to be written, counted BEFORE the write so the store cannot overshoot its own ceiling by a whole
+ * attachment. One log line per sweep, because a silent deletion of the user's own unsent text
+ * would be the wrong kind of quiet.
  */
-function enforceStoreBudget(dataDir: string, keepRunId: string): void {
+function enforceStoreBudget(dataDir: string, keepRunId: string, incomingBytes: number): void {
   const root = draftsRoot(dataDir);
-  if (!existsSync(root)) return;
+  if (!existsSync(root)) {
+    storeBytesEstimate.set(dataDir, incomingBytes);
+    return;
+  }
+  const estimate = storeBytesEstimate.get(dataDir);
+  if (estimate !== undefined && estimate + incomingBytes <= BUDGET_RECHECK_BYTES) {
+    storeBytesEstimate.set(dataDir, estimate + incomingBytes);
+    return;
+  }
   let total = dirBytes(root);
-  if (total <= DRAFT_STORE_MAX_BYTES) return;
+  storeBytesEstimate.set(dataDir, total + incomingBytes);
+  if (total + incomingBytes <= DRAFT_STORE_MAX_BYTES) return;
   let runIds: string[];
   try {
     runIds = readdirSync(root, { withFileTypes: true })
@@ -478,11 +571,12 @@ function enforceStoreBudget(dataDir: string, keepRunId: string): void {
     .sort((a, b) => a.touched.localeCompare(b.touched));
   const evicted: string[] = [];
   for (const { id } of ordered) {
-    if (total <= DRAFT_STORE_MAX_BYTES) break;
+    if (total + incomingBytes <= DRAFT_STORE_MAX_BYTES) break;
     total -= dirBytes(join(root, id));
     deleteRunDrafts(dataDir, id);
     evicted.push(id);
   }
+  storeBytesEstimate.set(dataDir, total + incomingBytes);
   if (evicted.length > 0) {
     console.warn(
       `[cezar] drafts store exceeded ${Math.round(DRAFT_STORE_MAX_BYTES / 1024 / 1024)} MiB — ` +

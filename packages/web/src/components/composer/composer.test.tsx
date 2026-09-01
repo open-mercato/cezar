@@ -7,7 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { Skill } from '@open-mercato/cezar-api-client'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
-import { MAX_IMAGE_BYTES, type PendingImage } from './composer-images'
+import { MAX_IMAGE_BYTES, type ImagesChangeReason, type PendingImage } from './composer-images'
 import { Composer, type ComposerProps } from './composer'
 
 beforeAll(() => {
@@ -255,14 +255,16 @@ describe('the controlled-images seam (#939)', () => {
    *  callback would leave the composer reading a prop that never moves. */
   function renderControlled(onSubmit: ComposerProps['onSubmit']) {
     const seen: PendingImage[][] = []
+    const reasons: ImagesChangeReason[] = []
     function Host() {
       const [images, setImages] = React.useState<PendingImage[]>([HELD])
       return (
         <Composer
           onSubmit={onSubmit}
           images={images}
-          onImagesChange={(next) => {
+          onImagesChange={(next, reason) => {
             seen.push(next)
+            reasons.push(reason)
             setImages(next)
           }}
         />
@@ -275,7 +277,11 @@ describe('the controlled-images seam (#939)', () => {
         <Toaster />
       </QueryClientProvider>,
     )
-    return { seen, textarea: screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement }
+    return {
+      seen,
+      reasons,
+      textarea: screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement,
+    }
   }
 
   const HELD: PendingImage = {
@@ -287,7 +293,7 @@ describe('the controlled-images seam (#939)', () => {
   }
 
   it('renders the host\'s images and routes every add and remove through the callback', async () => {
-    const { seen, textarea } = renderControlled(vi.fn(() => Promise.resolve({})))
+    const { seen, reasons, textarea } = renderControlled(vi.fn(() => Promise.resolve({})))
 
     // The host's array is what renders — a restored draft's thumbnail comes back with it.
     expect(screen.getByLabelText('Remove restored.png')).toBeTruthy()
@@ -298,15 +304,19 @@ describe('the controlled-images seam (#939)', () => {
 
     fireEvent.click(screen.getByLabelText('Remove restored.png'))
     expect(seen.at(-1)).toEqual([expect.objectContaining({ name: 'new.png' })])
+    expect(reasons.every((reason) => reason === 'edit')).toBe(true)
   })
 
   it('carries the host\'s attachments into submit and clears them optimistically', async () => {
     const onSubmit = vi.fn(() => Promise.resolve({}))
-    const { seen } = renderControlled(onSubmit)
+    const { seen, reasons } = renderControlled(onSubmit)
 
     fireEvent.click(screen.getByLabelText('Send'))
     expect(onSubmit).toHaveBeenCalledWith('', [{ mediaType: 'image/png', data: 'AAA' }])
     expect(seen.at(-1)).toEqual([])
+    // The clear is TAGGED, because the host cannot otherwise tell it from the user removing the
+    // last thumbnail — and the two differ: a message in flight keeps its bytes until it lands.
+    expect(reasons.at(-1)).toBe('submit')
   })
 
   it('restores the host\'s attachments when the send is rejected', async () => {

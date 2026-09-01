@@ -23,6 +23,17 @@ export interface PendingImage extends ImageInput {
   id?: string
 }
 
+/**
+ * Why a controlled composer's attachments changed.
+ *
+ * A send clears the composer OPTIMISTICALLY, before `onSubmit` is even called, so from the
+ * outside "the array went empty" is ambiguous — it is either the user removing the last
+ * thumbnail or a message on its way out. The two must not be treated alike: the blobs of a
+ * message in flight have to survive a rejection, and a removed thumbnail's blob should go now.
+ * Rather than let a host guess from the text being empty too, the composer says which it was.
+ */
+export type ImagesChangeReason = 'edit' | 'submit'
+
 /** File → base64 (chunked — `String.fromCharCode(...5MB)` would blow the arg limit). */
 export async function fileToPendingImage(file: File): Promise<PendingImage> {
   const bytes = new Uint8Array(await file.arrayBuffer())

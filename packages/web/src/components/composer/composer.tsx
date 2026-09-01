@@ -32,6 +32,7 @@ import {
   fileToPendingImage,
   MAX_IMAGES,
   screenFiles,
+  type ImagesChangeReason,
   type PendingImage,
 } from './composer-images'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
@@ -66,7 +67,7 @@ export interface ComposerProps {
    * optimistic clear, the on-error restore — flows through `onImagesChange`.
    */
   images?: PendingImage[]
-  onImagesChange?: (images: PendingImage[]) => void
+  onImagesChange?: (images: PendingImage[], reason: ImagesChangeReason) => void
   /** Focus the textarea on mount — the /new hero, where typing is the whole point of arriving. */
   autoFocus?: boolean
   /** Rendered in the footer bar after the paperclip — the /new picker pill row. */
@@ -160,11 +161,14 @@ export function Composer({
   const onImagesChangeRef = useRef(onImagesChange)
   onImagesChangeRef.current = onImagesChange
   const setImages = useCallback(
-    (next: PendingImage[] | ((current: PendingImage[]) => PendingImage[])) => {
+    (
+      next: PendingImage[] | ((current: PendingImage[]) => PendingImage[]),
+      reason: ImagesChangeReason = 'edit',
+    ) => {
       const resolved = typeof next === 'function' ? next(imagesRef.current) : next
       imagesRef.current = resolved
       setInternalImages(resolved)
-      onImagesChangeRef.current?.(resolved)
+      onImagesChangeRef.current?.(resolved, reason)
     },
     [],
   )
@@ -363,9 +367,10 @@ export function Composer({
     if (text.trim() === '' && images.length === 0 && !allowEmptySubmit) return
     const draftText = text
     const draftImages = images
-    // Optimistic clear — the reply feels instant; a rejection restores it above.
+    // Optimistic clear — the reply feels instant; a rejection restores it above. Tagged `submit`
+    // so a controlled host does not mistake it for the user emptying the composer by hand.
     setText('')
-    setImages([])
+    setImages([], 'submit')
     setTrigger(null)
     void send(draftText, draftImages, true)
   }, [allowEmptySubmit, images, send, text])
@@ -436,7 +441,7 @@ export function Composer({
     const merged = text.trim() === '' ? transcript : `${text.replace(/\s*$/, '')} ${transcript}`
     if (alsoSend) {
       setText('')
-      setImages([])
+      setImages([], 'submit')
       void send(merged, images, true)
       return
     }

@@ -84,6 +84,7 @@ import {
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import {
+  countRunDraftImages,
   deleteRunDraftImage,
   deleteRunDraftSurface,
   readRunDraftImage,
@@ -4335,7 +4336,7 @@ export function createApp(deps: ServerDeps) {
         if (!run) return c.json({ error: 'not found' }, 404);
         // The composer screens this before it ever reaches here; the route re-checks so a client
         // that is not the composer cannot bypass the cap.
-        const held = readRunDrafts(dataDir, run.id).surfaces[surface]?.images.length ?? 0;
+        const held = countRunDraftImages(dataDir, run.id, surface);
         if (held >= DRAFT_MAX_IMAGES) {
           return c.json({ error: `at most ${DRAFT_MAX_IMAGES} images per draft` }, 400);
         }
@@ -4346,6 +4347,10 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
+    // `:surface` is validated (it is a path segment) but deliberately NOT used to scope the
+    // lookup on these two: a blob is minted before any draft record names it, so scoping by
+    // surface would 404 the thumbnail the user just pasted and orphan its bytes when they remove
+    // it again. The run id is what scopes an attachment; the surface is here for URL symmetry.
     .get(
       '/runs/:id/drafts/:surface/images/:imageId',
       paramZodValidator(draftImageParamSchema),

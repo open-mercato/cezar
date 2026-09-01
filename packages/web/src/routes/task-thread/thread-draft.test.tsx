@@ -209,6 +209,22 @@ describe('useDraft', () => {
     expect(fetchMock.mock.calls.at(-1)?.[1]).toMatchObject({ keepalive: true })
   })
 
+  it('sends a long draft as an ordinary request — `keepalive` would reject it outright', async () => {
+    // Fetch caps the TOTAL body of in-flight `keepalive` requests at 64 KiB and REJECTS past it,
+    // so flagging a long draft `keepalive` makes the one draft most worth saving the one that is
+    // guaranteed not to be. `DRAFT_TEXT_MAX` is 100 000 characters — this is reachable by typing.
+    vi.useFakeTimers()
+    const { result } = renderHook(() => useDraft('r1', 'composer'), { wrapper: wrapper() })
+    act(() => result.current.setText('x'.repeat(70_000)))
+
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+    await act(() => vi.advanceTimersByTimeAsync(0))
+
+    expect(writes()).toHaveLength(1)
+    expect(fetchMock.mock.calls.at(-1)?.[1]).toMatchObject({ keepalive: false })
+  })
+
   it('switching to another task shows THAT task\'s draft, never the previous one\'s', async () => {
     stored.r1 = { surfaces: { composer: entry('task one') } }
     stored.r2 = { surfaces: { composer: entry('task two') } }
@@ -316,13 +332,34 @@ describe('useDraft', () => {
         ).toBe(true),
       )
 
-      // The composer's optimistic clear — text emptied first, then the images — must NOT, or a
-      // rejected send would come back without its attachments.
+      // The composer's optimistic clear says so ("submit") and must NOT delete, or a rejected
+      // send would come back without its attachments.
       calls.length = 0
       act(() => result.current.setImages([held]))
       act(() => result.current.setText(''))
-      act(() => result.current.setImages([]))
+      act(() => result.current.setImages([], 'submit'))
       expect(calls.some((c) => c.method === 'DELETE')).toBe(false)
+    })
+
+    it('deletes the blob of the LAST thumbnail removed from an images-only draft', async () => {
+      // The regression this pins: while the send-clear was inferred from "the array went empty and
+      // the text is already empty", a draft that never had text lost the distinction — removing its
+      // last thumbnail looked exactly like a send, so the blob was left to the server's orphan
+      // sweep and its ten-minute grace window rather than deleted now.
+      const held: PendingImage = { ...pasted, id: 'img1' }
+      const { result } = renderHook(() => useDraft('r1', 'composer'), { wrapper: wrapper() })
+      await waitFor(() => expect(result.current.ready).toBe(true))
+      act(() => result.current.setImages([held]))
+
+      act(() => result.current.setImages([]))
+
+      await waitFor(() =>
+        expect(
+          calls.some(
+            (c) => c.method === 'DELETE' && c.url === '/api/v1/runs/r1/drafts/composer/images/img1',
+          ),
+        ).toBe(true),
+      )
     })
 
     it('rehydrates a stored attachment into a thumbnail on return', async () => {

@@ -191,6 +191,33 @@ describe('editable title (#389)', () => {
     // the user cannot see.
   })
 
+  it('a restored rename is not applied by the next stray click — only by Enter', async () => {
+    const sent = stubFetch({
+      '/api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            title: { text: 'Half a new na', images: [], updatedAt: '2026-08-30T00:00:00.000Z' },
+          },
+        }),
+    })
+    renderHeader(run('waiting'))
+    const input = (await screen.findByLabelText('Task title')) as HTMLInputElement
+
+    // The user comes back an hour later and clicks somewhere in the thread. Blur commits for an
+    // editor they opened; this one opened itself, and committing here would silently rename the
+    // task to text they walked away from.
+    fireEvent.blur(input)
+    expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
+    expect((screen.getByLabelText('Task title') as HTMLInputElement).value).toBe('Half a new na')
+
+    // Once they touch it, it is an ordinary rename again.
+    fireEvent.change(input, { target: { value: 'Half a new name' } })
+    fireEvent.blur(input)
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'PATCH')?.body).toEqual({ title: 'Half a new name' }),
+    )
+  })
+
   it('typing a rename writes it to the draft store, and committing clears it', async () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))

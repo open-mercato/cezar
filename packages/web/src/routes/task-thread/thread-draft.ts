@@ -4,7 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { deleteRunDraftImage, getRunDraftImage, postRunDraftImage, putRunDraft } from '@/api/client'
 import { queryKeys, useRunDrafts } from '@/api/queries'
 import type { DraftImage, RunDraftsResponse } from '@open-mercato/cezar-api-client'
-import { MAX_IMAGES, type PendingImage } from '@/components/composer/composer-images'
+import {
+  MAX_IMAGES,
+  type ImagesChangeReason,
+  type PendingImage,
+} from '@/components/composer/composer-images'
 
 /**
  * `useDraft(runId, surface)` — the cockpit's ONE entry point to the in-task draft store (#939,
@@ -50,7 +54,9 @@ export interface Draft {
   text: string
   setText: (next: string) => void
   images: PendingImage[]
-  setImages: (next: PendingImage[]) => void
+  /** `reason` is the composer's own word for the change — see `ImagesChangeReason`. A host that
+   *  is not the composer omits it and gets the ordinary "the user edited this" handling. */
+  setImages: (next: PendingImage[], reason?: ImagesChangeReason) => void
   /**
    * Run the host's real send with the draft held open. On success the draft (and its blobs) are
    * dropped; on failure the pending write resumes, so the restore the composer performs is
@@ -238,22 +244,20 @@ export function useDraft(runId: string, surface: string, { enabled = true }: Dra
   )
 
   const setImages = useCallback(
-    (next: PendingImage[]) => {
-      const dropped = latest.current.images.filter(
-        (held) => held.id !== undefined && !next.some((kept) => kept.id === held.id),
-      )
-      // Distinguishing a thumbnail click from the composer's optimistic clear, without the
-      // composer having to tell us: a SEND clears the text first and the images second, so an
-      // emptied array over an already-empty text is the clear, not a removal. Its blobs must
-      // survive until the send resolves — a rejected message is restored with its attachments —
-      // and are dropped by the empty write that follows a successful one.
-      const clearedForSend = next.length === 0 && latest.current.text === ''
+    (next: PendingImage[], reason: ImagesChangeReason = 'edit') => {
+      const dropped = latest.current.images
+        .map((held) => held.id)
+        .filter((id): id is string => id !== undefined && !next.some((kept) => kept.id === id))
       setImagesState(next)
       latest.current = { ...latest.current, images: next }
       record(latest.current.text, next)
-      if (!clearedForSend && liveRef.current) {
-        for (const image of dropped) {
-          void deleteRunDraftImage(runId, surface, image.id as string).catch(() => {})
+      // The composer TELLS us which emptying this is (`composer-images.ts`): a send's optimistic
+      // clear must leave the blobs alone until it resolves — a rejected message is restored with
+      // its attachments, and a landed one drops them through the empty write in `clear()`. Only a
+      // thumbnail the user actually removed is deleted here.
+      if (reason !== 'submit' && liveRef.current) {
+        for (const id of dropped) {
+          void deleteRunDraftImage(runId, surface, id).catch(() => {})
         }
       }
       // Anything without an id is new: upload it once, then re-file it in place so the next write

@@ -157,6 +157,36 @@ describe('run draft store', () => {
       expect(readRunDraftImage(dataDir, 'run-1', stored.image.id)?.data).toBe(png);
     });
 
+    it('lists an attachment WITHOUT reading its bytes', () => {
+      // The property this pins is a performance one stated as behaviour: a listing and a `PUT`
+      // must not read or parse the blob. `cezar serve` is single-threaded and is streaming agent
+      // output over SSE while the user types, and four attachments at the ~5 MB cap cost ~80 ms of
+      // blocked event loop to parse — twice per typing pause, on the feature's own headline path.
+      // Corrupting the blob's CONTENT while leaving the file in place is how that is observable:
+      // anything that parses it drops the image, anything that reads the sidecar does not.
+      const stored = writeRunDraftImage(dataDir, 'run-1', {
+        mediaType: 'image/png',
+        name: 'shot.png',
+        data: png,
+      });
+      if (!stored.ok) throw new Error('setup failed');
+      writeFileSync(
+        join(draftsRoot(dataDir), 'run-1', 'images', `${stored.image.id}.json`),
+        '{ not json at all',
+        'utf8',
+      );
+
+      const written = writeRunDraftSurface(dataDir, 'run-1', 'composer', {
+        text: 'see this',
+        images: [stored.image.id],
+      });
+
+      expect(written.ok).toBe(true);
+      expect(readRunDrafts(dataDir, 'run-1').surfaces.composer?.images).toEqual([
+        { id: stored.image.id, mediaType: 'image/png', name: 'shot.png', bytes: expect.any(Number) },
+      ]);
+    });
+
     it('a traversal-shaped image id reads as missing rather than escaping the directory', () => {
       expect(readRunDraftImage(dataDir, 'run-1', '../../etc/passwd')).toBeUndefined();
     });
@@ -193,11 +223,14 @@ describe('run draft store', () => {
       writeRunDraftSurface(dataDir, 'run-1', 'review-notes', { text: 'notes', images: [] });
       expect(existsSync(path)).toBe(true);
 
-      // Aged past the grace window: nothing references it, so it goes.
+      // Aged past the grace window: nothing references it, so it goes — bytes and sidecar both.
+      const meta = join(draftsRoot(dataDir), 'run-1', 'images', `${orphan.image.id}.meta.json`);
       const old = new Date(Date.now() - 60 * 60 * 1000);
       utimesSync(path, old, old);
+      utimesSync(meta, old, old);
       writeRunDraftSurface(dataDir, 'run-1', 'review-notes', { text: 'notes, edited', images: [] });
       expect(existsSync(path)).toBe(false);
+      expect(existsSync(meta)).toBe(false);
     });
   });
 
@@ -224,6 +257,23 @@ describe('run draft store', () => {
       const left = readdirSync(draftsRoot(dataDir));
       expect(left).toContain('writing-run');
       expect(left).not.toContain('old-run');
+      expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('counts what is ABOUT to be written, so an attachment cannot push it over the ceiling', () => {
+      // Measuring the tree and then adding a blob to it lets the store settle above its own
+      // ceiling by up to one attachment. The incoming bytes are part of the sum.
+      fatDraft('old-run', '2026-01-01T00:00:00.000Z', DRAFT_STORE_MAX_BYTES - 4 * 1024 * 1024);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const stored = writeRunDraftImage(dataDir, 'run-1', {
+        mediaType: 'image/png',
+        name: 'big.png',
+        data: 'A'.repeat(8 * 1024 * 1024),
+      });
+
+      expect(stored.ok).toBe(true);
+      expect(readdirSync(draftsRoot(dataDir))).not.toContain('old-run');
       expect(warn).toHaveBeenCalledTimes(1);
     });
 

@@ -387,14 +387,21 @@ only showed once the code existed. Everything else — the route family, the sur
 500 ms debounce, the seed-once rule, the caps, the 64 MiB backstop, the gitignore entry — landed
 as written.
 
-**1. An attachment is ONE self-describing file, not raw bytes plus an index.**
-`drafts/<runId>/images/<imageId>.json` holds `{id, mediaType, name, bytes, data}`; `draft.json`
-stores only the id list per surface. The sketch's split (raw bytes in `images/<imageId>`, metadata
-in the draft record) has two writers for one fact, so a crash between them leaves an index naming a
-blob that is not there or a blob nothing can describe. One atomic write per attachment cannot
-diverge from itself, and the read path answers base64 either way — `GET …/images/:imageId` is JSON
-because the composer's `PendingImage` is base64 and every response in this repo is a zod schema.
-The cost is the ~33% base64 overhead on disk, which the byte-counting backstop measures honestly.
+**1. An attachment is a self-describing blob plus a metadata sidecar, not raw bytes plus an index.**
+`drafts/<runId>/images/<imageId>.json` holds `{id, mediaType, name, bytes, data}` and
+`images/<imageId>.meta.json` holds the same facts without `data`; `draft.json` stores only the id
+list per surface. The sketch's split (raw bytes in `images/<imageId>`, metadata in the draft
+record) has two writers for one fact, so a crash between them leaves an index naming a blob that is
+not there or a blob nothing can describe. The sidecar is not that index: it is written once, in the
+same breath as the blob it sits beside, never rewritten, and its absence means exactly what a
+missing blob means. It exists because the first cut — blob only, metadata recovered by parsing it —
+made a *listing* cost a multi-megabyte `readFileSync` + `JSON.parse` per attachment, twice per
+typing pause, on the single thread that is concurrently streaming every live agent's output over
+SSE (~160 ms of blocked event loop at the four-attachment cap; found in review of #940). A listing
+now reads the sidecar and confirms the blob with one `existsSync`, and only `GET …/images/:imageId`
+— the route that is *asking* for the bytes — reads them. That route answers base64 because the
+composer's `PendingImage` is base64 and every response in this repo is a zod schema. The cost is
+the ~33% base64 overhead on disk, which the byte-counting backstop measures honestly.
 
 **2. The orphan sweep has a grace window.** An attachment is `POST`ed on paste and only NAMED by
 the draft record on the next debounced `PUT`, so "sweep blobs no surface references" would delete
@@ -409,17 +416,37 @@ minutes are never swept — far past the 500 ms debounce, far short of mattering
   it, walking from task A to task B mid-sentence dropped A's last edit, which is precisely the move
   this feature exists to survive. It is pinned by a test.
 
-Two smaller decisions worth recording:
+Smaller decisions worth recording, several of them settled in review of #940:
 
 - **The query cache is written from the PUT's response, not only optimistically.** A `GET` that was
   already in flight when the user started typing lands afterwards and would otherwise leave the
   cache holding the PREVIOUS draft — which a remount later in the same session would then seed,
   resurrecting text the user had replaced.
-- **Removing a thumbnail deletes its blob; the composer's optimistic clear does not.** The host
-  tells them apart without the composer having to say which is which: a send clears the text first
-  and the images second, so an emptied array over an already-empty text is the clear. Its blobs
-  must outlive the request, because a rejected message is restored with its attachments; they go
-  with the empty write that follows a successful send.
+- **Removing a thumbnail deletes its blob; the composer's optimistic clear does not.** The
+  composer says which is which — `onImagesChange` carries an `ImagesChangeReason` (`edit` |
+  `submit`) — rather than the host inferring it from the text also being empty. The first cut did
+  infer it, and the inference was wrong for an attachment-only draft: removing the last thumbnail
+  of a draft that never had text looked exactly like a send, so the blob was left to the orphan
+  sweep and its ten-minute grace. A send's blobs must outlive the request, because a rejected
+  message is restored with its attachments; they go with the empty write that follows a successful
+  send.
+- **The 64 MiB backstop counts the write it is about to allow, and does not re-walk the tree on
+  every keystroke pause.** Measuring the tree and *then* adding a blob lets the store settle a
+  whole attachment above its own ceiling; and `dirBytes` over every run's draft directory, run on
+  every debounced `PUT`, is hundreds of syscalls per typing pause for a user with a few hundred
+  tasks. The store now keeps a running, deliberately pessimistic estimate — it only grows between
+  walks, so it can send us walking too often but never let the store past the ceiling unnoticed —
+  and does the exact walk once the estimate is within 80 % of it.
+- **A tab-close flush uses `keepalive` only while the body fits.** Fetch caps the total body of
+  in-flight `keepalive` requests at 64 KiB and *rejects* past it, and `DRAFT_TEXT_MAX` is 100 000
+  characters — so the flag would have made the longest draft, the one most worth saving, the one
+  guaranteed not to be. Above the cap it is an ordinary request, which a merely-hidden tab (the
+  common case) completes anyway.
+- **A rename editor that re-opened itself does not commit on blur until the user touches it.**
+  Restoring the text is the point; auto-*applying* it is not. Blur-commit is right for an editor
+  the user opened — they clicked the pencil, they typed, clicking away means yes — and wrong for
+  one that reappeared an hour later, where the first stray click in the thread would silently
+  rename the task to something they walked away from. Enter and Escape are unchanged.
 
 `ensureDataGitignore` moved out of `packages/cezar/src/index.ts` into its own module
 (`src/data-gitignore.ts`) so that it can be tested at all — importing `index.ts` runs the CLI.

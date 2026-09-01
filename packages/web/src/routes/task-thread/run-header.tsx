@@ -476,6 +476,10 @@ function EditableTitle({ run }: { run: ApiRun }) {
   // Re-open on what was left unsaved. `hasDraft` goes false the moment it is committed, cancelled
   // or typed empty, so this cannot re-fire against the user. `begin` rides a ref because the
   // editor object is rebuilt every render and would otherwise re-run this on each one.
+  //
+  // `beginWith` (not `begin`) also opens it WITHOUT blur-commit until the user types: an editor
+  // that reappeared on its own must not turn the next stray click in the thread into a rename the
+  // user walked away from an hour ago. Enter and Escape still mean what they always meant.
   const begin = useRef(editor.beginWith)
   begin.current = editor.beginWith
   const editing = editor.editing

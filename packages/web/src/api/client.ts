@@ -1535,6 +1535,14 @@ export async function getRunDrafts(id: string, opts?: ReadOptions): Promise<RunD
   )
 }
 
+/**
+ * The Fetch standard's ceiling on the TOTAL body of all in-flight `keepalive` requests. Past it
+ * the browser REJECTS the request outright — so a long draft asked to fly `keepalive` would be
+ * the one draft guaranteed not to be saved. Deliberately under the 64 KiB spec figure: other
+ * `keepalive` requests share the same allowance.
+ */
+const KEEPALIVE_BODY_MAX = 56 * 1024
+
 /** Replace one surface's draft. `images` are the ids `postRunDraftImage` minted; an empty write
  *  (no text, no images) DELETES the entry — that is the server's rule, not a client courtesy. */
 export async function putRunDraft(
@@ -1545,13 +1553,18 @@ export async function putRunDraft(
   // last write, and the browser is allowed to finish it after the document is gone.
   opts?: { keepalive?: boolean },
 ): Promise<DraftEntry> {
+  // …but only while the body fits. Above the cap an ordinary request is strictly better: a tab
+  // that is merely hidden (the common case) completes it normally, where `keepalive` would have
+  // thrown before it left. `DRAFT_TEXT_MAX` is 100 000 characters, so this is reachable by typing.
+  const keepalive =
+    opts?.keepalive === true && new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_BODY_MAX
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].$put(
       {
         param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
         json: body,
       },
-      { init: { keepalive: opts?.keepalive } },
+      { init: { keepalive } },
     ),
     runPath(id, `/drafts/${surface}`),
   )
