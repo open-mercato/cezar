@@ -138,9 +138,9 @@ Full gate from `.ai/agentic.config.json`: `npm run typecheck`, `npm test`, `npm 
 
 ### Phase 2: Teach the store its repository and heal poisoned records
 
-- [ ] 2.1 `RunStore.setRepoHandle` and the one-directional rescope sweep
-- [ ] 2.2 Arm the handle in the background from both `RunStore.open` call sites
-- [ ] 2.3 Tests for the sweep, the corroborated survivor, and the null handle
+- [x] 2.1 `RunStore.setRepoHandle` and the one-directional rescope sweep — 5bca379d
+- [x] 2.2 Arm the handle in the background from both `RunStore.open` call sites — 5bca379d
+- [x] 2.3 Tests for the sweep, the corroborated survivor, and the null handle — 5bca379d
 
 ### Phase 3: Documentation
 
