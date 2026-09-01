@@ -141,6 +141,7 @@ Full gate from `.ai/agentic.config.json`: `npm run typecheck`, `npm test`, `npm 
 - [x] 2.1 `RunStore.setRepoHandle` and the one-directional rescope sweep — 5bca379d
 - [x] 2.2 Arm the handle in the background from both `RunStore.open` call sites — 5bca379d
 - [x] 2.3 Tests for the sweep, the corroborated survivor, and the null handle — 5bca379d
+- [x] 2.4 Review autofix: cover `armRepoHandle`'s degradation path; arm only after a successful build — 1d712bd7
 
 ### Phase 3: Documentation
 
