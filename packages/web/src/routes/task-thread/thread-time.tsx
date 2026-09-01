@@ -1,5 +1,3 @@
-import { cn } from '@/lib/utils'
-
 /**
  * The thread's clock (#941): the small, always-visible time on a conversation turn, the day
  * separators between turns, and the turn duration.
@@ -30,7 +28,9 @@ const DAY_WITH_YEAR = new Intl.DateTimeFormat(undefined, {
 })
 const FULL_DAY = new Intl.DateTimeFormat(undefined, { dateStyle: 'full' })
 
-/** The one gate every export goes through: a `Date` worth formatting, or nothing. */
+/** The one gate every export goes through: a `Date` worth formatting, or nothing. The same test
+ *  runs one layer earlier, at `stamp()` in `thread-state.ts`, which keeps the raw string instead:
+ *  the reducer carries stamps, this module formats them, and neither should own the other's type. */
 function parse(ts: string | undefined): Date | undefined {
   if (typeof ts !== 'string' || ts === '') return undefined
   const at = new Date(ts)
@@ -96,7 +96,7 @@ export function turnDuration(startedAt: string | undefined, completedAt: string 
 }
 
 /** The stamp on a user bubble: short local time, exact instant on hover. */
-export function MessageTime({ ts, className }: { ts: string; className?: string }) {
+export function MessageTime({ ts }: { ts: string }) {
   const label = clockLabel(ts)
   if (label === undefined) return null
   return (
@@ -104,7 +104,7 @@ export function MessageTime({ ts, className }: { ts: string; className?: string 
       data-slot="message-time"
       dateTime={ts}
       title={exactLabel(ts)}
-      className={cn('text-[11px] leading-none text-soft-foreground', className)}
+      className="text-[11px] leading-none text-soft-foreground"
     >
       {label}
     </time>
@@ -134,18 +134,28 @@ export function TurnTime({ startedAt, completedAt }: { startedAt?: string; compl
 }
 
 /** The rule between two turns that fall on different local days. Its own thread row, so it
- *  measures like any other and never changes a neighbour's height. */
+ *  measures like any other and never changes a neighbour's height.
+ *
+ *  A real `separator`, not a decorative one: the two rules are `aria-hidden` because they carry
+ *  nothing, so without a name the day change would reach sighted readers only. A non-focusable
+ *  `separator` takes no name from its content, hence the explicit label — the full date, kept
+ *  behind "Today"/"Yesterday" when `dayLabel` returned one of those, since a relative word alone
+ *  is not an anchor and the date alone loses the very cue a returning reader wants. */
 export function DaySeparator({ ts }: { ts: string }) {
   const label = dayLabel(ts)
   const at = parse(ts)
   if (label === undefined || at === undefined) return null
+  const exact = FULL_DAY.format(at)
+  const relative = label === 'Today' || label === 'Yesterday'
   return (
     <div
       data-slot="day-separator"
+      role="separator"
+      aria-label={relative ? `${label}, ${exact}` : exact}
       className="flex items-center gap-3 py-1 text-[11px] font-medium text-soft-foreground"
     >
       <span aria-hidden className="h-px flex-1 bg-border" />
-      <time dateTime={localDayKey(ts)} title={FULL_DAY.format(at)}>
+      <time dateTime={localDayKey(ts)} title={exact}>
         {label}
       </time>
       <span aria-hidden className="h-px flex-1 bg-border" />

@@ -143,4 +143,25 @@ describe('thread-time components', () => {
     expect(time.getAttribute('datetime')).toBe('2026-08-24')
     expect(time.textContent).toBe(dayLabel(ts))
   })
+
+  /**
+   * The rules either side are `aria-hidden` and a non-focusable `separator` takes no name from its
+   * content, so without an explicit label the day change would reach sighted readers only.
+   */
+  it('announces the day change, keeping the relative word in front of the full date', () => {
+    const dated = localIso(2026, 8, 24, 9, 0)
+    render(<DaySeparator ts={dated} />)
+    const row = () => document.querySelector('[data-slot="day-separator"]')!
+    expect(row().getAttribute('role')).toBe('separator')
+    // Its own label already carries the date, so the name is the unabbreviated one, not both.
+    expect(row().getAttribute('aria-label')).toContain('2026')
+    expect(row().getAttribute('aria-label')).not.toContain(dayLabel(dated)!)
+
+    cleanup()
+    const now = new Date()
+    render(<DaySeparator ts={new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9).toISOString()} />)
+    // "Today" is the anchor a returning reader wants; the date follows so it is not just relative.
+    expect(row().getAttribute('aria-label')).toContain('Today, ')
+    expect(row().getAttribute('aria-label')).toContain(String(now.getFullYear()))
+  })
 })

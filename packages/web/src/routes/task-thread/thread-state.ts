@@ -203,6 +203,9 @@ function str(value: unknown): string | undefined {
  * has always been written, but `runEventSchema` is deliberately loose and NDJSON transcripts are
  * plain files people edit — so an absent, non-string or unparseable stamp becomes `undefined`
  * here, and the turn renders exactly as it did before rather than printing `Invalid Date`.
+ *
+ * `parse()` in `thread-time.tsx` applies the same test at the render layer and returns the `Date`;
+ * this one keeps the string, because the reduced thread carries stamps rather than formats them.
  */
 function stamp(value: unknown): string | undefined {
   if (typeof value !== 'string' || value === '') return undefined

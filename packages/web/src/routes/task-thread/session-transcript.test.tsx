@@ -199,6 +199,59 @@ describe('transcript adapters and row building', () => {
       ).toEqual([])
     })
 
+    /**
+     * The stack renders directly under the task bubble but is queued LAST: a message stacked onto
+     * a run that was continued days later is NEWER than the whole transcript beneath it. Letting
+     * it move the day cursor put an "Aug 1" rule over July turns and, because the cursor only ever
+     * advances, swallowed the genuine boundary inside the conversation — the one thing the
+     * separator exists to show.
+     */
+    it('keeps a message stacked after the turns out of the day sequence', () => {
+      const rows = buildTranscriptRows(
+        mainTranscriptSections(
+          run({
+            createdAt: localIso(2026, 7, 30, 9),
+            queuedMessages: [{ id: 'm1', text: 'Stacked later', createdAt: localIso(2026, 8, 1, 9) }],
+          }),
+          {
+            turns: [
+              turn('turn-1', { user: localIso(2026, 7, 30, 10) }),
+              turn('turn-2', { user: localIso(2026, 7, 31, 10) }),
+            ],
+          } as ThreadState,
+        ),
+        'r1',
+      ).map((r) => r.key)
+
+      // It still renders where it always did, above the turns it will be sent after…
+      expect(rows.indexOf('queued:m1')).toBeLessThan(rows.indexOf('turn-1:user'))
+      // …with no rule above it claiming the July transcript below happened on Aug 1…
+      expect(rows).not.toContain('queued:m1:day-separator')
+      // …and the real Jul 30 → Jul 31 boundary between the turns intact.
+      expect(rows.filter((key) => key.endsWith(':day-separator'))).toEqual(['turn-2:day-separator'])
+    })
+
+    it('draws the day rule as an announced separator through the real component tree', () => {
+      render(
+        <SessionTranscript
+          runId="r1"
+          viewId="main"
+          mode="document"
+          sections={mainTranscriptSections(run({ task: '' }), {
+            turns: [
+              turn('turn-1', { user: localIso(2026, 7, 31, 23) }),
+              turn('turn-2', { user: localIso(2026, 8, 1, 9) }),
+            ],
+          } as ThreadState)}
+        />,
+      )
+      const separator = document.querySelector('[data-slot="day-separator"]')!
+      expect(separator.getAttribute('role')).toBe('separator')
+      // Assistive tech gets the same anchor a sighted reader has, not just the two decorative rules.
+      expect(separator.getAttribute('aria-label')).toContain('2026')
+      expect(separator.querySelector('time')?.getAttribute('datetime')).toBe('2026-08-01')
+    })
+
     it('renders the bubble time and the turn duration through the shared transcript', () => {
       const startedAt = localIso(2026, 7, 31, 14, 32)
       render(

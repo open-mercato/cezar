@@ -16,8 +16,10 @@
   beginning; the thread simply stopped throwing them away. A turn still running shows no completion
   stamp rather than a placeholder that would jump when it fills in, and a transcript whose stamps
   are missing or unreadable — an old recording, a hand-edited NDJSON — renders exactly as it did
-  before rather than printing `Invalid Date`. Sub-agent and panel transcripts read through the same
-  component, so they inherit it. Issue: #941.
+  before rather than printing `Invalid Date`. A message you stacked onto a running task keeps its
+  own queued-at time but never dates the older conversation it sits above. Sub-agent panels are
+  unchanged for now: their entries are one uninterrupted stream with no turn boundaries to hang a
+  clock on. Issue: #941.
 - ✨ **Continue a task on another agent account, not just another agent.** The thread's Continue
   carried a runner pill that could switch `claude → codex` but never offered the second Claude
   login the new-task composer has offered since accounts landed — so "finish this one on my other

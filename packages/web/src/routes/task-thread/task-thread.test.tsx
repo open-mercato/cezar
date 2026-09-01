@@ -431,11 +431,11 @@ describe('ThreadView', () => {
   it('inserts the stacked rows directly after the task row, in order', () => {
     const keys = transcriptRows(
       run('queued', {
-        // Same day as the run and its transcript, so no day separator (#941) sits between the
-        // rows this test is about — stacking order is its subject, not the thread's clock.
+        // Stacked a week after the run and its transcript: the stack stays out of the thread's
+        // day sequence (#941), so no separator is invented between the rows this test is about.
         queuedMessages: [
-          { id: 'm1', text: 'one', createdAt: '2026-07-14T12:00:00.000Z' },
-          { id: 'm2', text: 'two', createdAt: '2026-07-14T12:01:00.000Z' },
+          { id: 'm1', text: 'one', createdAt: '2026-07-21T10:00:00.000Z' },
+          { id: 'm2', text: 'two', createdAt: '2026-07-21T10:01:00.000Z' },
         ],
       }),
     ).map((r) => r.key)

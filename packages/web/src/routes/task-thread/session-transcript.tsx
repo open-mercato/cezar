@@ -44,6 +44,10 @@ export interface TranscriptSection {
    *  initial-prompt, queued and attributed-agent sections, which have no turn boundaries. */
   startedAt?: string
   completedAt?: string
+  /** Whether this section's stamp may move the thread's day cursor (#941). Default true; false
+   *  for a section rendered OUT of chronological order, whose date says nothing about where the
+   *  conversation below it sits in time. See `buildTranscriptRows`. */
+  inDaySequence?: boolean
 }
 
 export interface TranscriptMessageActions {
@@ -96,6 +100,10 @@ export function mainTranscriptSections(run: ApiRun, thread: ThreadState): Transc
       // Stamped with when it was QUEUED. Once it is sent, this section is gone and the turn's own
       // event `ts` takes over — the two differ, and that is the honest reading of both.
       userMessage: { text: message.text, images: message.images ?? [], ts: message.createdAt },
+      // The stack renders here, above every turn, but is queued LAST: a message stacked onto a
+      // run continued the next day is newer than the whole transcript beneath it. Its own stamp
+      // stays on its bubble; it must not date the older turns below it (#941).
+      inDaySequence: false,
       entries: [],
     })
   }
@@ -130,8 +138,10 @@ export function agentTranscriptSections(
 }
 
 /** When a section happened, for the day-separator comparison: the turn opens with the user's
- *  message when there is one, otherwise with the agent's own boundary stamps. */
+ *  message when there is one, otherwise with the agent's own boundary stamps. Sections held out
+ *  of the day sequence report nothing, so they neither draw a rule nor move the cursor. */
 function sectionStamp(section: TranscriptSection): string | undefined {
+  if (section.inDaySequence === false) return undefined
   return section.userMessage?.ts ?? section.startedAt ?? section.completedAt
 }
 
@@ -149,10 +159,13 @@ export function buildTranscriptRows(
   const rows: TranscriptRowModel[] = []
   /** The latest local day the thread has shown, as a sortable `YYYY-MM-DD`. Sections with no
    *  stamp at all (attributed agent streams, old recordings) leave it alone rather than breaking
-   *  the run of dates. A separator is drawn only when the day moves FORWARD: the initial prompt
-   *  is stamped from the run record while the turns below it are stamped from events, so a
-   *  section that reads as older than what is already on screen is disorder, not a new day, and
-   *  a "Yesterday" rule under today's turns would state something false. */
+   *  the run of dates, as do sections held out of the sequence — the stack renders above the
+   *  turns but is queued after them, and letting it set the cursor would both date the older
+   *  turns wrongly and swallow the real boundary below. A separator is drawn only when the day
+   *  moves FORWARD: the initial prompt is stamped from the run record while the turns below it
+   *  are stamped from events, so a section that reads as older than what is already on screen is
+   *  disorder, not a new day, and a "Yesterday" rule under today's turns would state something
+   *  false. */
   let lastDay: string | undefined
   for (const section of sections) {
     const stamp = sectionStamp(section)
