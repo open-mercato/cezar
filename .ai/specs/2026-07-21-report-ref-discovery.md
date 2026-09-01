@@ -56,7 +56,19 @@ pretty distinguished"):
 - Same resolution rule via the now-shared `resolveReferencedRef`: a declared
   issue number filters candidates outright; otherwise one distinct URL is the
   subject; several resolve only when the task prompt names exactly one;
-  ambiguity clears the chip.
+  ambiguity clears the chip; and the winner is **repo-scoped** — a foreign
+  `owner/repo` resolves only when the task prompt names it.
+- **Amendment — the issue tier is repo-scoped too (#945).** Sharing
+  `resolveReferencedRef` meant sharing its hole: an issue link to another
+  repository, spotted once in a transcript, became the task's subject. It now
+  shares the repo-scope guard as well — see the amendment in
+  `2026-07-16-pr-autodiscovery.md` for the rule, the corroboration source, and
+  why an unknown repository keeps the pre-#945 behavior. The issue side had
+  one extra edge the PR side does not: a vetoed URL must not seed
+  `issueNumber` either. It cannot — the seed below is gated on a resolution
+  existing — and when the heal drops a stored foreign URL it revokes the
+  number alongside it, but only when `referencedIssueNumberSeeded` says the
+  janitor is the one who wrote it.
 - An unambiguous resolution seeds `issueNumber` when nothing owns that field;
   the persisted `referencedIssueNumberSeeded` provenance bit lets ambiguity
   take back only the janitor's own seed, including after a restart. Prompt,
