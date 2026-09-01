@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from './store.ts';
 
+import type { RunRecord } from './store.ts';
+
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */
 const LEGACY_RUN = {
@@ -1299,6 +1301,122 @@ describe("RunStore — a task never adopts another repository's ref (#945)", () 
     });
     store.applyMarkerRefs(run.id, { pr: 6056 });
     expect(store.getRun(run.id)?.referencedPullRequestUrl).toBeUndefined();
+  });
+
+  describe('healing records the un-scoped rule already poisoned', () => {
+    /** Persist one record, then reopen and arm — what a cockpit restart does. */
+    const reopenArmed = (
+      record: Partial<RunRecord> & { task: string },
+      handle: typeof HANDLE | null = HANDLE,
+    ) => {
+      const seed = RunStore.open(dataDir);
+      const run = seed.createRun({ title: 't', workflow: 'w', task: record.task, steps: [] });
+      seed.updateRun(run.id, record);
+      seed.flush();
+
+      const reopened = RunStore.open(dataDir);
+      // Snapshot the VALUE, not the record: `getRun` hands back the live object the sweep
+      // mutates in place, so holding the reference would show the healed state either way.
+      const before = reopened.getRun(run.id)?.referencedPullRequestUrl;
+      reopened.setRepoHandle(handle);
+      return { before, after: reopened.getRun(run.id) };
+    };
+
+    it('drops a stored foreign referencedPullRequestUrl when the handle arrives', () => {
+      const { before, after } = reopenArmed({
+        task: 'assessing Phase 0 SQL safety',
+        referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+        referencedPrCandidates: ['https://github.com/supabase/cli/pull/6056'],
+      });
+      // Before arming, the poisoned value is still there — the heal is not a load-time rewrite.
+      expect(before).toBe('https://github.com/supabase/cli/pull/6056');
+      expect(after?.referencedPullRequestUrl).toBeUndefined();
+      // Evidence survives the heal — only the conclusion drawn from it was wrong.
+      expect(after?.referencedPrCandidates).toEqual(['https://github.com/supabase/cli/pull/6056']);
+    });
+
+    it('keeps a stored foreign URL the prompt corroborates', () => {
+      const { after } = reopenArmed({
+        task: 'om-auto-fix-pr https://github.com/open-mercato/open-mercato/pull/1977',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+      });
+      expect(after?.referencedPullRequestUrl).toBe(
+        'https://github.com/open-mercato/open-mercato/pull/1977',
+      );
+    });
+
+    it("keeps a stored URL from the project's own repo", () => {
+      const { after } = reopenArmed({
+        task: 'task',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/407',
+      });
+      expect(after?.referencedPullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/407');
+    });
+
+    it('revokes an issueNumber this janitor seeded from the dropped URL', () => {
+      const { after } = reopenArmed({
+        task: 'assessing Phase 0 SQL safety',
+        referencedIssueUrl: 'https://github.com/supabase/cli/issues/6056',
+        issueNumber: 6056,
+        referencedIssueNumberSeeded: true,
+      });
+      expect(after?.referencedIssueUrl).toBeUndefined();
+      expect(after?.issueNumber).toBeUndefined();
+      expect(after?.referencedIssueNumberSeeded).toBeUndefined();
+    });
+
+    it('leaves an issueNumber it did NOT seed alone', () => {
+      // The prompt, the namer or a CEZ:ISSUE marker owns that number — dropping the foreign URL
+      // must not take it with them.
+      const { after } = reopenArmed({
+        task: 'fix issue 42',
+        referencedIssueUrl: 'https://github.com/supabase/cli/issues/6056',
+        issueNumber: 42,
+      });
+      expect(after?.referencedIssueUrl).toBeUndefined();
+      expect(after?.issueNumber).toBe(42);
+    });
+
+    it('a null handle heals nothing — there is nothing to prove foreign against', () => {
+      const { after } = reopenArmed(
+        {
+          task: 'assessing Phase 0 SQL safety',
+          referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+        },
+        null,
+      );
+      expect(after?.referencedPullRequestUrl).toBe('https://github.com/supabase/cli/pull/6056');
+    });
+
+    it('is one-directional — it never invents an association', () => {
+      // A record with candidates but no resolution stays unresolved: the sweep only ever clears.
+      const { after } = reopenArmed({
+        task: 'task',
+        referencedPullRequestUrl: undefined,
+        referencedPrCandidates: [
+          'https://github.com/open-mercato/cezar/pull/1',
+          'https://github.com/supabase/cli/pull/6056',
+        ],
+      });
+      expect(after?.referencedPullRequestUrl).toBeUndefined();
+    });
+
+    it('emits the corrected record so an open cockpit repaints', () => {
+      const seed = RunStore.open(dataDir);
+      const run = seed.createRun({
+        title: 't',
+        workflow: 'w',
+        task: 'assessing Phase 0 SQL safety',
+        steps: [],
+      });
+      seed.updateRun(run.id, {
+        referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+      });
+      const seen: string[] = [];
+      seed.on('run', (r: RunRecord) => seen.push(r.id));
+      seed.setRepoHandle(HANDLE);
+      expect(seen).toContain(run.id);
+    });
   });
 
   it('does not rescue a candidate today’s rule already calls ambiguous', () => {

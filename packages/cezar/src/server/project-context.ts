@@ -3,6 +3,7 @@ import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
 import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
 import { pruneOrphans } from '../git-worktree.ts';
+import { armRepoHandle } from '../runs/arm-repo-handle.ts';
 import { reclaimWorktrees } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -209,6 +210,10 @@ export class ProjectContexts {
     // keepLive + recover() (#367), same as serveCommand: runs that were live
     // when this project's context last existed are re-queued or resumed.
     const store = RunStore.open(dataDir, { keepLive: true });
+    // Which repository this project IS (#945), so the referenced tier stops adopting another
+    // repo's PR/issue as a task's subject. Fire-and-forget on purpose — it costs a `gh` spawn and
+    // building a context must not wait on the network. `project.root` is already realpath'd.
+    armRepoHandle(store, project.root);
     const automationStore = this.deps.automationStore?.(project.id, project.root)
       ?? AutomationStore.open(dataDir);
     reconcileAutomationReceipts(automationStore, store);
