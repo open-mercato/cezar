@@ -129,6 +129,8 @@ Full gate from `.ai/agentic.config.json`: `npm run typecheck`, `npm test`, `npm 
 
 ## Progress
 
+PR: #946
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Repo-scope the referenced tier's promotion
