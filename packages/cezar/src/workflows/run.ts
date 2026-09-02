@@ -2836,6 +2836,14 @@ export class RunManager {
     }
 
     let userPrompt = applyTemplate(step.prompt ?? '{{task}}', input.task);
+    // A fresh run's OPENING prompt is delivered straight to `startSession`, never through
+    // `deliverMessage`, so — like the continuation seam above (#811) — it needs the same
+    // delivery-only `/skill` rewrite. Without it a task STARTED with `/om-...` as its first
+    // message leaks the raw slash to the backend, which answers "Unknown command" even though
+    // Cezar lists the skill (#278). `state.skills` was populated by `discoverSkills` earlier in
+    // `execute`. Expand before the chain/check/attachment prefixes so the leading slash still
+    // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
+    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? []);
     if (chainNote) userPrompt = `${chainNote}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
       userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;

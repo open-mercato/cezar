@@ -2007,3 +2007,110 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     expect(echoed?.text).toContain('/compact please');
   }, 40_000);
 });
+
+/**
+ * #278 — registry `/skill` expansion on a FRESH run's OPENING prompt.
+ *
+ * A task STARTED with `/om-...` as its first message is delivered straight to
+ * `startSession` inside `execute`, never through `deliverMessage`, and #811 only
+ * patched the continuation seam. So the opening prompt leaked the raw slash to the
+ * backend, which answered "Unknown command" even though Cezar lists the skill.
+ *
+ * The mock CLI echoes the prompt it received (`Okay — looking into: …`), so the
+ * transcript is a faithful witness of what actually reached the backend.
+ */
+describe("registry /skill expansion on a fresh run's opening prompt (#278)", () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let runId: string | undefined;
+  let savedDryRun: string | undefined;
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-278-'));
+    savedDryRun = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    mkdirSync(join(repoRoot, '.ai/cezar/skills'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.ai/cezar/skills/demo-review.md'),
+      '---\nname: demo-review\ndescription: Review a diff.\n---\n\nRun the demo review playbook.\n',
+    );
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    runId = undefined;
+  });
+
+  afterEach(() => {
+    if (runId) manager.cancel(runId);
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  // Tolerant of the pre-first-event window: the run's ndjson does not exist until
+  // the engine writes its first event, and this describe polls events directly
+  // (no store-status gate first), so a missing file is simply "no events yet".
+  const eventsOf = (id: string) => {
+    let raw: string;
+    try {
+      raw = readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8').trim();
+    } catch {
+      return [] as { type: string; text?: string; stepId?: string }[];
+    }
+    if (!raw) return [] as { type: string; text?: string; stepId?: string }[];
+    return raw.split('\n').map((line) => JSON.parse(line) as { type: string; text?: string; stepId?: string });
+  };
+
+  const waitFor = async (predicate: () => boolean, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  it('expands the opening prompt before it reaches the backend', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: '/demo-review look at the diff',
+      worktree: false,
+    });
+    runId = record.id;
+    await waitFor(() =>
+      eventsOf(record.id).some(
+        (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+      ),
+    );
+
+    const echoed = eventsOf(record.id).find(
+      (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+    );
+    // The backend saw the expanded skill prompt, NOT the bare slash command it would
+    // reject as an unknown command.
+    expect(echoed?.text).toContain('Selected skill: /demo-review');
+    expect(echoed?.text).not.toContain('/demo-review look at the diff');
+  }, 40_000);
+
+  it('leaves an unknown slash command untouched so backend-native commands still work', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: '/compact please', worktree: false });
+    runId = record.id;
+    await waitFor(() =>
+      eventsOf(record.id).some(
+        (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+      ),
+    );
+    const echoed = eventsOf(record.id).find(
+      (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+    );
+    expect(echoed?.text).toContain('/compact please');
+  }, 40_000);
+});
