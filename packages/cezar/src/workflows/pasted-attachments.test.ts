@@ -8,7 +8,14 @@ import type { ContentBlock } from '../core/agent-runner.ts';
 import { HANDOFF_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
 import type { WorkflowDef } from './types.ts';
-import { RunManager, pastedAttachmentsNote, pastedAttachmentsText } from './run.ts';
+import {
+  fileExtensionFor,
+  isImageAttachment,
+  mediaTypeFor,
+  pastedAttachmentsNote,
+  pastedAttachmentsText,
+  RunManager,
+} from './run.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -59,6 +66,47 @@ describe('pastedAttachmentsText / pastedAttachmentsNote', () => {
   it('wraps the same text as a trailing text ContentBlock', () => {
     const attachments = [{ name: 'pasted-1.png', url: '/api/v1/x', path: '/abs/pasted-1.png' }];
     expect(pastedAttachmentsNote(attachments)).toEqual({ type: 'text', text: pastedAttachmentsText(attachments) });
+  });
+});
+
+/**
+ * The naming rules behind a run's attachment folder. One folder holds screenshots, pasted images
+ * and attached text files, so the on-disk EXTENSION is the only thing that says which is which —
+ * `readPersistedAttachments` re-encodes an image from it and must never re-encode a `.md`.
+ */
+describe('attachment naming', () => {
+  it('reads an image by its extension', () => {
+    expect(isImageAttachment('pasted-1.png')).toBe(true);
+    expect(isImageAttachment('screenshot-2.jpg')).toBe(true);
+    // The fallback extension `persistImage` writes for an unrecognized image media type.
+    expect(isImageAttachment('pasted-3.img')).toBe(true);
+    expect(isImageAttachment('pasted-4.md')).toBe(false);
+    expect(isImageAttachment('pasted-5')).toBe(false);
+  });
+
+  it('keeps the user file’s extension so the agent gets a `.md` it can read', () => {
+    expect(fileExtensionFor('BRIEF.md')).toBe('md');
+    expect(fileExtensionFor('server.log')).toBe('log');
+    expect(fileExtensionFor('data.tar.gz')).toBe('gz');
+  });
+
+  /** The name is user input. Only the extension is ever honoured, and anything that could leave
+   *  the folder — or claim to be an image — degrades to `txt` rather than reaching the disk. */
+  it('sanitizes an extension it cannot vouch for', () => {
+    expect(fileExtensionFor('no-extension')).toBe('txt');
+    expect(fileExtensionFor('../../etc/passwd')).toBe('txt');
+    expect(fileExtensionFor('trick.md/../../evil')).toBe('txt');
+    expect(fileExtensionFor('spaced. md')).toBe('txt');
+    expect(fileExtensionFor('longer.extensionthanallowed')).toBe('txt');
+    // A text file must not be able to name itself into the image branch.
+    expect(fileExtensionFor('notes.png')).toBe('txt');
+  });
+
+  it('maps an image name back to its media type for re-encoding', () => {
+    expect(mediaTypeFor('pasted-1.png')).toBe('image/png');
+    expect(mediaTypeFor('pasted-2.jpg')).toBe('image/jpeg');
+    expect(mediaTypeFor('pasted-3.webp')).toBe('image/webp');
+    expect(mediaTypeFor('pasted-4.gif')).toBe('image/gif');
   });
 });
 
@@ -277,4 +325,74 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
 
     manager.finish(record.id);
   }, 40_000);
+
+  /**
+   * The text half of the same road. A `.md` brief has nothing to look at, so it never becomes an
+   * image block: it is written to the run's attachment folder under its own extension and reaches
+   * the agent as a PATH, which is the form its file tools can act on. The base64 must not appear
+   * in the prompt — inlining it is exactly what this design avoids.
+   */
+  it('an attached text file is saved as pasted-<n>.md and reaches the agent as a path, never inline', async () => {
+    writeFileSync(argsFile, '', 'utf8');
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'attached-file-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const body = '# Brief\n\nShip the thing.\n';
+    const record = manager.startRun(workflow, {
+      task: 'read the attached brief',
+      files: [{ name: 'BRIEF.md', mediaType: 'text/markdown', data: Buffer.from(body).toString('base64') }],
+      worktree: false,
+    });
+
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+    const after = store.getRun(record.id);
+    expect(after?.status, after?.error).toMatch(/^(done|review)$/);
+    // Attachments are ONE list: the file rides `taskImages` like a pasted image does, because
+    // that list is what the bubble, the orphan sweep and the dequeue all read.
+    expect(after?.taskImages).toEqual([`/api/v1/runs/${record.id}/images/pasted-1.md`]);
+
+    const filePath = join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.md');
+    expect(readFileSync(filePath, 'utf8')).toBe(body);
+
+    const opening = readStdinLines()[0];
+    expect(opening?.userText).toContain('The user attached 1 pasted file, also saved on disk at:');
+    expect(opening?.userText).toContain(`- ${filePath}`);
+    // Named, not inlined — and not smuggled in as an image either.
+    expect(opening?.userText).not.toContain(body);
+    expect(opening?.imageCount).toBe(0);
+  }, 30_000);
+
+  /** The same file attached to a LIVE session: persisted at delivery and appended to the message
+   *  the session receives. */
+  it('a follow-up text file is saved and its path is appended to the delivered message', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'attached-file-followup-test',
+      source: 'built-in',
+      steps: [{ id: 'work', prompt: '{{task}}' }],
+    };
+    const record = manager.startRun(workflow, { task: 'chat about a file' });
+    await waitForStatus(record.id, ['waiting']);
+
+    const delivered = manager.sendMessage(
+      record.id,
+      [{ type: 'text', text: 'here are the notes' }],
+      [{ name: 'notes.txt', mediaType: 'text/plain', data: Buffer.from('two lines\n').toString('base64') }],
+    );
+    expect(delivered).toBe(true);
+    await waitForStatus(record.id, ['waiting']);
+
+    const followUp = readStdinLines().find((line) => line.userText.includes('here are the notes'));
+    const pathMatch = followUp?.userText.match(/- (.*pasted-\d+\.txt)/);
+    expect(pathMatch).toBeTruthy();
+    expect(readFileSync(pathMatch?.[1] as string, 'utf8')).toBe('two lines\n');
+
+    manager.finish(record.id);
+  }, 30_000);
 });

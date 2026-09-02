@@ -18,6 +18,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
+import { resolveApiUrl } from '@open-mercato/cezar-api-client'
 import type { FileDiff, ToolKind, UiToolItem } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
 
@@ -36,6 +37,21 @@ export { isNearBottom }
  * only — everything they show comes from the reducer's output and `groupThreadItems`; nothing
  * is derived here except open/closed UI state.
  */
+
+/**
+ * Which of a message's attachment URLs is an image. The run writes every attachment into one
+ * folder as `pasted-<n>.<ext>` / `screenshot-<n>.<ext>` (`RunManager.persistAttachment`), so the
+ * extension is cezar's own and this is the same test the server applies before re-encoding an
+ * attachment into an image block. A text file gets a download chip: an `<img>` pointed at a
+ * `.md` renders as a broken image.
+ */
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['png', 'jpg', 'webp', 'gif', 'img'])
+
+export function isImageAttachmentUrl(url: string): boolean {
+  const name = url.slice(url.lastIndexOf('/') + 1)
+  const dot = name.lastIndexOf('.')
+  return dot > 0 && IMAGE_ATTACHMENT_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())
+}
 
 /** Right-aligned muted bubble — a v1 `user-message` line or the run's initial task. Renders any
  *  attached images inline; falls back to a count only when the URLs aren't available (older runs).
@@ -195,15 +211,31 @@ export function UserBubble({
       {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
       <Markdown breaks>{text}</Markdown>
       {images.length > 0 ? (
-        <span data-slot="user-images" className="mt-2 flex flex-wrap justify-end gap-1.5">
-          {images.map((url) => (
-            <ZoomableImage
-              key={url}
-              src={url}
-              alt="attached"
-              className="max-h-40 max-w-[220px] rounded-md border border-border object-contain"
-            />
-          ))}
+        <span data-slot="user-images" className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+          {images.map((url) =>
+            isImageAttachmentUrl(url) ? (
+              <ZoomableImage
+                key={url}
+                src={url}
+                alt="attached"
+                className="max-h-40 max-w-[220px] rounded-md border border-border object-contain"
+              />
+            ) : (
+              <a
+                key={url}
+                data-slot="user-file"
+                // Scoped at render time for the same reason `ZoomableImage` scopes an image src:
+                // the transcript stores the unscoped URL forever (multi-project spec, step 3.1).
+                href={resolveApiUrl(url)}
+                target="_blank"
+                rel="noreferrer"
+                className="flex max-w-[220px] items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <FileTextIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                <span className="truncate">{url.slice(url.lastIndexOf('/') + 1)}</span>
+              </a>
+            ),
+          )}
         </span>
       ) : null}
       {missing > 0 ? (

@@ -156,7 +156,7 @@ describe('the dictation overlay (paseo pattern)', () => {
     const recognition = startDictation()
     act(() => recognition.onresult!(result('ship it', true)))
     fireEvent.click(screen.getByLabelText('Insert transcription and send'))
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('ship it', []))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('ship it', [], []))
   })
 
   it('✕ cancel aborts and restores the footer without touching the draft', () => {

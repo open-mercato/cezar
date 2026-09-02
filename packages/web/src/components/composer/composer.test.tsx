@@ -7,7 +7,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { Skill } from '@open-mercato/cezar-api-client'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
-import { MAX_IMAGE_BYTES } from './composer-images'
+import { MAX_IMAGE_BYTES } from './composer-attachments'
 import { Composer, type ComposerProps } from './composer'
 
 beforeAll(() => {
@@ -99,7 +99,7 @@ describe('submit shortcuts', () => {
     const { onSubmit, textarea } = renderComposer()
     type(textarea, '  hello agent  ')
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('hello agent', [])
+    expect(onSubmit).toHaveBeenCalledWith('hello agent', [], [])
     expect(textarea.value).toBe('')
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
   })
@@ -120,8 +120,8 @@ describe('submit shortcuts', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     type(textarea, 'two')
     fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true })
-    expect(onSubmit).toHaveBeenNthCalledWith(1, 'one', [])
-    expect(onSubmit).toHaveBeenNthCalledWith(2, 'two', [])
+    expect(onSubmit).toHaveBeenNthCalledWith(1, 'one', [], [])
+    expect(onSubmit).toHaveBeenNthCalledWith(2, 'two', [], [])
   })
 
   it('empty text sends nothing, and the send button is disabled', () => {
@@ -135,7 +135,7 @@ describe('submit shortcuts', () => {
     const { onSubmit, textarea } = renderComposer()
     type(textarea, 'via button')
     fireEvent.click(screen.getByLabelText('Send'))
-    expect(onSubmit).toHaveBeenCalledWith('via button', [])
+    expect(onSubmit).toHaveBeenCalledWith('via button', [], [])
   })
 })
 
@@ -171,9 +171,11 @@ describe('images — attach, paste, thumbnails, caps (legacy parity)', () => {
 
     type(textarea, 'see screenshot')
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('see screenshot', [
-      { mediaType: 'image/png', data: btoa(String.fromCharCode(9, 9)) },
-    ])
+    expect(onSubmit).toHaveBeenCalledWith(
+      'see screenshot',
+      [{ mediaType: 'image/png', data: btoa(String.fromCharCode(9, 9)) }],
+      [],
+    )
     // Sent images leave the tray with the optimistic clear.
     await waitFor(() => expect(screen.queryByLabelText('Remove shot.png')).toBeNull())
   })
@@ -203,7 +205,11 @@ describe('images — attach, paste, thumbnails, caps (legacy parity)', () => {
     paste(textarea, [pngFile()])
     await screen.findByLabelText('Remove shot.png')
     fireEvent.click(screen.getByLabelText('Send'))
-    expect(onSubmit).toHaveBeenCalledWith('', [expect.objectContaining({ mediaType: 'image/png' })])
+    expect(onSubmit).toHaveBeenCalledWith(
+      '',
+      [expect.objectContaining({ mediaType: 'image/png' })],
+      [],
+    )
   })
 
   it('clicking a thumbnail removes exactly that image', async () => {
@@ -310,7 +316,7 @@ describe('/ skills autocomplete (#380)', () => {
     await waitFor(() => expect(document.querySelector('[data-slot="composer-menu"]')).toBeNull())
     expect(textarea.value).toBe('/om')
     fireEvent.keyDown(textarea, { key: 'Enter' })
-    expect(onSubmit).toHaveBeenCalledWith('/om', [])
+    expect(onSubmit).toHaveBeenCalledWith('/om', [], [])
   })
 
   it('a completed token (trailing space) closes the menu', async () => {
@@ -419,7 +425,7 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
     const { textarea } = renderComposer({ quickReplies: true, onSubmit })
     type(textarea, 'draft in progress')
     fireEvent.keyDown(window, { code: 'KeyA', altKey: true })
-    expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [])
+    expect(onSubmit).toHaveBeenCalledWith('Yes, approved.', [], [])
     expect(textarea.value).toBe('draft in progress')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
 
@@ -431,7 +437,7 @@ describe('quick replies (legacy Alt+A / Alt+C)', () => {
       expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(false),
     )
     fireEvent.keyDown(window, { code: 'KeyC', altKey: true })
-    expect(onSubmit).toHaveBeenCalledWith('Continue.', [])
+    expect(onSubmit).toHaveBeenCalledWith('Continue.', [], [])
   })
 
   /** ⌥ is a CHARACTER modifier on macOS: ⌥C types `ć` on a Polish layout (`ç` on a US one) and
@@ -472,7 +478,7 @@ describe('disabled state', () => {
     expect(textarea.disabled).toBe(true)
     expect(textarea.placeholder).toBe('Session closed — no session to resume.')
     expect((screen.getByLabelText('Send') as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByLabelText('Attach images') as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByLabelText('Attach files') as HTMLButtonElement).disabled).toBe(true)
   })
 
   /** `allowEmptySubmit` is the thread's Continue: an empty draft is a meaningful action there
@@ -482,7 +488,7 @@ describe('disabled state', () => {
     const send = screen.getByLabelText('Send') as HTMLButtonElement
     expect(send.disabled).toBe(false)
     fireEvent.click(send)
-    expect(onSubmit).toHaveBeenCalledWith('', [])
+    expect(onSubmit).toHaveBeenCalledWith('', [], [])
     cleanup()
 
     renderComposer({ allowEmptySubmit: true, disabled: true })
@@ -521,7 +527,7 @@ describe('host seams (R4: the /new hero)', () => {
     // The optimistic clear on send reaches the parent too.
     fireEvent.keyDown(screen.getByLabelText('Reply to the agent'), { key: 'Enter' })
     expect(changes).toEqual(['edited', ''])
-    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('edited', []))
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledWith('edited', [], []))
   })
 
   it('a rejected send restores the draft through onValueChange (controlled mode loses nothing)', async () => {

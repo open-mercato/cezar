@@ -87,16 +87,25 @@ describe('planTaskLine', () => {
 })
 
 describe('pendingPlanOf', () => {
-  it('carries the task, the answer, and DEFENSIVE copies of steps and images', () => {
+  it('carries the task, the answer, and DEFENSIVE copies of steps and attachments', () => {
     const images = [{ mediaType: 'image/png', data: 'AAA' }]
-    const plan = pendingPlanOf('fix it', images, {
+    const files = [{ name: 'brief.md', mediaType: 'text/markdown', data: 'QQQ' }]
+    const plan = pendingPlanOf('fix it', images, files, {
       steps: STEPS,
       rationale: 'why',
       fallback: false,
     })
-    expect(plan).toEqual({ task: 'fix it', steps: STEPS, rationale: 'why', fallback: false, images })
+    expect(plan).toEqual({
+      task: 'fix it',
+      steps: STEPS,
+      rationale: 'why',
+      fallback: false,
+      images,
+      files,
+    })
     expect(plan.steps).not.toBe(STEPS)
     expect(plan.images).not.toBe(images)
+    expect(plan.files).not.toBe(files)
   })
 })
 

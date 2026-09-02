@@ -3,6 +3,7 @@ import type {
   BackendCheck,
   CreateRunInput,
   CreateRunResponse,
+  FileInput,
   ImageInput,
   ModelDiscoveryRunner,
   Runner,
@@ -275,6 +276,9 @@ export function buildCreateRunBody(opts: {
   agentProfile?: string | null
   variants: number
   images: readonly ImageInput[]
+  /** Text attachments — saved with the run and named to the first agent step by path.
+   *  Optional: a caller with no attachment surface (the automation editor) omits it. */
+  files?: readonly FileInput[]
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when
    *  explicitly off; the default (isolated worktree) stays implicit. */
   worktree?: boolean
@@ -299,6 +303,7 @@ export function buildCreateRunBody(opts: {
     agentProfile,
     variants,
     images,
+    files,
     worktree,
     autonomous,
     generateFollowups,
@@ -316,6 +321,7 @@ export function buildCreateRunBody(opts: {
     agentProfile: agentProfile || undefined,
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
+    files: files && files.length > 0 ? [...files] : undefined,
     // Off only matters for a single run — variants always isolate.
     worktree: worktree === false && variants <= 1 ? false : undefined,
     autonomous: autonomous === true ? true : undefined,
@@ -325,12 +331,12 @@ export function buildCreateRunBody(opts: {
 }
 
 /** The automation editor persists the exact New task serialization, with only the transport-
- * specific `task` key renamed to `prompt`. Images and inbox provenance are deliberately absent:
- * an automation is a reusable template, not one browser submission. */
+ * specific `task` key renamed to `prompt`. Attachments and inbox provenance are deliberately
+ * absent: an automation is a reusable template, not one browser submission. */
 export function buildAutomationTask(
   opts: Parameters<typeof buildCreateRunBody>[0],
-): Omit<CreateRunInput, 'task' | 'images' | 'todoId'> & { prompt: string } {
-  const { task, images: _images, todoId: _todoId, ...body } = buildCreateRunBody(opts)
+): Omit<CreateRunInput, 'task' | 'images' | 'files' | 'todoId'> & { prompt: string } {
+  const { task, images: _images, files: _files, todoId: _todoId, ...body } = buildCreateRunBody(opts)
   return { prompt: task, ...body }
 }
 

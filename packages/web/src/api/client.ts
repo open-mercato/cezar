@@ -50,6 +50,7 @@ import type {
   GithubPrChangesData,
   GroupResponse,
   HealthResponse,
+  FileInput,
   ImageInput,
   LaunchKeyResponse,
   MessageInput,
@@ -1224,6 +1225,8 @@ export async function finishRun(id: string): Promise<FinishResponse> {
 export interface ContinueOptions {
   text?: string
   images?: ImageInput[]
+  /** Text attachments for the reopened session — written to disk, named to the agent by path. */
+  files?: FileInput[]
   runner?: Runner
   model?: string
   /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
@@ -1238,6 +1241,7 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
   const body = {
     ...(opts.text !== undefined ? { text: opts.text } : {}),
     ...(opts.images !== undefined ? { images: opts.images } : {}),
+    ...(opts.files !== undefined ? { files: opts.files } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
     ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
@@ -1263,6 +1267,7 @@ export async function continueProjectRun(
       json: {
         ...(opts.text !== undefined ? { text: opts.text } : {}),
         ...(opts.images !== undefined ? { images: opts.images } : {}),
+        ...(opts.files !== undefined ? { files: opts.files } : {}),
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined ? { model: opts.model } : {}),
         ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
@@ -1459,7 +1464,7 @@ export async function sendMessage(id: string, message: MessageInput): Promise<Me
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: { text: message.text ?? '', images: message.images ?? [] },
+      json: { text: message.text ?? '', images: message.images ?? [], files: message.files ?? [] },
     }),
     runPath(id, '/messages'),
   )
@@ -1475,7 +1480,7 @@ export async function sendProjectRunMessage(
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
       param: { projectId, id: encodeURIComponent(id) },
-      json: { text: message.text ?? '', images: message.images ?? [] },
+      json: { text: message.text ?? '', images: message.images ?? [], files: message.files ?? [] },
     }),
     runPath(id, '/messages'),
   )

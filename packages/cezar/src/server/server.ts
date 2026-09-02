@@ -36,6 +36,7 @@ import {
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
 import {
+  fileInputSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
@@ -605,6 +606,9 @@ const startRunSchema = z
       )
       .max(4)
       .optional(),
+    // Text files attached to the new-task form — written into the run's attachment folder and
+    // named to the first agent step by path, never inlined into `task`.
+    files: z.array(fileInputSchema).max(4).optional(),
     // Inbox follow-up (#374): the todo the composer was prefilled from
     // (`/new?skill=&ref=&todo=t1`). On a successful start the entry is marked
     // started — the same bookkeeping POST /api/todos/:id/start does, so the
@@ -793,26 +797,32 @@ const messageSchema = z
   .object({
     text: z.string().max(100_000).default(''),
     images: z.array(imageInputSchema).max(4).default([]),
+    files: z.array(fileInputSchema).max(4).default([]),
   })
-  .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+  .refine((m) => m.text.trim().length > 0 || m.images.length > 0 || m.files.length > 0, {
+    message: 'message needs text or at least one attachment',
   });
 
 // PATCH semantics are load-bearing here: an omitted field keeps its current value.
 // In particular, the cockpit edits text without re-uploading existing attachments.
+// `images` and `files` are two halves of ONE list, so naming either one replaces both —
+// see `RunManager.editQueuedMessage`.
 const queuedMessagePatchSchema = z
   .object({
     text: z.string().max(100_000).optional(),
     images: z.array(imageInputSchema).max(4).optional(),
+    files: z.array(fileInputSchema).max(4).optional(),
   })
-  .refine((m) => m.text !== undefined || m.images !== undefined, {
-    message: 'message edit needs text or images',
+  .refine((m) => m.text !== undefined || m.images !== undefined || m.files !== undefined, {
+    message: 'message edit needs text or attachments',
   });
 
 // Queued prompt stack bounds (#472). The per-message bounds mirror `messageSchema`
 // above; the one that actually matters is the FOLDED total, because 20 messages of
 // 100 000 chars each would otherwise compose a ~2 M-character {{task}}.
 const MAX_QUEUED_MESSAGES = 20;
+/** Attachments — images and files alike — across the whole stack. They share the count
+ *  because they share the folder, the numbering and the message they arrive on. */
 const MAX_QUEUED_IMAGES = 8;
 const MAX_FOLDED_TASK_CHARS = 200_000;
 
@@ -836,6 +846,7 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
   images: z.array(imageInputSchema).max(4).optional(),
+  files: z.array(fileInputSchema).max(4).optional(),
   runner: z.enum(RUNNER_IDS).optional(),
   model: z.string().max(200).optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
@@ -3564,6 +3575,7 @@ export function createApp(deps: ServerDeps) {
         runner: parsed.data.runner,
         agentProfile: parsed.data.agentProfile,
         images,
+        files: parsed.data.files,
         systemPrompt: parsed.data.systemPrompt,
         worktree: parsed.data.worktree,
         autonomous: parsed.data.autonomous,
@@ -3713,7 +3725,7 @@ export function createApp(deps: ServerDeps) {
       // (the record is written a tick later), the engine can.
       //   live session → delivered · still queued → folded into the prompt
       //   starting up  → buffered  · anything else → 409, exactly as before
-      if (manager.sendMessage(id, content)) return c.json({ delivered: true });
+      if (manager.sendMessage(id, content, parsed.data.files)) return c.json({ delivered: true });
 
       const currentRun = store.getRun(id);
       const stack = currentRun?.queuedMessages ?? [];
@@ -3727,8 +3739,9 @@ export function createApp(deps: ServerDeps) {
           return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
         }
         const stackedImages = stack.reduce((n, m) => n + (m.images?.length ?? 0), 0);
-        if (stackedImages + parsed.data.images.length > MAX_QUEUED_IMAGES) {
-          return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
+        const incoming = parsed.data.images.length + parsed.data.files.length;
+        if (stackedImages + incoming > MAX_QUEUED_IMAGES) {
+          return c.json({ error: `too many queued attachments — ${MAX_QUEUED_IMAGES} attachment limit across the stack` }, 400);
         }
         const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
         if (prospective > MAX_FOLDED_TASK_CHARS) {
@@ -3741,9 +3754,9 @@ export function createApp(deps: ServerDeps) {
         }
       }
 
-      const queued = manager.enqueueMessage(id, content);
+      const queued = manager.enqueueMessage(id, content, parsed.data.files);
       if (queued) return c.json({ queued: true, message: queued });
-      if (manager.deferMessage(id, content)) return c.json({ deferred: true });
+      if (manager.deferMessage(id, content, parsed.data.files)) return c.json({ deferred: true });
       return c.json({ error: 'session closed' }, 409);
     })
 
@@ -3761,15 +3774,22 @@ export function createApp(deps: ServerDeps) {
       if (!existing) return c.json({ error: 'not found' }, 404);
 
       const effectiveText = parsed.data.text ?? existing.text;
-      const effectiveImageCount = parsed.data.images?.length ?? existing.images?.length ?? 0;
+      // The message's attachments are one list. A PATCH naming either half replaces the whole
+      // list (`editQueuedMessage`), so the prospective count is the halves it did name — and
+      // the entry's current count only when it named neither.
+      const replacesAttachments =
+        parsed.data.images !== undefined || parsed.data.files !== undefined;
+      const effectiveImageCount = replacesAttachments
+        ? (parsed.data.images?.length ?? 0) + (parsed.data.files?.length ?? 0)
+        : (existing.images?.length ?? 0);
       if (!effectiveText.trim() && effectiveImageCount === 0) {
-        return c.json({ error: 'message needs text or at least one image' }, 400);
+        return c.json({ error: 'message needs text or at least one attachment' }, 400);
       }
 
       const others = stack.filter((m) => m.id !== msgId);
       const stackedImages = others.reduce((n, m) => n + (m.images?.length ?? 0), 0);
       if (stackedImages + effectiveImageCount > MAX_QUEUED_IMAGES) {
-        return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
+        return c.json({ error: `too many queued attachments — ${MAX_QUEUED_IMAGES} attachment limit across the stack` }, 400);
       }
       const prospective = foldedLength(run.task, [...others, { text: effectiveText }]);
       if (prospective > MAX_FOLDED_TASK_CHARS) {
@@ -3790,6 +3810,7 @@ export function createApp(deps: ServerDeps) {
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
+        ...(parsed.data.files !== undefined ? { files: parsed.data.files } : {}),
       });
       if (!message) return c.json({ error: 'run already started' }, 409);
       return c.json({ message });
@@ -3847,6 +3868,7 @@ export function createApp(deps: ServerDeps) {
           type: 'image',
           source: { type: 'base64', media_type: img.mediaType, data: img.data },
         })),
+        files: parsed.data.files,
         runner: parsed.data.runner,
         model: parsed.data.model,
         agentProfile: parsed.data.agentProfile,
@@ -4029,7 +4051,12 @@ export function createApp(deps: ServerDeps) {
       const file = basename(c.req.param('file'));
       const path = join(dataDir, 'runs', `${run.id}-images`, file);
       if (!existsSync(path)) return c.json({ error: 'not found' }, 404);
-      const type = IMAGE_TYPES[file.split('.').pop() ?? ''] ?? 'application/octet-stream';
+      const ext = file.split('.').pop() ?? '';
+      const type =
+        IMAGE_TYPES[ext] ??
+        (TEXT_ATTACHMENT_EXTENSIONS.has(ext)
+          ? 'text/plain; charset=utf-8'
+          : 'application/octet-stream');
       return new Response(readFileSync(path), {
         headers: {
           'content-type': type,
@@ -4384,14 +4411,26 @@ export function createApp(deps: ServerDeps) {
       return c.json({ opened: true as const, path: root });
     });
 
-  // Agent screenshots — image blocks the run manager persisted out of tool
-  // results (persistImage). `basename` pins reads inside the run's own dir.
+  // A run's attachments — agent screenshots and pasted images the run manager persisted out of
+  // tool results (persistImage), plus the text files a user attached (persistFiles).
+  // `basename` pins reads inside the run's own dir.
   const IMAGE_TYPES: Record<string, string> = {
     png: 'image/png',
     jpg: 'image/jpeg',
     webp: 'image/webp',
     gif: 'image/gif',
   };
+  /**
+   * What a text attachment is served AS. Every one of them is `text/plain`, deliberately: these
+   * bytes came from a user and are served from the cockpit's own origin, so answering with the
+   * type the file claims (`text/html`, `image/svg+xml`) would be handing that origin a script.
+   * Plain text renders in a tab and runs nothing. Anything not listed keeps the octet-stream
+   * default and downloads.
+   */
+  const TEXT_ATTACHMENT_EXTENSIONS = new Set([
+    'md', 'markdown', 'txt', 'text', 'log', 'csv', 'tsv', 'json', 'jsonl', 'ndjson',
+    'yaml', 'yml', 'toml', 'ini', 'xml', 'sql', 'diff', 'patch',
+  ]);
   // ---- session git view (redesign R5 Step 1.2 — §"Git/session API additions").
   // Structured sibling of the text-blob /diff above (which stays untouched —
   // protected surface). Isolated runs read their worktree; worktree-off runs

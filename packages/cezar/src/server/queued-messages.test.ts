@@ -27,6 +27,8 @@ describe('queued prompt stack routes (#472)', () => {
   let record: RunRecord;
   /** Which rung the fake engine answers on. */
   let rung: 'live' | 'queued' | 'starting' | 'closed';
+  /** What the route handed the engine as the message's text attachments. */
+  let enqueuedFiles: Array<{ name: string }> | undefined;
 
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-472-routes-'));
@@ -36,10 +38,16 @@ describe('queued prompt stack routes (#472)', () => {
     // rather than a bounds 400), so the fixture must look queued as well as answer on that rung.
     store.updateRun(record.id, { status: 'queued' });
     rung = 'queued';
+    enqueuedFiles = undefined;
 
     manager = {
       sendMessage: () => rung === 'live',
-      enqueueMessage: (id: string, content: Array<{ type: string; text?: string }>): QueuedMessage | null => {
+      enqueueMessage: (
+        id: string,
+        content: Array<{ type: string; text?: string }>,
+        files?: Array<{ name: string }>,
+      ): QueuedMessage | null => {
+        enqueuedFiles = files;
         if (rung !== 'queued') return null;
         const message: QueuedMessage = {
           id: `msg-${(store.getRun(id)?.queuedMessages?.length ?? 0) + 1}`,
@@ -124,6 +132,54 @@ describe('queued prompt stack routes (#472)', () => {
     expect(store.getRun(record.id)?.queuedMessages?.map((m) => m.text)).toEqual(['stack me']);
   });
 
+  // ---- text attachments -----------------------------------------------------
+  //
+  // A `.md` brief is an attachment like a screenshot is, and travels the same routes. What
+  // differs is the wire key: images are inlined for the model to look at, files are written to
+  // disk and named by path, so the route hands them to the engine separately.
+
+  it('hands attached text files to the engine alongside the content blocks', async () => {
+    const res = await post({
+      text: 'read this',
+      files: [{ name: 'BRIEF.md', mediaType: 'text/markdown', data: 'IyBoaQ==' }],
+    });
+    expect(res.status).toBe(200);
+    expect(enqueuedFiles?.map((f) => f.name)).toEqual(['BRIEF.md']);
+  });
+
+  /** A message that is ONLY an attachment is a message — the refine says text OR images OR
+   *  files, and a brief with nothing typed alongside it is the ordinary way to send one. */
+  it('accepts a message that carries a file and no text at all', async () => {
+    const res = await post({ files: [{ name: 'notes.txt', mediaType: 'text/plain', data: 'aGk=' }] });
+    expect(res.status).toBe(200);
+    expect(enqueuedFiles?.map((f) => f.name)).toEqual(['notes.txt']);
+  });
+
+  /** The allowlist is what keeps `text/html` and SVG out of a folder this server serves back
+   *  from the cockpit's own origin. */
+  it('rejects a media type outside the text allowlist', async () => {
+    const res = await post({
+      text: 'here',
+      files: [{ name: 'payload.zip', mediaType: 'application/zip', data: 'AAAA' }],
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('counts files and images against ONE per-stack attachment cap', async () => {
+    store.updateRun(record.id, {
+      queuedMessages: [
+        { id: 'msg-1', text: 'with images', images: Array.from({ length: 7 }, (_, i) => `/i/${i}.png`), createdAt: 'x' },
+      ],
+    });
+    const res = await post({
+      text: 'one image, one file',
+      images: [{ mediaType: 'image/png', data: 'aaaa' }],
+      files: [{ name: 'a.md', mediaType: 'text/markdown', data: 'aGk=' }],
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toContain('8 attachment limit');
+  });
+
   it('does not probe or require provider credentials to amend a queued prompt', async () => {
     const status = vi.fn(() => Promise.reject(new Error('provider status must not be read')));
     app = createApp({
@@ -194,7 +250,7 @@ describe('queued prompt stack routes (#472)', () => {
     expect(((await res.json()) as { error: string }).error).toContain('20 message limit');
   });
 
-  it('rejects an over-cap image count across the stack', async () => {
+  it('rejects an over-cap attachment count across the stack', async () => {
     store.updateRun(record.id, {
       queuedMessages: [
         { id: 'msg-1', text: 'with images', images: Array.from({ length: 7 }, (_, i) => `/i/${i}.png`), createdAt: 'x' },
@@ -208,7 +264,7 @@ describe('queued prompt stack routes (#472)', () => {
       ],
     });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain('8 image limit');
+    expect(((await res.json()) as { error: string }).error).toContain('8 attachment limit');
   });
 
   /**
@@ -247,10 +303,10 @@ describe('queued prompt stack routes (#472)', () => {
     expect(((await over.json()) as { error: string }).error).toContain('would be 200001');
   });
 
-  it('rejects a whitespace-only message with no images', async () => {
+  it('rejects a whitespace-only message with no attachments', async () => {
     const res = await post({ text: '   ' });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain('needs text or at least one image');
+    expect(((await res.json()) as { error: string }).error).toContain('needs text or at least one attachment');
   });
 
   // ---- PATCH / DELETE a stacked message -------------------------------------

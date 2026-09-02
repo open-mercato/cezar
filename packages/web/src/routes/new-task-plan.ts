@@ -1,5 +1,6 @@
 import type {
   CreateRunInput,
+  FileInput,
   ImageInput,
   PlanResponse,
   Runner,
@@ -17,19 +18,21 @@ import { runnerOverride } from './new-task-form'
  */
 
 /** What the review overlay edits: the planner's answer plus what the user had typed/attached
- *  at submit time. Images captured here ride into the started run (legacy parity — the plan
- *  request itself never carries them). */
+ *  at submit time. Attachments captured here ride into the started run (legacy parity — the
+ *  plan request itself never carries them). */
 export interface PendingPlan {
   task: string
   steps: WorkflowStepDef[]
   rationale: string
   fallback: boolean
   images: ImageInput[]
+  files: FileInput[]
 }
 
 export function pendingPlanOf(
   task: string,
   images: readonly ImageInput[],
+  files: readonly FileInput[],
   response: PlanResponse,
 ): PendingPlan {
   return {
@@ -38,6 +41,7 @@ export function pendingPlanOf(
     rationale: response.rationale,
     fallback: response.fallback,
     images: [...images],
+    files: [...files],
   }
 }
 
@@ -79,7 +83,7 @@ export function planTaskLine(task: string, max = 120): string {
 /**
  * The exact `POST /api/runs` body for an approved plan: the edited steps INLINE (never a
  * workflow name — the chain may be unsaved), plus the composer's current picker choices under
- * the same rules as `buildCreateRunBody`: `model`/`variants`/`images` only when they say
+ * the same rules as `buildCreateRunBody`: `model`/`variants`/attachments only when they say
  * something, explicit/sticky `runner` choices always sent (untouched defaults may be omitted),
  * `generateFollowups`
  * only when off (#444), and `todoId` only when the composer was prefilled from an inbox entry (#374 —
@@ -97,10 +101,11 @@ export function buildPlannedRunBody(opts: {
   defaultRunner?: Runner
   variants: number
   images: readonly ImageInput[]
+  files?: readonly FileInput[]
   generateFollowups?: boolean
   todoId?: string
 }): CreateRunInput {
-  const { task, steps, model, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId } =
+  const { task, steps, model, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, files, generateFollowups, todoId } =
     opts
   return {
     task,
@@ -109,6 +114,7 @@ export function buildPlannedRunBody(opts: {
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     variants: variants > 1 ? variants : undefined,
     images: images.length > 0 ? [...images] : undefined,
+    files: files && files.length > 0 ? [...files] : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
   }

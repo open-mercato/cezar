@@ -316,6 +316,9 @@ export interface StartRunInput {
   /** Screenshots pasted into the new-task form — persisted when the run is
    *  created and delivered once, with the first agent step's opening message. */
   images?: ContentBlock[];
+  /** Text files attached to the new-task form — persisted next to the images and
+   *  named to the first agent step by PATH (see `pastedAttachmentsText`). */
+  files?: FileAttachmentInput[];
   /** Per-run system-prompt override (`POST /api/runs`, programmatic callers).
    *  Replaces the `config.json` default for this run — see
    *  `resolveExtraSystemPrompt` for the precedence contract. */
@@ -338,6 +341,11 @@ export interface StartRunInput {
    *  and make the task bubble render the stack's images as its own. In-memory
    *  only: rebuilt from the record on every hydration, never persisted. */
   stackedImages?: ContentBlock[];
+  /** The stack's attachments as FILES (#472 + text attachments): every stacked entry, image or
+   *  not, contributes its on-disk path to the opening message's note. Images could rely on their
+   *  inlined blocks; a text attachment has no other way to reach the agent. In-memory only,
+   *  rebuilt by `hydrateQueuedInput` on every hydration. */
+  stackedAttachments?: PersistedAttachment[];
 }
 
 /**
@@ -388,14 +396,43 @@ export function agentDirectories(runsDir: string, env: Record<string, string>): 
  * issue/PR (#357). `path` is only ever an absolute path under
  * `.ai/cezar/runs/<runId>-images/` (see `RunManager.persistImage`).
  */
-/** Inverse of `persistImage`'s extension mapping (#472) — a persisted attachment
- *  is re-encoded from disk at dequeue and needs its media type back. */
+/** Extensions `persistImage` writes for an image block, and the only names
+ *  `readPersistedAttachments` re-encodes as one. */
+const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'webp', 'gif', 'img']);
+
+/** The extension part of an attachment's on-disk name, lowercased. */
+function extensionOf(name: string): string {
+  return name.split('.').pop()?.toLowerCase() ?? '';
+}
+
+/** Does this persisted attachment name belong to an image? A run's attachment folder holds
+ *  both now: agent screenshots and pasted images, plus the text files a user attached, which
+ *  travel by path only and must never be re-encoded into an image block. */
+export function isImageAttachment(name: string): boolean {
+  return IMAGE_EXTENSIONS.has(extensionOf(name));
+}
+
+/** Inverse of `persistImage`'s extension mapping (#472) — a persisted image is
+ *  re-encoded from disk at dequeue and needs its media type back. Only ever asked
+ *  about a name `isImageAttachment` already accepted. */
 export function mediaTypeFor(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase();
+  const ext = extensionOf(name);
   return ext === 'jpg' ? 'image/jpeg'
     : ext === 'webp' ? 'image/webp'
     : ext === 'gif' ? 'image/gif'
     : 'image/png';
+}
+
+/**
+ * The on-disk extension for an attached text file, taken from the name the user's file had.
+ * Sanitized rather than trusted: the stored name is always `pasted-<n>.<ext>`, so this only
+ * decides the suffix — anything unrecognizable becomes `txt` rather than reaching the
+ * filesystem. An image extension is refused the same way: the folder's own naming is what
+ * `isImageAttachment` reads, so a text file called `notes.png` must not claim to be one.
+ */
+export function fileExtensionFor(name: string): string {
+  const ext = extensionOf(name);
+  return /^[a-z0-9]{1,10}$/.test(ext) && !IMAGE_EXTENSIONS.has(ext) ? ext : 'txt';
 }
 
 /** Highest `<prefix>-<n>.<ext>` suffix already present in a run's image dir (#472).
@@ -419,6 +456,22 @@ export interface PersistedAttachment {
 }
 
 /**
+ * A text attachment on its way in — the wire's `{name, mediaType, data}` (the contract's
+ * `fileInputSchema`), base64 like an image and bounded far tighter.
+ *
+ * It never becomes a `ContentBlock`. Images are inlined so the model can LOOK at them; a text
+ * file has no such need — inlining it would spend the prompt on bytes the agent's own file tools
+ * can read on demand, and would push a long brief past the message bounds for nothing. So it is
+ * written to the run's attachment folder and announced by PATH, through the same note the pasted
+ * images already use (#357).
+ */
+export interface FileAttachmentInput {
+  name: string;
+  mediaType: string;
+  data: string;
+}
+
+/**
  * Plain-text note listing the absolute paths of pasted attachments, appended
  * to the message that carries them (#357). The base64 image blocks stay in
  * the message for the model to *view*; this note is what lets it *use* the
@@ -432,7 +485,8 @@ export function pastedAttachmentsText(attachments: PersistedAttachment[]): strin
     `also saved on disk at:\n${list}\n` +
     `When the task involves saving, uploading, attaching, or transforming the pasted content ` +
     `(e.g. attaching to a GitHub issue/PR, copying into the repo), operate on these files — do ` +
-    `not attempt to reconstruct them from the conversation.`
+    `not attempt to reconstruct them from the conversation. A text attachment is on disk only: ` +
+    `read it from its path when you need what is inside it.`
   );
 }
 
@@ -459,10 +513,23 @@ interface PendingContinuation {
   sessionId: string | undefined;
   backend: RunnerId;
   prompt: string;
+  /** Text files attached to the follow-up composer, persisted when the continuation actually
+   *  opens — the same moment its images are, so a deferred continuation writes each file once. */
+  files: FileAttachmentInput[];
   images: ContentBlock[];
 }
 
-interface PersistedImages {
+/** A message buffered between dequeue and session-open (`deferMessage`). Its attached files
+ *  travel WITH it: they are persisted at delivery, so a buffer holding only the blocks would
+ *  flush a message whose attachments quietly went missing. */
+interface DeferredMessage {
+  content: ContentBlock[];
+  files: FileAttachmentInput[];
+}
+
+/** What a run's attachment folder gives back: inline blocks for the images among them, and the
+ *  on-disk path of every attachment, image or text file alike. */
+interface ReadAttachments {
   blocks: ContentBlock[];
   attachments: PersistedAttachment[];
 }
@@ -507,7 +574,7 @@ export class RunManager {
   private readonly queuedImageSeq = new Map<string, number>();
   /** Messages that landed in the dequeue → session-open gap (#472), flushed as
    *  ordinary follow-up turns the moment the session opens. In-memory only. */
-  private readonly deferredMessages = new Map<string, ContentBlock[][]>();
+  private readonly deferredMessages = new Map<string, DeferredMessage[]>();
   /** Armed usage-limit resumes, keyed by run id (spec
    *  2026-08-03-auto-resume-after-usage-limit). The DEADLINE itself lives on the record
    *  (`autoResumeAt`) — this map holds only the process-local timer, so a restart rebuilds it
@@ -752,11 +819,17 @@ export class RunManager {
     // and must survive a restart before a slot opens. Persist them before the job
     // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
     // from these URLs when a recovered run eventually starts.
-    if (input.images?.length) {
-      const persisted = input.images
-        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-        .map((b) => this.persistImage(run.id, b.source.media_type, b.source.data, 'pasted'))
-        .filter((saved): saved is PersistedAttachment => saved !== null);
+    // Attached text files are written in the same pass and land in the same list: `taskImages`
+    // is the initial prompt's ATTACHMENT list, and keeping one list is what lets the run's
+    // execution find every path to name (see `startAttachments` in `execute`).
+    if (input.images?.length || input.files?.length) {
+      const persisted = [
+        ...(input.images ?? [])
+          .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+          .map((b) => this.persistImage(run.id, b.source.media_type, b.source.data, 'pasted'))
+          .filter((saved): saved is PersistedAttachment => saved !== null),
+        ...this.persistFiles(run.id, input.files ?? []),
+      ];
       if (persisted.length) {
         this.store.updateRun(run.id, { taskImages: persisted.map((saved) => saved.url) });
       }
@@ -930,6 +1003,7 @@ export class RunManager {
               hydrated.images,
               hydrated.persistedImages,
               hydrated.persistedAttachments,
+              hydrated.files,
             ).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.store.updateRun(runId, {
@@ -1001,6 +1075,9 @@ export class RunManager {
         backend,
         prompt: RESTART_CONTINUATION_PROMPT,
         images: [],
+        // A revived continuation carries no fresh attachments: whatever the run already had is
+        // on disk, and the stack's own files are re-read by `hydrateQueuedContinuation`.
+        files: [],
       });
       this.queue.push(run.id);
       this.store.appendEvent(run.id, {
@@ -1621,18 +1698,25 @@ export class RunManager {
     // so rebuild it from the durable task-image URLs.
     const images = input.images?.length
       ? input.images
-      : this.readPersistedImages(runId, run.taskImages ?? [], 'task').blocks;
-    const stackedImages = this.readPersistedImages(
+      : this.readPersistedAttachments(runId, run.taskImages ?? [], 'task').blocks;
+    // The stack's own attachments: blocks for what the model can look at, paths for ALL of
+    // them. A text attachment stacked onto a queued prompt has no block, so the path list is
+    // the only thing that carries it into the opening message.
+    const stacked = this.readPersistedAttachments(
       runId,
       stack.flatMap((m) => m.images ?? []),
       'queued',
-    ).blocks;
+    );
+    const stackedImages = stacked.blocks;
 
     return {
       ...input,
       task,
       ...(images.length ? { images } : { images: undefined }),
       ...(stackedImages.length ? { stackedImages } : { stackedImages: undefined }),
+      ...(stacked.attachments.length
+        ? { stackedAttachments: stacked.attachments }
+        : { stackedAttachments: undefined }),
     };
   }
 
@@ -1659,7 +1743,7 @@ export class RunManager {
     const prompt = amendedTask
       ? `${continuation.prompt}\n\nCurrent task and queued updates:\n\n${amendedTask}`
       : continuation.prompt;
-    const persisted = this.readPersistedImages(
+    const persisted = this.readPersistedAttachments(
       runId,
       stack.flatMap((message) => message.images ?? []),
       'queued',
@@ -1672,11 +1756,17 @@ export class RunManager {
     };
   }
 
-  private readPersistedImages(
+  /**
+   * Re-read a run's persisted attachments from disk. An image comes back as an inline block AND
+   * as a path; a text attachment comes back as a path only — re-encoding a `.md` into an image
+   * block would hand the backend a payload it has to reject. Both are read, so the note names
+   * every attachment, and an unreadable one is reported rather than silently missing.
+   */
+  private readPersistedAttachments(
     runId: string,
     urls: string[],
     kind: 'task' | 'queued',
-  ): PersistedImages {
+  ): ReadAttachments {
     const blocks: ContentBlock[] = [];
     const attachments: PersistedAttachment[] = [];
     for (const url of urls) {
@@ -1685,10 +1775,12 @@ export class RunManager {
       const path = join(this.dataDir, 'runs', `${runId}-images`, name);
       try {
         const data = readFileSync(path);
-        blocks.push({
-          type: 'image',
-          source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
-        });
+        if (isImageAttachment(name)) {
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
+          });
+        }
         attachments.push({ name, url, path });
       } catch {
         // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
@@ -1713,17 +1805,25 @@ export class RunManager {
     return this.pendingJobs.has(runId) || this.pendingContinuations.has(runId);
   }
 
-  /** Split `ContentBlock[]` into the persisted shape a stacked message holds. */
-  private toQueuedMessage(runId: string, content: ContentBlock[]): QueuedMessage {
+  /** Split `ContentBlock[]` plus any attached files into the persisted shape a stacked message
+   *  holds. Both kinds land in the entry's `images` list: it is the message's ATTACHMENT list —
+   *  the URLs `dropOrphanImages` reference-counts and `readPersistedAttachments` reads back. */
+  private toQueuedMessage(
+    runId: string,
+    content: ContentBlock[],
+    files: FileAttachmentInput[] = [],
+  ): QueuedMessage {
     const text = content
       .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
       .map((b) => b.text)
       .join('\n');
-    const images = content
-      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
-      .filter((saved): saved is PersistedAttachment => saved !== null)
-      .map((saved) => saved.url);
+    const images = [
+      ...content
+        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+        .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
+        .filter((saved): saved is PersistedAttachment => saved !== null),
+      ...this.persistFiles(runId, files),
+    ].map((saved) => saved.url);
     return {
       id: randomUUID(),
       text,
@@ -1737,11 +1837,15 @@ export class RunManager {
    * entry, or null when the run has already started — the caller then falls
    * through to `deferMessage`.
    */
-  enqueueMessage(runId: string, content: ContentBlock[]): QueuedMessage | null {
+  enqueueMessage(
+    runId: string,
+    content: ContentBlock[],
+    files: FileAttachmentInput[] = [],
+  ): QueuedMessage | null {
     if (!this.isQueued(runId)) return null;
     const run = this.store.getRun(runId);
     if (!run) return null;
-    const message = this.toQueuedMessage(runId, content);
+    const message = this.toQueuedMessage(runId, content, files);
     this.store.updateRun(runId, { queuedMessages: [...(run.queuedMessages ?? []), message] });
     return message;
   }
@@ -1750,7 +1854,7 @@ export class RunManager {
   editQueuedMessage(
     runId: string,
     msgId: string,
-    edit: { text?: string; images?: ContentBlock[] },
+    edit: { text?: string; images?: ContentBlock[]; files?: FileAttachmentInput[] },
   ): QueuedMessage | null {
     if (!this.isQueued(runId)) return null;
     const run = this.store.getRun(runId);
@@ -1759,9 +1863,11 @@ export class RunManager {
     const at = stack.findIndex((m) => m.id === msgId);
     if (at < 0) return null;
     const current = stack[at]!;
-    const replacementImages = edit.images === undefined
+    // One attachment list, replaced as a whole: naming either half of it re-uploads both, so a
+    // PATCH that sends `images` without `files` is what drops the message's files, deliberately.
+    const replacementImages = edit.images === undefined && edit.files === undefined
       ? current.images
-      : this.toQueuedMessage(runId, edit.images).images;
+      : this.toQueuedMessage(runId, edit.images ?? [], edit.files ?? []).images;
     const replacement: QueuedMessage = {
       id: msgId,
       text: edit.text ?? current.text,
@@ -1851,7 +1957,7 @@ export class RunManager {
    * The buffer lives on the manager rather than the `ActiveRun` because the
    * `ActiveRun` does not exist yet for part of this window.
    */
-  deferMessage(runId: string, content: ContentBlock[]): boolean {
+  deferMessage(runId: string, content: ContentBlock[], files: FileAttachmentInput[] = []): boolean {
     // The window spans two sub-states: `starting` (no `ActiveRun` yet) and the
     // longer stretch where the `ActiveRun` exists but the backend is still being
     // spawned. `execute()` deletes the run from `starting` as soon as it builds
@@ -1861,7 +1967,7 @@ export class RunManager {
     const startingUp = this.starting.has(runId) || (state !== undefined && !state.sessionEverOpened && !state.cancelled);
     if (!startingUp) return false;
     const pending = this.deferredMessages.get(runId) ?? [];
-    pending.push(content);
+    pending.push({ content, files });
     this.deferredMessages.set(runId, pending);
     return true;
   }
@@ -1874,7 +1980,7 @@ export class RunManager {
     // answers false when the session is not open yet — and silently losing a message
     // here would be precisely the failure `deferMessage` exists to prevent. Anything
     // left over is retried by the next session that opens on this run.
-    const unsent = pending.filter((content) => !this.sendMessage(runId, content));
+    const unsent = pending.filter((message) => !this.sendMessage(runId, message.content, message.files));
     if (unsent.length) this.deferredMessages.set(runId, unsent);
     else this.deferredMessages.delete(runId);
   }
@@ -1884,8 +1990,8 @@ export class RunManager {
    * while `waiting`). Returns false when there is no open session — the GUI
    * then offers "Continue" instead.
    */
-  sendMessage(runId: string, content: ContentBlock[]): boolean {
-    const delivered = this.deliverMessage(runId, content, true);
+  sendMessage(runId: string, content: ContentBlock[], files: FileAttachmentInput[] = []): boolean {
+    const delivered = this.deliverMessage(runId, content, true, files);
     if (delivered) {
       const state = this.active.get(runId);
       if (state) state.monitoringWakeups = 0;
@@ -1896,7 +2002,12 @@ export class RunManager {
 
   /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
    * bookkeeping without masquerading as user-authored transcript messages. */
-  private deliverMessage(runId: string, content: ContentBlock[], userAuthored: boolean): boolean {
+  private deliverMessage(
+    runId: string,
+    content: ContentBlock[],
+    userAuthored: boolean,
+    files: FileAttachmentInput[] = [],
+  ): boolean {
     const state = this.active.get(runId);
     if (!state?.session?.open || state.cancelled) return false;
 
@@ -1906,11 +2017,15 @@ export class RunManager {
       .join('\n');
     // Persist the attached images so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
-    // these as user attachments (vs. agent tool screenshots) on disk (#357).
-    const persisted = userAuthored ? content
-      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
-      .filter((saved): saved is PersistedAttachment => saved !== null) : [];
+    // these as user attachments (vs. agent tool screenshots) on disk (#357). Attached text files
+    // are written the same way and reach the agent through the same note, by path only.
+    const persisted = userAuthored ? [
+      ...content
+        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+        .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
+        .filter((saved): saved is PersistedAttachment => saved !== null),
+      ...this.persistFiles(runId, files),
+    ] : [];
     const images = persisted.map((saved) => saved.url);
     if (userAuthored) {
       this.store.appendEvent(runId, {
@@ -1977,6 +2092,9 @@ export class RunManager {
     opts: {
       text?: string;
       images?: ContentBlock[];
+      /** Text files attached to the follow-up composer — persisted with the reopened
+       *  session's opening message and named to the agent by path. */
+      files?: FileAttachmentInput[];
       runner?: RunnerId;
       model?: string;
       /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
@@ -2074,6 +2192,7 @@ export class RunManager {
     this.store.addStep(runId, { id: stepId, name: 'Continue', kind: 'agent' });
     const prompt = opts.text?.trim() || 'Continue.';
     const images = opts.images ?? [];
+    const files = opts.files ?? [];
     if (deferForCapacity) {
       this.pendingContinuations.set(runId, {
         stepId,
@@ -2081,6 +2200,7 @@ export class RunManager {
         backend: targetRunner,
         prompt,
         images,
+        files,
       });
       this.queue.push(runId);
       this.store.updateRun(runId, {
@@ -2098,6 +2218,9 @@ export class RunManager {
       targetRunner,
       prompt,
       images,
+      [],
+      [],
+      files,
     ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -2127,6 +2250,9 @@ export class RunManager {
      *  opening a recovered continuation does not persist duplicate files. */
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
+    /** Text files attached to this continuation — persisted here, next to its images, and
+     *  carried into the opening message as paths. */
+    files: FileAttachmentInput[] = [],
   ): Promise<void> {
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
@@ -2198,10 +2324,13 @@ export class RunManager {
     // images rather than a bare count, and handed to the agent BOTH as base64 blocks (so it can
     // view them) and as absolute paths appended to the prompt (so it can operate on them — and
     // because codex/opencode drop image blocks before they reach the model).
-    const freshAttachments = images
-      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
-      .filter((saved): saved is PersistedAttachment => saved !== null);
+    const freshAttachments = [
+      ...images
+        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
+        .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
+        .filter((saved): saved is PersistedAttachment => saved !== null),
+      ...this.persistFiles(runId, files),
+    ];
     const openingImages = [...images, ...persistedImages];
     const attachments = [...freshAttachments, ...persistedAttachments];
     this.store.appendEvent(runId, {
@@ -2665,6 +2794,13 @@ export class RunManager {
         return existsSync(path) ? { name, url, path } : null;
       })
       .filter((saved): saved is PersistedAttachment => saved !== null);
+    // The stack's own attachments are already on disk (they were persisted when they were
+    // enqueued), so they are ADDED to the paths this opening message names rather than
+    // re-persisted. Without this a text file stacked onto a queued prompt would reach the agent
+    // as nothing at all: it has no inline block to fall back on.
+    if (input.stackedAttachments?.length) {
+      startAttachments = [...startAttachments, ...input.stackedAttachments];
+    }
     // Task screenshots go with the FIRST agent step's opening message only —
     // later steps and retry loops run in fresh sessions without them. Stacked
     // attachments (#472) ride along too, but are NOT re-persisted above: they
@@ -2846,11 +2982,13 @@ export class RunManager {
         stepId: step.id,
         message: `${images.length} screenshot${images.length > 1 ? 's' : ''} attached to the task`,
       });
-      // Point the agent at the on-disk files for the pasted subset (#357) — the
-      // base64 blocks above still let it *view* the images; this is what lets it
-      // *use* them as files (save, attach to an issue/PR, copy into the repo).
-      if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
     }
+    // Point the agent at the on-disk files (#357) — the base64 blocks above still let it *view*
+    // an image; this is what lets it *use* an attachment as a file (read it, save it, attach it
+    // to an issue/PR, copy it into the repo). Outside the `images` branch on purpose: a text
+    // attachment produces no image block, and gating the note on one is what would leave the
+    // agent holding a task about a file it was never told the path of.
+    if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
 
     const sessionId = randomUUID();
     const backend = step.runner ?? taskBackend;
@@ -3369,7 +3507,7 @@ export class RunManager {
 
   /**
    * Agent screenshot (an image block inside a tool result) or a user-pasted
-   * attachment: the base64 data never enters the NDJSON event log — it lands
+   * image: the base64 data never enters the NDJSON event log — it lands
    * as a file under `.ai/cezar/runs/<id>-images/` and the transcript event
    * carries only the name + serving URL. `namePrefix` distinguishes the two
    * origins on disk (`screenshot-<n>.<ext>` for agent tool screenshots,
@@ -3383,14 +3521,37 @@ export class RunManager {
     mediaType: string,
     data: string,
     namePrefix: string = 'screenshot',
-  ): { name: string; url: string; path: string } | null {
+  ): PersistedAttachment | null {
+    const ext =
+      /png/.test(mediaType) ? 'png'
+      : /jpe?g/.test(mediaType) ? 'jpg'
+      : /webp/.test(mediaType) ? 'webp'
+      : /gif/.test(mediaType) ? 'gif'
+      : 'img';
+    return this.persistAttachment(runId, ext, data, namePrefix);
+  }
+
+  /**
+   * The text files a user attached (`fileInputSchema`), written into the same folder and the
+   * same numbering space as the images — they are attachments of the same message, and one
+   * shared counter is what keeps `pasted-3.md` from colliding with `pasted-3.png`. Returns the
+   * ones that made it; a file that cannot be written is dropped, like an image that cannot.
+   */
+  private persistFiles(runId: string, files: FileAttachmentInput[]): PersistedAttachment[] {
+    return files
+      .map((file) => this.persistAttachment(runId, fileExtensionFor(file.name), file.data, 'pasted'))
+      .filter((saved): saved is PersistedAttachment => saved !== null);
+  }
+
+  /** Write one attachment's base64 payload into the run's folder under the next free
+   *  `<prefix>-<n>.<ext>`. Shared by every origin: agent screenshots, pasted images, files. */
+  private persistAttachment(
+    runId: string,
+    ext: string,
+    data: string,
+    namePrefix: string,
+  ): PersistedAttachment | null {
     try {
-      const ext =
-        /png/.test(mediaType) ? 'png'
-        : /jpe?g/.test(mediaType) ? 'jpg'
-        : /webp/.test(mediaType) ? 'webp'
-        : /gif/.test(mediaType) ? 'gif'
-        : 'img';
       const dir = join(this.dataDir, 'runs', `${runId}-images`);
       mkdirSync(dir, { recursive: true });
       // Seed from the highest numeric suffix already on disk, NOT the file count:
@@ -3399,7 +3560,7 @@ export class RunManager {
       // of a process (restart case) — afterwards the map is authoritative.
       let seq = this.queuedImageSeq.get(runId);
       if (seq === undefined) seq = highestImageSeq(dir);
-      // `persistImage` is fully synchronous, so two pastes cannot interleave between
+      // `persistAttachment` is fully synchronous, so two pastes cannot interleave between
       // the read of the counter and the write. The exclusive-create flag is the
       // belt-and-braces guard for a stale seed: it degrades to a renamed file rather
       // than a silent overwrite.

@@ -5,7 +5,7 @@ import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
-import type { ApiRun, ContinueResponse, ImageInput, Runner } from '@open-mercato/cezar-api-client'
+import type { ApiRun, ContinueResponse, FileInput, ImageInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
 import {
   modelsForRunner,
@@ -34,7 +34,11 @@ export interface ContinueAction {
    * rather than toasting itself, so the composer can restore the draft it optimistically
    * cleared — nothing the user typed is lost to a 409.
    */
-  continueWith: (text: string, images: ImageInput[]) => Promise<ContinueResponse>
+  continueWith: (
+    text: string,
+    images: ImageInput[],
+    files: FileInput[],
+  ) => Promise<ContinueResponse>
 }
 
 /**
@@ -100,7 +104,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     : null
 
   const mutation = useMutation({
-    mutationFn: ({ text, images }: { text: string; images: ImageInput[] }) => {
+    mutationFn: ({ text, images, files }: { text: string; images: ImageInput[]; files: FileInput[] }) => {
       if (!canContinue) {
         return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
       }
@@ -109,6 +113,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // ("Continue.") still applies — one-click Continue, unchanged.
         text: text.trim() ? text : undefined,
         images: images.length ? images : undefined,
+        files: files.length ? files : undefined,
         // Send an override only for a pill the user actually touched; otherwise omit it so the
         // server keeps the run's current backend/model. If that backend disconnected, the
         // connected fallback must be explicit even when the pills were untouched.
@@ -166,6 +171,6 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         />
       </div>
     ),
-    continueWith: (text, images) => mutation.mutateAsync({ text, images }),
+    continueWith: (text, images, files) => mutation.mutateAsync({ text, images, files }),
   }
 }

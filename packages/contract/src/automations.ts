@@ -55,8 +55,9 @@ export const automationFiltersSchema = z.object({
 export type AutomationFilters = z.infer<typeof automationFiltersSchema>;
 
 /**
- * The task a match launches: `POST /runs`' own body minus the three keys an automation owns
- * itself — `task` (the rendered prompt), `images` and `todoId` — plus the prompt TEMPLATE.
+ * The task a match launches: `POST /runs`' own body minus the keys an automation owns itself —
+ * `task` (the rendered prompt), its attachments (`images`, `files`) and `todoId` — plus the
+ * prompt TEMPLATE.
  *
  * Two keys are re-spelled rather than inherited, because the automation schema really does differ
  * from the composer's and the contract has to describe the automation route:
@@ -69,7 +70,7 @@ export type AutomationFilters = z.infer<typeof automationFiltersSchema>;
  *    stores and answers it plainly, so it stays optional.
  */
 export const automationTaskSchema = createRunInputBaseSchema
-  .omit({ task: true, images: true, todoId: true, systemPrompt: true })
+  .omit({ task: true, images: true, files: true, todoId: true, systemPrompt: true })
   .extend({
     /** The prompt template. `{{github.number}}`, `{{github.title}}`, `{{github.url}}` and
      *  `{{github.labels}}` are substituted per match; GitHub content is appended as untrusted

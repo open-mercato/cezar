@@ -15,6 +15,7 @@ const plan: PendingPlan = {
   rationale: '',
   fallback: false,
   images: [],
+  files: [],
 }
 
 describe('PlanReview provider availability', () => {

@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUpIcon, CheckIcon, MicIcon, PaperclipIcon, XIcon } from 'lucide-react'
+import { ArrowUpIcon, CheckIcon, FileTextIcon, MicIcon, PaperclipIcon, XIcon } from 'lucide-react'
 import {
   useCallback,
   useEffect,
@@ -17,7 +17,7 @@ import {
 
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
-import type { ImageInput } from '@open-mercato/cezar-api-client'
+import type { FileInput, ImageInput } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -30,11 +30,15 @@ import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
 
 import {
+  ATTACH_ACCEPT,
+  fileToPendingFile,
   fileToPendingImage,
+  MAX_FILES,
   MAX_IMAGES,
   screenFiles,
+  type PendingFile,
   type PendingImage,
-} from './composer-images'
+} from './composer-attachments'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
 import { formatElapsed, useDictation } from './dictation'
 
@@ -50,8 +54,9 @@ import { formatElapsed, useDictation } from './dictation'
  */
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
-   *  and restores the draft (nothing the user typed is ever lost). */
-  onSubmit: (text: string, images: ImageInput[]) => Promise<unknown>
+   *  and restores the draft (nothing the user typed is ever lost). `files` are the text
+   *  attachments — a host that does not pass them on simply drops them. */
+  onSubmit: (text: string, images: ImageInput[], files: FileInput[]) => Promise<unknown>
   /**
    * Controlled text (pass BOTH or neither): the /new host owns the draft so it survives
    * navigation (spec: "Queued form state survives navigation"). Every internal edit — typing,
@@ -138,10 +143,13 @@ export function Composer({
     onValueChangeRef.current?.(resolved)
   }, [])
   const [images, setImages] = useState<PendingImage[]>([])
-  // Mirrors `images` for reads inside event handlers that must not run through a setState updater
-  // (StrictMode double-invokes those in dev — see addFiles / #double-paste).
+  const [files, setFiles] = useState<PendingFile[]>([])
+  // Mirrors `images`/`files` for reads inside event handlers that must not run through a setState
+  // updater (StrictMode double-invokes those in dev — see addFiles / #double-paste).
   const imagesRef = useRef(images)
   imagesRef.current = images
+  const filesRef = useRef(files)
+  filesRef.current = files
   const [busy, setBusy] = useState(false)
   const [trigger, setTrigger] = useState<TriggerState | null>(null)
   const [menuValue, setMenuValue] = useState('')
@@ -268,20 +276,28 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`
   }, [text])
 
-  // ---- images --------------------------------------------------------------------------------
+  // ---- attachments ---------------------------------------------------------------------------
 
   const addFiles = useCallback(
-    (files: readonly File[]) => {
+    (incoming: readonly File[]) => {
       if (disabled) return
       // Side effects (screening toasts + async encode) run OUTSIDE any setState updater: React
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
-      // append each pasted image twice (#double-paste). `imagesRef` gives the current count
+      // append each pasted image twice (#double-paste). The refs give the current counts
       // without reading through state; each async append re-checks the cap functionally.
-      const intake = screenFiles(files, imagesRef.current.length)
+      const intake = screenFiles(incoming, {
+        images: imagesRef.current.length,
+        files: filesRef.current.length,
+      })
       for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
-      for (const file of intake.accepted) {
+      for (const file of intake.images) {
         void fileToPendingImage(file).then((image) =>
           setImages((prev) => (prev.length >= MAX_IMAGES ? prev : [...prev, image])),
+        )
+      }
+      for (const file of intake.files) {
+        void fileToPendingFile(file).then((attachment) =>
+          setFiles((prev) => (prev.length >= MAX_FILES ? prev : [...prev, attachment])),
         )
       }
     },
@@ -289,34 +305,45 @@ export function Composer({
   )
 
   const onPaste = (event: ClipboardEvent) => {
-    const files = [...(event.clipboardData?.items ?? [])]
-      .filter((item) => item.type.startsWith('image/'))
+    // Every clipboard entry that IS a file, not just the images: a `.md` copied in the file
+    // manager arrives here too, and screening tells the user about anything it cannot take.
+    // `getAsFile()` is the filter — it answers null for a string item, so an ordinary text
+    // paste finds nothing here and falls through to the textarea untouched.
+    const pasted = [...(event.clipboardData?.items ?? [])]
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null)
-    if (files.length === 0) return
+    if (pasted.length === 0) return
     event.preventDefault()
-    addFiles(files)
+    addFiles(pasted)
   }
 
   const onDrop = (event: DragEvent) => {
-    const files = [...(event.dataTransfer?.files ?? [])]
-    if (files.length === 0) return
+    const dropped = [...(event.dataTransfer?.files ?? [])]
+    if (dropped.length === 0) return
     event.preventDefault()
-    addFiles(files)
+    addFiles(dropped)
   }
 
   // ---- submit --------------------------------------------------------------------------------
 
   const send = useCallback(
-    async (messageText: string, messageImages: PendingImage[], restoreOnError: boolean) => {
+    async (
+      messageText: string,
+      messageImages: PendingImage[],
+      messageFiles: PendingFile[],
+      restoreOnError: boolean,
+    ) => {
       const body = messageText.trim()
       if (disabled || busy) return
-      if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
+      if (body === '' && messageImages.length === 0 && messageFiles.length === 0 && !allowEmptySubmit) {
+        return
+      }
       setBusy(true)
       try {
         await onSubmit(
           body,
           messageImages.map(({ mediaType, data }) => ({ mediaType, data })),
+          messageFiles.map(({ name, mediaType, data }) => ({ name, mediaType, data })),
         )
       } catch (error) {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
@@ -325,6 +352,7 @@ export function Composer({
           // typed since, so nothing the user wrote is lost.
           setText((current) => (current === '' ? messageText : `${messageText}\n${current}`))
           setImages((current) => [...messageImages, ...current].slice(0, MAX_IMAGES))
+          setFiles((current) => [...messageFiles, ...current].slice(0, MAX_FILES))
         }
       } finally {
         setBusy(false)
@@ -334,15 +362,17 @@ export function Composer({
   )
 
   const submitDraft = useCallback(() => {
-    if (text.trim() === '' && images.length === 0 && !allowEmptySubmit) return
+    if (text.trim() === '' && images.length === 0 && files.length === 0 && !allowEmptySubmit) return
     const draftText = text
     const draftImages = images
+    const draftFiles = files
     // Optimistic clear — the reply feels instant; a rejection restores it above.
     setText('')
     setImages([])
+    setFiles([])
     setTrigger(null)
-    void send(draftText, draftImages, true)
-  }, [allowEmptySubmit, images, send, text])
+    void send(draftText, draftImages, draftFiles, true)
+  }, [allowEmptySubmit, files, images, send, text])
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (menuOpen) {
@@ -404,7 +434,7 @@ export function Composer({
       if (reply === undefined) return
       event.preventDefault()
       // Canned replies bypass the draft entirely — nothing to restore on failure.
-      void send(reply, [], false)
+      void send(reply, [], [], false)
     }
     window.addEventListener('keydown', onWindowKeyDown)
     return () => window.removeEventListener('keydown', onWindowKeyDown)
@@ -419,7 +449,8 @@ export function Composer({
     if (alsoSend) {
       setText('')
       setImages([])
-      void send(merged, images, true)
+      setFiles([])
+      void send(merged, images, files, true)
       return
     }
     setText(merged)
@@ -444,8 +475,8 @@ export function Composer({
             disabled && 'opacity-80',
           )}
         >
-          {images.length > 0 ? (
-            <div data-slot="composer-thumbs" className="flex flex-wrap gap-2 px-4 pt-3">
+          {images.length > 0 || files.length > 0 ? (
+            <div data-slot="composer-thumbs" className="flex flex-wrap items-center gap-2 px-4 pt-3">
               {images.map((image, index) => (
                 <button
                   key={`${image.name}-${index}`}
@@ -459,6 +490,23 @@ export function Composer({
                   <span className="absolute inset-0 hidden items-center justify-center bg-background/70 group-hover:flex group-focus-visible:flex">
                     <XIcon aria-hidden="true" className="size-4" />
                   </span>
+                </button>
+              ))}
+              {/* A text file has nothing to preview — it gets its name, which is also what the
+                  user needs to see to know the right file made it in. */}
+              {files.map((file, index) => (
+                <button
+                  key={`${file.name}-${index}`}
+                  type="button"
+                  data-slot="composer-file"
+                  aria-label={`Remove ${file.name}`}
+                  title="Click to remove"
+                  className="group flex h-12 max-w-[220px] items-center gap-2 rounded-md border border-border px-2.5 text-xs text-muted-foreground hover:border-danger hover:text-danger"
+                  onClick={() => setFiles((current) => current.filter((_, i) => i !== index))}
+                >
+                  <FileTextIcon aria-hidden="true" className="size-4 shrink-0" />
+                  <span className="truncate">{file.name}</span>
+                  <XIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-0 group-hover:opacity-100 group-focus-visible:opacity-100" />
                 </button>
               ))}
             </div>
@@ -527,7 +575,12 @@ export function Composer({
                   size="icon-sm"
                   aria-label={sendAriaLabel}
                   disabled={
-                    disabled || busy || (text.trim() === '' && images.length === 0 && !allowEmptySubmit)
+                    disabled ||
+                    busy ||
+                    (text.trim() === '' &&
+                      images.length === 0 &&
+                      files.length === 0 &&
+                      !allowEmptySubmit)
                   }
                   className="size-8"
                   onClick={submitDraft}
@@ -602,7 +655,13 @@ export function Composer({
   )
 }
 
-/** The paperclip + its hidden multi-file input (legacy `#msg-attach`). */
+/**
+ * The paperclip + its hidden multi-file input (legacy `#msg-attach`).
+ *
+ * `accept` lists the text types by EXTENSION as well as by MIME, because the picker's MIME
+ * filter is the platform's own: on the pairs where `.md` has no registered type, an
+ * `accept="text/*"` dialog greys the file out and there is no way to pick it at all.
+ */
 function AttachButton({
   disabled,
   onFiles,
@@ -617,8 +676,8 @@ function AttachButton({
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label="Attach images"
-        title="Attach an image (or paste a screenshot)"
+        aria-label="Attach files"
+        title="Attach an image or a text file (or paste a screenshot)"
         disabled={disabled}
         className="size-8 text-muted-foreground"
         onClick={() => inputRef.current?.click()}
@@ -628,7 +687,7 @@ function AttachButton({
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept={ATTACH_ACCEPT}
         multiple
         className="hidden"
         aria-hidden="true"

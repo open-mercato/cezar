@@ -601,6 +601,31 @@ export const imageInputSchema = z.object({
 export type ImageInput = z.input<typeof imageInputSchema>;
 
 /**
+ * What a `files` attachment may be: text, and the structured formats that are text underneath.
+ * Deliberately an allowlist rather than "any type" — cezar serves these back from the cockpit's
+ * own origin, and that is what keeps `text/html` and SVG out of it.
+ */
+export const FILE_MEDIA_TYPE =
+  /^(text\/|application\/(json|x-ndjson|xml|yaml|x-yaml|toml|x-toml|markdown|sql|csv)$)/;
+
+/**
+ * A non-image attachment: a `.md` brief, a log, a CSV. Base64 on the wire like an image, but
+ * never inlined into the prompt — the file is written into the run's attachment folder and the
+ * agent is handed its PATH, which is what a coding agent's file tools want anyway. That is also
+ * why it is bounded an order of magnitude tighter than an image: nothing here rides in a message.
+ *
+ * `name` is the file the user picked. Only its EXTENSION is honoured (sanitized server-side);
+ * the on-disk name stays `pasted-<n>.<ext>`, so a crafted name cannot leave the run's own folder.
+ */
+export const fileInputSchema = z.object({
+  name: z.string().min(1).max(200),
+  mediaType: z.string().regex(FILE_MEDIA_TYPE),
+  /** ~1 MB once base64-decoded. */
+  data: z.string().min(1).max(1_400_000),
+});
+export type FileInput = z.input<typeof fileInputSchema>;
+
+/**
  * The KEYS of `POST /runs`' body, before the XOR refinement that `createRunInputSchema` adds.
  *
  * Split out for one reason: `./automations.ts` builds an automation's task on top of this shape
@@ -640,6 +665,9 @@ export const createRunInputBaseSchema = z
       .transform((s) => (s ? s : undefined)),
     /** Screenshots pasted into the new-task form; delivered with the first agent step. */
     images: z.array(imageInputSchema).max(4).optional(),
+    /** Text files attached to the new-task form; saved to disk and named to the first agent
+     *  step by path, never inlined into `task`. */
+    files: z.array(fileInputSchema).max(4).optional(),
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
@@ -658,17 +686,18 @@ export const createRunInputSchema = createRunInputBaseSchema.refine(
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
 
 /**
- * `POST /runs/:id/messages` — text and/or pasted screenshots for a live session. Both keys have
- * server-side defaults, so an omitted `text` is `''` and an omitted `images` is `[]`; the refine
- * is what rejects a message that is empty in both.
+ * `POST /runs/:id/messages` — text and/or attachments for a live session. Every key has a
+ * server-side default, so an omitted `text` is `''` and an omitted `images`/`files` is `[]`;
+ * the refine is what rejects a message that is empty in all three.
  */
 export const messageInputSchema = z
   .object({
     text: z.string().max(100_000).default(''),
     images: z.array(imageInputSchema).max(4).default([]),
+    files: z.array(fileInputSchema).max(4).default([]),
   })
-  .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+  .refine((m) => m.text.trim().length > 0 || m.images.length > 0 || m.files.length > 0, {
+    message: 'message needs text or at least one attachment',
   });
 export type MessageInput = z.input<typeof messageInputSchema>;
 

@@ -162,7 +162,7 @@ function Harness({ run, draft = '' }: { run: ApiRun; draft?: string }) {
   return (
     <>
       {action.pills}
-      <button type="button" onClick={() => void action.continueWith(draft, [])}>
+      <button type="button" onClick={() => void action.continueWith(draft, [], [])}>
         Continue
       </button>
     </>
