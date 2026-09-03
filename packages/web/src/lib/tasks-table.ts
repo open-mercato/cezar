@@ -226,6 +226,23 @@ export interface TaskReference {
  * reference has to arrive as a real field before it can be shown: the shape is ready for more,
  * the guesswork is not invited in.
  *
+ * Nor does it repo-check the `referenced*Url` fields it DOES read, and that is a decision, not an
+ * omission (#945). Those fields could name another repository — a task that cited one upstream PR
+ * used to adopt it outright — but the fix belongs at the record, in `store.ts`, for a reason this
+ * layer cannot work around: the legitimate cross-repo reference (#819) is told from the poisoned
+ * one by whether the TASK PROMPT names that repository, and `TaskReferenceInput` has no `task`.
+ * The slim runs-index row it is `Pick`ed from has none either, so mirroring the rule here would
+ * mean either widening `runIndexEntrySchema` for a signal the store already used, or dropping
+ * every foreign chip including the ones a user deliberately asked for. Both are worse than one
+ * authority. So the invariant this file relies on is: **a `referenced*Url` that reaches the
+ * display layer has already been repo-scoped**, and a foreign one only survives because the prompt
+ * corroborated it — in which case painting it is correct.
+ *
+ * That completes the rule this comment states in one piece. All three halves guard the same
+ * failure — a chip pointing at a repository the task never touched — at the three places it can
+ * enter: #526/#819/#854 stop a bare NUMBER being synthesized into a link (here, above), and #945
+ * stops a foreign discovered URL being adopted as the subject (in `store.ts`).
+ *
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
 export function taskReferences(run: TaskReferenceInput, repoBase?: string): TaskReference[] {

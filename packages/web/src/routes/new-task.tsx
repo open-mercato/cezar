@@ -2,11 +2,14 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckIcon,
   ChevronDownIcon,
+  CircleSlashIcon,
   EyeIcon,
   FolderOpenIcon,
+  PlusIcon,
   SparklesIcon,
   SquareIcon,
   WorkflowIcon,
+  XIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, useSearchParams } from 'react-router'
@@ -30,7 +33,7 @@ import {
   useWorkflows,
 } from '@/api/queries'
 import type {
-  ImageInput,
+  AttachmentInput,
   ProjectListEntry,
   RepoResponse,
   Runner,
@@ -63,6 +66,7 @@ import {
   isProjectSkill,
   orderSkillsByUsage,
   partitionSkillsForDisplay,
+  queryScore,
   searchSkills,
   searchWorkflows,
   skillKeywords,
@@ -78,7 +82,7 @@ import {
   type DeepLinkNotice,
 } from './new-task-autostart'
 import {
-  clearDraftText,
+  clearStartedDraft,
   composerRunModeNote,
   readDraft,
   resolveComposerRunMode,
@@ -90,6 +94,7 @@ import {
   modelsForRunner,
   modelCatalogStatus,
   pushRecentSource,
+  QUICK_TASK,
   resolveModel,
   resolveRunner,
   resolveSource,
@@ -179,8 +184,10 @@ export function NewTaskRoute() {
   const projectList = projects.data?.projects ?? []
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
-  const source = resolveSource([draft.source, uiState.data?.lastTask], skillList, workflowList)
-  const selectedSkill = source.source === 'skill'
+  // The draft's pick alone — a fresh `/new` selects nothing (see `resolveSource` for what the
+  // persisted `lastTask` preselection was load-bearing for, and why it is gone).
+  const source = resolveSource(draft.source, skillList, workflowList)
+  const selectedSkill = source?.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
 
@@ -193,7 +200,7 @@ export function NewTaskRoute() {
     () => normalizePromptTemplates(uiState.data?.promptTemplates),
     [uiState.data?.promptTemplates],
   )
-  const autoText = autoApplyText(templates, source.source === 'skill' ? [source.ref] : [])
+  const autoText = autoApplyText(templates, source?.source === 'skill' ? [source.ref] : [])
   const draftTextRef = useRef(draft.text)
   draftTextRef.current = draft.text
   const autoAppliedRef = useRef('')
@@ -284,7 +291,9 @@ export function NewTaskRoute() {
       workspaceConfig.data?.composerDefaults?.worktree
       ?? workspaceConfig.data?.composerDefaults?.inheritedWorktree
       ?? true,
-    source: source.source,
+    // Nothing picked runs the plain built-in workflow, and the 'source-dependent' autonomy
+    // default keys off exactly that: skills default autonomous, everything else does not.
+    source: source?.source ?? 'workflow',
   })
   const worktreeOn = runMode.worktree
   const autonomousOn = runMode.autonomous
@@ -357,7 +366,7 @@ export function NewTaskRoute() {
       if (launchKey !== '' && deepLink.key === launchKey) {
         try {
           const created = await createRun(bookmarkletRunBody(deepLink, runner, defaultRunner))
-          clearDraftText(draftProjectId)
+          clearStartedDraft(draftProjectId)
           void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
           void navigate(startedRunPath(created))
           return
@@ -385,12 +394,9 @@ export function NewTaskRoute() {
         ? deepLink.skill
         : ''
     if (unknownSkill !== '') {
-      update({
-        text: unknownSkillPrefillText(deepLink.skill, deepLink.ref),
-        ...(workflowList.some((w) => w.name === 'quick-task')
-          ? { source: { source: 'workflow', ref: 'quick-task' } as TaskSource }
-          : {}),
-      })
+      // Legacy put the intent into the text and ran quick-task; `null` IS that run now, and
+      // needs no catalog lookup to say so.
+      update({ text: unknownSkillPrefillText(deepLink.skill, deepLink.ref), source: null })
     }
     const { message, tone } = deepLinkToast(notice, unknownSkill)
     toast(message, { tone })
@@ -402,7 +408,7 @@ export function NewTaskRoute() {
       ?.focus()
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = async (text: string, images: ImageInput[]) => {
+  const submit = async (text: string, images: AttachmentInput[]) => {
     if (!providersReady || runner === null) {
       throw new Error(
         providers.isPending
@@ -457,21 +463,25 @@ export function NewTaskRoute() {
     // `saveLastTaskSource`) and float it to the top of the picker next time
     // (recency sort) — fire-and-forget: a failed write only costs the convenience.
     void putUiState({
+      // `null` when nothing was picked — an honest record of a plain run, and the value that
+      // stops an older cockpit (which still preselects `lastTask`) restoring a stale skill.
       lastTask: source,
-      recentSources: pushRecentSource(recentSources, source),
+      // Recency is a list of PICKS: a task that chose nothing did not pick quick-task, and
+      // filling the list with the default would push real choices out of it.
+      ...(source ? { recentSources: pushRecentSource(recentSources, source) } : {}),
       ...(followupsToggleShown ? { lastGenerateFollowups: generateFollowupsOn } : {}),
       // Frequency sort (#408): only a SKILL pick counts — the map is keyed by skill name, and a
       // workflow choice here doesn't select one directly. Gated on the CURRENT map being known:
       // the PUT merge is shallow, so bumping off an errored ui-state query (`sourcesReady` only
       // rules out `isPending`, not a failed fetch) would send a one-entry map and wipe every
       // accumulated count.
-      ...(source.source === 'skill' && uiState.data !== undefined
+      ...(source?.source === 'skill' && uiState.data !== undefined
         ? { skillUsage: bumpSkillUsage(uiState.data.skillUsage, source.ref) }
         : {}),
     })
       .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
       .catch(() => {})
-    clearDraftText(draftProjectId)
+    clearStartedDraft(draftProjectId)
     void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
     navigate(startedRunPath(created))
   }
@@ -505,7 +515,7 @@ export function NewTaskRoute() {
           .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
           .catch(() => {})
       }
-      clearDraftText(draftProjectId)
+      clearStartedDraft(draftProjectId)
       setPlan(null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       navigate(startedRunPath(created))
@@ -987,8 +997,23 @@ function ProjectPill({
 
 /**
  * The workflow/skill picker (#385's searchable cmdk dropdown, #519's tier ordering): ONE pill
- * for both kinds of source. Groups render Most used (skills picked before, frequency
- * descending), Project skills (bold), Workflows, then Global.
+ * for both kinds of source — and one that can be EMPTY.
+ *
+ * `null` — no skill, no workflow — is a first-class state rather than a hidden default. It is
+ * what a fresh `/new` opens on, and there are three ways back to it: the ✕ on the pill (one
+ * click, no menu), picking the selected row again (the toggle the GitHub hand-off's workflow
+ * row already had — this picker was the one that swallowed the second click), and the "No
+ * skill" row at the head of the list. Before that the only exit was picking the `quick-task`
+ * WORKFLOW, which reads as a third mode to learn rather than as "none of the above" — the
+ * report this fixes was a user hunting for it.
+ *
+ * `quick-task` is therefore not a row of its own: it IS the run an empty picker performs, and
+ * one run behind two names is what made the exit invisible. The "No skill" row carries the
+ * catalog's own description for it, so a workspace whose file shadows the built-in still
+ * describes what it will actually run.
+ *
+ * Groups render No skill, Most used (skills picked before, frequency descending), Project
+ * skills (bold), Workflows, then Global.
  */
 function SourcePill({
   source,
@@ -998,12 +1023,12 @@ function SourcePill({
   workflows,
   onPick,
 }: {
-  source: TaskSource
+  source: TaskSource | null
   ready: boolean
   skills: readonly Skill[]
   skillUsage: Readonly<Record<string, number>> | undefined
   workflows: readonly WorkflowDef[]
-  onPick: (source: TaskSource) => void
+  onPick: (source: TaskSource | null) => void
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -1013,16 +1038,30 @@ function SourcePill({
   // ranked matches into the #519 display tiers so each group stays match-ordered.
   const matched = searchSkills(skills, search, skillUsage)
   const { mostUsed, project, global } = partitionSkillsForDisplay(matched, skillUsage)
-  const matchedWorkflows = searchWorkflows(workflows, search)
+  const quickTask = workflows.find((workflow) => workflow.name === QUICK_TASK)
+  const matchedWorkflows = searchWorkflows(workflows, search).filter((w) => w.name !== QUICK_TASK)
+  // The empty row answers to what people type when they mean "none of these" — including the
+  // built-in's own name, which is no longer a row of its own. Same match signal as every other
+  // row, so one query ranks the whole list.
+  const noneMatches =
+    queryScore('no skill', `none plain ${QUICK_TASK} ${quickTask?.description ?? ''}`, search) > 0
   const nothingMatches =
-    mostUsed.length === 0 && project.length === 0 && global.length === 0 && matchedWorkflows.length === 0
-  const pick = (next: TaskSource) => {
+    !noneMatches
+    && mostUsed.length === 0
+    && project.length === 0
+    && global.length === 0
+    && matchedWorkflows.length === 0
+  const pick = (next: TaskSource | null) => {
     onPick(next)
     setOpen(false)
   }
+  /** Picking what is already picked CLEARS it — the gesture every other toggle in the cockpit
+   *  answers to, and the one the report asked for by name. */
+  const toggle = (next: TaskSource) =>
+    pick(source?.source === next.source && source.ref === next.ref ? null : next)
 
   const skillItem = (skill: Skill, emphasized: boolean) => {
-    const selected = source.source === 'skill' && source.ref === skill.name
+    const selected = source?.source === 'skill' && source.ref === skill.name
     return (
       <CommandItem
         key={skill.path}
@@ -1032,7 +1071,7 @@ function SourcePill({
         data-slot="source-option"
         data-source-kind="skill"
         data-source-ref={skill.name}
-        onSelect={() => pick({ source: 'skill', ref: skill.name })}
+        onSelect={() => toggle({ source: 'skill', ref: skill.name })}
       >
         <span className={cn('shrink-0 font-mono text-xs', emphasized && 'font-semibold')}>
           {skill.name}
@@ -1063,6 +1102,47 @@ function SourcePill({
     )
   }
 
+  const SourceIcon = source === null ? PlusIcon : source.source === 'skill' ? SparklesIcon : WorkflowIcon
+  // An empty picker looks empty: dashed, quiet, an invitation rather than a value. Every other
+  // pill in this row shows a resolved choice, so a filled-looking pill that nobody chose was
+  // read as one that could not be changed.
+  const trigger = (
+    <button
+      type="button"
+      data-slot="source-pill"
+      data-source-kind={source?.source ?? 'none'}
+      aria-label="Choose a skill or workflow"
+      title={
+        source === null
+          ? 'No skill — the task runs as one plain agent step. Pick a skill or workflow to change that.'
+          : `Runs the ${source.source} "${source.ref}" — pick it again, or press ✕, to run without it`
+      }
+      disabled={!ready}
+      onKeyDown={(event) => {
+        // A filled pill clears like a token in a tag field. Modifiers stay out of it: ⌘⌫ is a
+        // text gesture in the composer this row belongs to, not a picker one.
+        if (source === null || event.metaKey || event.ctrlKey || event.altKey) return
+        if (event.key !== 'Backspace' && event.key !== 'Delete') return
+        event.preventDefault()
+        onPick(null)
+      }}
+      className={cn(
+        chipClass,
+        'font-mono text-[11.5px]',
+        source === null
+          ? 'border-dashed text-soft-foreground'
+          : 'rounded-r-none border-r-0 border-foreground/60 pr-1.5 font-semibold text-foreground',
+      )}
+    >
+      <SourceIcon
+        aria-hidden="true"
+        className={cn('size-3 shrink-0', source === null ? 'text-soft-foreground' : 'text-violet')}
+      />
+      <span className="max-w-44 truncate">{!ready ? '…' : (source?.ref ?? 'Skill')}</span>
+      {chevron}
+    </button>
+  )
+
   return (
     <>
       <SkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />
@@ -1073,23 +1153,26 @@ function SourcePill({
           if (!next) setSearch('')
         }}
       >
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            data-slot="source-pill"
-            aria-label="Choose a skill or workflow"
-            disabled={!ready}
-            className={cn(chipClass, 'border-foreground/60 font-mono text-[11.5px] font-semibold text-foreground')}
-          >
-            {source.source === 'skill' ? (
-              <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
-            ) : (
-              <WorkflowIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
-            )}
-            <span className="max-w-44 truncate">{ready ? source.ref : '…'}</span>
-            {chevron}
-          </button>
-        </PopoverTrigger>
+        {/* Split control, not a button inside a button: the trigger owns the menu, the ✕ owns
+            the clear, and the seam between them is the ✕'s left border. */}
+        <span className="inline-flex items-center">
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          {source !== null && ready ? (
+            <button
+              type="button"
+              data-slot="source-pill-clear"
+              aria-label={`Clear the ${source.source} ${source.ref}`}
+              title="Run without it"
+              onClick={() => onPick(null)}
+              className={cn(
+                chipClass,
+                'rounded-l-none border-foreground/60 pl-1.5 pr-2 text-soft-foreground hover:text-foreground',
+              )}
+            >
+              <XIcon aria-hidden="true" className="size-3" />
+            </button>
+          ) : null}
+        </span>
         <PopoverContent
           align="start"
           sideOffset={8}
@@ -1110,6 +1193,28 @@ function SourcePill({
               className="max-h-[min(18rem,calc(var(--radix-popover-content-available-height)-3rem))]"
             >
               {nothingMatches ? <CommandEmpty>Nothing matches.</CommandEmpty> : null}
+              {/* Heading-less and first: "run it plain" is not a kind of skill, and the way out
+                  of a selection has to be the thing you see when the list opens. */}
+              {noneMatches ? (
+                <CommandGroup>
+                  <CommandItem
+                    value="none no-skill"
+                    keywords={['none', 'plain', ...skillKeywords(QUICK_TASK)]}
+                    data-slot="source-option"
+                    data-source-kind="none"
+                    onSelect={() => pick(null)}
+                  >
+                    <CircleSlashIcon aria-hidden="true" className="size-3.5 shrink-0 text-soft-foreground" />
+                    <span className="shrink-0 text-xs font-medium">No skill</span>
+                    <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
+                      {quickTask?.description ?? 'One agent run on your task — no ceremony.'}
+                    </span>
+                    {source === null ? (
+                      <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary" />
+                    ) : null}
+                  </CommandItem>
+                </CommandGroup>
+              ) : null}
               {/* Most used leads (#519), then Project skills before Global — the closer a
                   skill lives to the repo, the more likely it's the one being picked. */}
               {mostUsed.length > 0 ? (
@@ -1125,7 +1230,7 @@ function SourcePill({
               {matchedWorkflows.length > 0 ? (
                 <CommandGroup heading="Workflows">
                   {matchedWorkflows.map((workflow) => {
-                    const selected = source.source === 'workflow' && source.ref === workflow.name
+                    const selected = source?.source === 'workflow' && source.ref === workflow.name
                     return (
                       <CommandItem
                         key={workflow.name}
@@ -1134,7 +1239,7 @@ function SourcePill({
                         data-slot="source-option"
                         data-source-kind="workflow"
                         data-source-ref={workflow.name}
-                        onSelect={() => pick({ source: 'workflow', ref: workflow.name })}
+                        onSelect={() => toggle({ source: 'workflow', ref: workflow.name })}
                       >
                         <span className="shrink-0 font-mono text-xs">{workflow.name}</span>
                         {workflow.description ? (

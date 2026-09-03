@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { DraftEntry, RunDraftsResponse } from '@open-mercato/cezar-api-client'
-import type { PendingImage } from '@/components/composer/composer-images'
+import type { PendingAttachment } from '@/components/composer/composer-attachments'
 
 import { DRAFT_WRITE_DEBOUNCE_MS, useDraft } from './thread-draft'
 
@@ -298,11 +298,12 @@ describe('useDraft', () => {
   })
 
   describe('attachments', () => {
-    const pasted: PendingImage = {
+    const pasted: PendingAttachment = {
       mediaType: 'image/png',
       data: 'AAA',
       name: 'shot.png',
       preview: 'data:image/png;base64,AAA',
+      isImage: true,
     }
 
     it('uploads on attach and names the stored id in the next write', async () => {
@@ -316,7 +317,7 @@ describe('useDraft', () => {
     })
 
     it('removing a thumbnail deletes its blob, but the clear before a send does not', async () => {
-      const held: PendingImage = { ...pasted, id: 'img1' }
+      const held: PendingAttachment = { ...pasted, id: 'img1' }
       const { result } = renderHook(() => useDraft('r1', 'composer'), { wrapper: wrapper() })
       await waitFor(() => expect(result.current.ready).toBe(true))
       act(() => result.current.setImages([held]))
@@ -346,7 +347,7 @@ describe('useDraft', () => {
       // the text is already empty", a draft that never had text lost the distinction — removing its
       // last thumbnail looked exactly like a send, so the blob was left to the server's orphan
       // sweep and its ten-minute grace window rather than deleted now.
-      const held: PendingImage = { ...pasted, id: 'img1' }
+      const held: PendingAttachment = { ...pasted, id: 'img1' }
       const { result } = renderHook(() => useDraft('r1', 'composer'), { wrapper: wrapper() })
       await waitFor(() => expect(result.current.ready).toBe(true))
       act(() => result.current.setImages([held]))

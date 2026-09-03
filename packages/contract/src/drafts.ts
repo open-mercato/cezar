@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-import { imageInputSchema } from './runs.ts';
+import { attachmentInputSchema } from './runs.ts';
 
 /**
  * Per-run, per-surface DRAFTS — the unsent text (and pasted screenshots) of every editable input
@@ -90,7 +90,7 @@ export type SetRunDraftInput = z.input<typeof setRunDraftInputSchema>;
  * message's (`imageInputSchema`, ≤4 per surface, ~5 MB decoded each). `name` is the composer's
  * thumbnail label; an omitted one degrades to a generic label rather than failing an upload.
  */
-export const draftImageInputSchema = imageInputSchema.extend({
+export const draftImageInputSchema = attachmentInputSchema.extend({
   name: z.string().trim().max(200).default('image'),
 });
 export type DraftImageInput = z.input<typeof draftImageInputSchema>;
