@@ -1188,11 +1188,11 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 });
 
 /**
- * #472 — `persistImage` must work with no `ActiveRun`, because a queued run has
+ * #472 — `persistAttachment` must work with no `ActiveRun`, because a queued run has
  * none. The counter moved to `RunManager.queuedImageSeq`, seeded from the highest
  * numeric suffix on disk rather than the file count.
  */
-describe('RunManager.persistImage without a session (#472)', () => {
+describe('RunManager.persistAttachment without a session (#472)', () => {
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager;
@@ -1205,7 +1205,7 @@ describe('RunManager.persistImage without a session (#472)', () => {
     namePrefix?: string,
   ) => { name: string; url: string; path: string } | null;
   const persist = (id: string, prefix?: string) =>
-    (manager as unknown as { persistImage: PersistFn }).persistImage(id, 'image/png', PNG, prefix);
+    (manager as unknown as { persistAttachment: PersistFn }).persistAttachment(id, 'image/png', PNG, prefix);
   const imagesDir = (id: string) => join(repoRoot, '.ai/cezar', 'runs', `${id}-images`);
 
   beforeEach(() => {
@@ -1683,6 +1683,31 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     ]);
   });
 
+  /**
+   * #950 — the re-read branches on the NAME, not on the list. A `.pdf` sitting in the same
+   * `images` list as a screenshot must come back as a path only: re-encoding it into a base64
+   * image block would compose a message no backend can accept, and would put the whole document
+   * into the prompt on the one path (restart) where nobody is watching.
+   */
+  it('never re-encodes a non-image attachment into an image block on restart', () => {
+    const r = store.createRun({ title: 't', workflow: 'w', task: 'read the brief', steps: [] });
+    const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'pasted-1.png'), 'the-task-bytes');
+    writeFileSync(join(dir, 'pasted-2.pdf'), '%PDF-1.4 the-document-bytes');
+    store.updateRun(r.id, {
+      taskImages: [
+        `/api/v1/runs/${r.id}/images/pasted-1.png`,
+        `/api/v1/runs/${r.id}/images/pasted-2.pdf`,
+      ],
+    });
+
+    const images = hydrate(r.id, r.task).images;
+    expect(images).toHaveLength(1);
+    expect(images?.[0]).toMatchObject({ type: 'image', source: { media_type: 'image/png' } });
+    expect(JSON.stringify(images)).not.toContain(Buffer.from('%PDF-1.4 the-document-bytes').toString('base64'));
+  });
+
   /** Degrade, never fail the boot (AGENTS.md). */
   it('skips an unreadable attachment, notes it, and still starts', () => {
     const r = store.createRun({ title: 't', workflow: 'w', task: 'look at this', steps: [] });
@@ -1692,6 +1717,17 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     expect(hydrated.task).toBe('look at this\n\nsee the mock');
     expect(hydrated.stackedImages).toBeUndefined();
     expect(store.readEvents(r.id).some((e) => e.type === 'note' && String(e.message).includes('gone-1.png'))).toBe(true);
+  });
+
+  /** A file has no bytes to fail on — it is only ever `stat`ed — so it needs its own case: a
+   *  deleted `.md` must be dropped and noted, not handed to the agent as a path to nothing. */
+  it('notes a non-image attachment whose file is gone instead of naming a dead path', () => {
+    const r = store.createRun({ title: 't', workflow: 'w', task: 'read the brief', steps: [] });
+    stack(r.id, { text: 'see the brief', images: [`/api/v1/runs/${r.id}/images/pasted-7.md`] });
+
+    const hydrated = hydrate(r.id, r.task);
+    expect(hydrated.stackedImages).toBeUndefined();
+    expect(store.readEvents(r.id).some((e) => e.type === 'note' && String(e.message).includes('pasted-7.md'))).toBe(true);
   });
 });
 
