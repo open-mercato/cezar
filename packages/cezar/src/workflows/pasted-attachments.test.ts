@@ -18,12 +18,20 @@ const TINY_PNG_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 
 /** The static system-prompt note every agent step gets (#357) — the agent
- *  contract that says "use the on-disk path, the inline image is view-only". */
+ *  contract that says "the on-disk path is the attachment", inline copy or not. */
 describe('HANDOFF_INSTRUCTIONS pasted-attachments note', () => {
   it('tells the agent pasted files are real files with paths, not just inline images', () => {
     expect(HANDOFF_INSTRUCTIONS).toContain('## Pasted attachments');
     expect(HANDOFF_INSTRUCTIONS).toMatch(/saved as real files/);
-    expect(HANDOFF_INSTRUCTIONS).toMatch(/the inline image is for viewing only/);
+  });
+
+  /** The note used to end at "the inline image is for viewing only", which reads as
+   *  "no inline image, no attachment" — the reason agents answered "I can't see your
+   *  screenshot" with the PNG sitting one Read away. */
+  it('tells the agent to open the path instead of reporting it cannot see the attachment', () => {
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/read the file whenever the user refers to a screenshot you cannot see inline/);
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/Never tell the user their attachment did not reach you without opening its path first/);
+    expect(HANDOFF_INSTRUCTIONS).not.toMatch(/the inline image is for viewing only/);
   });
 });
 
@@ -52,8 +60,18 @@ describe('pastedAttachmentsText / pastedAttachmentsNote', () => {
 
   it('tells the agent to operate on the files, not reconstruct them', () => {
     const text = pastedAttachmentsText([{ name: 'pasted-1.png', url: '/api/v1/x', path: '/abs/pasted-1.png' }]);
-    expect(text).toMatch(/operate on these files/);
-    expect(text).toMatch(/do not attempt to reconstruct/);
+    expect(text).toMatch(/Operate on these files/);
+    expect(text).toMatch(/never reconstruct them from the conversation/);
+  });
+
+  /** The note is the ONLY reference to the attachment on every path that loses the
+   *  inline blocks — later workflow steps, codex/opencode's `textOf`, a compacted
+   *  session. Saying only "operate on these files" left an agent that cannot see the
+   *  image with no reason to believe the path would show it one. */
+  it('tells the agent to read a path when no image is visible in the message', () => {
+    const text = pastedAttachmentsText([{ name: 'pasted-1.png', url: '/api/v1/x', path: '/abs/pasted-1.png' }]);
+    expect(text).toMatch(/Read a path above whenever you need to SEE an attachment/);
+    expect(text).toMatch(/the file always survives/);
   });
 
   it('wraps the same text as a trailing text ContentBlock', () => {
@@ -186,6 +204,45 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     const ndjson = readFileSync(join(dataDir, 'runs', `${record.id}.ndjson`), 'utf8');
     expect(ndjson).not.toContain(TINY_PNG_B64);
   }, 30_000);
+
+  /** The base64 blocks are deliberately first-step-only, so on a multi-step workflow the
+   *  path note is all the second step has. Clearing `startAttachments` alongside them left
+   *  step two with no reference to the screenshot at all — the user pasted it, the run said
+   *  "1 screenshot attached", and the step that did the work never heard about it. */
+  it('a second agent step still receives the on-disk path, without the inline image', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'pasted-two-step-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}' },
+        { id: 'review', prompt: 'second step reviewing: {{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const image: ContentBlock = {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
+    };
+    const record = manager.startRun(workflow, {
+      task: 'act on the screenshot in step two',
+      images: [image],
+      worktree: false,
+    });
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+    expect(store.getRun(record.id)?.status, store.getRun(record.id)?.error).toMatch(/^(done|review)$/);
+
+    const lines = readStdinLines();
+    const second = lines.find((line) => line.userText.includes('second step reviewing:'));
+    expect(second).toBeDefined();
+    // No inline copy on a later step — re-sending the bytes to every step is pure cost…
+    expect(second?.imageCount).toBe(0);
+    // …but the path must still be there, or the attachment is invisible to this step.
+    expect(second?.userText).toContain('The user attached 1 pasted file, also saved on disk at:');
+    const pathMatch = second?.userText.match(/- (.*pasted-\d+\.png)/);
+    expect(pathMatch).toBeTruthy();
+    expect(existsSync(pathMatch?.[1] as string)).toBe(true);
+  }, 40_000);
 
   it('a follow-up pasted image is saved and its path is appended to the delivered message', async () => {
     writeFileSync(stdinFile, '', 'utf8');

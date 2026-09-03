@@ -289,8 +289,13 @@ export function Composer({
   )
 
   const onPaste = (event: ClipboardEvent) => {
+    // Take every FILE item and let `screenFiles` be the single judge of what is an image.
+    // Filtering on `item.type` here re-screened the dominant paste path against a narrower
+    // rule than the drop path, and a clipboard file the OS could not type vanished with no
+    // thumbnail and no toast. Text items are `kind: 'string'`, so a plain paste still yields
+    // zero files and falls through to the textarea untouched.
     const files = [...(event.clipboardData?.items ?? [])]
-      .filter((item) => item.type.startsWith('image/'))
+      .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null)
     if (files.length === 0) return

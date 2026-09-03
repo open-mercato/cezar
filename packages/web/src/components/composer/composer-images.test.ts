@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { fileToPendingImage, MAX_IMAGE_BYTES, screenFiles } from './composer-images'
+import { fileToPendingImage, imageMediaType, MAX_IMAGE_BYTES, screenFiles } from './composer-images'
 
 /** screenFiles reads only `type`, `size`, `name` — a structural stand-in keeps the 5MB cases
  *  from allocating 5MB buffers. */
@@ -53,6 +53,53 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
     const intake = screenFiles([fakeFile({ name: '', size: MAX_IMAGE_BYTES + 1 })], 0)
     expect(intake.rejected).toEqual(['image is too large (max 5 MB)'])
   })
+
+  /** A file the browser could not type at all is NOT the "dropped text file" case: the
+   *  user deliberately attached it and expects a thumbnail. Silently skipping it is
+   *  indistinguishable from the paste never registering. */
+  it('accepts a typeless file whose extension names a supported image', () => {
+    const intake = screenFiles([fakeFile({ type: '', name: 'Screenshot 2026-08-23.png' })], 0)
+    expect(intake.accepted).toHaveLength(1)
+    expect(intake.rejected).toEqual([])
+  })
+
+  it('names a typeless file it cannot recognize instead of dropping it silently', () => {
+    const intake = screenFiles([fakeFile({ type: '', name: 'archive.tar.gz' })], 0)
+    expect(intake.accepted).toEqual([])
+    expect(intake.rejected).toEqual(['archive.tar.gz skipped — not a recognized image'])
+  })
+
+  it('a typed non-image stays silent — the drop-a-text-file case is unchanged', () => {
+    expect(screenFiles([fakeFile({ type: 'text/plain', name: 'notes.txt' })], 0).rejected).toEqual([])
+  })
+})
+
+describe('imageMediaType', () => {
+  it('trusts the browser when it typed the file', () => {
+    expect(imageMediaType(fakeFile({ type: 'image/webp', name: 'x.png' }))).toBe('image/webp')
+  })
+
+  it('infers from the extension only when there is no type at all', () => {
+    expect(imageMediaType(fakeFile({ type: '', name: 'shot.JPG' }))).toBe('image/jpeg')
+    expect(imageMediaType(fakeFile({ type: '', name: 'anim.gif' }))).toBe('image/gif')
+    expect(imageMediaType(fakeFile({ type: '', name: 'noextension' }))).toBeNull()
+  })
+
+  /** SVG and friends are image types the model cannot decode; a wrong guess would be
+   *  a rejected API request rather than a rendered attachment. */
+  it('does not invent a type for image extensions the backends cannot render', () => {
+    expect(imageMediaType(fakeFile({ type: '', name: 'diagram.svg' }))).toBeNull()
+  })
+
+  it('rejects a typed non-image outright', () => {
+    expect(imageMediaType(fakeFile({ type: 'application/pdf', name: 'doc.pdf' }))).toBeNull()
+  })
+
+  /** The extension is user-supplied, so the lookup must not answer off a prototype. */
+  it('does not resolve an extension that only exists on Object.prototype', () => {
+    expect(imageMediaType(fakeFile({ type: '', name: 'payload.constructor' }))).toBeNull()
+    expect(imageMediaType(fakeFile({ type: '', name: 'payload.toString' }))).toBeNull()
+  })
 })
 
 describe('fileToPendingImage', () => {
@@ -62,6 +109,13 @@ describe('fileToPendingImage', () => {
     expect(image.mediaType).toBe('image/png')
     expect(image.name).toBe('tiny.png')
     expect(image.data).toBe(btoa(String.fromCharCode(137, 80, 78, 71)))
+    expect(image.preview).toBe(`data:image/png;base64,${image.data}`)
+  })
+
+  it('sends the inferred type for a file the browser left untyped', async () => {
+    const file = new File([new Uint8Array([137, 80])], 'shot.png', { type: '' })
+    const image = await fileToPendingImage(file)
+    expect(image.mediaType).toBe('image/png')
     expect(image.preview).toBe(`data:image/png;base64,${image.data}`)
   })
 })

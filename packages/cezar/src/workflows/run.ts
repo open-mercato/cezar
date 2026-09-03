@@ -424,15 +424,23 @@ export interface PersistedAttachment {
  * the message for the model to *view*; this note is what lets it *use* the
  * files as files — and the only usable reference on backends (codex,
  * opencode) whose `textOf()` drops image blocks before reaching the model.
+ *
+ * It must therefore say that reading the file is how you SEE the attachment,
+ * not only how you move it around: the blocks ride the first agent step only,
+ * two of the three backends drop them outright, and a compacted session loses
+ * them. An agent told merely to "operate on these files" reports that it
+ * cannot see the screenshot while the screenshot sits on disk beside it.
  */
 export function pastedAttachmentsText(attachments: PersistedAttachment[]): string {
   const list = attachments.map((a) => `- ${a.path}`).join('\n');
   return (
     `The user attached ${attachments.length} pasted file${attachments.length > 1 ? 's' : ''}, ` +
     `also saved on disk at:\n${list}\n` +
-    `When the task involves saving, uploading, attaching, or transforming the pasted content ` +
-    `(e.g. attaching to a GitHub issue/PR, copying into the repo), operate on these files — do ` +
-    `not attempt to reconstruct them from the conversation.`
+    `Read a path above whenever you need to SEE an attachment and no image is visible in this ` +
+    `message — the inline copy is dropped by later workflow steps, by some backends and by ` +
+    `context compaction, but the file always survives. Operate on these files for anything that ` +
+    `saves, uploads, attaches or transforms the pasted content (e.g. attaching to a GitHub ` +
+    `issue/PR, copying into the repo), and never reconstruct them from the conversation.`
   );
 }
 
@@ -2657,7 +2665,7 @@ export class RunManager {
     // `startRun` already persisted task images so a queued bubble can render them
     // (#612). Reuse those files for the agent-facing path note instead of minting
     // duplicate pasted files when execution finally begins.
-    let startAttachments: PersistedAttachment[] = (this.store.getRun(runId)?.taskImages ?? [])
+    const startAttachments: PersistedAttachment[] = (this.store.getRun(runId)?.taskImages ?? [])
       .map((url): PersistedAttachment | null => {
         const name = url.split('/').pop();
         if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) return null;
@@ -2665,11 +2673,13 @@ export class RunManager {
         return existsSync(path) ? { name, url, path } : null;
       })
       .filter((saved): saved is PersistedAttachment => saved !== null);
-    // Task screenshots go with the FIRST agent step's opening message only —
-    // later steps and retry loops run in fresh sessions without them. Stacked
-    // attachments (#472) ride along too, but are NOT re-persisted above: they
-    // already live on disk, and adding them to `taskImages` would both duplicate
-    // the files and make the task bubble claim the stack's images as its own.
+    // The base64 blocks go with the FIRST agent step's opening message only —
+    // later steps and retry loops run in fresh sessions, and re-sending them is
+    // pure token cost. `startAttachments` above is the part that must NOT stop
+    // there: every later step still gets the on-disk paths. Stacked attachments
+    // (#472) ride along too, but are NOT re-persisted above: they already live
+    // on disk, and adding them to `taskImages` would both duplicate the files
+    // and make the task bubble claim the stack's images as its own.
     let startImages =
       input.stackedImages?.length ? [...(input.images ?? []), ...input.stackedImages] : input.images;
 
@@ -2711,8 +2721,11 @@ export class RunManager {
           chainStepNote(workflow.steps, i),
           startAttachments,
         );
+        // The base64 blocks are first-step-only: re-sending megabytes of image
+        // to every later step and every retry buys nothing the path note does
+        // not. The PATHS keep riding along, because from here on they are the
+        // only reference the agent has to the user's screenshot.
         startImages = undefined;
-        startAttachments = [];
         checkFailure = null;
         if (state.cancelled) break;
         if (failure) {
@@ -2846,11 +2859,12 @@ export class RunManager {
         stepId: step.id,
         message: `${images.length} screenshot${images.length > 1 ? 's' : ''} attached to the task`,
       });
-      // Point the agent at the on-disk files for the pasted subset (#357) — the
-      // base64 blocks above still let it *view* the images; this is what lets it
-      // *use* them as files (save, attach to an issue/PR, copy into the repo).
-      if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
     }
+    // Point the agent at the on-disk files for the pasted subset (#357). NOT gated
+    // on `images`: the blocks stop after the first agent step, so from step two
+    // onward — and on every retry — this note is the only thing that still tells
+    // the agent the screenshot exists, and where to read it.
+    if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
 
     const sessionId = randomUUID();
     const backend = step.runner ?? taskBackend;
