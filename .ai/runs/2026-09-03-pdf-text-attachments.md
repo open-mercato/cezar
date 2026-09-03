@@ -128,12 +128,12 @@ Everything a non-image attachment touches on its way from the file picker to the
 
 ### Phase 3: Cockpit intake
 
-- [ ] 3.1 Composer intake accepts PDF/TXT/MD and refuses the rest out loud
-- [ ] 3.2 Paperclip, paste, drop and the attachment row take both kinds
+- [x] 3.1 Composer intake accepts PDF/TXT/MD and refuses the rest out loud — cbe43a2e
+- [x] 3.2 Paperclip, paste, drop and the attachment row take both kinds — cbe43a2e
 
 ### Phase 4: Cockpit rendering
 
-- [ ] 4.1 Thread bubbles render a non-image attachment as a chip
+- [x] 4.1 Thread bubbles render a non-image attachment as a chip — cbe43a2e
 
 ### Phase 5: Docs and gate
 
