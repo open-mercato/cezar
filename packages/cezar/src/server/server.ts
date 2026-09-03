@@ -683,11 +683,15 @@ const appearanceSchema = z.object({
 
 const uiStateSchema = z
   .object({
+    // `null` clears the recorded choice — the composer's "no skill, no workflow" state,
+    // which is a plain quick-task run. Written through to the file like any other value, so an
+    // older cockpit reading it falls back to its own default instead of restoring a stale skill.
     lastTask: z
       .object({
         source: z.enum(['workflow', 'skill']),
         ref: z.string().min(1).max(200),
       })
+      .nullable()
       .optional(),
     // Composer picker recency (newest first, capped) + the remembered worktree
     // choice for single-skill runs. Additive prefs, like the rest of ui-state.
@@ -824,9 +828,9 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 }
 
 // "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
-// the last session on the run's current backend (backward compat). A runner/model override lets
-// the follow-up composer choose which engine handles the continuation. `text` stays bounded like
-// the live-session message `text` (#429), and `images` like a live-session message's — the
+// the last session on the run's current backend (backward compat). A runner/model/account override
+// lets the follow-up composer choose which engine handles the continuation. `text` stays bounded
+// like the live-session message `text` (#429), and `images` like a live-session message's — the
 // follow-up composer is a full composer, so a screenshot pasted into it must reach the reopened
 // session rather than being silently dropped.
 const continueSchema = z.object({
@@ -834,6 +838,9 @@ const continueSchema = z.object({
   images: z.array(imageInputSchema).max(4).optional(),
   runner: z.enum(RUNNER_IDS).optional(),
   model: z.string().max(200).optional(),
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
+   *  `POST /runs`' own `agentProfile`. Omitted = keep the account the run is already on. */
+  agentProfile: z.string().max(64).optional(),
 });
 
 // Inbox "▶ Run" body (spec 007 / #401 / #413): every field optional, and the whole body is
@@ -3825,6 +3832,15 @@ export function createApp(deps: ServerDeps) {
       }
       const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
       if (blocked) return c.json({ error: blocked }, 409);
+      // The follow-up pill names an account the user just picked, so an id that has been deleted
+      // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
+      // USER can act on "unknown account", and reopening the session on another login silently
+      // would cross the very billing boundary accounts exist to draw.
+      if (parsed.data.agentProfile !== undefined) {
+        const provider = providerForExistingRun(run, parsed.data.runner);
+        const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
+        if ('error' in account) return c.json({ error: account.error }, 400);
+      }
       const result = manager.continueRun(id, {
         text: parsed.data.text,
         images: parsed.data.images?.map((img): ContentBlock => ({
@@ -3833,6 +3849,7 @@ export function createApp(deps: ServerDeps) {
         })),
         runner: parsed.data.runner,
         model: parsed.data.model,
+        agentProfile: parsed.data.agentProfile,
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ continued: true });
@@ -4155,13 +4172,19 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs/:id/git/push', async (c) => {
-      const { store } = c.get('project');
+      const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const result = await pushCurrentBranch(worktree);
       if (!result.ok) return c.json({ error: result.error }, 409);
+      // A push is the event that changes what the chips say about this task's pull requests —
+      // its checks start again, and its MERGEABILITY is recomputed from scratch. Both are cached
+      // per number, so without this the cockpit would keep showing the pre-push answer (up to a
+      // minute of "Ready to merge" for a branch that has just been rewritten) about a push the
+      // user watched this server make.
+      for (const number of runPrNumbers(run)) forgetRefStatus(repoRoot, number);
       return c.json({
         pushed: true,
         branch: result.branch,
@@ -4381,6 +4404,20 @@ export function createApp(deps: ServerDeps) {
       ? repoRoot
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
+
+  /** Every pull request number this run points at — the one it created and the one it is about
+   *  (#901), from whichever field carries it. Used to invalidate what the forge told us about
+   *  them when this server does something that changes the answer. Deliberately tolerant: an
+   *  unrecognized URL shape yields nothing rather than a guessed number. */
+  const runPrNumbers = (run: RunRecord): number[] => {
+    const numbers = [
+      run.prNumber,
+      ...[run.pullRequestUrl, run.referencedPullRequestUrl].map((url) =>
+        url ? refNumberFromUrl(url) : null,
+      ),
+    ];
+    return [...new Set(numbers.filter((n): n is number => typeof n === 'number'))];
+  };
 
   // ---- chained family: worktrees (project-scoped) ----
   const worktreesRoutes = new Hono<ProjectApiEnv>()

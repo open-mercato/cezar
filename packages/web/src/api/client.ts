@@ -505,6 +505,24 @@ export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
   )
 }
 
+/**
+ * The same read by EXPLICIT project — the twin of `getRun`, for the reason `archiveProjectRun`
+ * spells out: the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would
+ * name the BOOT project for a row that belongs to another one. It is also the only way that page
+ * can learn a run's steps: its own index ships a deliberately slim entry (no `steps`, no
+ * `runner`), and whether a finished task can be reopened is a question only the full record
+ * answers.
+ */
+export async function getProjectRun(projectId: string, id: string, opts?: ReadOptions): Promise<ApiRun> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$get(
+      { param: { projectId, id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id),
+  )
+}
+
 /** One reverse-paged history page. Validated (not merely cast) because `useRunHistory` iterates
  *  `events`: see `unwrapValidated`. */
 export async function getRunHistory(
@@ -1224,15 +1242,18 @@ export async function finishRun(id: string): Promise<FinishResponse> {
   )
 }
 
-/** The follow-up composer's optional overrides for a Continue (#401): pick which backend and
- *  model handle the reopened session. Omitted fields keep the run's current backend/model.
- *  `text`/`images` are the prompt the reopened session starts on — omitted, the engine opens
- *  with its plain "Continue.". */
+/** The follow-up composer's optional overrides for a Continue (#401): pick which backend, model
+ *  and agent account handle the reopened session. Omitted fields keep the run's current
+ *  backend/model/account. `text`/`images` are the prompt the reopened session starts on — omitted,
+ *  the engine opens with its plain "Continue.". */
 export interface ContinueOptions {
   text?: string
   images?: ImageInput[]
   runner?: Runner
   model?: string
+  /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
+   *  starts a fresh session server-side — a session id lives inside ONE account's config dir. */
+  agentProfile?: string
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1244,11 +1265,33 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.images !== undefined ? { images: opts.images } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
       json: body,
+    }),
+    runPath(id, '/continue'),
+  )
+}
+
+/** The same reopen by EXPLICIT project — see `archiveProjectRun`. */
+export async function continueProjectRun(
+  projectId: string,
+  id: string,
+  opts: ContinueOptions = {},
+): Promise<ContinueResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: {
+        ...(opts.text !== undefined ? { text: opts.text } : {}),
+        ...(opts.images !== undefined ? { images: opts.images } : {}),
+        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
+      },
     }),
     runPath(id, '/continue'),
   )
@@ -1441,6 +1484,22 @@ export async function sendMessage(id: string, message: MessageInput): Promise<Me
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { text: message.text ?? '', images: message.images ?? [] },
+    }),
+    runPath(id, '/messages'),
+  )
+}
+
+/** The same delivery by EXPLICIT project — see `archiveProjectRun`. What lets a chip on the
+ *  global Tasks page speak to a run in a project this page is not standing in. */
+export async function sendProjectRunMessage(
+  projectId: string,
+  id: string,
+  message: MessageInput,
+): Promise<MessageResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+      param: { projectId, id: encodeURIComponent(id) },
       json: { text: message.text ?? '', images: message.images ?? [] },
     }),
     runPath(id, '/messages'),

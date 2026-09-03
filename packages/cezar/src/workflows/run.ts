@@ -51,6 +51,7 @@ import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
@@ -1973,7 +1974,15 @@ export class RunManager {
    */
   continueRun(
     runId: string,
-    opts: { text?: string; images?: ContentBlock[]; runner?: RunnerId; model?: string } = {},
+    opts: {
+      text?: string;
+      images?: ContentBlock[];
+      runner?: RunnerId;
+      model?: string;
+      /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
+       *  account the run is already on. */
+      agentProfile?: string;
+    } = {},
     /** Restart recovery may discover several interrupted tasks at once. Those
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
@@ -1995,15 +2004,23 @@ export class RunManager {
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
     const sessionBackend = sessionStep.backend ?? run.runner ?? 'claude';
-    const resume = sessionBackend === targetRunner;
+    // A session id only resolves inside the config dir that created it (spec
+    // 2026-07-29-agent-profiles), so switching ACCOUNT ends the session exactly like switching
+    // backend does: `claude --resume <id>` under another login finds nothing and would silently
+    // open a fresh conversation while the thread claimed it had resumed. A step that recorded no
+    // account predates the feature and therefore ran under the discovered one.
+    const sessionAccount = sessionStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
+    const accountSwitched = opts.agentProfile !== undefined && opts.agentProfile !== sessionAccount;
+    const resume = sessionBackend === targetRunner && !accountSwitched;
 
-    // Follow-up runner/model override (#401): the composer lets the user pick which backend and
-    // model handle this continuation. Omitted → the run's current backend/model is kept
+    // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
+    // lets the user pick which backend, model and login handle this continuation — the same flat
+    // pill the /new composer offers. Omitted → the run's current backend/model/account is kept
     // (backward compat). A provided choice is persisted BEFORE scheduling, so it becomes the
     // run's current backend — `runContinuation` reads it off the record, later continuations
     // default to it, and the header reflects the active engine. An empty model ('') clears the
     // pin, letting the runner pick the model (auto).
-    if (opts.runner !== undefined || opts.model !== undefined) {
+    if (opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined) {
       // Guard the pairing before persisting anything: the model override applies to the runner
       // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
       // same resolution `runContinuation` reads off the record). A model that is recognizably
@@ -2021,12 +2038,27 @@ export class RunManager {
         opts.model === undefined &&
         run.model !== undefined &&
         modelConflictsWithRunner(run.model, targetRunner);
+      // An account belongs to ONE agent, so a runner switch that names no account must not leave
+      // the previous backend's login on the record. It is inert immediately (resolution applies
+      // the run's account only to steps on the run's own runner) and wrong later, when a further
+      // continuation switches back and inherits a login the user picked for a different task.
+      const inheritedAccountIsForeign =
+        opts.agentProfile === undefined &&
+        run.agentProfile !== undefined &&
+        targetRunner !== (run.runner ?? 'claude');
       this.store.updateRun(runId, {
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined
           ? { model: opts.model === '' ? undefined : opts.model }
           : inheritedPinIsForeign
             ? { model: undefined }
+            : {}),
+        // Persisted BEFORE scheduling, like the runner/model pair: `runContinuation` resolves the
+        // account off the record, and every later continuation then defaults to it.
+        ...(opts.agentProfile !== undefined
+          ? { agentProfile: opts.agentProfile }
+          : inheritedAccountIsForeign
+            ? { agentProfile: undefined }
             : {}),
       });
     }
@@ -2344,9 +2376,26 @@ export class RunManager {
     // Resuming reattaches to a session that lives inside ONE account's config dir, so the
     // continuation must run under the account that created it — not whatever the project has
     // been switched to since. The owning step is the one carrying this session id.
-    const resumedProfileId = sessionId === undefined
+    const owningStep = sessionId === undefined
       ? undefined
-      : record?.steps.find((s) => s.sessionId === sessionId)?.profileId;
+      : record?.steps.find((s) => s.sessionId === sessionId);
+    const resumedProfileId = owningStep?.profileId;
+    // The owning step also names the session's tools: resolve `allowedTools`/`bashAllowlist`
+    // from the persisted `workflowDef` exactly as the first spawn did (`runAgentStep`).
+    // Rebuilding with the bare DEFAULT_ALLOWED_TOOLS silently revoked every per-step grant
+    // (MCP servers, subagents) on Continue, restart recovery and the usage-limit auto-resume
+    // — and dropping `bashAllowlist` WIDENED Bash from an allowlist to unrestricted
+    // (`AgentRunSpec.allowedTools`, #430). Record steps share ids with `workflowDef.steps`;
+    // a synthetic `continue-N` owner and a fresh-session continuation (backend switch — no
+    // owning session) both extend the run's tail, so they resolve from the definition's last
+    // agent step. A legacy record without `workflowDef` (#367), or a session no step owns,
+    // keeps today's defaults.
+    const defSteps = record?.workflowDef?.steps;
+    const toolsStep =
+      defSteps === undefined || (sessionId !== undefined && owningStep === undefined)
+        ? undefined
+        : defSteps.find((s) => s.id === owningStep?.id)
+          ?? [...defSteps].reverse().find((s) => stepKind(s) === 'agent');
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
     // returns nothing is worse than a turn that refuses to start and says why.
@@ -2385,7 +2434,8 @@ export class RunManager {
           : openingPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
-        allowedTools: DEFAULT_ALLOWED_TOOLS,
+        allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+        bashAllowlist: toolsStep?.bashAllowlist,
         additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
         env: continueProfile.env,
         model: continueModel,

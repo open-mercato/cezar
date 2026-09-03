@@ -56,9 +56,15 @@ function FilesView({ run }: { run: ApiRun }) {
           subtitle={root.error.message}
         />
       ) : (
-        <div className="flex min-h-0 flex-1 flex-col items-stretch gap-5 px-4 py-4 md:flex-row md:items-start md:px-6">
-          {/* Sticky beside a long preview on desktop; first in the stack on phones. */}
-          <aside className="w-full shrink-0 md:sticky md:top-28 md:w-60 lg:w-72">
+        <div className="flex min-h-0 flex-1 flex-col items-stretch gap-5 px-4 py-4 [--diff-sticky-top:7rem] md:flex-row md:items-start md:px-6">
+          {/* Sticky beside a long preview on desktop, with its own scroller so a deep tree scrolls
+              without dragging the preview along; first in the stack (and no scroller of its own) on
+              phones, where the page IS the pane. The cap reads the same var the pin is set from, so
+              the two cannot drift when this tab's chrome height changes. */}
+          <aside
+            data-slot="files-tree-pane"
+            className="w-full shrink-0 md:sticky md:top-[var(--diff-sticky-top)] md:max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] md:w-60 md:overflow-y-auto md:overscroll-contain lg:w-72"
+          >
             <FilesTree runId={run.id} selected={selected} onSelect={setSelected} />
           </aside>
           <FilePreview runId={run.id} path={selected} className="min-w-0 flex-1" />

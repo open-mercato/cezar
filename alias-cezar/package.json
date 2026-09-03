@@ -1,6 +1,6 @@
 {
   "name": "cezar-cli",
-  "version": "0.9.2",
+  "version": "0.10.0",
   "description": "Alias for @open-mercato/cezar — so `npx cezar-cli` just works. Local cockpit for running and tracking AI agent tasks in your repo.",
   "license": "MIT",
   "type": "module",
@@ -10,7 +10,7 @@
     "cez": "bin.js"
   },
   "dependencies": {
-    "@open-mercato/cezar": "^0.8.0"
+    "@open-mercato/cezar": "^0.10.0"
   },
   "publishConfig": {
     "access": "public"

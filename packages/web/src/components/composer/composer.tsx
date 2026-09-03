@@ -23,6 +23,7 @@ import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import { insertTemplate } from '@/lib/prompt-templates'
+import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { bumpSkillUsage, filterSkills, fuzzyMatch, isProjectSkill } from '@/lib/skills'
 import { useNow } from '@/lib/use-now'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
@@ -391,6 +392,14 @@ export function Composer({
     if (!quickReplies || disabled) return
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!event.altKey || event.metaKey || event.ctrlKey || event.repeat) return
+      // Alt is a TEXT modifier on macOS: ⌥ composes characters, so ⌥C types `ć` on a Polish
+      // layout (`ç` on a US one) and ⌥A types `ą`/`å` — same `event.code`, and this handler
+      // matches the code, not the character. Typed into the composer that fired "Continue." at
+      // the agent and swallowed the letter with `preventDefault`. Same rule the ⌘K family
+      // already follows (`shouldTriggerKeyShortcut`): a focused editable means someone is
+      // typing, and typing always wins. The accelerator still works everywhere else — the
+      // thread composer is not autofocused, which is when these replies are reached for.
+      if (isEditableTarget(event.target)) return
       const reply = QUICK_REPLIES[event.code]
       if (reply === undefined) return
       event.preventDefault()

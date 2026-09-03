@@ -33,7 +33,7 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
-import { ReferenceChip } from '@/components/reference-chip'
+import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
@@ -630,7 +630,7 @@ function TaskTableCell({
     case 'reference':
       return (
         <td data-column-id={column.id} className={TD_BASE}>
-          {reference ? <ReferenceChip reference={reference} taskTitle={runTitle(run)} /> : <Dash />}
+          {reference ? <TaskReferenceChip run={run} reference={reference} /> : <Dash />}
         </td>
       )
     case 'tokens':
@@ -882,7 +882,7 @@ function TaskCard({
           </>
         )}
         {reference ? (
-          <ReferenceChip reference={reference} taskTitle={runTitle(run)} className="h-5" />
+          <TaskReferenceChip run={run} reference={reference} className="h-5" />
         ) : null}
       </div>
     </div>

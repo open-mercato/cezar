@@ -1353,6 +1353,10 @@ export type GithubRefStatusData =
       available: true;
       prs: Record<number, ReferenceStatus>;
       issues: Record<number, ReferenceStatus>;
+      /** The OPEN pull requests among them that do not merge into their base — the second axis,
+       *  never folded into a status. Optional on the wire, and absent means "nothing is known"
+       *  rather than "no conflicts"; see `conflicts` in the contract. */
+      conflicts?: number[];
       /** When to ask again, or `null` when nothing here can change. See `recheckAfterMs` in the
        *  contract for why the SERVER answers this. */
       recheckAfterMs: number | null;
@@ -1365,17 +1369,45 @@ export type GithubRefStatusData =
  *  client that guessed high would have every chip in a batch 400 instead of losing its tail. */
 export const GH_REF_STATUS_MAX = REFERENCE_STATUS_MAX;
 
+/** A requested reviewer, as either connection spells them. `login` covers `User` and `Bot`, `slug`
+ *  covers `Team`; `reviewerKey` folds them into one comparable string. */
+const reviewerRefSchema = z
+  .object({
+    __typename: z.string().nullish(),
+    login: z.string().nullish(),
+    slug: z.string().nullish(),
+  })
+  .nullish();
+
+/** One reviewer as a comparable key, or `null` when GitHub named nobody we can match on — which
+ *  must never compare equal to another unnamed reviewer, hence `null` rather than a shared "". */
+function reviewerKey(ref: z.infer<typeof reviewerRefSchema>): string | null {
+  const name = ref?.login ?? ref?.slug;
+  return name ? `${ref?.__typename ?? '?'}:${name}` : null;
+}
+
 const ghRefStatusPrSchema = z
   .object({
     state: z.string(),
     isDraft: z.boolean().nullish(),
     reviewDecision: z.string().nullish(),
+    /** `MERGEABLE` | `CONFLICTING` | `UNKNOWN` — GitHub computes it in the background, so
+     *  `UNKNOWN` is normal on a PR that was just pushed and must never read as "clean". */
+    mergeable: z.string().nullish(),
     commits: z
       .object({
         nodes: z.array(
           z.object({
             commit: z.object({
               committedDate: z.string().nullish(),
+              /** `totalCount` says whether the head is a merge; the first parent is the branch's
+               *  previous tip, which is the newest commit that is actual WORK when it is. */
+              parents: z
+                .object({
+                  totalCount: z.number(),
+                  nodes: z.array(z.object({ committedDate: z.string().nullish() }).nullish()).nullish(),
+                })
+                .nullish(),
               statusCheckRollup: z.object({ state: z.string().nullish() }).nullish(),
             }),
           }),
@@ -1383,9 +1415,58 @@ const ghRefStatusPrSchema = z
       })
       .nullish(),
     reviews: z.object({ nodes: z.array(z.object({ submittedAt: z.string().nullish() })) }).nullish(),
-    reviewRequests: z.object({ totalCount: z.number() }).nullish(),
+    /** Who is on the hook RIGHT NOW. The reviewers are carried, not just the count, because a
+     *  request's date has to be matched to a request that still stands — see `reviewRequestedAt`. */
+    reviewRequests: z
+      .object({
+        totalCount: z.number(),
+        nodes: z.array(z.object({ requestedReviewer: reviewerRefSchema }).nullish()).nullish(),
+      })
+      .nullish(),
+    timelineItems: z
+      .object({
+        nodes: z
+          .array(z.object({ createdAt: z.string().nullish(), requestedReviewer: reviewerRefSchema }).nullish())
+          .nullish(),
+      })
+      .nullish(),
   })
   .nullish();
+
+type GhRefStatusPr = NonNullable<z.infer<typeof ghRefStatusPrSchema>>;
+
+/**
+ * When was the newest STILL-STANDING review request made?
+ *
+ * The two connections answer different halves and neither answers both: `reviewRequests` says who
+ * is on the hook right now but carries no date, while a `ReviewRequestedEvent` carries the date and
+ * survives the request being withdrawn. Reading the newest event on its own therefore dates a
+ * request that may no longer exist — and a request added after a review and then removed would make
+ * a live rejection read as answered, which is the exact bug the precedence above exists to fix.
+ * Matching the two by reviewer is what keeps the date attached to a request that is really there.
+ *
+ * `null` when nothing matches, which the precedence reads as an undated request and treats
+ * conservatively: the review stands rather than being dismissed on a guess.
+ */
+function standingReviewRequestedAt(
+  requests: GhRefStatusPr['reviewRequests'],
+  timeline: GhRefStatusPr['timelineItems'],
+): string | null {
+  const standing = new Set<string>();
+  for (const node of requests?.nodes ?? []) {
+    const key = reviewerKey(node?.requestedReviewer);
+    if (key) standing.add(key);
+  }
+  if (standing.size === 0) return null;
+  let newest: string | null = null;
+  for (const node of timeline?.nodes ?? []) {
+    if (!node?.createdAt) continue;
+    const key = reviewerKey(node.requestedReviewer);
+    if (!key || !standing.has(key)) continue;
+    if (!newest || isAfter(node.createdAt, newest)) newest = node.createdAt;
+  }
+  return newest;
+}
 
 const ghRefStatusIssueSchema = z.object({ state: z.string(), stateReason: z.string().nullish() }).nullish();
 
@@ -1409,15 +1490,23 @@ const ghRefStatusSchema = z.record(z.string(), z.unknown());
  * from which field carried the number, and a bare `#774` can land in either — because the answer
  * carries `__typename` and is filed under what the number REALLY is.
  *
- * `committedDate` and the last CHANGES_REQUESTED review's `submittedAt` cost nothing extra, riding
- * the same node, and are what let the precedence tell a review the author has already responded to
- * from one still about the code on screen.
+ * `committedDate`, the head commit's `parents.totalCount` (`first: 0` — the COUNT is the whole
+ * question, so no parent is fetched) and the last CHANGES_REQUESTED review's `submittedAt` cost
+ * nothing extra, riding the same node, and are what let the precedence tell a review the author has
+ * already responded to from one still about the code on screen. The last `ReviewRequestedEvent` is
+ * asked for the same reason: `reviewRequests` says only THAT someone is on the hook, never since
+ * when, and the difference between a request made before the review and one made after it is the
+ * difference between a reviewer who has not looked yet and an author who has answered.
+ *
+ * `mergeable` rides it too, and is the reason the batch can answer "this one conflicts" without
+ * the per-PR probe `prMergeState` runs for the merge box. It is NOT folded into the status: see
+ * `conflicts` in the contract for why the two stay separate axes.
  */
 function refStatusQuery(numbers: number[]): string {
   const aliases = numbers
     .map(
       (n, i) =>
-        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision commits(last: 1) { nodes { commit { committedDate statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 1) { totalCount } } ... on Issue { state stateReason } }`,
+        `    r${i}: issueOrPullRequest(number: ${n}) { __typename ... on PullRequest { state isDraft reviewDecision mergeable commits(last: 1) { nodes { commit { committedDate parents(first: 1) { totalCount nodes { committedDate } } statusCheckRollup { state } } } } reviews(last: 1, states: CHANGES_REQUESTED) { nodes { submittedAt } } reviewRequests(first: 20) { totalCount nodes { requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } timelineItems(last: 20, itemTypes: [REVIEW_REQUESTED_EVENT]) { nodes { ... on ReviewRequestedEvent { createdAt requestedReviewer { __typename ... on User { login } ... on Bot { login } ... on Team { slug } } } } } } ... on Issue { state stateReason } }`,
     )
     .join('\n');
   return `query ($owner: String!, $name: String!) {\n  repository(owner: $owner, name: $name) {\n${aliases}\n  }\n}`;
@@ -1447,11 +1536,20 @@ function refStatusQuery(numbers: number[]): string {
  * reviewer submits again — so on its own it points at the author forever. Two signals say the ball
  * has moved back:
  *
- *  - **a pending review request** (`reviewRequests.totalCount`), which is the author clicking
- *    re-request. Authoritative, and observed live alongside a stale `CHANGES_REQUESTED` and an
- *    EMPTY `latestReviews` — the case that has no other tell.
- *  - **a commit newer than the review**, the fallback for an author who pushed without clicking
- *    anything.
+ *  - **a review request made AFTER the review**, which is the author clicking re-request.
+ *    Authoritative, and observed live alongside a stale `CHANGES_REQUESTED` and an EMPTY
+ *    `latestReviews` — the case that has no other tell.
+ *  - **a non-merge commit newer than the review**, the fallback for an author who pushed without
+ *    clicking anything. Merges are excluded because GitHub's "Update branch" button writes one,
+ *    dated now, that answers nothing — the reflexive click on a stale PR must not clear a
+ *    rejection.
+ *
+ * The "after" in the first one is load-bearing, and its absence was a reported bug. A request that
+ * PREDATES the review is a reviewer who has not looked yet, and on a PR where several people were
+ * asked and one of them rejected it the others stay listed forever — so a bare
+ * `reviewRequests.totalCount > 0` reads a live "changes requested" as answered and hides it behind
+ * "waiting for review" (observed live: three reviewers asked at 10:28, changes requested
+ * the next day, one reviewer still pending).
  *
  * Either way the words change from "you owe edits" to "they owe a look", and so does the colour:
  * danger is the author's move, info is the reviewer's.
@@ -1471,12 +1569,23 @@ export function derivePrReferenceStatus(pr: {
   /** ISO-8601 commit date of the head commit. `committedDate`, not a push time: GitHub's
    *  `pushedDate` is deprecated and comes back null on new PRs. */
   headCommittedAt?: string | null;
+  /** How many parents the head commit has. 2+ means a MERGE — "Update branch" pulling the base in,
+   *  not work on the review. See `answered` below. Absent reads as an ordinary commit: the push
+   *  rule is the common path and must not switch off on a field GitHub declined to send. */
+  headParentCount?: number | null;
+  /** ISO-8601 `committedDate` of the head's FIRST parent, which on a merge is the branch's previous
+   *  tip — the newest commit that is actual work. Only read when the head is a merge. */
+  headFirstParentCommittedAt?: string | null;
   /** ISO-8601 `submittedAt` of the most recent CHANGES_REQUESTED review, when there is one. */
   changesRequestedAt?: string | null;
   /** Is a reviewer currently ON THE HOOK — `reviewRequests.totalCount > 0`? True after the author
    *  clicks re-request, which is the one thing that says so while `reviewDecision` still reads
-   *  `CHANGES_REQUESTED`. */
+   *  `CHANGES_REQUESTED` — but also true of a reviewer asked long ago who never looked, hence
+   *  `reviewRequestedAt`. */
   reviewRequested?: boolean | null;
+  /** ISO-8601 `createdAt` of the most recent `ReviewRequestedEvent`, which is WHEN the standing
+   *  request was made. Only a request younger than the review can be an answer to it. */
+  reviewRequestedAt?: string | null;
 }): ReferenceStatus {
   const state = pr.state.toUpperCase();
   if (state === 'MERGED') return 'merged';
@@ -1487,7 +1596,27 @@ export function derivePrReferenceStatus(pr: {
   const decision = (pr.reviewDecision ?? '').toUpperCase();
   const changesRequested = decision === 'CHANGES_REQUESTED';
   // Has the author already answered the review — by asking for another look, or by pushing?
-  const answered = pr.reviewRequested === true || pushedSince(pr.headCommittedAt, pr.changesRequestedAt);
+  // A standing request counts as the ask only if it POSTDATES the review; one made before it is a
+  // reviewer who has not got to the PR yet, and on a PR where someone else rejected it that
+  // request would otherwise mask the rejection indefinitely. With no review date at all it still
+  // counts — that is the empty-`reviews` case above, where it is the only signal there is.
+  const reRequested =
+    pr.reviewRequested === true && (!pr.changesRequestedAt || isAfter(pr.reviewRequestedAt, pr.changesRequestedAt));
+  // A push counts as the answer, judged by the newest commit that is actual WORK. GitHub's "Update
+  // branch" button (and this cockpit's own "Resolve conflicts") writes `Merge branch 'main' into
+  // <branch>` dated NOW, newer than any review while addressing none of it: the click people make
+  // reflexively on a stale PR must not wipe a rejection off the chip. Two parents is what tells
+  // that commit apart from work.
+  //
+  // Which is why a merge is not simply DISQUALIFYING: it is transparent. Reading only the head
+  // would let a merge landing on top of a genuine fix erase that fix's answer and flip the chip
+  // back to red, blaming an author who already responded — the same misattribution this whole
+  // function exists to prevent, just pointed the other way. The merge's FIRST parent is the
+  // branch's previous tip, so it carries the date of the work the merge sat on top of.
+  const workCommittedAt =
+    (pr.headParentCount ?? 1) < 2 ? pr.headCommittedAt : pr.headFirstParentCommittedAt;
+  const pushed = isAfter(workCommittedAt, pr.changesRequestedAt);
+  const answered = reRequested || pushed;
   if (changesRequested && !answered) return 'changes-requested';
   if (pr.checks === 'failing') return 'checks-failing';
   // `APPROVED` is the forge saying the review requirement IS MET, and it outranks a pending
@@ -1502,13 +1631,45 @@ export function derivePrReferenceStatus(pr: {
   return 'ready';
 }
 
-/** Did a commit land AFTER the review? Unparseable or missing dates answer `false` — the
- *  conservative direction, since it keeps a review current rather than silently demoting one. */
-function pushedSince(headCommittedAt?: string | null, reviewedAt?: string | null): boolean {
-  if (!headCommittedAt || !reviewedAt) return false;
-  const head = Date.parse(headCommittedAt);
-  const reviewed = Date.parse(reviewedAt);
-  return Number.isFinite(head) && Number.isFinite(reviewed) && head > reviewed;
+/**
+ * Whether this pull request's branch merges into its base — the OTHER axis, kept out of
+ * `derivePrReferenceStatus` on purpose (see `conflicts` in the contract).
+ *
+ * Three values, and the third is the one that matters. GitHub does not store mergeability; it
+ * COMPUTES it when asked, and answers `UNKNOWN` while the background job runs — which is the
+ * normal answer for the first seconds after every push, and therefore for exactly the moment a
+ * cockpit is most likely to be looking. `UNKNOWN` means *we were not told*, never *it is clean*,
+ * and the caller must be able to tell those apart: it is what decides how soon to ask again
+ * (`refStatusTtl`), and answering it as "not conflicting" with a one-minute TTL is precisely how a
+ * conflicting pull request came to sit there wearing "Ready to merge".
+ *
+ * `undefined` for anything the question does not apply to: an issue, and a merged or closed pull
+ * request (GitHub says `UNKNOWN` for those too, forever, and a terminal PR has no conflict left to
+ * resolve — a merged PR wearing a conflict chip is a lie the state alone rules out).
+ */
+export type Mergeability = 'mergeable' | 'conflicting' | 'unknown';
+
+export function mergeabilityOf(state: string, mergeable: string | null | undefined): Mergeability | undefined {
+  if (state.toUpperCase() !== 'OPEN') return undefined;
+  switch (mergeable?.toUpperCase()) {
+    case 'MERGEABLE':
+      return 'mergeable';
+    case 'CONFLICTING':
+      return 'conflicting';
+    default:
+      // Includes a field GitHub omitted entirely: not being told is not being told.
+      return 'unknown';
+  }
+}
+
+/** Did `later` happen AFTER `earlier` — a commit, or a re-request, landing past the review?
+ *  Unparseable or missing dates answer `false`, which is the conservative direction for both
+ *  callers: they only ever use a `true` to demote a review, so no answer must keep the review
+ *  current rather than silently dismiss one. */
+function isAfter(later?: string | null, earlier?: string | null): boolean {
+  const a = later ? Date.parse(later) : NaN;
+  const b = earlier ? Date.parse(earlier) : NaN;
+  return Number.isFinite(a) && Number.isFinite(b) && a > b;
 }
 
 /**
@@ -1529,6 +1690,12 @@ export function deriveIssueReferenceStatus(issue: {
 export interface ResolvedReference {
   kind: 'pr' | 'issue';
   status: ReferenceStatus;
+  /** Where this pull request stands on the OTHER axis, or absent when the question does not
+   *  apply (an issue, a merged or closed PR). Deliberately not folded into `status`; see
+   *  `mergeabilityOf`, and `conflicts` in the contract. `unknown` is kept as a value rather than
+   *  collapsed into "not conflicting", because it is the difference between an answer and a
+   *  question GitHub has not finished answering. */
+  mergeable?: Mergeability;
 }
 
 /**
@@ -1582,6 +1749,7 @@ export async function fetchRefStatuses(
           if (!pr) return;
           const head = pr.commits?.nodes[0]?.commit;
           const rollup = head?.statusCheckRollup;
+          const mergeability = mergeabilityOf(pr.state, pr.mergeable);
           out.resolved[number] = {
             kind: 'pr',
             status: derivePrReferenceStatus({
@@ -1592,12 +1760,22 @@ export async function fetchRefStatuses(
               // reusing the FAILURE/PENDING/SUCCESS vocabulary rather than duplicating it.
               checks: rollup ? rollupToChecks([{ state: rollup.state, status: null, conclusion: null }]) ?? null : null,
               headCommittedAt: head?.committedDate,
+              // Two parents = "Update branch", which is dated now and answers nothing on its own —
+              // so the first parent's date, the work it sat on top of, is carried with it.
+              headParentCount: head?.parents?.totalCount,
+              headFirstParentCommittedAt: head?.parents?.nodes?.[0]?.committedDate,
               // `reviews(last: 1, states: CHANGES_REQUESTED)` — the timestamp only. WHETHER changes
               // are requested stays `reviewDecision`'s answer, which is the one that accounts for
               // dismissed and superseded reviews.
               changesRequestedAt: pr.reviews?.nodes[0]?.submittedAt,
-            reviewRequested: (pr.reviewRequests?.totalCount ?? 0) > 0,
+              reviewRequested: (pr.reviewRequests?.totalCount ?? 0) > 0,
+              // WHEN that standing request was made. `reviewRequests` carries no date of its own,
+              // and without one an old request looks exactly like a re-request.
+              reviewRequestedAt: standingReviewRequestedAt(pr.reviewRequests, pr.timelineItems),
             }),
+            // The tri-state, not a boolean: `unknown` has to survive as far as the cache, which
+            // is what decides to ask again in seconds rather than in a minute.
+            ...(mergeability ? { mergeable: mergeability } : {}),
           };
         } else if (node.__typename === 'Issue') {
           const issue = ghRefStatusIssueSchema.parse(node);
@@ -1619,7 +1797,14 @@ export async function fetchRefStatuses(
 // something the forge answers rather than something the caller asserts. Same 60 s TTL and bounded
 // shape as the checks cache; `null` is a cached "this repository has no such number", so a
 // transcript-scraped number from another repo is not re-queried on every table repaint.
-const refStatusCache = new Map<string, { at: number; resolved: ResolvedReference | null }>();
+//
+// `unknownSince` is when this reference FIRST came back with its mergeability still being
+// computed, carried across refreshes so the fast recheck below is bounded to that first window
+// rather than restarting on every answer that is still `unknown`.
+const refStatusCache = new Map<
+  string,
+  { at: number; resolved: ResolvedReference | null; unknownSince?: number }
+>();
 const REF_STATUS_CACHE_MAX = 500;
 
 /** Test-only: drop the per-reference cache so cases don't leak state into each other. */
@@ -1678,7 +1863,7 @@ export function readCachedRefStatuses(
   const now = Date.now();
   for (const number of new Set(numbers)) {
     const hit = refStatusCache.get(refStatusKey(repoRoot, number));
-    if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved)) continue;
+    if (!hit || !hit.resolved || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) continue;
     out[hit.resolved.kind === 'pr' ? 'prs' : 'issues'][number] = hit.resolved.status;
   }
   return out;
@@ -1710,8 +1895,21 @@ const REF_STATUS_MERGED_TTL = 24 * 60 * 60_000;
  * A number the repository does not have keeps the short TTL: it is usually a wrong number, but it
  * is also what a reference to a not-yet-created PR looks like, and re-asking is cheap.
  */
-function refStatusTtl(entry: ResolvedReference | null): number {
+function refStatusTtl(entry: ResolvedReference | null, unknownSince?: number, now = Date.now()): number {
   if (!entry) return CACHE_MS;
+  // Mergeability GitHub has not finished computing is not an answer to cache for a minute. It is
+  // the normal reply for the first seconds after a push, and holding it that long is what let a
+  // conflicting pull request read "Ready to merge" until the page was reloaded. Ask again in
+  // seconds instead — and only while it is still plausibly being computed, so a repository that
+  // answers `UNKNOWN` indefinitely settles back to the ordinary cadence rather than spawning `gh`
+  // every few seconds forever.
+  if (
+    entry.mergeable === 'unknown' &&
+    unknownSince !== undefined &&
+    now - unknownSince < MERGEABILITY_UNKNOWN_WINDOW_MS
+  ) {
+    return MERGEABILITY_UNKNOWN_TTL_MS;
+  }
   switch (entry.status) {
     case 'merged':
       return REF_STATUS_MERGED_TTL;
@@ -1725,24 +1923,38 @@ function refStatusTtl(entry: ResolvedReference | null): number {
 }
 
 /** How long a status can be trusted to stay put — `null` when it can never change again. The
- *  cadence half of `refStatusTtl`, and deliberately the same table: a value the cache would still
- *  be serving is a value there is no point asking for. */
-function refStatusRecheckAfter(entry: ResolvedReference | null): number | null {
+ *  cadence half of `refStatusTtl`, and deliberately the same function: a value the cache would
+ *  still be serving is a value there is no point asking for, and a value it would NOT serve —
+ *  mergeability still being computed — is one the cockpit should come back for just as soon. */
+function refStatusRecheckAfter(entry: ResolvedReference | null, unknownSince?: number, now = Date.now()): number | null {
   if (entry?.status === 'merged') return null; // GitHub has no un-merge
-  return refStatusTtl(entry);
+  return refStatusTtl(entry, unknownSince, now);
 }
 
 /** How long the WHOLE answer holds — the soonest any single reference in it could differ. `null`
- *  only when every one of them is immutable, which is what tells the cockpit to stop scheduling. */
-function batchRecheckAfter(entries: (ResolvedReference | null)[]): number | null {
+ *  only when every one of them is immutable, which is what tells the cockpit to stop scheduling.
+ *  Taking the per-reference values rather than the entries, because one of them may be on the fast
+ *  mergeability cadence and the batch has to travel at the speed of its most impatient member. */
+function batchRecheckAfter(rechecks: (number | null)[]): number | null {
   let soonest: number | null = null;
-  for (const entry of entries) {
-    const after = refStatusRecheckAfter(entry);
+  for (const after of rechecks) {
     if (after === null) continue;
     soonest = soonest === null ? after : Math.min(soonest, after);
   }
   return soonest;
 }
+
+/**
+ * How long a still-computing mergeability holds, and for how long that fast cadence applies.
+ *
+ * Five seconds because that is the shape of the thing being waited for: GitHub kicks off the
+ * merge-base computation when asked and usually has it by the next request. Bounded to a minute
+ * because a value that is STILL unknown after that is not a computation in flight any more — it is
+ * a repository that will not answer, and re-asking it every five seconds forever costs a `gh`
+ * subprocess a second for nothing.
+ */
+const MERGEABILITY_UNKNOWN_TTL_MS = 5_000;
+const MERGEABILITY_UNKNOWN_WINDOW_MS = 60_000;
 
 /** A forge that could not be reached is worth retrying, and worth not hammering: a workspace with
  *  no `gh` installed would otherwise spawn a subprocess a minute, forever, to be told the same
@@ -1834,21 +2046,34 @@ export async function fetchGithubRefStatus(
   const wanted = [...new Set([...asPrs, ...asIssues])];
 
   const resolved = { prs: {} as Record<number, ReferenceStatus>, issues: {} as Record<number, ReferenceStatus> };
-  // Every reference in the answer, resolved or not — what the recheck cadence is computed from.
-  const entries: (ResolvedReference | null)[] = [];
-  const file = (number: number, entry: ResolvedReference | null) => {
-    entries.push(entry);
-    if (entry) resolved[entry.kind === 'pr' ? 'prs' : 'issues'][number] = entry.status;
+  // How soon each reference in the answer could differ — what the batch's cadence is the minimum
+  // of. Per reference rather than per batch because mergeability still being computed is worth
+  // coming back for in seconds while everything else holds for a minute.
+  const rechecks: (number | null)[] = [];
+  // The second axis, and a list rather than a map because it is nearly always empty: only the
+  // pull requests the forge actively called CONFLICTING are named (see `mergeabilityOf`).
+  const conflicts: number[] = [];
+  const file = (number: number, entry: ResolvedReference | null, unknownSince?: number) => {
+    rechecks.push(refStatusRecheckAfter(entry, unknownSince));
+    if (!entry) return;
+    resolved[entry.kind === 'pr' ? 'prs' : 'issues'][number] = entry.status;
+    if (entry.mergeable === 'conflicting') conflicts.push(number);
   };
   const misses: number[] = [];
   const now = Date.now();
   for (const n of wanted) {
     const hit = refStatusCache.get(refStatusKey(repoRoot, n));
-    if (!hit || now - hit.at >= refStatusTtl(hit.resolved)) misses.push(n);
-    else file(n, hit.resolved);
+    if (!hit || now - hit.at >= refStatusTtl(hit.resolved, hit.unknownSince, now)) misses.push(n);
+    else file(n, hit.resolved, hit.unknownSince);
   }
   if (misses.length === 0) {
-    return { available: true, prs: resolved.prs, issues: resolved.issues, recheckAfterMs: batchRecheckAfter(entries) };
+    return {
+      available: true,
+      prs: resolved.prs,
+      issues: resolved.issues,
+      conflicts,
+      recheckAfterMs: batchRecheckAfter(rechecks),
+    };
   }
   try {
     const ownerName = await resolveRepoHandleStrict(repoRoot);
@@ -1866,8 +2091,19 @@ export async function fetchGithubRefStatus(
       // no such number" for a minute on the strength of a network blip.
       if (failed.has(n)) continue;
       const entry = batch.resolved[n] ?? null;
-      file(n, entry);
-      refStatusCache.set(refStatusKey(repoRoot, n), { at: storedAt, resolved: entry });
+      // Kept from the previous answer, not restarted: the fast cadence is bounded from when this
+      // reference FIRST came back still-computing, so a forge that never resolves it cannot hold
+      // the batch on a five-second poll indefinitely.
+      const unknownSince =
+        entry?.mergeable === 'unknown'
+          ? (refStatusCache.get(refStatusKey(repoRoot, n))?.unknownSince ?? storedAt)
+          : undefined;
+      file(n, entry, unknownSince);
+      refStatusCache.set(refStatusKey(repoRoot, n), {
+        at: storedAt,
+        resolved: entry,
+        ...(unknownSince === undefined ? {} : { unknownSince }),
+      });
     }
     while (refStatusCache.size > REF_STATUS_CACHE_MAX) {
       const oldest = refStatusCache.keys().next().value;
@@ -1886,7 +2122,13 @@ export async function fetchGithubRefStatus(
         recheckAfterMs: REF_STATUS_RETRY_MS,
       };
     }
-    return { available: true, prs: resolved.prs, issues: resolved.issues, recheckAfterMs: batchRecheckAfter(entries) };
+    return {
+      available: true,
+      prs: resolved.prs,
+      issues: resolved.issues,
+      conflicts,
+      recheckAfterMs: batchRecheckAfter(rechecks),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {

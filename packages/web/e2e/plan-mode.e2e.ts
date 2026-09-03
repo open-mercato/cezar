@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
-import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-browser'
+import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, getJson } from './agent-browser'
 
 /**
  * Plan mode end-to-end (R4 Step 1.2, #383 + spec 008) against a LIVE dry-run server. Under
@@ -124,9 +124,10 @@ describe('plan mode against a live dry-run server', () => {
     browser.waitForFunction(`document.querySelector('[data-slot="mode-plan"]') !== null`)
     // Sources must have LOADED before submitting — a plan submit races the workflows/skills
     // queries otherwise and is (correctly) rejected with the "still loading" toast. The pill
-    // showing the fixture's project skill is the ready signal (same trick as new-task.e2e).
+    // dropping its loading ellipsis is the ready signal (same trick as new-task.e2e): a
+    // resolved composer picks nothing, so there is no name to wait for.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="source-pill"]')?.textContent.includes('lint-fix')`,
+      `!document.querySelector('[data-slot="source-pill"]')?.textContent.includes('…')`,
     )
 
     expect(browser.evaluate(`document.querySelector('[data-slot="mode-plan"]').getAttribute('aria-checked')`)).toBe('false')
@@ -164,9 +165,9 @@ describe('plan mode against a live dry-run server', () => {
     browser.click('[data-slot="plan-save-dialog"] button[type="submit"]')
     browser.waitForFunction(`document.querySelector('[data-slot="plan-save-dialog"]') === null`)
 
-    const readback = (await (await fetch(`${baseUrl}/api/v1/workflows`)).json()) as {
+    const readback = await getJson<{
       workflows: Array<{ name: string; source: string; steps: Array<{ id: string }> }>
-    }
+    }>(`${baseUrl}/api/v1/workflows`)
     const saved = readback.workflows.find((w) => w.name === 'e2e planned chain')
     expect(saved?.source).toBe('file')
     expect(saved?.steps.map((s) => s.id)).toEqual(['implement', 'verify', 'review'])
@@ -182,9 +183,9 @@ describe('plan mode against a live dry-run server', () => {
       `document.querySelector('[data-slot="plan-overwrite-dialog"]') === null &&
        document.querySelector('[data-slot="plan-save-dialog"]') === null`,
     )
-    const again = (await (await fetch(`${baseUrl}/api/v1/workflows`)).json()) as {
-      workflows: Array<{ name: string }>
-    }
+    const again = await getJson<{ workflows: Array<{ name: string }> }>(
+      `${baseUrl}/api/v1/workflows`,
+    )
     expect(again.workflows.filter((w) => w.name === 'e2e planned chain')).toHaveLength(1)
   }, 90_000)
 
@@ -204,6 +205,11 @@ describe('plan mode against a live dry-run server', () => {
     expect(rect.x).toBe(0)
     expect(rect.y).toBe(0)
     expect(rect.w).toBe(390)
+
+    // The previous spec's "saved" toast sits over the step cards at this width — 360px of
+    // pointer-events-auto across a 390px viewport. It expires on its own; the reorder below
+    // clicks exactly where it lands, so wait it out rather than click through it.
+    browser.waitForFunction(`document.querySelector('[data-slot="toast"]') === null`)
 
     // Touch-honest reorder: buttons, not drag.
     await clickStepControl(

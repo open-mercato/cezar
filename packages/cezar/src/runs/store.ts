@@ -4,6 +4,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { join } from 'node:path';
 import { z } from 'zod';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
+import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 
@@ -329,6 +331,48 @@ const CREATED_PR_RE =
  *  this many distinct PRs the conversation is a survey, not a subject. */
 const MAX_PR_CANDIDATES = 8;
 
+/** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
+ *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
+export type RepoHandle = { owner: string; name: string };
+
+/** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
+ *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
+function refUrlRepo(url: string): string | undefined {
+  const parts = url.split('/');
+  const owner = parts[parts.length - 4];
+  const name = parts[parts.length - 3];
+  return owner && name ? `${owner}/${name}`.toLowerCase() : undefined;
+}
+
+/**
+ * May the referenced tier ADOPT this URL as the task's subject? (#945)
+ *
+ * The tier was text-scoped but never repo-scoped: `PR_URL_RE` matches any
+ * `github.com/<owner>/<repo>/pull/N`, so a research task that cites one upstream PR handed the
+ * resolver exactly one candidate and it became the task's identity — an `oko` task wearing
+ * `supabase/cli#6056`. Nothing compared the URL's repository with the project's own.
+ *
+ * A foreign URL is adoptable only when the TASK PROMPT corroborates it: the prompt names that
+ * `owner/repo`, which a pasted URL does inherently. That is the trust boundary this module already
+ * uses elsewhere — the prompt and the agent's own turn text are trusted, scraped tool output is
+ * not — and it is what keeps the legitimate cross-repo case working (#819:
+ * `om-auto-fix-pr https://github.com/open-mercato/open-mercato/pull/1977` started from cezar).
+ *
+ * Unknown handle → today's behavior exactly (`AGENTS.md` zero config: degrade, never fail). An
+ * unparseable URL is left alone for the same reason — the guard only ever removes an association
+ * it can PROVE is foreign.
+ *
+ * Note what this does not touch: `referenced*Candidates` keep recording every URL as evidence.
+ * The fix changes what is *promoted*, never what is *collected* (the #526 rule).
+ */
+function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null): boolean {
+  if (!handle) return true;
+  const repo = refUrlRepo(url);
+  if (!repo) return true;
+  if (repo === `${handle.owner}/${handle.name}`.toLowerCase()) return true;
+  return task.toLowerCase().includes(repo);
+}
+
 /**
  * Every scannable string of one persisted event: the v1 top-level fields plus
  * the protocol-v2 `item.*` content (nested — the reason v2 streams were
@@ -375,6 +419,42 @@ function eventTextFragments(event: Record<string, unknown>): string[] {
   return fragments;
 }
 
+/**
+ * Where a CREATION CLAIM may come from — the trust boundary the created tier was missing.
+ *
+ * `CREATED_PR_RE` used to be matched against everything an event carried, tool OUTPUT included,
+ * so a transcript that merely QUOTES a `gh pr create` line handed the run a PR it never opened.
+ * Not hypothetical: the task that fixed the reference chips printed another run's stored events
+ * while investigating them, and cezar read `"title": "Ran gh pr create --repo …"` out of that
+ * dump and adopted a PR from a DIFFERENT repository as its own — permanently, because the first
+ * created URL wins and the real `gh pr create` that followed was never looked at.
+ *
+ * So the claim must come from the agent's own words, or from the tool title cezar itself renders
+ * from the command it saw run. Tool output and tool input are the transcript of the world, not a
+ * statement about this run. The URL is still read from the whole event — `gh` prints it in the
+ * output — because it is the CLAIM that needs a trustworthy source, not the link.
+ */
+function eventCreationClaimFragments(event: Record<string, unknown>): string[] {
+  const fragments: string[] = [];
+  // A `tool-result` event's `result` IS raw command output; on every other event the top-level
+  // text is the agent's own.
+  if (event.type !== 'tool-result') {
+    for (const key of ['text', 'result', 'message'] as const) {
+      const value = event[key];
+      if (typeof value === 'string') fragments.push(value);
+    }
+  }
+  const item = event.item;
+  if (item && typeof item === 'object') {
+    const it = item as Record<string, unknown>;
+    if (it.kind === 'message' && it.role === 'assistant' && typeof it.text === 'string') {
+      fragments.push(it.text);
+    }
+    if (it.kind === 'tool' && typeof it.title === 'string') fragments.push(it.title);
+  }
+  return fragments;
+}
+
 /** Agent-authored event text, matching the trust boundary used by task markers.
  * Tool titles, inputs, and outputs remain visible to the referenced-URL tier,
  * but must never promote an issue into the shared `issueNumber` field (#538). */
@@ -402,8 +482,27 @@ function eventAgentTextFragments(event: Record<string, unknown>): string[] {
  * the subject; among several, the one whose number the task prompt names (and
  * only when exactly one matches); otherwise ambiguous — no chip beats a wrong
  * chip.
+ *
+ * Whatever that produces is then repo-scoped (#945): a winner from another repository that the
+ * prompt does not corroborate is vetoed — see `isRepoScopedRef`. The veto is applied to the
+ * RESULT rather than to the candidate list on purpose, so the guard stays strictly subtractive:
+ * filtering first would let a project-local candidate win a two-candidate race today's rule calls
+ * ambiguous, which is a wider behavior change than the defect warrants. As written this function
+ * can only ever lose a value, never gain one.
  */
-function resolveReferencedRef(candidates: string[], task: string, declared?: number): string | undefined {
+function resolveReferencedRef(
+  candidates: string[],
+  task: string,
+  declared?: number,
+  handle?: RepoHandle | null,
+): string | undefined {
+  const resolved = resolveCandidate(candidates, task, declared);
+  if (resolved === undefined) return undefined;
+  return isRepoScopedRef(resolved, task, handle) ? resolved : undefined;
+}
+
+/** The pre-#945 resolution rule, unchanged — see `resolveReferencedRef` for the contract. */
+function resolveCandidate(candidates: string[], task: string, declared?: number): string | undefined {
   if (declared !== undefined) return candidates.find((url) => url.endsWith(`/${declared}`));
   if (candidates.length === 1) return candidates[0];
   const named = candidates.filter((url) => {
@@ -413,6 +512,35 @@ function resolveReferencedRef(candidates: string[], task: string, declared?: num
     return num !== '' && new RegExp(`(?<!\\d)#?${num}(?!\\d)`).test(task);
   });
   return named.length === 1 ? named[0] : undefined;
+}
+
+/** The number a forge URL's last segment names (`…/pull/402` → 402), or undefined. */
+function refUrlNumber(url: string | undefined): number | undefined {
+  if (!url) return undefined;
+  const n = Number(url.split('/').pop());
+  return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
+}
+
+/**
+ * The PR declaration the REFERENCED tier is allowed to act on.
+ *
+ * `CEZ:PR=N` means one of two things depending on when the agent writes it: on the way in it
+ * names the PR the task is ABOUT, and once the task has opened a PR of its own the marker
+ * contract asks it to re-declare with the new number ("Re-emit with the new number if the subject
+ * changes (e.g. you open a PR later in the task)"). A declaration naming the PR this run CREATED
+ * is therefore a statement about the CREATED tier, which `pullRequestUrl` already carries — and
+ * feeding it to the referenced tier ERASES the about-PR, because `resolveReferencedRef` clears
+ * the chip when no candidate matches the declared number (a task on #4326 that opened
+ * #5366 dropped from two chips to one the moment it declared #5366).
+ *
+ * Both tiers stay true instead: the created PR is the created PR, and the reference resolves as
+ * if that declaration had not been made — which is exactly what it was before the task opened
+ * anything.
+ */
+function referencedPrDeclaration(run: RunRecord): number | undefined {
+  const declared = run.markerRefs?.pr;
+  if (declared === undefined) return undefined;
+  return declared === refUrlNumber(run.pullRequestUrl) ? undefined : declared;
 }
 
 /**
@@ -476,6 +604,32 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
+  // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
+  // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
+  // could match the created number. The evidence is all still on the record — only the
+  // conclusion drawn from it was wrong — so re-resolve without that declaration instead of
+  // asking for a migration. Deliberately one-directional: it only runs on a record that HAS no
+  // referenced PR, so it can never take one away from a record written by an older cezar whose
+  // candidate list no longer explains it. `prNumber` is not recoverable this way (the
+  // declaration overwrote it) and is left alone — the restored URL is what paints the chip.
+  if (
+    run.referencedPullRequestUrl === undefined &&
+    run.markerRefs?.pr !== undefined &&
+    referencedPrDeclaration(run) === undefined
+  ) {
+    run.referencedPullRequestUrl = resolveReferencedRef(
+      run.referencedPrCandidates ?? [],
+      run.task,
+      undefined,
+    );
+  }
+  // Deliberately UNSCOPED by repo (#945), unlike every other `resolveReferencedRef` call. Neither
+  // caller has a handle to pass: `RunStore.open` is synchronous and the handle costs a `gh` spawn
+  // (which is why it is armed afterwards, by `setRepoHandle`), and the read-only index reader
+  // (`./run-index.ts`) has no repo root at all. Passing `undefined` here is not a gap — it is the
+  // no-handle path the guard is specified to take. The foreign-URL heal runs in `setRepoHandle`'s
+  // sweep the moment the handle lands, and the index reader picks the healed values up from
+  // `runs.json` on its next read.
   return run;
 }
 
@@ -488,6 +642,10 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
   private saveTimer: NodeJS.Timeout | null = null;
+  /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
+   *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
+   *  exactly the pre-#945 behavior. */
+  private repoHandle: RepoHandle | null | undefined;
 
   private constructor(private readonly dataDir: string) {
     super();
@@ -513,6 +671,65 @@ export class RunStore extends EventEmitter {
       }
     }
     return store;
+  }
+
+  /**
+   * Tell the store which repository this project IS (#945), so the referenced tier stops adopting
+   * another repo's PR/issue as the task's subject. See `isRepoScopedRef` for the rule.
+   *
+   * A setter rather than an `open()` option because `open()` is synchronous and the handle costs a
+   * `gh` spawn: callers arm this in the background so boot never waits on the network. `null` is a
+   * first-class answer meaning "cannot be known" (no `gh`, no remote, a non-git root) and leaves
+   * the store in exactly its pre-#945 behavior.
+   *
+   * Arming also HEALS records already poisoned by the un-scoped rule, on the `reconcileLoadedRun`
+   * precedent: the evidence is all still on the record (`referenced*Candidates`), only the
+   * conclusion drawn from it was wrong, so re-deciding beats asking for a migration. It rewrites
+   * values, never the format, and is one-directional by construction — see `rescopeRun`.
+   */
+  setRepoHandle(handle: RepoHandle | null): void {
+    this.repoHandle = handle;
+    if (!handle) return; // nothing to prove foreign against
+    // `touch` per healed run: the cockpit is already live when the handle lands, so a corrected
+    // chip has to reach the open page over SSE, not just the next `runs.json` write.
+    for (const run of this.runs.values()) {
+      if (this.rescopeRun(run)) this.touch(run);
+    }
+  }
+
+  /**
+   * Drop this run's referenced PR/issue if the project's handle proves it foreign and the prompt
+   * does not corroborate it (#945). Returns whether anything changed.
+   *
+   * One-directional by construction: it only ever clears fields, so a record written by an older
+   * cezar — or read by one after this ran — is never worse off, and a downgrade sees a record whose
+   * format is untouched and whose cleared fields were already optional.
+   */
+  private rescopeRun(run: RunRecord): boolean {
+    let changed = false;
+    if (
+      run.referencedPullRequestUrl &&
+      !isRepoScopedRef(run.referencedPullRequestUrl, run.task, this.repoHandle)
+    ) {
+      run.referencedPullRequestUrl = undefined;
+      changed = true;
+    }
+    if (
+      run.referencedIssueUrl &&
+      !isRepoScopedRef(run.referencedIssueUrl, run.task, this.repoHandle)
+    ) {
+      run.referencedIssueUrl = undefined;
+      changed = true;
+      // Take back the number this janitor seeded from that very URL — the same revoke
+      // `trackReferencedIssues` performs when ambiguity clears a resolution. A `prNumber`-style
+      // number the prompt, namer or a marker owns is NOT ours to touch, which is exactly what
+      // `referencedIssueNumberSeeded` records.
+      if (run.referencedIssueNumberSeeded) {
+        run.issueNumber = undefined;
+        run.referencedIssueNumberSeeded = undefined;
+      }
+    }
+    return changed;
   }
 
   listRuns(): RunRecord[] {
@@ -799,15 +1016,35 @@ export class RunStore extends EventEmitter {
     // The janitor trick: agents print the PR URL after `gh pr create` — the
     // first one spotted in the transcript becomes the run's PR link. Scans v1
     // fields AND nested v2 `item.*` content (#407). A URL without the created
-    // phrasing still feeds the referenced tier (the PR the task is about).
+    // phrasing still feeds the referenced tier (the PR the task is about) —
+    // and the phrasing itself is only believed from a source that can speak
+    // FOR this run (`eventCreationClaimFragments`), never from quoted output.
     const haystack = eventTextFragments(full).join(' ');
     const agentHaystack = eventAgentTextFragments(full).join(' ');
+    // The creation CLAIM is read from a narrower source than the URL is
+    // (`eventCreationClaimFragments`), which is why the two are searched
+    // together rather than the haystack alone: the phrase must land in the
+    // trusted prefix, and the link may come from anywhere after it.
+    const claim = eventCreationClaimFragments(full).join(' ');
     if (haystack.length > 0) {
       let changed = false;
       if (!run.pullRequestUrl) {
-        const created = createdPrUrl(haystack);
+        const created = CREATED_PR_RE.test(claim) ? createdPrUrl(`${claim} ${haystack}`) : undefined;
         if (created) {
           this.updateRun(runId, { pullRequestUrl: created });
+          // Adopting the created tier can RELEASE a declaration the referenced tier was holding
+          // (see `referencedPrDeclaration`), so re-resolve here too: the about-PR must come back
+          // whether the marker arrived before the creation evidence or after it.
+          const resolved = resolveReferencedRef(
+            run.referencedPrCandidates ?? [],
+            run.task,
+            referencedPrDeclaration(run),
+            this.repoHandle,
+          );
+          if (resolved !== run.referencedPullRequestUrl) {
+            run.referencedPullRequestUrl = resolved;
+            changed = true;
+          }
         } else if (PR_URL_RE.test(haystack) && this.trackReferencedPrs(run, haystack)) {
           changed = true;
         }
@@ -844,7 +1081,8 @@ export class RunStore extends EventEmitter {
     run.referencedPullRequestUrl = resolveReferencedRef(
       run.referencedPrCandidates,
       run.task,
-      run.markerRefs?.pr,
+      referencedPrDeclaration(run),
+      this.repoHandle,
     );
     return true;
   }
@@ -874,6 +1112,7 @@ export class RunStore extends EventEmitter {
       run.referencedIssueCandidates ?? [],
       run.task,
       run.markerRefs?.issue,
+      this.repoHandle,
     );
     let numberChanged = false;
     if (run.markerRefs?.issue === undefined && ISSUE_URL_RE.test(seedHaystack)) {
@@ -902,6 +1141,10 @@ export class RunStore extends EventEmitter {
    * against the candidate working set — including down to `undefined` when no
    * candidate matches (a wrong chip is worse than no chip). The created tier
    * (`pullRequestUrl`) is deliberately untouched.
+   *
+   * One declaration is NOT a statement about the referenced tier: the number of the PR this run
+   * itself created. See `referencedPrDeclaration` — the marker contract asks the agent to
+   * re-declare after it opens a PR, and taking that literally cost the task the PR it was about.
    */
   applyMarkerRefs(runId: string, refs: { pr?: number; issue?: number }): RunRecord | undefined {
     const run = this.runs.get(runId);
@@ -911,7 +1154,12 @@ export class RunStore extends EventEmitter {
       ...(refs.pr !== undefined ? { pr: refs.pr } : {}),
       ...(refs.issue !== undefined ? { issue: refs.issue } : {}),
     };
-    if (refs.pr !== undefined) run.prNumber = refs.pr;
+    // `prNumber` is the about-PR as well (it is what paints a numeric-only chip), so a
+    // re-declaration naming the created PR only FILLS it — it never overwrites the number the
+    // task came in with, which is still the PR this task is about.
+    if (refs.pr !== undefined && (run.prNumber === undefined || refs.pr !== refUrlNumber(run.pullRequestUrl))) {
+      run.prNumber = refs.pr;
+    }
     if (refs.issue !== undefined) {
       run.issueNumber = refs.issue;
       delete run.referencedIssueNumberSeeded;
@@ -920,7 +1168,8 @@ export class RunStore extends EventEmitter {
       run.referencedPullRequestUrl = resolveReferencedRef(
         run.referencedPrCandidates ?? [],
         run.task,
-        run.markerRefs.pr,
+        referencedPrDeclaration(run),
+        this.repoHandle,
       );
     }
     if (run.markerRefs.issue !== undefined) {
@@ -928,6 +1177,7 @@ export class RunStore extends EventEmitter {
         run.referencedIssueCandidates ?? [],
         run.task,
         run.markerRefs.issue,
+        this.repoHandle,
       );
     }
     this.touch(run);

@@ -555,6 +555,82 @@ describe('RunManager.continueRun override', () => {
     expect(store.getRun(id)?.model).toBe('my-custom-alias');
   });
 
+  /* Agent accounts (spec 2026-07-29-agent-profiles): a follow-up may switch login as well as
+     backend — and a session id only resolves inside the config dir that created it. */
+
+  it('persists the picked account as the run current one', () => {
+    const id = resumableRun();
+    expect(manager.continueRun(id, { agentProfile: 'klaudiusz' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.agentProfile).toBe('klaudiusz');
+    // Nothing else moves: the account is its own axis.
+    expect(store.getRun(id)?.runner).toBe('claude');
+    expect(store.getRun(id)?.model).toBe('sonnet');
+  });
+
+  it('starts fresh when Continue switches to another login of the same agent', () => {
+    const id = resumableRun();
+    store.updateStep(id, 's1', { backend: 'claude', profileId: 'default' });
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => {
+      calls.push(args);
+    };
+
+    expect(manager.continueRun(id, { agentProfile: 'klaudiusz' })).toEqual({ ok: true });
+    // `claude --resume <id>` under another login would find nothing and silently open a fresh
+    // conversation, so the session id is deliberately not passed.
+    expect(calls[0]?.[2]).toBeUndefined();
+    expect(calls[0]?.[3]).toBe('claude');
+  });
+
+  it('resumes when the picked account is the one that owns the session', () => {
+    const id = resumableRun();
+    store.updateStep(id, 's1', { backend: 'claude', profileId: 'klaudiusz' });
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => {
+      calls.push(args);
+    };
+
+    expect(manager.continueRun(id, { agentProfile: 'klaudiusz' })).toEqual({ ok: true });
+    expect(calls[0]?.[2]).toBe('sess-1');
+  });
+
+  it('treats a step that recorded no account as the discovered one', () => {
+    // Pre-accounts sessions ran under whatever `agentHomePaths()` finds, so re-picking `default`
+    // is not a switch and must still resume.
+    const id = resumableRun();
+    store.updateStep(id, 's1', { backend: 'claude' });
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => {
+      calls.push(args);
+    };
+
+    expect(manager.continueRun(id, { agentProfile: 'default' })).toEqual({ ok: true });
+    expect(calls[0]?.[2]).toBe('sess-1');
+  });
+
+  it('an omitted account preserves the one the run is on (backward compat)', () => {
+    const id = resumableRun();
+    store.updateRun(id, { agentProfile: 'klaudiusz' });
+    expect(manager.continueRun(id, { text: 'keep going' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.agentProfile).toBe('klaudiusz');
+  });
+
+  it('a runner switch drops the previous agent account instead of carrying it over', () => {
+    // An account belongs to ONE agent: a claude login says nothing about which codex account
+    // should run, and leaving it on the record would re-apply it if a later Continue switched back.
+    const id = resumableRun();
+    store.updateRun(id, { agentProfile: 'klaudiusz' });
+    expect(manager.continueRun(id, { runner: 'codex' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.agentProfile).toBeUndefined();
+  });
+
+  it('keeps the account when the continuation stays on the same agent', () => {
+    const id = resumableRun();
+    store.updateRun(id, { agentProfile: 'klaudiusz' });
+    expect(manager.continueRun(id, { runner: 'claude' })).toEqual({ ok: true });
+    expect(store.getRun(id)?.agentProfile).toBe('klaudiusz');
+  });
+
   it('refuses to continue a run with no resumable session (no override persisted)', () => {
     const record = store.createRun({ title: 't', workflow: 'quick-task', task: 't', runner: 'claude', steps: [] });
     store.updateRun(record.id, { status: 'done' });

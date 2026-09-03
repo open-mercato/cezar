@@ -359,6 +359,54 @@ describe('Run — backend selection (#401)', () => {
     expect(card.querySelector('[data-slot="runner-pill"]')).toBeNull()
   })
 
+  /**
+   * The Inbox mounts `EnginePills` WITHOUT `accounts` on purpose: `POST /todos/:id/start` has no
+   * `agentProfile` field, so offering a login picker here would render a choice the server drops
+   * on the floor. That opt-in is the whole safety argument for putting accounts in the shared
+   * component, and it needs a host that actually HAS a second login to mean anything — with an
+   * empty profiles payload this passes no matter which way the flag is set.
+   */
+  it('never offers agent accounts, even on a host with two logins for one runner', async () => {
+    const twoLogins = (provider: string, id: string, label: string) => ({
+      id,
+      provider,
+      label,
+      configDir: `~/.${provider}-${id}`,
+      path: `/home/u/.${provider}-${id}`,
+      exists: true,
+      looksValid: true,
+      isDefault: id === 'default',
+    })
+    const sent = stubFetch({
+      'GET /api/v1/workspace/agent-profiles': () =>
+        jsonResponse({
+          editable: true,
+          profiles: [
+            twoLogins('claude', 'default', 'Default'),
+            twoLogins('claude', 'klaudiusz', 'Klaudiusz'),
+          ],
+          profileCapableProviders: ['claude'],
+          selections: {},
+          defaults: {},
+        }),
+    })
+    renderInbox()
+
+    await waitFor(() => expect(cards()).toHaveLength(2))
+    const card = cards()[0]!
+    await waitFor(() => expect(card.querySelector('[data-slot="model-pill"]')).not.toBeNull())
+    // A second login would raise the pill on an accounts-enabled surface; here it must not.
+    expect(card.querySelector('[data-slot="runner-pill"]')).toBeNull()
+
+    fireEvent.click(card.querySelector('[data-action="todo-run"]')!)
+    // No body at all — stronger than an empty one, and the same bar the untouched-pick test above
+    // holds the card to. An `agentProfile` the endpoint ignores could not survive this.
+    await waitFor(() =>
+      expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/todos/t1/start')).toBe(true),
+    )
+    expect(startBody(sent, 't1')).toBeUndefined()
+  })
+
   it('a multi-backend host offers the runner pill, and the pick reaches the POST', async () => {
     const sent = stubFetch({
       // Reproduce a non-boot project whose default is Claude while boot health says Codex.
