@@ -400,6 +400,17 @@ describe('activeSubagent', () => {
     )
     expect(subagentActivityText({ id: 'a', title: 't', status: 'running', toolCalls: 0 })).toBe('starting…')
   })
+
+  // Regression (run 56633cdc): a harness skill session surfaces as a task item with NO
+  // attributed children, so `activity` never fills in. After the run staged and closed, the
+  // dock's head read "Agents · 1/1 — starting…" over a finished session. A settled agent
+  // without an activity line must state its outcome, not its birth.
+  it('names the outcome of a settled agent that produced no attributed output', () => {
+    expect(subagentActivityText({ id: 'a', title: 't', status: 'completed', toolCalls: 0 })).toBe('finished')
+    expect(subagentActivityText({ id: 'a', title: 't', status: 'failed', toolCalls: 0 })).toBe('failed')
+    expect(subagentActivityText({ id: 'a', title: 't', status: 'declined', toolCalls: 0 })).toBe('declined')
+    expect(subagentActivityText({ id: 'a', title: 't', status: 'pending', toolCalls: 0 })).toBe('starting…')
+  })
 })
 
 describe('findSubagent — the sheet outlives the dock', () => {

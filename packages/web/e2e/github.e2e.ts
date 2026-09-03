@@ -142,10 +142,19 @@ describe('the GitHub tab against the live dry-run server', () => {
     browser.waitForFunction(
       `document.querySelectorAll('[data-slot="gh-workflow-option"]').length === ${workflows.workflows.length}`,
     )
-    browser.fill('[data-slot="command-input"]', 'quick')
     browser.waitForFunction(
-      `document.querySelectorAll('[data-slot="gh-workflow-option"]').length === 1`,
+      `document.querySelector('[data-slot="gh-workflow-menu"]') !== null`,
     )
+    expect(browser.count('[data-slot="gh-workflow-option"]')).toBe(workflows.workflows.length)
+    browser.fill('input[placeholder="search workflows…"]', 'quick')
+    browser.waitForFunction(
+      `document.querySelector('input[placeholder="search workflows…"]')?.value === 'quick'`,
+    )
+    const filteredWorkflows = browser.evaluate(
+      `Array.from(document.querySelectorAll('[data-slot="gh-workflow-option"]')).map((el) => el.dataset.workflow)`,
+    ) as string[]
+    expect(filteredWorkflows).toContain('quick-task')
+    expect(filteredWorkflows.length).toBeLessThan(workflows.workflows.length)
 
     // Same settle rule as above: the screenshot must show the whole truth, nav item included.
     browser.waitForFunction(`document.querySelector('nav a[href="${scoped('/github')}"]') !== null`)

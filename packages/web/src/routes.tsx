@@ -59,6 +59,12 @@ const TaskFilesRoute = lazy(() =>
 const TaskCommitsRoute = lazy(() =>
   import('./routes/task-git/task-commits').then((m) => ({ default: m.TaskCommitsRoute })),
 )
+const TaskHarnessReviewRoute = lazy(() =>
+  import('./routes/task-harness/task-harness').then((m) => ({ default: m.TaskHarnessReviewRoute })),
+)
+const TaskHarnessPacketsRoute = lazy(() =>
+  import('./routes/task-harness/task-harness').then((m) => ({ default: m.TaskHarnessPacketsRoute })),
+)
 
 /** Lazy because the repo view renders through the `<Diff>` facade and the Shiki singleton —
  *  the same heavy chunk the task git tabs ride; the home screen must not pay for it. */
@@ -328,6 +334,22 @@ export function AppRoutes() {
           element={
             <Suspense fallback={<GitTabLoading tab="changes" />}>
               <TaskChangesRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/review"
+          element={
+            <Suspense fallback={<ThreadLoading />}>
+              <TaskHarnessReviewRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="tasks/:id/packets"
+          element={
+            <Suspense fallback={<ThreadLoading />}>
+              <TaskHarnessPacketsRoute />
             </Suspense>
           }
         />

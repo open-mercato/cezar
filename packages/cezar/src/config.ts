@@ -105,6 +105,15 @@ const configSchema = z.object({
    * false preserves the ordinary per-runner model selector.
    */
   modelsLocked: z.boolean().optional().catch(undefined),
+  /**
+   * Multi-model harness feature flag: the staged multi-model workflows, their
+   * composer tab, the Settings → Harness section and the harness probe are
+   * offered only when this is true. Off by default while the feature hardens.
+   * Flipping it off never strands an in-flight harness run — revival reads the
+   * run's own persisted `workflowDef`, and the run-scoped harness routes stay
+   * readable for history. `.catch(false)` keeps a bad value additive-safe.
+   */
+  multiModel: z.boolean().default(false).catch(false),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;

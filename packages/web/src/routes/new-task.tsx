@@ -22,10 +22,13 @@ import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import {
   queryKeys,
   useConfig,
+  useHarnessProbe,
+  useHarnessStatus,
   useHealth,
   useProviderStatus,
   useProjects,
   useRepo,
+  useRunnerModelCatalogs,
   useRunnerModels,
   useSkills,
   useUiState,
@@ -33,6 +36,7 @@ import {
   useWorkflows,
 } from '@/api/queries'
 import type {
+  HarnessPreset,
   ImageInput,
   ProjectListEntry,
   RepoResponse,
@@ -90,8 +94,19 @@ import {
   type NewTaskDraft,
 } from './new-task-draft'
 import {
+  HARNESS_MODES,
+  harnessStartBlock,
   buildCreateRunBody,
+  canSaveHarnessPreset,
+  defaultHarnessRoles,
+  advisorHarnessOptions,
+  sessionRoleOptions,
+  harnessRolesIssue,
+  harnessSetupPrefill,
+  harnessWorkflowName,
+  modelFamilyOf,
   modelsForRunner,
+  normalizeHarnessPresets,
   modelCatalogStatus,
   pushRecentSource,
   QUICK_TASK,
@@ -99,8 +114,11 @@ import {
   resolveRunner,
   resolveSource,
   startedRunPath,
+  withoutHarnessWorkflows,
+  type HarnessModelOption,
   type TaskSource,
 } from './new-task-form'
+import { HarnessPanel, HarnessSetupDialog } from './new-task-harness'
 import { parseNewTaskParams } from './new-task-params'
 import { buildPlannedRunBody, pendingPlanOf, type PendingPlan } from './new-task-plan'
 import { PlanReview } from './plan-review'
@@ -184,9 +202,23 @@ export function NewTaskRoute() {
   const projectList = projects.data?.projects ?? []
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
-  // The draft's pick alone — a fresh `/new` selects nothing (see `resolveSource` for what the
-  // persisted `lastTask` preselection was load-bearing for, and why it is gone).
-  const source = resolveSource(draft.source, skillList, workflowList)
+  const taskWorkflows = withoutHarnessWorkflows(workflowList)
+  // The draft's pick alone — a fresh `/new` selects nothing. Keep harness workflows available
+  // only to the Multi-model surface while ordinary Task composition resolves against its
+  // filtered catalog.
+  const rawSource = resolveSource(draft.source, skillList, workflowList)
+  const source = resolveSource(draft.source, skillList, taskWorkflows)
+
+  // ---- cez-harness / Multi-model tab (role-based, user feedback 2026-07-24) -----------------
+  // Feature flag (off by default): with `multiModel` unset or false the Multi-model tab is not
+  // offered and a persisted 'multi' draft falls back to the Task surface instead of stranding.
+  const multiModelEnabled = config.data?.multiModel === true
+  const composerMode: 'task' | 'multi' = !multiModelEnabled
+    ? 'task'
+    : draft.composerMode ?? (harnessWorkflowName(rawSource) !== null ? 'multi' : 'task')
+  const harnessMode =
+    draft.harnessMode ?? HARNESS_MODES.find((m) => m.workflow === rawSource?.ref)?.id ?? 'fix-issue'
+  const harnessSkillProfile = draft.harnessSkillProfile ?? 'generic'
   const selectedSkill = source?.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
@@ -223,13 +255,22 @@ export function NewTaskRoute() {
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
   const catalog = useRunnerModels(displayRunner)
+  // A normal task only needs its selected runner. The multi-model surface needs every runner's
+  // catalog at once to build the role lineup; disabled hooks remain inert while the feature is off.
+  const harnessCatalogs = useRunnerModelCatalogs(multiModelEnabled)
+  const catalogFor = (candidate: Runner) =>
+    candidate === displayRunner ? catalog.data : harnessCatalogs[candidate].data
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
-    : modelsForRunner(runner, catalog.data, [draft.model, config.data?.defaultModels?.[runner]])
+    : modelsForRunner(
+        runner,
+        catalogFor(runner),
+        [draft.model, config.data?.defaultModels?.[runner]],
+      )
   const model = runner === null
     ? ''
-    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalog.data)
+    : resolveModel(modelsLocked ? null : draft.model, runner, config.data?.defaultModels, catalogFor(runner))
   // Agent accounts (spec 2026-07-29-agent-profiles). These are rows of the RUNNER pill rather than
   // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
   // readable at a glance instead of assembled from two controls. An agent with a single login stays
@@ -256,6 +297,105 @@ export function NewTaskRoute() {
         ?.focus()
     }
   }, [providersReady])
+
+  const codexCatalogData = harnessCatalogs.codex.data
+  const opencodeCatalogData = harnessCatalogs.opencode.data
+  // Configured agentHarness advisor bindings (kimi-subscription, deepseek-api…)
+  // join the reviewer options (spec 2026-07-24-advisor-reviewers).
+  const harnessStatus = useHarnessStatus(multiModelEnabled)
+  const harnessStatusData = harnessStatus.data
+  const [harnessBaseReason, setHarnessBaseReason] = useState('')
+  const harnessOptions = useMemo<HarnessModelOption[]>(
+    () => [
+      ...runners.flatMap((r) => {
+        // Pi is a first-class ordinary runner, but the harness has no Pi probe/runtime binding
+        // yet. Do not advertise a lineup the conductor cannot execute.
+        if (r === 'pi') return []
+        return modelsForRunner(
+          r,
+          r === 'codex' ? codexCatalogData : r === 'opencode' ? opencodeCatalogData : undefined,
+        ).map((m) => ({
+          runner: r,
+          model: m.id,
+          label: m.label,
+          family: modelFamilyOf({ runner: r, model: m.id }),
+        }))
+      }),
+      ...advisorHarnessOptions(harnessStatusData),
+    ],
+    // `runners` derives from provider status; join to a stable key so the memo
+    // doesn't churn on every render's fresh array identity.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runners.join(','), codexCatalogData, opencodeCatalogData, harnessStatusData],
+  )
+  // Split by transport, because they answer different questions (2026-07-27):
+  // orchestrator and implementer can ONLY be runner-backed, so a workspace with
+  // one runner family and three configured advisors still cannot field a lineup
+  // — and used to be told "no models are available yet", which is false and
+  // sends the user to the wrong fix.
+  //
+  // `sessionRoleOptions` and not "not an advisor": OpenCode is runner-backed but
+  // cannot hold a session to stage-only, so it seats reviewers only. Counting it
+  // here let a claude+opencode workspace past this gate and into a lineup the
+  // server then refused.
+  const harnessRunnerFamilies = useMemo(
+    () => [...new Set(sessionRoleOptions(harnessOptions).map((o) => o.family))],
+    [harnessOptions],
+  )
+  const harnessAdvisorFamilies = useMemo(
+    () => [...new Set(harnessOptions.filter((o) => o.runner === 'harness').map((o) => o.family))],
+    [harnessOptions],
+  )
+  const harnessRoles = draft.harnessRoles ?? defaultHarnessRoles(harnessOptions)
+  const harnessBlocked = harnessRoles === null
+  // The composer always probes the custom lineup (2026-07-27: the named execution profiles
+  // are gone from this surface, so there is no second thing to probe).
+  const harnessProbe = useHarnessProbe(
+    undefined,
+    harnessRoles ?? undefined,
+    composerMode === 'multi' && harnessRoles !== null,
+  )
+  const harnessProbeBlock = harnessStartBlock(
+    harnessProbe.data,
+    harnessProbe.isPending,
+    harnessProbe.isError,
+  )
+  const [harnessSetupOpen, setHarnessSetupOpen] = useState(false)
+  useEffect(() => {
+    // Opening the Multi-model tab without the models to field a council prompts setup
+    // immediately (user feedback 2026-07-24) — not an inline error after the fact.
+    //
+    // It also has to CLOSE again (2026-07-27): the model catalogs and
+    // `/harness/status` land asynchronously, so the first render of this tab is
+    // always "blocked", and a dialog that only ever opened then sat on top of a
+    // perfectly valid lineup once the data arrived.
+    if (health.data === undefined) return
+    setHarnessSetupOpen(composerMode === 'multi' && harnessBlocked)
+  }, [composerMode, harnessBlocked, health.data !== undefined]) // eslint-disable-line react-hooks/exhaustive-deps
+  // Saved lineups (2026-07-24) live in the project's ui-state — passthrough by design, so
+  // this is purely additive client state. Save replaces a same-named preset; the list caps.
+  const uiHarnessPresets = uiState.data?.harnessPresets
+  const harnessPresets = useMemo(() => normalizeHarnessPresets(uiHarnessPresets), [uiHarnessPresets])
+  const persistHarnessPresets = (next: HarnessPreset[]) => {
+    void putUiState({ harnessPresets: next })
+      .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
+      .catch(() => {})
+  }
+  const saveHarnessPreset = (name: string) => {
+    if (harnessRoles === null) return
+    // Explicit cap (2026-07-24): the panel refuses past the limit with
+    // guidance — never a silent eviction of someone's saved lineup. Replacing
+    // a same-named preset is in-place and always allowed.
+    if (!canSaveHarnessPreset(harnessPresets, name).ok) return
+    persistHarnessPresets([
+      ...harnessPresets.filter((p) => p.name !== name),
+      { id: crypto.randomUUID(), name, roles: harnessRoles },
+    ])
+  }
+  const startHarnessSetup = () => {
+    setHarnessSetupOpen(false)
+    update(harnessSetupPrefill())
+  }
 
   // Parallel variants need a worktree per variant, hence git (the server 409s without it).
   // Read it from the PROJECT-scoped `/repo` above, never from `/api/health.repo`: health is bound
@@ -422,6 +562,57 @@ export function NewTaskRoute() {
       // Rejection restores the draft — nothing typed is lost to a race with the pickers.
       throw new Error('Still loading workflows and skills — try again in a second.')
     }
+    if (composerMode === 'multi') {
+      if (harnessBlocked || harnessRoles === null) {
+        setHarnessSetupOpen(true)
+        throw new Error('Multi-model needs models from at least two families — configure models first.')
+      }
+      if (harnessProbeBlock) throw new Error(harnessProbeBlock)
+      const staleBase = harnessStatusData?.base
+      if (
+        staleBase?.stale &&
+        staleBase.configured &&
+        staleBase.remoteDefault &&
+        harnessBaseReason.trim().length < 3
+      ) {
+        throw new Error('Explain why this run should use the configured stale base, or update the base branch first.')
+      }
+      const rolesIssue = harnessRolesIssue(harnessRoles)
+      if (rolesIssue) throw new Error(rolesIssue)
+      const modeDef = HARNESS_MODES.find((m) => m.id === harnessMode) ?? HARNESS_MODES[0]!
+      const multiSource: TaskSource = { source: 'workflow', ref: modeDef.workflow }
+      const created = await createRun(
+        buildCreateRunBody({
+          task: text,
+          source: multiSource,
+          model: '',
+          runner: 'claude',
+          defaultRunner: health.data?.defaultRunner ?? 'claude',
+          variants: 1,
+          images,
+          harnessRoles,
+          harnessSkillProfile,
+          harnessBaseAcknowledgement:
+            staleBase?.stale && staleBase.configured && staleBase.remoteDefault
+              ? {
+                  configuredBase: staleBase.configured,
+                  remoteDefault: staleBase.remoteDefault,
+                  reason: harnessBaseReason.trim(),
+                }
+              : undefined,
+        }),
+      )
+      void putUiState({
+        lastTask: multiSource,
+        recentSources: pushRecentSource(recentSources, multiSource),
+      })
+        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
+        .catch(() => {})
+      clearStartedDraft(draftProjectId)
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+      navigate(startedRunPath(created))
+      return
+    }
     if (draft.planFirst) {
       // Plan mode: submit means PLAN. A rejection propagates — the composer toasts and
       // restores the draft; a success restores the text ourselves (the composer already
@@ -555,17 +746,61 @@ export function NewTaskRoute() {
       <GhostCodeBackdrop />
 
       <div className="w-full max-w-[720px]">
-        <header className="mb-6 text-center max-md:mb-4">
+        <header className="mb-4 text-center max-md:mb-3">
           <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
             What should the agent work on?
           </h1>
-          {/* Follows the resolved run mode (#793). Printing the isolation promise
-              unconditionally made this line false for every run the user opted out of — and
-              for a non-git folder, where there is no worktree to opt into. */}
           <p data-slot="run-mode-note" className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
-            {composerRunModeNote({ worktree: worktreeOn, hasGit })}
+            {composerMode === 'multi'
+              ? 'Several models implement and review in one long staged run — you publish the result.'
+              : composerRunModeNote({ worktree: worktreeOn, hasGit })}
           </p>
         </header>
+
+        {/* The composer's two surfaces (user feedback 2026-07-23): the ordinary Task tab and
+            the Multi-model tab, a first-class entry instead of a workflow hidden in the picker.
+            Behind the `multiModel` config flag (off by default) there is only one surface, so
+            the whole strip disappears rather than rendering a single-tab tablist. */}
+        {multiModelEnabled ? (
+        <div className="mb-3 flex justify-center">
+          <div
+            role="tablist"
+            aria-label="Composer mode"
+            className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-[3px]"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={composerMode === 'task'}
+              onClick={() => update({ composerMode: 'task' })}
+              className={cn(
+                'h-7 rounded-md px-3 text-[12.5px] transition-colors',
+                composerMode === 'task'
+                  ? 'bg-card font-semibold text-foreground shadow-xs'
+                  : 'font-medium text-muted-foreground hover:text-foreground',
+              )}
+            >
+              Task
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={composerMode === 'multi'}
+              data-slot="multi-model-tab"
+              onClick={() => update({ composerMode: 'multi' })}
+              className={cn(
+                'inline-flex h-7 items-center gap-1.5 rounded-md px-3 text-[12.5px] transition-colors',
+                composerMode === 'multi'
+                  ? 'bg-card font-semibold text-foreground shadow-xs'
+                  : 'font-medium text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <SparklesIcon aria-hidden="true" className="size-3 text-violet" />
+              Multi-model
+            </button>
+          </div>
+        </div>
+        ) : null}
 
         <Composer
           ref={composerRef}
@@ -573,9 +808,19 @@ export function NewTaskRoute() {
           value={draft.text}
           onValueChange={(text) => update({ text })}
           autoFocus
-          placeholder="Describe a task for the agent — / for skills…"
+          placeholder={
+            composerMode === 'multi'
+              ? 'Describe the issue to fix or the feature to build — e.g. a whole new module…'
+              : 'Describe a task for the agent — / for skills…'
+          }
           ariaLabel="Describe a task for the agent"
-          sendAriaLabel={draft.planFirst ? 'Plan task' : 'Start task'}
+          sendAriaLabel={
+            composerMode === 'multi' ? 'Start multi-model run' : draft.planFirst ? 'Plan task' : 'Start task'
+          }
+          // A harness precondition blocks SENDING, never typing (2026-07-27):
+          // it used to disable the whole box, which put the probe's error text
+          // where the prompt's instructions belong and wiped the ability to
+          // keep writing every time a model changed and the probe re-ran.
           disabled={!providersReady || starting}
           disabledReason={
             providers.isPending
@@ -584,8 +829,28 @@ export function NewTaskRoute() {
                 ? 'Provider authentication could not be verified.'
                 : 'Connect an agent provider before starting a task.'
           }
-          autocompleteSkills
+          sendBlockedReason={
+            composerMode === 'multi'
+              ? (harnessProbeBlock ??
+                (harnessBlocked
+                  ? 'Multi-model needs models from at least two families — configure models first.'
+                  : undefined))
+              : undefined
+          }
+          autocompleteSkills={composerMode !== 'multi'}
           footerStart={
+            composerMode === 'multi' ? (
+              <>
+                {projectList.length > 1 && urlProjectId !== undefined ? (
+                  <ProjectPill
+                    projects={projectList}
+                    projectId={urlProjectId}
+                    onPick={(next) => navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })}
+                  />
+                ) : null}
+                {repo.data ? <BaseBranchPill repo={repo.data} /> : null}
+              </>
+            ) : (
             <>
               {/* The project pill LEADS the row (mockup new-task-project.html): everything to
                   its right is resolved against it, so it reads left-to-right as "in this
@@ -607,7 +872,7 @@ export function NewTaskRoute() {
                 ready={sourcesReady}
                 skills={skillList}
                 skillUsage={skillUsage}
-                workflows={workflowList}
+                workflows={taskWorkflows}
                 onPick={(next) => update({ source: next })}
               />
               {/* Icon-only: this row already carries source/runner/model/variants/worktree/
@@ -696,6 +961,7 @@ export function NewTaskRoute() {
               ) : null}
               {repo.data ? <BaseBranchPill repo={repo.data} /> : null}
             </>
+            )
           }
           footerEnd={
             <>
@@ -707,11 +973,13 @@ export function NewTaskRoute() {
                   Configure providers
                 </Link>
               ) : null}
-              <ModeSegment
-                planFirst={draft.planFirst}
-                planning={planning}
-                onModeChange={(planFirst) => update({ planFirst })}
-              />
+              {composerMode !== 'multi' ? (
+                <ModeSegment
+                  planFirst={draft.planFirst}
+                  planning={planning}
+                  onModeChange={(planFirst) => update({ planFirst })}
+                />
+              ) : null}
               <kbd
                 aria-hidden="true"
                 className="rounded-[5px] border border-b-2 border-border bg-card px-[5px] py-px font-mono text-[10.5px] font-medium text-muted-foreground"
@@ -722,7 +990,41 @@ export function NewTaskRoute() {
           }
         />
 
-        <SuggestedChips onPick={(text) => update({ text })} />
+        {composerMode === 'multi' ? (
+          <HarnessPanel
+            mode={harnessMode}
+            onMode={(next) => update({ harnessMode: next })}
+            skillProfile={harnessSkillProfile}
+            onSkillProfile={(next) => update({ harnessSkillProfile: next })}
+            probe={harnessProbe.data}
+            base={harnessStatusData?.base}
+            baseAcknowledgementReason={harnessBaseReason}
+            onBaseAcknowledgementReason={setHarnessBaseReason}
+            roles={harnessRoles}
+            onRoles={(next) => update({ harnessRoles: next })}
+            options={harnessOptions}
+            presets={harnessPresets}
+            onApplyPreset={(preset) => update({ harnessRoles: preset.roles })}
+            onSavePreset={saveHarnessPreset}
+            onDeletePreset={(id) => persistHarnessPresets(harnessPresets.filter((p) => p.id !== id))}
+            onAddModels={startHarnessSetup}
+          />
+        ) : (
+          <SuggestedChips onPick={(text) => update({ text })} />
+        )}
+
+        {composerMode === 'multi' && harnessSetupOpen ? (
+          <HarnessSetupDialog
+            families={harnessRunnerFamilies}
+            advisorFamilies={harnessAdvisorFamilies}
+            onConfigure={startHarnessSetup}
+            onBackToTask={() => {
+              setHarnessSetupOpen(false)
+              update({ composerMode: 'task' })
+            }}
+            onClose={() => setHarnessSetupOpen(false)}
+          />
+        ) : null}
       </div>
 
       {plan !== null ? (

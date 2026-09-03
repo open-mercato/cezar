@@ -163,3 +163,30 @@ describe('WorkflowSteps — the collapsible header summary', () => {
     expect(document.querySelector('[data-slot="step-row"]')).toBeNull()
   })
 })
+
+/**
+ * Step rows became jump targets (user request 2026-07-29): with a handler each
+ * row is a button that reports its step id; without one the rows stay inert —
+ * no dead buttons on surfaces that have no transcript to jump in.
+ */
+describe('StepRail step selection', () => {
+  const steps = [
+    { id: 'spec', name: 'Specify', kind: 'agent', status: 'done', iterations: 1 },
+    { id: 'implement', name: 'Implement', kind: 'agent', status: 'running', iterations: 1 },
+  ] as unknown as Parameters<typeof StepRail>[0]['steps']
+
+  it('reports the clicked step id and renders rows as buttons', () => {
+    const picked: string[] = []
+    render(<StepRail steps={steps} onSelectStep={(id) => picked.push(id)} />)
+
+    const rows = screen.getAllByRole('button')
+    expect(rows).toHaveLength(2)
+    rows[1]!.click()
+    expect(picked).toEqual(['implement'])
+  })
+
+  it('renders inert rows without a handler', () => {
+    render(<StepRail steps={steps} />)
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+  })
+})

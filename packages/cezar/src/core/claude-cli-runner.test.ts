@@ -30,6 +30,27 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
+/** Records tree teardowns instead of performing them, but only while a fake
+ *  child is installed — the real-process tests in this file need the real
+ *  teardown. See the teardown describe below for why a fake child must never
+ *  reach `process.kill`. */
+const treeHook = vi.hoisted(() => ({
+  recording: false,
+  calls: [] as Array<[unknown, number]>,
+}));
+
+vi.mock('./process-tree.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./process-tree.ts')>();
+  return {
+    ...actual,
+    terminateAgentProcessTree: (child: never, graceMs: number) => {
+      if (!treeHook.recording) return actual.terminateAgentProcessTree(child, graceMs);
+      treeHook.calls.push([child, graceMs]);
+      return setTimeout(() => {}, 0);
+    },
+  };
+});
+
 /**
  * The per-backend system-prompt delivery mechanism (spec §protocol v2
  * mapping table): claude gets `--append-system-prompt`, codex/opencode get
@@ -64,6 +85,19 @@ describe('buildClaudeArgs approval gate', () => {
     const args = buildClaudeArgs(spec, { CEZ_APPROVAL_GATE: '1' });
     const idx = args.indexOf('--permission-mode');
     expect(args[idx + 1]).toBe('acceptEdits');
+  });
+
+  it('loads only the invocation policy for stage-only harness sessions', () => {
+    const args = buildClaudeArgs({
+      ...spec,
+      env: { CEZ_HARNESS_CLAUDE_SETTINGS: '/tmp/harness-settings.json' },
+    });
+    expect(args.slice(args.indexOf('--settings'), args.indexOf('--settings') + 4)).toEqual([
+      '--settings',
+      '/tmp/harness-settings.json',
+      '--setting-sources',
+      '',
+    ]);
   });
 });
 
@@ -132,19 +166,24 @@ describe('a teardown cezar initiated', () => {
 });
 
 /**
- * #844 — the watchdogs used to ask `!child.killed` before escalating, but Node
+ * #844 — the watchdogs used to ask `!child.killed` before tearing down, but Node
  * sets `killed` the moment a signal is *delivered*. claude installs its own
  * SIGTERM handler, so the flag went true while the process ran on and the
- * SIGKILL that exists for exactly that case was never sent — one leaked CLI per
- * teardown. The escalation now follows real termination instead.
+ * teardown that exists for exactly that case was skipped — one leaked CLI per
+ * teardown. Every watchdog now follows real termination instead.
+ *
+ * The teardown itself is `terminateAgentProcessTree` (group SIGTERM, then a
+ * group-liveness-checked SIGKILL), and it is asserted here as a call rather than
+ * as signals: the module is mocked because a fake child's made-up pid would
+ * otherwise have `process.kill(-pid)` signal a real process group on the host.
+ * The escalation inside it is exercised against real processes in
+ * `process-tree.test.ts`.
  */
-describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
+describe('teardown for a CLI that survives SIGTERM', () => {
   function signallableChild(): {
     child: ChildProcessWithoutNullStreams;
-    signals: NodeJS.Signals[];
     exit: (code: number) => void;
   } {
-    const signals: NodeJS.Signals[] = [];
     const emitter = new EventEmitter();
     const child = Object.assign(emitter, {
       stdin: new PassThrough(),
@@ -152,36 +191,37 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
       stderr: new PassThrough(),
       exitCode: null as number | null,
       signalCode: null as NodeJS.Signals | null,
-      killed: false,
-      pid: 4242,
       // Node's semantics: delivery flips `killed`; a CLI with its own handler
-      // keeps running with `exitCode` still null.
-      kill: (signal: NodeJS.Signals) => {
-        signals.push(signal);
-        Object.assign(child, { killed: true });
-        return true;
-      },
+      // keeps running with `exitCode` still null. Pre-set here, because that is
+      // the state an earlier signal leaves behind and the one the old guard
+      // silently treated as "already dead".
+      killed: true,
+      pid: 4242,
+      kill: () => true,
     }) as unknown as ChildProcessWithoutNullStreams;
     const exit = (code: number) => {
       Object.assign(child, { exitCode: code });
       emitter.emit('exit', code, null);
     };
-    return { child, signals, exit };
+    return { child, exit };
   }
 
   function withFakeChild(run: (fake: ReturnType<typeof signallableChild>) => void): void {
     const fake = signallableChild();
     spawnHook.override = () => fake.child;
+    treeHook.calls.length = 0;
+    treeHook.recording = true;
     vi.useFakeTimers();
     try {
       run(fake);
     } finally {
       vi.useRealTimers();
+      treeHook.recording = false;
       spawnHook.override = null;
     }
   }
 
-  it('escalates after end() even though Node already flagged the child as killed', () => {
+  it('tears the tree down after end() even though Node already flagged the child as killed', () => {
     withFakeChild((fake) => {
       const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
         userPrompt: 'do it',
@@ -190,17 +230,14 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
       session.end();
 
       vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
-      expect(fake.signals).toEqual(['SIGTERM']);
-      // Delivered, not dead — the state that used to disable the escalation.
+      // Delivered, not dead — the state that used to disable the teardown.
       expect(fake.child.killed).toBe(true);
       expect(fake.child.exitCode).toBeNull();
-
-      vi.advanceTimersByTime(EOF_KILL_GRACE_MS);
-      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(treeHook.calls).toEqual([[fake.child, EOF_KILL_GRACE_MS]]);
     });
   });
 
-  it('escalates on the wall-clock timeout path as well', () => {
+  it('tears the tree down on the wall-clock timeout path as well', () => {
     withFakeChild((fake) => {
       const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 20 }).startSession({
         userPrompt: 'do it',
@@ -209,27 +246,21 @@ describe('SIGTERM→SIGKILL escalation for a CLI that survives SIGTERM', () => {
       void session.result.catch(() => undefined);
 
       vi.advanceTimersByTime(20);
-      expect(fake.signals).toEqual(['SIGTERM']);
-
-      vi.advanceTimersByTime(KILL_GRACE_MS);
-      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(treeHook.calls).toEqual([[fake.child, KILL_GRACE_MS]]);
     });
   });
 
-  it('stops escalating once the CLI really exits after SIGTERM', () => {
+  it('leaves a CLI that really exited alone', () => {
     withFakeChild((fake) => {
       const session = new ClaudeCliRunner({ bin: 'claude', timeoutMs: 0 }).startSession({
         userPrompt: 'do it',
         cwd: process.cwd(),
       });
       session.end();
-
-      vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
-      expect(fake.signals).toEqual(['SIGTERM']);
       fake.exit(143);
 
-      vi.advanceTimersByTime(EOF_KILL_GRACE_MS);
-      expect(fake.signals).toEqual(['SIGTERM']);
+      vi.advanceTimersByTime(EOF_TERM_GRACE_MS + EOF_KILL_GRACE_MS);
+      expect(treeHook.calls).toEqual([]);
     });
   });
 });
@@ -242,6 +273,117 @@ describe('prependSystemPrompt (codex/opencode delivery)', () => {
   it('leaves the user prompt untouched when no systemPrompt is set', () => {
     expect(prependSystemPrompt(undefined, 'do it')).toBe('do it');
   });
+});
+
+/**
+ * Turn-driven phase sessions (2026-07-24): with `autoEndAfterFirstTurn`
+ * off, a session must survive a turn boundary, accept a follow-up message
+ * (the phase nudge), run another turn, and close cleanly on `end()` — the
+ * mechanics `runAgentStep` relies on to keep a phase's background subagents
+ * alive across the boundary instead of killing them with the session.
+ */
+describe('ClaudeCliRunner turn-driven session', () => {
+  it('runs a second turn from a message sent after the first turn ends', async () => {
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { ClaudeCliRunner } = await import('./claude-cli-runner.js');
+    const dir = await mkdtemp(join(tmpdir(), 'cez-turns-'));
+    try {
+      const bin = join(dir, 'echo-claude.mjs');
+      await writeFile(
+        bin,
+        `#!/usr/bin/env node
+import { createInterface } from 'node:readline';
+const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+say({ type: 'system', subtype: 'init', session_id: 's-mt' });
+let n = 0;
+const rl = createInterface({ input: process.stdin });
+rl.on('line', () => {
+  n += 1;
+  say({ type: 'assistant', message: { content: [{ type: 'text', text: 'turn ' + n }] } });
+  say({ type: 'result', subtype: 'success', is_error: false, result: 'turn ' + n, usage: { output_tokens: 1 } });
+});
+rl.on('close', () => process.exit(0));
+`,
+        { mode: 0o755 },
+      );
+
+      const runner = new ClaudeCliRunner({ bin, timeoutMs: 60_000 });
+      const events: Array<{ type: string }> = [];
+      let turnEnds = 0;
+      const session = runner.startSession(
+        { userPrompt: 'first', cwd: dir, sessionId: 's-mt' },
+        (e) => {
+          events.push(e);
+          if (e.type === 'turn-end') {
+            turnEnds += 1;
+            if (turnEnds === 1) session.sendMessage([{ type: 'text', text: 'nudge: finish now' }]);
+            if (turnEnds === 2) session.end();
+          }
+        },
+        { autoEndAfterFirstTurn: false },
+      );
+      const result = await session.result;
+
+      expect(turnEnds).toBe(2);
+      expect(result.text).toContain('turn 1');
+      expect(result.text).toContain('turn 2');
+      expect(events.map((e) => e.type)).not.toContain('error');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+});
+
+/**
+ * The EOF watchdog's kill must read as clean closure (2026-07-24, live
+ * failure): a harness spec phase finished its turn, `end()` closed stdin, the
+ * claude CLI ignored EOF (janitor-confirmed bug) and hung, the watchdog
+ * SIGTERMed it — and the exit 143 failed a phase whose work had already
+ * succeeded. The runner must deliver the result and note the cleanup kill,
+ * never throw. Wall clock: the test rides the real EOF_TERM_GRACE_MS (8s).
+ */
+describe('ClaudeCliRunner EOF watchdog', () => {
+  it('treats the watchdog kill of an EOF-ignoring CLI as clean closure, not a failure', async () => {
+    const { mkdtemp, rm, writeFile } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { ClaudeCliRunner } = await import('./claude-cli-runner.js');
+    const dir = await mkdtemp(join(tmpdir(), 'cez-eof-'));
+    try {
+      const bin = join(dir, 'stuck-claude.mjs');
+      await writeFile(
+        bin,
+        `#!/usr/bin/env node
+setInterval(() => {}, 60_000);
+process.on('SIGTERM', () => process.exit(143));
+process.stdin.resume();
+const say = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+say({ type: 'system', subtype: 'init', session_id: 's-eof' });
+say({ type: 'assistant', message: { content: [{ type: 'text', text: 'spec finished' }] } });
+say({ type: 'result', subtype: 'success', is_error: false, result: 'spec finished', session_id: 's-eof', usage: { input_tokens: 10, output_tokens: 5 } });
+`,
+        { mode: 0o755 },
+      );
+
+      const runner = new ClaudeCliRunner({ bin, timeoutMs: 60_000 });
+      const events: Array<{ type: string; message?: unknown }> = [];
+      const result = await runner.run(
+        { userPrompt: 'write the spec', cwd: dir, sessionId: 's-eof' },
+        (e) => events.push(e as { type: string; message?: unknown }),
+      );
+
+      expect(result.text).toContain('spec finished');
+      const types = events.map((e) => e.type);
+      expect(types).toContain('turn-end');
+      expect(types).toContain('done');
+      expect(types).not.toContain('error');
+      expect(events.some((e) => e.type === 'note' && String(e.message).includes('ignored EOF'))).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });
 
 describe('ClaudeCliRunner token usage', () => {

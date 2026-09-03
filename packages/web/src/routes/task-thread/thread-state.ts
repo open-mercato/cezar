@@ -40,6 +40,9 @@ export interface ThreadNote {
   id: string
   text: string
   tone: 'dim' | 'danger'
+  /** A synthetic client-side phase boundary (2026-07-29): rendered as a step
+   *  divider, and the row the header's step panel jumps to. */
+  marker?: 'step-start'
 }
 
 /** An image the run persisted (v1 `image` line: served from `/api/runs/:id/images/…`). */
@@ -206,19 +209,55 @@ function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | un
  *
  *  `stripAsk` gates the `CEZ:ASK` strip on the turn actually holding an ask card (#473): the
  *  card is the only other place the questions exist, so a marker whose card never materialized
- *  (invalid payload, or the session died before turn-end) must stay visible as raw text — the
- *  user can still read the question and answer via the composer. Hiding it would delete the
- *  question from the thread entirely. */
+ *  (invalid payload, a non-interactive harness phase, or the session died before turn-end)
+ *  must stay VISIBLE — but visible as readable questions, not as the raw protocol JSON it was
+ *  repeatedly reported as. `askMarkerAsProse` rewrites anything ask-shaped; only a payload too
+ *  broken to read as questions stays raw, because raw is then the only honest rendering. */
 function stripDoneMarker(text: string, stripAsk: boolean): string {
   let trailing = text
     .replace(/\s*CEZ:DONE\s*$/, '')
     .replace(/\s*CEZ:MONITORING\s*$/, '')
   if (stripAsk) trailing = trailing.replace(/\s*CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, '')
+  else trailing = askMarkerAsProse(trailing) ?? trailing
   if (!trailing.includes('CEZ:')) return trailing
   return trailing
     .split('\n')
     .filter((line) => !/^CEZ:(?:PR=\d+|ISSUE=\d+|TITLE=.+)\s*$/.test(line))
     .join('\n')
+}
+
+function askMarkerAsProse(trailing: string): string | null {
+  const match = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/.exec(trailing.trimEnd())
+  if (!match) return null
+  let raw: unknown
+  try {
+    raw = JSON.parse(match[1]!)
+  } catch {
+    return null
+  }
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const questions = (raw as { questions?: unknown }).questions
+  if (!Array.isArray(questions) || questions.length === 0) return null
+  const blocks: string[] = []
+  for (const entry of questions) {
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) continue
+    const question = entry as Record<string, unknown>
+    const text = typeof question.question === 'string' ? question.question.trim() : ''
+    if (!text) continue
+    const header = typeof question.header === 'string' ? question.header.trim() : ''
+    const lines = [header ? `**${header}** — ${text}` : `**${text}**`]
+    for (const rawOption of Array.isArray(question.options) ? question.options : []) {
+      if (rawOption === null || typeof rawOption !== 'object' || Array.isArray(rawOption)) continue
+      const option = rawOption as Record<string, unknown>
+      const label = typeof option.label === 'string' ? option.label.trim() : ''
+      if (!label) continue
+      const description = typeof option.description === 'string' ? option.description.trim() : ''
+      lines.push(description ? `- ${label} — ${description}` : `- ${label}`)
+    }
+    blocks.push(lines.join('\n'))
+  }
+  if (blocks.length === 0) return null
+  return trailing.replace(/CEZ:ASK[ \t]+\{[\s\S]*\}\s*$/, blocks.join('\n\n'))
 }
 
 /**
@@ -373,7 +412,20 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
     itemsById.set(key, { turn, entry: draft })
   }
 
+  /** The last workflow step whose events reached the transcript. Phases share
+   *  turns (a harness run folds several phases into one), so step boundaries
+   *  are their own synthetic entries: a marker note pushed the moment the
+   *  stream switches steps — the divider the step panel jumps to (2026-07-29). */
+  let currentStepId: string | undefined
   for (const event of events) {
+    const eventStepId = str(event.stepId)
+    if (eventStepId !== undefined && eventStepId !== currentStepId) {
+      currentStepId = eventStepId
+      currentTurn().entries.push({
+        origin: 'meta',
+        entry: { kind: 'note', id: `step-start:${eventStepId}`, text: eventStepId, tone: 'dim', marker: 'step-start' },
+      })
+    }
     switch (event.type) {
       // ---- turn boundaries ------------------------------------------------------------
       case 'user-message': {

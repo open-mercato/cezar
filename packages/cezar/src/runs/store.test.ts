@@ -1568,6 +1568,75 @@ describe('RunStore — queuedMessages (#472)', () => {
   });
 });
 
+/**
+ * Step ordering (user report 2026-07-29): the harness predeclares its seven
+ * base steps and creates the rest (baseline gate, council rounds, fix rounds)
+ * while conducting. Appending those at the tail displayed "Stage · step 7 of
+ * 19" on a run whose stage ran LAST. A new step is created the moment
+ * execution reaches it, so it lands before the first not-yet-started step.
+ */
+describe('RunStore — addStep lands at the execution point', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-steps-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const harnessSteps = () =>
+    ['preflight', 'capture', 'spec', 'implement', 'validate', 'review', 'stage'].map((id) => ({
+      id,
+      name: id,
+      kind: 'agent' as const,
+    }));
+
+  it('inserts a dynamic step before the first pending one, keeping execution order', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: harnessSteps() });
+    // Preflight and capture ran; the driver then creates the baseline gate.
+    store.updateStep(run.id, 'preflight', { status: 'done' });
+    store.updateStep(run.id, 'capture', { status: 'done' });
+    store.addStep(run.id, { id: 'baseline-gate', name: 'Baseline gate', kind: 'check' });
+    store.updateStep(run.id, 'baseline-gate', { status: 'done' });
+    // Spec ran and its council rounds follow, each created as it starts.
+    store.updateStep(run.id, 'spec', { status: 'done' });
+    store.addStep(run.id, { id: 'spec-review', name: 'Spec council', kind: 'agent' });
+    store.updateStep(run.id, 'spec-review', { status: 'done' });
+    store.addStep(run.id, { id: 'spec-2', name: 'Revise spec (round 2)', kind: 'agent' });
+    store.updateStep(run.id, 'spec-2', { status: 'done' });
+
+    expect(store.getRun(run.id)!.steps.map((step) => step.id)).toEqual([
+      'preflight',
+      'capture',
+      'baseline-gate',
+      'spec',
+      'spec-review',
+      'spec-2',
+      'implement',
+      'validate',
+      'review',
+      'stage',
+    ]);
+  })
+
+  it('keeps the plain append for Continue on a finished run', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({
+      title: 't',
+      workflow: 'w',
+      task: 'task',
+      steps: [{ id: 'task', name: 'Do the task', kind: 'agent' }],
+    });
+    store.updateStep(run.id, 'task', { status: 'done' });
+    store.addStep(run.id, { id: 'continue-1', name: 'Continue', kind: 'agent' });
+
+    expect(store.getRun(run.id)!.steps.map((step) => step.id)).toEqual(['task', 'continue-1'])
+  })
+})
+
 describe('RunStore — read receipts (#unread-done-items)', () => {
   let dataDir: string;
 

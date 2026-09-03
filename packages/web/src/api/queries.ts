@@ -5,12 +5,15 @@ import { mergeProviderStatusResponse } from '@/lib/provider-status'
 
 import {
   ApiError,
+  acceptContestedHarness,
   browseFs,
   checkoutProject,
   connectProvider,
   continueRun,
   continueProjectRun,
+  councilDecision,
   createAgentProfile,
+  editQueuedMessage,
   getAgentConfig,
   getAgentConfigFile,
   getAgentAccountDetails,
@@ -23,28 +26,31 @@ import {
   getGithubPrChanges,
   getGithubRefStatus,
   getGroup,
+  getHarnessStatus,
+  getHarnessInvocation,
+  getRunHarness,
   getHealth,
+  getImportableSkills,
+  getImportableSkillsWhenReady,
   getLaunchKey,
   getOpenTargets,
   getProviderStatus,
   getProjectRun,
   getProjectRuns,
   getProjects,
-  getRunnerModels,
   getRepo,
-  getRunCommit,
-  getRunCommits,
   getRepoChanges,
   getRepoCommit,
   getRun,
   getRunChanges,
+  getRunCommit,
+  getRunCommits,
   getRunDiff,
   getRunFile,
   getRunHandoff,
+  getRunnerModels,
   getRuns,
   getRunsIndex,
-  getImportableSkills,
-  getImportableSkillsWhenReady,
   getSkills,
   getSkillsWhenReady,
   getTodos,
@@ -56,21 +62,21 @@ import {
   checkSkillsUpdate,
   applySkillsUpdate,
   getWorktrees,
-  editQueuedMessage,
   markRunSeen,
   markRunUnseen,
   patchRun,
-  removeQueuedMessage,
+  probeHarness,
+  putAgentConfigFile,
   registerProject,
   openAgentAccountFile,
   removeAgentProfile,
   removeProject,
+  removeQueuedMessage,
   selectAgentProfile,
   updateAgentProfile,
-  updateProject,
   sendMessage,
   sendProjectRunMessage,
-  putAgentConfigFile,
+  updateProject,
   retryProviderAuth,
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
@@ -82,6 +88,8 @@ import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
   CreateAgentProfileInput,
+  HarnessProfile,
+  HarnessRoles,
   HealthResponse,
   MessageInput,
   Runner,
@@ -133,12 +141,19 @@ export const queryKeys = {
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
+    harness: (id: string) => [queryScope(), 'runs', 'harness', id] as const,
   },
   groups: {
     detail: (groupId: string) => [queryScope(), 'groups', groupId] as const,
   },
   get todos() {
     return [queryScope(), 'todos'] as const
+  },
+  harness: {
+    get status() {
+      return [queryScope(), 'harness', 'status'] as const
+    },
+    probe: (profile: string) => [queryScope(), 'harness', 'probe', profile] as const,
   },
   get workflows() {
     return [queryScope(), 'workflows'] as const
@@ -832,6 +847,85 @@ export function useRun(id: string | undefined) {
   })
 }
 
+/** Durable harness snapshot. Live progress is folded from the existing per-run SSE stream by
+ *  the routed views, so this query never polls and does not open another connection. */
+export function useRunHarness(id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.runs.harness(id ?? ''),
+    queryFn: ({ signal }) => getRunHarness(id as string, { signal }),
+    enabled: Boolean(id) && enabled,
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+}
+
+/** A reviewer's conversation. Enabled only while its drawer is open, and cached
+ *  indefinitely — a finished invocation's artifacts never change. */
+export function useHarnessInvocation(id: string | undefined, invocationId: string | null) {
+  return useQuery({
+    queryKey: [...queryKeys.runs.harness(id ?? ''), 'invocation', invocationId ?? ''] as const,
+    queryFn: ({ signal }) => getHarnessInvocation(id as string, invocationId as string, { signal }),
+    enabled: Boolean(id) && Boolean(invocationId),
+    retry: false,
+    staleTime: Number.POSITIVE_INFINITY,
+  })
+}
+
+export function useAcceptContestedHarness(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (reason: string) => acceptContestedHarness(id, reason),
+    onSuccess: ({ outcome, decisions, resumed }) => {
+      if (resumed) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.detail(id) })
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.list() })
+        return
+      }
+      // BOTH halves, or publishing never unlocks (review 2026-07-27): the gate
+      // requires the matching `accept-contested` decision row as well as the
+      // acceptance stamp on `outcome`, and this query never refetches on its own
+      // (`staleTime: Infinity`, no polling), so a partial patch is permanent —
+      // the panel said "accepted" while Finish and Draft PR stayed disabled.
+      queryClient.setQueryData<import('@open-mercato/cezar-api-client').HarnessLedgerResponse>(
+        queryKeys.runs.harness(id),
+        (ledger) => {
+          if (!ledger) return ledger
+          const rows =
+            decisions ??
+            (outcome.acceptedAt && outcome.acceptanceReason
+              ? [
+                  ...(ledger.decisions ?? []),
+                  {
+                    at: outcome.acceptedAt,
+                    kind: 'accept-contested',
+                    by: outcome.acceptedBy ?? 'user',
+                    detail: outcome.acceptanceReason,
+                  },
+                ]
+              : ledger.decisions)
+          return { ...ledger, outcome, ...(rows ? { decisions: rows } : {}) }
+        },
+      )
+    },
+  })
+}
+
+/** Resolve a paused council: retry the failed reviewers or proceed with the
+ *  survivors. The run resumes server-side, so the run + ledger queries are
+ *  invalidated rather than patched — the driver rewrites both immediately. */
+export function useCouncilDecision(id: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (action: 'retry' | 'proceed') => councilDecision(id, action),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.detail(id) })
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.list() })
+    },
+  })
+}
+
 /**
  * One run of a NAMED project — what a surface outside `/p/:projectId` has to use.
  *
@@ -1054,11 +1148,40 @@ export function useRepoCommit(sha: string | undefined) {
 
 /** The Settings → Agents knobs (R6 1.5): base branch, default runner, system prompt, per-runner
  *  model presets. Task-start surfaces read this project-scoped query for both runner and model
- *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo. */
-export function useConfig() {
+ *  defaults; `/api/health` is workspace-level and intentionally describes only the boot repo.
+ *  `enabled: false` skips the fetch for callers outside a project scope (the global settings
+ *  shell), where the answer would be the boot repo's and the traffic is contractually absent. */
+export function useConfig(enabled = true) {
   return useQuery({
     queryKey: queryKeys.config,
     queryFn: ({ signal }) => getConfig({ signal }),
+    enabled,
+  })
+}
+
+// ---- cez-harness (spec 2026-07-23-harness-orchestration) -----------------------------------
+
+/** Installed/configured harness summary + model roster (Settings → Harness, composer panel). */
+export function useHarnessStatus(enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.harness.status,
+    queryFn: ({ signal }) => getHarnessStatus({ signal }),
+    enabled,
+  })
+}
+
+/** Probe one profile's readiness. Keyed per profile so switching the segment shows each
+ *  profile's own cached answer instantly; a fresh probe still runs on mount. */
+export function useHarnessProbe(
+  profile: HarnessProfile | undefined,
+  roles: HarnessRoles | undefined,
+  enabled = true,
+) {
+  const key = profile ?? JSON.stringify(roles ?? null)
+  return useQuery({
+    queryKey: queryKeys.harness.probe(key),
+    queryFn: () => probeHarness(profile, roles),
+    enabled,
   })
 }
 
@@ -1339,7 +1462,12 @@ export function useSendMessage(id: string, projectId?: string) {
     // is the ordinary case and keeps the scoped-by-context spelling.
     mutationFn: (message: MessageInput) =>
       projectId === undefined ? sendMessage(id, message) : sendProjectRunMessage(projectId, id, message),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+    onSuccess: (response) => {
+      void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+      if ('queuedForPhase' in response) {
+        void queryClient.invalidateQueries({ queryKey: queryKeys.runs.harness(id) })
+      }
+    },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) {
         void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })

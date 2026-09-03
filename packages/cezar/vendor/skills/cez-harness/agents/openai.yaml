@@ -1,0 +1,6 @@
+interface:
+  display_name: "Agent Harness"
+  short_description: "Shared staged-only packet and review runtime"
+  default_prompt: "Use $cez-harness only as the shared runtime for staged-only wrapper workflows."
+policy:
+  allow_implicit_invocation: false

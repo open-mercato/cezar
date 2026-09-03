@@ -1,5 +1,6 @@
 import {
   BellIcon,
+  NetworkIcon,
   BookmarkIcon,
   BotIcon,
   FileCogIcon,
@@ -21,6 +22,7 @@ import { AgentConfigSection } from './agent-config-section'
 import { AgentsSection } from './agents-section'
 import { AppearanceSection } from './appearance'
 import { BookmarkletsSection } from './bookmarklets-section'
+import { HarnessSection } from './harness-section'
 import { NotificationsSection } from './notifications-section'
 import { ProjectsSection } from './projects-section'
 import { PromptTemplatesSection } from './prompt-templates-section'
@@ -46,6 +48,7 @@ import { WorktreesSection } from './worktrees-section'
 
 export type SettingsSectionId =
   | 'bookmarklets'
+  | 'harness'
   | 'appearance'
   | 'accounts'
   | 'agents'
@@ -97,6 +100,14 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     description: 'Default runner, models and system prompt.',
     icon: BotIcon,
     component: AgentsSection,
+    scope: 'project',
+  },
+  {
+    id: 'harness',
+    title: 'Harness',
+    description: 'Multi-model runs: profiles, model access, staged-only pipeline.',
+    icon: NetworkIcon,
+    component: HarnessSection,
     scope: 'project',
   },
   {
@@ -198,12 +209,19 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  */
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Pick<Capabilities, 'singleProject'>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject'>> & {
+    /** The per-project `multiModel` config flag. `false` hides the Harness section
+     *  (feature off); absent keeps it — route registration happens above the
+     *  project scope, where the config is unknowable, and the section component
+     *  itself explains the gate on a direct URL. */
+    multiModel?: boolean
+  },
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects'),
+      !(capabilities?.singleProject === true && section.id === 'projects') &&
+      !(capabilities?.multiModel === false && section.id === 'harness'),
   )
 }

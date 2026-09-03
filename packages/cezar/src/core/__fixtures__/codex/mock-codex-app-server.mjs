@@ -36,13 +36,29 @@ rl.on('line', (line) => {
   } else if (msg.method === 'initialize') {
     emit({ id: msg.id, result: { userAgent: 'mock-codex/0.0.0' } });
   } else if (msg.method === 'thread/start' || msg.method === 'thread/resume') {
-    const expectedSandbox = process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access';
+    const expectedSandbox =
+      process.env.CEZ_CODEX_NETWORK === '0' ||
+      process.env.CEZ_HARNESS_STAGE_ONLY === '1'
+        ? 'workspace-write'
+        : 'danger-full-access';
     if (msg.params?.sandbox !== expectedSandbox || msg.params?.approvalPolicy !== 'never') {
       emit({ id: msg.id, error: { code: -32602, message: `expected ${expectedSandbox} auto permissions` } });
       return;
     }
     if (process.argv.includes('sandbox_workspace_write.network_access=true')) {
       emit({ id: msg.id, error: { code: -32602, message: 'workspace-write override is obsolete in full-access mode' } });
+      return;
+    }
+    // Opt-in assertion for the stage-only writable-roots grant: the phase-result
+    // dir must arrive as spawn-time sandbox config or the thread must not start.
+    const requiredRoot = process.env.MOCK_CODEX_REQUIRE_WRITABLE_ROOTS;
+    if (
+      requiredRoot &&
+      !process.argv.some(
+        (arg) => arg.startsWith('sandbox_workspace_write.writable_roots=') && arg.includes(requiredRoot),
+      )
+    ) {
+      emit({ id: msg.id, error: { code: -32602, message: `expected writable_roots config carrying ${requiredRoot}` } });
       return;
     }
     if (msg.method === 'thread/start') {

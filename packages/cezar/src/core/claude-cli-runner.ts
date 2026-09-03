@@ -15,9 +15,14 @@ import type {
 // Re-exported for backends and the run manager that still import them from here.
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
+import { thinkingBudgetFor } from './reasoning-effort.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
+import {
+  AGENT_PROCESS_DETACHED,
+  terminateAgentProcessTree,
+} from './process-tree.ts';
 import {
   claudeTurnStarted,
   createClaudeUiState,
@@ -91,11 +96,20 @@ export class ClaudeCliRunner implements AgentRunner {
   ): AgentSession {
     const args = buildClaudeArgs(spec);
 
+    // Reasoning effort (user feedback 2026-07-24): the CLI reads a thinking
+    // budget from MAX_THINKING_TOKENS. A caller-provided value in `spec.env`
+    // wins — the tier is a convenience, not an override.
+    const thinkingBudget = thinkingBudgetFor(spec.reasoningEffort);
+    const effortEnv =
+      thinkingBudget !== null && spec.env?.MAX_THINKING_TOKENS === undefined
+        ? { MAX_THINKING_TOKENS: String(thinkingBudget) }
+        : undefined;
     let child: ChildProcessWithoutNullStreams;
     try {
       child = nodeSpawn(this.bin, args, {
         cwd: spec.cwd,
-        env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
+        env: buildChildEnv({ backend: this.backend, extraEnv: { ...spec.env, ...effortEnv } }),
+        detached: AGENT_PROCESS_DETACHED,
       });
     } catch (err) {
       throw wrapSpawnError(err, this.bin);
@@ -105,6 +119,13 @@ export class ClaudeCliRunner implements AgentRunner {
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
+    let eofKilled = false;
+
+    child.stdin.on('error', (err: NodeJS.ErrnoException) => {
+      stdinOpen = false;
+      if (err.code === 'EPIPE') return;
+      onEvent?.({ type: 'note', message: `claude: stdin error: ${err.message}` });
+    });
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -150,11 +171,14 @@ export class ClaudeCliRunner implements AgentRunner {
     // Set the moment WE signal the child — the EOF watchdog, a cancel, or the
     // wall-clock kill switch. claude installs its own SIGTERM handler and exits
     // 143 instead of dying from the signal, so without this flag our own
-    // teardown reads as an agent failure (#703).
+    // teardown reads as an agent failure (#703). Termination itself is
+    // tree-wide: the CLI's own children (MCP servers, provider processes) must
+    // not outlive it, and the group-liveness escalation inside
+    // `terminateAgentProcessTree` replaces the per-child SIGKILL timers.
     let terminatedByCezar = false;
-    const signalChild = (signal: 'SIGTERM' | 'SIGKILL'): void => {
+    const terminateChild = (graceMs: number): NodeJS.Timeout => {
       terminatedByCezar = true;
-      child.kill(signal);
+      return terminateAgentProcessTree(child, graceMs);
     };
     // Every watchdog below asks "is the child still alive?" — and that question
     // is NOT `child.killed`, which only reports signal delivery. claude handles
@@ -171,18 +195,17 @@ export class ClaudeCliRunner implements AgentRunner {
         // already gone
       }
       eofTermTimer = setTimeout(() => {
-        if (!hasExited()) signalChild('SIGTERM');
-        eofKillTimer = setTimeout(() => {
-          if (!hasExited()) signalChild('SIGKILL');
-        }, EOF_KILL_GRACE_MS);
-        eofKillTimer.unref?.();
+        if (!hasExited()) {
+          eofKilled = true;
+          eofKillTimer = terminateChild(EOF_KILL_GRACE_MS);
+        }
       }, EOF_TERM_GRACE_MS);
       eofTermTimer.unref?.();
     };
 
     const interrupt = (): void => {
       stdinOpen = false;
-      if (!hasExited()) signalChild('SIGTERM');
+      if (!hasExited()) terminateChild(KILL_GRACE_MS);
     };
 
     // Seed the first user message — the same path every follow-up takes.
@@ -206,17 +229,12 @@ export class ClaudeCliRunner implements AgentRunner {
     // Optional wall-clock kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? this.timeoutMs;
     let timedOut = false;
-    let killTimer: NodeJS.Timeout | undefined;
     let deadline: NodeJS.Timeout | undefined;
     if (limitMs > 0) {
       deadline = setTimeout(() => {
         timedOut = true;
         interrupt();
         child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!hasExited()) signalChild('SIGKILL');
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
       }, limitMs);
       deadline.unref?.();
     }
@@ -272,7 +290,6 @@ export class ClaudeCliRunner implements AgentRunner {
         if (!timedOut) throw err;
       } finally {
         if (deadline) clearTimeout(deadline);
-        if (killTimer) clearTimeout(killTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
       }
@@ -298,13 +315,28 @@ export class ClaudeCliRunner implements AgentRunner {
       if (terminatedByCezar && isSignalTerminationExit(exitCode)) {
         onEvent?.({
           type: 'note',
-          message: `claude CLI did not exit on its own after close; terminated by cezar (code ${exitCode})`,
+          message: eofKilled
+            ? `claude CLI ignored EOF after session end and was terminated (exit ${exitCode}) — result already delivered (known CLI bug)`
+            : `claude CLI did not exit on its own after close; terminated by cezar (code ${exitCode})`,
         });
         onEvent?.({ type: 'done' });
         return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
       }
 
       if (exitCode !== 0 && exitCode !== null) {
+        if (eofKilled) {
+          // Seen live 2026-07-24: a harness spec phase finished its turn,
+          // `end()` closed stdin, claude ignored EOF (janitor-confirmed CLI
+          // bug), the watchdog SIGTERMed it — and the exit 143 failed a phase
+          // whose work had already succeeded. Our own cleanup kill is not an
+          // error.
+          onEvent?.({
+            type: 'note',
+            message: `claude CLI ignored EOF after session end and was terminated (exit ${exitCode}) — result already delivered (known CLI bug)`,
+          });
+          onEvent?.({ type: 'done' });
+          return { text, toolCalls, tokensUsed, sessionId: spec.sessionId };
+        }
         const stderr = stderrChunks.join('').trim();
         const detail = stderr ? ` — ${stderr.split('\n').slice(-3).join(' | ')}` : '';
         const msg = `claude CLI exited with code ${exitCode}${detail}`;
@@ -326,6 +358,7 @@ export class ClaudeCliRunner implements AgentRunner {
       end,
       interrupt,
       pid: child.pid,
+      processGroup: true,
       get open() {
         return stdinOpen;
       },
@@ -357,6 +390,13 @@ export function buildClaudeArgs(
   ];
   if (spec.systemPrompt) {
     args.push('--append-system-prompt', spec.systemPrompt);
+  }
+  if (spec.env?.CEZ_HARNESS_CLAUDE_SETTINGS) {
+    args.push('--settings', spec.env.CEZ_HARNESS_CLAUDE_SETTINGS);
+    // Harness isolation must not be widened by a target repository's local
+    // Claude settings (for example sandbox allowWrite/excludedCommands).
+    // `--settings` above remains the sole invocation-specific policy source.
+    args.push('--setting-sources', '');
   }
   // Pin the session so the user can `claude --resume <sessionId>` in the repo
   // to take over interactively after a run. With `resume` we reopen the

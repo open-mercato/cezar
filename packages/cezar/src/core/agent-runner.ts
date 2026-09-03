@@ -56,6 +56,12 @@ export interface AgentRunSpec {
    *  e.g. CEZ_HANDOFF_FILE / CEZ_TODOS_FILE / CEZ_TASK_ID (spec 007). */
   env?: Record<string, string>;
   model?: string;
+  /** Reasoning effort for the session (user feedback 2026-07-24) — one neutral
+   *  four-tier scale, mapped per backend in `reasoning-effort.ts`: claude via
+   *  the `MAX_THINKING_TOKENS` budget, codex via its thread reasoning-effort
+   *  level; opencode has no documented channel in version 1 and deliberately
+   *  ignores it. Absent = the backend's own default. */
+  reasoningEffort?: 'low' | 'medium' | 'high' | 'max';
   /** Wall-clock kill switch for the run (ms). */
   timeoutMs?: number;
   /**
@@ -187,6 +193,7 @@ export interface AgentSession {
    *  tree (agents spawn Bash children under it). Absent when the spawn
    *  failed before a pid existed. Feeds live resource telemetry (#348). */
   readonly pid?: number;
+  readonly processGroup?: boolean;
   /** Write a user message into the live session. False when it is closed. */
   sendMessage(content: ContentBlock[]): boolean;
   /** Graceful close: end input, then a SIGTERM→SIGKILL watchdog. */

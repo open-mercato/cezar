@@ -27,15 +27,13 @@ import type {
   ChangesPayload,
   CheckoutProjectInput,
   ConfigResponse,
-  ReclaimWorktreesResponse,
-  RemoveWorktreeResponse,
-  WorktreesResponse,
   ContinueResponse,
   CreatePrResponse,
   CreateRunInput,
   CreateRunResponse,
   DeleteRunResponse,
   DeleteWorkflowResponse,
+  EditQueuedMessageResponse,
   FinishResponse,
   FsBrowseResponse,
   GitCommitResponse,
@@ -49,13 +47,18 @@ import type {
   GithubPrMergeStateResponse,
   GithubPrChangesData,
   GroupResponse,
+  HarnessInvocationDetail,
+  HarnessLedgerResponse,
+  HarnessProbeResponse,
+  HarnessProfile,
+  HarnessRoles,
+  HarnessStatusResponse,
   HealthResponse,
   ImageInput,
+  ImportableSkill,
   LaunchKeyResponse,
   MessageInput,
-  EditQueuedMessageResponse,
   MessageResponse,
-  RemoveQueuedMessageResponse,
   OpenInCliResponse,
   OpenProjectInResponse,
   OpenTargetsResponse,
@@ -67,39 +70,42 @@ import type {
   ProviderId,
   ProviderStatusResponse,
   ProjectsResponse,
+  ReclaimWorktreesResponse,
   RegisterProjectResponse,
   RemoveProjectResponse,
-  UpdateProjectInput,
-  UpdateProjectResponse,
+  RemoveQueuedMessageResponse,
   RemoveTodoResponse,
+  RemoveWorktreeResponse,
   RepoBranchResponse,
   RepoCommitPayload,
   RunCommitsResponse,
   RunHistoryContext,
   RunHistoryPage,
   RepoResponse,
+  RunRecord,
   Runner,
   ModelDiscoveryRunner,
   RunnerModelCatalogResponse,
-  RunRecord,
   RunsIndexResponse,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
+  SetAgentConfigInput,
   SetConfigInput,
   SetConfigResponse,
-  SetAgentConfigInput,
   SetWorkspaceConfigInput,
   SetWorkspaceUiStateInput,
-  ImportableSkill,
   Skill,
   StartTodoResponse,
   TodoItem,
   UiState,
+  UpdateProjectInput,
+  UpdateProjectResponse,
   WorkflowsResponse,
   WorkspaceConfigResponse,
   WorkspaceUiState,
   SkillsUpdateState,
+  WorktreesResponse,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import {
@@ -108,6 +114,7 @@ import {
   createCezarClient,
   getApiBaseUrl,
   getApiScope,
+  harnessLedgerResponseSchema,
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
@@ -650,6 +657,102 @@ export async function getConfig(opts?: ReadOptions): Promise<ConfigResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].config.$get({ param: { projectId: queryScope() } }, init(opts)),
     '/config',
+  )
+}
+
+// ---- cez-harness (spec 2026-07-23-harness-orchestration) ---------------------------------
+
+/** Installed/configured harness summary + the model roster for Settings and the composer. */
+export async function getHarnessStatus(opts?: ReadOptions): Promise<HarnessStatusResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].harness.status.$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/harness/status',
+  )
+}
+
+/** Readiness of one profile before starting a harness run. */
+export async function probeHarness(
+  profile: HarnessProfile | undefined,
+  roles?: HarnessRoles,
+): Promise<HarnessProbeResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].harness.probe.$post({
+      param: { projectId: queryScope() },
+      json: {
+        ...(profile ? { profile } : {}),
+        ...(roles ? { roles } : {}),
+      },
+    }),
+    '/harness/probe',
+  )
+}
+
+/** The run's harness ledger — 404s (throws) when the run has none. */
+export async function getRunHarness(
+  id: string,
+  opts?: ReadOptions,
+): Promise<HarnessLedgerResponse> {
+  return harnessLedgerResponseSchema.parse(await unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].harness.$get(
+      { param: { projectId: queryScope(), id } },
+      init(opts),
+    ),
+    runPath(id, '/harness'),
+  ))
+}
+
+/** One reviewer invocation's prompt and result — the conversation behind a
+ *  verdict. Fetched on demand: prompts embed diff context and are far too large
+ *  to ride along with every ledger read. */
+export async function getHarnessInvocation(
+  id: string,
+  invocationId: string,
+  opts: ReadOptions = {},
+): Promise<HarnessInvocationDetail> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].harness.invocations[':invocationId'].$get(
+      { param: { projectId: queryScope(), id, invocationId } },
+      init(opts),
+    ),
+    runPath(id, `/harness/invocations/${encodeURIComponent(invocationId)}`),
+  )
+}
+
+/** Resolve a council paused below quorum: `retry` buys the failed reviewers one
+ *  more attempt, `proceed` continues with the survivors. Recorded in the ledger
+ *  and the run resumes immediately (council resilience 2026-07-29). */
+export async function councilDecision(
+  id: string,
+  action: 'retry' | 'proceed',
+): Promise<{ resumed: boolean; decisions?: HarnessLedgerResponse['decisions'] }> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].harness['council-decision'].$post({
+      param: { projectId: queryScope(), id },
+      json: { action },
+    }),
+    runPath(id, '/harness/council-decision'),
+  )
+}
+
+/** Explicitly accept a contested harness result before publishing it. The reason is retained
+ *  in the durable ledger; this is intentionally separate from commit/push/PR actions. */
+export async function acceptContestedHarness(
+  id: string,
+  reason: string,
+): Promise<{
+  outcome: HarnessLedgerResponse['outcome']
+  decisions?: HarnessLedgerResponse['decisions']
+  resumed?: boolean
+}> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].harness['accept-contested'].$post({
+      param: { projectId: queryScope(), id },
+      json: { reason },
+    }),
+    runPath(id, '/harness/accept-contested'),
   )
 }
 

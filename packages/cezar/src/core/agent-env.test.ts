@@ -79,6 +79,25 @@ describe('buildChildEnv — least-privilege child env (#427)', () => {
     expect(env.PATH).toBe('/override');
   });
 
+  it('removes publish credentials and SSH access for stage-only harness phases', () => {
+    const env = buildChildEnv({
+      backend: 'claude',
+      source: {
+        ...HOST,
+        GITHUB_TOKEN: 'gho_token',
+        GH_TOKEN: 'gh_token',
+        SSH_AGENT_PID: '42',
+      },
+      extraEnv: { CEZ_HARNESS_STAGE_ONLY: '1' },
+    });
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.SSH_AGENT_PID).toBeUndefined();
+    expect(env.SSH_AUTH_SOCK).toBe('');
+    expect(env.GIT_ALLOW_PROTOCOL).toBe('');
+    expect(env.GIT_TERMINAL_PROMPT).toBe('0');
+  });
+
   /**
    * #785: the run's own temp directory is delivered as `extraEnv`, and it only
    * works if it genuinely REPLACES the host's. The host copy must be gone, not

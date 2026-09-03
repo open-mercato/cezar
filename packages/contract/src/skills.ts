@@ -15,7 +15,9 @@ export const skillSchema = z.object({
   interactive: z.literal(true).optional(),
   body: z.string(),
   path: z.string(),
-  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team']),
+  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'bundled']),
+  /** Optional companion skills that must be materialized with this entry. */
+  requires: z.array(z.string()).optional(),
   /** Team skills only: where the definition lives in its skills repo. */
   team: z
     .object({

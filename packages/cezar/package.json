@@ -18,6 +18,7 @@
     "dist",
     "web/dist",
     "scripts",
+    "vendor",
     "README.md"
   ],
   "engines": {
@@ -49,6 +50,9 @@
     "ws": "^8.21.1",
     "yaml": "^2.5.0",
     "zod": "^4.4.3"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sandbox-runtime": "0.0.61"
   },
   "devDependencies": {
     "@open-mercato/cezar-api-client": "^0.10.0",

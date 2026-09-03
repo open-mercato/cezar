@@ -193,6 +193,14 @@ describe('the variants compare view against two settled dry runs', () => {
   it('✔ Pick A confirms, archives B with its worktree removed, and lands on A at the gate', async () => {
     browser.click(`[data-slot="variant-column"][data-variant="A"] [data-slot="variant-pick"]`)
     browser.waitForFunction(`document.querySelector('[data-slot="confirm-pick"]') !== null`)
+    browser.waitForFunction(
+      `(() => {
+        const button = document.querySelector('[data-slot="confirm-pick"]')
+        const rect = button.getBoundingClientRect()
+        const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)
+        return hit === button || button.contains(hit)
+      })()`,
+    )
     browser.click(`[data-slot="confirm-pick"]`)
 
     // Navigation to the winner's thread, where the review gate renders (A parked at review).

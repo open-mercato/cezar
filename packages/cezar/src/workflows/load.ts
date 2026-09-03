@@ -1,6 +1,8 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { loadConfig } from '../config.ts';
+import { harnessWorkflowDefs } from '../harness/workflows.js';
 import {
   QUICK_TASK_WORKFLOW,
   normalizeWorkflowDoc,
@@ -20,10 +22,16 @@ export interface WorkflowLoadIssue {
  * Load the workflow catalog: the built-in `quick-task` plus every
  * `.ai/cezar/workflows/*.{yaml,yml}` in the repo. File workflows win name
  * collisions with built-ins. Invalid files are reported, never fatal.
+ *
+ * The multi-model harness workflows join the catalog only behind the
+ * `multiModel` config flag (off by default). In-flight harness runs are
+ * unaffected by a flip: revival prefers the run's persisted `workflowDef`
+ * over this catalog.
  */
 export async function loadWorkflows(
   repoRoot: string,
 ): Promise<{ workflows: WorkflowDef[]; issues: WorkflowLoadIssue[] }> {
+  const { multiModel } = await loadConfig(repoRoot);
   const dir = resolve(repoRoot, WORKFLOWS_DIR);
   const issues: WorkflowLoadIssue[] = [];
   const fromFiles: WorkflowDef[] = [];
@@ -61,9 +69,10 @@ export async function loadWorkflows(
   }
 
   const fileNames = new Set(fromFiles.map((w) => w.name));
+  const builtIns = [QUICK_TASK_WORKFLOW, ...(multiModel ? harnessWorkflowDefs() : [])];
   const workflows = [
     ...fromFiles,
-    ...[QUICK_TASK_WORKFLOW].filter((w) => !fileNames.has(w.name)),
+    ...builtIns.filter((w) => !fileNames.has(w.name)),
   ];
   workflows.sort((a, b) => a.name.localeCompare(b.name));
   return { workflows, issues };

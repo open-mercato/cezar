@@ -11,6 +11,7 @@ import {
   usePatchRun,
   useRemoveQueuedMessage,
   useRun,
+  useRunHarness,
   useProjectRepoBase,
   useRuns,
   useSendMessage,
@@ -56,6 +57,12 @@ import {
   type ThreadAsk,
   type ThreadState,
 } from './thread-state'
+import { HarnessModelsDock } from '../task-harness/harness-components'
+import { HarnessRail } from '../task-harness/harness-rail'
+import { HarnessStatusBar, HarnessTimelineDialog } from '../task-harness/harness-status-bar'
+import { ReviewerModal } from '../task-harness/reviewer-modal'
+import { RUN_RAIL_GRID, runShellClass } from './run-shell'
+import { mergeHarnessLedger, orderStepsByLedger } from '../task-harness/harness-state'
 
 /**
  * `/tasks/:id` — the Session tab (spec, "Task thread"): the run header (title/meta/tabs/
@@ -71,7 +78,16 @@ import {
 export function TaskThreadRoute() {
   const { id } = useParams<{ id: string }>()
   const run = useRun(id)
+  const harness = useRunHarness(id, Boolean(run.data?.harness))
   const history = useRunHistory(id)
+  const events = history.visibleEvents
+  const lastHarnessSeq = events.reduce(
+    (max, event) => (event.type.startsWith('harness.') ? Math.max(max, event.seq) : max),
+    0,
+  )
+  useEffect(() => {
+    if (lastHarnessSeq > 0 && harness.isError) void harness.refetch()
+  }, [lastHarnessSeq, harness.isError, harness.refetch])
   const runStatus = run.data?.status
   const thread = useMemo(
     () => reduceThread(history.visibleEvents, { activeTurn: runStatus === 'running' }),
@@ -80,6 +96,10 @@ export function TaskThreadRoute() {
   const currentThread = useMemo(
     () => reduceThread(history.currentEvents, { activeTurn: runStatus === 'running' }),
     [history.currentEvents, runStatus],
+  )
+  const harnessLedger = useMemo(
+    () => mergeHarnessLedger(harness.data, events),
+    [harness.data, events],
   )
 
   // Read receipt (#unread-done-items): opening a finished task's thread marks it read — the same
@@ -152,9 +172,26 @@ export function TaskThreadRoute() {
       thread={thread}
       currentThread={currentThread}
       history={history}
+      harnessLedger={harnessLedger}
       onMarkedUnread={suppressAutoReadFor}
     />
   )
+}
+
+/**
+ * The transcript row of a step's divider marker (`reduceThread` pushes one
+ * `step-start:<id>` note per phase boundary) — the jump target for the
+ * header's step panel (user request 2026-07-29). Falls back to a
+ * round-suffixed variant (`spec-review` → `spec-review-1`) because council
+ * sub-phases stamp their round onto the event step id. -1 when the step never
+ * reached the transcript — the caller then no-ops.
+ */
+export function stepRowIndex(rows: readonly { key: string }[], stepId: string): number {
+  const exact = rows.findIndex((row) => row.key.endsWith(`:step-start:${stepId}`))
+  if (exact >= 0) return exact
+  const escaped = stepId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const suffixed = new RegExp(`:step-start:${escaped}-\\d+$`)
+  return rows.findIndex((row) => suffixed.test(row.key))
 }
 
 /** The loaded thread. The header owns its own data hooks (mutations, the runs list); the
@@ -164,12 +201,14 @@ export function ThreadView({
   thread,
   currentThread = thread,
   history,
+  harnessLedger,
   onMarkedUnread,
 }: {
   run: ApiRun
   thread: ThreadState
   currentThread?: ThreadState
   history?: RunHistoryState
+  harnessLedger?: import('@open-mercato/cezar-api-client').HarnessLedgerResponse
   /** Passed straight through to the header's "Mark unread" (#775) so the route can suppress its
    *  auto-mark-read effect. Optional: every test that drives this view with a fixture, and the
    *  header's other three tabs, have no such effect to suppress. */
@@ -181,7 +220,7 @@ export function ThreadView({
   const plan = latestPlanEntries(currentThread)
   const planTally = plan !== undefined && plan.length > 0 ? planCounts(plan) : undefined
   // The Agents dock's data: the current fan-out's sub-agents, or [] when there is none to
-  // show (#474). Derived from the same reduced turns the thread renders — no new subscription.
+  // show (#474). Derived from the compact current-state turns — no new subscription.
   // The legacy session-open rule (web/app.js `updateDetail`): the composer can deliver while
   // the engine owns a live session — running queues the message, waiting answers it.
   const sessionOpen = run.status === 'running' || run.status === 'waiting'
@@ -215,6 +254,7 @@ export function ThreadView({
   // The drill-down's whole state: which agent is open. Ephemeral by design (spec Q2/Q5) —
   // sub-agents have no stable identity outside their run, so there is nothing to persist.
   const [openAgentId, setOpenAgentId] = useState<string | undefined>(undefined)
+  const [openReviewer, setOpenReviewer] = useState<string | null>(null)
   // Item ids repeat across runs (codex mints `item_1`, `item_rv_1` per session), so a
   // selection carried across a route change could pop the sheet open on an unrelated item.
   const [selectionRunId, setSelectionRunId] = useState(run.id)
@@ -231,9 +271,13 @@ export function ThreadView({
       : findSubagent(currentThread.turns, openAgentId, runIsTerminal),
     [currentThread.turns, openAgentId, runIsTerminal],
   )
+  // Agent identity belongs to the compact current-state feed above, so a long transcript can
+  // still open its dock without loading every old page. The sheet body is history, though: read
+  // it from the visible paged thread. Otherwise progressive history reduces a long-running
+  // agent to the few tail items retained by `/history-context`.
   const openAgentChildren = useMemo(
-    () => (openAgentId === undefined ? [] : subagentChildren(currentThread.turns, openAgentId)),
-    [currentThread.turns, openAgentId],
+    () => (openAgentId === undefined ? [] : subagentChildren(thread.turns, openAgentId)),
+    [thread.turns, openAgentId],
   )
   const sendMessage = useSendMessage(run.id)
   const activeProvider = useActiveProviderAvailability(run)
@@ -294,27 +338,108 @@ export function ThreadView({
     onJumpToLatest: history?.jumpToLatest,
     rowKeys: rows.map(({ key }) => key),
   })
+  const acceptedContested =
+    harnessLedger?.outcome.status === 'contested' &&
+    harnessLedger.outcome.acceptedAt !== undefined &&
+    harnessLedger.outcome.acceptedBy === 'user' &&
+    harnessLedger.outcome.acceptanceReason !== undefined &&
+    (harnessLedger.decisions ?? []).some(
+      (decision) =>
+        decision.kind === 'accept-contested' &&
+        decision.by === 'user' &&
+        decision.at === harnessLedger.outcome.acceptedAt &&
+        decision.detail === harnessLedger.outcome.acceptanceReason,
+    )
+  const harnessPublishBlocked =
+    !run.harness || !['review', 'done'].includes(run.status)
+      ? undefined
+      : !harnessLedger
+        ? 'Harness recovery snapshot is unavailable. Publishing stays blocked until it is restored.'
+        : harnessLedger.stage.status !== 'staged'
+          ? 'The harness has not produced a verified staged handoff.'
+          : harnessLedger.outcome.status === 'ready' || acceptedContested
+            ? undefined
+            : harnessLedger.outcome.status === 'contested'
+              ? 'Accept the unresolved harness risk in the Review tab before finishing or publishing.'
+              : `Harness outcome is ${harnessLedger.outcome.status}. Publishing requires a verified ready outcome.`
   // The iOS keyboard lifts the dock via `--kb`; once it settles, a pinned reader re-pins
   // (research §7: re-run scrollToEnd after the viewport settles).
   useKeyboardInsetVar(scroll.restickIfStuck)
+  const [timelineOpen, setTimelineOpen] = useState(false)
+
+  // The step panel's jump: virtua owns programmatic scrolls while virtualized;
+  // the flat mode scrolls the row's own element. The virtual jump is issued
+  // twice — a far target's offset is an estimate until its neighborhood has
+  // been measured, and the second call lands on the corrected position.
+  const jumpToStep = (stepId: string) => {
+    const index = stepRowIndex(rows, stepId)
+    if (index < 0) return
+    const virtualizer = scroll.virtualizerRef.current
+    if (virtualizer) {
+      virtualizer.scrollToIndex(index, { align: 'start' })
+      window.setTimeout(() => {
+        scroll.virtualizerRef.current?.scrollToIndex(index, { align: 'start' })
+      }, 120)
+      return
+    }
+    const row = (scroll.scrollElRef.current ?? document).querySelectorAll(
+      '[data-slot="thread-row"]',
+    )[index]
+    row?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
-      <RunHeader run={run} planTally={planTally} onMarkedUnread={() => onMarkedUnread?.(run.id)} />
+      <RunHeader
+        run={run}
+        planTally={planTally}
+        publishBlockedReason={harnessPublishBlocked}
+        onJumpToStep={jumpToStep}
+        orderedSteps={harnessLedger ? orderStepsByLedger(run.steps, harnessLedger) : undefined}
+        onMarkedUnread={() => onMarkedUnread?.(run.id)}
+      />
+      {/* ONE status line, and the timeline behind it (review 2026-07-27): the
+          horizontal phase rail could not be read — 18 phases, 2620px wide, inside
+          an 820px viewport, with the live phase always off-screen. */}
+      {harnessLedger ? (
+        <div className="border-b border-border bg-card px-4 md:px-6">
+          <div className={runShellClass(true)}>
+            <HarnessStatusBar
+              ledger={harnessLedger}
+              timelineOpen={timelineOpen}
+              onOpenTimeline={() => setTimelineOpen((open) => !open)}
+            />
+          </div>
+        </div>
+      ) : null}
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
-      <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-3.5 px-4 py-5 md:px-6">
-        {history ? (
-          <HistoryBoundary
-            hasOlder={history.hasOlder}
-            loading={history.isFetchingOlder}
-            error={history.olderError}
-            fallback={history.fallback}
-            retainedPages={history.retainedPages}
-            onLoad={scroll.loadOlder}
+      <div
+        className={cn(
+          'flex flex-1 flex-col gap-3.5 px-4 py-5 md:px-6',
+          runShellClass(Boolean(harnessLedger)),
+        )}
+      >
+        {harnessLedger ? (
+          <HarnessTimelineDialog
+            ledger={harnessLedger}
+            open={timelineOpen}
+            onOpenChange={setTimelineOpen}
           />
         ) : null}
+        <div className={harnessLedger ? RUN_RAIL_GRID : undefined}>
+          <div className="flex min-w-0 flex-col gap-3.5">
+            {history ? (
+              <HistoryBoundary
+                hasOlder={history.hasOlder}
+                loading={history.isFetchingOlder}
+                error={history.olderError}
+                fallback={history.fallback}
+                retainedPages={history.retainedPages}
+                onLoad={scroll.loadOlder}
+              />
+            ) : null}
         <SessionTranscript
           runId={run.id}
           viewId="main"
@@ -385,7 +510,20 @@ export function ThreadView({
 
         {/* The review gate (spec 009): a finished run with changes parks here — nothing
             auto-merges. The panel exists exactly while the run rests at `review`. */}
-        {run.status === 'review' ? <ReviewPanel run={run} /> : null}
+        {run.status === 'review' ? (
+          <ReviewPanel run={run} publishBlockedReason={harnessPublishBlocked} />
+        ) : null}
+          </div>
+
+          {harnessLedger ? (
+            <HarnessRail
+              ledger={harnessLedger}
+              runId={run.id}
+              onOpenTimeline={() => setTimelineOpen((open) => !open)}
+              onOpenReviewer={setOpenReviewer}
+            />
+          ) : null}
+        </div>
       </div>
 
       <AcceptCelebration status={run.status} />
@@ -401,6 +539,15 @@ export function ThreadView({
         onClose={() => setOpenAgentId(undefined)}
       />
 
+      {harnessLedger ? (
+        <ReviewerModal
+          runId={run.id}
+          ledger={harnessLedger}
+          reviewerId={openReviewer}
+          onClose={() => setOpenReviewer(null)}
+        />
+      ) : null}
+
       {/* The dock region (mockup `.dock`): plan dock, paused hint, then the composer.
           `bottom: var(--kb)` is the iOS keyboard lift — 0 until the visualViewport watcher
           publishes an inset. */}
@@ -414,10 +561,22 @@ export function ThreadView({
             <JumpToLatestPill onJump={scroll.jumpToLatest} />
           </div>
         ) : null}
-        <div className="mx-auto flex w-full max-w-[var(--measure)] flex-col gap-2.5">
+        <div
+          className={cn(
+            runShellClass(Boolean(harnessLedger)),
+            harnessLedger ? RUN_RAIL_GRID : 'flex flex-col gap-2.5',
+          )}
+        >
+          <div className="flex min-w-0 flex-col gap-2.5">
           {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
+
+          {harnessLedger ? (
+            <div className="xl:hidden">
+              <HarnessModelsDock ledger={harnessLedger} />
+            </div>
+          ) : null}
 
           {plan !== undefined && plan.length > 0 ? (
             // Keyed by run id: the collapse default re-derives per task (see PlanDock).
@@ -445,6 +604,16 @@ export function ThreadView({
             >
               <StatusDot tone="pending" />
               Messages you add now are folded into the prompt before the run starts.
+            </div>
+          ) : null}
+
+          {run.harness && run.status === 'running' ? (
+            <div
+              data-slot="harness-message-hint"
+              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
+            >
+              <StatusDot tone="violet" pulse />
+              Messages are delivered to the active phase, or durably queued for the next phase boundary.
             </div>
           ) : null}
 
@@ -478,12 +647,15 @@ export function ThreadView({
               queued ? 'Add to the prompt — sent when the run starts…'
               : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
               : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
-              : 'Message the agent — / for skills, @ for files…'
+              : run.harness && run.status === 'running'
+                ? 'Message the harness — queued safely between phases…'
+                : 'Message the agent — / for skills, @ for files…'
             }
             autocompleteSkills
             quickReplies
             getMentionCandidates={() => threadFilePaths(thread)}
           />
+          </div>
         </div>
       </div>
     </div>

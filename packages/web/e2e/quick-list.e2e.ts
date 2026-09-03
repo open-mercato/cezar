@@ -18,7 +18,8 @@ import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv } from './agent-
  * state. And "whatever runs happen to be in the dev checkout" is not a fixture: it is whatever the
  * last person did.
  *
- * So: a throwaway data dir, a fixture `runs.json`, one `node dist/index.js serve --repo <tmp>`.
+ * So: a throwaway data dir, a fixture `runs.json`, one
+ * `node packages/cezar/dist/index.js serve --repo <tmp>`.
  * The fixture is not invented data — `runs.json` is cezar's documented state contract (a
  * `RunRecord[]`, the exact shape `GET /api/v1/runs` answers with and `src/runs/store.ts` parses with
  * zod). If a record here were wrong, the store would drop it and these assertions would fail.

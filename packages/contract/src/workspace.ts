@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { type Runner, runnerSchema } from './health.ts';
+import { harnessPresetSchema } from './harness.ts';
 
 /**
  * The workspace + settings families: `~/.cezar/config.json`'s settings slice, both GUI-pref bags
@@ -165,6 +166,8 @@ export const uiStateSchema = z.looseObject({
   /** Skill selection frequency (#408): name → times chosen, across BOTH composers. */
   skillUsage: z.record(z.string(), z.number()).optional(),
   runsView: z.enum(['list', 'table']).optional(),
+  /** Saved multi-model role lineups, normalized by the cockpit on read. */
+  harnessPresets: z.array(harnessPresetSchema).optional(),
   /** The GitHub tab's last-selected sub-tab (#417). Absent → issues. */
   githubView: z.enum(['issues', 'prs']).optional(),
   /** Settings → Appearance. The theme itself stays in localStorage (`cez-theme`) — it must
@@ -332,6 +335,9 @@ export const configResponseSchema = z.object({
   /** Optional review gate (#489): null = no config key, the `CEZ_REVIEW_GATE` env default (OFF)
    *  decides. */
   reviewGate: z.boolean().nullable(),
+  /** Multi-model harness feature flag (off by default): gates the harness workflows, the
+   *  composer's Multi-model tab and the Settings → Harness section. */
+  multiModel: z.boolean(),
 });
 export type ConfigResponse = z.infer<typeof configResponseSchema>;
 

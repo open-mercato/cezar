@@ -102,6 +102,24 @@ const queuedMessageSchema = z.object({
   createdAt: z.string(),
 });
 
+const harnessModelRefSchema = z.object({
+  runner: z.enum(['claude', 'codex', 'opencode', 'harness']),
+  model: z.string(),
+  effort: z.enum(['low', 'medium', 'high', 'max']).optional(),
+  family: z.string().optional(),
+  adapterId: z.string().optional(),
+});
+
+const harnessRolesSchema = z.object({
+  orchestrator: harnessModelRefSchema.extend({
+    runner: z.enum(['claude', 'codex', 'opencode']),
+  }),
+  implementer: harnessModelRefSchema.extend({
+    runner: z.enum(['claude', 'codex', 'opencode']),
+  }),
+  reviewers: z.array(harnessModelRefSchema),
+});
+
 /** Exported for `./run-index.ts`, the read-only reader of the same file. Nothing else should
  *  parse `runs.json` — see `reconcileLoadedRun` for why a second parser is a correctness risk. */
 export const runRecordSchema = z.object({
@@ -301,6 +319,29 @@ export const runRecordSchema = z.object({
    *  `workflowStepSchema` only with that in mind: a narrowing here silently eats
    *  queued runs rather than degrading them. */
   workflowDef: workflowDefSchema.optional().catch(undefined),
+  /** cez-harness run stub (spec 2026-07-23-harness-orchestration): presence
+   *  marks a harness-driven run for the list surfaces, the publish guards and
+   *  recovery; the full state lives in the sibling `<id>.harness.json` ledger.
+   *  Kept loose (plain strings) so the store never imports harness types. */
+  harness: z
+    .object({
+      profile: z.string(),
+      workflow: z.string(),
+      /** Optional on runs created before selectable phase-skill profiles. */
+      skillProfile: z.enum(['generic', 'open-mercato']).optional(),
+      issueId: z.string().optional(),
+      /** Role-based selection (2026-07-24). This copy makes recovery re-queues
+       *  conduct the same roles while keeping the run API fully typed. */
+      roles: harnessRolesSchema.optional(),
+      baseAcknowledgement: z
+        .object({
+          configuredBase: z.string(),
+          remoteDefault: z.string(),
+          reason: z.string(),
+        })
+        .optional(),
+    })
+    .optional(),
 });
 
 export type StepState = z.infer<typeof stepStateSchema>;
@@ -859,11 +900,22 @@ export class RunStore extends EventEmitter {
     return { ...patch, error: this.redactText(patch.error) };
   }
 
-  /** Append a step to an existing run (used by "Continue" — spec 003). */
+  /** Add a step to an existing run (Continue — spec 003 — and every step the
+   *  harness driver creates as it conducts). A NEW step is created the moment
+   *  execution reaches it, so it is inserted before the first step that has
+   *  not started yet — the harness predeclares its seven base steps and
+   *  creates the rest (baseline gate, council rounds, fix rounds) as it goes,
+   *  and appending those at the tail displayed Stage as "step 7 of 19" on a
+   *  run whose stage ran LAST (user report 2026-07-29). For ordinary runs
+   *  every earlier step is terminal by the time Continue adds one, so the
+   *  insertion point is the tail — exactly the old order. */
   addStep(runId: string, step: Pick<StepState, 'id' | 'name' | 'kind'>): void {
     const run = this.runs.get(runId);
     if (!run || run.steps.some((s) => s.id === step.id)) return;
-    run.steps.push({ ...step, status: 'pending', iterations: 0, tokensUsed: 0 });
+    const created: StepState = { ...step, status: 'pending', iterations: 0, tokensUsed: 0 };
+    const firstPending = run.steps.findIndex((s) => s.status === 'pending');
+    if (firstPending === -1) run.steps.push(created);
+    else run.steps.splice(firstPending, 0, created);
     this.touch(run);
   }
 
@@ -1241,6 +1293,14 @@ export class RunStore extends EventEmitter {
     }
   }
 
+  eventHighWaterMark(runId: string): number {
+    const cached = this.seqs.get(runId);
+    if (cached !== undefined) return cached;
+    const restored = this.rehydrateSeq(runId);
+    this.seqs.set(runId, restored);
+    return restored;
+  }
+
   deleteRun(id: string): boolean {
     const existed = this.runs.delete(id);
     if (existed) {
@@ -1272,7 +1332,7 @@ export class RunStore extends EventEmitter {
   private seqs = new Map<string, number>();
 
   private nextSeq(runId: string): number {
-    const next = (this.seqs.get(runId) ?? this.rehydrateSeq(runId)) + 1;
+    const next = this.eventHighWaterMark(runId) + 1;
     this.seqs.set(runId, next);
     return next;
   }

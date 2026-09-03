@@ -14,6 +14,21 @@
   conversation. A host with one agent and one login sees exactly the composer it always saw.
   `POST /api/v1/runs/:id/continue` gained an optional `agentProfile`; an id that no longer exists
   is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+- ✨ **Opt-in multi-model runs separate implementation from independent judgment and stop at a
+  verified review gate.** Enable `multiModel` for a repository to get first-class **Multi-model**
+  composition with a bound orchestrator, implementer and 2–5 reviewers spanning at least two
+  provider families. Cezar conducts the durable phase graph — preflight, capture, specification,
+  spec council, implementation, validation, final council, bounded repair loops and staging —
+  while vendored, hash-pinned skills own judgment and a sealed runtime owns deterministic
+  mechanics. Claude and Codex can hold the writing roles under stage-only isolation; OpenCode
+  gateway models can join the read-only review council without hand-written configuration. Git
+  refs and reflogs are integrity-checked, staged paths come from git rather than model claims,
+  and push/PR routes stay blocked until the ledger proves a ready staged outcome. Runs recover
+  from their invocation-level ledger, expose their phase/council evidence in the cockpit, and
+  never commit, push or open a PR themselves. A five-task zero-config evaluation completed all
+  90 reviewer invocations and delivered 5/5 contained, tested, green-gate changes, compared with
+  2/5 contained and 4/5 green-gate changes for a matched single-agent arm. Full architecture and
+  evidence: `docs/multi-model-harness.md` and `.ai/specs/2026-08-23-multi-model-eval.md`.
 
 ## 🐛 Fixes
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status

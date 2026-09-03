@@ -1,0 +1,4 @@
+interface:
+  display_name: "Setup Agent Harness"
+  short_description: "Configure multi-model staged harness policy"
+  default_prompt: "Use $cez-setup-harness to configure selectable workers, reviewers, and optional high-assurance packet policy."
