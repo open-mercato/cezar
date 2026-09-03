@@ -331,6 +331,7 @@ describe('the controlled-images seam (#939)', () => {
     preview: 'data:image/png;base64,AAA',
     isImage: true,
     id: 'img1',
+    isImage: true,
   }
 
   it('renders the host\'s images and routes every add and remove through the callback', async () => {
