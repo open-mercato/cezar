@@ -360,11 +360,16 @@ function ProjectGroup({
               scope={project.id}
               showTokens={showTokens}
               showCost={showCost}
-              onTogglePin={(run, pinned) =>
-                pin.mutate(
-                  { id: run.id, pinned },
-                  { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
-                )
+              onTogglePin={
+                // Withheld in the archived view, where the pin has nowhere to show its result —
+                // the same call `TaskQuickList` and the thread header make.
+                view === 'archived'
+                  ? undefined
+                  : (run, pinned) =>
+                      pin.mutate(
+                        { id: run.id, pinned },
+                        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+                      )
               }
             />
           </ReferenceStatusProvider>

@@ -868,6 +868,9 @@ function ActionsKebab({
         {flags.pin ? (
           <DropdownMenuItem
             data-slot="pin-run"
+            // The same `aria-pressed` its desktop twin and `PinToggle` carry — a toggle should
+            // announce its state in every spelling, not only the ones with room for the word.
+            aria-pressed={Boolean(run.pinned)}
             disabled={actions.pin.isPending}
             onSelect={() => actions.pin.mutate()}
           >

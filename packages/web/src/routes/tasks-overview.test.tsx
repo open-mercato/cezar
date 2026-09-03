@@ -603,6 +603,18 @@ describe('TasksOverview — pinned tasks (#935)', () => {
     )
     expect(order).toEqual(['newer', 'older-pinned'])
   })
+
+  it('paints no pin control in the archived view — it would have nowhere to show its result', () => {
+    // The thread header already withholds the action on an archived run (`runActionFlags`).
+    // Offered here it would be worse than inert: the pin sticks, so un-archiving would drop the
+    // task at the top of the active list by a click that looked like it did nothing.
+    renderOverview({
+      view: 'archived',
+      runs: [run({ id: 'gone', archived: true })],
+      onTogglePin: vi.fn(),
+    })
+    expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
+  })
 })
 
 describe('TasksOverview — usage cells', () => {

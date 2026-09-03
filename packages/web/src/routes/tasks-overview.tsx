@@ -133,6 +133,12 @@ export function TasksOverview({
   const finished = finishedRunCount(all)
   const columns = taskColumnsForCapabilities({ tokens: showTokens, cost: showCost })
   const unread = unreadDoneCount(all)
+  // The archived view withholds the pin, the same call `runActionFlags` makes for the thread
+  // header (`pin: !run.archived`): `sortRuns` skips the pin comparator there and `bucketOf`
+  // answers `Archived` before it ever reads `run.pinned`, so the button would be an action with
+  // nowhere to show its result — and one that outlives the view, since un-archiving would then
+  // drop the task at the top of the active list by a click that looked like it did nothing.
+  const pinToggle = view === 'archived' ? undefined : onTogglePin
 
   return (
     <div data-route="tasks" className="flex min-h-full flex-col">
@@ -238,7 +244,7 @@ export function TasksOverview({
                         run={run}
                         queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
                         onRename={onRename}
-                        onTogglePin={onTogglePin}
+                        onTogglePin={pinToggle}
                         now={now}
                         columns={columns}
                         expandedColumns={expandedColumns}
@@ -259,7 +265,7 @@ export function TasksOverview({
                   now={now}
                   showTokens={showTokens}
                   showCost={showCost}
-                  onTogglePin={onTogglePin}
+                  onTogglePin={pinToggle}
                 />
               ))}
             </div>

@@ -63,6 +63,9 @@ export function TaskQuickList({
 }) {
   const counts = listCounts(runs)
   const buckets = groupRuns(runs, view)
+  // Withheld in the archived view, where `groupRuns` answers one `Archived` bucket and never
+  // reads `run.pinned` — the same call the thread header makes on an archived run.
+  const pinToggle = view === 'archived' ? undefined : onTogglePin
 
   return (
     <div data-slot="quick-list">
@@ -94,7 +97,7 @@ export function TaskQuickList({
           now={now}
           showTokens={showTokens}
           showCost={showCost}
-          onTogglePin={onTogglePin}
+          onTogglePin={pinToggle}
         />
       )}
     </div>

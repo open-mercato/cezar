@@ -18,13 +18,11 @@ import { cn } from '@/lib/utils'
 export function PinToggle({
   pinned,
   onToggle,
-  disabled = false,
   className,
 }: {
   pinned: boolean
   /** Called with the state the user is asking for — `true` to pin, `false` to unpin. */
   onToggle: (pinned: boolean) => void
-  disabled?: boolean
   className?: string
 }) {
   return (
@@ -36,13 +34,16 @@ export function PinToggle({
       aria-pressed={pinned}
       aria-label={pinned ? 'Unpin task' : 'Pin task'}
       title={pinned ? 'Unpin from the top of the list' : 'Pin to the top of the list'}
-      disabled={disabled}
+      // Deliberately never disabled while the mutation is in flight: `usePinRun` invalidates
+      // rather than patching optimistically, so a row's `run.pinned` is stale until the refetch
+      // lands, and a second click would only re-send an idempotent `{pinned: true}`. Greying the
+      // control out for the length of a round trip would cost more than the duplicate it saves.
       onClick={(event) => {
         event.stopPropagation()
         onToggle(!pinned)
       }}
       className={cn(
-        'inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none disabled:cursor-wait disabled:opacity-60',
+        'inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-soft-foreground transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
         pinned && 'text-violet hover:text-violet',
         className,
       )}

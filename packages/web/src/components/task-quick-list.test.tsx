@@ -556,6 +556,15 @@ describe('TaskQuickList', () => {
       expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
     })
 
+    it('paints none in the archived view either — `groupRuns` never reads the pin there', () => {
+      renderList({
+        view: 'archived',
+        runs: [run({ id: 'gone', status: 'done', archived: true })],
+        onTogglePin: vi.fn(),
+      })
+      expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
+    })
+
     it('keeps the status dot on a pinned row — Pinned says where it is, not how it is', () => {
       renderList({ runs: [run({ id: 'kept', status: 'waiting', pinned: true })], onTogglePin: vi.fn() })
       expect(dotOf('kept')?.getAttribute('data-tone')).toBe('pending')
