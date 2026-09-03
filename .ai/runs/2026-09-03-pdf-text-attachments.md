@@ -111,6 +111,14 @@ Everything a non-image attachment touches on its way from the file picker to the
 
 ## Progress
 
+PR: #951
+
+**Gate (2026-09-03, head `d085fd03`):** `npm run typecheck` ✓ · `npm test` 6252 passed / 329 files ✓ ·
+`npm run test:unit` 36 ✓ · `npm run build` (incl. `check:pack`) ✓ · `npm run test:package` 16 ✓.
+Every command was run with `TMPDIR=/tmp`: this machine's `TMPDIR` points *inside* the checkout, which
+makes six pre-existing "outside a git repository" cases (`git`, `git-changes`, `git-worktree`,
+`health-forge`, `projects-api`, plus one automations preview-timing case) fail on `main` too.
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Wire contract and routes
@@ -137,5 +145,5 @@ Everything a non-image attachment touches on its way from the file picker to the
 
 ### Phase 5: Docs and gate
 
-- [ ] 5.1 Backward-compatibility notes
-- [ ] 5.2 Full validation gate
+- [x] 5.1 Backward-compatibility notes — d085fd03
+- [x] 5.2 Full validation gate — d085fd03
