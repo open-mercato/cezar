@@ -113,23 +113,32 @@ function useDebouncedValue<T>(value: T, delay: number): T {
 export type GithubView = 'issues' | 'prs'
 
 /**
- * `/github`'s index (#417): restores the last-selected sub-tab instead of always defaulting
- * to Issues. Only the bare path redirects — `/github/prs` and the `:n` deep links always
+ * The GitHub tab itself, and — under `index` — the bare `/github` entry point.
+ *
+ * **`index` (#417)** restores the last-selected sub-tab instead of always defaulting to Issues.
+ * Only the bare path redirects — `/github/prs` and the `:n` deep links always
  * render exactly what their URL says, memory or not, so a pasted link never surprises.
  *
  * A one-way check, not a live sync: it reads `ui-state.json` once per mount and either renders
  * Issues or hands off to `/github/prs`. It never redirects back to Issues from `/github/prs` —
  * that URL is authoritative on its own.
+ *
+ * It is an `index` FLAG on this component rather than a wrapper component of its own, and that
+ * matters: React reconciles by element TYPE at a position, so a `/github` route rendering some
+ * other component unmounts `GithubRoute` on the hop to `/github/issues/:n` and takes its state
+ * with it — including the search text, which is the only thing that can resolve a cross-state
+ * hit (#730). See the `index` early return below.
  */
-export function GithubIndexRoute() {
-  const uiState = useUiState()
-  if (uiState.data?.githubView === 'prs') {
-    return <Navigate to="/github/prs" replace />
-  }
-  return <GithubRoute view="issues" />
-}
-
-export function GithubRoute({ view, changes = false }: { view: GithubView; changes?: boolean }) {
+export function GithubRoute({
+  view,
+  changes = false,
+  index = false,
+}: {
+  view: GithubView
+  changes?: boolean
+  /** This is the bare `/github` index (#417): restore the remembered sub-tab before rendering. */
+  index?: boolean
+}) {
   const { n } = useParams()
   // One fast shot now that the list dropped `statusCheckRollup` (#664) — no more fast/full swap.
   const list = useGithub({ limit: LIST_LIMIT })
@@ -292,6 +301,17 @@ export function GithubRoute({ view, changes = false }: { view: GithubView; chang
   )
   const searchWanted = shouldSearchForge(debouncedQuery, localMatches)
   const forgeSearch = useGithubSearch(view === 'issues' ? 'issue' : 'pr', debouncedQuery, searchWanted)
+
+  // The bare `/github` restores the remembered sub-tab (#417). It lives HERE rather than in a
+  // wrapper component so `/github` and `/github/issues/:n` render the same element type: React
+  // reconciles by type, so a wrapper made the hop between them a full remount, resetting `query`
+  // to '' — and with the query gone, `searchHits` is empty and the cross-state item the user just
+  // clicked resolves to "not among the open issues". `/github/prs` and `/github/prs/:n` never had
+  // the bug precisely because they already shared one element type. Below the hooks, like every
+  // other early return in this component.
+  if (index && uiState.data?.githubView === 'prs') {
+    return <Navigate to="/github/prs" replace />
+  }
 
   if (!gh) {
     if (list.isError) {

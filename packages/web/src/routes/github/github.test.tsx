@@ -18,7 +18,7 @@ import type {
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { githubTaskRef } from '@/lib/github-task'
 
-import { GithubIndexRoute, GithubRoute, groupCommitRuns, type ThreadRow } from './github'
+import { GithubRoute, groupCommitRuns, type ThreadRow } from './github'
 import { readFollowupPrompt, readFollowupSelection, writeFollowupSelection } from './hand-to-agent-draft'
 
 beforeAll(() => {
@@ -246,20 +246,22 @@ function stubFetch(
   return sent
 }
 
-/** Cold-load the tab at a URL, with the same route map routes.tsx registers — `/github` goes
- *  through `GithubIndexRoute` (#417) exactly like production, so the remembered-tab redirect
- *  is exercised the same way a real navigation would hit it. */
+/** Cold-load the tab at a URL, with the same route map routes.tsx registers — `/github` is the
+ *  `index` form of `GithubRoute` (#417) exactly like production, so the remembered-tab redirect
+ *  is exercised the same way a real navigation would hit it AND `/github` → `/github/issues/:n`
+ *  reconciles as one element type instead of remounting (#730). Getting either wrong here would
+ *  hide the very bug the "opens a cross-state hit" tests below exist to catch. */
 function renderAt(entry: string) {
   render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[entry]}>
         <Routes>
-          <Route path="/github" element={<GithubIndexRoute />} />
+          <Route path="/github" element={<GithubRoute view="issues" index />} />
           <Route path="/github/prs" element={<GithubRoute view="prs" />} />
           <Route path="/github/issues/:n" element={<GithubRoute view="issues" />} />
           <Route path="/github/prs/:n" element={<GithubRoute view="prs" />} />
           <Route path="/github/prs/:n/changes" element={<GithubRoute view="prs" changes />} />
-          <Route path="/p/:projectId/github" element={<GithubIndexRoute />} />
+          <Route path="/p/:projectId/github" element={<GithubRoute view="issues" index />} />
           <Route path="/p/:projectId/github/prs" element={<GithubRoute view="prs" />} />
           <Route path="/p/:projectId/github/issues/:n" element={<GithubRoute view="issues" />} />
           <Route path="/p/:projectId/github/prs/:n" element={<GithubRoute view="prs" />} />
@@ -2444,6 +2446,72 @@ describe('cross-state search fallback (#730)', () => {
     expect(hits()?.textContent).toContain('reconcile payment-session amount')
     expect(hits()?.textContent).toContain('Found on GitHub')
     expect(sent.some((r) => r.path === '/api/v1/github/search?kind=pr&q=4507')).toBe(true)
+  })
+
+  const CLOSED_ISSUE: GithubItem = {
+    kind: 'issue',
+    number: 4507,
+    title: 'payment session amount drifts from the order total',
+    author: 'wojciechszyjka',
+    createdAt: '2026-07-25T07:08:17.000Z',
+    labels: ['bug'],
+    body: 'A closed issue — never present in the open list.',
+    url: 'https://github.com/acme/demo/issues/4507',
+    comments: 4,
+  }
+
+  /**
+   * CLICKING a hit, not deep-linking to it — the test above renders `/github/prs/4507` directly
+   * and types, so it never exercises the navigation a real user makes.
+   *
+   * These two cover the click path on both tabs against this file's richer fixtures. They do NOT
+   * pin the route wiring: the map in `renderAt` is a hand-written copy of `routes.tsx`, so it
+   * cannot catch a defect that lives in the real one — and one did (a wrapper component on
+   * `/github` remounted the route on the hop and reset the search text). That guard is
+   * `github-route-wiring.test.tsx`, which drives the real `AppRoutes`.
+   */
+  it('keeps a clicked cross-state hit open across the /github → /github/issues/:n hop', async () => {
+    stubFetch({
+      'GET /api/v1/github/search?kind=issue&q=4507': () =>
+        jsonResponse({ available: true, items: [CLOSED_ISSUE] }),
+    })
+    renderAt('/github')
+    await waitFor(() => expect(rows()).toHaveLength(2)) // the two OPEN issues
+
+    fireEvent.change(searchBox(), { target: { value: '4507' } })
+    await waitFor(() => expect(hits()).not.toBeNull(), { timeout: 3000 })
+
+    fireEvent.click(within(hits() as HTMLElement).getByRole('link'))
+
+    // The query survived the navigation, so the hit is still rendered AND still selectable.
+    await waitFor(
+      () => expect(detail()?.textContent).toContain('payment session amount drifts'),
+      { timeout: 3000 },
+    )
+    expect(searchBox().value).toBe('4507')
+    expect(hits()).not.toBeNull()
+    expect(detail()?.textContent ?? '').not.toContain('is not among the open issues')
+  })
+
+  it('keeps a clicked cross-state hit open across the /github/prs → /github/prs/:n hop', async () => {
+    stubFetch({
+      'GET /api/v1/github/search?kind=pr&q=4507': () =>
+        jsonResponse({ available: true, items: [MERGED_PR] }),
+    })
+    renderAt('/github/prs')
+    await waitFor(() => expect(rows()).toHaveLength(1))
+
+    fireEvent.change(searchBox(), { target: { value: '4507' } })
+    await waitFor(() => expect(hits()).not.toBeNull(), { timeout: 3000 })
+
+    fireEvent.click(within(hits() as HTMLElement).getByRole('link'))
+
+    await waitFor(
+      () => expect(detail()?.textContent).toContain('reconcile payment-session amount'),
+      { timeout: 3000 },
+    )
+    expect(searchBox().value).toBe('4507')
+    expect(hits()).not.toBeNull()
   })
 
   it('opens a searched item in the detail pane, like any listed row', async () => {
