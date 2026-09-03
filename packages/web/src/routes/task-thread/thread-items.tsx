@@ -7,6 +7,7 @@ import {
   GlobeIcon,
   ListTodoIcon,
   LoaderCircleIcon,
+  PaperclipIcon,
   SearchIcon,
   SquarePenIcon,
   SquareTerminalIcon,
@@ -18,7 +19,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
-import type { FileDiff, ToolKind, UiToolItem } from '@open-mercato/cezar-api-client'
+import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
 
 import { Markdown } from './markdown'
@@ -38,7 +39,8 @@ export { isNearBottom }
  */
 
 /** Right-aligned muted bubble — a v1 `user-message` line or the run's initial task. Renders any
- *  attached images inline; falls back to a count only when the URLs aren't available (older runs).
+ *  attached images inline and non-image attachments as download chips (#950); falls back to a
+ *  count only when the URLs aren't available (older runs).
  *
  *  The text renders as MARKDOWN, like `AssistantMessage` (#524): what a user sends is markdown as
  *  often as what the agent replies — the GitHub hand-off prompt alone carries a `#N` heading-ish
@@ -195,15 +197,31 @@ export function UserBubble({
       {actionError ? <p role="alert" className="mb-1 text-xs text-danger">{actionError}</p> : null}
       <Markdown breaks>{text}</Markdown>
       {images.length > 0 ? (
-        <span data-slot="user-images" className="mt-2 flex flex-wrap justify-end gap-1.5">
-          {images.map((url) => (
-            <ZoomableImage
-              key={url}
-              src={url}
-              alt="attached"
-              className="max-h-40 max-w-[220px] rounded-md border border-border object-contain"
-            />
-          ))}
+        <span data-slot="user-images" className="mt-2 flex flex-wrap items-center justify-end gap-1.5">
+          {/* One list carries both kinds (#950), so the NAME decides how each entry renders: an
+              image is shown, a file is offered as a download — rendering a `.pdf` in an `<img>`
+              would show the user a broken image where their attachment should be. */}
+          {images.map((url) =>
+            isImageAttachmentName(url.split('/').pop() ?? '') ? (
+              <ZoomableImage
+                key={url}
+                src={url}
+                alt="attached"
+                className="max-h-40 max-w-[220px] rounded-md border border-border object-contain"
+              />
+            ) : (
+              <a
+                key={url}
+                href={url}
+                download
+                data-slot="user-file"
+                className="inline-flex max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-background/60 px-2 py-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <PaperclipIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                <span className="truncate">{url.split('/').pop()}</span>
+              </a>
+            ),
+          )}
         </span>
       ) : null}
       {missing > 0 ? (

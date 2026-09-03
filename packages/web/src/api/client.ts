@@ -50,7 +50,7 @@ import type {
   GithubPrChangesData,
   GroupResponse,
   HealthResponse,
-  ImageInput,
+  AttachmentInput,
   LaunchKeyResponse,
   MessageInput,
   EditQueuedMessageResponse,
@@ -1223,7 +1223,7 @@ export async function finishRun(id: string): Promise<FinishResponse> {
  *  the engine opens with its plain "Continue.". */
 export interface ContinueOptions {
   text?: string
-  images?: ImageInput[]
+  images?: AttachmentInput[]
   runner?: Runner
   model?: string
   /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
