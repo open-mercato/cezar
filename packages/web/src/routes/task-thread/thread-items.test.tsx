@@ -13,12 +13,14 @@ import opencodeToolLifecycle from '../../../../cezar/src/core/__fixtures__/openc
 import { groupThreadItems } from './thread-groups'
 import {
   ContextGroup,
+  isImageAttachmentUrl,
   isNearBottom,
   OUTPUT_CLAMP_LINES,
   ProviderAuthRequiredCard,
   ReasoningItem,
   ToolCard,
   ToolStreak,
+  UserBubble,
 } from './thread-items'
 import { reduceThread } from './thread-state'
 import { SessionTranscript } from './session-transcript'
@@ -302,5 +304,49 @@ describe('sub-agent nesting (golden subagent-task fixture, end to end through th
     const nested = document.querySelector('[data-slot="tool-nested"]')!
     expect(nested.querySelector('[data-slot="assistant-message"]')?.textContent).toContain('Scanning the auth middleware')
     expect(nested.querySelectorAll('[data-slot="tool-card"]')).toHaveLength(1)
+  })
+})
+
+
+/**
+ * A message's attachments are one URL list holding two kinds, so the bubble decides per URL what
+ * it is looking at. Getting that wrong is visible and cheap to hit: an `<img>` pointed at a `.md`
+ * renders as a broken image, and a download chip for a screenshot hides the screenshot.
+ */
+describe('user attachments in the bubble', () => {
+  const url = (name: string) => `/api/v1/runs/r1/images/${name}`
+
+  it('classifies an attachment URL by the extension cezar wrote', () => {
+    expect(isImageAttachmentUrl(url('pasted-1.png'))).toBe(true)
+    expect(isImageAttachmentUrl(url('screenshot-2.JPG'))).toBe(true)
+    // `img` is `persistImage`'s fallback for an image type it did not recognize.
+    expect(isImageAttachmentUrl(url('pasted-3.img'))).toBe(true)
+    expect(isImageAttachmentUrl(url('pasted-4.md'))).toBe(false)
+    expect(isImageAttachmentUrl(url('pasted-5'))).toBe(false)
+  })
+
+  it('renders a text attachment as a named download chip, not an image', () => {
+    render(
+      <MemoryRouter>
+        <UserBubble text="read this" imageCount={0} images={[url('pasted-1.md')]} />
+      </MemoryRouter>,
+    )
+    const chip = document.querySelector('[data-slot="user-file"]') as HTMLAnchorElement
+    expect(chip).not.toBeNull()
+    expect(chip.textContent).toContain('pasted-1.md')
+    expect(chip.getAttribute('href')).toContain('/images/pasted-1.md')
+    expect(document.querySelector('[data-slot="user-images"] img')).toBeNull()
+  })
+
+  it('still renders an image attachment inline', () => {
+    render(
+      <MemoryRouter>
+        <UserBubble text="look" imageCount={1} images={[url('pasted-2.png')]} />
+      </MemoryRouter>,
+    )
+    expect(document.querySelector('[data-slot="user-file"]')).toBeNull()
+    const img = document.querySelector('[data-slot="user-images"] img') as HTMLImageElement
+    expect(img).not.toBeNull()
+    expect(img.getAttribute('src')).toContain('/images/pasted-2.png')
   })
 })

@@ -1337,6 +1337,7 @@ describe('RunManager queued-stack mutators (#472)', () => {
       backend: 'claude';
       prompt: string;
       images: ContentBlock[];
+      files: Array<{ name: string; mediaType: string; data: string }>;
     };
     const internals = manager as unknown as {
       pendingContinuations: Map<string, PendingContinuation>;
@@ -1348,9 +1349,12 @@ describe('RunManager queued-stack mutators (#472)', () => {
         sessionId: string | undefined,
         backend: 'claude',
         prompt: string,
-        images: ContentBlock[],
-        persistedImages: ContentBlock[],
-        persistedAttachments: Array<{ name: string; url: string; path: string }>,
+        carried: {
+          images?: ContentBlock[];
+          persistedImages?: ContentBlock[];
+          persistedAttachments?: Array<{ name: string; url: string; path: string }>;
+          files?: Array<{ name: string; mediaType: string; data: string }>;
+        },
       ): Promise<void>;
     };
     internals.pendingContinuations.set(r.id, {
@@ -1359,6 +1363,7 @@ describe('RunManager queued-stack mutators (#472)', () => {
       backend: 'claude',
       prompt: 'restart recovery',
       images: [],
+      files: [],
     });
     internals.queue.push(r.id);
 
@@ -1375,17 +1380,13 @@ describe('RunManager queued-stack mutators (#472)', () => {
           persistedAttachments: Array<{ name: string; url: string; path: string }>;
         }
       | undefined;
-    internals.runContinuation = async (
-      _runId,
-      _stepId,
-      _sessionId,
-      _backend,
-      prompt,
-      images,
-      persistedImages,
-      persistedAttachments,
-    ) => {
-      delivered = { prompt, images, persistedImages, persistedAttachments };
+    internals.runContinuation = async (_runId, _stepId, _sessionId, _backend, prompt, carried) => {
+      delivered = {
+        prompt,
+        images: carried.images ?? [],
+        persistedImages: carried.persistedImages ?? [],
+        persistedAttachments: carried.persistedAttachments ?? [],
+      };
     };
     await internals.pump();
 
@@ -1482,6 +1483,50 @@ describe('RunManager queued-stack mutators (#472)', () => {
 
     manager.removeQueuedMessage(r.id, msg.id);
     expect(existsSync(join(imagesDir(r.id), 'pasted-1.png'))).toBe(true);
+  });
+
+  /**
+   * A message's attachments are ONE list, and `editQueuedMessage` replaces it as a whole. That
+   * makes the PATCH destructive in a way worth pinning rather than merely commenting: naming
+   * `images` without `files` deletes the files, `dropOrphanImages` then unlinks them, and the
+   * user's attachment is gone for good. Both directions are asserted so a future client that
+   * starts sending one half cannot discover this behaviour in production.
+   */
+  describe('editQueuedMessage replaces the whole attachment list', () => {
+    const file = (name = 'brief.md') => ({ name, mediaType: 'text/markdown', data: 'aGk=' });
+
+    it('keeps both halves when the edit names neither', () => {
+      const r = seedQueued();
+      const msg = manager.enqueueMessage(r.id, [image()], [file()])!;
+      expect(msg.images).toHaveLength(2);
+
+      const edited = manager.editQueuedMessage(r.id, msg.id, { text: 'just the text' })!;
+      expect(edited.text).toBe('just the text');
+      expect(edited.images).toEqual(msg.images);
+      expect(readdirSync(imagesDir(r.id)).sort()).toEqual(['pasted-1.png', 'pasted-2.md']);
+    });
+
+    it('drops — and unlinks — the files when the edit names only images', () => {
+      const r = seedQueued();
+      const msg = manager.enqueueMessage(r.id, [image()], [file()])!;
+
+      const edited = manager.editQueuedMessage(r.id, msg.id, { images: [image()] })!;
+      expect(edited.images).toHaveLength(1);
+      expect(edited.images?.[0]).toMatch(/pasted-3\.png$/);
+      // The replaced entries are orphans and go with the edit.
+      expect(existsSync(join(imagesDir(r.id), 'pasted-2.md'))).toBe(false);
+      expect(existsSync(join(imagesDir(r.id), 'pasted-1.png'))).toBe(false);
+    });
+
+    it('drops the images when the edit names only files', () => {
+      const r = seedQueued();
+      const msg = manager.enqueueMessage(r.id, [image()], [file()])!;
+
+      const edited = manager.editQueuedMessage(r.id, msg.id, { files: [file('notes.txt')] })!;
+      expect(edited.images).toHaveLength(1);
+      expect(edited.images?.[0]).toMatch(/pasted-3\.txt$/);
+      expect(existsSync(join(imagesDir(r.id), 'pasted-1.png'))).toBe(false);
+    });
   });
 
   it('edits the task and re-derives the heuristic title and refs', () => {

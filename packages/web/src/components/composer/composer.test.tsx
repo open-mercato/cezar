@@ -180,6 +180,36 @@ describe('images — attach, paste, thumbnails, caps (legacy parity)', () => {
     await waitFor(() => expect(screen.queryByLabelText('Remove shot.png')).toBeNull())
   })
 
+  /**
+   * The paste is swallowed only for a file we actually take. A clipboard payload carrying both
+   * text and a file cezar refuses used to cancel the text paste as well, so the user lost what
+   * they meant to paste and got only a rejection toast.
+   */
+  it('swallows the paste for an accepted file and lets a refused one fall through', async () => {
+    const { textarea } = renderComposer()
+
+    const accepted = fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [{ type: 'image/png', getAsFile: () => pngFile('shot.png') }],
+      },
+    })
+    expect(accepted).toBe(false) // preventDefault ran
+    await screen.findByLabelText('Remove shot.png')
+
+    const refused = fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [
+          {
+            type: 'application/pdf',
+            getAsFile: () => new File([new Uint8Array([1])], 'doc.pdf', { type: 'application/pdf' }),
+          },
+        ],
+      },
+    })
+    expect(refused).toBe(true) // default paste still runs — the text is not lost
+    expect(await screen.findByText('doc.pdf is not an image or a text file')).toBeTruthy()
+  })
+
   it('a single paste adds exactly ONE thumbnail under StrictMode (#double-paste regression)', async () => {
     // StrictMode double-invokes state updaters in dev; the earlier addFiles ran its async encode
     // inside the setImages updater, so one paste appended the image twice. Render under

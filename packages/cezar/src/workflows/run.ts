@@ -28,6 +28,9 @@ import {
   handoffPath,
   seedHandoffFile,
 } from '../handoff.ts';
+// A contract VALUE (like `workspaceUiStateSchema` in workspace/migrations.ts): the attachment
+// extension lists are shared with the server and the cockpit, so they are defined once.
+import { IMAGE_ATTACHMENT_EXTENSIONS } from '@open-mercato/cezar-contract';
 import { todosPath } from '../todos.ts';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
@@ -397,8 +400,10 @@ export function agentDirectories(runsDir: string, env: Record<string, string>): 
  * `.ai/cezar/runs/<runId>-images/` (see `RunManager.persistImage`).
  */
 /** Extensions `persistImage` writes for an image block, and the only names
- *  `readPersistedAttachments` re-encodes as one. */
-const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'webp', 'gif', 'img']);
+ *  `readPersistedAttachments` re-encodes as one. The contract's list, so the cockpit's own
+ *  render branch (`isImageAttachmentUrl`) cannot disagree with the engine about what an
+ *  attachment is. */
+const IMAGE_EXTENSIONS = new Set(IMAGE_ATTACHMENT_EXTENSIONS);
 
 /** The extension part of an attachment's on-disk name, lowercased. */
 function extensionOf(name: string): string {
@@ -517,6 +522,22 @@ interface PendingContinuation {
    *  opens — the same moment its images are, so a deferred continuation writes each file once. */
   files: FileAttachmentInput[];
   images: ContentBlock[];
+}
+
+/** What a reopened session may carry alongside its opening prompt (`runContinuation`). */
+interface ContinuationAttachments {
+  /** Screenshots pasted into the follow-up composer — delivered with the reopened session's
+   *  opening message, exactly like a live-session message's attachments. */
+  images?: ContentBlock[];
+  /** Queued-message screenshots were persisted when they were enqueued and reconstructed at
+   *  dequeue. Kept separate from fresh `images` so opening a recovered continuation does not
+   *  persist duplicate files. */
+  persistedImages?: ContentBlock[];
+  /** Their on-disk paths, for the note the opening prompt carries. */
+  persistedAttachments?: PersistedAttachment[];
+  /** Text files attached to this continuation — persisted here, next to its images, and
+   *  carried into the opening message as paths. */
+  files?: FileAttachmentInput[];
 }
 
 /** A message buffered between dequeue and session-open (`deferMessage`). Its attached files
@@ -1000,10 +1021,12 @@ export class RunManager {
               hydrated.sessionId,
               hydrated.backend,
               hydrated.prompt,
-              hydrated.images,
-              hydrated.persistedImages,
-              hydrated.persistedAttachments,
-              hydrated.files,
+              {
+                images: hydrated.images,
+                persistedImages: hydrated.persistedImages,
+                persistedAttachments: hydrated.persistedAttachments,
+                files: hydrated.files,
+              },
             ).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
               this.store.updateRun(runId, {
@@ -2217,10 +2240,7 @@ export class RunManager {
       resume ? sessionStep.sessionId : undefined,
       targetRunner,
       prompt,
-      images,
-      [],
-      [],
-      files,
+      { images, files },
     ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -2241,19 +2261,17 @@ export class RunManager {
     sessionId: string | undefined,
     backend: RunnerId,
     prompt: string,
-    /** Screenshots pasted into the follow-up composer — delivered with the
-     *  reopened session's opening message, exactly like a live-session
-     *  message's attachments. */
-    images: ContentBlock[] = [],
-    /** Queued-message screenshots were persisted when they were enqueued and
-     *  reconstructed at dequeue. Keep them separate from fresh `images` so
-     *  opening a recovered continuation does not persist duplicate files. */
-    persistedImages: ContentBlock[] = [],
-    persistedAttachments: PersistedAttachment[] = [],
-    /** Text files attached to this continuation — persisted here, next to its images, and
-     *  carried into the opening message as paths. */
-    files: FileAttachmentInput[] = [],
+    /** Everything a continuation may carry beyond its prompt. An options object rather than a
+     *  positional tail: the two call sites pass different subsets, and a bare `[], []` in the
+     *  middle of nine arguments is a place for the next parameter to land silently wrong. */
+    carried: ContinuationAttachments = {},
   ): Promise<void> {
+    const {
+      images = [],
+      persistedImages = [],
+      persistedAttachments = [],
+      files = [],
+    } = carried;
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
     // Retention (#483) may have reclaimed this run's worktree directory while

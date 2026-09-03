@@ -155,14 +155,29 @@ describe('queued prompt stack routes (#472)', () => {
     expect(enqueuedFiles?.map((f) => f.name)).toEqual(['notes.txt']);
   });
 
-  /** The allowlist is what keeps `text/html` and SVG out of a folder this server serves back
-   *  from the cockpit's own origin. */
-  it('rejects a media type outside the text allowlist', async () => {
+  /** The allowlist is what keeps `text/html`, `text/javascript` and SVG out of a folder this
+   *  server serves back from the cockpit's own origin. Pinned by name rather than described:
+   *  the first cut of this regex allowed every `text/*` subtype while its comment claimed
+   *  otherwise, which is the failure mode a security control cannot have. */
+  it.each([
+    ['application/zip', 'payload.zip'],
+    ['text/html', 'page.html'],
+    ['text/html; charset=utf-8', 'page.html'],
+    ['text/javascript', 'script.js'],
+    ['image/svg+xml', 'logo.svg'],
+  ])('rejects %s — outside the text allowlist', async (mediaType, name) => {
+    const res = await post({ text: 'here', files: [{ name, mediaType, data: 'AAAA' }] });
+    expect(res.status).toBe(400);
+  });
+
+  /** …and the parameterized spelling a browser actually sends must keep passing. */
+  it('accepts a media type carrying a charset parameter', async () => {
     const res = await post({
       text: 'here',
-      files: [{ name: 'payload.zip', mediaType: 'application/zip', data: 'AAAA' }],
+      files: [{ name: 'notes.txt', mediaType: 'text/plain; charset=utf-8', data: 'aGk=' }],
     });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(200);
+    expect(enqueuedFiles?.map((f) => f.name)).toEqual(['notes.txt']);
   });
 
   it('counts files and images against ONE per-stack attachment cap', async () => {

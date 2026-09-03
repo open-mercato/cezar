@@ -603,10 +603,36 @@ export type ImageInput = z.input<typeof imageInputSchema>;
 /**
  * What a `files` attachment may be: text, and the structured formats that are text underneath.
  * Deliberately an allowlist rather than "any type" — cezar serves these back from the cockpit's
- * own origin, and that is what keeps `text/html` and SVG out of it.
+ * own origin, and that is what keeps `text/html`, `text/javascript` and SVG out of it.
+ *
+ * Both branches are enumerated and both are anchored. A bare `text/` prefix would have admitted
+ * every `text/*` subtype including the two this comment claims to exclude — a control whose
+ * documentation overstates it is worse than no control, because the next reader trusts it. The
+ * trailing `(;|$)` is load-bearing in the other direction: `text/plain; charset=utf-8` is a real
+ * browser-supplied value and has to keep passing.
  */
 export const FILE_MEDIA_TYPE =
-  /^(text\/|application\/(json|x-ndjson|xml|yaml|x-yaml|toml|x-toml|markdown|sql|csv)$)/;
+  /^(text\/(plain|markdown|x-markdown|csv|tab-separated-values|xml|yaml|x-yaml|x-toml|x-log)|application\/(json|x-ndjson|xml|yaml|x-yaml|toml|x-toml|markdown|sql|csv))\s*(;|$)/;
+
+/**
+ * The extensions a text attachment may keep on disk, and the ONE list every layer reads: the
+ * cockpit's file picker and its intake screening, and the server's content-type map for serving
+ * the bytes back. They have to agree — a picker that offers a file the intake refuses is the
+ * defect this feature shipped with — and one exported list is the only thing that makes them.
+ */
+export const TEXT_ATTACHMENT_EXTENSIONS: readonly string[] = [
+  'md', 'markdown', 'txt', 'text', 'log', 'csv', 'tsv', 'json', 'jsonl', 'ndjson',
+  'yaml', 'yml', 'toml', 'ini', 'xml', 'sql', 'diff', 'patch',
+];
+
+/**
+ * The extensions a run's attachment folder uses for an IMAGE (`persistImage`'s own map, `img`
+ * being its fallback for an unrecognized image media type). Shared for the same reason: the
+ * engine re-encodes exactly these back into image blocks, and the cockpit renders exactly these
+ * as `<img>` — a list that drifted would put a broken image in a bubble, or a `.md` into a
+ * payload the model's backend rejects.
+ */
+export const IMAGE_ATTACHMENT_EXTENSIONS: readonly string[] = ['png', 'jpg', 'webp', 'gif', 'img'];
 
 /**
  * A non-image attachment: a `.md` brief, a log, a CSV. Base64 on the wire like an image, but

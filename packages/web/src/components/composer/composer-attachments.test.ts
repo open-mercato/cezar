@@ -40,6 +40,17 @@ describe('screenFiles — the 4×5MB image caps and the 4×1MB file caps, mirror
   })
 
   /** …and the other half of it: what cezar cannot take is now SAID, not silently dropped. */
+  /** A mistyped `.csv` reaches the intake as a file, not as a refusal (the regression behind
+   *  the fallback rule above). */
+  it('takes a mistyped .csv on its extension', () => {
+    const intake = screenFiles(
+      [fakeFile({ type: 'application/vnd.ms-excel', name: 'data.csv' })],
+      none,
+    )
+    expect(intake.files.map((f) => f.name)).toEqual(['data.csv'])
+    expect(intake.rejected).toEqual([])
+  })
+
   it('names an unsupported file instead of ignoring it', () => {
     const intake = screenFiles([fakeFile({ type: 'application/pdf', name: 'doc.pdf' })], none)
     expect(intake.images).toEqual([])
@@ -128,13 +139,35 @@ describe('attachmentMediaType', () => {
     expect(attachmentMediaType(fakeFile({ type: 'image/jpeg', name: 'a.jpg' }))).toBe('image/jpeg')
   })
 
-  it('falls back to the extension only when the browser gave no type at all', () => {
+  it('keeps a parameterized type — a browser really does say `text/plain; charset=utf-8`', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'text/plain; charset=utf-8', name: 'a.txt' })))
+      .toBe('text/plain; charset=utf-8')
+  })
+
+  it('falls back to the extension when the browser gave no type at all', () => {
     expect(attachmentMediaType(fakeFile({ type: '', name: 'a.md' }))).toBe('text/plain')
     expect(attachmentMediaType(fakeFile({ type: '', name: 'a.bin' }))).toBeNull()
   })
 
-  it('refuses a type the server would reject rather than guessing past it', () => {
-    expect(attachmentMediaType(fakeFile({ type: 'application/zip', name: 'a.md' }))).toBeNull()
+  /**
+   * The type a browser reports is wrong as often as it is missing: a `.csv` comes back as
+   * `application/vnd.ms-excel` wherever Excel registered it, a `.md` as
+   * `application/octet-stream` where an editor did. Both are files the picker offers and the
+   * server would have taken — refusing them was the same "you picked the file you meant and
+   * cezar says no" failure this feature exists to end.
+   */
+  it('falls back to the extension when the browser gave a type the server would not take', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'application/vnd.ms-excel', name: 'data.csv' })))
+      .toBe('text/plain')
+    expect(attachmentMediaType(fakeFile({ type: 'application/octet-stream', name: 'brief.md' })))
+      .toBe('text/plain')
+  })
+
+  /** The extension is what decides a refusal too — it describes the bytes, and it is the only
+   *  half of the pair the server keeps. */
+  it('refuses a file whose extension is not text, whatever it claims to be', () => {
+    expect(attachmentMediaType(fakeFile({ type: 'application/zip', name: 'a.zip' }))).toBeNull()
+    expect(attachmentMediaType(fakeFile({ type: '', name: 'a.pdf' }))).toBeNull()
   })
 })
 
@@ -146,6 +179,11 @@ describe('fileToPendingImage / fileToPendingFile', () => {
     expect(image.name).toBe('tiny.png')
     expect(image.data).toBe(btoa(String.fromCharCode(137, 80, 78, 71)))
     expect(image.preview).toBe(`data:image/png;base64,${image.data}`)
+  })
+
+  it('gives an unnamed file a name — `fileInputSchema.name` is min(1), so `` would 400', async () => {
+    const file = new File(['hi'], '', { type: 'text/plain' })
+    expect((await fileToPendingFile(file)).name).toBe('attachment.txt')
   })
 
   it('encodes a text file with its own name — the server derives the on-disk extension from it', async () => {

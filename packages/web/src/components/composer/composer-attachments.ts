@@ -1,3 +1,4 @@
+import { FILE_MEDIA_TYPE, TEXT_ATTACHMENT_EXTENSIONS } from '@open-mercato/cezar-api-client'
 import type { FileInput, ImageInput } from '@open-mercato/cezar-api-client'
 
 /**
@@ -19,19 +20,18 @@ export const MAX_FILES = 4
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 export const MAX_FILE_BYTES = 1024 * 1024
 
-/** The media types the server's `fileInputSchema` accepts. */
-const FILE_MEDIA_TYPE = /^(text\/|application\/(json|x-ndjson|xml|yaml|x-yaml|toml|x-toml|markdown|sql|csv)$)/
-
 /**
- * Extensions we call text when the browser will not. `file.type` is empty for plenty of
- * ordinary files (`.md` on several OS/browser pairs, `.log`, `.toml`), and refusing those
- * because the platform has no MIME entry for them would refuse exactly the file this feature
- * exists for.
+ * Extensions we call text whatever the browser calls them — the contract's own list, so the
+ * picker, this screening and the server's content-type map cannot drift apart.
+ *
+ * `file.type` is unreliable in both directions: empty for plenty of ordinary files (`.md` on
+ * several OS/browser pairs, `.log`, `.toml`) and confidently WRONG on others (a `.csv` arrives
+ * as `application/vnd.ms-excel` wherever Excel registered it, a `.md` as
+ * `application/octet-stream` where an editor did). Refusing those would refuse exactly the files
+ * this feature exists for, so the extension decides whenever the declared type is not one the
+ * server accepts.
  */
-const TEXT_EXTENSIONS = new Set([
-  'md', 'markdown', 'txt', 'text', 'log', 'csv', 'tsv', 'json', 'jsonl', 'ndjson',
-  'yaml', 'yml', 'toml', 'ini', 'xml', 'sql', 'diff', 'patch',
-])
+const TEXT_EXTENSIONS = new Set(TEXT_ATTACHMENT_EXTENSIONS)
 
 /**
  * The file picker's `accept`. Extensions as well as types, because the dialog filters with the
@@ -71,14 +71,20 @@ export interface AttachmentIntake {
   rejected: string[]
 }
 
-/** The media type to send for a file, or null when it is neither an image nor text. */
+/**
+ * The media type to send for a file, or null when it is neither an image nor text.
+ *
+ * The extension decides whenever the declared type is not one the server accepts — absent OR
+ * merely wrong. Nothing is weakened by that: the server discards `mediaType` after validating
+ * it and re-derives the on-disk extension from `name` (`fileExtensionFor`), so this only picks
+ * which files the cockpit is willing to send. A `.zip` is still refused — on its extension,
+ * which is the property that actually says what the bytes are.
+ */
 export function attachmentMediaType(file: File): string | null {
   if (file.type.startsWith('image/')) return file.type
   if (FILE_MEDIA_TYPE.test(file.type)) return file.type
-  // No type, or one the allowlist does not know: the extension decides, and `text/plain` is
-  // what a `.md` the browser had no entry for is sent as.
   const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
-  return file.type === '' && TEXT_EXTENSIONS.has(ext) ? 'text/plain' : null
+  return TEXT_EXTENSIONS.has(ext) ? 'text/plain' : null
 }
 
 /** Base64 for a File (chunked — `String.fromCharCode(...5MB)` would blow the arg limit). */
@@ -104,7 +110,9 @@ export async function fileToPendingImage(file: File): Promise<PendingImage> {
 
 export async function fileToPendingFile(file: File): Promise<PendingFile> {
   return {
-    name: file.name,
+    // `fileInputSchema.name` is `min(1)`, and a `File` can genuinely have an empty name — an
+    // unnamed one would come back as a raw zod 400 instead of anything a user could act on.
+    name: file.name || 'attachment.txt',
     mediaType: attachmentMediaType(file) ?? 'text/plain',
     data: await encode(file),
     size: file.size,

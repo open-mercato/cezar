@@ -37,6 +37,7 @@ import {
 // schema this route validates with is the same one the client compiles against.
 import {
   fileInputSchema,
+  TEXT_ATTACHMENT_EXTENSIONS as CONTRACT_TEXT_ATTACHMENT_EXTENSIONS,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
@@ -4057,9 +4058,24 @@ export function createApp(deps: ServerDeps) {
         (TEXT_ATTACHMENT_EXTENSIONS.has(ext)
           ? 'text/plain; charset=utf-8'
           : 'application/octet-stream');
+      // These bytes are user-supplied and served from the cockpit's own origin, and the thread's
+      // file chip navigates to them, so the response carries the same guards the worktree
+      // raw-file route carries for the same reason: `nosniff` (a sniffing client must not
+      // upgrade `text/plain` to `text/html`) and a sandbox CSP (nothing executes even if one
+      // does). Anything the extension map could not name is additionally forced to DOWNLOAD
+      // rather than render. Belt and braces on purpose — the content-type map alone is one
+      // careless addition away from being the only thing holding the origin.
       return new Response(readFileSync(path), {
         headers: {
           'content-type': type,
+          'x-content-type-options': 'nosniff',
+          'content-security-policy': "default-src 'none'; sandbox",
+          ...(type === 'application/octet-stream'
+            ? // The name is echoed into a quoted header value, so it is reduced to a charset
+              // that cannot close the quote or split the header — `basename` bounds the path,
+              // not the syntax.
+              { 'content-disposition': `attachment; filename="${file.replace(/[^A-Za-z0-9._-]/g, '_')}"` }
+            : {}),
           'cache-control': 'private, max-age=31536000, immutable',
         },
       });
@@ -4425,12 +4441,11 @@ export function createApp(deps: ServerDeps) {
    * bytes came from a user and are served from the cockpit's own origin, so answering with the
    * type the file claims (`text/html`, `image/svg+xml`) would be handing that origin a script.
    * Plain text renders in a tab and runs nothing. Anything not listed keeps the octet-stream
-   * default and downloads.
+   * default and downloads. The list itself is the contract's — the cockpit's picker and intake
+   * read the same one, and a server that served an extension the picker never offers (or the
+   * reverse) is the drift this single source exists to prevent.
    */
-  const TEXT_ATTACHMENT_EXTENSIONS = new Set([
-    'md', 'markdown', 'txt', 'text', 'log', 'csv', 'tsv', 'json', 'jsonl', 'ndjson',
-    'yaml', 'yml', 'toml', 'ini', 'xml', 'sql', 'diff', 'patch',
-  ]);
+  const TEXT_ATTACHMENT_EXTENSIONS = new Set(CONTRACT_TEXT_ATTACHMENT_EXTENSIONS);
   // ---- session git view (redesign R5 Step 1.2 — §"Git/session API additions").
   // Structured sibling of the text-blob /diff above (which stays untouched —
   // protected surface). Isolated runs read their worktree; worktree-off runs

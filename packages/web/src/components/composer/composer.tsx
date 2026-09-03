@@ -278,9 +278,11 @@ export function Composer({
 
   // ---- attachments ---------------------------------------------------------------------------
 
+  /** Screens and appends; answers whether anything was actually taken, which is what lets the
+   *  paste handler decide between swallowing the event and letting the default run. */
   const addFiles = useCallback(
-    (incoming: readonly File[]) => {
-      if (disabled) return
+    (incoming: readonly File[]): boolean => {
+      if (disabled) return false
       // Side effects (screening toasts + async encode) run OUTSIDE any setState updater: React
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
       // append each pasted image twice (#double-paste). The refs give the current counts
@@ -300,6 +302,7 @@ export function Composer({
           setFiles((prev) => (prev.length >= MAX_FILES ? prev : [...prev, attachment])),
         )
       }
+      return intake.images.length > 0 || intake.files.length > 0
     },
     [disabled],
   )
@@ -313,8 +316,10 @@ export function Composer({
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null)
     if (pasted.length === 0) return
-    event.preventDefault()
-    addFiles(pasted)
+    // Swallow the paste only for a file we actually took. A clipboard payload carrying both
+    // text and a file cezar refuses (a `.pdf`, a `.zip`) still pastes its text — the rejection
+    // toast says what was left out, and the user does not lose what they meant to paste.
+    if (addFiles(pasted)) event.preventDefault()
   }
 
   const onDrop = (event: DragEvent) => {

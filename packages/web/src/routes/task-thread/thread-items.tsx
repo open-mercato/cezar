@@ -18,7 +18,7 @@ import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { ZoomableImage } from '@/components/zoomable-image'
 import { Link } from '@/lib/project-router'
-import { resolveApiUrl } from '@open-mercato/cezar-api-client'
+import { IMAGE_ATTACHMENT_EXTENSIONS, resolveApiUrl } from '@open-mercato/cezar-api-client'
 import type { FileDiff, ToolKind, UiToolItem } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
 
@@ -45,12 +45,12 @@ export { isNearBottom }
  * attachment into an image block. A text file gets a download chip: an `<img>` pointed at a
  * `.md` renders as a broken image.
  */
-const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['png', 'jpg', 'webp', 'gif', 'img'])
+const IMAGE_EXTENSIONS = new Set(IMAGE_ATTACHMENT_EXTENSIONS)
 
 export function isImageAttachmentUrl(url: string): boolean {
   const name = url.slice(url.lastIndexOf('/') + 1)
   const dot = name.lastIndexOf('.')
-  return dot > 0 && IMAGE_ATTACHMENT_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())
+  return dot > 0 && IMAGE_EXTENSIONS.has(name.slice(dot + 1).toLowerCase())
 }
 
 /** Right-aligned muted bubble — a v1 `user-message` line or the run's initial task. Renders any
