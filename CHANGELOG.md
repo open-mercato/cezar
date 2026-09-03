@@ -28,13 +28,15 @@
   mismatched closer and an already-balanced payload that failed to parse for some other reason
   (a trailing comma), and a repair that yields fewer than two options still degrades to plain text
   exactly as before. A recovered card is never passed off as a clean one: the run records a note
-  saying the question was recovered from an unbalanced payload and asking you to check the options
-  match what was asked, and the raw marker is stripped along with the card it produced rather than
-  left sitting under it. The two forgiveness layers now read as a pair — presentation drift
-  (unknown keys, an over-long header) was already recovered above the parse; syntax drift is
-  recovered below it. Relatedly, a question that IS lost outright no longer whispers: that note
-  renders in the danger tone instead of as the dimmest line in the thread, and the marker contract
-  agents receive now says in as many words that the JSON must be syntactically valid.
+  saying the question was recovered from an unbalanced payload and asking you to check that the
+  options — and how many of them you may pick — match what was asked, and the raw marker is
+  stripped along with the card it produced rather than left sitting under it. Because that note is
+  the only trace a repair leaves, it renders in the danger tone rather than as the dimmest line in
+  the thread. The two forgiveness layers now read as a pair — presentation drift (unknown keys, an
+  over-long header) was already recovered above the parse; syntax drift is recovered below it.
+  Relatedly, a question that IS lost outright no longer whispers either: its note gets the same
+  treatment, and the marker contract agents receive now says in as many words that the JSON must
+  be syntactically valid.
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
   answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
   of that stays true of a branch GitHub is refusing to merge, so a conflicted PR sat there in

@@ -132,11 +132,38 @@ function askMarkerRejection(result: AskMarkerParseResult): string | undefined {
 /** A persisted, auditable trace for a card that only rendered because the
  * payload's missing closers were appended (#936) — a repair can only lose what
  * the truncation already removed, so the recovery must stay visible rather than
- * passing for a clean parse. */
+ * passing for a clean parse. Carries `tone: 'danger'` for the same reason the
+ * rejection does: it is the ONLY signal that the card may be missing a trailing
+ * option or a trailing `multiSelect` the cut took with it, and the raw payload
+ * is stripped along with the card, so a dim footnote could not be acted on. */
 function askMarkerRecovery(result: AskMarkerParseResult): string | undefined {
   return result.kind === 'valid' && result.repaired
-    ? 'structured question recovered from an unbalanced CEZ:ASK payload — check the options match what was asked'
+    ? 'structured question recovered from an unbalanced CEZ:ASK payload — check the options, and how many you may pick, match what was asked'
     : undefined;
+}
+/** What a turn's trailing `CEZ:ASK` marker resolves to: the card to raise, and
+ * the notes to persist alongside it. */
+type AskTurnOutcome = {
+  ask: AskRequest | null;
+  /** Emitted in order by the caller, which owns how a note is persisted. */
+  notes: Array<{ message: string; tone?: 'danger' }>;
+};
+/** Resolve the ask marker for one finished turn. Both turn-end handlers
+ * (`runAgentStep` and `runContinuation`) route through this single function:
+ * they are hand-duplicated, and `AGENTS.md` warns that a lifecycle change
+ * applied to only one of them ships half a fix — the notes and their tones are
+ * exactly that kind of change. `enabled` is the caller's own precondition (the
+ * session is open, the turn is not a `CEZ:DONE`, and for an agent step, the run
+ * is interactive); when false there is no marker to look for. */
+function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
+  if (!enabled) return { ask: null, notes: [] };
+  const result = parseAskMarkerResult(turnText);
+  const notes: AskTurnOutcome['notes'] = [];
+  const rejection = askMarkerRejection(result);
+  if (rejection) notes.push({ message: rejection, tone: 'danger' });
+  const recovery = askMarkerRecovery(result);
+  if (recovery) notes.push({ message: recovery, tone: 'danger' });
+  return { ask: result.kind === 'valid' ? result.request : null, notes };
 }
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
@@ -2267,16 +2294,11 @@ export class RunManager {
         const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is genuinely blocked; wins over `CEZ:MONITORING`
         // (a pending question is always attention), loses to `CEZ:DONE` (#473).
-        const askResult = sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
-        const ask = askResult?.kind === 'valid' ? askResult.request : null;
-        const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
-        const askRecovery = askResult ? askMarkerRecovery(askResult) : undefined;
+        const { ask, notes: askNotes } = resolveAskTurn(turnText, Boolean(sessionOpen) && !done);
         const monitoring =
           sessionOpen && !done && !ask && MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
-        if (askRejection)
-          this.store.appendEvent(runId, { type: 'note', message: askRejection, tone: 'danger', stepId });
-        if (askRecovery) this.store.appendEvent(runId, { type: 'note', message: askRecovery, stepId });
+        for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         if (done) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
@@ -2898,10 +2920,10 @@ export class RunManager {
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
         // `CEZ:DONE` (#473).
-        const askResult = interactive && sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
-        const ask = askResult?.kind === 'valid' ? askResult.request : null;
-        const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
-        const askRecovery = askResult ? askMarkerRecovery(askResult) : undefined;
+        const { ask, notes: askNotes } = resolveAskTurn(
+          turnText,
+          Boolean(interactive && sessionOpen) && !done,
+        );
         const monitoring =
           interactive &&
           sessionOpen &&
@@ -2909,8 +2931,7 @@ export class RunManager {
           !ask &&
           MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
-        if (askRejection) emit({ type: 'note', stepId: step.id, message: askRejection, tone: 'danger' });
-        if (askRecovery) emit({ type: 'note', stepId: step.id, message: askRecovery });
+        for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
           // Goal achieved (agent contract, #347): close the session instead
           // of parking at `waiting` — the run completes and frees its slot.

@@ -1167,7 +1167,11 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(parked?.activity).toBeUndefined();
     const events = readEvents(record.id);
     expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
-    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('not valid JSON'))).toHaveLength(1);
+    const rejections = events.filter((e) => e.type === 'note' && String(e.message).includes('not valid JSON'));
+    expect(rejections).toHaveLength(1);
+    // The question was lost outright — the note must not render as the dimmest
+    // line in the thread (#936). Nothing else pins this field on the wire.
+    expect(rejections[0]!.tone).toBe('danger');
   }, 30_000);
 
   // Regression (blank-question bug): valid JSON that fails the ask schema used
@@ -1181,7 +1185,9 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     await waitFor(record.id, (r) => r?.status === 'waiting');
     const events = readEvents(record.id);
     expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
-    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('failed validation'))).toHaveLength(1);
+    const rejections = events.filter((e) => e.type === 'note' && String(e.message).includes('failed validation'));
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]!.tone).toBe('danger'); // see the malformed case above
     const assistantText = events.filter((e) => e.type === 'text');
     expect(assistantText.some((e) => String(e.text).includes('CEZ:ASK {"questions":[]}'))).toBe(true);
   }, 30_000);
@@ -1202,12 +1208,45 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Lint scope');
     expect(questions[0]!.options).toHaveLength(3);
-    expect(
-      events.filter((e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced')),
-    ).toHaveLength(1);
+    const recoveries = events.filter(
+      (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
+    );
+    expect(recoveries).toHaveLength(1);
+    // The raw payload is stripped along with the card, so this note is the only
+    // trace of the repair — it must not whisper (#936).
+    expect(recoveries[0]!.tone).toBe('danger');
     expect(events.some((e) => e.type === 'note' && String(e.message).includes('ignored'))).toBe(false);
     expect(events.filter((e) => e.type === 'text').some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
   }, 30_000);
+
+  // The same recovery on the OTHER turn-end handler. `runContinuation`'s is
+  // hand-duplicated from `runAgentStep`'s — AGENTS.md's standing warning that a
+  // lifecycle change applied to one of them ships half a fix. Both now route
+  // through `resolveAskTurn`; this pins that they stay indistinguishable.
+  it('recovers a truncated CEZ:ASK on a continuation turn identically', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'do the first thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(manager.finish(record.id)).toBe(true); // continueRun only accepts a terminal run
+    await waitFor(record.id, (r) => ['done', 'review'].includes(r?.status ?? ''));
+    expect(manager.continueRun(record.id, { text: 'mock:ask-truncated choose' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    const events = readEvents(record.id);
+    const asks = events.filter((e) => e.type === 'ask.requested');
+    expect(asks).toHaveLength(1); // the first turn carried no marker
+    const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
+    expect(questions[0]!.header).toBe('Lint scope');
+    expect(questions[0]!.options).toHaveLength(3);
+    const recoveries = events.filter(
+      (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
+    );
+    expect(recoveries).toHaveLength(1);
+    expect(recoveries[0]!.tone).toBe('danger');
+    expect(String(recoveries[0]!.stepId)).toMatch(/^continue-/); // the continuation handler, not the step one
+    expect(events.some((e) => e.type === 'note' && String(e.message).includes('ignored'))).toBe(false);
+    expect(events.filter((e) => e.type === 'text').some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
+  }, 40_000);
 });
 
 /**

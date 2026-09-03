@@ -272,10 +272,14 @@ a **completed** structural value (`}` or `]`), the scan ends outside a string,
 and every closer matched its opener — a stream cut mid-string, after a `,`, or
 after a `:` is still refused, and an already-balanced payload (a trailing comma,
 say) has nothing to repair. The repaired text goes through the unchanged schema,
-so a repair yielding fewer than 2 options still degrades to plain text. A
-recovered card is never passed off as a clean parse: `AskMarkerParseResult`
-carries `repaired`, the run records a recovery note, and the raw marker is
-stripped from the transcript along with the card it produced. A native
+so a repair yielding fewer than 2 options still degrades to plain text. What a
+repair *can* lose is whatever the cut already took: a stream severed exactly on
+an option boundary yields a real card missing a trailing option, or missing a
+trailing `multiSelect` — so a recovered card is never passed off as a clean
+parse. `AskMarkerParseResult` carries `repaired`, and the run records a
+danger-toned recovery note asking the user to check the options, and how many
+they may pick, against what was asked; the raw marker is stripped from the
+transcript along with the card it produced. A native
 `AskUserQuestion`
 control-protocol bridge for claude (the `control_request can_use_tool` path) is a
 possible future enhancement; the marker is the portable baseline.
