@@ -34,6 +34,19 @@ type UsageAccountingHarness = {
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
+/**
+ * DISPOSE — why every teardown below ends its manager.
+ *
+ * A `RunManager` owns process-lifetime timers, the queue watchdog
+ * (`QUEUE_WATCHDOG_MS`, 60 s) above all. An undisposed one keeps ticking for the
+ * remainder of the file, long after its `repoRoot` was `rmSync`'d, and the sweep
+ * that then revives a still-`queued` run writes its lifecycle event into a
+ * directory that no longer exists — an unhandled rejection that fails the whole
+ * file with every test passing. Latent until this file grew past the watchdog's
+ * first tick, which is exactly why it is fixed here rather than left for the
+ * next test to trip over. `dispose()` clears the timers and touches no session.
+ */
+
 const TURN_TEXT =
   "I'll catch the AuthError in the login handler so wrong passwords answer 401.\n\nDetails follow.";
 
@@ -75,6 +88,7 @@ describe('RunManager directional usage accounting', () => {
   });
 
   afterEach(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });
@@ -267,6 +281,7 @@ describe('RunManager.recordTurnEnd', () => {
   });
 
   afterAll(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });
@@ -431,6 +446,7 @@ describe('RunManager.continueRun override', () => {
   });
 
   afterEach(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });
@@ -676,6 +692,7 @@ describe('RunManager.settleSuccess — optional review gate', () => {
   });
 
   afterEach(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     delete process.env.CEZ_REVIEW_GATE;
     // Reset the config file each test so config.reviewGate never leaks across cases.
     rmSync(join(repoRoot, '.ai/cezar', 'config.json'), { force: true });
@@ -767,6 +784,7 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
   });
 
   afterAll(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -856,6 +874,7 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
   });
 
   afterAll(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -936,6 +955,7 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
 
   afterEach(() => {
     if (currentId) manager.cancel(currentId); // release the session + repo lock
+    manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -1073,6 +1093,27 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     source: 'built-in',
     steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
   };
+  /**
+   * A NON-final agent step followed by a check — the shape #917 is about. The
+   * check `false` is what makes a park provable rather than incidental: before
+   * the fix the workflow advanced straight into it, failed it, and recorded the
+   * whole run as failed while the question was still on the user's screen. So
+   * `verify: pending` can only mean the workflow genuinely stopped at the ask.
+   */
+  const BLOCKING_CHECK: WorkflowDef = {
+    name: 'implement-verify',
+    source: 'built-in',
+    steps: [
+      { id: 'implement', name: 'Implement', prompt: '{{task}}' },
+      { id: 'verify', name: 'Verify', command: 'false' },
+    ],
+  };
+  /** The same shape with a check that passes — for the paths that must NOT park,
+   *  where the proof is the workflow running all the way through. */
+  const PASSING_CHECK: WorkflowDef = {
+    ...BLOCKING_CHECK,
+    steps: [BLOCKING_CHECK.steps[0]!, { id: 'verify', name: 'Verify', command: 'true' }],
+  };
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-473-'));
@@ -1089,6 +1130,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
   afterEach(() => {
     if (currentId) manager.cancel(currentId);
+    manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -1111,6 +1153,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       .split('\n')
       .map((l) => JSON.parse(l));
 
+  const steps = (id: string) => store.getRun(id)?.steps.map((s) => ({ id: s.id, status: s.status }));
+
   it('a CEZ:ASK turn-end parks the run as waiting (attention) and emits ask.requested', async () => {
     const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask which library?', worktree: false });
     currentId = record.id;
@@ -1124,6 +1168,151 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
     expect(questions[0]!.header).toBe('Library');
     expect(questions[0]!.options).toHaveLength(2);
+  }, 30_000);
+
+  it('an intermediate CEZ:ASK pauses before the following check', async () => {
+    const record = manager.startRun(BLOCKING_CHECK, { task: 'mock:ask choose a path', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    const parked = store.getRun(record.id);
+    expect(parked?.status).toBe('waiting');
+    expect(parked?.askParked).toBe(true); // the durable half — `recover()`'s only signal
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'waiting' },
+      { id: 'verify', status: 'pending' },
+    ]);
+    expect(readEvents(record.id).filter((event) => event.type === 'ask.requested')).toHaveLength(1);
+  }, 30_000);
+
+  it('answering an intermediate CEZ:ASK resumes the workflow through the following check', async () => {
+    const record = manager.startRun(PASSING_CHECK, { task: 'mock:ask choose a path', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'date-fns' }])).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'done' },
+      { id: 'verify', status: 'done' },
+    ]);
+    expect(store.getRun(record.id)?.askParked).toBeUndefined();
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 30_000);
+
+  /**
+   * The park has to have EXITS, not just an entrance. Everything below drives one
+   * of them: without them a run parked at an intermediate ask could never be
+   * cancelled, finished or settled once its session closed, and — never reaching
+   * `dropActive` — held a `maxParallel` slot for the lifetime of the process.
+   * `isActive` is the observable proxy for that leak: it reads the same `active`
+   * registry `busySlots()` counts.
+   */
+  it('cancelling a run parked at an intermediate ask settles it as cancelled and frees the slot', async () => {
+    const record = manager.startRun(BLOCKING_CHECK, { task: 'mock:ask choose a path', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    expect(manager.cancel(record.id)).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'cancelled');
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'cancelled' },
+      { id: 'verify', status: 'pending' },
+    ]);
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 30_000);
+
+  /** The control for the case above: the same cancel on the FINAL interactive
+   *  step, whose `waiting` predates #917 and must be unaffected by it. */
+  it('cancelling a run parked at a final interactive ask still settles as cancelled', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask which library?', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(store.getRun(record.id)?.askParked).toBeUndefined(); // not a mid-workflow park
+
+    expect(manager.cancel(record.id)).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'cancelled');
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 30_000);
+
+  it('finishing a run parked at an intermediate ask ends it like any other Finish', async () => {
+    const record = manager.startRun(BLOCKING_CHECK, { task: 'mock:ask choose a path', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    expect(manager.finish(record.id)).toBe(true);
+    await waitFor(record.id, (r) => r?.status === 'done');
+    // Finish is "stop here", not an answer: the step it parked on is accepted,
+    // and the check it never reached stays honestly pending rather than running.
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'done' },
+      { id: 'verify', status: 'pending' },
+    ]);
+    expect(store.getRun(record.id)?.error).toBeUndefined();
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 30_000);
+
+  it('a parked session that closes unanswered settles as failed, not as a success', async () => {
+    const record = manager.startRun(BLOCKING_CHECK, { task: 'mock:ask choose a path', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    // Exactly what `armIdleTimer` does after 15 minutes of silence, and what the
+    // runner's wall clock amounts to — a close with no answer behind it. Driven
+    // directly because neither timeout is reachable inside a test's patience.
+    const live = (manager as unknown as {
+      active: Map<string, { session?: { end(): void; readonly open: boolean } }>;
+    }).active.get(record.id);
+    expect(live?.session?.open).toBe(true);
+    live!.session!.end();
+
+    await waitFor(record.id, (r) => r?.status === 'failed');
+    const settled = store.getRun(record.id);
+    expect(settled?.error).toContain('before the question was answered');
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'failed' },
+      { id: 'verify', status: 'pending' },
+    ]);
+    expect(settled?.askParked).toBeUndefined();
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 30_000);
+
+  /**
+   * A malformed marker cannot become an ask card, so parking an intermediate step
+   * on one would halt an autonomous workflow on a question nobody can see. It
+   * degrades to the diagnostic note it already left and the workflow carries on —
+   * unlike the final interactive step, which parks either way (test above).
+   */
+  it('a malformed intermediate CEZ:ASK leaves the workflow running', async () => {
+    const record = manager.startRun(PASSING_CHECK, { task: 'mock:ask-bad choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'done' },
+      { id: 'verify', status: 'done' },
+    ]);
+    const events = readEvents(record.id);
+    expect(events.some((event) => event.type === 'ask.requested')).toBe(false);
+    expect(
+      events.filter((e) => e.type === 'note' && String(e.message).includes('not valid JSON')),
+    ).toHaveLength(1);
+  }, 30_000);
+
+  /**
+   * Session teardown for intermediate steps moved out of all four runners'
+   * `autoEndAfterFirstTurn` and into the turn-end handler. A regression there
+   * does not fail loudly — it hangs every multi-step workflow on its first agent
+   * step — so the ordinary markerless case is pinned directly.
+   */
+  it('a markerless intermediate step still closes its session and advances', async () => {
+    const record = manager.startRun(PASSING_CHECK, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+    expect(steps(record.id)).toEqual([
+      { id: 'implement', status: 'done' },
+      { id: 'verify', status: 'done' },
+    ]);
+    expect(manager.isActive(record.id)).toBe(false);
   }, 30_000);
 
   it('strips the CEZ:ASK marker from server-emitted v1 text events', async () => {
@@ -1188,6 +1377,91 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 });
 
 /**
+ * #917 — restart recovery over a run parked mid-workflow on a `CEZ:ASK`.
+ *
+ * A run-level `waiting` used to mean one thing, "the final interactive step is
+ * open for follow-ups", where marking the open step done and settling as a
+ * success is exactly right. A mid-workflow park widens that meaning: the later
+ * steps are still `pending`, so the same settlement would badge a workflow that
+ * stopped at its first question as a finished one. `askParked` is the durable
+ * signal that tells the two apart, since the in-memory park dies with the
+ * process. No spawning here — a workspace capped at 0 keeps the queue frozen.
+ */
+describe('recover() over a mid-workflow ask park (#917)', () => {
+  let repoRoot: string;
+  let store: RunStore;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-917-recover-'));
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+  });
+
+  afterEach(() => {
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  /** A two-step run persisted exactly as a park leaves it on disk. */
+  const parkedRun = (askParked: boolean): string => {
+    const { id } = store.createRun({
+      title: 't',
+      workflow: 'implement-verify',
+      task: 'mock:ask choose a path',
+      steps: [
+        { id: 'implement', name: 'Implement', kind: 'agent' },
+        { id: 'verify', name: 'Verify', kind: 'check' },
+      ],
+    });
+    store.updateStep(id, 'implement', { status: 'waiting' });
+    store.updateRun(id, { status: 'waiting', currentStepId: 'implement', askParked: askParked || undefined });
+    return id;
+  };
+
+  const recover = async () => {
+    const manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { maxParallel: 0 } }),
+    });
+    await manager.recover();
+    manager.dispose(); // see DISPOSE at the top of this file
+  };
+
+  it('does not report the interrupted workflow as a successful run', async () => {
+    const id = parkedRun(true);
+    await recover();
+
+    const recovered = store.getRun(id);
+    expect(recovered?.status).toBe('failed');
+    expect(recovered?.error).toContain('waiting for an answer');
+    // The check never ran, and recovery must not pretend otherwise.
+    expect(recovered?.steps.map((s) => s.status)).toEqual(['failed', 'pending']);
+    expect(recovered?.askParked).toBeUndefined();
+  });
+
+  /** The control: the same `waiting` WITHOUT the park marker is the pre-#917
+   *  meaning — a finished interactive session — and still settles as success. */
+  it('still settles an ordinary waiting run as a success', async () => {
+    const id = parkedRun(false);
+    await recover();
+
+    const recovered = store.getRun(id);
+    expect(recovered?.status).toBe('done');
+    expect(recovered?.steps.map((s) => s.status)).toEqual(['done', 'pending']);
+  });
+
+  /** Records written before #917 have no `askParked` key at all — they must keep
+   *  reading as the interactive park they were, not drop out of `runs.json`. */
+  it('reads a pre-#917 record with no askParked key unchanged', () => {
+    const id = parkedRun(false);
+    store.flush();
+    const raw = JSON.parse(readFileSync(join(repoRoot, '.ai/cezar/runs.json'), 'utf8')) as Array<
+      Record<string, unknown>
+    >;
+    expect(raw.find((r) => r.id === id)).not.toHaveProperty('askParked');
+    expect(RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true }).getRun(id)?.status).toBe('waiting');
+  });
+});
+
+/**
  * #472 — `persistImage` must work with no `ActiveRun`, because a queued run has
  * none. The counter moved to `RunManager.queuedImageSeq`, seeded from the highest
  * numeric suffix on disk rather than the file count.
@@ -1215,6 +1489,7 @@ describe('RunManager.persistImage without a session (#472)', () => {
   });
 
   afterEach(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -1300,6 +1575,7 @@ describe('RunManager queued-stack mutators (#472)', () => {
   });
 
   afterEach(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -1610,6 +1886,7 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
   });
 
   afterEach(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     rmSync(repoRoot, { recursive: true, force: true });
   });
 
@@ -1729,6 +2006,7 @@ describe('queued stacking reaches the backend (#472)', () => {
   });
 
   afterAll(() => {
+    manager.dispose(); // see DISPOSE at the top of this file
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -1854,6 +2132,7 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
 
   afterEach(() => {
     if (runId) manager.cancel(runId);
+    manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
     if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
     store.flush();
@@ -1928,6 +2207,7 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
 
   afterEach(() => {
     if (runId) manager.cancel(runId);
+    manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
     store.flush();

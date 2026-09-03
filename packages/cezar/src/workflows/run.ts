@@ -8,7 +8,7 @@ import {
   type AskMarkerParseResult,
   type AskRequest,
 } from '../core/ask.ts';
-import { type AgentSession } from '../core/claude-cli-runner.ts';
+import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -175,6 +175,22 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /**
+   * A NON-FINAL agent step emitted `CEZ:ASK`, so the workflow is parked on that
+   * step instead of advancing into its next check (#917). Two values, because
+   * the park has two endings and they settle differently:
+   *
+   *  - `'waiting'` — live: the session is open and the answer is still expected.
+   *    `execute` sits inside `runAgentStep` for as long as that holds, so seeing
+   *    this value after the step loop means the session closed WITHOUT an answer
+   *    (the idle timer, the wall clock, a crash) and the run settles `failed`.
+   *  - `'abandoned'` — the user pressed Finish instead of answering: "stop here",
+   *    so the run settles like any other finished run.
+   *
+   * A delivered answer clears it (`deliverMessage`) and the workflow resumes.
+   * Mirrored durably onto the record as `RunRecord.askParked` for `recover()`.
+   */
+  askPark?: 'waiting' | 'abandoned';
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
@@ -1058,7 +1074,9 @@ export class RunManager {
    *  - `queued`  → back into the queue (FIFO by createdAt), from the persisted
    *    workflowDef (or the catalog by name for older records);
    *  - `waiting` → the turn was over and the ball was in the user's court —
-   *    settle exactly like a closed session (review/done, Continue still works);
+   *    settle exactly like a closed session (review/done, Continue still works),
+   *    unless `askParked` says the workflow stopped mid-way on a question (#917),
+   *    which settles `failed` instead so unrun steps are not reported as done;
    *  - `running` → mark interrupted, then immediately resume the last agent
    *    session via the Continue path, pointing the agent at its handoff file.
    * Call once, before the server starts taking requests.
@@ -1078,6 +1096,36 @@ export class RunManager {
         continue;
       }
       if (run.status === 'waiting') {
+        // Two different parks wear this status. The final interactive step's
+        // session was open for follow-ups and the workflow had already run to
+        // its end, so settling it as a success is right. A mid-workflow park on
+        // a `CEZ:ASK` (#917) had NOT run to its end — its later steps are still
+        // `pending` — so the same settlement would report a workflow that
+        // stopped at its first question as a finished one. It ends the way any
+        // interrupted run ends instead: `failed`, with the Continue button that
+        // reopens the session so the question can still be answered. No
+        // automatic resume here, unlike the `running` branch below: the agent
+        // asked for a decision, and nudging it onward would be cezar making
+        // that decision on the user's behalf.
+        if (run.askParked) {
+          const interruptedAt = new Date().toISOString();
+          for (const step of run.steps) {
+            if (step.status === 'waiting' || step.status === 'running') {
+              this.store.updateStep(run.id, step.id, { status: 'failed', finishedAt: interruptedAt });
+            }
+          }
+          this.store.updateRun(run.id, {
+            status: 'failed',
+            error: 'interrupted — cezar process exited while the task was waiting for an answer',
+            finishedAt: interruptedAt,
+            currentStepId: undefined,
+          });
+          this.store.appendEvent(run.id, {
+            type: 'lifecycle',
+            message: 'cezar restarted — the task was waiting for your answer; continue it to reply',
+          });
+          continue;
+        }
         for (const step of run.steps) {
           if (step.status === 'waiting' || step.status === 'running') {
             this.store.updateStep(run.id, step.id, { status: 'done', finishedAt: new Date().toISOString() });
@@ -1934,6 +1982,10 @@ export class RunManager {
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
       this.monitoring.delete(runId);
+      // The answer landed, so a mid-workflow ask park (#917) is over and the
+      // workflow may advance past this step again. The durable twin
+      // (`RunRecord.askParked`) is retired by the status write below.
+      state.askPark = undefined;
       // Clear any `monitoring` activity — the agent is actively working again
       // (spec 2026-07-18-subagent-monitoring-status, #490).
       this.store.updateRun(runId, { status: 'running', activity: undefined });
@@ -1953,6 +2005,11 @@ export class RunManager {
     const state = this.active.get(runId);
     if (state?.session?.open) {
       this.clearIdleTimer(state);
+      // Finish on a run parked mid-workflow on a `CEZ:ASK` (#917) is not an
+      // answer, it is "stop here" — so it settles like every other Finish
+      // (`done`, or `review` when the worktree holds changes) instead of the
+      // `failed` a question nobody ever answered settles as.
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'session closed by user' });
       state.session.end();
       return true;
@@ -2720,6 +2777,17 @@ export class RunManager {
           runError = `step "${step.id}" failed: ${failure}`;
           break;
         }
+        // This step parked the workflow on a `CEZ:ASK` (#917) and its session
+        // has now closed with the park still standing — nobody answered, or the
+        // user pressed Finish. Either way the step is over and the workflow must
+        // not walk into the next check; the settlement below owns the outcome.
+        if (state.askPark) {
+          // An abandoned park is the user accepting the step as it stands, so
+          // the rail reads like any other finished step. An unanswered one is
+          // marked by the settlement, alongside the run it failed.
+          if (state.askPark === 'abandoned') this.finishStep(runId, step.id, 'done', undefined, emit);
+          break;
+        }
         this.finishStep(runId, step.id, 'done', undefined, emit);
         i++;
         continue;
@@ -2758,6 +2826,18 @@ export class RunManager {
       break;
     }
 
+    // How a mid-workflow ask park (#917) ended, read once before the settlement
+    // below clears it. A LIVE park never reaches this line: the parked session
+    // stays open, so `execute` is still awaiting `runAgentStep` and the answer
+    // that resumes the workflow clears the flag first. Reaching here with the
+    // park still set therefore means the session is gone — and every one of the
+    // ways that can happen has to settle the run and reach `dropActive`, or the
+    // run is stranded at `waiting` holding a `maxParallel` slot for the lifetime
+    // of the process. Cancellation and step failures keep their own branches
+    // below, ahead of the park, so they still land as `cancelled`/`failed`.
+    const askPark = state.askPark;
+    state.askPark = undefined;
+
     // Final autosave: the branch always ends holding the finished state.
     this.clearAutosaveTimer(state);
     if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'run finalize');
@@ -2775,7 +2855,23 @@ export class RunManager {
     } else if (runError) {
       this.store.updateRun(runId, { status: 'failed', error: runError, finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: `run failed — ${runError}` });
+    } else if (askPark === 'waiting') {
+      // The question was never answered, so the steps behind it never ran.
+      // `settleSuccess` would put a finished badge on a workflow that stopped at
+      // its first question; `failed` says what happened and keeps the Continue
+      // button, which reopens the session so the answer can still be given.
+      const run = this.store.getRun(runId);
+      for (const s of run?.steps ?? []) {
+        if (s.status === 'running' || s.status === 'waiting') {
+          this.store.updateStep(runId, s.id, { status: 'failed', finishedAt });
+        }
+      }
+      const error = 'the session closed before the question was answered';
+      this.store.updateRun(runId, { status: 'failed', error, finishedAt, currentStepId: undefined });
+      emit({ type: 'lifecycle', message: `run stopped — ${error}` });
     } else {
+      // Includes `askPark === 'abandoned'`: Finish on a parked run ends it the
+      // way Finish always does, with the later steps left honestly at `pending`.
       await this.settleSuccess(runId);
     }
     this.clearIdleTimer(state);
@@ -2901,9 +2997,25 @@ export class RunManager {
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
         // `CEZ:DONE` (#473).
-        const askResult = interactive && sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
+        // Every agent step may need user input. Previously this parser was
+        // gated by `interactive`, which is only true for the final step, so
+        // CEZ:ASK from an implementation/review step was ignored and the
+        // workflow advanced into its next check (#917).
+        const askResult = sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
         const ask = askResult?.kind === 'valid' ? askResult.request : null;
         const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
+        // Does this ask park the WORKFLOW — hold a non-final step open instead
+        // of letting `execute` mark it done and run the next check (#917)?
+        //
+        // Only a marker that parsed can: a malformed one produces no ask card,
+        // so parking on it would halt an otherwise autonomous workflow on a
+        // question the user cannot even see, for as long as the session lives.
+        // It degrades to what it did before — the `askRejection` note, and the
+        // raw marker left in the transcript — and the workflow carries on. The
+        // final interactive step is untouched by this: it parks at `waiting`
+        // whatever the marker looked like, where the prose fallback is still
+        // answerable and nothing downstream is being blocked (#473).
+        const parksWorkflow = !interactive && ask !== null && Boolean(sessionOpen);
         const monitoring =
           interactive &&
           sessionOpen &&
@@ -2920,7 +3032,7 @@ export class RunManager {
           state.session?.end();
           return;
         }
-        const waiting = interactive && sessionOpen;
+        const waiting = (interactive || parksWorkflow) && sessionOpen;
         if (waiting) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
@@ -2930,6 +3042,10 @@ export class RunManager {
           // instead of raising "needs you" (#490). Lifecycle is identical: the
           // run frees its slot and keeps the idle timer.
           if (ask) emitAskRequested(sink, ask);
+          // The final interactive step already parks at `waiting` by its own
+          // lifecycle; only a non-final step needs the workflow held back, so
+          // `execute` does not mark it done and run the next check (#917).
+          if (parksWorkflow) state.askPark = 'waiting';
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
@@ -2937,7 +3053,14 @@ export class RunManager {
             this.clearIdleTimer(state);
             this.armMonitoringWakeTimer(runId, state);
           } else {
-            this.store.updateRun(runId, { status: 'waiting', activity: undefined });
+            this.store.updateRun(runId, {
+              status: 'waiting',
+              activity: undefined,
+              // The durable half of the park, and the only thing a restart can
+              // read: without it `recover()` cannot tell this `waiting` from a
+              // finished interactive session and settles it as a success.
+              askParked: parksWorkflow ? true : undefined,
+            });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
             this.monitoring.delete(runId);
             this.clearMonitoringWakeTimer(state, runId);
@@ -2945,6 +3068,24 @@ export class RunManager {
           this.waiting.add(runId);
           if (!monitoring) this.armIdleTimer(runId, state);
           this.releaseSlot(); // the freed slot can start a queued run right away — in any project
+        }
+        // One-shot close for an ordinary intermediate step — the behavior the
+        // runners' `autoEndAfterFirstTurn` used to provide, moved here so a step
+        // that parks on a `CEZ:ASK` can keep its session open for the answer
+        // instead of having the runner close it first (#917).
+        //
+        // The delay reproduces the runners' own `AUTO_END_DELAY_MS`, which they
+        // all apply for the same two reasons: `end()` stays out of the event
+        // dispatch that is announcing the turn, and frames trailing the turn's
+        // final `result` message still land before stdin closes. The session is
+        // captured rather than re-read so a later step's session can never be
+        // the one this timer closes.
+        const closing = state.session;
+        if (!interactive && sessionOpen && !parksWorkflow && closing) {
+          const autoEnd = setTimeout(() => {
+            if (closing.open) closing.end();
+          }, AUTO_END_DELAY_MS);
+          autoEnd.unref?.();
         }
         // The window is proven open — see the twin in `runContinuation`.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
@@ -3027,11 +3168,25 @@ export class RunManager {
           model: backendModel,
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.
+          //
+          // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
+          // even though it may now park on a `CEZ:ASK` and sit open waiting for
+          // an answer (#917). Dropping it for every intermediate step is the
+          // wrong trade: it would leave a runaway step with nothing to stop it,
+          // to buy a park that is bounded by the 15-minute idle timer first in
+          // all but the longest steps. What matters is that neither expiry can
+          // strand the run — both close the session, and a park whose session
+          // closed unanswered settles as `failed` with a Continue button (see
+          // the `askPark` branch in `execute`), never as a run stuck `waiting`.
           timeoutMs: interactive ? 0 : undefined,
         },
         onEvent,
         {
-          autoEndAfterFirstTurn: !interactive,
+          // Ordinary intermediate sessions are closed explicitly at turn-end
+          // instead (with the same delay the runners apply). That is what lets
+          // the turn-end handler hold an intermediate `CEZ:ASK` session open for
+          // the user's answer rather than have the runner close it first (#917).
+          autoEndAfterFirstTurn: false,
           onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
         },
       );

@@ -16,6 +16,22 @@
   is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
 
 ## 🐛 Fixes
+- 🐛 **A question from a mid-workflow step now pauses the workflow instead of being ignored.** An
+  agent that ended an implementation or review step with a structured `CEZ:ASK` was asking nobody:
+  cezar only read the marker on the last step of a workflow, so an intermediate one was dropped and
+  the run marched straight into the next check — which then failed, and the whole task was recorded
+  as failed while the question was still unanswered on screen. Every agent step's ask is now read,
+  and one from a non-final step holds the workflow at that step: the task shows as waiting with the
+  question as clickable chips, and answering it resumes the very same session and carries on
+  through the remaining steps. The pause has a complete set of exits, which is the part worth
+  spelling out: Cancel settles it as cancelled, Finish ends it the way Finish always does, and a
+  session that closes with the question never answered — the fifteen-minute idle timeout, a
+  restart — settles as failed with a Continue button that reopens the session, rather than leaving
+  the task stuck at waiting and quietly holding one of the workspace's parallel slots forever. A
+  restart no longer reports such a task as a *successful* run either; its unrun steps stay visibly
+  unrun. A malformed `CEZ:ASK` from an intermediate step deliberately does not pause anything: no
+  card can be rendered for it, so the workflow carries on and the parse failure is noted in the
+  transcript, exactly as before. (#917)
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
   answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
   of that stays true of a branch GitHub is refusing to merge, so a conflicted PR sat there in
