@@ -115,16 +115,16 @@ Everything a non-image attachment touches on its way from the file picker to the
 
 ### Phase 1: Wire contract and routes
 
-- [ ] 1.1 Widen the attachment media-type contract
-- [ ] 1.2 Carry non-image attachments through the four routes
-- [ ] 1.3 Serve non-image attachments safely
+- [x] 1.1 Widen the attachment media-type contract — 653f3518
+- [x] 1.2 Carry non-image attachments through the four routes — d5d7abc0
+- [x] 1.3 Serve non-image attachments safely — d5d7abc0
 
 ### Phase 2: Run engine
 
-- [ ] 2.1 File blocks and the extension/media-type round trip
-- [ ] 2.2 Persist file blocks across every RunManager seam
-- [ ] 2.3 Restart re-read returns a path, never a re-encoded image
-- [ ] 2.4 The agent gets the paths, including attachment-only and stacked messages
+- [x] 2.1 File blocks and the extension/media-type round trip — c7f6a206
+- [x] 2.2 Persist file blocks across every RunManager seam — c7f6a206
+- [x] 2.3 Restart re-read returns a path, never a re-encoded image — c7f6a206
+- [x] 2.4 The agent gets the paths, including attachment-only and stacked messages — c7f6a206
 
 ### Phase 3: Cockpit intake
 
