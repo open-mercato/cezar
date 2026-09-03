@@ -109,7 +109,8 @@ export type DiffStat = z.infer<typeof diffStatSchema>;
 export const queuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
-  /** `/api/v1/runs/:id/images/…` URLs — attachments are persisted, never inlined. */
+  /** `/api/v1/runs/:id/images/…` URLs — attachments are persisted, never inlined. Images and
+   *  files share this one list; read `isImageAttachmentName` on the file name to tell them apart. */
   images: z.array(z.string()).optional(),
   createdAt: z.string(),
 });
@@ -144,7 +145,8 @@ export const runRecordSchema = z.object({
   /** Prompt messages stacked onto the run while it waited for a free agent slot (#472). Folded
    *  into the prompt at dequeue — never delivered as their own turns. Absent on pre-#472 runs. */
   queuedMessages: z.array(queuedMessageSchema).optional(),
-  /** URLs of images attached to the initial task prompt (#image-display). */
+  /** URLs of the attachments on the initial task prompt (#image-display) — images and, since
+   *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
@@ -593,12 +595,88 @@ export type PickVariantResponse = z.infer<typeof pickVariantResponseSchema>;
 // defaults/transforms below (`text`, `images`, `systemPrompt`) mean the parsed output is not the
 // same shape. `z.infer` here would demand keys the server fills in for you.
 
-/** An inline image, base64 — ≤4 per request, ~5 MB each once decoded. */
-export const imageInputSchema = z.object({
-  mediaType: z.string().regex(/^image\//),
+/**
+ * Non-image attachment types the composer may send (#950). Deliberately an allowlist and
+ * deliberately short: cezar serves these files back from the cockpit's own origin, so every entry
+ * here is one more thing that must be safe to hand a browser. `image/*` stays a regex — narrowing
+ * what the route has always accepted would be the breaking half of this change.
+ *
+ * `text/x-markdown` is the spelling some browsers still report for a `.md`.
+ */
+export const FILE_ATTACHMENT_MEDIA_TYPES = [
+  'text/plain',
+  'text/markdown',
+  'text/x-markdown',
+  'application/pdf',
+] as const;
+
+/** Does this media type travel as an inline image block the model can look at? */
+export function isImageMediaType(mediaType: string): boolean {
+  return /^image\//.test(mediaType);
+}
+
+/** Is this something the composer may attach at all — an image, or one of the file types above? */
+export function isAttachmentMediaType(mediaType: string): boolean {
+  return (
+    isImageMediaType(mediaType) ||
+    (FILE_ATTACHMENT_MEDIA_TYPES as readonly string[]).includes(mediaType)
+  );
+}
+
+/**
+ * The on-disk extension for an attachment, derived from its media type ALONE — the user's own
+ * filename never reaches the wire, and therefore never reaches a path. `img` is the pre-existing
+ * catch-all for an image type cezar does not name (an SVG, a BMP), kept so those files land where
+ * they always did.
+ */
+export function attachmentExtension(mediaType: string): string {
+  return /png/.test(mediaType) ? 'png'
+    : /jpe?g/.test(mediaType) ? 'jpg'
+    : /webp/.test(mediaType) ? 'webp'
+    : /gif/.test(mediaType) ? 'gif'
+    : mediaType === 'application/pdf' ? 'pdf'
+    : mediaType === 'text/plain' ? 'txt'
+    : mediaType === 'text/markdown' || mediaType === 'text/x-markdown' ? 'md'
+    : 'img';
+}
+
+/** Extensions `attachmentExtension` produces for an inline image. */
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'img']);
+
+/**
+ * Does a persisted attachment name (`pasted-3.pdf`, `screenshot-1.png`) refer to an image?
+ *
+ * The one predicate every reader branches on — the engine deciding whether to re-encode a file as
+ * an image block, and the cockpit deciding between a thumbnail and a named chip. Branch on the
+ * NAME, never on the list an entry came from: images and files share one list and one numbering
+ * space on disk, and that is what keeps the orphan sweep, the restart re-read and the per-stack
+ * cap on a single code path.
+ */
+export function isImageAttachmentName(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase();
+  return ext !== undefined && IMAGE_ATTACHMENT_EXTENSIONS.has(ext);
+}
+
+/**
+ * One inline attachment, base64 — ≤4 per request, ~5 MB each once decoded.
+ *
+ * An image rides along as a block the model can view; a file (#950) is written to the run's
+ * attachment folder and reaches the agent as a PATH only, which is the form its file tools want,
+ * the only form that survives the codex/opencode backends (they drop image blocks before the
+ * model sees them), and the one that keeps a multi-megabyte PDF out of the prompt bounds.
+ */
+export const attachmentInputSchema = z.object({
+  mediaType: z.string().refine(isAttachmentMediaType, {
+    message: 'unsupported attachment type — images, plain text, markdown and PDF only',
+  }),
   data: z.string().min(1).max(7_000_000),
 });
-export type ImageInput = z.input<typeof imageInputSchema>;
+export type AttachmentInput = z.input<typeof attachmentInputSchema>;
+
+/** @deprecated Attachments are no longer images only — use `attachmentInputSchema`. Kept because
+ *  the `images` key it validates is the wire contract and did not change name. */
+export const imageInputSchema = attachmentInputSchema;
+export type ImageInput = AttachmentInput;
 
 /**
  * The KEYS of `POST /runs`' body, before the XOR refinement that `createRunInputSchema` adds.
@@ -638,8 +716,10 @@ export const createRunInputBaseSchema = z
       .max(20_000, 'must be at most 20000 characters')
       .optional()
       .transform((s) => (s ? s : undefined)),
-    /** Screenshots pasted into the new-task form; delivered with the first agent step. */
-    images: z.array(imageInputSchema).max(4).optional(),
+    /** Attachments pasted into the new-task form — screenshots, and since #950 PDF/TXT/MD files
+     *  too; delivered with the first agent step. The key keeps its name: the wire contract widened
+     *  in place rather than growing a second list. */
+    images: z.array(attachmentInputSchema).max(4).optional(),
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
@@ -658,17 +738,17 @@ export const createRunInputSchema = createRunInputBaseSchema.refine(
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
 
 /**
- * `POST /runs/:id/messages` — text and/or pasted screenshots for a live session. Both keys have
+ * `POST /runs/:id/messages` — text and/or pasted attachments for a live session. Both keys have
  * server-side defaults, so an omitted `text` is `''` and an omitted `images` is `[]`; the refine
  * is what rejects a message that is empty in both.
  */
 export const messageInputSchema = z
   .object({
     text: z.string().max(100_000).default(''),
-    images: z.array(imageInputSchema).max(4).default([]),
+    images: z.array(attachmentInputSchema).max(4).default([]),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+    message: 'message needs text or at least one attachment',
   });
 export type MessageInput = z.input<typeof messageInputSchema>;
 
