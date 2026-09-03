@@ -94,7 +94,7 @@ Everything a non-image attachment touches on its way from the file picker to the
 
 ### Phase 3 — Cockpit intake
 
-- 3.1 Widen the composer's intake (`composer-images.ts`): accept PDF/TXT/MD, fall back to the file
+- 3.1 Widen the composer's intake (`composer-images.ts` → `composer-attachments.ts`): accept PDF/TXT/MD, fall back to the file
   extension when the browser reports no or an unknown type, and refuse anything else out loud.
 - 3.2 Wire it through `composer.tsx`: the `accept` filter, paste and drop, and a named chip instead
   of a thumbnail for a non-image attachment.

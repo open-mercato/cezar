@@ -40,7 +40,14 @@ describe('HANDOFF_INSTRUCTIONS pasted-attachments note', () => {
   it('tells the agent pasted files are real files with paths, not just inline images', () => {
     expect(HANDOFF_INSTRUCTIONS).toContain('## Pasted attachments');
     expect(HANDOFF_INSTRUCTIONS).toMatch(/saved as real files/);
-    expect(HANDOFF_INSTRUCTIONS).toMatch(/the inline image is for viewing only/);
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/that copy is for viewing only/);
+  });
+
+  /** #950 — a file has no inline copy at all, and an agent that assumes one would answer about a
+   *  document it never saw. The contract has to say so, not merely imply it. */
+  it('says a non-image attachment exists only as the file on disk', () => {
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/PDF, TXT, MD/);
+    expect(HANDOFF_INSTRUCTIONS).toMatch(/a non-image attachment exists ONLY as the file at that path/);
   });
 });
 
