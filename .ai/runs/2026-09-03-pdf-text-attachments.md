@@ -113,7 +113,11 @@ Everything a non-image attachment touches on its way from the file picker to the
 
 PR: #951
 
-**Gate (2026-09-03, head `d085fd03`):** `npm run typecheck` ✓ · `npm test` 6252 passed / 329 files ✓ ·
+**Review (2026-09-03):** `om-auto-review-pr 951 --autofix` — APPROVE, no blockers or majors; three
+minor findings fixed in-review as `fa758d07`. GitHub refuses self-approval, so the verdict is a
+comment and the `review` label stays until a second reviewer converts it.
+
+**Gate (2026-09-03, re-run at head `fa758d07`):** `npm run typecheck` ✓ · `npm test` 6252 passed / 329 files ✓ ·
 `npm run test:unit` 36 ✓ · `npm run build` (incl. `check:pack`) ✓ · `npm run test:package` 16 ✓.
 Every command was run with `TMPDIR=/tmp`: this machine's `TMPDIR` points *inside* the checkout, which
 makes six pre-existing "outside a git repository" cases (`git`, `git-changes`, `git-worktree`,
