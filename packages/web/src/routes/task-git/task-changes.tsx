@@ -191,8 +191,16 @@ function ChangesView({ run }: { run: ApiRun }) {
         />
       ) : (
         <div className="flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:10rem] md:px-6">
-          {/* The tree column: sticky under the header so long diffs scroll beside it. */}
-          <aside className="sticky top-40 hidden w-60 shrink-0 md:block lg:w-72">
+          {/* The tree column: sticky under the header so long diffs scroll beside it, and its OWN
+              scroller. Sticky alone is not enough — a tree taller than the viewport grows the page
+              instead, so the only way to reach its last file was to drag the shared `main` scroller
+              (and the diff with it) to the bottom. Capping the pane at the space left under the
+              sticky chrome gives the list its own scrollbar; `overscroll-contain` keeps a wheel
+              inside it from chaining into the diff once it bottoms out. */}
+          <aside
+            data-slot="changes-tree-pane"
+            className="sticky top-40 hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72"
+          >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} />
           </aside>
           <Diff

@@ -5,10 +5,10 @@ import { deleteRunDraftImage, getRunDraftImage, postRunDraftImage, putRunDraft }
 import { queryKeys, useRunDrafts } from '@/api/queries'
 import type { DraftImage, RunDraftsResponse } from '@open-mercato/cezar-api-client'
 import {
-  MAX_IMAGES,
-  type ImagesChangeReason,
-  type PendingImage,
-} from '@/components/composer/composer-images'
+  MAX_ATTACHMENTS,
+  type AttachmentsChangeReason,
+  type PendingAttachment,
+} from '@/components/composer/composer-attachments'
 
 /**
  * `useDraft(runId, surface)` — the cockpit's ONE entry point to the in-task draft store (#939,
@@ -53,10 +53,10 @@ export interface Draft {
   hasDraft: boolean
   text: string
   setText: (next: string) => void
-  images: PendingImage[]
-  /** `reason` is the composer's own word for the change — see `ImagesChangeReason`. A host that
+  images: PendingAttachment[]
+  /** `reason` is the composer's own word for the change — see `AttachmentsChangeReason`. A host that
    *  is not the composer omits it and gets the ordinary "the user edited this" handling. */
-  setImages: (next: PendingImage[], reason?: ImagesChangeReason) => void
+  setImages: (next: PendingAttachment[], reason?: AttachmentsChangeReason) => void
   /**
    * Run the host's real send with the draft held open. On success the draft (and its blobs) are
    * dropped; on failure the pending write resumes, so the restore the composer performs is
@@ -68,7 +68,7 @@ export interface Draft {
 }
 
 /** Metadata for the query cache: what the server would answer for the images we hold. */
-function draftImages(images: readonly PendingImage[]): DraftImage[] {
+function draftImages(images: readonly PendingAttachment[]): DraftImage[] {
   const out: DraftImage[] = []
   for (const image of images) {
     if (image.id === undefined) continue
@@ -97,7 +97,7 @@ export function useDraft(runId: string, surface: string, { enabled = true }: Dra
   const entry = drafts.data?.surfaces?.[surface]
 
   const [text, setTextState] = useState('')
-  const [images, setImagesState] = useState<PendingImage[]>([])
+  const [images, setImagesState] = useState<PendingAttachment[]>([])
 
   // Per-(run, surface) identity. Item ids and surface names repeat across runs, so everything
   // below is reset the moment either changes — a draft must never leak into another task's box.
@@ -225,7 +225,7 @@ export function useDraft(runId: string, surface: string, { enabled = true }: Dra
 
   /** Local edit → optimistic cache → debounced write. */
   const record = useCallback(
-    (nextText: string, nextImages: readonly PendingImage[]) => {
+    (nextText: string, nextImages: readonly PendingAttachment[]) => {
       dirty.current = true
       if (!liveRef.current) return
       cache(runId, surface, { text: nextText, images: draftImages(nextImages) })
@@ -244,14 +244,14 @@ export function useDraft(runId: string, surface: string, { enabled = true }: Dra
   )
 
   const setImages = useCallback(
-    (next: PendingImage[], reason: ImagesChangeReason = 'edit') => {
+    (next: PendingAttachment[], reason: AttachmentsChangeReason = 'edit') => {
       const dropped = latest.current.images
         .map((held) => held.id)
         .filter((id): id is string => id !== undefined && !next.some((kept) => kept.id === id))
       setImagesState(next)
       latest.current = { ...latest.current, images: next }
       record(latest.current.text, next)
-      // The composer TELLS us which emptying this is (`composer-images.ts`): a send's optimistic
+      // The composer TELLS us which emptying this is (`composer-attachments.ts`): a send's optimistic
       // clear must leave the blobs alone until it resolves — a rejected message is restored with
       // its attachments, and a landed one drops them through the empty write in `clear()`. Only a
       // thumbnail the user actually removed is deleted here.
@@ -347,7 +347,7 @@ export function useDraft(runId: string, surface: string, { enabled = true }: Dra
     if (seedImages.length === 0) return
     let live = true
     void Promise.all(
-      seedImages.slice(0, MAX_IMAGES).map(async (image): Promise<PendingImage | null> => {
+      seedImages.slice(0, MAX_ATTACHMENTS).map(async (image): Promise<PendingAttachment | null> => {
         try {
           const blob = await getRunDraftImage(runId, surface, image.id)
           return {
@@ -356,13 +356,14 @@ export function useDraft(runId: string, surface: string, { enabled = true }: Dra
             data: blob.data,
             name: blob.name,
             preview: `data:${blob.mediaType};base64,${blob.data}`,
+            isImage: blob.mediaType.startsWith('image/'),
           }
         } catch {
           return null // a blob that is gone simply does not come back
         }
       }),
     ).then((restored) => {
-      const kept = restored.filter((image): image is PendingImage => image !== null)
+      const kept = restored.filter((image): image is PendingAttachment => image !== null)
       if (!live || kept.length === 0 || dirty.current) return
       setImagesState(kept)
       latest.current = { ...latest.current, images: kept }

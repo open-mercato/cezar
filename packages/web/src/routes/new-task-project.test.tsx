@@ -223,7 +223,7 @@ const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or w
 const pathname = () => screen.getByTestId('location').textContent
 
 /** The composer is only settled once the pickers resolved against the mounted scope. */
-async function composerReady(sourceLabel: string) {
+async function composerReady(sourceLabel = 'Skill') {
   await waitFor(() => {
     expect(sourcePill().textContent).toContain(sourceLabel)
     expect(textarea().disabled).toBe(false)
@@ -248,7 +248,7 @@ describe('the new-task project pill', () => {
   it('is preselected from the URL scope and lists the registry with branches', async () => {
     serve()
     renderAt(`/p/${OTHER}/new`)
-    await composerReady('ship-storefront')
+    await composerReady()
 
     expect(projectPill().textContent).toContain('shop-frontend')
     fireEvent.click(projectPill())
@@ -269,7 +269,7 @@ describe('the new-task project pill', () => {
       registry: { ...REGISTRY, projects: [REGISTRY.projects[0]!] },
     })
     renderAt(`/p/${BOOT}/new`)
-    await composerReady('quick-task')
+    await composerReady()
     expect(screen.queryByRole('button', { name: 'Project' })).toBeNull()
     expect(document.querySelector('[data-slot="source-pill"]')).not.toBeNull()
   })
@@ -281,17 +281,18 @@ describe('switching project', () => {
   it('re-resolves the skills, workflows and config pickers against the new project', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)
-    await composerReady('quick-task')
+    await composerReady()
 
     // The boot project reads the unscoped legacy surface (step 3.1) …
     fireEvent.click(sourcePill())
     await screen.findByPlaceholderText('search skills & workflows…')
-    expect(sourceRefs()).toEqual(['om-fix', 'quick-task'])
+    // A leading `null` is the "No skill" row; the built-in `quick-task` has no row of its own.
+    expect(sourceRefs()).toEqual([null, 'om-fix'])
     fireEvent.keyDown(document.body, { key: 'Escape' })
 
     await switchProject(OTHER)
     await waitFor(() => expect(pathname()).toBe(`/p/${OTHER}/new`))
-    await composerReady('ship-storefront')
+    await composerReady()
 
     // … and the second project reads its own, through the `/api/v1/p/<id>` prefix.
     for (const path of ['/skills', '/workflows', '/config', '/repo']) {
@@ -299,7 +300,9 @@ describe('switching project', () => {
     }
     fireEvent.click(sourcePill())
     await screen.findByPlaceholderText('search skills & workflows…')
-    expect(sourceRefs()).toEqual(['ship-storefront', 'release-train'])
+    // Both pills read "Skill" until something is picked, so the catalog — not the label — is
+    // what proves the swap re-resolved.
+    await waitFor(() => expect(sourceRefs()).toEqual([null, 'ship-storefront', 'release-train']))
 
     // Config too: the Model pill's preset comes from the project's `defaultModels`.
     await waitFor(() =>
@@ -310,11 +313,11 @@ describe('switching project', () => {
   it('keeps drafts isolated per project — one composer never leaks into the other', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)
-    await composerReady('quick-task')
+    await composerReady()
     fireEvent.change(textarea(), { target: { value: 'fix the cezar flake' } })
 
     await switchProject(OTHER)
-    await composerReady('ship-storefront')
+    await composerReady()
     // The arriving project starts from ITS draft, which is empty — not the departing text.
     expect(textarea().value).toBe('')
     fireEvent.change(textarea(), { target: { value: 'ship the storefront' } })
@@ -331,18 +334,18 @@ describe('switching project', () => {
     // Switching back restores what was typed there, untouched by the detour.
     await switchProject(BOOT)
     await waitFor(() => expect(pathname()).toBe(`/p/${BOOT}/new`))
-    await composerReady('quick-task')
+    await composerReady()
     expect(textarea().value).toBe('fix the cezar flake')
   })
 
   it('submits to the SELECTED project and clears only that project’s draft text', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)
-    await composerReady('quick-task')
+    await composerReady()
     fireEvent.change(textarea(), { target: { value: 'left behind in cezar' } })
 
     await switchProject(OTHER)
-    await composerReady('ship-storefront')
+    await composerReady()
     fireEvent.change(textarea(), { target: { value: 'Ship the storefront' } })
     fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
 

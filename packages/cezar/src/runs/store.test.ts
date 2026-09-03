@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from './store.ts';
 
+import type { RunRecord } from './store.ts';
+
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */
 const LEGACY_RUN = {
@@ -1167,6 +1169,266 @@ describe('RunStore — referenced-issue discovery (spec 2026-07-21-report-ref-di
       result: 'Mentioned in https://github.com/open-mercato/cezar/issues/9',
     });
     expect(store.getRun(run.id)?.issueNumber).toBe(500);
+  });
+});
+
+describe("RunStore — a task never adopts another repository's ref (#945)", () => {
+  let dataDir: string;
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-repo-scope-'));
+  });
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const HANDLE = { owner: 'open-mercato', name: 'cezar' };
+
+  /** A store that already knows which repository it is, as the background arming leaves it. */
+  const scopedRun = (task = 'task', handle: typeof HANDLE | null = HANDLE) => {
+    const store = RunStore.open(dataDir);
+    store.setRepoHandle(handle);
+    const run = store.createRun({ title: 't', workflow: 'w', task, steps: [] });
+    return { store, run };
+  };
+
+  it('drops a lone foreign PR the prompt never named — the reported defect', () => {
+    // "assessing Phase 0 SQL safety": a research task cites one upstream PR, and the
+    // one-distinct-candidate rule made it the task's identity.
+    const { store, run } = scopedRun('assessing Phase 0 SQL safety');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Migration safety is discussed in https://github.com/supabase/cli/pull/6056.',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedPullRequestUrl).toBeUndefined();
+    // Collected as evidence all the same — the guard changes what is PROMOTED, never what is
+    // recorded (the #526 rule).
+    expect(loaded?.referencedPrCandidates).toEqual(['https://github.com/supabase/cli/pull/6056']);
+  });
+
+  it('drops a lone foreign issue AND refuses to seed issueNumber from it', () => {
+    const { store, run } = scopedRun('assessing Phase 0 SQL safety');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Tracked upstream as https://github.com/supabase/cli/issues/6056.',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBeUndefined();
+    expect(loaded?.issueNumber).toBeUndefined();
+    expect(loaded?.referencedIssueCandidates).toEqual([
+      'https://github.com/supabase/cli/issues/6056',
+    ]);
+  });
+
+  it('keeps a foreign PR the task prompt itself names — the #819 cross-repo case', () => {
+    const { store, run } = scopedRun(
+      'om-auto-fix-pr https://github.com/open-mercato/open-mercato/pull/1977',
+    );
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Working on https://github.com/open-mercato/open-mercato/pull/1977 now.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/1977',
+    );
+  });
+
+  it('corroboration accepts the bare owner/repo, not only a pasted URL', () => {
+    const { store, run } = scopedRun('port the fix over to open-mercato/open-mercato');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/open-mercato/open-mercato/pull/1977.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/open-mercato/pull/1977',
+    );
+  });
+
+  it("leaves the project's own PRs alone — the ordinary #407 path", () => {
+    const { store, run } = scopedRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Reviewed https://github.com/open-mercato/cezar/pull/407 — looks good.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/cezar/pull/407',
+    );
+  });
+
+  it('matches the handle case-insensitively', () => {
+    const { store, run } = scopedRun('task', { owner: 'Open-Mercato', name: 'Cezar' });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/open-mercato/cezar/pull/407.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/open-mercato/cezar/pull/407',
+    );
+  });
+
+  it('an unknown handle keeps pre-#945 behavior — degrade, never fail', () => {
+    // No `gh`, no remote, a non-git root, hosted mode: `resolveRepoHandle` answers null and the
+    // foreign URL is adopted exactly as it was before this guard existed.
+    const { store, run } = scopedRun('assessing Phase 0 SQL safety', null);
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Migration safety is discussed in https://github.com/supabase/cli/pull/6056.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/supabase/cli/pull/6056',
+    );
+  });
+
+  it('a store that was never armed keeps pre-#945 behavior too', () => {
+    const store = RunStore.open(dataDir);
+    const run = store.createRun({ title: 't', workflow: 'w', task: 'task', steps: [] });
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/supabase/cli/pull/6056.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBe(
+      'https://github.com/supabase/cli/pull/6056',
+    );
+  });
+
+  it('vetoes a foreign URL a CEZ:PR marker declared', () => {
+    // The marker owns the resolution, but it can only ever pick from the candidate list — and a
+    // foreign candidate is not adoptable, so the chip stays empty rather than pointing away.
+    const { store, run } = scopedRun('task');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'See https://github.com/supabase/cli/pull/6056.',
+    });
+    store.applyMarkerRefs(run.id, { pr: 6056 });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBeUndefined();
+  });
+
+  describe('healing records the un-scoped rule already poisoned', () => {
+    /** Persist one record, then reopen and arm — what a cockpit restart does. */
+    const reopenArmed = (
+      record: Partial<RunRecord> & { task: string },
+      handle: typeof HANDLE | null = HANDLE,
+    ) => {
+      const seed = RunStore.open(dataDir);
+      const run = seed.createRun({ title: 't', workflow: 'w', task: record.task, steps: [] });
+      seed.updateRun(run.id, record);
+      seed.flush();
+
+      const reopened = RunStore.open(dataDir);
+      // Snapshot the VALUE, not the record: `getRun` hands back the live object the sweep
+      // mutates in place, so holding the reference would show the healed state either way.
+      const before = reopened.getRun(run.id)?.referencedPullRequestUrl;
+      reopened.setRepoHandle(handle);
+      return { before, after: reopened.getRun(run.id) };
+    };
+
+    it('drops a stored foreign referencedPullRequestUrl when the handle arrives', () => {
+      const { before, after } = reopenArmed({
+        task: 'assessing Phase 0 SQL safety',
+        referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+        referencedPrCandidates: ['https://github.com/supabase/cli/pull/6056'],
+      });
+      // Before arming, the poisoned value is still there — the heal is not a load-time rewrite.
+      expect(before).toBe('https://github.com/supabase/cli/pull/6056');
+      expect(after?.referencedPullRequestUrl).toBeUndefined();
+      // Evidence survives the heal — only the conclusion drawn from it was wrong.
+      expect(after?.referencedPrCandidates).toEqual(['https://github.com/supabase/cli/pull/6056']);
+    });
+
+    it('keeps a stored foreign URL the prompt corroborates', () => {
+      const { after } = reopenArmed({
+        task: 'om-auto-fix-pr https://github.com/open-mercato/open-mercato/pull/1977',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/open-mercato/pull/1977',
+      });
+      expect(after?.referencedPullRequestUrl).toBe(
+        'https://github.com/open-mercato/open-mercato/pull/1977',
+      );
+    });
+
+    it("keeps a stored URL from the project's own repo", () => {
+      const { after } = reopenArmed({
+        task: 'task',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/407',
+      });
+      expect(after?.referencedPullRequestUrl).toBe('https://github.com/open-mercato/cezar/pull/407');
+    });
+
+    it('revokes an issueNumber this janitor seeded from the dropped URL', () => {
+      const { after } = reopenArmed({
+        task: 'assessing Phase 0 SQL safety',
+        referencedIssueUrl: 'https://github.com/supabase/cli/issues/6056',
+        issueNumber: 6056,
+        referencedIssueNumberSeeded: true,
+      });
+      expect(after?.referencedIssueUrl).toBeUndefined();
+      expect(after?.issueNumber).toBeUndefined();
+      expect(after?.referencedIssueNumberSeeded).toBeUndefined();
+    });
+
+    it('leaves an issueNumber it did NOT seed alone', () => {
+      // The prompt, the namer or a CEZ:ISSUE marker owns that number — dropping the foreign URL
+      // must not take it with them.
+      const { after } = reopenArmed({
+        task: 'fix issue 42',
+        referencedIssueUrl: 'https://github.com/supabase/cli/issues/6056',
+        issueNumber: 42,
+      });
+      expect(after?.referencedIssueUrl).toBeUndefined();
+      expect(after?.issueNumber).toBe(42);
+    });
+
+    it('a null handle heals nothing — there is nothing to prove foreign against', () => {
+      const { after } = reopenArmed(
+        {
+          task: 'assessing Phase 0 SQL safety',
+          referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+        },
+        null,
+      );
+      expect(after?.referencedPullRequestUrl).toBe('https://github.com/supabase/cli/pull/6056');
+    });
+
+    it('is one-directional — it never invents an association', () => {
+      // A record with candidates but no resolution stays unresolved: the sweep only ever clears.
+      const { after } = reopenArmed({
+        task: 'task',
+        referencedPullRequestUrl: undefined,
+        referencedPrCandidates: [
+          'https://github.com/open-mercato/cezar/pull/1',
+          'https://github.com/supabase/cli/pull/6056',
+        ],
+      });
+      expect(after?.referencedPullRequestUrl).toBeUndefined();
+    });
+
+    it('emits the corrected record so an open cockpit repaints', () => {
+      const seed = RunStore.open(dataDir);
+      const run = seed.createRun({
+        title: 't',
+        workflow: 'w',
+        task: 'assessing Phase 0 SQL safety',
+        steps: [],
+      });
+      seed.updateRun(run.id, {
+        referencedPullRequestUrl: 'https://github.com/supabase/cli/pull/6056',
+      });
+      const seen: string[] = [];
+      seed.on('run', (r: RunRecord) => seen.push(r.id));
+      seed.setRepoHandle(HANDLE);
+      expect(seen).toContain(run.id);
+    });
+  });
+
+  it('does not rescue a candidate today’s rule already calls ambiguous', () => {
+    // Strictly subtractive: two candidates, one foreign, still resolves to nothing. Filtering the
+    // list before resolving would have promoted the local one — a wider change than the fix needs.
+    const { store, run } = scopedRun('task');
+    store.appendEvent(run.id, {
+      type: 'result',
+      result:
+        'Compare https://github.com/open-mercato/cezar/pull/1 with https://github.com/supabase/cli/pull/6056.',
+    });
+    expect(store.getRun(run.id)?.referencedPullRequestUrl).toBeUndefined();
   });
 });
 

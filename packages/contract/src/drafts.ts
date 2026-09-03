@@ -17,7 +17,7 @@ import { imageInputSchema } from './runs.ts';
 /** The text cap, shared with `PATCH /runs/:id`'s `task`. */
 export const DRAFT_TEXT_MAX = 100_000;
 
-/** Images per surface — composer parity (`MAX_IMAGES`). */
+/** Attachments per surface — composer parity (`MAX_ATTACHMENTS`). */
 export const DRAFT_MAX_IMAGES = 4;
 
 /** Surfaces per run. A task has five editable inputs plus one editor per queued message; 16 is
@@ -97,8 +97,8 @@ export type DraftImageInput = z.input<typeof draftImageInputSchema>;
 
 /** `GET /runs/:id/drafts/:surface/images/:imageId` — the bytes, base64.
  *
- *  JSON rather than raw bytes because the composer's `PendingImage` is base64 either way (it
- *  renders a `data:` URL), and every response shape in this repo is a zod schema. */
+ *  JSON rather than raw bytes because the composer's `PendingAttachment` is base64 either way,
+ *  and every response shape in this repo is a zod schema. */
 export const draftImageContentSchema = draftImageSchema.extend({
   data: z.string(),
 });
