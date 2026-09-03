@@ -17,31 +17,33 @@ import {
 
 import { putUiState } from '@/api/client'
 import { queryKeys, useSkills, useUiState } from '@/api/queries'
-import type { ImageInput } from '@open-mercato/cezar-api-client'
+import type { AttachmentInput } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import { Command, CommandItem, CommandList } from '@/components/ui/command'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
 import { insertTemplate } from '@/lib/prompt-templates'
+import { isEditableTarget } from '@/lib/use-command-shortcut'
 import { bumpSkillUsage, filterSkills, fuzzyMatch, isProjectSkill } from '@/lib/skills'
 import { useNow } from '@/lib/use-now'
 import { isSubmitShortcut } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
 
 import {
-  fileToPendingImage,
-  MAX_IMAGES,
+  fileToPendingAttachment,
+  MAX_ATTACHMENTS,
   screenFiles,
-  type PendingImage,
-} from './composer-images'
+  type PendingAttachment,
+} from './composer-attachments'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
 import { formatElapsed, useDictation } from './dictation'
 
 /**
  * The SHARED composer (spec §"Task thread" composer + §"New task" composer intelligence —
  * one component, two hosts): auto-growing textarea, Enter-sends / Shift+Enter-newline /
- * ⌘↵+Ctrl+↵ (`isSubmitShortcut`), image attach/paste/drag-drop with the legacy 4×5MB caps and
- * thumbnail row, `/` skills autocomplete (#380), `@` file mentions behind a provider seam,
+ * ⌘↵+Ctrl+↵ (`isSubmitShortcut`), attachment attach/paste/drag-drop with the legacy 4×5MB caps
+ * and thumbnail row (images) or named chips (PDF/TXT/MD, #950), `/` skills autocomplete (#380),
+ * `@` file mentions behind a provider seam,
  * the Dictation mic (paseo pattern), and the Alt+A / Alt+C quick replies.
  *
  * Visual contract: docs/mockups/thread.html `.composer` — card, borderless textarea, footer
@@ -50,7 +52,7 @@ import { formatElapsed, useDictation } from './dictation'
 export interface ComposerProps {
   /** Deliver the message. Rejection = the message did NOT land: the composer toasts the error
    *  and restores the draft (nothing the user typed is ever lost). */
-  onSubmit: (text: string, images: ImageInput[]) => Promise<unknown>
+  onSubmit: (text: string, attachments: AttachmentInput[]) => Promise<unknown>
   /**
    * Controlled text (pass BOTH or neither): the /new host owns the draft so it survives
    * navigation (spec: "Queued form state survives navigation"). Every internal edit — typing,
@@ -136,7 +138,7 @@ export function Composer({
     setInternalText(resolved)
     onValueChangeRef.current?.(resolved)
   }, [])
-  const [images, setImages] = useState<PendingImage[]>([])
+  const [images, setImages] = useState<PendingAttachment[]>([])
   // Mirrors `images` for reads inside event handlers that must not run through a setState updater
   // (StrictMode double-invokes those in dev — see addFiles / #double-paste).
   const imagesRef = useRef(images)
@@ -267,20 +269,20 @@ export function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`
   }, [text])
 
-  // ---- images --------------------------------------------------------------------------------
+  // ---- attachments ---------------------------------------------------------------------------
 
   const addFiles = useCallback(
     (files: readonly File[]) => {
       if (disabled) return
       // Side effects (screening toasts + async encode) run OUTSIDE any setState updater: React
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
-      // append each pasted image twice (#double-paste). `imagesRef` gives the current count
+      // append each pasted file twice (#double-paste). `imagesRef` gives the current count
       // without reading through state; each async append re-checks the cap functionally.
       const intake = screenFiles(files, imagesRef.current.length)
       for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
       for (const file of intake.accepted) {
-        void fileToPendingImage(file).then((image) =>
-          setImages((prev) => (prev.length >= MAX_IMAGES ? prev : [...prev, image])),
+        void fileToPendingAttachment(file).then((attachment) =>
+          setImages((prev) => (prev.length >= MAX_ATTACHMENTS ? prev : [...prev, attachment])),
         )
       }
     },
@@ -288,8 +290,11 @@ export function Composer({
   )
 
   const onPaste = (event: ClipboardEvent) => {
+    // `kind: 'file'` rather than an `image/` type test (#950): the clipboard carries a pasted
+    // `.md` as a file item too, and `screenFiles` is what decides whether cezar takes it. The
+    // text half of the clipboard is left alone so an ordinary ⌘V still types.
     const files = [...(event.clipboardData?.items ?? [])]
-      .filter((item) => item.type.startsWith('image/'))
+      .filter((item) => item.kind === 'file')
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null)
     if (files.length === 0) return
@@ -307,7 +312,7 @@ export function Composer({
   // ---- submit --------------------------------------------------------------------------------
 
   const send = useCallback(
-    async (messageText: string, messageImages: PendingImage[], restoreOnError: boolean) => {
+    async (messageText: string, messageImages: PendingAttachment[], restoreOnError: boolean) => {
       const body = messageText.trim()
       if (disabled || busy) return
       if (body === '' && messageImages.length === 0 && !allowEmptySubmit) return
@@ -323,7 +328,7 @@ export function Composer({
           // The optimistic clear already happened — put the message back, in front of anything
           // typed since, so nothing the user wrote is lost.
           setText((current) => (current === '' ? messageText : `${messageText}\n${current}`))
-          setImages((current) => [...messageImages, ...current].slice(0, MAX_IMAGES))
+          setImages((current) => [...messageImages, ...current].slice(0, MAX_ATTACHMENTS))
         }
       } finally {
         setBusy(false)
@@ -391,6 +396,14 @@ export function Composer({
     if (!quickReplies || disabled) return
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
       if (!event.altKey || event.metaKey || event.ctrlKey || event.repeat) return
+      // Alt is a TEXT modifier on macOS: ⌥ composes characters, so ⌥C types `ć` on a Polish
+      // layout (`ç` on a US one) and ⌥A types `ą`/`å` — same `event.code`, and this handler
+      // matches the code, not the character. Typed into the composer that fired "Continue." at
+      // the agent and swallowed the letter with `preventDefault`. Same rule the ⌘K family
+      // already follows (`shouldTriggerKeyShortcut`): a focused editable means someone is
+      // typing, and typing always wins. The accelerator still works everywhere else — the
+      // thread composer is not autofocused, which is when these replies are reached for.
+      if (isEditableTarget(event.target)) return
       const reply = QUICK_REPLIES[event.code]
       if (reply === undefined) return
       event.preventDefault()
@@ -436,17 +449,31 @@ export function Composer({
           )}
         >
           {images.length > 0 ? (
-            <div data-slot="composer-thumbs" className="flex flex-wrap gap-2 px-4 pt-3">
-              {images.map((image, index) => (
+            <div data-slot="composer-thumbs" className="flex flex-wrap items-center gap-2 px-4 pt-3">
+              {images.map((attachment, index) => (
                 <button
-                  key={`${image.name}-${index}`}
+                  key={`${attachment.name}-${index}`}
                   type="button"
-                  aria-label={`Remove ${image.name}`}
+                  aria-label={`Remove ${attachment.name}`}
                   title="Click to remove"
-                  className="group relative size-12 overflow-hidden rounded-md border border-border"
+                  className={cn(
+                    'group relative overflow-hidden rounded-md border border-border',
+                    attachment.isImage
+                      ? 'size-12'
+                      : 'flex h-12 max-w-[200px] items-center gap-1.5 bg-muted/40 px-2.5 text-xs text-muted-foreground',
+                  )}
                   onClick={() => setImages((current) => current.filter((_, i) => i !== index))}
                 >
-                  <img src={image.preview} alt="" className="size-full object-cover" />
+                  {/* An image previews; a file (#950) has nothing to look at, so it gets its own
+                      name instead — the one place the user's filename is used at all. */}
+                  {attachment.isImage ? (
+                    <img src={attachment.preview} alt="" className="size-full object-cover" />
+                  ) : (
+                    <>
+                      <PaperclipIcon aria-hidden="true" className="size-3.5 shrink-0" />
+                      <span className="truncate">{attachment.name}</span>
+                    </>
+                  )}
                   <span className="absolute inset-0 hidden items-center justify-center bg-background/70 group-hover:flex group-focus-visible:flex">
                     <XIcon aria-hidden="true" className="size-4" />
                   </span>
@@ -608,18 +635,20 @@ function AttachButton({
         type="button"
         variant="ghost"
         size="icon-sm"
-        aria-label="Attach images"
-        title="Attach an image (or paste a screenshot)"
+        aria-label="Attach files"
+        title="Attach an image, PDF, TXT or MD file (or paste a screenshot)"
         disabled={disabled}
         className="size-8 text-muted-foreground"
         onClick={() => inputRef.current?.click()}
       >
         <PaperclipIcon aria-hidden="true" className="size-[15px]" />
       </Button>
+      {/* Both spellings of every type: an OS dialog filters on the extension as often as on the
+          MIME type, and `accept="image/*,text/plain"` alone greys out a `.md` on Windows (#950). */}
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept="image/*,application/pdf,text/plain,text/markdown,.pdf,.txt,.md,.markdown,.log"
         multiple
         className="hidden"
         aria-hidden="true"

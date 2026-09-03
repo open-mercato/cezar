@@ -143,8 +143,13 @@ const taskTableUiStateSchema = z.looseObject({
  * listed it, which made it wider than the route.
  */
 export const uiStateSchema = z.looseObject({
+  /** What the last started run used. `null` is a VALUE, not an absence: it records a run that
+   *  chose neither a skill nor a workflow (the plain built-in `quick-task`), which the composer
+   *  can now express since the source picker grew an empty state. Absent still means "no
+   *  run has been recorded here" — a cockpit reading either one selects nothing. */
   lastTask: z
     .object({ source: z.enum(['workflow', 'skill']), ref: z.string() })
+    .nullable()
     .optional(),
   /** Most-recently-run sources, newest first (deduped, capped). Feeds the composer picker's
    *  recency sort. */

@@ -259,9 +259,10 @@ Three words, no jargon — **task**, **skill**, **chain**:
 
 - 📋 **Tasks** are the unit of work. Every task is a **run**: `queued → running →
   review / done / failed / cancelled`, with a live event log, per-step token and
-  cost usage, cancel/delete, and — for anything with a diff — a review gate. Paste
-  screenshots into the task, or send follow-up messages into the live session
-  while it works.
+  cost usage, cancel/delete, and — for anything with a diff — a review gate. Attach
+  screenshots, PDFs, `.txt` or `.md` files to the task (paperclip, ⌘V or drag-drop;
+  the agent gets each one as a real file on disk), or send follow-up messages into
+  the live session while it works.
 - 📖 **Skills** are Markdown playbooks. Drop them in `.ai/skills/` or
   `.ai/cezar/skills/`, or pull them from a shared **team skills repo** (a bare
   git clone cached globally in `~/.cache/cez/`). A workflow step references one by
@@ -314,7 +315,7 @@ Eight views, one browser window, all live over Server-Sent Events (seven until y
 
 | View | What's in it |
 |---|---|
-| **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
+| **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots and file attachments), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
 | **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. |

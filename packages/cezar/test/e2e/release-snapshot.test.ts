@@ -90,6 +90,14 @@ function runScript(fixtureRoot: string, extraEnv: Record<string, string>, args: 
     GITHUB_OUTPUT: join(fixtureRoot, 'github-output.txt'),
     NODE_AUTH_TOKEN: '',
     GITHUB_ACTIONS: '',
+    // Neutralized for the same reason as the two above: the suite inherits `process.env`, and
+    // under Actions that carries the workflow's OWN run identity. `GITHUB_RUN_ATTEMPT` is the
+    // one that bites, because `computeSnapshot` appends `.${attempt}` whenever it is > 1 — so
+    // on a re-run (attempt 2+) every version the orchestrator stamps here silently grew a
+    // suffix and the hard-coded expectations below missed by it. Pinning the default to the
+    // first attempt makes the suite depend only on what each test passes; a test that wants to
+    // exercise re-run behavior overrides it explicitly via `extraEnv`.
+    GITHUB_RUN_ATTEMPT: '1',
     ...extraEnv,
   };
   return execFile(process.execPath, [script, ...args], { env, maxBuffer: 10 * 1024 * 1024 });
@@ -186,6 +194,36 @@ test('the nightly channel stamps a dated version and publishes under the nightly
     const output = await readFile(join(root, 'github-output.txt'), 'utf8');
     assert.match(output, /^attempted=true$/m);
     assert.match(output, /"distTag":"nightly"/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+// The other half of the contract the pinned default above protects: an attempt number the test
+// asks for still reaches the orchestrator and still separates a re-cut from the original, so
+// re-running a nightly cannot try to publish a version npm already has. Passing it explicitly
+// also proves the default is a default and not a hard override.
+test('a nightly re-run stamps the attempt onto the version so it cannot collide', { timeout: 120_000 }, async () => {
+  const root = await makeFixture();
+  try {
+    await writeFile(join(root, 'github-output.txt'), '');
+    await runScript(
+      root,
+      {
+        GITHUB_EVENT_NAME: 'schedule',
+        GITHUB_REF_NAME: 'main',
+        GITHUB_REPOSITORY: 'open-mercato/cezar',
+        GITHUB_RUN_NUMBER: '12',
+        GITHUB_RUN_ATTEMPT: '2',
+        CEZ_RELEASE_CHANNEL: 'nightly',
+        NIGHTLY_DATE: '20260813',
+      },
+      ['--dry-run'],
+    );
+
+    const aliasPkg = await readPkg(root, 'alias-cezar');
+    assert.equal(aliasPkg.version, '0.9.9-nightly.20260813.12.2');
+    assert.deepEqual(aliasPkg.dependencies, { '@scope/fake-root': '0.9.9-nightly.20260813.12.2' });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

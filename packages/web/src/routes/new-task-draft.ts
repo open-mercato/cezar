@@ -182,10 +182,15 @@ export function writeDraft(next: NewTaskDraft, projectId: string | null = null):
   }
 }
 
-/** After a successful submit: the text is spent, the picker choices remain — the next task
- *  usually runs the same way (legacy keeps its pills too). */
-export function clearDraftText(projectId: string | null = null): void {
-  writeDraft({ ...readDraft(projectId), text: '' }, projectId)
+/** After a successful submit: the text is spent AND the source resets to nothing.
+ *
+ *  The runner/model/variants/plan-first pills stay — those are a way of working, and the next
+ *  task usually runs the same way (legacy keeps its pills too). A SKILL is not: it is a
+ *  decision about the task that just started, and carrying it into the next one is how a skill
+ *  picked once ended up silently running every task after it. A fresh `/new` starts with no
+ *  skill; picking one again is one click. */
+export function clearStartedDraft(projectId: string | null = null): void {
+  writeDraft({ ...readDraft(projectId), text: '', source: null }, projectId)
 }
 
 /** Test isolation — drop EVERY project's cache and stored draft, so the next read re-consults
