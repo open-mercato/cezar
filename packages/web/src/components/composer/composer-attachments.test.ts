@@ -51,7 +51,7 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
     const intake = screenFiles([fakeFile({ type: 'application/zip', name: 'payload.zip' })], 0)
     expect(intake.accepted).toEqual([])
     expect(intake.rejected).toEqual([
-      'payload.zip is not a supported attachment (images, PDF, TXT and MD only)',
+      'payload.zip is not a supported attachment (images, PDF and plain-text files such as TXT or MD)',
     ])
   })
 
@@ -84,7 +84,7 @@ describe('screenFiles — the legacy 4×5MB caps, mirrored from the server zod',
     expect(intake.accepted.map((f: File) => f.name)).toEqual(['ok.png', 'brief.md'])
     expect(intake.rejected).toEqual([
       'big.png is too large (max 5 MB)',
-      'payload.zip is not a supported attachment (images, PDF, TXT and MD only)',
+      'payload.zip is not a supported attachment (images, PDF and plain-text files such as TXT or MD)',
     ])
   })
 

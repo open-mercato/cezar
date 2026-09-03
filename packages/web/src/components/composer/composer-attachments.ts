@@ -20,7 +20,9 @@ import {
 export const MAX_ATTACHMENTS = 4
 export const MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
 
-/** Extension → media type for a file whose own `type` is empty or unrecognised. */
+/** Extension → media type for a file whose own `type` is empty or unrecognised. `.log` is here
+ *  because `text/plain` is what the allowlist takes, and a log the browser typed as `text/plain`
+ *  is accepted either way — the fallback only decides the TYPELESS case. */
 const EXTENSION_MEDIA_TYPES: Record<string, string> = {
   md: 'text/markdown',
   markdown: 'text/markdown',
@@ -90,7 +92,9 @@ export function screenFiles(files: readonly File[], alreadyAttached: number): At
   for (const file of files) {
     const label = file.name || 'attachment'
     if (attachmentMediaType(file) === null) {
-      rejected.push(`${label} is not a supported attachment (images, PDF, TXT and MD only)`)
+      rejected.push(
+        `${label} is not a supported attachment (images, PDF and plain-text files such as TXT or MD)`,
+      )
       continue
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {

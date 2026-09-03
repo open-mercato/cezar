@@ -775,10 +775,9 @@ const openInSchema = z.object({
   path: z.string().max(1_000).optional(),
 });
 
-// The attachment element schema is the CONTRACT's (#950) — images plus the short PDF/TXT/MD
-// allowlist — imported rather than mirrored so the wire cannot drift from what the cockpit
-// compiles against. ~5 MB per attachment once base64-decoded.
-
+// Attachment-carrying bodies validate with the CONTRACT's `attachmentInputSchema` (#950) —
+// images plus the short PDF/TXT/MD allowlist, ~5 MB each once base64-decoded. Imported rather
+// than mirrored here, so the wire cannot drift from what the cockpit compiles against.
 const messageSchema = z
   .object({
     text: z.string().max(100_000).default(''),

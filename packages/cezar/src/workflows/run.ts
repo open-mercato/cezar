@@ -509,7 +509,7 @@ interface PendingContinuation {
 
 /** What re-reading a message's persisted attachments yields: viewable blocks for the images, and
  *  a path for every attachment including the files that have no block. */
-interface PersistedImages {
+interface PersistedAttachments {
   blocks: ContentBlock[];
   attachments: PersistedAttachment[];
 }
@@ -1730,7 +1730,7 @@ export class RunManager {
     runId: string,
     urls: string[],
     kind: 'task' | 'queued',
-  ): PersistedImages {
+  ): PersistedAttachments {
     const blocks: ContentBlock[] = [];
     const attachments: PersistedAttachment[] = [];
     for (const url of urls) {
@@ -2731,11 +2731,11 @@ export class RunManager {
     // attachments (#472) ride along too, but are NOT re-persisted above: they
     // already live on disk, and adding them to `taskImages` would both duplicate
     // the files and make the task bubble claim the stack's images as its own.
-    // File blocks are dropped here — a session only ever sees viewable blocks (#950).
-    let startImages: ContentBlock[] | undefined = contentBlocksOf([
-      ...(input.images ?? []),
-      ...(input.stackedImages ?? []),
-    ]);
+    // File blocks are dropped here — a session only ever sees viewable blocks (#950). An empty
+    // result stays `undefined` rather than `[]`, so a task carrying only files hands the runner
+    // seam exactly the shape a task carrying nothing always did.
+    const startBlocks = contentBlocksOf([...(input.images ?? []), ...(input.stackedImages ?? [])]);
+    let startImages: ContentBlock[] | undefined = startBlocks.length ? startBlocks : undefined;
 
     const lastAgentIdx = findLastAgentStepIndex(workflow);
 
