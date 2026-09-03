@@ -331,6 +331,48 @@ const CREATED_PR_RE =
  *  this many distinct PRs the conversation is a survey, not a subject. */
 const MAX_PR_CANDIDATES = 8;
 
+/** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
+ *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
+export type RepoHandle = { owner: string; name: string };
+
+/** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
+ *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
+function refUrlRepo(url: string): string | undefined {
+  const parts = url.split('/');
+  const owner = parts[parts.length - 4];
+  const name = parts[parts.length - 3];
+  return owner && name ? `${owner}/${name}`.toLowerCase() : undefined;
+}
+
+/**
+ * May the referenced tier ADOPT this URL as the task's subject? (#945)
+ *
+ * The tier was text-scoped but never repo-scoped: `PR_URL_RE` matches any
+ * `github.com/<owner>/<repo>/pull/N`, so a research task that cites one upstream PR handed the
+ * resolver exactly one candidate and it became the task's identity — an `oko` task wearing
+ * `supabase/cli#6056`. Nothing compared the URL's repository with the project's own.
+ *
+ * A foreign URL is adoptable only when the TASK PROMPT corroborates it: the prompt names that
+ * `owner/repo`, which a pasted URL does inherently. That is the trust boundary this module already
+ * uses elsewhere — the prompt and the agent's own turn text are trusted, scraped tool output is
+ * not — and it is what keeps the legitimate cross-repo case working (#819:
+ * `om-auto-fix-pr https://github.com/open-mercato/open-mercato/pull/1977` started from cezar).
+ *
+ * Unknown handle → today's behavior exactly (`AGENTS.md` zero config: degrade, never fail). An
+ * unparseable URL is left alone for the same reason — the guard only ever removes an association
+ * it can PROVE is foreign.
+ *
+ * Note what this does not touch: `referenced*Candidates` keep recording every URL as evidence.
+ * The fix changes what is *promoted*, never what is *collected* (the #526 rule).
+ */
+function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null): boolean {
+  if (!handle) return true;
+  const repo = refUrlRepo(url);
+  if (!repo) return true;
+  if (repo === `${handle.owner}/${handle.name}`.toLowerCase()) return true;
+  return task.toLowerCase().includes(repo);
+}
+
 /**
  * Every scannable string of one persisted event: the v1 top-level fields plus
  * the protocol-v2 `item.*` content (nested — the reason v2 streams were
@@ -440,8 +482,27 @@ function eventAgentTextFragments(event: Record<string, unknown>): string[] {
  * the subject; among several, the one whose number the task prompt names (and
  * only when exactly one matches); otherwise ambiguous — no chip beats a wrong
  * chip.
+ *
+ * Whatever that produces is then repo-scoped (#945): a winner from another repository that the
+ * prompt does not corroborate is vetoed — see `isRepoScopedRef`. The veto is applied to the
+ * RESULT rather than to the candidate list on purpose, so the guard stays strictly subtractive:
+ * filtering first would let a project-local candidate win a two-candidate race today's rule calls
+ * ambiguous, which is a wider behavior change than the defect warrants. As written this function
+ * can only ever lose a value, never gain one.
  */
-function resolveReferencedRef(candidates: string[], task: string, declared?: number): string | undefined {
+function resolveReferencedRef(
+  candidates: string[],
+  task: string,
+  declared?: number,
+  handle?: RepoHandle | null,
+): string | undefined {
+  const resolved = resolveCandidate(candidates, task, declared);
+  if (resolved === undefined) return undefined;
+  return isRepoScopedRef(resolved, task, handle) ? resolved : undefined;
+}
+
+/** The pre-#945 resolution rule, unchanged — see `resolveReferencedRef` for the contract. */
+function resolveCandidate(candidates: string[], task: string, declared?: number): string | undefined {
   if (declared !== undefined) return candidates.find((url) => url.endsWith(`/${declared}`));
   if (candidates.length === 1) return candidates[0];
   const named = candidates.filter((url) => {
@@ -562,6 +623,13 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
       undefined,
     );
   }
+  // Deliberately UNSCOPED by repo (#945), unlike every other `resolveReferencedRef` call. Neither
+  // caller has a handle to pass: `RunStore.open` is synchronous and the handle costs a `gh` spawn
+  // (which is why it is armed afterwards, by `setRepoHandle`), and the read-only index reader
+  // (`./run-index.ts`) has no repo root at all. Passing `undefined` here is not a gap — it is the
+  // no-handle path the guard is specified to take. The foreign-URL heal runs in `setRepoHandle`'s
+  // sweep the moment the handle lands, and the index reader picks the healed values up from
+  // `runs.json` on its next read.
   return run;
 }
 
@@ -574,6 +642,10 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
   private saveTimer: NodeJS.Timeout | null = null;
+  /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
+   *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
+   *  exactly the pre-#945 behavior. */
+  private repoHandle: RepoHandle | null | undefined;
 
   private constructor(private readonly dataDir: string) {
     super();
@@ -599,6 +671,65 @@ export class RunStore extends EventEmitter {
       }
     }
     return store;
+  }
+
+  /**
+   * Tell the store which repository this project IS (#945), so the referenced tier stops adopting
+   * another repo's PR/issue as the task's subject. See `isRepoScopedRef` for the rule.
+   *
+   * A setter rather than an `open()` option because `open()` is synchronous and the handle costs a
+   * `gh` spawn: callers arm this in the background so boot never waits on the network. `null` is a
+   * first-class answer meaning "cannot be known" (no `gh`, no remote, a non-git root) and leaves
+   * the store in exactly its pre-#945 behavior.
+   *
+   * Arming also HEALS records already poisoned by the un-scoped rule, on the `reconcileLoadedRun`
+   * precedent: the evidence is all still on the record (`referenced*Candidates`), only the
+   * conclusion drawn from it was wrong, so re-deciding beats asking for a migration. It rewrites
+   * values, never the format, and is one-directional by construction — see `rescopeRun`.
+   */
+  setRepoHandle(handle: RepoHandle | null): void {
+    this.repoHandle = handle;
+    if (!handle) return; // nothing to prove foreign against
+    // `touch` per healed run: the cockpit is already live when the handle lands, so a corrected
+    // chip has to reach the open page over SSE, not just the next `runs.json` write.
+    for (const run of this.runs.values()) {
+      if (this.rescopeRun(run)) this.touch(run);
+    }
+  }
+
+  /**
+   * Drop this run's referenced PR/issue if the project's handle proves it foreign and the prompt
+   * does not corroborate it (#945). Returns whether anything changed.
+   *
+   * One-directional by construction: it only ever clears fields, so a record written by an older
+   * cezar — or read by one after this ran — is never worse off, and a downgrade sees a record whose
+   * format is untouched and whose cleared fields were already optional.
+   */
+  private rescopeRun(run: RunRecord): boolean {
+    let changed = false;
+    if (
+      run.referencedPullRequestUrl &&
+      !isRepoScopedRef(run.referencedPullRequestUrl, run.task, this.repoHandle)
+    ) {
+      run.referencedPullRequestUrl = undefined;
+      changed = true;
+    }
+    if (
+      run.referencedIssueUrl &&
+      !isRepoScopedRef(run.referencedIssueUrl, run.task, this.repoHandle)
+    ) {
+      run.referencedIssueUrl = undefined;
+      changed = true;
+      // Take back the number this janitor seeded from that very URL — the same revoke
+      // `trackReferencedIssues` performs when ambiguity clears a resolution. A `prNumber`-style
+      // number the prompt, namer or a marker owns is NOT ours to touch, which is exactly what
+      // `referencedIssueNumberSeeded` records.
+      if (run.referencedIssueNumberSeeded) {
+        run.issueNumber = undefined;
+        run.referencedIssueNumberSeeded = undefined;
+      }
+    }
+    return changed;
   }
 
   listRuns(): RunRecord[] {
@@ -908,6 +1039,7 @@ export class RunStore extends EventEmitter {
             run.referencedPrCandidates ?? [],
             run.task,
             referencedPrDeclaration(run),
+            this.repoHandle,
           );
           if (resolved !== run.referencedPullRequestUrl) {
             run.referencedPullRequestUrl = resolved;
@@ -950,6 +1082,7 @@ export class RunStore extends EventEmitter {
       run.referencedPrCandidates,
       run.task,
       referencedPrDeclaration(run),
+      this.repoHandle,
     );
     return true;
   }
@@ -979,6 +1112,7 @@ export class RunStore extends EventEmitter {
       run.referencedIssueCandidates ?? [],
       run.task,
       run.markerRefs?.issue,
+      this.repoHandle,
     );
     let numberChanged = false;
     if (run.markerRefs?.issue === undefined && ISSUE_URL_RE.test(seedHaystack)) {
@@ -1035,6 +1169,7 @@ export class RunStore extends EventEmitter {
         run.referencedPrCandidates ?? [],
         run.task,
         referencedPrDeclaration(run),
+        this.repoHandle,
       );
     }
     if (run.markerRefs.issue !== undefined) {
@@ -1042,6 +1177,7 @@ export class RunStore extends EventEmitter {
         run.referencedIssueCandidates ?? [],
         run.task,
         run.markerRefs.issue,
+        this.repoHandle,
       );
     }
     this.touch(run);
