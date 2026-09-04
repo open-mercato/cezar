@@ -343,6 +343,28 @@ describe('sanitizeAttachmentName (#929)', () => {
     expect(long).toBe(`${'x'.repeat(100)}.md`);
   });
 
+  /**
+   * A filesystem bounds an entry in BYTES, so a character bound alone is not one — and the write
+   * that would fail is caught, which means getting this wrong costs a silently missing library
+   * entry rather than a visible error.
+   */
+  it('bounds the stem in bytes too, cutting on a code-point boundary', () => {
+    // 100 four-byte emoji are 400 bytes: under the character bound, far over the byte budget.
+    const emoji = sanitizeAttachmentName(`${'😀'.repeat(100)}.md`, 'text/markdown') as string;
+    expect(emoji.endsWith('.md')).toBe(true);
+    expect(new TextEncoder().encode(emoji).length).toBeLessThanOrEqual(184);
+    // Never a lone surrogate: every kept character is a whole emoji.
+    const stem = emoji.slice(0, -'.md'.length);
+    expect(stem).toBe('😀'.repeat([...stem].length));
+    expect([...stem].length).toBe(45);
+  });
+
+  it('never leaves a trailing dot or space, which Windows refuses outright', () => {
+    expect(sanitizeAttachmentName('notes.', 'text/plain')).toBe('notes.txt');
+    expect(sanitizeAttachmentName('notes ', 'text/plain')).toBe('notes.txt');
+    expect(sanitizeAttachmentName('report...', 'application/pdf')).toBe('report.pdf');
+  });
+
   it('returns null when nothing usable survives, so the caller falls back to the run-folder name', () => {
     expect(sanitizeAttachmentName('', 'text/plain')).toBeNull();
     expect(sanitizeAttachmentName('   ', 'text/plain')).toBeNull();

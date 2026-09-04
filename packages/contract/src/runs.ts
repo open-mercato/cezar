@@ -670,9 +670,35 @@ const ALLOWED_NAME_EXTENSIONS: Record<string, readonly string[]> = {
   'text/x-markdown': ['md', 'markdown'],
 };
 
-/** Longest stem the library will keep. Every mainstream filesystem takes 255 bytes for a whole
- *  entry; this leaves generous room for the extension and the `-2`/`-3` collision suffix. */
+/** Longest stem the library will keep, in characters AND in UTF-8 bytes. Filesystems bound the
+ *  entry in BYTES (255 on ext4/APFS/NTFS), and a character bound alone is not one: 100 emoji are
+ *  400 bytes, and the write would fail with `ENAMETOOLONG`. That failure is caught and degrades to
+ *  no library entry, so the cost of getting this wrong is silent absence rather than a crash —
+ *  which is exactly why it is bounded here instead. Both bounds leave room for the extension and
+ *  the `-2`/`-99` collision suffix. */
 const MAX_ATTACHMENT_NAME_STEM = 100;
+const MAX_ATTACHMENT_NAME_STEM_BYTES = 180;
+
+/** UTF-8 width of one code point. Computed rather than measured: this package is Node-free AND
+ *  DOM-free by construction (`lib: ["ES2022"]`, `types: []` in its tsconfig), so neither `Buffer`
+ *  nor `TextEncoder` is in scope here — and that guard is load-bearing, because the module is
+ *  bundled into a browser and imported by the Node service. */
+function utf8Width(codePoint: number): number {
+  return codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+}
+
+/** Truncate to a UTF-8 byte budget on a code-POINT boundary — iterating a string with `for…of`
+ *  yields whole code points, so a surrogate pair is never cut in half into a lone surrogate. */
+function truncateToBytes(value: string, maxBytes: number): string {
+  let out = '';
+  let bytes = 0;
+  for (const char of value) {
+    bytes += utf8Width(char.codePointAt(0) ?? 0);
+    if (bytes > maxBytes) return out;
+    out += char;
+  }
+  return out;
+}
 
 /**
  * Turn the filename a browser reported into one that is safe to use as a path segment, or `null`
@@ -710,7 +736,11 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
   const keepsExtension = allowed.includes(ext);
   const rawStem = keepsExtension ? cleaned.slice(0, dot) : cleaned;
-  const stem = rawStem.slice(0, MAX_ATTACHMENT_NAME_STEM).trim();
+  const stem = truncateToBytes(rawStem.slice(0, MAX_ATTACHMENT_NAME_STEM), MAX_ATTACHMENT_NAME_STEM_BYTES)
+    // Trailing dots and spaces last, after truncation could have exposed one: Windows refuses an
+    // entry that ends in either, and `notes.` would otherwise become `notes..txt`.
+    .replace(/[. ]+$/, '')
+    .trim();
   if (stem === '') return null;
   return `${stem}.${keepsExtension ? ext : canonical}`;
 }
