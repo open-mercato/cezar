@@ -165,8 +165,8 @@ export function RunHeader({
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
             {planTally ? (
               // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
-              // the run header"). Desktop only: on a phone the dock it mirrors is itself on
-              // screen, so the mirror would spend the tightest row on the screen restating it.
+              // the run header"). Desktop only since #764: on a phone the dock it mirrors is
+              // itself on screen, so the mirror would spend the tightest row here restating it.
               <span data-slot="plan-mirror" className="hidden text-[11px] text-soft-foreground tabular-nums md:inline">
                 Plan {planTally.done}/{planTally.total}
               </span>
@@ -177,8 +177,8 @@ export function RunHeader({
             </Pill>
             {/* Phone-width only: above `md` the meta row never collapses, so a control to expand
                 it would be a permanently disabled-looking chevron next to always-visible content.
-                On the Session tab of a run with a plan, the slot it costs is the one the plan
-                mirror just gave back; on the three `task-git` tabs no tally is passed at all, so
+                On the Session tab of a run with a plan it lands in the slot #764 freed by hiding
+                the plan mirror here; on the three `task-git` tabs no tally is passed at all, so
                 there the row does grow by one control — the price of the collapse. */}
             <Button
               variant="ghost"
