@@ -151,6 +151,7 @@ export function Composer({
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const pendingCaretRef = useRef<number | null>(null)
+  const menuItemRefs = useRef<Map<string, HTMLElement>>(new Map())
 
   const skills = useSkills(autocompleteSkills && skillsWanted)
   // The `/` list orders most-used first (#519) and a pick bumps `skillUsage`, so this — the
@@ -249,6 +250,14 @@ export function Composer({
     setTrigger(null)
     el.focus()
   }
+
+  // cmdk's built-in scrollIntoView never fires here: the controlled value path
+  // writes to the store but doesn't schedule a scroll. useEffect (not
+  // useLayoutEffect) so the browser has painted and layout is settled.
+  useEffect(() => {
+    if (!menuOpen || activeValue == null) return
+    menuItemRefs.current.get(activeValue)?.scrollIntoView({ block: 'nearest' })
+  }, [activeValue, menuOpen])
 
   // Restore the caret after a completion replaced the token mid-draft.
   useLayoutEffect(() => {
@@ -591,6 +600,10 @@ export function Composer({
               candidates.map((candidate) => (
                 <CommandItem
                   key={candidate.value}
+                  ref={(el) => {
+                    if (el) menuItemRefs.current.set(candidate.value, el)
+                    else menuItemRefs.current.delete(candidate.value)
+                  }}
                   value={candidate.value}
                   data-slot="composer-menu-item"
                   data-emphasized={candidate.emphasized || undefined}
