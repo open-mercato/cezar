@@ -17,7 +17,12 @@ import {
   toPastedContent,
   type PastedContent,
 } from './run.ts';
-import { attachmentExtension, isAttachmentMediaType, isImageAttachmentName } from '@open-mercato/cezar-contract';
+import {
+  attachmentExtension,
+  isAttachmentMediaType,
+  isImageAttachmentName,
+  sanitizeAttachmentName,
+} from '@open-mercato/cezar-contract';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -150,6 +155,76 @@ describe('attachment media types, extensions and blocks (#950)', () => {
       { type: 'file', mediaType: 'text/markdown', data: BRIEF_MD_B64 },
     ];
     expect(contentBlocksOf(content)).toEqual([content[0], content[1]]);
+  });
+});
+
+/**
+ * `sanitizeAttachmentName` (#929) — the one place a user-supplied string is allowed to influence a
+ * path. Everything the attachment library writes goes through it, so these cases are the security
+ * boundary of that feature rather than formatting preferences.
+ */
+describe('sanitizeAttachmentName (#929)', () => {
+  it('keeps an ordinary filename as it was written', () => {
+    expect(sanitizeAttachmentName('design-notes.md', 'text/markdown')).toBe('design-notes.md');
+    expect(sanitizeAttachmentName('Q3 Report.pdf', 'application/pdf')).toBe('Q3 Report.pdf');
+  });
+
+  it('reduces any path to its last segment, on both separator conventions', () => {
+    expect(sanitizeAttachmentName('/etc/passwd.txt', 'text/plain')).toBe('passwd.txt');
+    expect(sanitizeAttachmentName('C:\\Users\\me\\notes.md', 'text/markdown')).toBe('notes.md');
+    expect(sanitizeAttachmentName('a/b/c/deep.txt', 'text/plain')).toBe('deep.txt');
+  });
+
+  it('cannot be talked into traversing out of the library', () => {
+    // `..` survives basenaming only as a name, never as an operation — and a name of nothing but
+    // dots leaves no stem at all, so there is nothing to write.
+    expect(sanitizeAttachmentName('..', 'text/plain')).toBeNull();
+    expect(sanitizeAttachmentName('../../etc/shadow', 'text/plain')).toBe('shadow.txt');
+    expect(sanitizeAttachmentName('....//....//x.txt', 'text/plain')).toBe('x.txt');
+  });
+
+  it('never produces a dotfile', () => {
+    expect(sanitizeAttachmentName('.gitignore', 'text/plain')).toBe('gitignore.txt');
+    expect(sanitizeAttachmentName('.env', 'text/plain')).toBe('env.txt');
+  });
+
+  it('strips control characters and the characters Windows refuses', () => {
+    expect(sanitizeAttachmentName('no\u0000tes\u001f.md', 'text/markdown')).toBe('notes.md');
+    expect(sanitizeAttachmentName('a<b>c:d"e|f?g*h.txt', 'text/plain')).toBe('a-b-c-d-e-f-g-h.txt');
+  });
+
+  /**
+   * The case the whole helper exists for. The media type is what the allowlist screened; letting
+   * the NAME contradict it would mean a `text/plain` upload landing in the user's project as
+   * `install.sh` — a file that passed a check that believed it was screening for exactly that.
+   */
+  it('pins the extension to the validated media type, so a claimed name cannot contradict it', () => {
+    expect(sanitizeAttachmentName('install.sh', 'text/plain')).toBe('install.sh.txt');
+    expect(sanitizeAttachmentName('payload.exe', 'application/pdf')).toBe('payload.exe.pdf');
+    expect(sanitizeAttachmentName('notes.md', 'text/plain')).toBe('notes.md.txt');
+    expect(sanitizeAttachmentName('README', 'text/plain')).toBe('README.txt');
+  });
+
+  it('accepts the alternative spellings of a type the composer already takes', () => {
+    // `.log` is the one the composer went out of its way to support; renaming `server.log` to
+    // `server.log.txt` would throw away the only name the user recognises it by.
+    expect(sanitizeAttachmentName('server.log', 'text/plain')).toBe('server.log');
+    expect(sanitizeAttachmentName('spec.markdown', 'text/x-markdown')).toBe('spec.markdown');
+    // Case is normalised on the extension alone: `notes.TXT` and `notes.txt` are the same file on
+    // macOS and Windows, and the library's dedupe compares names before it compares bytes.
+    expect(sanitizeAttachmentName('notes.TXT', 'text/plain')).toBe('notes.txt');
+  });
+
+  it('bounds the stem so a hostile name cannot exceed a filesystem entry', () => {
+    const long = sanitizeAttachmentName(`${'x'.repeat(400)}.md`, 'text/markdown');
+    expect(long).toBe(`${'x'.repeat(100)}.md`);
+  });
+
+  it('returns null when nothing usable survives, so the caller falls back to the run-folder name', () => {
+    expect(sanitizeAttachmentName('', 'text/plain')).toBeNull();
+    expect(sanitizeAttachmentName('   ', 'text/plain')).toBeNull();
+    expect(sanitizeAttachmentName('\u0000\u0001', 'text/plain')).toBeNull();
+    expect(sanitizeAttachmentName('...', 'text/plain')).toBeNull();
   });
 });
 
