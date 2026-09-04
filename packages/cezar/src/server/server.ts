@@ -862,6 +862,13 @@ const archiveSchema = z.object({
   archived: z.boolean().optional(),
 });
 
+// `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
+// route's shape, deliberately: it is the same kind of per-task flag, and a second spelling for
+// "absent means do the thing" would be one more rule for a client to remember.
+const pinSchema = z.object({
+  pinned: z.boolean().optional(),
+});
+
 // Request-body size guards (#429). A generous global cap keeps a single
 // localhost request from being unbounded (the largest legit body is 4 pasted
 // images at ~7 MB base64 each); the ui-state PUT gets a much tighter cap since
@@ -3482,6 +3489,16 @@ export function createApp(deps: ServerDeps) {
       // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
       const run = store.setArchived(id, parsed.data.archived !== false);
+      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
+    // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
+    // twin in every respect: an absent body pins (the common case), the answer is the updated
+    // record, and the change rides the existing `run` SSE because `setPinned` touches. No new
+    // event and no new response shape.
+    .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
+      const { store } = c.get('project');
+      const run = store.setPinned(c.req.param('id'), c.req.valid('json').pinned !== false);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 

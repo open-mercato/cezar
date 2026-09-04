@@ -186,15 +186,17 @@ describe('editable title (#389)', () => {
 })
 
 describe('action bar visibility per status (the legacy rules, rendered)', () => {
+  // Pin (#935) is in every row: unlike every other action here it asks nothing of the engine,
+  // so it is offered whatever the run is doing — only archiving takes it away.
   const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Cancel'] },
+    { status: 'queued', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'running', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'waiting', visible: ['Finish', 'Notes', 'Pin', 'Cancel'] },
     // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
+    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
   ]
 
   it.each(matrix)('$status → $visible', ({ status, visible }) => {
@@ -239,7 +241,7 @@ describe('Mark unread (#775)', () => {
     const names = actionBar()
       .getAllByRole('button')
       .map((el) => el.textContent?.trim())
-    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
   })
 
   it.each([
@@ -396,6 +398,38 @@ describe('actions hit their endpoints', () => {
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
+  })
+
+  it('Pin → POST /pin with the flipped flag, and reads Unpin once pinned (#935)', async () => {
+    const sent = stubFetch()
+    renderHeader(run('done'))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Pin' }))
+    await waitFor(() => {
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true })
+    })
+
+    cleanup()
+    const unpinning = stubFetch()
+    renderHeader(run('done', { pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' }))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Unpin' }))
+    await waitFor(() => {
+      expect(unpinning.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: false })
+    })
+  })
+
+  it('an archived run offers no pin at all — archiving retires it (#935)', () => {
+    stubFetch()
+    renderHeader(run('done', { archived: true }))
+    expect(actionBar().queryByRole('button', { name: 'Pin' })).toBeNull()
+    expect(actionBar().queryByRole('button', { name: 'Unpin' })).toBeNull()
+  })
+
+  it('Pin is in the mobile kebab too', async () => {
+    stubFetch()
+    renderHeader(run('running'))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.getByRole('menuitem', { name: 'Pin' })).not.toBeNull()
   })
 
   it('Cancel asks first — the POST fires only after the confirm dialog', async () => {

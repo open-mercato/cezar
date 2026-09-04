@@ -1,6 +1,23 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ **Pin the two or three tasks you are actually living in.** The task list is sorted by what
+  happens next, which is the right default and a bad fit for a long-running task you keep coming
+  back to: it sinks under every newer run, and a finished-but-unmerged one drops into `Recent` and
+  then out of the sidebar's ten-row budget entirely. A task can now be pinned — from the sidebar
+  row (the control appears on hover, and stays lit once pinned), the Tasks table row, the mobile
+  card, or the thread header beside Archive — and pinned tasks gather in a **Pinned** group above
+  `Needs you`, first in that project's table too. A pinned task appears there once and nowhere
+  else, keeps its status and attention dots so one that wants you still says so, and is never
+  evicted by the sidebar's ten-row cap: the ten rows still go to the other groups, so pinning
+  three tasks cannot hide what needs you. Pins are per task and therefore per project — pinning in
+  one repo changes nothing in another — and archiving a task unpins it, because archiving is how
+  you resign from one. The group is absent entirely when nothing is pinned. `POST
+  /api/v1/runs/:id/pin` is a new additive route with the archive route's exact semantics (no body
+  pins, `{pinned:false}` unpins) answering the updated record, and `runs.json` gained optional
+  `pinned`/`pinnedAt` keys that unpinning deletes rather than writes as `false` — so a record
+  written before this, or unpinned after it, is byte-identical to what an older cezar wrote.
+  Cross-project pins on the global All-tasks page and in the ⌘K palette are a follow-up. (#935)
 - ✨ **Continue a task on another agent account, not just another agent.** The thread's Continue
   carried a runner pill that could switch `claude → codex` but never offered the second Claude
   login the new-task composer has offered since accounts landed — so "finish this one on my other
