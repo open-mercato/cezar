@@ -62,7 +62,7 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
       className="min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-xs"
     >
       {/* The mockup's `.grad-edge` — the brand gradient as a hairline top edge. */}
-      <div aria-hidden data-slot="grad-edge" className="h-[3px]" style={{ background: 'var(--grad)' }} />
+      <div aria-hidden data-slot="grad-edge" className="h-0.5 md:h-[3px]" style={{ background: 'var(--grad)' }} />
       <button
         type="button"
         onClick={toggle}

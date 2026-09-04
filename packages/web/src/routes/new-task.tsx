@@ -33,7 +33,7 @@ import {
   useWorkflows,
 } from '@/api/queries'
 import type {
-  ImageInput,
+  AttachmentInput,
   ProjectListEntry,
   RepoResponse,
   Runner,
@@ -408,7 +408,7 @@ export function NewTaskRoute() {
       ?.focus()
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = async (text: string, images: ImageInput[]) => {
+  const submit = async (text: string, images: AttachmentInput[]) => {
     if (!providersReady || runner === null) {
       throw new Error(
         providers.isPending

@@ -142,8 +142,8 @@ const openByRun = new Map<string, boolean>()
 
 /**
  * The step rail as it sits in the run header: a ONE-LINE summary by default — a dot per step,
- * the current step's name, its position, and the progress bar — so the sticky header stays
- * shallow and the thread gets the vertical room. Clicking it expands the full `StepRail`.
+ * the current step's name, its position, and the progress bar — so the header stays shallow and
+ * the thread gets the vertical room. Clicking it expands the full `StepRail`.
  * Collapsed by default because the summary already answers "where is this run?" at a glance;
  * an explicit expand is remembered for that run across tab switches.
  */
@@ -161,7 +161,7 @@ export function WorkflowSteps({ runId, steps }: { runId: string; steps: StepStat
     <Collapsible data-slot="workflow-steps" open={open} onOpenChange={toggle} className="min-w-0">
       <CollapsibleTrigger
         aria-label={`Workflow: ${current.name}, step ${index + 1} of ${steps.length}`}
-        className="group flex min-h-[30px] w-full items-center gap-2.5 text-left text-xs text-muted-foreground hover:text-foreground"
+        className="group flex min-h-7 w-full items-center gap-2 text-left text-xs text-muted-foreground hover:text-foreground md:min-h-[30px] md:gap-2.5"
       >
         <span data-slot="step-dots" className="flex shrink-0 items-center gap-1">
           {steps.map((step) => (

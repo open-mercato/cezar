@@ -3,7 +3,7 @@ import type {
   BackendCheck,
   CreateRunInput,
   CreateRunResponse,
-  ImageInput,
+  AttachmentInput,
   ModelDiscoveryRunner,
   Runner,
   RunnerModelCatalogResponse,
@@ -274,7 +274,7 @@ export function buildCreateRunBody(opts: {
    *  project's own selection, applying to `runner`. Absent/empty follows the project. */
   agentProfile?: string | null
   variants: number
-  images: readonly ImageInput[]
+  images: readonly AttachmentInput[]
   /** false → run in the repo working tree, no worktree (single runs only). Sent only when
    *  explicitly off; the default (isolated worktree) stays implicit. */
   worktree?: boolean

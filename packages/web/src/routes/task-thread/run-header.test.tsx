@@ -672,6 +672,48 @@ describe('notes panel', () => {
 })
 
 describe('meta line, tabs, pill and resume hint', () => {
+  it('scrolls the run header on phones but restores sticky context on desktop', () => {
+    stubFetch()
+    renderHeader(run('done'))
+
+    const header = document.querySelector('[data-slot="run-header"]') as HTMLElement
+    const classes = header.className.split(/\s+/)
+    expect(classes).toContain('relative')
+    expect(classes).not.toContain('sticky')
+    expect(classes).not.toContain('top-0')
+    expect(classes).toContain('md:sticky')
+    expect(classes).toContain('md:top-0')
+    expect(classes).toContain('px-3')
+    expect(classes).toContain('md:px-6')
+  })
+
+  // The plan mirror hides on phones so the title row keeps its space for the status pill and
+  // the kebab. It switches at `md`, the same breakpoint as the sticky header, the tabs, the
+  // composer and the dock — an `sm:` here would reveal it between 640-768px in a header that
+  // is still not sticky, a state the responsive pass never designed for.
+  it('hides the plan mirror on phones and reveals it at the same md breakpoint as the rest of the header', () => {
+    stubFetch()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route
+              path="/tasks/:id"
+              element={<RunHeader run={run('running')} planTally={{ done: 2, total: 5 }} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const mirror = document.querySelector('[data-slot="plan-mirror"]') as HTMLElement
+    expect(mirror.textContent).toContain('Plan 2/5')
+    const classes = mirror.className.split(/\s+/)
+    expect(classes).toContain('hidden')
+    expect(classes).toContain('md:inline')
+    expect(classes).not.toContain('sm:inline')
+  })
+
   it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
     stubFetch()
     renderHeader(
