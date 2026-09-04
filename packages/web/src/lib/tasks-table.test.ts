@@ -2,18 +2,26 @@ import { describe, expect, it } from 'vitest'
 
 import type { ProcessUsage, RunRecord } from '@open-mercato/cezar-api-client'
 import {
+  NO_TASK_FILTERS,
+  activeFilterCount,
   compareGroups,
   filterRuns,
+  filterTaskList,
   finishedRunCount,
   formatCost,
   formatMem,
   githubRepoBase,
+  hasActiveTaskFilters,
   prNumber,
+  referenceNeedle,
   scheduledResume,
+  statusFacetOptions,
   taskReference,
   taskPrUrl,
   taskIssueUrl,
   taskReferences,
+  taskStatusValue,
+  toggleStatusFilter,
   usageCells,
   workflowLabel,
 } from '@/lib/tasks-table'
@@ -174,6 +182,175 @@ describe('filterRuns', () => {
 
   it('does not match on the task prompt — text the table never shows', () => {
     expect(filterRuns([run({ task: 'secret prompt words' })], 'secret')).toEqual([])
+  })
+})
+
+describe('referenceNeedle', () => {
+  const cases: Array<[query: string, expected: ReturnType<typeof referenceNeedle>]> = [
+    ['909', { number: 909 }],
+    ['#909', { number: 909 }],
+    [' #909 ', { number: 909 }],
+    ['pr 909', { kind: 'PR', number: 909 }],
+    ['PR#909', { kind: 'PR', number: 909 }],
+    ['pull 909', { kind: 'PR', number: 909 }],
+    ['issue 42', { kind: 'Issue', number: 42 }],
+    ['issue#42', { kind: 'Issue', number: 42 }],
+    // Not a reference lookup — an ordinary search, and it must stay one.
+    ['909 tokens', undefined],
+    ['zod', undefined],
+    ['v4', undefined],
+    ['#', undefined],
+    ['', undefined],
+  ]
+  it.each(cases)('reads %j as %j', (query, expected) => {
+    expect(referenceNeedle(query)).toEqual(expected)
+  })
+})
+
+describe('filterRuns — by tracker reference', () => {
+  const created = run({ id: 'created', title: 'Ship the thing', pullRequestUrl: 'https://github.com/o/r/pull/909' })
+  const about = run({ id: 'about', title: 'Review it', referencedPullRequestUrl: 'https://github.com/o/r/pull/904' })
+  const issue = run({ id: 'issue', title: 'File it', issueNumber: 909 })
+  const runs = [created, about, issue]
+  const ids = (query: string) => filterRuns(runs, query).map((r) => r.id)
+
+  it('finds a task by its PR number, written the way the tracker writes it', () => {
+    expect(ids('#909')).toEqual(['created', 'issue'])
+    expect(ids('904')).toEqual(['about'])
+  })
+
+  it('narrows to one kind when the reader names the kind', () => {
+    expect(ids('pr 909')).toEqual(['created'])
+    expect(ids('issue 909')).toEqual(['issue'])
+  })
+
+  it('still searches the text for a bare number — the reference is an extra haystack, not a swap', () => {
+    const numbered = [run({ id: 'named', title: '788: rename the thing' })]
+    expect(filterRuns(numbered, '788').map((r) => r.id)).toEqual(['named'])
+  })
+
+  it('does not invent a reference a row does not have', () => {
+    expect(ids('#1234')).toEqual([])
+  })
+})
+
+describe('taskStatusValue', () => {
+  it('answers with the word the status pill prints, sub-states included', () => {
+    expect(taskStatusValue(run({ status: 'waiting' }))).toBe('needs you')
+    expect(taskStatusValue(run({ status: 'review' }))).toBe('needs review')
+    expect(taskStatusValue(run({ status: 'running' }))).toBe('running')
+    expect(taskStatusValue(run({ status: 'running', activity: 'monitoring' }))).toBe('monitoring')
+    // The two the record cannot express on its own — the whole reason the facet reads the pill.
+    expect(taskStatusValue(run({ status: 'failed', autoResumeAt: '2026-07-14T11:00:00.000Z' }))).toBe('scheduled')
+    expect(taskStatusValue(run({ status: 'failed' }))).toBe('failed')
+  })
+})
+
+describe('filterTaskList', () => {
+  const runs = [
+    run({ id: 'w', title: 'Waiting one', status: 'waiting' }),
+    run({ id: 'd1', title: 'Done one', status: 'done' }),
+    run({ id: 'd2', title: 'Done two', status: 'done' }),
+    run({ id: 'f', title: 'Failed one', status: 'failed' }),
+  ]
+  const ids = (statuses: string[], query = '') =>
+    filterTaskList(runs, { query, statuses }).map((r) => r.id)
+
+  it('keeps everything when no status is picked — an empty facet is no opinion', () => {
+    expect(ids([])).toEqual(['w', 'd1', 'd2', 'f'])
+  })
+
+  it('ORs the picked statuses', () => {
+    expect(ids(['done'])).toEqual(['d1', 'd2'])
+    expect(ids(['done', 'failed'])).toEqual(['d1', 'd2', 'f'])
+  })
+
+  it('ANDs the facet with the search box', () => {
+    expect(ids(['done'], 'two')).toEqual(['d2'])
+    expect(ids(['failed'], 'two')).toEqual([])
+  })
+})
+
+describe('statusFacetOptions', () => {
+  const runs = [
+    run({ id: 'w', title: 'Alpha', status: 'waiting' }),
+    run({ id: 'r', title: 'Beta', status: 'running' }),
+    run({ id: 'd1', title: 'Gamma', status: 'done' }),
+    run({ id: 'd2', title: 'Delta', status: 'done' }),
+  ]
+
+  it('offers exactly the statuses present, in the list’s own priority order', () => {
+    expect(statusFacetOptions(runs, NO_TASK_FILTERS).map((option) => option.value)).toEqual([
+      'needs you',
+      'running',
+      'done',
+    ])
+  })
+
+  it('counts against the search box but NOT against its own ticks', () => {
+    // Ticking `done` must not make every other option read 0 — unticking it has to promise the
+    // rows it will actually bring back.
+    const ticked = statusFacetOptions(runs, { query: '', statuses: ['done'] })
+    expect(ticked.map((option) => [option.value, option.count])).toEqual([
+      ['needs you', 1],
+      ['running', 1],
+      ['done', 2],
+    ])
+    // The query does narrow the counts — it is the other narrowing in force.
+    const searched = statusFacetOptions(runs, { query: 'gamma', statuses: [] })
+    expect(searched.map((option) => [option.value, option.count])).toEqual([
+      ['needs you', 0],
+      ['running', 0],
+      ['done', 1],
+    ])
+  })
+
+  it('gives every label the attention ladder can produce a place, in reading order', () => {
+    // The drift guard for `STATUS_FILTER_ORDER`: a label `deriveAttention` learns to emit that
+    // nobody adds to the ladder would sort to the bottom, and this table would say so.
+    const everything = [
+      run({ status: 'waiting' }),
+      run({ status: 'review' }),
+      run({ status: 'running' }),
+      run({ status: 'running', activity: 'monitoring' }),
+      run({ status: 'failed', autoResumeAt: '2026-07-14T11:00:00.000Z' }),
+      run({ status: 'queued' }),
+      run({ status: 'done' }),
+      run({ status: 'failed' }),
+      run({ status: 'cancelled' }),
+    ]
+    expect(statusFacetOptions(everything, NO_TASK_FILTERS).map((option) => option.value)).toEqual([
+      'needs you',
+      'needs review',
+      'running',
+      'monitoring',
+      'scheduled',
+      'queued',
+      'done',
+      'failed',
+      'cancelled',
+    ])
+  })
+})
+
+describe('toggleStatusFilter / activeFilterCount / hasActiveTaskFilters', () => {
+  it('adds and removes without mutating the array it was given', () => {
+    const values: readonly string[] = ['done']
+    expect(toggleStatusFilter(values, 'failed')).toEqual(['done', 'failed'])
+    expect(toggleStatusFilter(values, 'done')).toEqual([])
+    expect(values).toEqual(['done'])
+  })
+
+  it('counts every narrowing the reader turned on, whitespace excluded', () => {
+    expect(activeFilterCount(NO_TASK_FILTERS)).toBe(0)
+    expect(activeFilterCount({ query: '   ', statuses: [] })).toBe(0)
+    expect(activeFilterCount({ query: 'zod', statuses: [] })).toBe(1)
+    expect(activeFilterCount({ query: 'zod', statuses: ['done', 'failed'] })).toBe(3)
+  })
+
+  it('says whether anything is narrowing the list at all', () => {
+    expect(hasActiveTaskFilters(NO_TASK_FILTERS)).toBe(false)
+    expect(hasActiveTaskFilters({ query: '', statuses: ['done'] })).toBe(true)
   })
 })
 

@@ -2,7 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { ComponentProps } from 'react'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { GlobalEventsProvider } from '@/api/global-events'
 import { queryKeys } from '@/api/queries'
@@ -10,6 +10,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProcessUsage, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
+import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { TasksOverview, TasksOverviewRoute } from '@/routes/tasks-overview'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
@@ -44,7 +45,7 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
   const onArchiveFinished = props.onArchiveFinished ?? vi.fn()
   const onMarkAllRead = props.onMarkAllRead ?? vi.fn()
   const onRename = props.onRename ?? vi.fn()
-  const utils = render(
+  const tree = (extra: Partial<ComponentProps<typeof TasksOverview>>) => (
     <MemoryRouter initialEntries={['/']}>
       <LocationProbe />
       <Routes>
@@ -57,6 +58,7 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
               now={NOW}
               expandedColumns={{ branch: true }}
               {...props}
+              {...extra}
               onViewChange={onViewChange}
               onArchiveFinished={onArchiveFinished}
               onMarkAllRead={onMarkAllRead}
@@ -69,15 +71,81 @@ function renderOverview(props: Partial<ComponentProps<typeof TasksOverview>> = {
       </Routes>
     </MemoryRouter>
   )
-  return { ...utils, onViewChange, onArchiveFinished, onMarkAllRead, onRename }
+  const utils = render(tree({}))
+  return {
+    ...utils,
+    onViewChange,
+    onArchiveFinished,
+    onMarkAllRead,
+    onRename,
+    /** New props, same mounted component — how a test plays the data changing UNDER the reader
+     *  (a run finishing over the SSE stream) without losing the filters and ticks they set. */
+    setProps: (extra: Partial<ComponentProps<typeof TasksOverview>>) => utils.rerender(tree(extra)),
+  }
 }
 
 const location = () => screen.getByTestId('location').textContent
 const tableRow = (id: string) => document.querySelector(`[data-slot="task-table-row"][data-run-id="${id}"]`)
 const card = (id: string) => document.querySelector(`[data-slot="task-card"][data-run-id="${id}"]`)
-const cellsOf = (id: string): string[] => [...(tableRow(id)?.querySelectorAll('td') ?? [])].map((td) => td.textContent ?? '')
+/** The row's DATA cells. The leading selection box is not one of them — it is the handle for
+ *  editing the row, not a fact about the run — so it stays out of every column assertion. */
+const cellsOf = (id: string): string[] =>
+  [...(tableRow(id)?.querySelectorAll('td:not([data-column-id="select"])') ?? [])].map(
+    (td) => td.textContent ?? '',
+  )
 
 afterEach(cleanup)
+
+beforeAll(() => {
+  // The Status facet is a Popover + cmdk; cmdk scrolls the active item into view and jsdom has
+  // no scrollIntoView.
+  Element.prototype.scrollIntoView = vi.fn()
+})
+
+beforeEach(() => {
+  // …and Radix positions the popover with floating-ui, which needs a ResizeObserver jsdom
+  // does not have either.
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+})
+
+/** The Status facet's trigger, its options, and the row/header tick boxes — the handles every
+ *  filter-and-select assertion below reaches for. */
+const statusTrigger = () => document.querySelector<HTMLElement>('[data-slot="facet-status"]') as HTMLElement
+const statusOption = (value: string) =>
+  document.querySelector<HTMLElement>(`[data-slot="facet-option"][data-value="${value}"]`)
+const rowBox = (id: string) =>
+  tableRow(id)?.querySelector<HTMLInputElement>('[data-slot="select-task"]') as HTMLInputElement
+const cardBox = (id: string) =>
+  card(id)?.querySelector<HTMLInputElement>('[data-slot="select-task"]') as HTMLInputElement
+const selectAllBox = () => document.querySelector<HTMLInputElement>('[data-slot="select-all"]') as HTMLInputElement
+const bulkBar = () => document.querySelector<HTMLElement>('[data-slot="bulk-action-bar"]')
+const bulkButton = (action: string) =>
+  document.querySelector<HTMLButtonElement>(`[data-action="bulk-${action}"]`) as HTMLButtonElement
+
+/**
+ * Open the Status facet and tick one option.
+ *
+ * The popover deliberately stays OPEN after a pick (ticking three statuses in a row is the
+ * common case), so this cannot key completion on the list unmounting. It keys on the option's
+ * own `aria-checked` instead, and re-queries the node on every poll: cmdk re-renders the list as
+ * the popover settles, and clicking a node from a previous poll is a silent no-op (#413).
+ */
+async function pickStatus(value: string): Promise<void> {
+  if (!statusOption(value)) fireEvent.click(statusTrigger())
+  await waitFor(() => {
+    const node = statusOption(value)
+    if (node?.getAttribute('aria-checked') === 'true') return
+    if (node) fireEvent.click(node)
+    throw new Error(`status "${value}" is not picked yet`)
+  })
+}
 
 describe('TasksOverview — the table', () => {
   it('starts with Branch folded while keeping fixed columns and an in-place restore control', () => {
@@ -273,9 +341,9 @@ describe('TasksOverview — the table', () => {
       ],
     })
 
-    const headers = [...document.querySelectorAll('[data-slot="tasks-table"] th')].map(
-      (cell) => cell.textContent,
-    )
+    const headers = [
+      ...document.querySelectorAll('[data-slot="tasks-table"] th:not([data-column-id="select"])'),
+    ].map((cell) => cell.textContent)
     expect(headers).toEqual(['Status', 'Task', 'Workflow', 'Branch', '±', 'Ref', 'CPU', 'Mem', 'Started'])
     expect(cellsOf('hidden')).toEqual([
       'done',
@@ -290,7 +358,7 @@ describe('TasksOverview — the table', () => {
     ])
 
     const queued = tableRow('queued-hidden') as HTMLElement
-    expect(queued.querySelectorAll('td')).toHaveLength(8)
+    expect(queued.querySelectorAll('td:not([data-column-id="select"])')).toHaveLength(8)
     expect(queued.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
     expect(queued.textContent).not.toContain('12.0k')
     expect(queued.textContent).not.toContain('$0.02')
@@ -920,6 +988,235 @@ describe('TasksOverview — compare-variants strip', () => {
   })
 })
 
+describe('TasksOverview — the status filter', () => {
+  const mixed = () => [
+    run({ id: 'w', title: 'Waiting one', status: 'waiting' }),
+    run({ id: 'r', title: 'Running one', status: 'running' }),
+    run({ id: 'd', title: 'Done one', status: 'done' }),
+  ]
+
+  it('narrows the table to the picked status, and back when it is unpicked', async () => {
+    renderOverview({ runs: mixed() })
+    await pickStatus('done')
+
+    expect(tableRow('d')).not.toBeNull()
+    expect(tableRow('w')).toBeNull()
+    expect(tableRow('r')).toBeNull()
+    // The cards are the same list below `md`, so they narrow with it.
+    expect(card('w')).toBeNull()
+
+    // Un-tick: everything is back. `pickStatus` refuses to double-click, so this is the raw one.
+    fireEvent.click(statusOption('done') as HTMLElement)
+    await waitFor(() => expect(tableRow('w')).not.toBeNull())
+  })
+
+  it('ORs several statuses — "what needs me OR failed?" is one question, not two', async () => {
+    renderOverview({ runs: [...mixed(), run({ id: 'f', title: 'Failed one', status: 'failed' })] })
+    await pickStatus('failed')
+    await pickStatus('needs you')
+
+    expect(tableRow('f')).not.toBeNull()
+    expect(tableRow('w')).not.toBeNull()
+    expect(tableRow('d')).toBeNull()
+  })
+
+  it('offers the statuses of the list on screen, in reading order, each with its row count', async () => {
+    renderOverview({
+      runs: [...mixed(), run({ id: 'd2', title: 'Done two', status: 'done' }), run({ id: 'arc', status: 'done', archived: true })],
+    })
+    fireEvent.click(statusTrigger())
+    await waitFor(() => expect(statusOption('done')).not.toBeNull())
+
+    const options = [...document.querySelectorAll('[data-slot="facet-option"]')].map((node) => node.textContent)
+    // Reading order, not the alphabet — and no `archived` row's status leaks into the Active tab.
+    expect(options).toEqual(['needs you1', 'running1', 'done2'])
+  })
+
+  it('ANDs the facet with the search box', async () => {
+    renderOverview({ runs: [...mixed(), run({ id: 'd2', title: 'Done two', status: 'done' })] })
+    await pickStatus('done')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), { target: { value: 'two' } })
+
+    expect(tableRow('d2')).not.toBeNull()
+    expect(tableRow('d')).toBeNull()
+  })
+
+  it('counts every narrowing in Clear, and one click undoes all of them', async () => {
+    renderOverview({ runs: mixed() })
+    // Nothing narrowed yet — no Clear to press.
+    expect(document.querySelector('[data-action="clear-filters"]')).toBeNull()
+
+    await pickStatus('done')
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), { target: { value: 'one' } })
+    const clear = document.querySelector<HTMLElement>('[data-action="clear-filters"]') as HTMLElement
+    expect(clear.textContent).toContain('(2)')
+
+    fireEvent.click(clear)
+    await waitFor(() => expect(tableRow('w')).not.toBeNull())
+    expect((screen.getByRole('textbox', { name: 'Search tasks' }) as HTMLInputElement).value).toBe('')
+    expect(document.querySelector('[data-action="clear-filters"]')).toBeNull()
+  })
+
+  it('blames the filter, not the list, when a facet alone empties the table', async () => {
+    // The reachable shape of this: a filter is on, and the data moves under it — the `done` run
+    // is archived from another surface and the stream takes it out of the Active list.
+    const { setProps } = renderOverview({
+      runs: [run({ id: 'd', title: 'Done one', status: 'done' }), run({ id: 'w', status: 'waiting' })],
+    })
+    await pickStatus('done')
+    expect(tableRow('d')).not.toBeNull()
+
+    setProps({ runs: [run({ id: 'w2', status: 'waiting' })] })
+
+    const empty = document.querySelector<HTMLElement>('[data-slot="tasks-empty"]')
+    if (!empty) throw new Error('no empty state rendered')
+    // Not "No tasks yet" — the tasks are there, the filter is hiding them, and the state has to
+    // say which of those two it is.
+    expect(empty.getAttribute('data-empty-kind')).toBe('search-miss')
+    expect(screen.getByText('No tasks match the filters you picked.')).not.toBeNull()
+  })
+
+  it('finds a task by the PR or issue number in its chip', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'pr', title: 'Ship it', pullRequestUrl: 'https://github.com/o/r/pull/909' }),
+        run({ id: 'iss', title: 'File it', issueNumber: 42 }),
+      ],
+    })
+    const box = screen.getByRole('textbox', { name: 'Search tasks' })
+
+    fireEvent.change(box, { target: { value: '#909' } })
+    expect(tableRow('pr')).not.toBeNull()
+    expect(tableRow('iss')).toBeNull()
+
+    fireEvent.change(box, { target: { value: 'issue 42' } })
+    expect(tableRow('iss')).not.toBeNull()
+    expect(tableRow('pr')).toBeNull()
+  })
+})
+
+describe('TasksOverview — selecting rows and editing them together', () => {
+  const batch = () => [
+    run({ id: 'd1', title: 'Done one', status: 'done', finishedAt: ago(60_000) }),
+    run({ id: 'd2', title: 'Done two', status: 'done', finishedAt: ago(60_000), seenAt: ago(30_000) }),
+    run({ id: 'rev', title: 'Wants a human', status: 'review' }),
+  ]
+
+  it('shows no bar until something is ticked, then names the count', () => {
+    renderOverview({ runs: batch() })
+    expect(bulkBar()).toBeNull()
+
+    fireEvent.click(rowBox('d1'))
+    expect(bulkBar()?.querySelector('[data-slot="bulk-selection-count"]')?.textContent).toBe('1 selected')
+    fireEvent.click(rowBox('rev'))
+    expect(bulkBar()?.querySelector('[data-slot="bulk-selection-count"]')?.textContent).toBe('2 selected')
+
+    // Un-ticking the last one puts the bar away again.
+    fireEvent.click(rowBox('d1'))
+    fireEvent.click(rowBox('rev'))
+    expect(bulkBar()).toBeNull()
+  })
+
+  it('drives the header box through none → all → none, indeterminate in between', () => {
+    renderOverview({ runs: batch() })
+    expect(selectAllBox().getAttribute('data-state')).toBe('none')
+
+    fireEvent.click(rowBox('d1'))
+    expect(selectAllBox().getAttribute('data-state')).toBe('some')
+    expect(selectAllBox().indeterminate).toBe(true)
+
+    fireEvent.click(selectAllBox())
+    // A partial selection clears rather than completes — the escape from an indeterminate box.
+    expect(bulkBar()).toBeNull()
+
+    fireEvent.click(selectAllBox())
+    expect(bulkBar()?.querySelector('[data-slot="bulk-selection-count"]')?.textContent).toBe('3 selected')
+    expect(selectAllBox().checked).toBe(true)
+  })
+
+  it('selects all of the FILTERED list, never the rows a filter is hiding', async () => {
+    const onBulkAction = vi.fn()
+    renderOverview({ runs: batch(), onBulkAction })
+    await pickStatus('done')
+
+    fireEvent.click(selectAllBox())
+    expect(bulkBar()?.querySelector('[data-slot="bulk-selection-count"]')?.textContent).toBe('2 selected')
+
+    fireEvent.click(bulkButton('archive'))
+    expect(onBulkAction.mock.calls[0]?.[1].map((r: RunRecord) => r.id)).toEqual(['d1', 'd2'])
+  })
+
+  it('counts each action by the rows it would really change, and says why it cannot', () => {
+    renderOverview({ runs: batch() })
+    fireEvent.click(selectAllBox())
+
+    // The review row is selected but is not archivable — the broom refuses it too.
+    expect(bulkButton('archive').textContent).toContain('2')
+    expect(bulkButton('archive').disabled).toBe(false)
+    // One unread (d1 finished, never seen), one read (d2), and nothing archived to restore.
+    expect(bulkButton('read').textContent).toContain('1')
+    expect(bulkButton('unread').textContent).toContain('1')
+    expect(bulkButton('restore').disabled).toBe(true)
+    expect(bulkButton('restore').getAttribute('title')).toBe('Nothing selected is archived.')
+  })
+
+  it('hands the action exactly the rows it applies to, then empties the selection', () => {
+    const onBulkAction = vi.fn()
+    renderOverview({ runs: batch(), onBulkAction })
+    fireEvent.click(selectAllBox())
+    fireEvent.click(bulkButton('archive'))
+
+    expect(onBulkAction).toHaveBeenCalledTimes(1)
+    expect(onBulkAction.mock.calls[0]?.[0]).toBe('archive')
+    // The `review` row was ticked but is not archivable, so it is not sent.
+    expect(onBulkAction.mock.calls[0]?.[1].map((r: RunRecord) => r.id)).toEqual(['d1', 'd2'])
+    expect(bulkBar()).toBeNull()
+  })
+
+  it('waits rather than letting a second batch race the first', () => {
+    const onBulkAction = vi.fn()
+    renderOverview({ runs: batch(), onBulkAction, bulkPending: true })
+    fireEvent.click(rowBox('d1'))
+
+    expect(bulkButton('archive').disabled).toBe(true)
+    fireEvent.click(bulkButton('archive'))
+    expect(onBulkAction).not.toHaveBeenCalled()
+  })
+
+  it('ticks a row without opening it — the box is not a click on the row', () => {
+    renderOverview({ runs: batch() })
+    fireEvent.click(rowBox('d1'))
+    expect(location()).toBe('/')
+    expect(tableRow('d1')?.getAttribute('data-selected')).toBe('true')
+
+    // …and the row still navigates when the click lands anywhere else.
+    fireEvent.click(tableRow('d1') as HTMLElement)
+    expect(location()).toBe('/tasks/d1')
+  })
+
+  it('ticks a card without opening it either', () => {
+    renderOverview({ runs: batch() })
+    fireEvent.click(cardBox('d1'))
+    expect(location()).toBe('/')
+    expect(card('d1')?.getAttribute('data-selected')).toBe('true')
+    // One selection, two renderings of it: the desktop row agrees with the mobile card.
+    expect(rowBox('d1').checked).toBe(true)
+  })
+
+  it('cannot act on a row that has left the view', async () => {
+    const onBulkAction = vi.fn()
+    renderOverview({ runs: batch(), onBulkAction })
+    fireEvent.click(rowBox('d1'))
+    fireEvent.click(rowBox('rev'))
+
+    // A filter hides the review row while it is still ticked.
+    await pickStatus('done')
+    expect(bulkBar()?.querySelector('[data-slot="bulk-selection-count"]')?.textContent).toBe('1 selected')
+    fireEvent.click(bulkButton('archive'))
+    expect(onBulkAction.mock.calls[0]?.[1].map((r: RunRecord) => r.id)).toEqual(['d1'])
+  })
+})
+
 describe('TasksOverviewRoute — wired to the app', () => {
   const fetchMock = vi.fn<typeof fetch>()
 
@@ -928,6 +1225,7 @@ describe('TasksOverviewRoute — wired to the app', () => {
   })
 
   afterEach(() => {
+    act(() => resetToasts())
     cleanup()
     fetchMock.mockReset()
     vi.unstubAllGlobals()
@@ -1057,6 +1355,56 @@ describe('TasksOverviewRoute — wired to the app', () => {
       expect(posted?.[1]?.method).toBe('POST')
     })
     // The doctrine: after the mutation, ask the endpoint again rather than trusting the cache.
+    await waitFor(() => {
+      const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/v1/runs')
+      expect(listFetches.length).toBeGreaterThan(1)
+    })
+  })
+
+  it('fans a bulk archive out per run, finishes the batch when one is refused, and says so', async () => {
+    const rows = [
+      run({ id: 'b1', title: 'Batch one', status: 'done' }),
+      run({ id: 'b2', title: 'Batch two', status: 'done' }),
+    ]
+    fetchMock.mockImplementation(async (input) => {
+      const url = String(input)
+      if (url === '/api/v1/runs') return json(rows)
+      // One row refuses. `allSettled` is what makes the other one still land.
+      if (url === '/api/v1/runs/b1/archive') return json({ error: 'run is locked by another agent' }, 409)
+      if (url === '/api/v1/runs/b2/archive') return json({ ...rows[1], archived: true })
+      return json({})
+    })
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter>
+          <ListViewProvider>
+            <TasksOverviewRoute />
+            <Toaster />
+          </ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(tableRow('b1')).not.toBeNull())
+
+    fireEvent.click(selectAllBox())
+    fireEvent.click(bulkButton('archive'))
+
+    await waitFor(() => {
+      const archives = fetchMock.mock.calls
+        .filter(([path]) => String(path).endsWith('/archive'))
+        .map(([path, options]) => [String(path), options?.method])
+      // Both were attempted — a refusal must not cancel the rest of the batch.
+      expect(archives.sort()).toEqual([
+        ['/api/v1/runs/b1/archive', 'POST'],
+        ['/api/v1/runs/b2/archive', 'POST'],
+      ])
+    })
+    // The receipt is honest about the half that failed, and carries the server's reason.
+    expect(
+      await screen.findByText('Archived 1 of 2 tasks — 1 failed: run is locked by another agent'),
+    ).not.toBeNull()
+    // Same doctrine as every other mutation here: ask the endpoint again rather than trusting a
+    // cache that believes both rows moved.
     await waitFor(() => {
       const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/v1/runs')
       expect(listFetches.length).toBeGreaterThan(1)

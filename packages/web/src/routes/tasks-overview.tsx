@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
+  ArchiveRestoreIcon,
   CheckCheckIcon,
   ChevronsLeftIcon,
   ChevronsRightIcon,
@@ -8,6 +9,8 @@ import {
   CoinsIcon,
   CpuIcon,
   DollarSignIcon,
+  EyeIcon,
+  EyeOffIcon,
   FileDiffIcon,
   GitBranchIcon,
   ListChecksIcon,
@@ -19,11 +22,12 @@ import {
   SearchIcon,
   SearchXIcon,
   WorkflowIcon,
+  XIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
+import { archiveFinished, archiveRun, markAllRunsSeen, markRunSeen, markRunUnseen, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
 import { queryKeys, useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
@@ -31,6 +35,7 @@ import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
+import { FacetFilter } from '@/components/facet-filter'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
@@ -53,14 +58,31 @@ import {
 } from '@/lib/task-columns'
 import { listCounts, queuePositions, runTitle, sortRuns, type ListView } from '@/lib/task-groups'
 import {
+  BULK_ACTION_IDS,
+  NO_SELECTION,
+  bulkResultMessage,
+  selectionSummary,
+  toggleAllVisible,
+  toggleSelected,
+  type BulkActionId,
+  type HeaderSelectionState,
+  type SelectionSummary,
+} from '@/lib/task-selection'
+import {
+  NO_TASK_FILTERS,
+  activeFilterCount,
   compareGroups,
-  filterRuns,
+  filterTaskList,
   finishedRunCount,
   formatCost,
+  hasActiveTaskFilters,
   scheduledResume,
+  statusFacetOptions,
   taskReference,
+  toggleStatusFilter,
   usageCells,
   workflowLabel,
+  type TaskListFilters,
   type UsageCell,
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
@@ -87,6 +109,8 @@ export function TasksOverview({
   onArchiveFinished,
   onMarkAllRead,
   onRename,
+  onBulkAction = () => undefined,
+  bulkPending = false,
   now = Date.now(),
   showTokens = true,
   showCost = true,
@@ -105,6 +129,13 @@ export function TasksOverview({
   /** Inline rename from the table's Task cell (spec step 15) — the route wires this to
    *  `PATCH /api/runs/:id`, the same flow as the run header's pencil. */
   onRename: (id: string, title: string) => void
+  /** One bulk edit over the selected rows. Already narrowed to the rows the action would really
+   *  change (`SelectionSummary.targets`), so the route fans out exactly N requests and reports
+   *  exactly N outcomes. Defaulted, like `onToggleColumn`, so a direct render needs no stub. */
+  onBulkAction?: (action: BulkActionId, runs: readonly RunRecord[]) => void
+  /** A bulk edit is in flight — the bar's buttons wait rather than letting a second batch race
+   *  the first over the same rows. */
+  bulkPending?: boolean
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
   /** Presentation capability; defaults visible for older health responses and direct renders. */
@@ -116,17 +147,39 @@ export function TasksOverview({
   /** Prevent a shallow write before the authoritative workspace state can preserve siblings. */
   columnsPending?: boolean
 }) {
-  const [query, setQuery] = React.useState('')
+  const [filters, setFilters] = React.useState<TaskListFilters>(NO_TASK_FILTERS)
+  // Selected row ids. Kept raw — never pruned by an effect — because every reader intersects it
+  // with what is on screen (`selectionSummary`), so an id whose row left the view is already
+  // inert. An effect that pruned it would be a second source of truth racing the first.
+  const [selected, setSelected] = React.useState<ReadonlySet<string>>(NO_SELECTION)
   const all = runs ?? []
   const counts = listCounts(all)
-  const visible = sortRuns(filterRuns(all, query), view)
+  // In-view (Active or Archived) and sorted, before the filter bar narrows it: the status facet's
+  // options come from here, so it offers the statuses of the list you are LOOKING at rather than
+  // the ones your own ticks have left.
+  const inView = sortRuns(all, view)
+  const visible = filterTaskList(inView, filters)
   // Positions come from the full list, never the filtered one: a search must not renumber the
   // queue the engine is actually going to drain.
   const positions = queuePositions(all)
-  const strips = compareGroups(filterRuns(all, query), view)
+  const strips = compareGroups(filterTaskList(all, filters), view)
   const finished = finishedRunCount(all)
   const columns = taskColumnsForCapabilities({ tokens: showTokens, cost: showCost })
   const unread = unreadDoneCount(all)
+  const statusOptions = statusFacetOptions(inView, filters)
+  const selection = selectionSummary(visible, selected)
+
+  const setQuery = (query: string) => setFilters((current) => ({ ...current, query }))
+  const clearFilters = () => setFilters(NO_TASK_FILTERS)
+  // The bar acts, then empties itself: the rows it changed are usually leaving the view (an
+  // archive is the motivating case), and a selection left pointing at them would invite a second
+  // click that does nothing. The receipt is the route's toast, not a lingering tick.
+  const runBulkAction = (action: BulkActionId) => {
+    const targets = selection.targets[action]
+    if (targets.length === 0) return
+    onBulkAction(action, targets)
+    setSelected(NO_SELECTION)
+  }
 
   return (
     <div data-route="tasks" className="flex min-h-full flex-col">
@@ -171,6 +224,32 @@ export function TasksOverview({
             Archive finished
           </Button>
         ) : null}
+        {/* Status, as the same searchable multi-select pill the global Tasks page uses — one
+            filter grammar across both surfaces. Multi-select rather than a `<select>` because
+            "what is waiting on me OR failed?" is the question people actually ask, and each
+            option carries the number of rows it would leave. */}
+        <FacetFilter
+          slot="status"
+          label="Status"
+          selected={filters.statuses}
+          onToggle={(value) => setFilters((current) => ({ ...current, statuses: toggleStatusFilter(current.statuses, value) }))}
+          onClear={() => setFilters((current) => ({ ...current, statuses: [] }))}
+          options={statusOptions}
+          searchPlaceholder="Search statuses…"
+          emptyLabel="No tasks to filter"
+        />
+        {hasActiveTaskFilters(filters) ? (
+          <button
+            type="button"
+            data-action="clear-filters"
+            onClick={clearFilters}
+            className="inline-flex h-7 items-center gap-1 rounded-full px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <XIcon className="size-3" aria-hidden="true" />
+            Clear
+            {` (${activeFilterCount(filters)})`}
+          </button>
+        ) : null}
         <div className="relative w-60">
           <SearchIcon
             className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-soft-foreground"
@@ -178,9 +257,13 @@ export function TasksOverview({
           />
           <input
             type="text"
-            value={query}
+            value={filters.query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search tasks…"
+            // The number is advertised because it is not guessable: a box that says only
+            // "Search tasks" is not a box anyone pastes a PR number into. (Spelled in words
+            // rather than as a `#nnn` example — a three-digit one reads as a hex colour to the
+            // design guardian, and it is not worth an exception.)
+            placeholder="Search tasks, or a PR/issue number…"
             aria-label="Search tasks"
             className="h-9 w-full rounded-md border border-input bg-card pr-3 pl-8 text-[13px] text-foreground outline-none placeholder:text-soft-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           />
@@ -188,8 +271,17 @@ export function TasksOverview({
       </header>
 
       <div className="flex flex-1 flex-col p-3 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-5 md:pb-5">
+        {selection.count > 0 ? (
+          <BulkActionBar
+            selection={selection}
+            pending={bulkPending}
+            onAction={runBulkAction}
+            onClear={() => setSelected(NO_SELECTION)}
+          />
+        ) : null}
+
         {runs === undefined ? null : visible.length === 0 ? (
-          <TasksEmptyState view={view} query={query} />
+          <TasksEmptyState view={view} filters={filters} />
         ) : (
           <>
             {/* ≥md: the table. */}
@@ -200,6 +292,10 @@ export function TasksOverview({
               <TooltipProvider>
                 <table className="w-full border-collapse">
                   <colgroup>
+                    {/* The selection column is outside the foldable registry on purpose: it is
+                        not a column of run DATA, it is the handle for editing the rows, and it
+                        must never be folded away with the metric columns. */}
+                    <col data-column-id="select" style={{ width: '38px' }} />
                     {columns.map((column) => {
                       const expanded = isColumnExpanded(column.id, expandedColumns)
                       return (
@@ -214,6 +310,20 @@ export function TasksOverview({
                   </colgroup>
                   <thead>
                     <tr>
+                      <th
+                        scope="col"
+                        data-column-id="select"
+                        className="h-[38px] border-b border-border px-2.5 text-left first:pl-4"
+                      >
+                        <SelectionCheckbox
+                          slot="select-all"
+                          state={selection.state}
+                          // "Select all" over the FILTERED list, always — never the rows a
+                          // filter is hiding. See `toggleAllVisible`.
+                          label={selection.state === 'none' ? 'Select all tasks' : 'Clear selection'}
+                          onToggle={() => setSelected((current) => toggleAllVisible(visible, current))}
+                        />
+                      </th>
                       {columns.map((column) => (
                         <TaskColumnHeader
                           key={column.id}
@@ -235,6 +345,8 @@ export function TasksOverview({
                         now={now}
                         columns={columns}
                         expandedColumns={expandedColumns}
+                        selected={selected.has(run.id)}
+                        onToggleSelected={() => setSelected((current) => toggleSelected(current, run.id))}
                       />
                     ))}
                   </tbody>
@@ -252,6 +364,8 @@ export function TasksOverview({
                   now={now}
                   showTokens={showTokens}
                   showCost={showCost}
+                  selected={selected.has(run.id)}
+                  onToggleSelected={() => setSelected((current) => toggleSelected(current, run.id))}
                 />
               ))}
             </div>
@@ -297,9 +411,12 @@ export function TasksOverview({
  * (spec: textures on hero/empty surfaces only); a missed search or an unswept archive is just
  * a fact, so those stay flat. `heading="h2"` because the page's h1 is the header's "Tasks".
  */
-function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
-  const needle = query.trim()
-  const kind = needle ? 'search-miss' : view === 'archived' ? 'archive' : 'no-tasks'
+function TasksEmptyState({ view, filters }: { view: ListView; filters: TaskListFilters }) {
+  const needle = filters.query.trim()
+  // A status tick empties the list exactly as a missed search does, and for the same reason —
+  // something the reader turned on. Reporting "Nothing archived yet" over a filtered-away archive
+  // would blame the list for the filter.
+  const kind = hasActiveTaskFilters(filters) ? 'search-miss' : view === 'archived' ? 'archive' : 'no-tasks'
   return (
     <div data-slot="tasks-empty" data-empty-kind={kind} className="flex flex-1 flex-col">
       {kind === 'search-miss' ? (
@@ -308,7 +425,7 @@ function TasksEmptyState({ view, query }: { view: ListView; query: string }) {
           icon={<SearchXIcon />}
           tone="neutral"
           title="No matching tasks"
-          subtitle={`No tasks match “${needle}”.`}
+          subtitle={needle ? `No tasks match “${needle}”.` : 'No tasks match the filters you picked.'}
         />
       ) : kind === 'archive' ? (
         <CenteredState
@@ -371,6 +488,137 @@ function OverviewTab({
       {children}
       {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
     </button>
+  )
+}
+
+/**
+ * One tick box — a row's, or the header's tri-state one.
+ *
+ * A native `<input type="checkbox">` rather than a styled `<div role="checkbox">`, because the
+ * row it sits in already exempts real controls from its click-to-navigate handler (`closest('a,
+ * button, input')`), and because a native box is the one that keyboards, screen readers and
+ * shift-click already understand. `indeterminate` is a DOM property with no attribute, so it is
+ * set through the ref — the one thing React cannot express declaratively here.
+ */
+function SelectionCheckbox({
+  state,
+  label,
+  onToggle,
+  slot = 'select-task',
+  className,
+}: {
+  state: HeaderSelectionState
+  label: string
+  onToggle: () => void
+  slot?: string
+  className?: string
+}) {
+  return (
+    <input
+      type="checkbox"
+      data-slot={slot}
+      data-state={state}
+      checked={state === 'all'}
+      ref={(element) => {
+        if (element) element.indeterminate = state === 'some'
+      }}
+      onChange={onToggle}
+      aria-label={label}
+      title={label}
+      className={cn('size-3.5 shrink-0 cursor-pointer accent-violet', className)}
+    />
+  )
+}
+
+/** What each bulk action is called, and what it looks like. One table so the bar renders from
+ *  `BULK_ACTION_IDS` and a fifth action is an entry here plus a case in the route's fan-out. */
+const BULK_ACTIONS: Record<BulkActionId, { label: string; icon: React.ReactNode; nothing: string }> = {
+  archive: {
+    label: 'Archive',
+    icon: <ArchiveIcon className="size-3.5" aria-hidden="true" />,
+    nothing: 'Nothing selected can be archived — only finished tasks can be.',
+  },
+  restore: {
+    label: 'Restore',
+    icon: <ArchiveRestoreIcon className="size-3.5" aria-hidden="true" />,
+    nothing: 'Nothing selected is archived.',
+  },
+  read: {
+    label: 'Mark read',
+    icon: <EyeIcon className="size-3.5" aria-hidden="true" />,
+    nothing: 'Nothing selected is unread.',
+  },
+  unread: {
+    label: 'Mark unread',
+    icon: <EyeOffIcon className="size-3.5" aria-hidden="true" />,
+    nothing: 'Nothing selected can go back to unread.',
+  },
+}
+
+/**
+ * The multi-edit bar: what a selection can be done to, and to how many rows.
+ *
+ * It appears only with a selection and offers all four actions every time, DISABLED rather than
+ * hidden when the selection has nothing for them. A bar whose buttons appear and vanish as rows
+ * are ticked is a bar you cannot aim at, and the disabled state carries the reason in its title —
+ * "only finished tasks can be archived" is the answer to why the button will not press, and it is
+ * better said than left to be guessed.
+ *
+ * Each count is the number of rows the action would REALLY change, not the size of the selection:
+ * archiving five rows of which two are already archived is a three-row action and says three.
+ */
+function BulkActionBar({
+  selection,
+  pending,
+  onAction,
+  onClear,
+}: {
+  selection: SelectionSummary
+  pending: boolean
+  onAction: (action: BulkActionId) => void
+  onClear: () => void
+}) {
+  return (
+    <div
+      data-slot="bulk-action-bar"
+      role="group"
+      aria-label="Edit selected tasks"
+      className="mb-3 flex flex-wrap items-center gap-1.5 rounded-lg border border-violet/40 bg-violet/10 px-3 py-2 shadow-xs"
+    >
+      <span data-slot="bulk-selection-count" className="text-[12.5px] font-semibold text-foreground tabular-nums">
+        {selection.count} selected
+      </span>
+      <span className="mx-1 h-5 w-px bg-border" aria-hidden="true" />
+      {BULK_ACTION_IDS.map((id) => {
+        const action = BULK_ACTIONS[id]
+        const count = selection.targets[id].length
+        return (
+          <Button
+            key={id}
+            type="button"
+            variant="outline"
+            size="sm"
+            data-action={`bulk-${id}`}
+            disabled={count === 0 || pending}
+            title={count === 0 ? action.nothing : `${action.label} ${count} task${count === 1 ? '' : 's'}`}
+            onClick={() => onAction(id)}
+          >
+            {action.icon}
+            {action.label}
+            {count > 0 ? <span className="font-mono text-[11px] tabular-nums">{count}</span> : null}
+          </Button>
+        )
+      })}
+      <button
+        type="button"
+        data-action="bulk-clear"
+        onClick={onClear}
+        className="ml-auto inline-flex h-7 items-center gap-1 rounded-full px-2 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
+      >
+        <XIcon className="size-3" aria-hidden="true" />
+        Clear selection
+      </button>
+    </div>
   )
 }
 
@@ -499,6 +747,8 @@ function TableRow({
   now,
   columns,
   expandedColumns,
+  selected,
+  onToggleSelected,
 }: {
   run: RunRecord
   queuePosition: number | null
@@ -506,6 +756,8 @@ function TableRow({
   now: number
   columns: readonly TaskColumnDefinition[]
   expandedColumns: NormalizedExpandedColumns
+  selected: boolean
+  onToggleSelected: () => void
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -518,12 +770,20 @@ function TableRow({
     <tr
       data-slot="task-table-row"
       data-run-id={run.id}
+      data-selected={selected || undefined}
       onClick={(event) => {
         if ((event.target as Element).closest('a, button, input')) return
         navigate(to)
       }}
-      className="group/row cursor-pointer hover:bg-muted"
+      className={cn('group/row cursor-pointer hover:bg-muted', selected && 'bg-violet/5')}
     >
+      <td data-column-id="select" className={TD_BASE}>
+        <SelectionCheckbox
+          state={selected ? 'all' : 'none'}
+          label={`Select ${runTitle(run)}`}
+          onToggle={onToggleSelected}
+        />
+      </td>
       {columns.map((column) => {
         if (column.id === 'memory') return null
         if (column.id === 'cpu') {
@@ -789,12 +1049,16 @@ function TaskCard({
   now,
   showTokens,
   showCost,
+  selected,
+  onToggleSelected,
 }: {
   run: RunRecord
   queuePosition: number | null
   now: number
   showTokens: boolean
   showCost: boolean
+  selected: boolean
+  onToggleSelected: () => void
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -811,13 +1075,25 @@ function TaskCard({
     <div
       data-slot="task-card"
       data-run-id={run.id}
+      data-selected={selected || undefined}
       onClick={(event) => {
-        if ((event.target as Element).closest('a')) return
+        // `input` joins the exemption list now that a card carries a tick box: without it the
+        // first tap on the box would select the row AND navigate away from the list it belongs to.
+        if ((event.target as Element).closest('a, button, input')) return
         navigate(to)
       }}
-      className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
+      className={cn(
+        'cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs',
+        selected && 'border-violet/40 bg-violet/5',
+      )}
     >
       <div className="flex items-start gap-2.5">
+        <SelectionCheckbox
+          state={selected ? 'all' : 'none'}
+          label={`Select ${runTitle(run)}`}
+          onToggle={onToggleSelected}
+          className="mt-1"
+        />
         <Pill dot={attention.tone} pulse={attention.pulse} className="mt-px shrink-0" title={scheduled?.title}>
           {attention.label}
           {scheduled ? <span className="tabular-nums">{scheduled.label}</span> : null}
@@ -910,6 +1186,27 @@ function BranchChip({ branch }: { branch: string }) {
   )
 }
 
+/** One row's half of a bulk edit. The switch is exhaustive over `BulkActionId`, so a fifth action
+ *  is a compile error here rather than a button that quietly does nothing. */
+function bulkRequest(action: BulkActionId, id: string): Promise<unknown> {
+  switch (action) {
+    case 'archive':
+      return archiveRun(id, true)
+    case 'restore':
+      return archiveRun(id, false)
+    case 'read':
+      return markRunSeen(id)
+    case 'unread':
+      return markRunUnseen(id)
+  }
+}
+
+/** A rejected fan-out request, as a sentence. `allSettled` hands back `unknown`, and the client's
+ *  rejections are `Error`s carrying the server's one-line reason. */
+function errorMessage(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason)
+}
+
 /**
  * The overview wired to live data: `useRuns()` (kept fresh by the global SSE stream), the shared
  * Active/Archived context (the sidebar's tabs and these are one state), and the archive-finished
@@ -940,6 +1237,29 @@ export function TasksOverviewRoute() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
+  // The multi-edit fan-out. There is no batch endpoint and this run does not add one: every
+  // action already has a per-run route, the server is on loopback, and a selection is tens of
+  // rows rather than thousands. `allSettled`, not `all`, is the whole point — one refused write
+  // must not cancel the rest, and the receipt has to be able to say "3 of 5".
+  const bulk = useMutation({
+    mutationFn: async ({ action, runs }: { action: BulkActionId; runs: readonly RunRecord[] }) => {
+      const results = await Promise.allSettled(runs.map((run) => bulkRequest(action, run.id)))
+      const failures = results.flatMap((result) =>
+        result.status === 'rejected' ? [errorMessage(result.reason)] : [],
+      )
+      return { total: runs.length, failures }
+    },
+    onSuccess: ({ total, failures }, { action }) => {
+      toast(bulkResultMessage(action, total, failures), failures.length > 0 ? { tone: 'danger' } : undefined)
+    },
+    // Reached only if the fan-out itself threw, which `allSettled` makes unlikely — but a toast
+    // beats a silent no-op if it ever does.
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+    // Always, both halves: the stream has probably patched each run already, but the endpoint's
+    // answer is the truth — and after a partial failure the cache is the only place that still
+    // believes every row changed.
+    onSettled: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+  })
   const now = useNow(30_000)
   const taskTableColumns = useTaskTableColumns()
   // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
@@ -969,6 +1289,8 @@ export function TasksOverviewRoute() {
         onArchiveFinished={() => archive.mutate()}
         onMarkAllRead={() => markAllRead.mutate()}
         onRename={(id, title) => rename.mutate({ id, title })}
+        onBulkAction={(action, selected) => bulk.mutate({ action, runs: selected })}
+        bulkPending={bulk.isPending}
         now={now}
         showTokens={metricVisibility.tokens}
         showCost={metricVisibility.cost}
