@@ -48,7 +48,15 @@ export function AddProjectDialog({
   // Registry roots are realpath'd server-side; a listed `path` may be a symlink's own spelling,
   // so this match is best-effort — it decorates a row, it never blocks one. (A duplicate is not
   // an error anyway: the 409 carries the existing entry and we navigate to it.)
-  const registered = new Set((projects.data?.projects ?? []).map((project) => project.root))
+  //
+  // The `unregistered` row is filtered out: the list also carries the folder this server was
+  // started in when it is NOT registered, and badging that one "already added" would contradict
+  // Settings → Projects, which offers to add the very same folder.
+  const registered = new Set(
+    (projects.data?.projects ?? [])
+      .filter((project) => !project.unregistered)
+      .map((project) => project.root),
+  )
 
   const enter = (dir: string) => {
     setPath(dir)

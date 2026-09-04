@@ -170,7 +170,7 @@ never shadow the alias or a route.
 cezar serve (in /Users/x/proj-b)
   ├─ runMigrations()                       # ~/.cezar schemaVersion → latest (idempotent)
   ├─ ws = loadWorkspaceConfig()            # degrade: unreadable → in-memory defaults
-  ├─ boot = registerProject(cwd-repoRoot)  # appends if unknown; bumps lastOpenedAt
+  ├─ boot = registerProject(cwd-repoRoot)  # only while the registry is empty (or the root is known); bumps lastOpenedAt
   ├─ contexts = ProjectContexts(ws)        # lazy — nothing instantiated yet
   ├─ context(boot.id)                      # boot project eagerly: recover(), pruneOrphans()
   ├─ startServer({contexts, bootId, …})    # one port, loopback, as today
@@ -183,6 +183,34 @@ serves the folder, it just doesn't pollute the registry) when the resolved
 worktrees and nested `cez` invocations — the same nesting reality the
 `CEZ_TODOS_FILE=''` guard in `run.ts:294-305` acknowledges), or the user's
 home directory itself. Headless `cezar run` applies the same guards.
+
+**Seed once** — boot registration is additionally suppressed once the registry
+holds ANY project and the boot root is not one of them. Booting in a folder is
+an implicit "this is my project" only for the very first run; after that the
+cwd is where the cockpit was *opened from*, and adding a project stays an
+explicit gesture (`cezar projects add`, the cockpit's Add project dialog —
+both keep using the path-shape guard alone). An unregistered boot root is
+served exactly as a suppressed one is: `resolveBootProject` falls back to its
+would-be slug and `/p/<slug>/` binds to the boot context; only the registry
+file stays untouched. `CEZ_SINGLE_PROJECT=1` is exempt — there the launch
+context IS the project and its identity is read back out of the registry.
+
+Because that state is now ORDINARY rather than an edge case, two things follow
+and are load-bearing:
+
+- **`GET /api/projects` lists the boot folder anyway**, flagged
+  `unregistered: true` (see API Contracts). Registry-only, the cockpit would
+  have no row, no `lastLocation` entry and no way back to the folder it is
+  serving — the repo chip would name a project the navigation could not open.
+  Settings → Projects renders that row with **Add project** instead of Remove
+  and the per-project cap, the sidebar marks it "not saved", and everything
+  else treats it as a project.
+- **The boot slug is sticky for the process**, and reserved against other
+  registrations. It is a live URL derived from a file the user edits while the
+  server runs; recomputing it per call let an unrelated `Add project` with the
+  same basename take the slug and move the boot project to `<slug>-2` under an
+  open tab. The registry lookup still wins when the boot root itself is
+  registered, so adding the served folder adopts its real id.
 
 Other registered projects get their `ProjectContext` on first API touch
 (sidebar expand, deep link). Recovery/pruning for a project runs when its
@@ -254,8 +282,9 @@ and acquires slots normally.
 House rules apply verbatim: every field optional/defaulted (`.catch`),
 `.passthrough()` so newer keys survive an older writer, `.max()` bounds on
 strings, atomic tmp+rename `0600`, corrupt file → in-memory defaults plus a
-one-line boot warning (the registry rebuilds as projects are opened — losing
-it is an inconvenience, not data loss).
+one-line boot warning (losing it costs no work — the `config.json.bak`
+snapshot restores it on load, and what it holds is a list of roots, never
+anything from inside a repo).
 
 ### `~/.cezar/ui-state.json` (new — global GUI state)
 
@@ -339,7 +368,7 @@ difference until they add a second project.
 
 | Route | Shape | Notes |
 |---|---|---|
-| `GET /api/projects` | `{ projects: [{id,name,root,branch?,status,source,lastOpenedAt}], bootProject: string, projectsDir: string }` | `status ∈ 'ok' \| 'missing' \| 'not-git'` (`not-git` is fully usable — same degraded single-queue mode as today; only `missing` blocks). Status/branch probes are cached with a short TTL and refreshed async — the sidebar load must not shell `git` N times per render. Never 404s. |
+| `GET /api/projects` | `{ projects: [{id,name,root,branch?,status,source,lastOpenedAt,unregistered?}], bootProject: string, projectsDir: string }` | `status ∈ 'ok' \| 'missing' \| 'not-git'` (`not-git` is fully usable — same degraded single-queue mode as today; only `missing` blocks). Status/branch probes are cached with a short TTL and refreshed async — the sidebar load must not shell `git` N times per render. Never 404s. When the registry does not hold the boot root, the list LEADS with a synthetic `unregistered: true` entry for it (see "Seed once"): the server serves that folder, so the cockpit must be able to reach it. The flag is what keeps registry-editing affordances (Remove, per-project `maxParallel`) off a row that has no registry entry to edit — Settings offers Add project instead. Never written back; the row disappears the moment the folder is registered. |
 | `POST /api/projects` | `{ root } → { project }` | Registers an existing folder (folder-browser flow). 400 non-absolute/nonexistent path; 409 already registered (returns the existing entry). |
 | `POST /api/projects/checkout` | `{ url, name? } → { project }` \| `{ error }` | `gh repo clone <url> <projectsDir>/<name>`; zod-validates `url` as a GitHub repo URL/`owner/name`; 409 target dir exists; degrades to `{ error, reason }` when `gh` is unavailable (mirrors `github.ts` degradation). Long-running: answers when the clone finishes; the dialog shows progress from `checkout-progress` SSE events. |
 | `DELETE /api/projects/:projectId` | `{ ok: true }` | Unregisters only. 409 while the project has running tasks. Never deletes files. |
@@ -516,7 +545,7 @@ bookmarklets keep working via the redirect (boot project).
 | Scenario | Behavior |
 |---|---|
 | `~/.cezar` unwritable / read-only home | Boot proceeds with an in-memory single-project workspace (boot repo only); one boot-time warning. Nothing requires the file. |
-| Corrupt `~/.cezar/config.json` | Degrade to defaults + warning; registry rebuilds as projects are opened. Never crash, never overwrite the corrupt file until the next successful merge-write. |
+| Corrupt `~/.cezar/config.json` | Restore from `config.json.bak` when it still holds projects, else degrade to defaults + warning (rebuild with `cezar projects add` — opening a project no longer re-registers it). Never crash, never overwrite the corrupt file until the next successful merge-write. |
 | Registered project folder deleted/moved | `status: 'missing'`: greyed in sidebar, panes 409, remove offered. Never auto-removed. |
 | Project registered twice (symlink, trailing slash) | Realpath-normalized on registration → dedupe to the existing entry. |
 | `cezar` invoked inside a task worktree / nested `cez` / `$HOME` | Registration guard suppresses the registry write; the process still serves that folder normally. |

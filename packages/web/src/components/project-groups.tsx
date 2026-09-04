@@ -111,8 +111,15 @@ export function ProjectGroups({
 
   // Most-recently-opened first, per the spec. Sorted here rather than trusted from the wire so
   // the order is a property of the sidebar, not of whichever route last touched the registry.
+  // An UNREGISTERED boot folder leads: it has no `lastOpenedAt` to sort by (it was never
+  // written down), and it is the folder the user just started cezar in — burying it under the
+  // saved projects would repeat the disappearance this row exists to fix.
   const ordered = React.useMemo(
-    () => [...projects].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt)),
+    () =>
+      [...projects].sort((a, b) => {
+        if (Boolean(a.unregistered) !== Boolean(b.unregistered)) return a.unregistered ? -1 : 1
+        return b.lastOpenedAt.localeCompare(a.lastOpenedAt)
+      }),
     [projects],
   )
 
@@ -264,6 +271,18 @@ function ProjectGroup({
           aria-hidden="true"
         />
         <span className="truncate">{project.name}</span>
+        {project.unregistered ? (
+          // Says what the row is without pretending it is a problem: cezar is serving this
+          // folder, it just is not in the saved list. Global settings → Projects has the
+          // one-click Add; repeating the button here would put a registry write in the nav.
+          <span
+            data-slot="project-unregistered"
+            title="cezar is serving this folder — it is not in your saved projects. Add it in Global settings → Projects."
+            className="shrink-0 rounded-full bg-muted px-[7px] py-px text-[10px] font-medium text-soft-foreground"
+          >
+            not saved
+          </span>
+        ) : null}
         {waiting ? (
           <span
             data-slot="project-attention"

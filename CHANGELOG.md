@@ -15,6 +15,19 @@
   `POST /api/v1/runs/:id/continue` gained an optional `agentProfile`; an id that no longer exists
   is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
 
+## 🔧 Changed
+- **Starting cezar in a folder only registers it while you have no projects yet.** The first run
+  still seeds the registry from the current repo, and booting a project you already have keeps
+  bumping it to the top of the sidebar — but once anything is registered, running `cezar` somewhere
+  else serves that folder without quietly adding it to your project list. Run it from a worktree or
+  a scratch checkout as often as you like; the list stays the one you curated. The folder you
+  started in is still fully usable: it leads the sidebar marked **not saved**, its tasks and panes
+  work exactly as a saved project's do, and both **Global settings → Projects** and the
+  project's own **Settings → General** show it as *not registered* with a one-click **Add project** —
+  the one place without Remove and a per-project task cap, because there is no registry entry to
+  edit. Adding is otherwise unchanged: `cezar projects add <dir>` or the **+** button.
+  `CEZ_SINGLE_PROJECT=1` deployments are exempt, since there the launch folder *is* the project.
+
 ## 🐛 Fixes
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
   answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
@@ -67,6 +80,18 @@
   reports the boot project's repository, so it refused to guess rather than point at the wrong
   repo (#526). It now reads the project registry's own per-project repository — the same source
   All tasks uses — and falls back to health only for the boot project. (#901)
+- 🐛 **Automations in the folder cezar is serving keep running when that folder is not one of your
+  saved projects.** The workspace scheduler compares its live handles against the project registry
+  and drops anything the registry does not name — which the folder you started cezar in is not,
+  now that starting somewhere new no longer registers it. Its automations stayed listed and
+  switched on in the cockpit while nothing polled GitHub for them, and nothing said so. The boot
+  project is now pinned against that sweep: cezar is demonstrably serving it, registered or not.
+  And saving that folder with **Add project** no longer splits its automations in two: the folder
+  briefly answered to both the boot alias and its new registry slug, which opened two independent
+  handles on one `.ai/cezar` — so switching an automation off in the cockpit left the copy the
+  scheduler polls untouched, and it went on launching runs until you restarted cezar. Automation
+  state is now keyed by folder, so a folder addressed twice is still one automation set, scheduled
+  once. Only affects deployments that opted into automations with `CEZ_AUTOMATIONS=1`. (#872)
 
 # 0.10.0 (2026-08-14)
 

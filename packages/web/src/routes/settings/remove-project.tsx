@@ -20,7 +20,9 @@ import { toast } from '@/components/ui/toaster'
  * so the wording is load-bearing and belongs in ONE file — the confirm title, the body, the path
  * it names and the success toast all insist on the same fact: this DEREGISTERS.
  * `DELETE /api/v1/projects/:id` is a registry filter and touches nothing under the root (see the
- * route), and opening the folder again re-registers it with its tasks and worktrees intact.
+ * route), and adding the folder back later finds its tasks and worktrees intact. It does NOT come
+ * back on its own: boot registration is seed-once (`shouldAutoRegisterProject`), so serving the
+ * folder again never re-registers it.
  *
  * The refusals stay the server's: a project with running tasks and the boot project both answer
  * 409, whose message is toasted verbatim. Callers that can know about the boot project up front
@@ -65,7 +67,7 @@ export function RemoveProjectDialog({
           <AlertDialogDescription>
             This only unregisters the project — <strong>nothing on disk is deleted</strong>. The
             folder, its git history and its task history all stay exactly where they are, and
-            opening it again re-registers it with everything intact.
+            adding it back later finds everything intact.
             <span className="mt-1 block truncate font-mono text-[11px] text-foreground" title={project?.root}>
               {project?.root}
             </span>

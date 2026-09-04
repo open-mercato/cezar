@@ -306,6 +306,41 @@ describe('ProjectGroups', () => {
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain('/api/v1/p/gone/runs')
   })
 
+  it('leads with the unregistered boot folder and marks it, without limiting what it can do', async () => {
+    serve({ '/api/v1/workspace/ui-state': {}, '/api/v1/p/scratch/runs': [] })
+    renderGroups(
+      [
+        // Saved projects have timestamps; the folder cezar was started in has none,
+        // so the plain lastOpenedAt sort would bury it at the bottom.
+        project(),
+        project({
+          id: 'scratch',
+          name: 'scratch',
+          addedAt: '',
+          lastOpenedAt: '',
+          unregistered: true,
+        }),
+      ],
+      '/p/scratch/',
+    )
+
+    await waitFor(() => expect(group('scratch')).not.toBeNull())
+    expect(
+      Array.from(document.querySelectorAll('[data-slot="project-group"]')).map((el) =>
+        el.getAttribute('data-project'),
+      ),
+    ).toEqual(['scratch', 'cezar'])
+    expect(group('scratch').querySelector('[data-slot="project-unregistered"]')?.textContent).toBe(
+      'not saved',
+    )
+    // Flagged, not crippled: this is the project the user is working in, and its
+    // group expands and links exactly like a saved one.
+    expect(header('scratch').getAttribute('aria-expanded')).toBe('true')
+    expect(
+      within(group('scratch')).getByRole('navigation', { name: 'scratch navigation' }),
+    ).not.toBeNull()
+  })
+
   /**
    * A `/p/` prefix is the ONLY thing that makes a project the one you are standing in. On the
    * global pages — `/tasks` and `/settings/global` — there is no such prefix and no selected

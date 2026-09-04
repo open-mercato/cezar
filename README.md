@@ -334,11 +334,20 @@ a GitHub page.
 ## Multiple projects, one cockpit
 
 One `cezar serve` hosts **every repo you work in**, not just the one you started
-it in. Each repo cezar boots in registers itself in a per-user registry at
-`~/.cezar/config.json` — the workspace file that also holds the global knobs
+it in. Projects live in a per-user registry at `~/.cezar/config.json` — the
+workspace file that also holds the global knobs
 (the parallel cap, the memory ceiling, the browse root, and the checkout root). Nothing is added to
 the repo: per-project state stays exactly where it was, in that repo's
 `.ai/cezar/`.
+
+**Your first run registers the repo you start it in** — that is the whole setup.
+After that the registry is yours to curate: starting cezar somewhere else serves
+that folder as usual (its own tasks, its own `.ai/cezar/`) but does not add it to
+the list behind your back. It shows up at the top of the sidebar marked **not
+saved**, and **Settings → Projects** lists it as *not registered* with an
+**Add project** button — so the folder you launched in is always one click from
+being kept, and never kept without the click. `cezar projects add` does the same
+from a terminal.
 
 Every view is project-scoped:
 
@@ -363,8 +372,8 @@ and task list — and the new-task composer names the project it will run in.
 
 Removing a project (**Settings → Projects**) drops the registry entry only — the
 repo and its `.ai/cezar/` are never touched, so re-adding it later finds all its
-tasks intact. The project cezar is currently serving can't be removed: it
-re-registers itself at the next start.
+tasks intact. The project cezar is currently serving can't be removed from the
+cockpit — stop the server and use `cezar projects remove <id>` instead.
 
 **From the terminal** — the same registry, no cockpit required (handy over ssh):
 

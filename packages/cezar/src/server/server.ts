@@ -1098,12 +1098,33 @@ export function createApp(deps: ServerDeps) {
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
   // and plumbs its registry id in via `deps.bootProjectId`. Legacy callers and
   // tests construct the app without one — then it is derived lazily from the
-  // registry by realpath and cached on a hit. A boot repo that is legitimately
-  // unregistered (task worktree, `$HOME` itself, unreadable workspace) falls
-  // back to its would-be slug, so `bootProject` always names the repo this
-  // server was started in. Strictly non-fatal, zero-config: every failure path
-  // degrades to the slug fallback, never an error.
+  // registry by realpath and cached on a hit. A boot repo that is not in the
+  // registry — a task worktree, `$HOME`, an unreadable workspace, or (since
+  // boot registration became seed-once) any folder started in while the user
+  // already has projects — falls back to its would-be slug, so `bootProject`
+  // always names the repo this server was started in. Strictly non-fatal,
+  // zero-config: every failure path degrades to the slug fallback, never an
+  // error.
+  //
+  // BOTH answers are sticky for the process. The registry hit caches for the
+  // obvious reason; the FALLBACK caches because it is a live URL the cockpit
+  // is showing, and it is derived from a file the user edits while the server
+  // runs — recomputing it per call let an unrelated `Add project` with the
+  // same basename take the slug and silently move the boot project to
+  // `<slug>-2` under an open tab. The registry lookup still runs first, so the
+  // day the boot folder IS registered (its own "Add project"), its real id
+  // takes over from the fallback rather than the two disagreeing; the reserved
+  // slug below is what keeps those two the same string.
+  //
+  // Sticky, but never at the cost of correctness: a pinned fallback that some
+  // OTHER root has since taken (an out-of-band `cezar projects add ~/other/beta`
+  // from a second process, where the reservation cannot reach) is dropped and
+  // re-allocated. That gives back the visible `<slug>-2` move instead of
+  // shadowing — the scope resolver binds `/p/<bootProject>/` to the boot
+  // context before it consults the registry, so keeping the stolen slug would
+  // quietly serve the boot folder under a sidebar row pointing somewhere else.
   let bootProjectCache = bootProjectId;
+  let bootProjectFallback: string | undefined;
   const resolveBootProject = async (projects?: readonly WorkspaceProject[]): Promise<string> => {
     if (bootProjectCache) return bootProjectCache;
     let registry = projects ?? [];
@@ -1112,10 +1133,16 @@ export function createApp(deps: ServerDeps) {
       const real = await realpath(bootRoot).catch(() => bootRoot);
       const match = registry.find((p) => p.root === real || p.root === bootRoot);
       if (match) bootProjectCache = match.id;
+      else if (bootProjectFallback !== undefined
+        && registry.some((project) => project.id === bootProjectFallback)) {
+        bootProjectFallback = undefined;
+      }
     } catch {
       // unreadable workspace — fall through to the slug fallback below
     }
-    return bootProjectCache ?? allocateProjectSlug(bootRoot, registry.map((project) => project.id));
+    if (bootProjectCache) return bootProjectCache;
+    bootProjectFallback ??= allocateProjectSlug(bootRoot, registry.map((project) => project.id));
+    return bootProjectFallback;
   };
   // Health's workspace garnish: id+name ONLY — never `root` (#431, see the
   // health route). Reads only the registry file; no per-root status probes,
@@ -2335,11 +2362,39 @@ export function createApp(deps: ServerDeps) {
       } catch {
         // unreadable workspace — degrade to the empty registry + defaults
       }
-      const body: ProjectsResponse = {
-        projects,
-        bootProject: await resolveBootProject(projects),
-        projectsDir,
-      };
+      const bootProject = await resolveBootProject(projects);
+      // The folder this server was started in, when the registry does not hold
+      // it — the ordinary state since boot registration became seed-once, and
+      // before that the task-worktree/`$HOME` case. The server serves it (the
+      // boot context answers `/p/<bootProject>/…` and the unscoped alias), so
+      // leaving it out of this list made it unreachable: no sidebar row, no
+      // `lastLocation` (the cockpit only saves registry-known ids), and the
+      // repo chip naming a folder the navigation could not open. It is marked
+      // `unregistered` rather than merged in silently, so Settings offers to
+      // add it instead of offering Remove/Max parallel it cannot honour.
+      //
+      // Also the honest answer when the workspace is unreadable: nothing IS
+      // registered as far as this process can tell, and a cockpit showing the
+      // one folder it can definitely serve beats an empty sidebar.
+      if (!projects.some((project) => project.id === bootProject)) {
+        const root = await realpath(bootRoot).catch(() => bootRoot);
+        projects = [
+          {
+            id: bootProject,
+            root,
+            name: basename(root),
+            // Never registered, so it has no registry timestamps to report —
+            // empty rather than invented, and Settings renders "—" for them.
+            addedAt: '',
+            lastOpenedAt: '',
+            source: 'local',
+            unregistered: true,
+            ...(await probeProjectStatus(root)),
+          },
+          ...projects,
+        ];
+      }
+      const body: ProjectsResponse = { projects, bootProject, projectsDir };
       return c.json(body);
     })
 
@@ -2374,14 +2429,16 @@ export function createApp(deps: ServerDeps) {
       }
       if (!entry) return c.json({ error: `unknown project: ${id}` }, 404);
 
-      // The boot project is refused, not removed: `cezar serve` re-registers the
-      // repo it was started in on every boot, so "removing" it would undo itself
-      // at the next restart while breaking this session's sidebar in the
-      // meantime. The pane disables the button and says the same thing.
+      // The boot project is refused, not removed: this server is serving that
+      // repo right now, and dropping its registry row would break the session's
+      // own sidebar while the process keeps running out of it. Offline removal
+      // is the honest gesture — `cezar projects remove` has no such refusal
+      // because it runs with no server. The pane disables the button and says
+      // the same thing.
       if (id === bootId) {
         return c.json(
           {
-            error: `cezar is serving ${entry.name} right now — it re-registers itself at every start, so it cannot be removed from here`,
+            error: `cezar is serving ${entry.name} right now — stop it and run \`cezar projects remove ${id}\` to drop the registry entry`,
           },
           409,
         );
@@ -2641,9 +2698,16 @@ export function createApp(deps: ServerDeps) {
     } catch {
       // unreadable workspace — treat as unknown; the write below will fail loudly
     }
+    // The boot project's id is reserved even when the registry does not hold
+    // it: an unregistered boot folder is still being served under that slug,
+    // so letting a same-basename folder take it would point a live URL at the
+    // wrong repo. Reserved against OTHER roots only — adding the boot folder
+    // itself is the one registration that should get exactly that slug.
+    const bootReal = await realpath(bootRoot).catch(() => bootRoot);
+    const reserved = real === bootReal ? [] : [await resolveBootProject()];
     let project: ProjectListEntry;
     try {
-      const entry = await registerProject(requested, source);
+      const entry = await registerProject(requested, source, reserved);
       project = { ...entry, ...(await probeProjectStatus(entry.root)) };
     } catch (err) {
       // e.g. a read-only home — nothing was persisted (atomic tmp+rename).
@@ -5488,8 +5552,15 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
-  const automationCoordinator = new AutomationCoordinator({ listProjects });
   const bootProjectId = deps.bootProjectId ?? 'default';
+  // `pinned`: the boot project is served whether or not the registry holds it,
+  // and since boot registration became seed-once it usually does NOT — then
+  // `bootProjectId` is the `'default'` alias, which `listProjects()` can never
+  // name, so the coordinator's own refresh sweep would evict the store opened
+  // one line below and the boot folder's automations would silently stop being
+  // scheduled while the cockpit kept showing them enabled. Registered or not,
+  // pinning is the same statement: this process is serving that project.
+  const automationCoordinator = new AutomationCoordinator({ listProjects, pinned: bootProjectId });
   const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,

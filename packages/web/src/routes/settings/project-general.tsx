@@ -6,7 +6,7 @@ import type { Capabilities, ProjectListEntry } from '@open-mercato/cezar-api-cli
 import { Button } from '@/components/ui/button'
 import { useActiveProjectId } from '@/lib/project-router'
 import { ProjectFolderField } from './project-location'
-import { MaxParallelSelect, STATUS_LABEL } from './projects-section'
+import { AddBootProjectButton, MaxParallelSelect, STATUS_LABEL } from './projects-section'
 import { RemoveProjectDialog, useProjectRemoval } from './remove-project'
 import { SettingsField } from './settings-field'
 
@@ -77,12 +77,23 @@ export function ProjectGeneral({ capabilities }: { capabilities?: Pick<Capabilit
   // there is nothing true to say about a project that isn't one.
   if (!registry || !project) return null
   // See the header comment: single-project mode keeps the description, drops the management.
-  const managesRegistry = capabilities?.singleProject !== true
+  // An UNREGISTERED boot folder drops it for a different reason: there is no registry row to
+  // manage. `PATCH`/`DELETE /api/v1/projects/:id` would both 404, so the page offers the one
+  // thing that does apply — adding it — and says why it is not there yet.
+  const managesRegistry = capabilities?.singleProject !== true && project.unregistered !== true
 
   return (
     <div data-slot="project-general" className="mx-auto flex w-full max-w-2xl flex-col gap-7">
       <ProjectFolderField />
       <ProjectFacts project={project} canRemove={managesRegistry} />
+      {project.unregistered ? (
+        <SettingsField
+          title="Add to your projects"
+          hint="cezar is serving this folder because you started it here — starting cezar somewhere new never adds it to your project list for you. Adding it keeps it in the sidebar between runs and gives it a registry entry to hold settings like the task cap. Nothing on disk changes either way."
+        >
+          <AddBootProjectButton root={project.root} name={project.name} />
+        </SettingsField>
+      ) : null}
       {managesRegistry ? (
         <>
           <SettingsField
@@ -145,16 +156,29 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
           </>
         ) : null}
 
-        <dt className="text-muted-foreground">Added</dt>
-        <dd className="text-foreground">
-          {fullDate(project.addedAt)}
-          <span className="text-soft-foreground">
-            {project.source === 'checkout' ? ' · cloned from GitHub' : ' · opened locally'}
-          </span>
-        </dd>
+        {/* A folder cezar is serving but has never registered has no registry dates to read out
+            — inventing them (or dashing two rows) would say less than naming the state once. */}
+        {project.unregistered ? (
+          <>
+            <dt className="text-muted-foreground">In your projects</dt>
+            <dd data-slot="project-general-unregistered" className="text-foreground">
+              No — served because cezar was started here
+            </dd>
+          </>
+        ) : (
+          <>
+            <dt className="text-muted-foreground">Added</dt>
+            <dd className="text-foreground">
+              {fullDate(project.addedAt)}
+              <span className="text-soft-foreground">
+                {project.source === 'checkout' ? ' · cloned from GitHub' : ' · opened locally'}
+              </span>
+            </dd>
 
-        <dt className="text-muted-foreground">Last opened</dt>
-        <dd className="text-foreground">{fullDate(project.lastOpenedAt)}</dd>
+            <dt className="text-muted-foreground">Last opened</dt>
+            <dd className="text-foreground">{fullDate(project.lastOpenedAt)}</dd>
+          </>
+        )}
       </dl>
     </SettingsField>
   )
@@ -164,9 +188,11 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
  * Deregister this project — the registry table's per-row Remove, offered where the user already
  * is. Same hook, same dialog, same words (remove-project.tsx).
  *
- * The boot project cannot be removed: cezar is serving it and re-registers it at every start, so
- * the server 409s. Disabling here means the explanation arrives before the click rather than as
- * an error toast after it.
+ * The boot project cannot be removed from the cockpit: this server is serving that folder, and
+ * dropping its registry row would break the session's own sidebar, so the server 409s. Disabling
+ * here means the explanation arrives before the click rather than as an error toast after it —
+ * and the offline gesture (`cezar projects remove`, which has no such refusal) is what the
+ * message points at.
  *
  * On success the URL this page lives at (`/p/<id>/settings`) has just stopped resolving, so the
  * navigation is part of the action, not a nicety. It targets the BOOT project explicitly rather
@@ -183,7 +209,7 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
   return (
     <SettingsField
       title="Remove from workspace"
-      hint="Unregisters this project so it leaves the sidebar and the project list. Nothing on disk is deleted — the folder, its git history and its task history all stay, and opening it again re-registers it."
+      hint="Unregisters this project so it leaves the sidebar and the project list. Nothing on disk is deleted — the folder, its git history and its task history all stay, and adding it back later finds everything intact."
     >
       <div className="flex items-center gap-3">
         <Button
@@ -195,7 +221,7 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           // reach it, then says what "Remove" actually does — the row context that makes a bare
           // "Remove" safe-sounding isn't read out with it.
           aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-          title={isBoot ? 'cezar is serving this project — it re-registers itself at every start' : undefined}
+          title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
           disabled={isBoot || remove.isPending}
           onClick={() => setConfirming(project)}
           className="text-danger"
@@ -204,7 +230,7 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
         </Button>
         {isBoot ? (
           <span data-slot="project-general-remove-boot" className="text-[11px] text-soft-foreground">
-            cezar is serving this project — it re-registers itself at every start.
+            cezar is serving this project — stop cezar and run `cezar projects remove` to drop it.
           </span>
         ) : null}
       </div>

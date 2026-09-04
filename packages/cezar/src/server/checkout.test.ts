@@ -350,6 +350,12 @@ describe('POST /api/v1/projects/checkout', () => {
   const listProjectsViaApi = async (): Promise<ProjectsResponse> =>
     (await (await apiRequest(makeApp(), '/api/v1/projects')).json()) as ProjectsResponse;
 
+  /** The REGISTRY rows. The route also lists the unregistered boot folder (it
+   *  serves it, so the cockpit must be able to reach it — see projects-api.test.ts);
+   *  a checkout assertion is about what the clone did or did not register. */
+  const registeredViaApi = async (): Promise<ProjectsResponse['projects']> =>
+    (await listProjectsViaApi()).projects.filter((project) => !project.unregistered);
+
   /** Point the workspace at a temp checkout root, so nothing lands in `~`. */
   const useCheckoutRoot = () =>
     mergeWriteWorkspaceConfig((config) => {
@@ -409,7 +415,7 @@ describe('POST /api/v1/projects/checkout', () => {
     expect(body.error).toContain('already exists');
     expect(body.project).toBeUndefined();
     expect(readFileSync(join(existing, 'precious.txt'), 'utf8')).toBe('mine');
-    expect((await listProjectsViaApi()).projects).toEqual([]);
+    expect(await registeredViaApi()).toEqual([]);
   });
 
   it('surfaces a clone failure as a readable error, cleans up, and registers nothing', async () => {
@@ -428,7 +434,7 @@ describe('POST /api/v1/projects/checkout', () => {
     // Verbatim: gh's own words are the only ones that can tell the user WHY.
     expect(body.error).toContain('Repository not found');
     expect(existsSync(join(checkoutRoot, 'nope'))).toBe(false);
-    expect((await listProjectsViaApi()).projects).toEqual([]);
+    expect(await registeredViaApi()).toEqual([]);
     expect(seen.some((s) => s.event === 'project-added')).toBe(false);
     expect(seen.at(-1)).toMatchObject({
       event: 'checkout-progress',
@@ -463,7 +469,7 @@ describe('POST /api/v1/projects/checkout', () => {
       expect(typeof body.error).toBe('string');
     }
     expect(existsSync(join(checkoutRoot, 'escape'))).toBe(false);
-    expect((await listProjectsViaApi()).projects).toEqual([]);
+    expect(await registeredViaApi()).toEqual([]);
   });
 
   it('a repo already registered under a DIFFERENT name still clones and registers fresh', async () => {
@@ -473,7 +479,7 @@ describe('POST /api/v1/projects/checkout', () => {
     expect((await post({ url: 'open-mercato/cezar', name: 'one' })).status).toBe(200);
     const second = await post({ url: 'open-mercato/cezar', name: 'two' });
     expect(second.status).toBe(200);
-    expect((await listProjectsViaApi()).projects.map((p) => p.name).sort()).toEqual(['one', 'two']);
+    expect((await registeredViaApi()).map((p) => p.name).sort()).toEqual(['one', 'two']);
   });
 
   it('a checkout that duplicates an ALREADY-registered root answers 409 with the existing entry', async () => {

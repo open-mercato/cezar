@@ -21,10 +21,14 @@ import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.t
  *   survive a round-trip through an older one;
  * - `.max()` bounds on strings (this file is parsed on every boot);
  * - atomic tmp+rename writes with mode `0600` (dir `0700`);
- * - a corrupt file degrades to in-memory defaults plus ONE warning line — the
- *   registry rebuilds as projects are opened, so losing it is an
- *   inconvenience, not data loss. The corrupt file is left in place until the
- *   next successful merge-write replaces it.
+ * - a corrupt file degrades to in-memory defaults plus ONE warning line, and
+ *   is left in place until the next successful merge-write replaces it. What
+ *   makes that survivable is the `config.json.bak` snapshot below, which the
+ *   load path restores from before degrading — NOT re-registration: since boot
+ *   registration became seed-once (`shouldAutoRegisterProject`), opening a
+ *   project no longer writes it back, so a registry lost with its snapshot is
+ *   re-added with `cezar projects add <dir>` (or the cockpit's Add project),
+ *   one gesture per project. Nothing inside any repo is ever at stake.
  */
 
 /** `id` slug rule — mirrors the spec: `^[a-z0-9][a-z0-9-]{0,63}$`. */
@@ -325,7 +329,9 @@ export async function loadWorkspaceConfig(path: string = workspaceConfigPath()):
     return restored;
   }
   if (raw === null) return defaultWorkspaceConfig();
-  console.warn(`[cez] workspace config ${path} is corrupt — using defaults (registry rebuilds)`);
+  console.warn(
+    `[cez] workspace config ${path} is corrupt — using defaults (re-add projects with \`cezar projects add\`)`,
+  );
   return defaultWorkspaceConfig();
 }
 

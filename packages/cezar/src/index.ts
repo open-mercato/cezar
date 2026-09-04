@@ -30,9 +30,8 @@ import {
 } from './server/provider-action-gate.ts';
 import { checkForUpdate } from './update-check.ts';
 import { printSkillsBanner } from './skills-banner.ts';
+import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
-import { runMigrations } from './workspace/migrations.ts';
-import { registerProject, shouldRegisterProject } from './workspace/projects.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 
@@ -165,34 +164,6 @@ async function main(): Promise<void> {
       console.log(HELP);
       process.exitCode = 1;
   }
-}
-
-// ---- workspace boot ----------------------------------------------------------
-
-/**
- * Boot-time workspace bookkeeping (spec 2026-07-20-multi-project-workspace,
- * "Boot flow"): run pending `~/.cezar` migrations first, then register the
- * boot repo in the per-user project registry. Registration is suppressed for
- * task worktrees and `$HOME` itself (`shouldRegisterProject`) — the process
- * still serves those folders normally. Strictly non-fatal: the zero-config
- * law says a broken or read-only home degrades to a smaller cockpit, never a
- * failed boot, so any workspace error logs one warning and boot continues.
- *
- * Returns the boot project's registry id when registration happened —
- * `serveCommand` plumbs it into the server (`ServerDeps.bootProjectId`) so
- * `/api/projects` and `/api/v1/health` can name the boot project without a
- * lookup. Undefined when registration was suppressed or the workspace is
- * unavailable; the server then derives a fallback on its own.
- */
-async function initWorkspace(repoRoot: string): Promise<string | undefined> {
-  try {
-    await runMigrations({ bootRepoRoot: repoRoot });
-    if (await shouldRegisterProject(repoRoot)) return (await registerProject(repoRoot)).id;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[cez] workspace registry unavailable (${message}) — continuing without it`);
-  }
-  return undefined;
 }
 
 // ---- serve -----------------------------------------------------------------

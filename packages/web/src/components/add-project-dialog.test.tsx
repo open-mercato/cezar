@@ -183,6 +183,21 @@ describe('AddProjectDialog', () => {
     expect(document.querySelector('[data-slot="add-project-error"]')).toBeNull()
   })
 
+  it('does not mark the folder cezar is serving but has not registered', async () => {
+    serve({
+      browse: { '': json(PROJECTS) },
+      // What `GET /api/v1/projects` answers when the boot folder is not in the registry: the row
+      // is there so the cockpit can reach it, flagged so nothing reads it as saved. Badging it
+      // "already added" here would contradict Settings, which offers to add the same folder.
+      projects: [project({ id: 'cezar', root: '/home/me/Projects/cezar', unregistered: true })],
+    })
+    renderDialog()
+    await waitFor(() => expect(rows().getByText('cezar')).toBeTruthy())
+    expect(
+      within(rows().getByText('cezar').closest('button') as HTMLElement).queryByText('already added'),
+    ).toBeNull()
+  })
+
   it('shows a register refusal verbatim and stays put', async () => {
     serve({
       browse: { '': json(HOME) },

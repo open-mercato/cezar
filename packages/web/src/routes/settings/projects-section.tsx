@@ -5,6 +5,7 @@ import { useMemo, useRef, useState } from 'react'
 import { putWorkspaceConfig } from '@/api/client'
 import {
   useProjects,
+  useRegisterProject,
   useUpdateProject,
   useWorkspaceConfig,
   workspaceQueryKeys,
@@ -267,8 +268,12 @@ function RegistryTable({
   return (
     <SettingsField
       title="Registered projects"
-      hint={`Every folder cezar has run in, plus the ones added from the GUI. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
+      hint={`The folders you have added, plus the one cezar first ran in. A folder cezar is serving but has not saved is listed as “not registered” with an Add button — starting cezar somewhere new never registers it for you. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
     >
+      {/* Defensive: `GET /api/v1/projects` always names at least the folder this server is
+          serving (as a registry row or as the unregistered one), so today this branch cannot
+          render. Kept because an empty table with headers and no rows would be a worse answer
+          than a sentence if that ever changes. */}
       {registry.projects.length === 0 ? (
         <p data-slot="projects-empty" className="text-[13px] text-soft-foreground">
           No projects registered yet.
@@ -276,7 +281,10 @@ function RegistryTable({
       ) : (
         <div className="overflow-x-auto rounded-md border border-border">
           <table className="w-full border-collapse text-sm">
-            <caption className="sr-only">Projects registered in this workspace</caption>
+            {/* Not "registered": this table also renders the folder cezar is serving without
+                having saved it, whose only action is Add project. A screen-reader user was told
+                the list was registered projects and then met a row that is the opposite. */}
+            <caption className="sr-only">Projects in this workspace</caption>
             {/* Explicit widths rather than letting the browser distribute them by content: Tags
                 is the one cell whose content GROWS with use, and auto-layout kept giving it
                 whatever the fixed-size controls left over — which was not enough for one chip. */}
@@ -354,38 +362,102 @@ function ProjectRow({
         >
           {STATUS_LABEL[project.status]}
         </span>
-        {project.status !== 'missing' ? (
+        {project.unregistered ? (
+          // Where `source` (how it got into the registry) would go — it is not in the registry,
+          // and this is the row's whole story, so it says that instead.
+          <span data-slot="project-unregistered" className="ml-1 text-[11px] text-soft-foreground">
+            · not registered
+          </span>
+        ) : project.status !== 'missing' ? (
           <span className="ml-1 text-[11px] text-soft-foreground">· {project.source}</span>
         ) : null}
       </td>
       <td className="px-3 py-2">
-        <ProjectTagsEditor project={project} vocabulary={vocabulary} />
+        {/* Every registry edit is meaningless for a folder that has no registry row: tags and
+            the per-project cap are stored ON the entry, and Remove would 404. The Add button in
+            the Actions cell is the only thing this row can honestly offer. */}
+        {project.unregistered ? (
+          <span className="text-[12px] text-soft-foreground">—</span>
+        ) : (
+          <ProjectTagsEditor project={project} vocabulary={vocabulary} />
+        )}
       </td>
       <td className="px-3 py-2">
-        <MaxParallelSelect project={project} workspaceMax={workspaceMax} />
+        {project.unregistered ? (
+          <span className="text-[12px] text-soft-foreground">—</span>
+        ) : (
+          <MaxParallelSelect project={project} workspaceMax={workspaceMax} />
+        )}
       </td>
-      <td className="px-3 py-2 tabular-nums text-soft-foreground">{shortDate(project.addedAt)}</td>
+      <td className="px-3 py-2 tabular-nums text-soft-foreground">
+        {project.unregistered ? '—' : shortDate(project.addedAt)}
+      </td>
       <td className="px-3 py-2 text-right">
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          data-action="project-remove"
-          // Names the gesture precisely for a screen reader, where the row context that makes a
-          // bare "Remove" safe-sounding isn't read out with it — but LEADS with the button's own
-          // word, so the accessible name contains the visible one (WCAG 2.5.3 Label in Name) and
-          // speech input still reaches the control. Same shape as the General page's button.
-          aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-          // The boot project is refused server-side too (it re-registers itself at every start);
-          // disabling here means the user gets the explanation before the click, not after.
-          title={isBoot ? 'cezar is serving this project — it re-registers itself at every start' : undefined}
-          disabled={disabled || isBoot}
-          onClick={onRemove}
-        >
-          Remove
-        </Button>
+        {project.unregistered ? (
+          <AddBootProjectButton root={project.root} name={project.name} disabled={disabled} />
+        ) : (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            data-action="project-remove"
+            // Names the gesture precisely for a screen reader, where the row context that makes a
+            // bare "Remove" safe-sounding isn't read out with it — but LEADS with the button's own
+            // word, so the accessible name contains the visible one (WCAG 2.5.3 Label in Name) and
+            // speech input still reaches the control. Same shape as the General page's button.
+            aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
+            // The boot project is refused server-side too (this server runs out of it);
+            // disabling here means the user gets the explanation before the click, not after.
+            title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
+            disabled={disabled || isBoot}
+            onClick={onRemove}
+          >
+            Remove
+          </Button>
+        )}
       </td>
     </tr>
+  )
+}
+
+/**
+ * The one gesture an unregistered boot row can offer: save the folder cezar is currently serving.
+ * It goes through the ordinary `POST /api/v1/projects` — same guards, same 409 on a folder
+ * already registered — so a root the server refuses (`$HOME`, a task worktree, which can also be
+ * boot roots) answers with its own explanation and this button surfaces it verbatim rather than
+ * pre-judging which folders qualify.
+ *
+ * Exported for the project's own General page, which faces the same row and must not invent a
+ * second way to say this — the same reason `MaxParallelSelect` and `STATUS_LABEL` are shared.
+ */
+export function AddBootProjectButton({
+  root,
+  name,
+  disabled = false,
+}: {
+  root: string
+  name: string
+  disabled?: boolean
+}) {
+  const register = useRegisterProject()
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      data-action="project-add-boot"
+      aria-label={`Add ${name} to your projects`}
+      title="cezar is serving this folder — save it to your projects"
+      disabled={disabled || register.isPending}
+      onClick={() =>
+        register.mutate(root, {
+          onSuccess: () => toast(`${name} added to your projects`),
+          onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+        })
+      }
+    >
+      Add project
+    </Button>
   )
 }
 
