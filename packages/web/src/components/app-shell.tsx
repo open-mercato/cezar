@@ -845,7 +845,7 @@ function MobileTopBar({ title }: { title: string }) {
       data-slot="mobile-top-bar"
       className="row-start-1 border-b border-border bg-card pt-[env(safe-area-inset-top)] md:hidden"
     >
-      <div className="flex h-[52px] items-center gap-2.5 px-3">
+      <div className="flex h-11 items-center gap-2.5 px-3">
         {/* A real SheetTrigger rather than an onClick that flips our state: it is what registers
             the button as the dialog's trigger, which is what Radix restores focus to on close —
             with a bare onClick, closing the drawer drops focus on <body>. It also carries the
