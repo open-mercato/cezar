@@ -80,8 +80,8 @@ Named image uploads (a dragged `diagram.png`) can join later behind an explicit 
 
 ### Phase 1: Carry the filename on the wire
 
-- [ ] 1.1 Optional `name` on the contract + `sanitizeAttachmentName`
-- [ ] 1.2 Composer sends the filename
+- [x] 1.1 Optional `name` on the contract + `sanitizeAttachmentName` — acaadd8e
+- [x] 1.2 Composer sends the filename — e894ca8a
 
 ### Phase 2: The library
 
