@@ -91,17 +91,21 @@ function gateSeededClient(singleProject = false) {
   return client
 }
 
-function renderAt(entry: string, { singleProject = false }: { singleProject?: boolean } = {}) {
+function renderAt(
+  entry: string,
+  { singleProject = false, rootElement }: { singleProject?: boolean; rootElement?: HTMLElement } = {},
+) {
   render(
     <QueryClientProvider client={gateSeededClient(singleProject)}>
-      <ThemeProvider>
-        <AppearanceProvider>
+      <ThemeProvider rootElement={rootElement}>
+        <AppearanceProvider rootElement={rootElement}>
           <MemoryRouter initialEntries={[entry]}>
             <AppRoutes />
           </MemoryRouter>
         </AppearanceProvider>
       </ThemeProvider>
     </QueryClientProvider>,
+    rootElement ? { container: rootElement } : undefined,
   )
 }
 
@@ -268,6 +272,21 @@ describe('the settings shell', () => {
 })
 
 describe('the appearance section (global scope)', () => {
+  it('applies server appearance to an adopted cockpit root', async () => {
+    serve({ appearance: { accent: 'violet', density: 'compact', width: 'wide' } })
+    const rootElement = document.createElement('div')
+    document.body.append(rootElement)
+
+    renderAt('/settings/global/appearance', { rootElement })
+
+    await waitFor(() => {
+      expect(rootElement.dataset.accent).toBe('violet')
+      expect(rootElement.dataset.density).toBe('compact')
+      expect(rootElement.dataset.width).toBe('wide')
+    })
+    expect(document.documentElement.dataset.accent).toBeUndefined()
+  })
+
   it('persisted values apply at boot: server ui-state stamps the root and the controls', async () => {
     serve({ appearance: { accent: 'violet', density: 'compact' } })
     renderAt('/settings/global/appearance')

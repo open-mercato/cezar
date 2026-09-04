@@ -104,6 +104,7 @@ import type {
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import {
   API_PREFIX,
+  ApiError as ClientApiError,
   apiPath,
   createCezarClient,
   getApiBaseUrl,
@@ -233,6 +234,21 @@ const cez = createCezarClient<AppType>({
   fetch: (input: string | URL | Request, init?: RequestInit) =>
     fetchOrThrow(withApiBase(String(input)), init),
 })
+
+const cockpitClient = cez
+
+/** Keep the web boundary's established error type while runs move onto the shared client. */
+async function runRequest<T>(request: () => Promise<T>, label: string): Promise<T> {
+  try {
+    return await request()
+  } catch (cause) {
+    if (cause instanceof ClientApiError) {
+      const message = cause.message.replace(cause.path, label)
+      throw new ApiError(cause.status, message)
+    }
+    throw cause
+  }
+}
 
 /**
  * Prefix a root-relative URL the typed client built with the configured service origin.
@@ -473,10 +489,7 @@ export async function browseFs(
 
 /** The authoritative run list — sorted newest-first by the server. */
 export async function getRuns(opts?: ReadOptions): Promise<ApiRun[]> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs.$get({ param: { projectId: queryScope() } }, init(opts)),
-    '/runs',
-  )
+  return runRequest(() => cockpitClient.forProject(getApiScope()).runs.list(opts), '/runs')
 }
 
 /** One project's run list by EXPLICIT id (`GET /api/p/:projectId/runs`, step 3.3): the sidebar
@@ -495,13 +508,7 @@ export async function getRunsIndex(opts?: ReadOptions): Promise<RunsIndexRespons
 }
 
 export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].$get(
-      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
-      init(opts),
-    ),
-    runPath(id),
-  )
+  return runRequest(() => cockpitClient.forProject(getApiScope()).runs.get(id, opts), runPath(id))
 }
 
 /**
@@ -529,28 +536,14 @@ export async function getRunHistory(
   cursor?: string,
   opts?: ReadOptions,
 ): Promise<RunHistoryPage> {
-  return unwrapValidated(
-    await cez.api.v1.p[':projectId'].runs[':id'].history.$get(
-      {
-        param: { projectId: queryScope(), id: encodeURIComponent(id) },
-        query: { ...(cursor !== undefined ? { cursor } : {}) },
-      },
-      init(opts),
-    ),
-    `${runPath(id)}/history`,
-    runHistoryPageSchema,
-  )
+  return runRequest(() => cockpitClient.forProject(getApiScope()).runs.history(id, cursor, opts), `${runPath(id)}/history`)
 }
 
 /** The compact current-state context for a run. Validated for the same reason as the page above. */
 export async function getRunHistoryContext(id: string, opts?: ReadOptions): Promise<RunHistoryContext> {
-  return unwrapValidated(
-    await cez.api.v1.p[':projectId'].runs[':id']['history-context'].$get(
-      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
-      init(opts),
-    ),
+  return runRequest(
+    () => cockpitClient.forProject(getApiScope()).runs.historyContext(id, opts),
     `${runPath(id)}/history-context`,
-    runHistoryContextSchema,
   )
 }
 
@@ -1166,45 +1159,25 @@ export async function cancelAutoResume(id: string): Promise<CancelAutoResumeResp
 /** Sweep every finished (done/failed/cancelled) active run into the archive in one call —
  *  the Tasks header's "Archive finished" button. */
 export async function archiveFinished(): Promise<ArchiveFinishedResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs['archive-finished'].$post({
-      param: { projectId: queryScope() },
-    }),
-    '/runs/archive-finished',
-  )
+  return runRequest(() => cockpitClient.forProject(getApiScope()).runs.archiveFinished(), '/runs/archive-finished')
 }
 
 /** Read receipt (#unread-done-items): opening a task's thread marks it read. Bodyless —
  *  the server stamps `seenAt = now` and answers with the updated record. */
 export async function markRunSeen(id: string): Promise<RunRecord> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].read.$post({
-      param: { projectId: queryScope(), id: encodeURIComponent(id) },
-    }),
-    runPath(id, '/read'),
-  )
+  return runRequest(() => cockpitClient.forProject(getApiScope()).runs.markSeen(id), runPath(id, '/read'))
 }
 
 /** Put a finished task back to unread (#775): the inverse of `markRunSeen`. Bodyless — the
  *  server CLEARS `seenAt` (an absent receipt is what every reader already treats as unread)
  *  and answers with the updated record. */
 export async function markRunUnseen(id: string): Promise<RunRecord> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].unread.$post({
-      param: { projectId: queryScope(), id: encodeURIComponent(id) },
-    }),
-    runPath(id, '/unread'),
-  )
+  return runRequest(() => cockpitClient.forProject(getApiScope()).runs.markUnseen(id), runPath(id, '/unread'))
 }
 
 /** "Mark all read": stamp every currently-unread finished run in one call. */
 export async function markAllRunsSeen(): Promise<MarkAllReadResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs['read-all'].$post({
-      param: { projectId: queryScope() },
-    }),
-    '/runs/read-all',
-  )
+  return runRequest(() => cockpitClient.forProject(getApiScope()).runs.markAllSeen(), '/runs/read-all')
 }
 
 /** Close a waiting session gracefully — the run completes as done. 409 when nothing is open. */
@@ -1286,13 +1259,7 @@ export async function createRunPr(id: string): Promise<CreatePrResponse> {
 
 /** Rename a run (#389): the edit becomes the display title and wins over any auto-summary. */
 export async function patchRun(id: string, patch: PatchRunInput): Promise<RunRecord> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].runs[':id'].$patch({
-      param: { projectId: queryScope(), id: encodeURIComponent(id) },
-      json: patch,
-    }),
-    runPath(id),
-  )
+  return runRequest(() => cockpitClient.forProject(getApiScope()).runs.update(id, patch), runPath(id))
 }
 
 /** Deletes the run, its transcript, its worktree and its branch. 409 while it is still active. */

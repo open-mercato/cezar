@@ -24,7 +24,13 @@ const ThemeContext = React.createContext<ThemeContextValue | null>(null)
 /** Owns the theme preference: seeds from `localStorage` (the same value the pre-paint script in
  *  index.html already stamped, so mounting never repaints), tracks the OS preference live, and
  *  keeps the root element in sync. */
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
+export function ThemeProvider({
+  children,
+  rootElement,
+}: {
+  children: React.ReactNode
+  rootElement?: HTMLElement
+}) {
   const [theme, setThemeState] = React.useState<Theme>(readStoredTheme)
   const [prefersLight, setPrefersLight] = React.useState<boolean>(systemPrefersLight)
 
@@ -42,8 +48,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Layout effect, not effect: the class must land before the browser paints the mounted tree.
   React.useLayoutEffect(() => {
-    applyResolvedTheme(document.documentElement, resolvedTheme)
-  }, [resolvedTheme])
+    const target = rootElement ?? document.documentElement
+    applyResolvedTheme(target, resolvedTheme)
+  }, [rootElement, resolvedTheme])
 
   const setTheme = React.useCallback((next: Theme) => {
     setThemeState(next)

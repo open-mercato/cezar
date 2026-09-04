@@ -17,7 +17,7 @@ const script = join(repoRoot, 'scripts', 'release-snapshot.mjs');
 // packaged-CLI e2e) runs after `npm run build` — both locally in the gate order
 // and in CI's verify job.
 
-/** A miniature of the real workspace: the three publishable manifests, in their real
+/** A miniature of the real workspace: the publishable manifests, in their real
  *  directories, with the same intra-release dependency edges the pipeline has to re-pin. */
 async function makeFixture(): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'cezar-release-snapshot-'));
@@ -41,6 +41,13 @@ async function makeFixture(): Promise<string> {
     `${JSON.stringify({ name: '@scope/fake-client', version: '0.9.9', files: ['index.js'] }, null, 2)}\n`,
   );
   await writeFile(join(root, 'packages', 'api-client', 'index.js'), 'export {};\n');
+
+  await mkdir(join(root, 'packages', 'react'), { recursive: true });
+  await writeFile(
+    join(root, 'packages', 'react', 'package.json'),
+    `${JSON.stringify({ name: '@scope/fake-react', version: '0.9.9', files: ['index.js'], dependencies: { '@scope/fake-client': '^0.9.9' } }, null, 2)}\n`,
+  );
+  await writeFile(join(root, 'packages', 'react', 'index.js'), 'export {};\n');
 
   await mkdir(join(root, 'packages', 'cezar'), { recursive: true });
   await writeFile(
@@ -121,10 +128,13 @@ test('dry-run publish stamps every manifest, pins each sibling exact, and emits 
     );
 
     const clientPkg = await readPkg(root, 'packages', 'api-client');
+    const reactPkg = await readPkg(root, 'packages', 'react');
     const cezarPkg = await readPkg(root, 'packages', 'cezar');
     const aliasPkg = await readPkg(root, 'alias-cezar');
     assert.equal(clientPkg.version, '0.9.9-pr77.5');
+    assert.equal(reactPkg.version, '0.9.9-pr77.5');
     assert.equal(cezarPkg.version, '0.9.9-pr77.5');
+    assert.deepEqual(reactPkg.dependencies, { '@scope/fake-client': '0.9.9-pr77.5' });
     assert.equal(aliasPkg.version, '0.9.9-pr77.5');
     assert.deepEqual(aliasPkg.dependencies, { '@scope/fake-root': '0.9.9-pr77.5' });
     assert.deepEqual(cezarPkg.devDependencies, { '@scope/fake-client': '0.9.9-pr77.5' });

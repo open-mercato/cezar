@@ -9,8 +9,8 @@
 // picks the bump (patch/minor/major, or `existing` to publish the version
 // already committed). It stamps every manifest in the release set (intra-release
 // dependencies kept as caret ranges so a stable cezar-cli follows compatible impl
-// releases), then publishes them in DEPENDENCY ORDER — api-client, then the
-// service, then the alias — always with `--tag latest`. Publishing a dependent
+// releases), then publishes them in DEPENDENCY ORDER — contract, API client, React,
+// service, then alias — always with `--tag latest`. Publishing a dependent
 // before its dependency would briefly advertise a version that is not on the
 // registry yet.
 //
@@ -50,6 +50,7 @@ const repoRoot = process.env.CEZ_RELEASE_ROOT
 const dirs = {
   contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
+  react: path.join(repoRoot, 'packages/react'),
   cezar: path.join(repoRoot, 'packages/cezar'),
   alias: path.join(repoRoot, 'alias-cezar'),
 };
@@ -75,6 +76,7 @@ if (!isReleaseBump(bump)) {
 const manifests = {
   contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
+  react: readManifest(dirs.react),
   cezar: readManifest(dirs.cezar),
   alias: readManifest(dirs.alias),
 };
@@ -97,8 +99,9 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampStableManifests(manifests, version);
-for (const key of ['contract', 'apiClient', 'cezar', 'alias']) writeManifest(dirs[key], stamped[key]);
-const stampedNames = ['contract', 'apiClient', 'cezar', 'alias'].map((key) => stamped[key].name);
+const order = ['contract', 'apiClient', 'react', 'cezar', 'alias'];
+for (const key of order) writeManifest(dirs[key], stamped[key]);
+const stampedNames = order.map((key) => stamped[key].name);
 console.log(
   `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag latest${dryRun ? ', dry run' : ''})`,
 );
@@ -133,7 +136,7 @@ const publish = (dir, label) => {
 // exactly this reason. A `private` manifest is stamped above but never published: it is part of
 // the release (its version moves, its pins are rewritten) without being on the registry.
 const published = [];
-for (const key of ['contract', 'apiClient', 'cezar', 'alias']) {
+for (const key of order) {
   if (!isPublishable(stamped[key])) {
     console.log(`release: ${stamped[key].name} is private — stamped to ${version}, not published.`);
     continue;

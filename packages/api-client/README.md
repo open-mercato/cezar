@@ -37,6 +37,9 @@ consumers that already call them and are not part of what this client offers.
 
 ## Also exported
 
+- **`ApiError`** — HTTP failures carry their response status; a `TypeError` from the default global
+  Fetch before any response is normalized to status `0` with the original error as `cause`.
+  Aborts and every error thrown by an injected `fetch` adapter are preserved unchanged.
 - **Protocol types** (`UiEvent`, `UiItem`, `ToolDisplay`, …) — the agent event vocabulary the
   service streams over SSE, plus the pure `toolDisplay()` renderer for it.
 - **Scope helpers** (`scopeApiPath`, `apiBase`, …) — the `/api` ↔ `/api/p/:projectId`

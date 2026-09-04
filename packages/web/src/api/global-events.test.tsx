@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createUsageStore, type UsageStore } from './events'
 import { GlobalEventsProvider, useGlobalEvents, useRunUsage, useUsage } from './global-events'
-import { setApiScope } from '@open-mercato/cezar-api-client'
+import { setApiBaseUrl, setApiScope } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from './query-client'
 import { queryKeys, useProviderStatus, workspaceQueryKeys } from './queries'
 import type { ApiRun, ProviderStatusResponse, RunRecord } from '@open-mercato/cezar-api-client'
@@ -170,6 +170,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup()
+  setApiBaseUrl('')
   setApiScope(null)
   vi.unstubAllGlobals()
   vi.useRealTimers()
@@ -181,6 +182,14 @@ describe('useGlobalEvents — connection', () => {
     expect(FakeEventSource.instances).toHaveLength(1)
     expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events')
     expect(FakeEventSource.last.init).toEqual({ withCredentials: true })
+  })
+
+  it('resolves the stream URL after an embedded API base is installed', () => {
+    setApiBaseUrl('https://cezar.example')
+
+    mount()
+
+    expect(FakeEventSource.last.url).toBe('https://cezar.example/api/v1/workspace/events')
   })
 
   it('closes the stream on unmount', () => {

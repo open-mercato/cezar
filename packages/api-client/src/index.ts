@@ -24,7 +24,10 @@
  */
 
 export * from './client.ts'
+export * from './domains/runs.ts'
+export * from './subscriptions/run-events.ts'
 export * from '@open-mercato/cezar-contract'
 export * from './protocol/ui-events.ts'
 export * from './protocol/tool-display.ts'
 export * from './utils/project-scope.ts'
+export * from './utils/urls.ts'

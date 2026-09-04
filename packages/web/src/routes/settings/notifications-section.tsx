@@ -35,21 +35,30 @@ export function NotificationsSection() {
 
   const [enabled, setEnabled] = React.useState(false)
   const [permission, setPermission] = React.useState<NotificationSupport>(notificationSupport)
+  const pendingEnabled = React.useRef<boolean | null>(null)
 
   // The server's word wins — including "no notifications key" meaning the off default, so
   // wiping ui-state.json honestly resets every browser that visits.
   const serverState = uiState.data
   React.useEffect(() => {
     if (serverState === undefined) return
-    setEnabled(normalizeNotifications(serverState.notifications).enabled)
+    const serverEnabled = normalizeNotifications(serverState.notifications).enabled
+    if (pendingEnabled.current !== null && serverEnabled !== pendingEnabled.current) return
+    setEnabled(serverEnabled)
   }, [serverState])
 
   const save = React.useCallback(
     (next: boolean) => {
+      pendingEnabled.current = next
       setEnabled(next)
+      void queryClient.cancelQueries({ queryKey: workspaceQueryKeys.uiState, exact: true })
       putWorkspaceUiState({ notifications: { enabled: next } })
-        .then((merged) => queryClient.setQueryData(workspaceQueryKeys.uiState, merged))
+        .then((merged) => {
+          pendingEnabled.current = null
+          queryClient.setQueryData(workspaceQueryKeys.uiState, merged)
+        })
         .catch((error: unknown) => {
+          pendingEnabled.current = null
           toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
           void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.uiState })
         })

@@ -101,6 +101,10 @@ jobs:
         if: steps.decide.outputs.publish == 'true'
         run: npm run build
 
+      - name: Verify installed cockpit consumer
+        if: steps.decide.outputs.publish == 'true'
+        run: npm run test:cockpit-package
+
       - name: Run packaged CLI E2E tests
         if: steps.decide.outputs.publish == 'true'
         run: npm run test:package
@@ -142,7 +146,7 @@ jobs:
           console.log('');
           console.log(`- Version: \`${r.version}\``);
           console.log(`- Dist-tag: \`${r.distTag}\``);
-          console.log(`- Packages: \`${r.aliasName}\` → \`${r.rootName}\` → \`${r.apiClientName}\``);
+          console.log(`- Packages: ${r.publishedNames.split(',').map((name) => `\`${name}\``).join(', ')}`);
           console.log('');
           console.log('```bash');
           console.log(`npx ${r.aliasName}@nightly          # always the latest nightly`);

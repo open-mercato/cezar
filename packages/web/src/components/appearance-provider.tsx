@@ -46,7 +46,13 @@ const AppearanceContext = React.createContext<AppearanceContextValue | null>(nul
  *  would drop the stored density. On a failed write the server truth is re-fetched and
  *  re-applied — the control must not claim a persistence the file never got.
  */
-export function AppearanceProvider({ children }: { children: React.ReactNode }) {
+export function AppearanceProvider({
+  children,
+  rootElement,
+}: {
+  children: React.ReactNode
+  rootElement?: HTMLElement
+}) {
   const queryClient = useQueryClient()
   const uiState = useWorkspaceUiState()
   const [appearance, setAppearanceState] = React.useState<Appearance>(readStoredAppearance)
@@ -63,8 +69,9 @@ export function AppearanceProvider({ children }: { children: React.ReactNode }) 
 
   // Layout effect, not effect: the attributes must land before the browser paints the tree.
   React.useLayoutEffect(() => {
-    applyAppearance(document.documentElement, appearance)
-  }, [appearance])
+    const target = rootElement ?? document.documentElement
+    applyAppearance(target, appearance)
+  }, [rootElement, appearance])
 
   const save = React.useCallback(
     (next: Appearance) => {

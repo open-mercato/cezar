@@ -98,6 +98,22 @@ describe('ThemeProvider', () => {
     expect(root().style.colorScheme).toBe('light')
   })
 
+  it('stamps an adopted root instead of the document root', () => {
+    const adoptedRoot = document.createElement('div')
+    document.body.append(adoptedRoot)
+    localStorage.setItem(THEME_STORAGE_KEY, 'light')
+    mockMatchMedia(false)
+    render(
+      <ThemeProvider rootElement={adoptedRoot}>
+        <Probe />
+      </ThemeProvider>,
+    )
+
+    expect(adoptedRoot.classList.contains('light')).toBe(true)
+    expect(adoptedRoot.style.colorScheme).toBe('light')
+    expect(root().classList.contains('light')).toBe(false)
+  })
+
   it.each([
     { osPrefersLight: true, resolved: 'light' },
     { osPrefersLight: false, resolved: 'dark' },

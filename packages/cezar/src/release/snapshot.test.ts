@@ -145,6 +145,11 @@ describe('stampManifests', () => {
   const set = (): ReleaseManifests => ({
     contract: { name: '@open-mercato/cezar-contract', version: '0.1.5' },
     apiClient: { name: '@open-mercato/cezar-api-client', version: '0.1.5' },
+    react: {
+      name: '@open-mercato/cezar-react',
+      version: '0.1.5',
+      dependencies: { '@open-mercato/cezar-api-client': '^0.1.5' },
+    },
     cezar: {
       name: '@open-mercato/cezar',
       version: '0.1.5',
@@ -161,6 +166,10 @@ describe('stampManifests', () => {
   it('stamps every manifest to the snapshot version and pins each sibling exact', () => {
     const stamped = stampManifests(set(), '0.1.5-pr482.123');
     expect(stamped.apiClient.version).toBe('0.1.5-pr482.123');
+    expect(stamped.react).toMatchObject({
+      version: '0.1.5-pr482.123',
+      dependencies: { '@open-mercato/cezar-api-client': '0.1.5-pr482.123' },
+    });
     expect(stamped.cezar.version).toBe('0.1.5-pr482.123');
     expect(stamped.alias.version).toBe('0.1.5-pr482.123');
     // Exact, no range: `npx cezar-cli@<v>` must run this PR's code, and the service must
@@ -176,6 +185,7 @@ describe('stampManifests', () => {
       {
         contract: { name: '@old/contract', version: '0.1.5' },
         apiClient: { name: '@old/client', version: '0.1.5' },
+        react: { name: '@old/react', version: '0.1.5', dependencies: { '@old/client': '^0.1.5' } },
         cezar: { name: '@pat-lewczuk/cezar', version: '0.1.5', dependencies: { '@old/client': '^0.1.5' } },
         alias: { name: 'cezar-cli', version: '0.1.5', dependencies: { '@pat-lewczuk/cezar': '^0.1.5' } },
       },

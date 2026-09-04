@@ -73,6 +73,18 @@ const VALID_PROVIDER_STATUS = {
   ],
 }
 
+const VALID_RUN = {
+  id: 'run-1',
+  title: 'Fix it',
+  workflow: 'quick-task',
+  task: 'Fix the failing checkout.',
+  status: 'running',
+  createdAt: '2026-08-18T10:00:00.000Z',
+  tokensUsed: 0,
+  archived: false,
+  steps: [],
+}
+
 /** The (path, init) the client actually asked for. */
 function lastCall(): { path: string; method: string; body: unknown; headers: Headers; credentials: RequestCredentials | undefined } {
   const call = fetchMock.mock.calls.at(-1)
@@ -306,7 +318,16 @@ describe('request shapes', () => {
   ]
 
   it.each(cases)('$name hits $method $path', async ({ call, path, method, body }) => {
-    reply(path.startsWith('/api/v1/providers/') ? VALID_PROVIDER_STATUS : { ok: true })
+    const response = path === '/api/v1/runs'
+      ? [VALID_RUN]
+      : path === '/api/v1/runs/run-1'
+        ? VALID_RUN
+        : path === '/api/v1/runs/archive-finished'
+          ? { archived: 1 }
+          : path.startsWith('/api/v1/providers/')
+            ? VALID_PROVIDER_STATUS
+            : { ok: true }
+    reply(response)
     await call()
 
     const sent = lastCall()
@@ -348,7 +369,7 @@ describe('project scope (multi-project spec, step 3.1)', () => {
   it('prefixes every request path with /api/v1/p/<id> once a scope is active', async () => {
     setApiScope('proj-a')
 
-    reply({ ok: true })
+    reply([VALID_RUN])
     await getRuns()
     expect(lastCall().path).toBe('/api/v1/p/proj-a/runs')
 
@@ -374,6 +395,15 @@ describe('project scope (multi-project spec, step 3.1)', () => {
 })
 
 describe('response parsing', () => {
+  it('rejects a malformed run list at the compatibility boundary', async () => {
+    reply({ runs: [] })
+
+    const error = await getRuns().catch((cause: unknown) => cause)
+
+    expect(error).toBeInstanceOf(ApiError)
+    expect((error as ApiError).message).toContain('unexpected body')
+  })
+
   it('normalizes provider status into canonical order without unexpected fields', async () => {
     reply({
       ignored: 'top-level raw value',
@@ -446,7 +476,7 @@ describe('response parsing', () => {
   })
 
   it('returns the run list', async () => {
-    reply([{ id: 'run-1', title: 'Fix it', status: 'running' }])
+    reply([VALID_RUN])
     const runs = await getRuns()
     expect(runs).toHaveLength(1)
     expect(runs[0]?.id).toBe('run-1')

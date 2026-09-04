@@ -3,6 +3,8 @@
 import * as React from "react"
 import { Tooltip as TooltipPrimitive } from "radix-ui"
 
+import { useOptionalCezarPortal } from "@open-mercato/cezar-react"
+
 import { cn } from "@/lib/utils"
 
 function TooltipProvider({
@@ -36,8 +38,10 @@ function TooltipContent({
   children,
   ...props
 }: React.ComponentProps<typeof TooltipPrimitive.Content>) {
+  const portal = useOptionalCezarPortal()
+  const container = portal === undefined ? document.body : portal
   return (
-    <TooltipPrimitive.Portal>
+    <TooltipPrimitive.Portal container={container ?? undefined}>
       <TooltipPrimitive.Content
         data-slot="tooltip-content"
         sideOffset={sideOffset}

@@ -137,6 +137,24 @@ describe('useRunEvents — subscription', () => {
     expect(result.current.map((event) => event.type)).toEqual(['plan.updated'])
   })
 
+  it('bounds the React list and requests live compaction only once', async () => {
+    const onCompact = vi.fn()
+    const { result } = renderHook(() => useRunEvents('run-1', {
+      maxEvents: 2,
+      compactAt: 2,
+      onCompact,
+    }))
+    const source = FakeEventSource.last
+
+    source.emit('run-event', line(1, 'stdout', { text: 'a' }))
+    source.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    source.emit('run-event', line(3, 'stdout', { text: 'c' }))
+    await act(async () => Promise.resolve())
+
+    expect(result.current.map((event) => event.seq)).toEqual([2, 3])
+    expect(onCompact).toHaveBeenCalledOnce()
+  })
+
   it('reopens a CLOSED stream on return-to-visible; the replay dedups (#minor-run-sse-recovery)', () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const first = FakeEventSource.last

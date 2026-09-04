@@ -4,6 +4,8 @@ import * as React from "react"
 import { CheckIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react"
 import { Select as SelectPrimitive } from "radix-ui"
 
+import { useOptionalCezarPortal } from "@open-mercato/cezar-react"
+
 import { cn } from "@/lib/utils"
 
 function Select({
@@ -57,8 +59,10 @@ function SelectContent({
   align = "center",
   ...props
 }: React.ComponentProps<typeof SelectPrimitive.Content>) {
+  const portal = useOptionalCezarPortal()
+  const container = portal === undefined ? document.body : portal
   return (
-    <SelectPrimitive.Portal>
+    <SelectPrimitive.Portal container={container ?? undefined}>
       <SelectPrimitive.Content
         data-slot="select-content"
         className={cn(

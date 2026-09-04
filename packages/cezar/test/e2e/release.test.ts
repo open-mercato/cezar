@@ -16,7 +16,7 @@ const script = join(repoRoot, 'scripts', 'release.mjs');
 // The orchestrator imports packages/cezar/dist/release/stable.js, so this suite (like the
 // snapshot e2e) runs after `npm run build`.
 
-/** A miniature of the real workspace: the three publishable manifests, in their real
+/** A miniature of the real workspace: the publishable manifests, in their real
  *  directories, with the same intra-release dependency edges the pipeline has to re-pin. */
 async function makeFixture(version = '0.1.5'): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), 'cezar-release-'));
@@ -40,6 +40,13 @@ async function makeFixture(version = '0.1.5'): Promise<string> {
     `${JSON.stringify({ name: '@scope/fake-client', version, files: ['index.js'] }, null, 2)}\n`,
   );
   await writeFile(join(root, 'packages', 'api-client', 'index.js'), 'export {};\n');
+
+  await mkdir(join(root, 'packages', 'react'), { recursive: true });
+  await writeFile(
+    join(root, 'packages', 'react', 'package.json'),
+    `${JSON.stringify({ name: '@scope/fake-react', version, files: ['index.js'], dependencies: { '@scope/fake-client': `^${version}` } }, null, 2)}\n`,
+  );
+  await writeFile(join(root, 'packages', 'react', 'index.js'), 'export {};\n');
 
   await mkdir(join(root, 'packages', 'cezar'), { recursive: true });
   await writeFile(
@@ -113,10 +120,13 @@ test('a patch bump stamps every manifest, keeps the caret ranges, and emits the 
     );
 
     const clientPkg = await readPkg(root, 'packages', 'api-client');
+    const reactPkg = await readPkg(root, 'packages', 'react');
     const cezarPkg = await readPkg(root, 'packages', 'cezar');
     const aliasPkg = await readPkg(root, 'alias-cezar');
     assert.equal(clientPkg.version, '0.1.6');
+    assert.equal(reactPkg.version, '0.1.6');
     assert.equal(cezarPkg.version, '0.1.6');
+    assert.deepEqual(reactPkg.dependencies, { '@scope/fake-client': '^0.1.6' });
     assert.equal(aliasPkg.version, '0.1.6');
     // Caret, not an exact pin — the stable-release contract, on both edges.
     assert.deepEqual(aliasPkg.dependencies, { '@scope/fake-root': '^0.1.6' });
@@ -158,12 +168,13 @@ test('a private package is stamped but never published', { timeout: 120_000 }, a
       !/npm publish[^\n]*\(@scope\/fake-client\)/.test(stdout),
       'a private package must not be published',
     );
-    // The other two still publish.
+    // The other public packages still publish.
+    assert.match(stdout, /\(@scope\/fake-react\)/);
     assert.match(stdout, /\(@scope\/fake-root\)/);
     assert.match(stdout, /\(fake-alias\)/);
 
     const output = await readFile(join(root, 'github-output.txt'), 'utf8');
-    assert.match(output, /^publishedNames=@scope\/fake-root,fake-alias$/m);
+    assert.match(output, /^publishedNames=@scope\/fake-react,@scope\/fake-root,fake-alias$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

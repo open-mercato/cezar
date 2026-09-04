@@ -46,14 +46,14 @@ export interface ReleaseManifests {
   /**
    * The API contract (zod schemas + inferred types). FIRST in the stamped set because both the
    * api-client and the service depend on it, so its version has to settle before their pins are
-   * rewritten. Like the api-client it is `private`, so it is stamped but never published — which
-   * is exactly why the service cannot simply depend on it at runtime: `packages/cezar/scripts/
-   * inline-contract.mjs` folds it into `dist/contract/` at build time instead. It moves to a real
-   * publish the day that script is deleted.
+   * rewritten. The service still bundles it at build time through `packages/cezar/scripts/
+   * inline-contract.mjs`, so consumers do not need it at service runtime.
    */
   contract: ManifestLike;
   /** The contract package a consumer installs to talk to a cezar service. */
   apiClient: ManifestLike;
+  /** The public React facade, which depends on the API client. */
+  react: ManifestLike;
   /** The published service + CLI. */
   cezar: ManifestLike;
   /** The unscoped bin alias, so `npx cezar-cli` works. */
@@ -84,7 +84,8 @@ export function pinDependency(pkg: ManifestLike, depName: string, range: string)
 /**
  * Stamp every manifest to `version` and re-pin the intra-release dependencies.
  *
- * Two pins, both derived from the manifests rather than hardcoded:
+ * Three pins, all derived from the manifests rather than hardcoded:
+ *   - the React facade → the API client, so an installed facade resolves the matching client;
  *   - the alias → the service, so `npx <alias>@<v>` runs the matching CLI;
  *   - the service → the api-client, so a published service can never resolve a client build it
  *     was not released with.
@@ -99,7 +100,7 @@ export function stampManifestSet(
   version: string,
   pin: PinStyle,
 ): ReleaseManifests {
-  const { contract, apiClient, cezar, alias } = manifests;
+  const { contract, apiClient, react, cezar, alias } = manifests;
   const range = pin(version);
 
   const inherited: Partial<ManifestLike> = {};
@@ -110,6 +111,7 @@ export function stampManifestSet(
   return {
     contract: { ...contract, version },
     apiClient: pinDependency({ ...apiClient, version }, contract.name, range),
+    react: pinDependency({ ...react, version }, apiClient.name, range),
     cezar: pinDependency(
       pinDependency({ ...cezar, version }, apiClient.name, range),
       contract.name,

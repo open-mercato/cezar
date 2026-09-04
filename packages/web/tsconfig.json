@@ -22,10 +22,13 @@
     // No `baseUrl` — it was removed in TypeScript 7. `paths` now resolves relative to this
     // file's directory, which is what the mapping below already assumed.
     "paths": {
+      "#cezar-web-cockpit": ["./src/cockpit-implementation.tsx"],
       "@/*": ["./src/*"],
       // Source, not `dist` — see the matching alias in vite.config.ts. Typechecking the web
       // app must not depend on the api-client having been built.
-      "@open-mercato/cezar-api-client": ["../api-client/src/index.ts"]
+      "@open-mercato/cezar-api-client": ["../api-client/src/index.ts"],
+      "@open-mercato/cezar-react/cockpit": ["../react/src/cockpit.tsx"],
+      "@open-mercato/cezar-react": ["../react/src/index.ts"]
     }
   },
   // `e2e/**` is Node code, not bundled DOM code, but it lives under this tsconfig so it is

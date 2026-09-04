@@ -3,6 +3,8 @@
 import * as React from "react"
 import { AlertDialog as AlertDialogPrimitive } from "radix-ui"
 
+import { useOptionalCezarPortal } from "@open-mercato/cezar-react"
+
 import { buttonVariants } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -28,7 +30,9 @@ function AlertDialogTrigger({
 function AlertDialogPortal({
   ...props
 }: React.ComponentProps<typeof AlertDialogPrimitive.Portal>) {
-  return <AlertDialogPrimitive.Portal data-slot="alert-dialog-portal" {...props} />
+  const portal = useOptionalCezarPortal()
+  const container = portal === undefined ? document.body : portal
+  return <AlertDialogPrimitive.Portal container={container ?? undefined} data-slot="alert-dialog-portal" {...props} />
 }
 
 function AlertDialogOverlay({

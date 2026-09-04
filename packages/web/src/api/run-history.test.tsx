@@ -30,6 +30,10 @@ class FakeEventSource {
     this.listeners.set(name, listeners)
   }
 
+  removeEventListener(name: string, listener: (event: Event) => void): void {
+    this.listeners.get(name)?.delete(listener)
+  }
+
   close(): void {
     this.readyState = 2
   }

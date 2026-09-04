@@ -10,8 +10,8 @@
 //
 // Reads the CI facts from GitHub Actions' env, decides via computeSnapshot,
 // stamps every manifest in the release set (intra-release dependencies pinned
-// exact), publishes the non-`private` ones in DEPENDENCY ORDER — api-client,
-// then the service, then the alias — always with an explicit --tag so a snapshot can never move
+// exact), publishes the non-`private` ones in DEPENDENCY ORDER — contract, API client,
+// React, service, then alias — always with an explicit --tag so a snapshot can never move
 // `latest`, then emits a one-line JSON result to $GITHUB_OUTPUT for the
 // PR-comment and summary steps.
 //
@@ -52,6 +52,7 @@ const repoRoot = process.env.CEZ_SNAPSHOT_ROOT
 const dirs = {
   contract: path.join(repoRoot, 'packages/contract'),
   apiClient: path.join(repoRoot, 'packages/api-client'),
+  react: path.join(repoRoot, 'packages/react'),
   cezar: path.join(repoRoot, 'packages/cezar'),
   alias: path.join(repoRoot, 'alias-cezar'),
 };
@@ -75,6 +76,7 @@ const emitOutput = (result) => {
 const manifests = {
   contract: readManifest(dirs.contract),
   apiClient: readManifest(dirs.apiClient),
+  react: readManifest(dirs.react),
   cezar: readManifest(dirs.cezar),
   alias: readManifest(dirs.alias),
 };
@@ -111,7 +113,7 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampManifests(manifests, plan.version);
-const order = ['contract', 'apiClient', 'cezar', 'alias'];
+const order = ['contract', 'apiClient', 'react', 'cezar', 'alias'];
 for (const key of order) writeManifest(dirs[key], stamped[key]);
 console.log(
   `release-snapshot: stamped ${order.map((key) => stamped[key].name).join(' + ')} to ${plan.version} (dist-tag ${plan.distTag}${dryRun ? ', dry run' : ''})`,
