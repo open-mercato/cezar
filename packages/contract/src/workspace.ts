@@ -301,9 +301,11 @@ export type SetWorkspaceUiStateInput = z.infer<typeof setWorkspaceUiStateInputSc
 // ---- per-repo agent knobs (`GET/PUT /api/v1/config`) ----------------------------------------
 
 /** Per-runner default model preset (Settings → Agents): the composer preselects this model id for
- *  the runner. Absent = auto (the runner decides). Keyed by runner name rather than derived from
- *  `runnerSchema` because the server's own `defaultModels` object (src/config.ts:92) is spelled
- *  the same way — one key per runner, each independently optional. */
+ *  the runner. Absent = auto (the runner decides), and so is `''` — the explicit auto a
+ *  `defaultModelsAuto` override answers with (#906), which is why it beats the coding agent's own
+ *  configured default instead of being indistinguishable from "nothing set". Keyed by runner name
+ *  rather than derived from `runnerSchema` because the server's own `defaultModels` object
+ *  (src/config.ts) is spelled the same way — one key per runner, each independently optional. */
 export const runnerModelsSchema = z.object({
   claude: z.string().optional(),
   codex: z.string().optional(),
@@ -356,6 +358,18 @@ export const setConfigInputSchema = z.object({
       codex: z.string().trim().max(200).nullable().optional(),
       opencode: z.string().trim().max(200).nullable().optional(),
       pi: z.string().trim().max(200).nullable().optional(),
+    })
+    .optional(),
+  /** Per-runner "auto is the default" override (#906), additive: clearing a `defaultModels` preset
+   *  cannot express an explicit auto, because the answer then falls through to the coding agent's
+   *  own settings file. `true` sets auto; `false`/`null` clears the override back to no opinion.
+   *  Merges per runner exactly like `defaultModels`. */
+  defaultModelsAuto: z
+    .object({
+      claude: z.boolean().nullable().optional(),
+      codex: z.boolean().nullable().optional(),
+      opencode: z.boolean().nullable().optional(),
+      pi: z.boolean().nullable().optional(),
     })
     .optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),

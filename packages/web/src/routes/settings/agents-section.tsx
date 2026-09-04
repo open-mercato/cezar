@@ -187,9 +187,16 @@ function AgentsForm({
                     title={providerReason ?? runner.desc}
                     disabled={save.isPending || !providerConnected}
                     onChange={(event) =>
+                      // Picking auto is a CHOICE, not the absence of one (#906): clearing the
+                      // preset alone let the coding agent's own settings file show through again,
+                      // so the select snapped straight back to the model it names. The additive
+                      // override says "ignore that default"; picking a real model clears it.
                       save.mutate({
                         defaultModels: { [runner.id]: event.target.value || null } as Partial<
                           Record<Runner, string | null>
+                        >,
+                        defaultModelsAuto: { [runner.id]: event.target.value === '' } as Partial<
+                          Record<Runner, boolean>
                         >,
                       })
                     }
