@@ -166,11 +166,8 @@ export function RunHeader({
             {planTally ? (
               // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
               // the run header"). Desktop only: on a phone the dock it mirrors is itself on
-              // screen, so the mirror spends the tightest row on the screen restating it.
-              <span
-                data-slot="plan-mirror"
-                className="hidden text-[11px] text-soft-foreground tabular-nums md:inline"
-              >
+              // screen, so the mirror would spend the tightest row on the screen restating it.
+              <span data-slot="plan-mirror" className="hidden text-[11px] text-soft-foreground tabular-nums md:inline">
                 Plan {planTally.done}/{planTally.total}
               </span>
             ) : null}
