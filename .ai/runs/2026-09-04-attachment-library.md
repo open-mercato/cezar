@@ -94,8 +94,8 @@ Named image uploads (a dragged `diagram.png`) can join later behind an explicit 
 
 ### Phase 3: The .gitignore P0
 
-- [ ] 3.1 `attachments/` in `ensureDataGitignore`
-- [ ] 3.2 Static guard test for data-dir coverage
+- [x] 3.1 `attachments/` in `ensureDataGitignore` — 7ea14c09
+- [x] 3.2 Static guard test for data-dir coverage — 7ea14c09
 
 ### Phase 4: Documentation and gate
 
