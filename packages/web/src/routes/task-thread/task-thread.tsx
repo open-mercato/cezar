@@ -300,7 +300,15 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
-      <RunHeader run={run} planTally={planTally} onMarkedUnread={() => onMarkedUnread?.(run.id)} />
+      <RunHeader
+        run={run}
+        planTally={planTally}
+        onMarkedUnread={() => onMarkedUnread?.(run.id)}
+        // The badge the user already opens to inspect runner/account/model now edits the SAME
+        // continuation choice as the dock. One hook owns both renderings, so a header pick is
+        // exactly what the next composer submission sends — no second, drifting engine state.
+        continuationEngine={continuable ? continueAction.pills : undefined}
+      />
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
