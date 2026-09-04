@@ -241,6 +241,17 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean(),
   archivedAt: z.string().optional(),
+  /** Pinned to the top of this project's task list (#935) — the `Pinned` group above
+   *  `Needs you`. Optional, unlike `archived`: absent IS "not pinned", which is what every
+   *  record written before this carries, and the store never writes `false`. Archiving
+   *  clears it, because archiving is how a user resigns from a task. */
+  pinned: z.boolean().optional(),
+  /** When the pin was set. Deliberately WRITE-ONLY today, like the `archivedAt` above it:
+   *  ordering inside `Pinned` uses the ordinary status/recency rules, so nothing reads this
+   *  yet. It is here because a field on a protected surface is far cheaper to add now than to
+   *  add later — "pinned oldest first" and "unpin what you pinned a month ago" both need it,
+   *  and neither can be reconstructed after the fact. */
+  pinnedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
    *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old

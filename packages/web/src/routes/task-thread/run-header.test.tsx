@@ -186,15 +186,17 @@ describe('editable title (#389)', () => {
 })
 
 describe('action bar visibility per status (the legacy rules, rendered)', () => {
+  // Pin (#935) is in every row: unlike every other action here it asks nothing of the engine,
+  // so it is offered whatever the run is doing — only archiving takes it away.
   const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Cancel'] },
+    { status: 'queued', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'running', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'waiting', visible: ['Finish', 'Notes', 'Pin', 'Cancel'] },
     // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
+    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
   ]
 
   it.each(matrix)('$status → $visible', ({ status, visible }) => {
@@ -239,7 +241,7 @@ describe('Mark unread (#775)', () => {
     const names = actionBar()
       .getAllByRole('button')
       .map((el) => el.textContent?.trim())
-    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
   })
 
   it.each([
@@ -396,6 +398,38 @@ describe('actions hit their endpoints', () => {
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
+  })
+
+  it('Pin → POST /pin with the flipped flag, and reads Unpin once pinned (#935)', async () => {
+    const sent = stubFetch()
+    renderHeader(run('done'))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Pin' }))
+    await waitFor(() => {
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true })
+    })
+
+    cleanup()
+    const unpinning = stubFetch()
+    renderHeader(run('done', { pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' }))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Unpin' }))
+    await waitFor(() => {
+      expect(unpinning.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: false })
+    })
+  })
+
+  it('an archived run offers no pin at all — archiving retires it (#935)', () => {
+    stubFetch()
+    renderHeader(run('done', { archived: true }))
+    expect(actionBar().queryByRole('button', { name: 'Pin' })).toBeNull()
+    expect(actionBar().queryByRole('button', { name: 'Unpin' })).toBeNull()
+  })
+
+  it('Pin is in the mobile kebab too', async () => {
+    stubFetch()
+    renderHeader(run('running'))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.getByRole('menuitem', { name: 'Pin' })).not.toBeNull()
   })
 
   it('Cancel asks first — the POST fires only after the confirm dialog', async () => {
@@ -672,6 +706,48 @@ describe('notes panel', () => {
 })
 
 describe('meta line, tabs, pill and resume hint', () => {
+  it('scrolls the run header on phones but restores sticky context on desktop', () => {
+    stubFetch()
+    renderHeader(run('done'))
+
+    const header = document.querySelector('[data-slot="run-header"]') as HTMLElement
+    const classes = header.className.split(/\s+/)
+    expect(classes).toContain('relative')
+    expect(classes).not.toContain('sticky')
+    expect(classes).not.toContain('top-0')
+    expect(classes).toContain('md:sticky')
+    expect(classes).toContain('md:top-0')
+    expect(classes).toContain('px-3')
+    expect(classes).toContain('md:px-6')
+  })
+
+  // The plan mirror hides on phones so the title row keeps its space for the status pill and
+  // the kebab. It switches at `md`, the same breakpoint as the sticky header, the tabs, the
+  // composer and the dock — an `sm:` here would reveal it between 640-768px in a header that
+  // is still not sticky, a state the responsive pass never designed for.
+  it('hides the plan mirror on phones and reveals it at the same md breakpoint as the rest of the header', () => {
+    stubFetch()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route
+              path="/tasks/:id"
+              element={<RunHeader run={run('running')} planTally={{ done: 2, total: 5 }} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const mirror = document.querySelector('[data-slot="plan-mirror"]') as HTMLElement
+    expect(mirror.textContent).toContain('Plan 2/5')
+    const classes = mirror.className.split(/\s+/)
+    expect(classes).toContain('hidden')
+    expect(classes).toContain('md:inline')
+    expect(classes).not.toContain('sm:inline')
+  })
+
   it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
     stubFetch()
     renderHeader(

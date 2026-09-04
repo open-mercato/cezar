@@ -261,7 +261,7 @@ export function Composer({
     }
   }, [text])
 
-  // ---- sizing (mockup: min 54px, grows with content, never past ~1/3 screen) ----------------
+  // ---- sizing (44px phone baseline / 54px desktop, grows with content, max ~1/3 screen) ------
 
   useLayoutEffect(() => {
     const el = textareaRef.current
@@ -482,13 +482,18 @@ export function Composer({
 
           <textarea
             ref={textareaRef}
-            rows={2}
+            // `rows` is the phone case's floor, not the height: it is deliberately not
+            // responsive, so the height comes from the `min-h`/`md:min-h` pair below (44px
+            // phone, 54px desktop) and from the `useLayoutEffect` autosize pass. On desktop
+            // that means one intrinsic row for the single paint before autosize runs, which
+            // `md:min-h-[54px]` already bounds. This textarea is shared with `/new`.
+            rows={1}
             value={text}
             disabled={disabled}
             aria-label={ariaLabel}
             placeholder={disabled ? disabledReason : placeholder}
             // 16px on touch widths — iOS zooms any focused input below 16px (spec mobile rule).
-            className="block max-h-[220px] min-h-[54px] w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:text-sm"
+            className="block max-h-[220px] min-h-11 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-base leading-normal outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed md:min-h-[54px] md:px-4 md:pt-3 md:text-sm"
             onChange={(event) => {
               setText(event.target.value)
               syncTrigger()
@@ -509,7 +514,7 @@ export function Composer({
           ) : (
             // The footer may WRAP (the /new pill row on narrow widths), but the trailing
             // controls stay one unbreakable group so the send button never strands alone.
-            <div className="flex flex-wrap items-center gap-1 gap-y-1.5 px-2 pt-1.5 pb-2">
+            <div className="flex flex-wrap items-center gap-1 gap-y-1 px-1.5 pt-1 pb-1.5 md:gap-y-1.5 md:px-2 md:pt-1.5 md:pb-2">
               {/* The paperclip shares ONE wrapping row with the footer pills — otherwise the
                   pill group is a single flex item that wraps as a block, stranding the
                   paperclip alone on the line above it (#composer-attach-line). */}

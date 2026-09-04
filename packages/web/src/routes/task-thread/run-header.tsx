@@ -10,6 +10,8 @@ import {
   FileTextIcon,
   MailIcon,
   PencilIcon,
+  PinIcon,
+  PinOffIcon,
   PlayIcon,
   SquareTerminalIcon,
   Trash2Icon,
@@ -26,6 +28,7 @@ import {
   useMarkRunUnseen,
   useOpenTargets,
   usePatchRun,
+  usePinRun,
   useProjectRepoBase,
   useReferenceProjectId,
   useProviderStatus,
@@ -85,7 +88,9 @@ import { useFinishRun } from './use-finish-run'
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
  * the Session | Changes | Files tabs with the action bar, the workflow step rail and the plan
- * mirror — the whole sticky region above the thread.
+ * mirror — the whole header region above the thread. It scrolls away on phones so the transcript
+ * owns the small viewport, and stays sticky from `md` upward where there is room for persistent
+ * run context.
  *
  * Two deliberate omissions, both seams rather than gaps:
  *  - **VS Code** (spec: `POST /api/runs/:id/open-in-editor`) — the endpoint does not exist yet;
@@ -131,7 +136,7 @@ export function RunHeader({
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur md:px-6"
+      className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
@@ -140,7 +145,7 @@ export function RunHeader({
             {planTally ? (
               // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
               // the run header").
-              <span data-slot="plan-mirror" className="text-[11px] text-soft-foreground tabular-nums">
+              <span data-slot="plan-mirror" className="hidden text-[11px] text-soft-foreground tabular-nums md:inline">
                 Plan {planTally.done}/{planTally.total}
               </span>
             ) : null}
@@ -164,7 +169,7 @@ export function RunHeader({
         />
         <MonitoringSchedule run={run} />
 
-        <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
+        <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             Session
           </TabLink>
@@ -221,6 +226,24 @@ export function RunHeader({
                 Mark unread
               </Button>
             ) : null}
+            {flags.pin ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-slot="pin-run"
+                aria-pressed={Boolean(run.pinned)}
+                title={
+                  run.pinned
+                    ? 'Unpin from the top of this project’s task list'
+                    : 'Pin to the top of this project’s task list'
+                }
+                disabled={actions.pin.isPending}
+                onClick={() => actions.pin.mutate()}
+              >
+                {run.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
+                {run.pinned ? 'Unpin' : 'Pin'}
+              </Button>
+            ) : null}
             {flags.archive ? (
               <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
                 {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
@@ -243,7 +266,7 @@ export function RunHeader({
         </div>
 
         {run.steps.length > 0 ? (
-          <div className="border-t border-border pt-2 pb-1">
+          <div className="border-t border-border pt-1 pb-0 md:pt-2 md:pb-1">
             <WorkflowSteps runId={run.id} steps={run.steps} />
           </div>
         ) : null}
@@ -374,6 +397,14 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     onSuccess: invalidate,
     onError,
   })
+  // Pin/unpin (#935) — the shared hook rather than a local mutation, because the sidebar and the
+  // Tasks table drive the same action and the cache rule belongs in one place. Toggling off the
+  // record, exactly like archive above.
+  const pinMutation = usePinRun()
+  const pin = {
+    isPending: pinMutation.isPending,
+    mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),
+  }
   // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
   // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in
   // queries.ts, and no `invalidate` is wanted here — an invalidation would refetch the list
@@ -416,6 +447,7 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     continuation,
     continueRun: continueMutation,
     archive,
+    pin,
     markUnread,
     cancel,
     delete: deleteMutation,
@@ -626,7 +658,7 @@ function MetaRow({
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <div
         data-slot="run-meta"
-        className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
+        className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground md:mt-1.5 md:gap-y-1"
       >
         {parts.map((part, index) => (
           <Fragment key={index}>
@@ -833,6 +865,19 @@ function ActionsKebab({
             onSelect={() => actions.markUnread.mutate()}
           >
             <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
+        {flags.pin ? (
+          <DropdownMenuItem
+            data-slot="pin-run"
+            // The same `aria-pressed` its desktop twin and `PinToggle` carry — a toggle should
+            // announce its state in every spelling, not only the ones with room for the word.
+            aria-pressed={Boolean(run.pinned)}
+            disabled={actions.pin.isPending}
+            onSelect={() => actions.pin.mutate()}
+          >
+            {run.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
+            {run.pinned ? 'Unpin' : 'Pin'}
           </DropdownMenuItem>
         ) : null}
         {flags.archive ? (

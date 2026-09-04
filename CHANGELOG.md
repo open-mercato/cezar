@@ -1,6 +1,23 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ **Pin the two or three tasks you are actually living in.** The task list is sorted by what
+  happens next, which is the right default and a bad fit for a long-running task you keep coming
+  back to: it sinks under every newer run, and a finished-but-unmerged one drops into `Recent` and
+  then out of the sidebar's ten-row budget entirely. A task can now be pinned — from the sidebar
+  row (the control appears on hover, and stays lit once pinned), the Tasks table row, the mobile
+  card, or the thread header beside Archive — and pinned tasks gather in a **Pinned** group above
+  `Needs you`, first in that project's table too. A pinned task appears there once and nowhere
+  else, keeps its status and attention dots so one that wants you still says so, and is never
+  evicted by the sidebar's ten-row cap: the ten rows still go to the other groups, so pinning
+  three tasks cannot hide what needs you. Pins are per task and therefore per project — pinning in
+  one repo changes nothing in another — and archiving a task unpins it, because archiving is how
+  you resign from one. The group is absent entirely when nothing is pinned. `POST
+  /api/v1/runs/:id/pin` is a new additive route with the archive route's exact semantics (no body
+  pins, `{pinned:false}` unpins) answering the updated record, and `runs.json` gained optional
+  `pinned`/`pinnedAt` keys that unpinning deletes rather than writes as `false` — so a record
+  written before this, or unpinned after it, is byte-identical to what an older cezar wrote.
+  Cross-project pins on the global All-tasks page and in the ⌘K palette are a follow-up. (#935)
 - ✨ **Continue a task on another agent account, not just another agent.** The thread's Continue
   carried a runner pill that could switch `claude → codex` but never offered the second Claude
   login the new-task composer has offered since accounts landed — so "finish this one on my other
@@ -16,6 +33,27 @@
   is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
 
 ## 🐛 Fixes
+- 🐛 **A question one closing brace short is now a card, not a wall of JSON.** An agent that ended
+  its turn with a `CEZ:ASK` payload missing its final `}` — the single most common way a
+  hand-written one-line JSON blob gets mangled, and what an output-token limit does to one — lost
+  the whole question: no chips, ~760 characters of raw JSON left in the transcript, and a grey
+  footnote where a three-option card should have been. The task still parked at Needs you, so it
+  looked identical to a question that had never been asked. A bounded repair now sits under the
+  schema: the payload is scanned for its unclosed `{` and `[`, the missing closers are appended,
+  and the result goes through the **unchanged** validator. Only syntax is repaired, never
+  semantics — a stream cut mid-string, after a comma or after a colon is still refused, so is a
+  mismatched closer and an already-balanced payload that failed to parse for some other reason
+  (a trailing comma), and a repair that yields fewer than two options still degrades to plain text
+  exactly as before. A recovered card is never passed off as a clean one: the run records a note
+  saying the question was recovered from an unbalanced payload and asking you to check that the
+  options — and how many of them you may pick — match what was asked, and the raw marker is
+  stripped along with the card it produced rather than left sitting under it. Because that note is
+  the only trace a repair leaves, it renders in the danger tone rather than as the dimmest line in
+  the thread. The two forgiveness layers now read as a pair — presentation drift (unknown keys, an
+  over-long header) was already recovered above the parse; syntax drift is recovered below it.
+  Relatedly, a question that IS lost outright no longer whispers either: its note gets the same
+  treatment, and the marker contract agents receive now says in as many words that the JSON must
+  be syntactically valid.
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
   answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
   of that stays true of a branch GitHub is refusing to merge, so a conflicted PR sat there in
