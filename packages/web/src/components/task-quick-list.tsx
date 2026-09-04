@@ -4,7 +4,9 @@ import { useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { TitleEditInput } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
+import { TaskRowMenu } from '@/components/task-row-menu'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
@@ -34,6 +36,12 @@ import { cn } from '@/lib/utils'
  * Presentational — every decision it paints (which bucket, which order, which dot, whether a
  * group collapses) is made by `lib/task-groups.ts` and `lib/attention.ts`, which are pure and
  * table-tested. What is left here is markup, the router, and the expand/collapse toggle.
+ *
+ * One exception, and it is deliberate: each run row is wrapped in `TaskRowMenu`, which owns the
+ * right-click actions (rename, archive/unarchive, read state, cancel, delete) and their
+ * mutations. The rules of which actions a row offers stay pure and elsewhere
+ * (`lib/task-row-menu.ts`); what lands here is the same as ever — markup — plus the inline
+ * rename input the menu hands back.
  */
 export function TaskQuickList({
   runs,
@@ -340,102 +348,120 @@ function RunRow({
       : shortAge(run.finishedAt ?? run.createdAt, now)
 
   return (
-    <div
-      data-slot="task-row"
-      data-run-id={run.id}
-      // The row's highlight is a wrapper concern (the dot and the reference chip sit outside the
-      // Link), so the active state has to be readable here rather than only from the Link's
-      // `aria-current`.
-      data-active={isActive ? 'true' : undefined}
-      className={cn(
-        'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
-        isActive && 'bg-muted',
-        // The indent a member row wears under an expanded group tile. One padding declaration,
-        // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
-        // to it — 26px = the row's own 10px plus the 16px indent.
-        variant && 'pl-[26px]'
-      )}
-    >
-      {/* Outside the Link so it can lead the reference chip. The dot is a status indicator, not a
-          navigation target, and the wrapper still owns the row's hover surface. */}
-      <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
-      {/* The reference, ONCE (#788, option C): the number that used to be both a `775: ` title
-          prefix and a trailing `PR ↗` chip is now one leading chip that is itself the link. */}
-      {reference ? (
-        <TaskReferenceChip
-          run={run}
-          reference={reference}
-          compact
-          className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
-        />
-      ) : null}
-      <Link
-        to={scopeTo(scope, `/tasks/${run.id}`)}
-        // `title` carries the FULL stored title — including a `NNN: ` prefix the chip let the
-        // visible text drop — so hover always gives back everything the column could not show.
-        title={title}
-        aria-current={isActive ? 'page' : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2 py-[7px] pr-2.5"
-      >
-        {variant ? (
-          <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
-            {run.variant ?? '?'}
-          </span>
-        ) : null}
-        <span
-          data-slot="task-row-title"
+    // The right-click menu (rename, archive/unarchive, read state, cancel/delete) wraps the row
+    // rather than adding anything to it — see the width-priority rule above: this column has no
+    // spare pixels for a kebab, and the actions people reach for on a LIST are the ones the
+    // pointer is already over.
+    <TaskRowMenu run={run} scope={scope} active={isActive}>
+      {(editor) => (
+        <div
+          data-slot="task-row"
+          data-run-id={run.id}
+          // The row's highlight is a wrapper concern (the dot and the reference chip sit outside
+          // the Link), so the active state has to be readable here rather than only from the
+          // Link's `aria-current`.
+          data-active={isActive ? 'true' : undefined}
           className={cn(
-            // `min-w-[7rem]`: the floor of the width-priority rule above. The title never gives
-            // way past ~17 characters; metadata drops instead.
-            'min-w-[7rem] flex-1 truncate text-[13px]',
-            unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+            'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
+            isActive && 'bg-muted',
+            // The indent a member row wears under an expanded group tile. One padding
+            // declaration, not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above
+            // rather than losing to it — 26px = the row's own 10px plus the 16px indent.
+            variant && 'pl-[26px]'
           )}
         >
-          {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
-        </span>
-        {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
-            sidebar row has no column to hold an em dash open for.
+          {/* Outside the Link so it can lead the reference chip. The dot is a status indicator,
+              not a navigation target, and the wrapper still owns the row's hover surface. */}
+          <StatusDot tone={attention.tone} pulse={attention.pulse} aria-label={attention.label} role="img" />
+          {/* The reference, ONCE (#788, option C): the number that used to be both a `775: `
+              title prefix and a trailing `PR ↗` chip is now one leading chip that is itself the
+              link. */}
+          {reference ? (
+            <TaskReferenceChip
+              run={run}
+              reference={reference}
+              compact
+              className="h-auto shrink-0 gap-[2px] px-1.5 py-px text-[10.5px]"
+            />
+          ) : null}
+          {editor.editing ? (
+            /* Renaming replaces the LINK, not the title span inside it: an input nested in an
+               anchor is invalid, and every keystroke would be a click on the row. The dot and the
+               reference chip stay — they are siblings of the link, so the row is still itself
+               while its name is being typed. */
+            <TitleEditInput editor={editor} className="my-[3px] mr-2.5 min-w-0 flex-1 text-[13px]" />
+          ) : (
+            <Link
+              to={scopeTo(scope, `/tasks/${run.id}`)}
+              // `title` carries the FULL stored title — including a `NNN: ` prefix the chip let
+              // the visible text drop — so hover always gives back everything the column could
+              // not show.
+              title={title}
+              aria-current={isActive ? 'page' : undefined}
+              className="flex min-w-0 flex-1 items-center gap-2 py-[7px] pr-2.5"
+            >
+              {variant ? (
+                <span className="inline-flex size-[15px] shrink-0 items-center justify-center rounded-full bg-violet/15 font-mono text-[9.5px] font-semibold text-violet">
+                  {run.variant ?? '?'}
+                </span>
+              ) : null}
+              <span
+                data-slot="task-row-title"
+                className={cn(
+                  // `min-w-[7rem]`: the floor of the width-priority rule above. The title never
+                  // gives way past ~17 characters; metadata drops instead.
+                  'min-w-[7rem] flex-1 truncate text-[13px]',
+                  unread ? 'font-semibold text-foreground' : readDone ? 'font-medium text-muted-foreground' : 'font-medium'
+                )}
+              >
+                {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
+              </span>
+              {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
+                  sidebar row has no column to hold an em dash open for.
 
-            Droppable metadata, per the width-priority rule: `+59514 −12160` is ~82px, which a
-            264px column cannot spend and still name the task, and its exact numbers stay in the
-            `title` tooltip and in the Tasks table's ± column either way.
+                  Droppable metadata, per the width-priority rule: `+59514 −12160` is ~82px, which
+                  a 264px column cannot spend and still name the task, and its exact numbers stay
+                  in the `title` tooltip and in the Tasks table's ± column either way.
 
-            23rem is not the width at which the pair merely *fits* — it is the width at which it
-            fits AND the name is still at least as long as it was in the default 264px column
-            (measured: 146px of title at 23rem vs 132px at 264px). Anything narrower buys the
-            numbers back by making the task names shorter than they were before the drag, which
-            is precisely the bargain this issue exists to stop making. */}
-        {run.diffStat ? (
-          <DiffStatLabel
-            stat={run.diffStat}
-            className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
-          />
-        ) : null}
-        {/* The reference chip takes the AGE's slot when there is one — same as the mockup, and
-            the same trade as before: a row that knows its PR or issue number is identified by
-            that, not by how long ago it finished.
+                  23rem is not the width at which the pair merely *fits* — it is the width at which
+                  it fits AND the name is still at least as long as it was in the default 264px
+                  column (measured: 146px of title at 23rem vs 132px at 264px). Anything narrower
+                  buys the numbers back by making the task names shorter than they were before the
+                  drag, which is precisely the bargain this issue exists to stop making. */}
+              {run.diffStat ? (
+                <DiffStatLabel
+                  stat={run.diffStat}
+                  className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
+                />
+              ) : null}
+              {/* The reference chip takes the AGE's slot when there is one — same as the mockup,
+                  and the same trade as before: a row that knows its PR or issue number is
+                  identified by that, not by how long ago it finished.
 
-            It never takes the QUEUE POSITION's slot. `#2` is not an age, it is where the engine
-            will pick this run up, it is carried nowhere else in the row, and a queued run is
-            exactly the kind that has an issue reference and no PR yet — so keying this on "has a
-            reference" alone would have silently deleted the queue position from every
-            issue-driven queued row. */}
-        {age && (queuePosition !== null || !reference) ? (
-          <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
-        ) : null}
-        {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
-            different hue from the leading status dot, so the two read as two signals. */}
-        {unread ? (
-          <StatusDot
-            tone="violet"
-            role="img"
-            aria-label="unread"
-            title="Unread — not opened since it finished"
-            className="ml-0.5 shrink-0"
-          />
-        ) : null}
-      </Link>
-    </div>
+                  It never takes the QUEUE POSITION's slot. `#2` is not an age, it is where the
+                  engine will pick this run up, it is carried nowhere else in the row, and a queued
+                  run is exactly the kind that has an issue reference and no PR yet — so keying
+                  this on "has a reference" alone would have silently deleted the queue position
+                  from every issue-driven queued row. */}
+              {age && (queuePosition !== null || !reference) ? (
+                <span className="shrink-0 text-[11px] text-soft-foreground tabular-nums">{age}</span>
+              ) : null}
+              {/* The unread marker (#unread-done-items): a trailing violet dot, opposite end and
+                  different hue from the leading status dot, so the two read as two signals. */}
+              {unread ? (
+                <StatusDot
+                  tone="violet"
+                  role="img"
+                  aria-label="unread"
+                  title="Unread — not opened since it finished"
+                  className="ml-0.5 shrink-0"
+                />
+              ) : null}
+            </Link>
+          )}
+        </div>
+      )}
+    </TaskRowMenu>
   )
 }
 

@@ -1096,6 +1096,16 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
   )
 }
 
+/** The same stop by EXPLICIT project — see `archiveProjectRun`. */
+export async function cancelProjectRun(projectId: string, id: string): Promise<CancelResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].cancel.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/cancel'),
+  )
+}
+
 /** Archives by default; pass `false` to bring a run back into the live list. */
 export async function archiveRun(id: string, archived = true): Promise<RunRecord> {
   return unwrap(
@@ -1295,11 +1305,41 @@ export async function patchRun(id: string, patch: PatchRunInput): Promise<RunRec
   )
 }
 
+/** The same rename by EXPLICIT project — see `archiveProjectRun`. What lets the sidebar's
+ *  right-click menu rename a row that belongs to a project other than the mounted scope. */
+export async function patchProjectRun(
+  projectId: string,
+  id: string,
+  patch: PatchRunInput,
+): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$patch({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: patch,
+    }),
+    runPath(id),
+  )
+}
+
 /** Deletes the run, its transcript, its worktree and its branch. 409 while it is still active. */
 export async function deleteRun(id: string): Promise<DeleteRunResponse> {
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].$delete({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id),
+  )
+}
+
+/** The same delete by EXPLICIT project — see `archiveProjectRun`, and note that this is the one
+ *  row action whose mis-scoping is unrecoverable: it removes a worktree and a branch. */
+export async function deleteProjectRun(
+  projectId: string,
+  id: string,
+): Promise<DeleteRunResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$delete({
+      param: { projectId, id: encodeURIComponent(id) },
     }),
     runPath(id),
   )
