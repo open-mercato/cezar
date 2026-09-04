@@ -6,6 +6,7 @@ import type {
   githubChecksDataSchema,
   githubCommentsDataSchema,
   githubDataSchema,
+  githubIssuePrsDataSchema,
   githubMergeResponseSchema,
   githubPrChangesDataSchema,
   githubPrMergeStateResponseSchema,
@@ -52,6 +53,7 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     200
   >;
   type GithubChecks200 = InferResponseType<typeof client.api.v1.github.checks.$get, 200>;
+  type GithubIssuePrs200 = InferResponseType<(typeof client.api.v1.github)['issue-prs']['$get'], 200>;
   type GithubRefStatus200 = InferResponseType<(typeof client.api.v1.github)['ref-status']['$get'], 200>;
   type GithubMergeState200 = InferResponseType<
     (typeof client.api.v1.github.prs)[':number']['merge-state']['$get'],
@@ -102,6 +104,7 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     Assert<Exact<z.infer<typeof githubDataSchema>, Github200>>,
     Assert<Exact<z.infer<typeof githubCommentsDataSchema>, GithubComments200>>,
     Assert<Exact<z.infer<typeof githubChecksDataSchema>, GithubChecks200>>,
+    Assert<Exact<z.infer<typeof githubIssuePrsDataSchema>, GithubIssuePrs200>>,
     Assert<Exact<z.infer<typeof githubRefStatusDataSchema>, GithubRefStatus200>>,
     Assert<Exact<z.infer<typeof githubPrMergeStateResponseSchema>, GithubMergeState200>>,
     Assert<Exact<z.infer<typeof githubMergeResponseSchema>, GithubMerge200>>,

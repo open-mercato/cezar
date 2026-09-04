@@ -41,6 +41,7 @@ import type {
   GitCommitResponse,
   GitPushResponse,
   GithubChecksData,
+  GithubIssuePrsData,
   GithubRefStatusData,
   GithubCommentsData,
   GithubData,
@@ -783,6 +784,33 @@ export async function getGithubChecks(
       init(opts),
     ),
     '/github/checks',
+  )
+}
+
+/** Lazy linked-PR chips for on-screen ISSUE rows (#816). The sibling of `getGithubChecks`: the
+ *  list call carries no issue↔PR relationship at all, so the chips are hydrated per visible issue.
+ *  `refresh` busts the ≤60 s server cache — the list header's Refresh passes it so a PR an agent
+ *  opened seconds ago shows up at once. Degrades to `{ available: false, reason }` server-side —
+ *  a missing chip, never an ApiError. */
+export async function getGithubIssuePrs(
+  issueNumbers: number[],
+  params: { refresh?: boolean } = {},
+  opts?: ReadOptions,
+): Promise<GithubIssuePrsData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github['issue-prs'].$get(
+      {
+        param: { projectId: queryScope() },
+        query: {
+          issues: issueNumbers.join(','),
+          // `refresh: false` sends nothing at all — the server tests `=== '1'`, and a parameter we
+          // do not mean is how a "false" ends up read as truthy somewhere downstream.
+          refresh: params.refresh ? '1' : undefined,
+        },
+      },
+      init(opts),
+    ),
+    '/github/issue-prs',
   )
 }
 

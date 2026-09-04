@@ -8,6 +8,7 @@ export {
   fetchGithub,
   fetchGithubChecks,
   fetchGithubComments,
+  fetchGithubIssuePrs,
   fetchGithubPrDiff,
   fetchGithubRefStatus,
   forgetRefStatus,
@@ -16,12 +17,15 @@ export {
   GithubPrNotFoundError,
   GH_MAX_LIMIT,
   GH_CHECKS_MAX,
+  GH_ISSUE_PRS_MAX,
   GH_REF_STATUS_MAX,
 } from './forge/github.ts';
 export type {
   GithubData,
   GithubItem,
   GithubChecksData,
+  GithubIssuePrsData,
+  LinkedPr,
   GithubRefStatusData,
   ReferenceStatus,
 } from './forge/github.ts';

@@ -163,7 +163,7 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, GithubPrNotFoundError, GH_CHECKS_MAX, GH_REF_STATUS_MAX } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubIssuePrs, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, GithubPrNotFoundError, GH_CHECKS_MAX, GH_ISSUE_PRS_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
@@ -4867,6 +4867,39 @@ export function createApp(deps: ServerDeps) {
       }
       return c.json(await fetchGithubChecks(repoRoot, numbers));
     })
+
+    // Lazy linked-PR chips for on-screen ISSUE rows (#816). Additive sibling of /github/checks and
+    // shaped exactly like it — a required comma-separated `issues` list of positive integers
+    // capped at GH_ISSUE_PRS_MAX, a 400 on anything malformed, and the same in-payload
+    // availability degrade — so the one-shot list fetch keeps its fast paint.
+    //
+    // The one addition is `refresh`: the scenario this endpoint exists for is "an agent JUST
+    // opened a PR for this issue", and without the flag the list header's Refresh would re-run the
+    // client query only to be handed the same ≤60 s-old server answer. /github/checks needs no
+    // such flag because a CI glyph nobody just changed is not worth a subprocess.
+    .get(
+      '/github/issue-prs',
+      queryZodValidator(z.object({ issues: z.string().min(1), refresh: queryValue }), {
+        message: 'missing issues query',
+      }),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const query = c.req.valid('query');
+        const parts = query.issues.split(',').map((p) => p.trim()).filter(Boolean);
+        if (parts.length === 0 || parts.length > GH_ISSUE_PRS_MAX) {
+          return c.json({ error: 'invalid issues query' }, 400);
+        }
+        const numbers: number[] = [];
+        for (const part of parts) {
+          const n = Number(part);
+          if (!Number.isInteger(n) || n <= 0 || String(n) !== part) {
+            return c.json({ error: 'invalid issues query' }, 400);
+          }
+          numbers.push(n);
+        }
+        return c.json(await fetchGithubIssuePrs(repoRoot, numbers, query.refresh === '1'));
+      },
+    )
 
     // Batched status for the PR/issue chips a task table paints. Additive sibling of
     // /github/checks and shaped like it: comma-separated positive integers, capped at

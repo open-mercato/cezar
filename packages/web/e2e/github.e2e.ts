@@ -106,6 +106,34 @@ describe('the GitHub tab against the live dry-run server', () => {
     browser.screenshot(`${artifactsDir}/github-desktop.png`)
   })
 
+  it('an issue with a linked PR paints its chip on the row (#816)', async () => {
+    if (!forgeAvailable) return
+    // The dry-run catalog links issue #142 to an open PR and a merged one. The window is
+    // hydrated a beat after the rows paint (`GET /api/v1/github/issue-prs`), so poll for it.
+    const links = await api<{ available: boolean; links: Record<string, Array<{ number: number; state: string }>> }>(
+      '/api/v1/github/issue-prs?issues=142',
+    )
+    expect(links.available).toBe(true)
+    const expected = links.links['142'] ?? []
+    if (expected.length === 0) return // a catalog without a linked issue — nothing to assert
+
+    browser.goto(`${baseUrl}${scoped('/github')}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="gh-header"]') !== null`)
+    // Bare `/github` restores the last-selected tab (#417) — pin it to Issues.
+    browser.click(`[data-slot="gh-tabs"] a[href="${scoped('/github')}"]`)
+    browser.waitForFunction(
+      `document.querySelectorAll('[data-slot="gh-row-item"][data-number="142"] [data-slot="gh-row-linked-pr"]').length === ${expected.length}`,
+    )
+    const first = expected[0]!
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="gh-row-item"][data-number="142"] [data-slot="gh-row-linked-pr"]')?.dataset.number === '${first.number}'`,
+    )
+    expect(browser.text('[data-slot="gh-row-item"][data-number="142"] [data-slot="gh-row-linked-pr"]')).toContain(
+      `PR #${first.number}`,
+    )
+    browser.screenshot(`${artifactsDir}/github-issue-linked-pr-chip.png`)
+  })
+
   it('opens an issue’s detail: meta, labels, markdown body, hand-to-agent dropdowns', async () => {
     if (!forgeAvailable) return
     const gh = await api<GithubPayload>('/api/v1/github')
