@@ -527,7 +527,12 @@ function TableRow({
       {columns.map((column) => {
         if (column.id === 'memory') return null
         if (column.id === 'cpu') {
-          return queuePosition !== null ? (
+          const cpuExpanded = isColumnExpanded('cpu', expandedColumns)
+          const memoryExpanded = isColumnExpanded('memory', expandedColumns)
+          // The queue note borrows the CPU/Mem pair, but only while there is room to borrow: the
+          // table is auto-layout, so `#N in queue` under `whitespace-nowrap` would push both folded
+          // columns back open (#821). Fold beats the note; one expanded column is enough to carry it.
+          return queuePosition !== null && (cpuExpanded || memoryExpanded) ? (
             <td
               key={column.id}
               data-slot="queue-note"
@@ -541,8 +546,8 @@ function TableRow({
             <UsageTds
               key={column.id}
               run={run}
-              cpuExpanded={isColumnExpanded('cpu', expandedColumns)}
-              memoryExpanded={isColumnExpanded('memory', expandedColumns)}
+              cpuExpanded={cpuExpanded}
+              memoryExpanded={memoryExpanded}
             />
           )
         }
