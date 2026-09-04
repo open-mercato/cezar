@@ -596,6 +596,20 @@ cezar is not married to one vendor. Every agent step runs through a single
 On startup cezar probes which CLIs are installed and the cockpit only offers
 the backends it found — install any one of the four and you're operational.
 
+**Models come from your own machine.** The model picker does not ship a list of
+vendor releases that goes stale between cezar versions. For Claude, Codex and
+OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
+Code's `list_models` control request; the Codex app-server's `model/list`;
+`opencode models`) and shows exactly that, in that order — so a model your
+account gained yesterday is selectable today with no cezar release, and one your
+provider retired stops being offered. Discovery is read-only, costs no tokens,
+and is cached briefly in memory. If the CLI is missing, logged out, too old or
+slow, the picker quietly falls back to that runner's built-in entries (`auto`
+plus Claude's tier aliases) and says so in a status row; `pi`, which has no
+host-local catalog yet, always shows its built-in entries. `auto` — send no
+model at all and let the CLI decide — is always available, and a model you
+pinned by hand stays selectable even when it is no longer advertised.
+
 **Pick a backend at three levels** (most specific wins):
 
 1. **Config default** — `"defaultRunner": "codex"` in `.ai/cezar/config.json`.
@@ -624,17 +638,6 @@ steps:
 
 Parallel variants (×2/×3) of one task share that task's backend — mixing
 happens per task and per step, not inside a variant group.
-
-**Models come from your own machine.** For Codex and OpenCode, the model picker
-is not a list cezar ships — it asks the installed CLI what it can actually run
-(`codex app-server`'s `model/list`, and `opencode models`), caches the answer in
-memory for five minutes, and shows it. A model your provider rolled out
-yesterday is selectable without a cezar release, and one it retired stops being
-offered. Claude Code has no equivalent local catalog, so it keeps a short list
-of tier aliases and pinned versions. `auto` (let the agent decide) is always
-available, including when the CLI is missing, logged out, or slow — discovery
-never blocks the cockpit, and a model you pinned yourself stays selectable even
-if it is absent from the discovered list.
 
 The seam is deliberately small: a backend is one class implementing the
 `AgentRunner` interface (`packages/cezar/src/core/agent-runner.ts`) that turns a prompt into
