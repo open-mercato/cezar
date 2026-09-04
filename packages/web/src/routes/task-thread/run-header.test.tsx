@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
@@ -9,6 +9,18 @@ import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { RunHeader } from './run-header'
 import { resolveConflictsPrompt } from './run-actions'
+
+beforeEach(() => {
+  // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+})
 
 afterEach(() => {
   act(() => resetToasts())
@@ -1103,6 +1115,20 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Session' }).getAttribute('aria-current')).toBe('page')
     expect(tabs.getByRole('link', { name: 'Changes' }).getAttribute('href')).toBe('/tasks/r1/changes')
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
+  })
+
+  it('copies the branch name from its header chip and confirms it in the tooltip', async () => {
+    stubFetch()
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('cez/feature-branch')
+      expect(screen.getAllByText('Copied').length).toBeGreaterThan(0)
+    })
   })
 
   it('a queued run shows its position in the pill, from the shared runs list', async () => {

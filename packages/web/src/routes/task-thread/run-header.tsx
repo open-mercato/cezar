@@ -61,6 +61,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
@@ -490,6 +491,8 @@ function MetaRow({
    *  plain text, because the route it used to link to is disabled. */
   automationsAvailable: boolean
 }) {
+  const [branchCopied, setBranchCopied] = useState(false)
+  const [branchTooltipOpen, setBranchTooltipOpen] = useState(false)
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
@@ -512,15 +515,41 @@ function MetaRow({
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
-  if (run.branch) {
+  const branch = run.branch
+  if (branch) {
     parts.push(
-      <span
-        key="branch"
-        data-slot="branch-chip"
-        className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium"
-      >
-        {run.branch}
-      </span>,
+      <TooltipProvider key="branch">
+        <Tooltip open={branchTooltipOpen} onOpenChange={setBranchTooltipOpen}>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              data-slot="branch-chip"
+              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={`Copy branch name ${branch}`}
+              onClick={() => {
+                if (!navigator.clipboard) {
+                  toast(`Branch: ${branch}`)
+                  return
+                }
+                void navigator.clipboard
+                  .writeText(branch)
+                  .then(() => {
+                    setBranchCopied(true)
+                    setBranchTooltipOpen(true)
+                    window.setTimeout(() => {
+                      setBranchCopied(false)
+                      setBranchTooltipOpen(false)
+                    }, 1_500)
+                  })
+                  .catch(() => toast(`Branch: ${branch}`))
+              }}
+            >
+              {branch}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{branchCopied ? 'Copied' : 'Copy branch name'}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>,
     )
   }
   // EVERY PR the task points at, in `taskReferences` order — the same order, and the same
