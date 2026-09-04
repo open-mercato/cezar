@@ -78,6 +78,8 @@ Named image uploads (a dragged `diagram.png`) can join later behind an explicit 
 
 ## Progress
 
+PR: #957
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Carry the filename on the wire
@@ -99,5 +101,5 @@ Named image uploads (a dragged `diagram.png`) can join later behind an explicit 
 
 ### Phase 4: Documentation and gate
 
-- [ ] 4.1 BACKWARD_COMPATIBILITY.md and AGENTS.md
-- [ ] 4.2 Full validation gate
+- [x] 4.1 BACKWARD_COMPATIBILITY.md and AGENTS.md — cbc63e2e
+- [x] 4.2 Full validation gate — verified 2026-09-04
