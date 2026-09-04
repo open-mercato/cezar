@@ -1,6 +1,22 @@
 # Unreleased
 
 ## ✨ Features
+- ✨ **Drag the projects in the left drawer into the order you want.** The sidebar sorted its
+  project groups by `lastOpenedAt`, a timestamp bumped only when a project is registered or when
+  cezar boots in that folder — so the order was really "the sequence the servers booted in", and
+  the repo you live in all day could sit below three you touch once a month with no way to move
+  it. Each group now carries a grip: drag it, or focus it and press Space, arrows, Space. The
+  order is stored on the server, in `~/.cezar/ui-state.json` under the new optional
+  `sidebar.projectOrder`, so it is the same order in every browser you open the cockpit in — the
+  phone and the desktop agree — and it survives reloads and restarts. That is deliberately the
+  opposite call from `sidebar.collapsed`, which moved to per-browser storage: which groups are
+  *shut* describes the window you are looking through, while what order your repos are *in* is a
+  considered choice made once, and redoing it on every device is the annoyance. The ⌘K palette
+  reads the same order — one registry, never listed two ways. A project registered after your
+  last drag floats to the top by recency rather than hiding under the list, an id that is no
+  longer registered is ignored instead of leaving a hole, and Settings → Appearance grows a
+  "Reset order" that appears only once there is something to undo. A missing project keeps its
+  place but has no grip: that row is inert by design.
 - ✨ **Continue a task on another agent account, not just another agent.** The thread's Continue
   carried a runner pill that could switch `claude → codex` but never offered the second Claude
   login the new-task composer has offered since accounts landed — so "finish this one on my other
