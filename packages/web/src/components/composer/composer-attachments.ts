@@ -49,7 +49,8 @@ export function attachmentMediaType(file: File): string | null {
 export interface PendingAttachment extends AttachmentInput {
   /** Data-URL for the thumbnail — images only; a file has nothing to preview. */
   preview?: string
-  /** The user's own filename, shown on the chip. Never sent: the server names the file itself. */
+  /** The user's own filename, shown on the chip — and, for a FILE, sent (#929) so the per-project
+   *  attachment library can file the copy under it. The run folder still names the file itself. */
   name: string
   isImage: boolean
 }
@@ -71,6 +72,18 @@ export async function fileToPendingAttachment(file: File): Promise<PendingAttach
     name: file.name || (isImage ? 'pasted image' : `pasted.${attachmentExtension(mediaType)}`),
     isImage,
   }
+}
+
+/**
+ * Strip a pending attachment down to what goes on the wire — the single place that decides it, so
+ * a second composer surface cannot start sending `preview` (a whole second copy of the bytes).
+ *
+ * The filename rides along for FILES only (#929). An image is almost always a clipboard paste with
+ * no filename at all — the chip falls back to the literal `'pasted image'` — and images are not
+ * filed in the attachment library, so sending it would be noise the server would have to ignore.
+ */
+export function toAttachmentInput({ mediaType, data, name, isImage }: PendingAttachment): AttachmentInput {
+  return { mediaType, data, ...(isImage ? {} : { name }) }
 }
 
 export interface AttachmentIntake {
