@@ -62,7 +62,9 @@ Named image uploads (a dragged `diagram.png`) can join later behind an explicit 
 - **2.1** Add `name?: string` to `FileBlock` and carry it through `toPastedContent`. Tests pinning that the image branch is byte-identical to today.
 - **2.2** Add the library writer in `packages/cezar/src/workflows/run.ts`: content dedupe (byte-identical file under that name → reuse, copy nothing), collision rename (`<stem>-2.<ext>`, `-3`, …), best-effort `try/catch`. Its own unit tests.
 - **2.3** Call it from the user-attachment persistence path only (`namePrefix === 'pasted'`, file blocks) — never for agent screenshots. Tests, including the failure-isolation case.
-- **2.4** Surface the library path in `pastedAttachmentsText` without dropping the existing per-run paths (#950 behaviour must not regress). Tests.
+- **2.4** Surface the library in `pastedAttachmentsText` without dropping the existing per-run paths (#950 behaviour must not regress). Tests.
+
+  **Landed as a directory hint, not per-file paths.** A `PersistedAttachment.libraryPath` does not survive the dequeue/restart re-read — `readPersistedAttachments` reconstructs an attachment from its URL alone, so the original name is gone by then, and the note built at dequeue would silently lose the library line. Naming the folder needs no per-attachment state, and is a better answer for what the library is actually for: the document the user refers to by name but attached to an earlier task.
 
 ### Phase 3 — the `.gitignore` P0
 
@@ -85,10 +87,10 @@ Named image uploads (a dragged `diagram.png`) can join later behind an explicit 
 
 ### Phase 2: The library
 
-- [ ] 2.1 `FileBlock.name` through `toPastedContent`
-- [ ] 2.2 Library writer — dedupe, collision rename, best-effort
-- [ ] 2.3 Wire it to user file attachments only
-- [ ] 2.4 Surface the library path in the agent's note
+- [x] 2.1 `FileBlock.name` through `toPastedContent` — 1f21d864
+- [x] 2.2 Library writer — dedupe, collision rename, best-effort — 1f21d864
+- [x] 2.3 Wire it to user file attachments only — 1f21d864
+- [x] 2.4 Surface the library path in the agent's note — 1f21d864
 
 ### Phase 3: The .gitignore P0
 
