@@ -47,6 +47,21 @@ export interface ClaudeCliRunnerOptions {
 }
 
 /**
+ * The claude binary a spawn should use: an explicit override, else `CEZ_CLAUDE_BIN`, else the
+ * bundled mock under `CEZ_DRY_RUN`, else `claude` on PATH.
+ *
+ * Exported so model discovery (`claude-model-catalog.ts`) resolves the executable exactly the
+ * way execution does — the catalog and the runs it feeds cannot disagree about which CLI, and
+ * therefore which account and which model list, is authoritative.
+ */
+export function resolveClaudeExecutable(override?: string): string {
+  if (override) return override;
+  // CEZ_DRY_RUN=1 swaps in the bundled mock so the cockpit / store /
+  // GUI can be exercised without a logged-in claude or burning tokens.
+  return process.env.CEZ_CLAUDE_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockClaudePath() : 'claude');
+}
+
+/**
  * `AgentRunner` over the Claude Code CLI in headless stream-json mode. Auth =
  * the host's logged-in Pro/Max subscription (no API key needed). Sandboxing is
  * `--allowedTools` (default-deny for anything not listed) + running inside the
@@ -66,12 +81,7 @@ export class ClaudeCliRunner implements AgentRunner {
   private lastSession: AgentSession | null = null;
 
   constructor(opts: ClaudeCliRunnerOptions = {}) {
-    // CEZ_DRY_RUN=1 swaps in the bundled mock so the cockpit / store /
-    // GUI can be exercised without a logged-in claude or burning tokens.
-    const defaultBin =
-      process.env.CEZ_CLAUDE_BIN ??
-      (process.env.CEZ_DRY_RUN === '1' ? mockClaudePath() : 'claude');
-    this.bin = opts.bin ?? defaultBin;
+    this.bin = resolveClaudeExecutable(opts.bin);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
   }
 

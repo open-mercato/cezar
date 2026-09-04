@@ -101,6 +101,12 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
           },
         )
       })
+      // Compaction is an optimization, not a load: this call is fire-and-forget (`void`), so a
+      // rejection here has no query to reject and would surface as an unhandled rejection. The
+      // live buffer still holds every event, and the next `onCompact` retries — so swallowing is
+      // the graceful outcome. Reachable via a transport error, and now also via a malformed page
+      // body, which the client validates rather than casts (#827).
+      .catch(() => {})
       .finally(() => {
         compactingLive.current = false
       })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { MODEL_DISCOVERY_RUNNERS, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import type { BackendCheck, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 
 import {
@@ -7,9 +8,9 @@ import {
   availableRunners,
   buildCreateRunBody,
   MODELS_BY_RUNNER,
-  modelConflictsWithRunner,
   modelsForRunner,
   modelCatalogStatus,
+  modelConflictsWithRunner,
   pushRecentSource,
   resolveModel,
   resolveRunner,
@@ -63,10 +64,43 @@ describe('model option resolution', () => {
     }
   })
 
-  it('claude: tier aliases + pinned versions, newest (Fable 5) first', () => {
-    expect(modelsForRunner('claude').map((m) => m.id)).toEqual([
-      '', 'opus', 'sonnet', 'haiku', 'claude-fable-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5',
-    ])
+  it('claude falls back to the tier aliases when there is no host catalog', () => {
+    expect(modelsForRunner('claude').map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
+    // No dated id may be hard-coded any more (#784) — that drift is what discovery replaced.
+    expect(modelsForRunner('claude').some((m) => /^claude-\w+-\d/.test(m.id))).toBe(false)
+  })
+
+  it('claude: a live catalog REPLACES the fallback aliases, keeping auto and the CLI order', () => {
+    const catalog = {
+      runner: 'claude' as const,
+      source: 'live' as const,
+      stale: false,
+      models: [
+        { id: 'opus[1m]', label: 'Opus (1M context)', description: 'Opus 5 with 1M context' },
+        { id: 'sonnet', label: 'Sonnet', description: 'Sonnet 5' },
+      ],
+    }
+    const options = modelsForRunner('claude', catalog)
+    expect(options.map((m) => m.id)).toEqual(['', 'opus[1m]', 'sonnet'])
+    // The CLI's own description wins over the static one it replaced.
+    expect(options.find((m) => m.id === 'sonnet')?.desc).toBe('Sonnet 5')
+  })
+
+  it('claude: a model pinned to a retired id stays selectable', () => {
+    const catalog = {
+      runner: 'claude' as const,
+      source: 'live' as const,
+      stale: false,
+      models: [{ id: 'opus', label: 'Opus', description: 'Opus 5' }],
+    }
+    const options = modelsForRunner('claude', catalog, ['claude-opus-4-8'])
+    expect(options.map((m) => m.id)).toEqual(['', 'opus', 'claude-opus-4-8'])
+    expect(options.at(-1)?.desc).toBe('Custom or legacy model')
+  })
+
+  it('an empty catalog is not an empty picker — the presets come back', () => {
+    const empty = { runner: 'claude' as const, models: [], source: 'unavailable' as const, stale: false }
+    expect(modelsForRunner('claude', empty).map((m) => m.id)).toEqual(['', 'opus', 'sonnet', 'haiku'])
   })
 
   it('codex: auto plus host-discovered and custom ids', () => {
@@ -75,10 +109,34 @@ describe('model option resolution', () => {
     expect(modelsForRunner('codex', catalog, ['legacy-id']).at(-1)?.desc).toBe('Custom or legacy model')
   })
 
-  it('reports stale and unavailable Codex catalogs without exposing reasons', () => {
-    expect(modelCatalogStatus('codex', { runner: 'codex', models: [], source: 'cache', stale: true, reason: 'raw' })).toBe('Using cached Codex model list')
-    expect(modelCatalogStatus('codex', { runner: 'codex', models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe('Latest Codex models unavailable')
-    expect(modelCatalogStatus('claude', undefined, true)).toBeUndefined()
+  it.each([
+    ['codex', 'Codex'],
+    ['claude', 'Claude'],
+  ] as const)('names %s in its stale/unavailable rows without exposing raw reasons', (runner, label) => {
+    expect(modelCatalogStatus(runner, { runner, models: [], source: 'cache', stale: true, reason: 'raw' })).toBe(`Using cached ${label} model list`)
+    expect(modelCatalogStatus(runner, { runner, models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe(`Latest ${label} models unavailable`)
+    expect(modelCatalogStatus(runner, undefined, true)).toBe(`Latest ${label} models unavailable`)
+  })
+
+  it('rejects another vendor\'s bare id even after the presets stopped naming releases', () => {
+    // The list-membership half of the guard cannot see these any more — the shape half can.
+    expect(modelConflictsWithRunner('claude-opus-4-8', 'codex')).toBe(true)
+    expect(modelConflictsWithRunner('claude-opus-99', 'opencode')).toBe(true)
+    expect(modelConflictsWithRunner('gpt-6', 'claude')).toBe(true)
+    // A runner's own vendor, an explicit gateway id, and an unfamiliar custom id all pass.
+    expect(modelConflictsWithRunner('claude-opus-4-8', 'claude')).toBe(false)
+    // A gateway id names its provider, so the shape half never fires on it.
+    expect(modelConflictsWithRunner('openai/gpt-6', 'claude')).toBe(false)
+    expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'opencode')).toBe(false)
+    expect(modelConflictsWithRunner('my-org/custom-tune', 'codex')).toBe(false)
+  })
+
+  it('every runner cezar ships reads its models from the host', () => {
+    // #794 gave OpenCode a catalog and #784 gave Claude one, so the picker no longer has a
+    // preset-only runner. The contract's list is the single source both the route and the picker
+    // compile against — this asserts they still agree on who discovers.
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode'])
+    expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {
@@ -147,25 +205,26 @@ describe('model option resolution', () => {
   })
 })
 
-describe('resolveSource (candidate validation + cold quick-task default)', () => {
+describe('resolveSource (the draft pick, validated — no cold default)', () => {
   const skills = [skill('om-fix'), skill('deploy', 'global')]
   const workflows = [workflow('quick-task'), workflow('fix-and-verify')]
 
-  it('takes the first candidate that still exists', () => {
-    expect(
-      resolveSource(
-        [{ source: 'skill', ref: 'gone' }, { source: 'workflow', ref: 'fix-and-verify' }],
-        skills,
-        workflows,
-      ),
-    ).toEqual({ source: 'workflow', ref: 'fix-and-verify' })
+  it('keeps a pick the catalog still has', () => {
+    expect(resolveSource({ source: 'workflow', ref: 'fix-and-verify' }, skills, workflows))
+      .toEqual({ source: 'workflow', ref: 'fix-and-verify' })
+    expect(resolveSource({ source: 'skill', ref: 'om-fix' }, skills, workflows))
+      .toEqual({ source: 'skill', ref: 'om-fix' })
   })
 
-  it('defaults cold to quick-task, then first skill when quick-task is unavailable', () => {
-    expect(resolveSource([], skills, workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
-    expect(resolveSource([], skills, [workflow('fix-and-verify')])).toEqual({ source: 'skill', ref: 'om-fix' })
-    expect(resolveSource([], [], workflows)).toEqual({ source: 'workflow', ref: 'quick-task' })
-    expect(resolveSource([], [], [])).toEqual({ source: 'workflow', ref: 'quick-task' })
+  it('resolves to NOTHING when there is no pick, or the pick is gone', () => {
+    // The empty composer state: `/new` opens here, and nothing preselects it away.
+    expect(resolveSource(null, skills, workflows)).toBeNull()
+    expect(resolveSource(undefined, skills, workflows)).toBeNull()
+    // A skill deleted since it was drafted must not stay in the pill.
+    expect(resolveSource({ source: 'skill', ref: 'gone' }, skills, workflows)).toBeNull()
+    expect(resolveSource({ source: 'workflow', ref: 'gone' }, skills, workflows)).toBeNull()
+    // An empty catalog is the same answer, with no quick-task/first-skill fallback left.
+    expect(resolveSource({ source: 'skill', ref: 'om-fix' }, [], [])).toBeNull()
   })
 
   it('sourceExists checks the matching catalog only', () => {
@@ -196,6 +255,21 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     })
     // What actually goes over the wire: the undefineds vanish.
     expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'do the thing', workflow: 'quick-task' })
+  })
+
+  it('NO source → the built-in quick-task, because the route demands workflow XOR steps', () => {
+    const body = buildCreateRunBody({
+      task: 'just do it',
+      source: null,
+      model: '',
+      runner: 'claude',
+      defaultRunner: 'claude',
+      variants: 1,
+      images: [],
+    })
+    // Byte-identical to picking quick-task by hand — which is why the picker stopped offering
+    // both. `POST /runs` 400s on a body carrying neither key, so "nothing" cannot go out bare.
+    expect(JSON.parse(JSON.stringify(body))).toEqual({ task: 'just do it', workflow: 'quick-task' })
   })
 
   it('skill source → the one-step inline chain (spec 008: same shape as inbox/bookmarklet)', () => {

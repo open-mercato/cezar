@@ -208,21 +208,54 @@ export interface TaskReference {
  *
  * Built by walking an ordered list of SOURCES rather than by hand-picking a winner, so adding the
  * next kind of reference is one entry here and nothing else — and the PR half is `prUrls`, the
- * same list `taskPrUrl` takes its head from, so the two can never disagree about #407 or #526. Order is strongest-first — the PR a
- * task created, the PR it is about, then the issue — which is also what makes `taskReference`
- * answer exactly what it always answered.
+ * same list `taskPrUrl` takes its head from, so the two can never disagree about #407 or #526.
+ * Order is strongest-first — the PR a task created, the PR it is about, then the issue — with one
+ * thing ahead of all of them: a `CEZ:PR` declaration that NO scraped URL corroborates.
+ *
+ * That exception is narrow on purpose. Normally the declaration is already one of the URLs below
+ * (the marker contract asks the agent to re-declare once it opens a PR of its own), and then
+ * nothing changes: dedup collapses them and the created PR still leads. But when the URL tier
+ * carries a number the agent never declared, that tier is pointing somewhere the agent did not —
+ * and it is the tier built out of guesses. It has been wrong exactly that way: a task that
+ * printed another run's stored `gh pr create` line was credited with that run's PR, in another
+ * repository, and it then led every chip list on the page while the PR the task actually opened
+ * sat behind it. A statement the agent made outranks a line a janitor found.
  *
  * What this deliberately does NOT read is `referencedPrCandidates` / `referencedIssueCandidates`.
  * Those are transcript scrapings that routinely name OTHER repositories (#526), so a further
  * reference has to arrive as a real field before it can be shown: the shape is ready for more,
- * the guesswork is not invited in. `markerRefs.pr` is the obvious next source, and is left out
- * only because today it never appears without one of the URLs below already carrying it.
+ * the guesswork is not invited in.
+ *
+ * Nor does it repo-check the `referenced*Url` fields it DOES read, and that is a decision, not an
+ * omission (#945). Those fields could name another repository — a task that cited one upstream PR
+ * used to adopt it outright — but the fix belongs at the record, in `store.ts`, for a reason this
+ * layer cannot work around: the legitimate cross-repo reference (#819) is told from the poisoned
+ * one by whether the TASK PROMPT names that repository, and `TaskReferenceInput` has no `task`.
+ * The slim runs-index row it is `Pick`ed from has none either, so mirroring the rule here would
+ * mean either widening `runIndexEntrySchema` for a signal the store already used, or dropping
+ * every foreign chip including the ones a user deliberately asked for. Both are worse than one
+ * authority. So the invariant this file relies on is: **a `referenced*Url` that reaches the
+ * display layer has already been repo-scoped**, and a foreign one only survives because the prompt
+ * corroborated it — in which case painting it is correct.
+ *
+ * That completes the rule this comment states in one piece. All three halves guard the same
+ * failure — a chip pointing at a repository the task never touched — at the three places it can
+ * enter: #526/#819/#854 stop a bare NUMBER being synthesized into a link (here, above), and #945
+ * stops a foreign discovered URL being adopted as the subject (in `store.ts`).
  *
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
 export function taskReferences(run: TaskReferenceInput, repoBase?: string): TaskReference[] {
+  const prs = prUrls(run)
+  const declared = run.markerRefs?.pr
   const sources: { kind: TaskReference['kind']; url?: string; number?: number }[] = [
-    ...prUrls(run).map((url) => ({ kind: 'PR' as const, url })),
+    // The uncorroborated declaration, ahead of everything (see above). When a URL below does name
+    // it, this entry is omitted entirely rather than added and deduped — that keeps the ORDER the
+    // ordinary case had, with the created PR first.
+    ...(declared === undefined || prs.some((url) => prNumber(url) === String(declared))
+      ? []
+      : [{ kind: 'PR' as const, number: declared }]),
+    ...prs.map((url) => ({ kind: 'PR' as const, url })),
     // Numeric-only: a reference known by number before any URL was scraped. `repoBase` turns it
     // into a real link — see the synthesis note below.
     { kind: 'PR', number: run.prNumber },

@@ -11,11 +11,13 @@ import {
   FileTextIcon,
   MailIcon,
   PencilIcon,
+  PinIcon,
+  PinOffIcon,
   PlayIcon,
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useId, useReducer, useState, type ReactNode } from 'react'
+import { Fragment, useId, useMemo, useReducer, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -27,7 +29,9 @@ import {
   useMarkRunUnseen,
   useOpenTargets,
   usePatchRun,
+  usePinRun,
   useProjectRepoBase,
+  useReferenceProjectId,
   useProviderStatus,
   useRunHandoff,
   useRuns,
@@ -37,6 +41,8 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
+import { ResolveConflictsButton } from '@/components/reference-conflict-action'
+import { ReferenceStatusProvider } from '@/components/reference-status'
 import { TabLink } from '@/components/tab-link'
 import {
   AlertDialog,
@@ -63,7 +69,14 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
-import { formatCost, prNumber, taskIssueUrl, taskPrUrl, workflowLabel } from '@/lib/tasks-table'
+import {
+  formatCost,
+  prNumber,
+  taskIssueUrl,
+  taskPrUrl,
+  taskReferences,
+  workflowLabel,
+} from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { cn, isHttpUrl } from '@/lib/utils'
 
@@ -76,7 +89,9 @@ import { useFinishRun } from './use-finish-run'
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
  * the Session | Changes | Files tabs with the action bar, the workflow step rail and the plan
- * mirror — the whole sticky region above the thread.
+ * mirror — the whole header region above the thread. It scrolls away on phones so the transcript
+ * owns the small viewport, and stays sticky from `md` upward where there is room for persistent
+ * run context.
  *
  * Two deliberate omissions, both seams rather than gaps:
  *  - **VS Code** (spec: `POST /api/runs/:id/open-in-editor`) — the endpoint does not exist yet;
@@ -142,7 +157,7 @@ export function RunHeader({
   return (
     <header
       data-slot="run-header"
-      className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur md:px-6"
+      className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
     >
       <div className="mx-auto w-full max-w-[var(--measure)]">
         <div className="flex min-w-0 items-center gap-2">
@@ -207,7 +222,7 @@ export function RunHeader({
             metadata — it belongs with the pill above, not behind a tap with the diff stats. */}
         <MonitoringSchedule run={run} />
 
-        <div data-slot="run-tabs" className="mt-2.5 flex items-end gap-1">
+        <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             Session
           </TabLink>
@@ -264,6 +279,24 @@ export function RunHeader({
                 Mark unread
               </Button>
             ) : null}
+            {flags.pin ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-slot="pin-run"
+                aria-pressed={Boolean(run.pinned)}
+                title={
+                  run.pinned
+                    ? 'Unpin from the top of this project’s task list'
+                    : 'Pin to the top of this project’s task list'
+                }
+                disabled={actions.pin.isPending}
+                onClick={() => actions.pin.mutate()}
+              >
+                {run.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
+                {run.pinned ? 'Unpin' : 'Pin'}
+              </Button>
+            ) : null}
             {flags.archive ? (
               <Button variant="ghost" size="sm" onClick={() => actions.archive.mutate()}>
                 {run.archived ? <ArchiveRestoreIcon aria-hidden="true" /> : <ArchiveIcon aria-hidden="true" />}
@@ -286,7 +319,7 @@ export function RunHeader({
         </div>
 
         {run.steps.length > 0 ? (
-          <div className="border-t border-border pt-2 pb-1">
+          <div className="border-t border-border pt-1 pb-0 md:pt-2 md:pb-1">
             <WorkflowSteps runId={run.id} steps={run.steps} />
           </div>
         ) : null}
@@ -417,6 +450,14 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     onSuccess: invalidate,
     onError,
   })
+  // Pin/unpin (#935) — the shared hook rather than a local mutation, because the sidebar and the
+  // Tasks table drive the same action and the cache rule belongs in one place. Toggling off the
+  // record, exactly like archive above.
+  const pinMutation = usePinRun()
+  const pin = {
+    isPending: pinMutation.isPending,
+    mutate: () => pinMutation.mutate({ id: run.id, pinned: !run.pinned }, { onError }),
+  }
   // Mark unread (#775) drives the shared optimistic hook rather than a local mutation: the
   // cache choreography (clear `seenAt`, guarded rollback) belongs next to its read twin in
   // queries.ts, and no `invalidate` is wanted here — an invalidation would refetch the list
@@ -459,6 +500,7 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     continuation,
     continueRun: continueMutation,
     archive,
+    pin,
     markUnread,
     cancel,
     delete: deleteMutation,
@@ -536,6 +578,22 @@ function MetaRow({
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
+  // At most two references here, so this is a batch of one or two rather than of a table — but it
+  // goes through the same seam, which is what keeps the header's chip and the table's chip
+  // answering identically for the same PR.
+  const projectId = useReferenceProjectId()
+  const references = useMemo(() => taskReferences(run, repoBase), [run, repoBase])
+  const referenceRequests = useMemo(
+    () =>
+      projectId === undefined
+        ? []
+        : references.map((reference) => ({
+            projectId,
+            kind: reference.kind,
+            number: reference.number,
+          })),
+    [references, projectId],
+  )
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
@@ -550,13 +608,43 @@ function MetaRow({
       </span>,
     )
   }
+  // EVERY PR the task points at, in `taskReferences` order — the same order, and the same
+  // statuses, the global Tasks table paints. A task opened on someone else's PR that pushes a
+  // follow-up of its own is about both, and its own page is the last place that should have to
+  // pick one.
+  //
+  // A reference with no URL still gets its chip, exactly as All tasks paints it: a number-only
+  // reference is what a `CEZ:PR` declaration looks like before any link is scraped, and the two
+  // pages read their repository from DIFFERENT places (this one from health's remote, All tasks
+  // from the project registry's `repoUrl`) — so "no URL here" never means "nothing to show".
+  // `ReferenceChip` degrades such a chip to inert text on its own.
+  const prReferences = references.filter((reference) => reference.kind === 'PR')
+  for (const reference of prReferences) {
+    parts.push(
+      <ReferenceChip
+        key={`pr-${reference.number}`}
+        reference={reference}
+        taskTitle={runTitle(run)}
+        className="h-5"
+        // Shown only on a chip that IS conflicting — the chip decides that, being the thing that
+        // knows — and mounted only while its panel is open. The same component the Tasks table
+        // hands its chips, so both send the same prompt on the same seam.
+        conflictAction={<ResolveConflictsButton run={run} prNumber={reference.number} />}
+      />,
+    )
+  }
+  // The one PR chip `taskReferences` cannot express: a forge URL whose last segment is not a
+  // number (`taskPrUrl`'s own tolerance — an unrecognized forge still gets a working link, just
+  // without a number cezar would be inventing). Gated on that URL not being painted already,
+  // NOT on there being no chips at all: today every `pullRequestUrl` is a GitHub `…/pull/N` and
+  // the two are the same test, but a forge whose PR URLs do not end in a number (#847's GitLab
+  // adapter) would have a `prNumber` chip standing in front of a link that then never rendered.
   const prUrl = taskPrUrl(run)
-  if (prUrl && isHttpUrl(prUrl)) {
-    const number = prNumber(prUrl)
+  if (prUrl && isHttpUrl(prUrl) && !prReferences.some((reference) => reference.url === prUrl)) {
     parts.push(
       <ReferenceChip
         key="pr"
-        reference={{ kind: 'PR', ...(number ? { number: Number(number) } : {}), url: prUrl }}
+        reference={{ kind: 'PR', url: prUrl }}
         taskTitle={runTitle(run)}
         className="h-5"
       />,
@@ -620,22 +708,12 @@ function MetaRow({
   }
 
   return (
-    <div
-      data-slot="run-meta"
-      className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground"
-    >
-      {parts.map((part, index) => (
-        <Fragment key={index}>
-          {index > 0 ? (
-            <span className="text-soft-foreground" aria-hidden="true">
-              ·
-            </span>
-          ) : null}
-          {part}
-        </Fragment>
-      ))}
-      <span className="ml-auto flex shrink-0 items-center gap-1.5">
-        {usage.map((part, index) => (
+    <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+      <div
+        data-slot="run-meta"
+        className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground md:mt-1.5 md:gap-y-1"
+      >
+        {parts.map((part, index) => (
           <Fragment key={index}>
             {index > 0 ? (
               <span className="text-soft-foreground" aria-hidden="true">
@@ -645,9 +723,21 @@ function MetaRow({
             {part}
           </Fragment>
         ))}
-        <AgentBadge run={run} />
-      </span>
-    </div>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {usage.map((part, index) => (
+            <Fragment key={index}>
+              {index > 0 ? (
+                <span className="text-soft-foreground" aria-hidden="true">
+                  ·
+                </span>
+              ) : null}
+              {part}
+            </Fragment>
+          ))}
+          <AgentBadge run={run} />
+        </span>
+      </div>
+    </ReferenceStatusProvider>
   )
 }
 
@@ -828,6 +918,19 @@ function ActionsKebab({
             onSelect={() => actions.markUnread.mutate()}
           >
             <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
+        {flags.pin ? (
+          <DropdownMenuItem
+            data-slot="pin-run"
+            // The same `aria-pressed` its desktop twin and `PinToggle` carry — a toggle should
+            // announce its state in every spelling, not only the ones with room for the word.
+            aria-pressed={Boolean(run.pinned)}
+            disabled={actions.pin.isPending}
+            onSelect={() => actions.pin.mutate()}
+          >
+            {run.pinned ? <PinOffIcon aria-hidden="true" /> : <PinIcon aria-hidden="true" />}
+            {run.pinned ? 'Unpin' : 'Pin'}
           </DropdownMenuItem>
         ) : null}
         {flags.archive ? (

@@ -81,6 +81,35 @@ describe('the ui-state API — skillUsage (#408)', () => {
     expect((await res.json()) as { error: string }).toHaveProperty('error');
   });
 
+  // ---- lastTask: the "no skill" value ---------------------------------------------------------
+  // The composer can run a task with NO skill and no workflow (the plain built-in quick-task).
+  // `null` is how that choice is recorded, and it has to be a real value rather than an omitted
+  // key: omitting it leaves whatever the previous run stored, because the merge is shallow.
+  describe('lastTask records "nothing picked" as null', () => {
+    it('accepts null, writes it, and round-trips it through GET', async () => {
+      const res = await put({ lastTask: null });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ lastTask: null });
+      expect(rawFile()).toHaveProperty('lastTask', null);
+      expect(await (await get()).json()).toMatchObject({ lastTask: null });
+    });
+
+    it('null REPLACES a stored source — an omitted key would have kept it', async () => {
+      await put({ lastTask: { source: 'skill', ref: 'om-fix' } });
+      await put({ lastTask: null });
+      expect(rawFile().lastTask).toBeNull();
+      // The omitted-key case, for contrast: the shallow merge keeps what is already there.
+      await put({ lastTask: { source: 'skill', ref: 'om-fix' } });
+      await put({ lastAutonomous: true });
+      expect(rawFile().lastTask).toEqual({ source: 'skill', ref: 'om-fix' });
+    });
+
+    it('still refuses a malformed source', async () => {
+      expect((await put({ lastTask: { source: 'nonsense', ref: 'x' } })).status).toBe(400);
+      expect((await put({ lastTask: { source: 'skill' } })).status).toBe(400);
+    });
+  });
+
   // ---- bounds ------------------------------------------------------------------------------
   // The body is written straight to ui-state.json, which every cockpit load GETs back and every
   // later PUT re-reads — so an unbounded map is an unbounded file. Every other field in this

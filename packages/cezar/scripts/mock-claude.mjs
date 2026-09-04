@@ -92,10 +92,15 @@ async function respond(userText, imageCount) {
   // ever render it, so the marker must survive in the v1 text.
   // `mock:ask-near` → bounded presentation drift: harmless extra keys plus
   // an overlong header/description. It should normalize into exactly one card.
+  // `mock:ask-truncated` → a complete payload one closing brace short (#936):
+  // the closer repair should still produce one card, note the recovery, and
+  // strip the raw marker (which ends on `]`, not `}`).
   const askMarker = userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
     : userText.includes('mock:ask-invalid')
       ? '\n\nCEZ:ASK {"questions":[]}'
+      : userText.includes('mock:ask-truncated')
+        ? '\n\nCEZ:ASK {"questions":[{"header":"Lint scope","question":"How much of the lint backlog should I land now?","multiSelect":false,"options":[{"label":"First slice only"},{"label":"Rule by rule"},{"label":"Whole backlog"}]}]'
       : userText.includes('mock:ask-near')
         ? '\n\nCEZ:ASK ' +
           JSON.stringify({

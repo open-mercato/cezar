@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, type ReactNode } from 'react'
+import { createContext, useContext, useLayoutEffect, useMemo, type ReactNode } from 'react'
 
 import { API_PREFIX, getApiScope, setApiScope } from '@open-mercato/cezar-api-client'
 
@@ -43,6 +43,24 @@ export function useProjectScope(): ProjectScope {
  * the scope *between* the render that set it and the children's mount effects, so the arriving
  * project's very first requests would go out unprefixed and cache under the wrong key. A
  * project change must therefore never run a cleanup — only a real unmount does.
+ *
+ * Both are LAYOUT effects, and that is the second half of the same rule (#task-detail-404). Every
+ * request in this app goes out from a passive effect — TanStack's mount fetch, the EventSource
+ * hooks — and React runs every layout effect in a commit (destroys in the mutation phase, creates
+ * in the layout phase) before any passive one. Passive effects here would leave two windows where
+ * a child fetches with the scope this provider's own cleanup nulled, because a child's create runs
+ * BEFORE its ancestor's:
+ *
+ *   - StrictMode's simulated remount, where the whole subtree's destroys (this reset among them)
+ *     run and then its creates — so a thread mounted in the SAME commit as this provider re-fires
+ *     its query unprefixed. That is a soft navigation into another project's task: 404, cached
+ *     under the correctly-scoped key, and only a reload (where the provider commits with the lazy
+ *     route's Suspense fallback, a commit earlier than the route's own) clears it.
+ *   - a real unmount+mount of two providers in ONE commit (leaving a project area for another),
+ *     where the departing provider's cleanup would land between the arriving one's render and its
+ *     children's fetches.
+ *
+ * As layout effects, the whole dance finishes before the first request of the commit is made.
  */
 export function ProjectScopeProvider({
   projectId,
@@ -53,14 +71,15 @@ export function ProjectScopeProvider({
 }) {
   if (getApiScope() !== projectId) setApiScope(projectId)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     setApiScope(projectId)
   }, [projectId])
 
-  // Unmount only — see the note above on why this cannot be the cleanup of the effect above.
-  // Ordering still holds for StrictMode's simulated remount: destroys run before creates, so
-  // the re-created `[projectId]` effect re-asserts the scope after this one nulled it.
-  useEffect(() => () => setApiScope(null), [])
+  // Unmount only — see the note above on why this cannot be the cleanup of the effect above, and
+  // why both are layout effects: destroys run before creates, so the re-created `[projectId]`
+  // effect re-asserts the scope after this one nulled it, and the whole exchange happens in the
+  // layout phase — before the passive effects where every request of the commit is made.
+  useLayoutEffect(() => () => setApiScope(null), [])
 
   const value = useMemo<ProjectScope>(
     // Built from the same prefix the request path uses — the version is one fact, not two.

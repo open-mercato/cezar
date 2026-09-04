@@ -9,6 +9,7 @@ import { clearProjectProbeCache, listProjects, registerProject } from '../worksp
 import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp, type ServerDeps } from './server.ts';
+import { __seedRefStatusCacheForTests } from './forge/github.ts';
 
 /**
  * `GET /api/v1/workspace/runs-index` — the ⌘K palette's cross-project task finder.
@@ -78,7 +79,7 @@ describe('workspace runs index API', () => {
 
   it('answers an empty index for an empty registry — never a 404', async () => {
     const body = await getIndex();
-    expect(body).toEqual({ runs: [], perProjectLimit: 200, truncated: [] });
+    expect(body).toEqual({ runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} });
   });
 
   it('merges the boot project’s live store with a cold project read off disk, newest first', async () => {
@@ -313,5 +314,71 @@ describe('workspace runs index API', () => {
 
     // One unreadable project costs its own rows, never the whole workspace's search.
     expect(body.runs.map((run) => run.id)).toEqual([live.id]);
+  });
+
+  /**
+   * Statuses ride along with the rows that carry the references, so the chips are coloured in the
+   * same paint as the table rather than a round trip later. The rule that makes it free — and
+   * therefore safe on a route the palette hits — is that it reads the ref-status cache and NEVER
+   * asks the forge.
+   */
+  describe('reference statuses', () => {
+    it('ships an empty map when the server has looked nothing up', async () => {
+      await registerProject(repoRoot);
+      const run = store.createRun({ title: 'Has a PR', workflow: 'build', task: 't', steps: [] });
+      store.updateRun(run.id, { pullRequestUrl: 'https://github.com/acme/demo/pull/42' });
+
+      const body = await getIndex();
+
+      // Present but empty — never absent, so a consumer can read it without a guard, and never
+      // invented, so a cold reference stays "nothing known" rather than a guessed status.
+      expect(body.referenceStatuses).toEqual({});
+      expect(body.runs.some((row) => row.id === run.id)).toBe(true);
+    });
+
+    it('ships what the cache holds, keyed by project', async () => {
+      await registerProject(repoRoot);
+      const run = store.createRun({ title: 'Has a PR', workflow: 'build', task: 't', steps: [] });
+      store.updateRun(run.id, {
+        pullRequestUrl: 'https://github.com/acme/demo/pull/42',
+        issueNumber: 7,
+      });
+      // Warm the cache the way the lazy route would have.
+      __seedRefStatusCacheForTests(realpathSync(repoRoot), [
+        [42, { kind: 'pr', status: 'merged' }],
+        [7, { kind: 'issue', status: 'open' }],
+      ]);
+
+      const body = await getIndex();
+
+      const project = Object.keys(body.referenceStatuses)[0]!;
+      expect(body.referenceStatuses[project]).toEqual({ prs: { 42: 'merged' }, issues: { 7: 'open' } });
+    });
+
+    it('looks up every number a run MENTIONS, not just the one its chip will show', async () => {
+      // Which reference is displayed is the cockpit's rule (#407, #526) and is deliberately not
+      // re-derived here. A cache read costs nothing per number, so the superset is free — and it
+      // is what lets the client apply its own rule to whatever it gets.
+      await registerProject(repoRoot);
+      const run = store.createRun({ title: 'Several', workflow: 'build', task: 't', steps: [] });
+      store.updateRun(run.id, {
+        pullRequestUrl: 'https://github.com/acme/demo/pull/42',
+        referencedPullRequestUrl: 'https://github.com/acme/demo/pull/40',
+        referencedIssueUrl: 'https://github.com/acme/demo/issues/12',
+      });
+      __seedRefStatusCacheForTests(realpathSync(repoRoot), [
+        [42, { kind: 'pr', status: 'merged' }],
+        [40, { kind: 'pr', status: 'ready' }],
+        [12, { kind: 'issue', status: 'completed' }],
+      ]);
+
+      const body = await getIndex();
+
+      const project = Object.keys(body.referenceStatuses)[0]!;
+      expect(body.referenceStatuses[project]).toEqual({
+        prs: { 40: 'ready', 42: 'merged' },
+        issues: { 12: 'completed' },
+      });
+    });
   });
 });

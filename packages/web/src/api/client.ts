@@ -41,6 +41,8 @@ import type {
   GitCommitResponse,
   GitPushResponse,
   GithubChecksData,
+  GithubSearchData,
+  GithubRefStatusData,
   GithubCommentsData,
   GithubData,
   GithubMergeMethod,
@@ -49,7 +51,7 @@ import type {
   GithubPrChangesData,
   GroupResponse,
   HealthResponse,
-  ImageInput,
+  AttachmentInput,
   LaunchKeyResponse,
   MessageInput,
   EditQueuedMessageResponse,
@@ -108,6 +110,8 @@ import {
   getApiBaseUrl,
   getApiScope,
   queryScope,
+  runHistoryContextSchema,
+  runHistoryPageSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -298,6 +302,45 @@ async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>
 }
 
 /**
+ * The `safeParse` half of a contract schema, spelled structurally.
+ *
+ * Keeps this package free of a direct `zod` dependency: the schemas arrive through the
+ * api-client barrel as runtime values (`contract-pipeline.test.ts` pins that), and this is the
+ * only part of them `unwrapValidated` uses.
+ */
+type ResponseValidator<T> = {
+  safeParse: (value: unknown) => { success: true; data: T } | { success: false }
+}
+
+/**
+ * `unwrap`, plus the shape check its cast cannot make.
+ *
+ * `unwrap` ends in `parsed as OkJson<R>` — a compile-time claim about a body the server sent at
+ * runtime. For most routes the claim is harmless: a caller reading a missing field gets
+ * `undefined` and renders nothing. The history routes are different — `useRunHistory` iterates
+ * `page.events`, so a 200 whose body is not a page throws a `TypeError` mid-render and takes the
+ * session view down with it, bypassing the hook's own full-replay fallback (which only triggers
+ * on a REJECTED query). Validating here turns that body into the same `ApiError` a non-JSON body
+ * already produces, so the malformed case degrades exactly like the unreachable one.
+ *
+ * Its own server cannot produce such a body (`contract-parity.test.ts` pins both response types
+ * to these schemas) — this guards the boundary against a proxy, a stale server, or a stub.
+ */
+async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>>(
+  res: R,
+  label: string,
+  schema: ResponseValidator<OkJson<R>>,
+): Promise<OkJson<R>> {
+  const status = res.status
+  const parsed = await unwrap(res, label)
+  const result = schema.safeParse(parsed)
+  if (!result.success) {
+    throw new ApiError(status, `the cezar server answered ${label} with an unexpected body`)
+  }
+  return result.data
+}
+
+/**
  * The one `fetch` both request paths go through — hand-written and typed alike.
  *
  * Shared rather than duplicated because the two behaviours below are the contract, and a
@@ -353,8 +396,8 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** Host-local catalog for one discovery runner (`codex`, `opencode` — #794). Workspace-level:
- *  one CLI/account serves every project. */
+/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode` — #794, #784).
+ *  Workspace-level: one CLI/account serves every project. */
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,
   opts?: ReadOptions,
@@ -462,12 +505,32 @@ export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
   )
 }
 
+/**
+ * The same read by EXPLICIT project — the twin of `getRun`, for the reason `archiveProjectRun`
+ * spells out: the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would
+ * name the BOOT project for a row that belongs to another one. It is also the only way that page
+ * can learn a run's steps: its own index ships a deliberately slim entry (no `steps`, no
+ * `runner`), and whether a finished task can be reopened is a question only the full record
+ * answers.
+ */
+export async function getProjectRun(projectId: string, id: string, opts?: ReadOptions): Promise<ApiRun> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$get(
+      { param: { projectId, id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id),
+  )
+}
+
+/** One reverse-paged history page. Validated (not merely cast) because `useRunHistory` iterates
+ *  `events`: see `unwrapValidated`. */
 export async function getRunHistory(
   id: string,
   cursor?: string,
   opts?: ReadOptions,
 ): Promise<RunHistoryPage> {
-  return unwrap(
+  return unwrapValidated(
     await cez.api.v1.p[':projectId'].runs[':id'].history.$get(
       {
         param: { projectId: queryScope(), id: encodeURIComponent(id) },
@@ -476,16 +539,19 @@ export async function getRunHistory(
       init(opts),
     ),
     `${runPath(id)}/history`,
+    runHistoryPageSchema,
   )
 }
 
+/** The compact current-state context for a run. Validated for the same reason as the page above. */
 export async function getRunHistoryContext(id: string, opts?: ReadOptions): Promise<RunHistoryContext> {
-  return unwrap(
+  return unwrapValidated(
     await cez.api.v1.p[':projectId'].runs[':id']['history-context'].$get(
       { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
       init(opts),
     ),
     `${runPath(id)}/history-context`,
+    runHistoryContextSchema,
   )
 }
 
@@ -718,6 +784,62 @@ export async function getGithubChecks(
       init(opts),
     ),
     '/github/checks',
+  )
+}
+
+/** Search issues/PRs in ANY state (#730). `getGithub` lists the open set only, so the tab's
+ *  in-memory filter cannot reach a closed or merged item — this is the fallback it calls when the
+ *  local filter comes up empty. Degrades to `{ available: false, reason }` server-side. */
+export async function getGithubSearch(
+  kind: 'issue' | 'pr',
+  query: string,
+  params: { limit?: number } = {},
+  opts?: ReadOptions,
+): Promise<GithubSearchData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.search.$get(
+      {
+        param: { projectId: queryScope() },
+        // The search route validates `limit` with `z.coerce.number()`, so the typed client's
+        // query input is `number | undefined` — pass the number, not a stringified copy (the
+        // `/github` list route below coerces from a bare string, hence the difference).
+        query: { kind, q: query, limit: params.limit },
+      },
+      init(opts),
+    ),
+    '/github/search',
+  )
+}
+
+/**
+ * Batched status for the PR/issue chips on screen. Takes its project EXPLICITLY, like
+ * `getProjectRuns` and `archiveProjectRun` and for the same reason: the global Tasks page stands
+ * outside every `/p/:projectId`, and its rows belong to different projects — `queryScope()` would
+ * ask the boot project about another project's PR number and get a confident wrong answer.
+ * Callers standing in one project pass their own id.
+ *
+ * Degrades to `{ available: false, reason }` server-side; an absent number is "nothing known",
+ * which the chip renders exactly as it did before statuses existed.
+ */
+export async function getGithubRefStatus(
+  projectId: string,
+  refs: { prs?: readonly number[]; issues?: readonly number[] },
+  opts?: ReadOptions,
+): Promise<GithubRefStatusData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github['ref-status'].$get(
+      {
+        param: { projectId },
+        query: {
+          // Spread conditionally: the route reads an ABSENT key as "not asked for", and an empty
+          // string would be a malformed list (a 400) rather than a silent no-op.
+          ...(refs.prs?.length ? { prs: refs.prs.join(',') } : {}),
+          ...(refs.issues?.length ? { issues: refs.issues.join(',') } : {}),
+        },
+      },
+      init(opts),
+    ),
+    '/github/ref-status',
   )
 }
 
@@ -1010,6 +1132,33 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
   )
 }
 
+/** Pins by default; pass `false` to drop the task back into its ordinary bucket (#935). */
+export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { pinned },
+    }),
+    runPath(id, '/pin'),
+  )
+}
+
+/**
+ * The same pin by EXPLICIT project — the twin of `archiveProjectRun` below, and needed for the
+ * same reason one step closer to home: the multi-project sidebar paints a quick-list per
+ * REGISTERED project, so a pin toggle on another project's row would otherwise be sent with the
+ * scope of whichever project the URL happens to name.
+ */
+export async function pinProjectRun(projectId: string, id: string, pinned = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { pinned },
+    }),
+    runPath(id, '/pin'),
+  )
+}
+
 /**
  * The same route by EXPLICIT project — the twin of `getProjectRuns`, and for the same reason:
  * the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would send the
@@ -1120,15 +1269,18 @@ export async function finishRun(id: string): Promise<FinishResponse> {
   )
 }
 
-/** The follow-up composer's optional overrides for a Continue (#401): pick which backend and
- *  model handle the reopened session. Omitted fields keep the run's current backend/model.
- *  `text`/`images` are the prompt the reopened session starts on — omitted, the engine opens
- *  with its plain "Continue.". */
+/** The follow-up composer's optional overrides for a Continue (#401): pick which backend, model
+ *  and agent account handle the reopened session. Omitted fields keep the run's current
+ *  backend/model/account. `text`/`images` are the prompt the reopened session starts on — omitted,
+ *  the engine opens with its plain "Continue.". */
 export interface ContinueOptions {
   text?: string
-  images?: ImageInput[]
+  images?: AttachmentInput[]
   runner?: Runner
   model?: string
+  /** Which login of that agent reopens it (spec 2026-07-29-agent-profiles). Switching account
+   *  starts a fresh session server-side — a session id lives inside ONE account's config dir. */
+  agentProfile?: string
 }
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1140,11 +1292,33 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.images !== undefined ? { images: opts.images } : {}),
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
+    ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
       json: body,
+    }),
+    runPath(id, '/continue'),
+  )
+}
+
+/** The same reopen by EXPLICIT project — see `archiveProjectRun`. */
+export async function continueProjectRun(
+  projectId: string,
+  id: string,
+  opts: ContinueOptions = {},
+): Promise<ContinueResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: {
+        ...(opts.text !== undefined ? { text: opts.text } : {}),
+        ...(opts.images !== undefined ? { images: opts.images } : {}),
+        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
+      },
     }),
     runPath(id, '/continue'),
   )
@@ -1337,6 +1511,22 @@ export async function sendMessage(id: string, message: MessageInput): Promise<Me
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { text: message.text ?? '', images: message.images ?? [] },
+    }),
+    runPath(id, '/messages'),
+  )
+}
+
+/** The same delivery by EXPLICIT project — see `archiveProjectRun`. What lets a chip on the
+ *  global Tasks page speak to a run in a project this page is not standing in. */
+export async function sendProjectRunMessage(
+  projectId: string,
+  id: string,
+  message: MessageInput,
+): Promise<MessageResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+      param: { projectId, id: encodeURIComponent(id) },
       json: { text: message.text ?? '', images: message.images ?? [] },
     }),
     runPath(id, '/messages'),

@@ -4,6 +4,7 @@ import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import {
   BUCKET_ORDER,
   bucketOf,
+  capBuckets,
   groupRuns,
   groupTitle,
   listCounts,
@@ -284,7 +285,7 @@ describe('groupRuns', () => {
   })
 
   it('declares the bucket order it renders in', () => {
-    expect(BUCKET_ORDER).toEqual(['Needs you', 'Working', 'Recent', 'Archived'])
+    expect(BUCKET_ORDER).toEqual(['Pinned', 'Needs you', 'Working', 'Recent', 'Archived'])
   })
 
   it('puts every archived run under one Archived bucket regardless of status', () => {
@@ -462,5 +463,132 @@ describe('listCounts', () => {
 
   it('is all zeroes for an empty list', () => {
     expect(listCounts([])).toEqual({ active: 0, archived: 0, waiting: 0 })
+  })
+})
+
+describe('pinned tasks (#935)', () => {
+  const pinned = (over: Partial<RunRecord> = {}) => run({ pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z', ...over })
+
+  describe('bucketOf', () => {
+    it.each(['waiting', 'review', 'running', 'queued', 'done', 'failed', 'cancelled'] as RunStatus[])(
+      'a pinned %s run is Pinned, and nothing else',
+      (status) => {
+        expect(bucketOf(pinned({ status }), 'active')).toBe('Pinned')
+      },
+    )
+
+    it('the archived view still collapses everything, pin or no pin', () => {
+      // Archiving retires the pin server-side, so this is a hand-edited record — and in that
+      // view the answer is history either way.
+      expect(bucketOf(pinned({ status: 'waiting', archived: true }), 'archived')).toBe('Archived')
+    })
+  })
+
+  describe('sortRuns', () => {
+    it('puts pinned runs first, ahead of every status weight', () => {
+      const runs = [
+        run({ id: 'waiting', status: 'waiting' }),
+        pinned({ id: 'pinned-done', status: 'done' }),
+        run({ id: 'running', status: 'running' }),
+      ]
+      expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual(['pinned-done', 'waiting', 'running'])
+    })
+
+    it('keeps the ordinary rules INSIDE the pinned block', () => {
+      const runs = [
+        pinned({ id: 'pinned-done', status: 'done' }),
+        pinned({ id: 'pinned-waiting', status: 'waiting' }),
+        run({ id: 'plain-waiting', status: 'waiting' }),
+      ]
+      expect(sortRuns(runs, 'active').map((r) => r.id)).toEqual([
+        'pinned-waiting',
+        'pinned-done',
+        'plain-waiting',
+      ])
+    })
+
+    it('ignores the pin in the archived view', () => {
+      const runs = [
+        run({ id: 'newer', archived: true, createdAt: '2026-07-14T12:00:00.000Z' }),
+        pinned({ id: 'older-pinned', archived: true, createdAt: '2026-07-14T09:00:00.000Z' }),
+      ]
+      expect(sortRuns(runs, 'archived').map((r) => r.id)).toEqual(['newer', 'older-pinned'])
+    })
+  })
+
+  describe('groupRuns', () => {
+    it('emits Pinned at the head, and each pinned run exactly once', () => {
+      const runs = [
+        run({ id: 'waiting', status: 'waiting' }),
+        pinned({ id: 'p-waiting', status: 'waiting' }),
+        run({ id: 'running', status: 'running' }),
+        pinned({ id: 'p-done', status: 'done' }),
+      ]
+      expect(shape(groupRuns(runs, 'active'))).toEqual([
+        'Pinned: p-waiting, p-done',
+        'Needs you: waiting',
+        'Working: running',
+      ])
+    })
+
+    it('omits the bucket entirely when nothing is pinned', () => {
+      expect(shape(groupRuns([run({ id: 'done', status: 'done' })], 'active'))).toEqual(['Recent: done'])
+    })
+
+    it('lifts a whole variant tile when any member is pinned', () => {
+      // The existing best-ranked-member rule, applied to the new bucket: the tile moves as a
+      // unit rather than tearing in half across Pinned and Recent.
+      const runs = [
+        run({ id: 'a', groupId: 'g1', variant: 'A', status: 'done' }),
+        pinned({ id: 'b', groupId: 'g1', variant: 'B', status: 'done' }),
+        run({ id: 'other', status: 'done' }),
+      ]
+      expect(shape(groupRuns(runs, 'active'))).toEqual(['Pinned: [AB]', 'Recent: other'])
+    })
+  })
+
+  describe('capBuckets', () => {
+    const bucketRows = (n: number, prefix: string) =>
+      Array.from({ length: n }, (_, index) => ({
+        kind: 'run' as const,
+        run: run({ id: `${prefix}${index}` }),
+        queuePosition: null,
+      }))
+
+    it('trims across buckets in order and drops the ones the cap empties', () => {
+      const capped = capBuckets(
+        [
+          { label: 'Needs you', rows: bucketRows(2, 'n') },
+          { label: 'Working', rows: bucketRows(3, 'w') },
+          { label: 'Recent', rows: bucketRows(4, 'r') },
+        ],
+        4,
+      )
+      expect(capped.map((bucket) => `${bucket.label}:${bucket.rows.length}`)).toEqual([
+        'Needs you:2',
+        'Working:2',
+      ])
+    })
+
+    it('never trims Pinned, and spends none of the budget on it', () => {
+      // A pin is an explicit request for that row to be on screen — and the ten rows still go
+      // to the other buckets, so pinning three tasks cannot hide what needs you.
+      const capped = capBuckets(
+        [
+          { label: 'Pinned', rows: bucketRows(12, 'p') },
+          { label: 'Needs you', rows: bucketRows(3, 'n') },
+        ],
+        10,
+      )
+      expect(capped.map((bucket) => `${bucket.label}:${bucket.rows.length}`)).toEqual([
+        'Pinned:12',
+        'Needs you:3',
+      ])
+    })
+  })
+
+  it('does not change the tab counts — those count by status, never by bucket', () => {
+    const runs = [pinned({ status: 'waiting' }), run({ status: 'done' }), run({ archived: true })]
+    expect(listCounts(runs)).toEqual({ active: 2, archived: 1, waiting: 1 })
   })
 })

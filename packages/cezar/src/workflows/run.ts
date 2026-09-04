@@ -29,6 +29,14 @@ import {
   seedHandoffFile,
 } from '../handoff.ts';
 import { todosPath } from '../todos.ts';
+// Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the attachment
+// vocabulary the routes validate with is the same one the engine stores and re-reads by, so the
+// wire and the disk can never disagree about what counts as an image (#950).
+import {
+  attachmentExtension,
+  isImageAttachmentName,
+  isImageMediaType,
+} from '@open-mercato/cezar-contract';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
 import { materializeSkillDir } from '../skills-remote.ts';
@@ -51,6 +59,7 @@ import { parseTaskMarkers, stripTaskMarkers } from '../runs/task-markers.ts';
 import { autoNamingActive, generateRunName, liveTitleUpdatesEnabled, postValidateTitle } from '../runs/auto-name.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { resolveProfileEnvForRoot } from '../workspace/agent-profiles.ts';
+import { DEFAULT_AGENT_ACCOUNT_ID } from '../workspace/agent-accounts.ts';
 import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts';
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
@@ -115,7 +124,10 @@ function emitAskRequested(sink: UiEventSink, ask: AskRequest): string {
   return requestId;
 }
 /** A persisted, non-fatal explanation for protocol-shaped text that could not
- * become an ask card. Never include the raw payload in this diagnostic. */
+ * become an ask card. Never include the raw payload in this diagnostic. Carries
+ * `tone: 'danger'` (#936): the agent's question was lost outright, which is not
+ * a footnote — the cockpit renders an un-toned note as the dimmest line in the
+ * thread. Older events carry no `tone` and keep rendering dim. */
 function askMarkerRejection(result: AskMarkerParseResult): string | undefined {
   if (result.kind === 'invalid-json') {
     return 'structured question ignored — CEZ:ASK payload is not valid JSON';
@@ -124,6 +136,42 @@ function askMarkerRejection(result: AskMarkerParseResult): string | undefined {
   const issue = result.issues[0];
   const location = issue?.path.length ? ` at ${issue.path.join('.')}` : '';
   return `structured question ignored — CEZ:ASK payload failed validation${location}${issue ? `: ${issue.message}` : ''}`;
+}
+/** A persisted, auditable trace for a card that only rendered because the
+ * payload's missing closers were appended (#936) — a repair can only lose what
+ * the truncation already removed, so the recovery must stay visible rather than
+ * passing for a clean parse. Carries `tone: 'danger'` for the same reason the
+ * rejection does: it is the ONLY signal that the card may be missing a trailing
+ * option or a trailing `multiSelect` the cut took with it, and the raw payload
+ * is stripped along with the card, so a dim footnote could not be acted on. */
+function askMarkerRecovery(result: AskMarkerParseResult): string | undefined {
+  return result.kind === 'valid' && result.repaired
+    ? 'structured question recovered from an unbalanced CEZ:ASK payload — check the options, and how many you may pick, match what was asked'
+    : undefined;
+}
+/** What a turn's trailing `CEZ:ASK` marker resolves to: the card to raise, and
+ * the notes to persist alongside it. */
+type AskTurnOutcome = {
+  ask: AskRequest | null;
+  /** Emitted in order by the caller, which owns how a note is persisted. */
+  notes: Array<{ message: string; tone?: 'danger' }>;
+};
+/** Resolve the ask marker for one finished turn. Both turn-end handlers
+ * (`runAgentStep` and `runContinuation`) route through this single function:
+ * they are hand-duplicated, and `AGENTS.md` warns that a lifecycle change
+ * applied to only one of them ships half a fix — the notes and their tones are
+ * exactly that kind of change. `enabled` is the caller's own precondition (the
+ * session is open, the turn is not a `CEZ:DONE`, and for an agent step, the run
+ * is interactive); when false there is no marker to look for. */
+function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
+  if (!enabled) return { ask: null, notes: [] };
+  const result = parseAskMarkerResult(turnText);
+  const notes: AskTurnOutcome['notes'] = [];
+  const rejection = askMarkerRejection(result);
+  if (rejection) notes.push({ message: rejection, tone: 'danger' });
+  const recovery = askMarkerRecovery(result);
+  if (recovery) notes.push({ message: recovery, tone: 'danger' });
+  return { ask: result.kind === 'valid' ? result.request : null, notes };
 }
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
@@ -312,9 +360,10 @@ export interface StartRunInput {
    *  on `runner`. Unset = the project's own selection. Persisted on the record so the choice
    *  survives into resume and Continue, and so the thread can say which account did the work. */
   agentProfile?: string;
-  /** Screenshots pasted into the new-task form — persisted when the run is
-   *  created and delivered once, with the first agent step's opening message. */
-  images?: ContentBlock[];
+  /** Attachments pasted into the new-task form — persisted when the run is created and
+   *  delivered once, with the first agent step's opening message. Images ride along as blocks the
+   *  model can view; a file (#950) only ever reaches the agent as the path it was written to. */
+  images?: PastedContent[];
   /** Per-run system-prompt override (`POST /api/runs`, programmatic callers).
    *  Replaces the `config.json` default for this run — see
    *  `resolveExtraSystemPrompt` for the precedence contract. */
@@ -385,10 +434,12 @@ export function agentDirectories(runsDir: string, env: Record<string, string>): 
  * transcript already used, plus the absolute path that lets the agent
  * operate on the file itself — save it, `cp` it, attach it to a GitHub
  * issue/PR (#357). `path` is only ever an absolute path under
- * `.ai/cezar/runs/<runId>-images/` (see `RunManager.persistImage`).
+ * `.ai/cezar/runs/<runId>-images/` (see `RunManager.persistAttachment`).
  */
-/** Inverse of `persistImage`'s extension mapping (#472) — a persisted attachment
- *  is re-encoded from disk at dequeue and needs its media type back. */
+/** Inverse of `attachmentExtension` (#472) — a persisted attachment is re-encoded from disk at
+ *  dequeue and needs its media type back. Only ever asked about IMAGE names (a file reaches the
+ *  agent as a path, never as a block), so an unknown extension still answers `image/png`: that is
+ *  the pre-existing fallback for the `.img` an SVG or a BMP paste lands as. */
 export function mediaTypeFor(name: string): string {
   const ext = name.split('.').pop()?.toLowerCase();
   return ext === 'jpg' ? 'image/jpeg'
@@ -415,6 +466,38 @@ export interface PersistedAttachment {
   name: string;
   url: string;
   path: string;
+}
+
+/**
+ * A user attachment that is NOT an image (#950) — a PDF, a `.txt`, a `.md`.
+ *
+ * Deliberately not a `ContentBlock` variant: `ContentBlock` is the runner protocol
+ * (`AGENT_PROTOCOL.md`), and a file has nothing a model can look at. The RunManager
+ * converts these into files on disk plus a path in the prompt before anything is
+ * handed to a session, so a `file` block can never reach a backend.
+ */
+export interface FileBlock {
+  type: 'file';
+  mediaType: string;
+  data: string;
+}
+
+/** What the routes hand the engine: image/text blocks the session will see, plus file blocks it
+ *  will never see. Every RunManager entry point accepts this wider type. */
+export type PastedContent = ContentBlock | FileBlock;
+
+/** One wire attachment (`{mediaType, data}`) as the engine wants it: an image the model can view,
+ *  or a file it will only ever be given the path of. The single mapping the four attachment-
+ *  carrying routes share, so none of them can invent a different one. */
+export function toPastedContent(attachment: { mediaType: string; data: string }): PastedContent {
+  return isImageMediaType(attachment.mediaType)
+    ? { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } }
+    : { type: 'file', mediaType: attachment.mediaType, data: attachment.data };
+}
+
+/** The image blocks of a mixed list — what may be delivered to a session. */
+export function contentBlocksOf(content: readonly PastedContent[]): ContentBlock[] {
+  return content.filter((b): b is ContentBlock => b.type !== 'file');
 }
 
 /**
@@ -458,10 +541,14 @@ interface PendingContinuation {
   sessionId: string | undefined;
   backend: RunnerId;
   prompt: string;
-  images: ContentBlock[];
+  /** Attachments the user pasted into the follow-up composer — images to view, files (#950) to
+   *  be given the path of. Persisted when the continuation actually opens, not here. */
+  images: PastedContent[];
 }
 
-interface PersistedImages {
+/** What re-reading a message's persisted attachments yields: viewable blocks for the images, and
+ *  a path for every attachment including the files that have no block. */
+interface PersistedAttachments {
   blocks: ContentBlock[];
   attachments: PersistedAttachment[];
 }
@@ -506,7 +593,7 @@ export class RunManager {
   private readonly queuedImageSeq = new Map<string, number>();
   /** Messages that landed in the dequeue → session-open gap (#472), flushed as
    *  ordinary follow-up turns the moment the session opens. In-memory only. */
-  private readonly deferredMessages = new Map<string, ContentBlock[][]>();
+  private readonly deferredMessages = new Map<string, PastedContent[][]>();
   /** Armed usage-limit resumes, keyed by run id (spec
    *  2026-08-03-auto-resume-after-usage-limit). The DEADLINE itself lives on the record
    *  (`autoResumeAt`) — this map holds only the process-local timer, so a restart rebuilds it
@@ -747,15 +834,13 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow });
-    // Initial pasted images must be visible while the run is still queued (#612),
+    // Initial pasted attachments must be visible while the run is still queued (#612),
     // and must survive a restart before a slot opens. Persist them before the job
     // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
-    // from these URLs when a recovered run eventually starts.
+    // from these URLs when a recovered run eventually starts — and for a file (#950)
+    // this write is the ONLY copy, since it never had a block to be rebuilt from.
     if (input.images?.length) {
-      const persisted = input.images
-        .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-        .map((b) => this.persistImage(run.id, b.source.media_type, b.source.data, 'pasted'))
-        .filter((saved): saved is PersistedAttachment => saved !== null);
+      const persisted = this.persistPastedAttachments(run.id, input.images);
       if (persisted.length) {
         this.store.updateRun(run.id, { taskImages: persisted.map((saved) => saved.url) });
       }
@@ -1620,8 +1705,8 @@ export class RunManager {
     // so rebuild it from the durable task-image URLs.
     const images = input.images?.length
       ? input.images
-      : this.readPersistedImages(runId, run.taskImages ?? [], 'task').blocks;
-    const stackedImages = this.readPersistedImages(
+      : this.readPersistedAttachments(runId, run.taskImages ?? [], 'task').blocks;
+    const stackedImages = this.readPersistedAttachments(
       runId,
       stack.flatMap((m) => m.images ?? []),
       'queued',
@@ -1658,7 +1743,7 @@ export class RunManager {
     const prompt = amendedTask
       ? `${continuation.prompt}\n\nCurrent task and queued updates:\n\n${amendedTask}`
       : continuation.prompt;
-    const persisted = this.readPersistedImages(
+    const persisted = this.readPersistedAttachments(
       runId,
       stack.flatMap((message) => message.images ?? []),
       'queued',
@@ -1671,11 +1756,20 @@ export class RunManager {
     };
   }
 
-  private readPersistedImages(
+  /**
+   * Re-read persisted attachments at dequeue/restart (#472): an image comes back as a viewable
+   * block AND a path, a file (#950) as a path only. The branch is on the NAME's extension, never
+   * on which list the URL came from — images and files share one list, and re-encoding a `.pdf`
+   * into a base64 image block is a message no backend can accept.
+   *
+   * A file is still `stat`-checked here rather than trusted: an attachment the user deleted must
+   * drop out of the paths handed to the agent, exactly as a missing image does.
+   */
+  private readPersistedAttachments(
     runId: string,
     urls: string[],
     kind: 'task' | 'queued',
-  ): PersistedImages {
+  ): PersistedAttachments {
     const blocks: ContentBlock[] = [];
     const attachments: PersistedAttachment[] = [];
     for (const url of urls) {
@@ -1683,15 +1777,19 @@ export class RunManager {
       if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) continue;
       const path = join(this.dataDir, 'runs', `${runId}-images`, name);
       try {
-        const data = readFileSync(path);
-        blocks.push({
-          type: 'image',
-          source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
-        });
+        if (isImageAttachmentName(name)) {
+          const data = readFileSync(path);
+          blocks.push({
+            type: 'image',
+            source: { type: 'base64', media_type: mediaTypeFor(name), data: data.toString('base64') },
+          });
+        } else if (!existsSync(path)) {
+          throw new Error('missing');
+        }
         attachments.push({ name, url, path });
       } catch {
         // Degrade, never fail the boot (AGENTS.md): the user deleted `.ai/cezar/`
-        // or the file is unreadable — start with the text and say which image went.
+        // or the file is unreadable — start with the text and say which attachment went.
         this.store.appendEvent(runId, {
           type: 'note',
           message: `${kind} attachment ${name} could not be read — starting without it`,
@@ -1712,17 +1810,13 @@ export class RunManager {
     return this.pendingJobs.has(runId) || this.pendingContinuations.has(runId);
   }
 
-  /** Split `ContentBlock[]` into the persisted shape a stacked message holds. */
-  private toQueuedMessage(runId: string, content: ContentBlock[]): QueuedMessage {
+  /** Split a pasted message into the persisted shape a stacked message holds. */
+  private toQueuedMessage(runId: string, content: PastedContent[]): QueuedMessage {
     const text = content
       .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
       .map((b) => b.text)
       .join('\n');
-    const images = content
-      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
-      .filter((saved): saved is PersistedAttachment => saved !== null)
-      .map((saved) => saved.url);
+    const images = this.persistPastedAttachments(runId, content).map((saved) => saved.url);
     return {
       id: randomUUID(),
       text,
@@ -1736,7 +1830,7 @@ export class RunManager {
    * entry, or null when the run has already started — the caller then falls
    * through to `deferMessage`.
    */
-  enqueueMessage(runId: string, content: ContentBlock[]): QueuedMessage | null {
+  enqueueMessage(runId: string, content: PastedContent[]): QueuedMessage | null {
     if (!this.isQueued(runId)) return null;
     const run = this.store.getRun(runId);
     if (!run) return null;
@@ -1749,7 +1843,7 @@ export class RunManager {
   editQueuedMessage(
     runId: string,
     msgId: string,
-    edit: { text?: string; images?: ContentBlock[] },
+    edit: { text?: string; images?: PastedContent[] },
   ): QueuedMessage | null {
     if (!this.isQueued(runId)) return null;
     const run = this.store.getRun(runId);
@@ -1850,7 +1944,7 @@ export class RunManager {
    * The buffer lives on the manager rather than the `ActiveRun` because the
    * `ActiveRun` does not exist yet for part of this window.
    */
-  deferMessage(runId: string, content: ContentBlock[]): boolean {
+  deferMessage(runId: string, content: PastedContent[]): boolean {
     // The window spans two sub-states: `starting` (no `ActiveRun` yet) and the
     // longer stretch where the `ActiveRun` exists but the backend is still being
     // spawned. `execute()` deletes the run from `starting` as soon as it builds
@@ -1883,7 +1977,7 @@ export class RunManager {
    * while `waiting`). Returns false when there is no open session — the GUI
    * then offers "Continue" instead.
    */
-  sendMessage(runId: string, content: ContentBlock[]): boolean {
+  sendMessage(runId: string, content: PastedContent[]): boolean {
     const delivered = this.deliverMessage(runId, content, true);
     if (delivered) {
       const state = this.active.get(runId);
@@ -1895,7 +1989,7 @@ export class RunManager {
 
   /** Shared live-session delivery. Synthetic scheduler prompts reuse lifecycle
    * bookkeeping without masquerading as user-authored transcript messages. */
-  private deliverMessage(runId: string, content: ContentBlock[], userAuthored: boolean): boolean {
+  private deliverMessage(runId: string, content: PastedContent[], userAuthored: boolean): boolean {
     const state = this.active.get(runId);
     if (!state?.session?.open || state.cancelled) return false;
 
@@ -1903,13 +1997,10 @@ export class RunManager {
       .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
       .map((b) => b.text)
       .join('\n');
-    // Persist the attached images so the thread can render them (not just count them) — the same
+    // Persist the attachments so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
-    const persisted = userAuthored ? content
-      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
-      .filter((saved): saved is PersistedAttachment => saved !== null) : [];
+    const persisted = userAuthored ? this.persistPastedAttachments(runId, content) : [];
     const images = persisted.map((saved) => saved.url);
     if (userAuthored) {
       this.store.appendEvent(runId, {
@@ -1921,11 +2012,14 @@ export class RunManager {
       });
     }
 
-    // Tell the agent where the pasted files live on disk (#357): the base64 blocks below still
-    // ride along so the model can *view* them, but a real path is what lets it *operate* on them
-    // (save, `cp`, attach to a GitHub issue/PR) — and it's the only usable reference on backends
-    // (codex, opencode) that drop image blocks entirely before reaching the model.
-    const expanded = userAuthored ? expandRegistrySlashSkill(content, state.skills ?? []) : content;
+    // Tell the agent where the pasted files live on disk (#357): image blocks still ride along
+    // so the model can *view* them, but a real path is what lets it *operate* on them (save,
+    // `cp`, attach to a GitHub issue/PR) — and it's the only usable reference on backends (codex,
+    // opencode) that drop image blocks entirely before reaching the model, and the ONLY reference
+    // at all for a non-image attachment (#950), which is why `contentBlocksOf` drops file blocks
+    // here rather than letting one reach a backend that has no idea what it is.
+    const blocks = contentBlocksOf(content);
+    const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
     const deliverable = persisted.length ? [...expanded, pastedAttachmentsNote(persisted)] : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
@@ -1973,7 +2067,15 @@ export class RunManager {
    */
   continueRun(
     runId: string,
-    opts: { text?: string; images?: ContentBlock[]; runner?: RunnerId; model?: string } = {},
+    opts: {
+      text?: string;
+      images?: PastedContent[];
+      runner?: RunnerId;
+      model?: string;
+      /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Omitted = the
+       *  account the run is already on. */
+      agentProfile?: string;
+    } = {},
     /** Restart recovery may discover several interrupted tasks at once. Those
      *  continuations are queued; an explicit user Continue remains immediate. */
     deferForCapacity = false,
@@ -1995,15 +2097,23 @@ export class RunManager {
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
     const sessionBackend = sessionStep.backend ?? run.runner ?? 'claude';
-    const resume = sessionBackend === targetRunner;
+    // A session id only resolves inside the config dir that created it (spec
+    // 2026-07-29-agent-profiles), so switching ACCOUNT ends the session exactly like switching
+    // backend does: `claude --resume <id>` under another login finds nothing and would silently
+    // open a fresh conversation while the thread claimed it had resumed. A step that recorded no
+    // account predates the feature and therefore ran under the discovered one.
+    const sessionAccount = sessionStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
+    const accountSwitched = opts.agentProfile !== undefined && opts.agentProfile !== sessionAccount;
+    const resume = sessionBackend === targetRunner && !accountSwitched;
 
-    // Follow-up runner/model override (#401): the composer lets the user pick which backend and
-    // model handle this continuation. Omitted → the run's current backend/model is kept
+    // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
+    // lets the user pick which backend, model and login handle this continuation — the same flat
+    // pill the /new composer offers. Omitted → the run's current backend/model/account is kept
     // (backward compat). A provided choice is persisted BEFORE scheduling, so it becomes the
     // run's current backend — `runContinuation` reads it off the record, later continuations
     // default to it, and the header reflects the active engine. An empty model ('') clears the
     // pin, letting the runner pick the model (auto).
-    if (opts.runner !== undefined || opts.model !== undefined) {
+    if (opts.runner !== undefined || opts.model !== undefined || opts.agentProfile !== undefined) {
       // Guard the pairing before persisting anything: the model override applies to the runner
       // this continuation will actually use (`opts.runner ?? record.runner ?? 'claude'` — the
       // same resolution `runContinuation` reads off the record). A model that is recognizably
@@ -2021,12 +2131,27 @@ export class RunManager {
         opts.model === undefined &&
         run.model !== undefined &&
         modelConflictsWithRunner(run.model, targetRunner);
+      // An account belongs to ONE agent, so a runner switch that names no account must not leave
+      // the previous backend's login on the record. It is inert immediately (resolution applies
+      // the run's account only to steps on the run's own runner) and wrong later, when a further
+      // continuation switches back and inherits a login the user picked for a different task.
+      const inheritedAccountIsForeign =
+        opts.agentProfile === undefined &&
+        run.agentProfile !== undefined &&
+        targetRunner !== (run.runner ?? 'claude');
       this.store.updateRun(runId, {
         ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
         ...(opts.model !== undefined
           ? { model: opts.model === '' ? undefined : opts.model }
           : inheritedPinIsForeign
             ? { model: undefined }
+            : {}),
+        // Persisted BEFORE scheduling, like the runner/model pair: `runContinuation` resolves the
+        // account off the record, and every later continuation then defaults to it.
+        ...(opts.agentProfile !== undefined
+          ? { agentProfile: opts.agentProfile }
+          : inheritedAccountIsForeign
+            ? { agentProfile: undefined }
             : {}),
       });
     }
@@ -2086,10 +2211,10 @@ export class RunManager {
     sessionId: string | undefined,
     backend: RunnerId,
     prompt: string,
-    /** Screenshots pasted into the follow-up composer — delivered with the
+    /** Attachments pasted into the follow-up composer — delivered with the
      *  reopened session's opening message, exactly like a live-session
      *  message's attachments. */
-    images: ContentBlock[] = [],
+    images: PastedContent[] = [],
     /** Queued-message screenshots were persisted when they were enqueued and
      *  reconstructed at dequeue. Keep them separate from fresh `images` so
      *  opening a recovered continuation does not persist duplicate files. */
@@ -2162,15 +2287,13 @@ export class RunManager {
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
     // Attachments pasted into the follow-up composer, on the same terms as a live-session
-    // message (#357): persisted to the run's own image store so the thread renders the bubble's
-    // images rather than a bare count, and handed to the agent BOTH as base64 blocks (so it can
-    // view them) and as absolute paths appended to the prompt (so it can operate on them — and
-    // because codex/opencode drop image blocks before they reach the model).
-    const freshAttachments = images
-      .filter((b): b is Extract<ContentBlock, { type: 'image' }> => b.type === 'image')
-      .map((b) => this.persistImage(runId, b.source.media_type, b.source.data, 'pasted'))
-      .filter((saved): saved is PersistedAttachment => saved !== null);
-    const openingImages = [...images, ...persistedImages];
+    // message (#357): persisted to the run's own attachment store so the thread renders the
+    // bubble's images rather than a bare count, and handed to the agent as absolute paths
+    // appended to the prompt (so it can operate on them — and because codex/opencode drop image
+    // blocks before they reach the model). An image ALSO rides along as a base64 block so the
+    // model can view it; a file (#950) has nothing to view and travels as its path alone.
+    const freshAttachments = this.persistPastedAttachments(runId, images);
+    const openingImages = [...contentBlocksOf(images), ...persistedImages];
     const attachments = [...freshAttachments, ...persistedAttachments];
     this.store.appendEvent(runId, {
       type: 'user-message',
@@ -2186,7 +2309,7 @@ export class RunManager {
     const sink = this.makeUiSink(runId, stepId);
     const onEvent = (event: AgentEvent) => {
       if (event.type === 'image') {
-        const saved = this.persistImage(runId, event.mediaType, event.data);
+        const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) this.store.appendEvent(runId, { type: 'image', stepId, ...saved });
         return;
       }
@@ -2223,13 +2346,11 @@ export class RunManager {
         const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is genuinely blocked; wins over `CEZ:MONITORING`
         // (a pending question is always attention), loses to `CEZ:DONE` (#473).
-        const askResult = sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
-        const ask = askResult?.kind === 'valid' ? askResult.request : null;
-        const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
+        const { ask, notes: askNotes } = resolveAskTurn(turnText, Boolean(sessionOpen) && !done);
         const monitoring =
           sessionOpen && !done && !ask && MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
-        if (askRejection) this.store.appendEvent(runId, { type: 'note', message: askRejection, stepId });
+        for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         if (done) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'goal achieved — session closed' });
@@ -2344,9 +2465,26 @@ export class RunManager {
     // Resuming reattaches to a session that lives inside ONE account's config dir, so the
     // continuation must run under the account that created it — not whatever the project has
     // been switched to since. The owning step is the one carrying this session id.
-    const resumedProfileId = sessionId === undefined
+    const owningStep = sessionId === undefined
       ? undefined
-      : record?.steps.find((s) => s.sessionId === sessionId)?.profileId;
+      : record?.steps.find((s) => s.sessionId === sessionId);
+    const resumedProfileId = owningStep?.profileId;
+    // The owning step also names the session's tools: resolve `allowedTools`/`bashAllowlist`
+    // from the persisted `workflowDef` exactly as the first spawn did (`runAgentStep`).
+    // Rebuilding with the bare DEFAULT_ALLOWED_TOOLS silently revoked every per-step grant
+    // (MCP servers, subagents) on Continue, restart recovery and the usage-limit auto-resume
+    // — and dropping `bashAllowlist` WIDENED Bash from an allowlist to unrestricted
+    // (`AgentRunSpec.allowedTools`, #430). Record steps share ids with `workflowDef.steps`;
+    // a synthetic `continue-N` owner and a fresh-session continuation (backend switch — no
+    // owning session) both extend the run's tail, so they resolve from the definition's last
+    // agent step. A legacy record without `workflowDef` (#367), or a session no step owns,
+    // keeps today's defaults.
+    const defSteps = record?.workflowDef?.steps;
+    const toolsStep =
+      defSteps === undefined || (sessionId !== undefined && owningStep === undefined)
+        ? undefined
+        : defSteps.find((s) => s.id === owningStep?.id)
+          ?? [...defSteps].reverse().find((s) => stepKind(s) === 'agent');
     // The temp-directory preflight (#785) rides along with the account resolution: a resumed
     // turn hits the same broken `/tmp` a fresh one would, and an agent whose shell silently
     // returns nothing is worse than a turn that refuses to start and says why.
@@ -2385,7 +2523,8 @@ export class RunManager {
           : openingPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
-        allowedTools: DEFAULT_ALLOWED_TOOLS,
+        allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+        bashAllowlist: toolsStep?.bashAllowlist,
         additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
         env: continueProfile.env,
         model: continueModel,
@@ -2604,10 +2743,19 @@ export class RunManager {
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
-    // `startRun` already persisted task images so a queued bubble can render them
+    // `startRun` already persisted the task's attachments so a queued bubble can render them
     // (#612). Reuse those files for the agent-facing path note instead of minting
     // duplicate pasted files when execution finally begins.
-    let startAttachments: PersistedAttachment[] = (this.store.getRun(runId)?.taskImages ?? [])
+    //
+    // The STACK's attachments (#472) are listed here too: they were persisted when they were
+    // enqueued, and their paths are the only thing an agent ever gets for a non-image one — a
+    // note that covered the initial prompt alone would hand it a task about a file it was never
+    // told the path of (#950).
+    const startRecord = this.store.getRun(runId);
+    let startAttachments: PersistedAttachment[] = [
+      ...(startRecord?.taskImages ?? []),
+      ...(startRecord?.queuedMessages ?? []).flatMap((m) => m.images ?? []),
+    ]
       .map((url): PersistedAttachment | null => {
         const name = url.split('/').pop();
         if (!name || name.includes('..') || name.includes('/') || name.includes('\\')) return null;
@@ -2620,8 +2768,11 @@ export class RunManager {
     // attachments (#472) ride along too, but are NOT re-persisted above: they
     // already live on disk, and adding them to `taskImages` would both duplicate
     // the files and make the task bubble claim the stack's images as its own.
-    let startImages =
-      input.stackedImages?.length ? [...(input.images ?? []), ...input.stackedImages] : input.images;
+    // File blocks are dropped here — a session only ever sees viewable blocks (#950). An empty
+    // result stays `undefined` rather than `[]`, so a task carrying only files hands the runner
+    // seam exactly the shape a task carrying nothing always did.
+    const startBlocks = contentBlocksOf([...(input.images ?? []), ...(input.stackedImages ?? [])]);
+    let startImages: ContentBlock[] | undefined = startBlocks.length ? startBlocks : undefined;
 
     const lastAgentIdx = findLastAgentStepIndex(workflow);
 
@@ -2786,6 +2937,14 @@ export class RunManager {
     }
 
     let userPrompt = applyTemplate(step.prompt ?? '{{task}}', input.task);
+    // A fresh run's OPENING prompt is delivered straight to `startSession`, never through
+    // `deliverMessage`, so — like the continuation seam above (#811) — it needs the same
+    // delivery-only `/skill` rewrite. Without it a task STARTED with `/om-...` as its first
+    // message leaks the raw slash to the backend, which answers "Unknown command" even though
+    // Cezar lists the skill (#278). `state.skills` was populated by `discoverSkills` earlier in
+    // `execute`. Expand before the chain/check/attachment prefixes so the leading slash still
+    // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
+    userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? []);
     if (chainNote) userPrompt = `${chainNote}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
       userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
@@ -2796,11 +2955,14 @@ export class RunManager {
         stepId: step.id,
         message: `${images.length} screenshot${images.length > 1 ? 's' : ''} attached to the task`,
       });
-      // Point the agent at the on-disk files for the pasted subset (#357) — the
-      // base64 blocks above still let it *view* the images; this is what lets it
-      // *use* them as files (save, attach to an issue/PR, copy into the repo).
-      if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
     }
+    // Point the agent at the on-disk files (#357) — for an image the base64 block above already
+    // let it *view* the file and this is what lets it *use* it (save, attach to an issue/PR, copy
+    // into the repo); for a non-image attachment (#950) it is the only reference the agent gets
+    // at all. Deliberately NOT nested in the branch above: gating the paths on an image block
+    // existing is what would leave an agent holding a task about a `.pdf` it was never told the
+    // location of.
+    if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
 
     const sessionId = randomUUID();
     const backend = step.runner ?? taskBackend;
@@ -2814,7 +2976,7 @@ export class RunManager {
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
       if (event.type === 'image') {
-        const saved = this.persistImage(runId, event.mediaType, event.data);
+        const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) emit({ type: 'image', stepId: step.id, ...saved });
         return;
       }
@@ -2851,9 +3013,10 @@ export class RunManager {
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
         // `CEZ:DONE` (#473).
-        const askResult = interactive && sessionOpen && !done ? parseAskMarkerResult(turnText) : undefined;
-        const ask = askResult?.kind === 'valid' ? askResult.request : null;
-        const askRejection = askResult ? askMarkerRejection(askResult) : undefined;
+        const { ask, notes: askNotes } = resolveAskTurn(
+          turnText,
+          Boolean(interactive && sessionOpen) && !done,
+        );
         const monitoring =
           interactive &&
           sessionOpen &&
@@ -2861,7 +3024,7 @@ export class RunManager {
           !ask &&
           MONITORING_MARKER_RE.test(turnText.trimEnd());
         turnText = '';
-        if (askRejection) emit({ type: 'note', stepId: step.id, message: askRejection });
+        for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
           // Goal achieved (agent contract, #347): close the session instead
           // of parking at `waiting` — the run completes and frees its slot.
@@ -3318,29 +3481,49 @@ export class RunManager {
   }
 
   /**
-   * Agent screenshot (an image block inside a tool result) or a user-pasted
-   * attachment: the base64 data never enters the NDJSON event log — it lands
-   * as a file under `.ai/cezar/runs/<id>-images/` and the transcript event
-   * carries only the name + serving URL. `namePrefix` distinguishes the two
-   * origins on disk (`screenshot-<n>.<ext>` for agent tool screenshots,
-   * `pasted-<n>.<ext>` for user-pasted attachments, #357) and the absolute
-   * `path` lets the agent operate on the file directly (save/attach/upload).
+   * Persist every attachment a user message carries — images and files alike (#950) — into the
+   * run's own attachment folder, in the order they were attached. The returned paths are what the
+   * agent is told about; the caller decides which of them also ride along as viewable blocks.
+   */
+  private persistPastedAttachments(
+    runId: string,
+    content: readonly PastedContent[],
+  ): PersistedAttachment[] {
+    return content
+      .map((b) =>
+        b.type === 'image'
+          ? this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted')
+          : b.type === 'file'
+            ? this.persistAttachment(runId, b.mediaType, b.data, 'pasted')
+            : null,
+      )
+      .filter((saved): saved is PersistedAttachment => saved !== null);
+  }
+
+  /**
+   * Agent screenshot (an image block inside a tool result) or a user attachment —
+   * a pasted screenshot, or since #950 a PDF/TXT/MD file: the base64 data never
+   * enters the NDJSON event log — it lands as a file under
+   * `.ai/cezar/runs/<id>-images/` and the transcript event carries only the name +
+   * serving URL. `namePrefix` distinguishes the two origins on disk
+   * (`screenshot-<n>.<ext>` for agent tool screenshots, `pasted-<n>.<ext>` for user
+   * attachments, #357) and the absolute `path` lets the agent operate on the file
+   * directly (save/attach/upload) — for a non-image attachment that path is the ONLY
+   * way it ever reaches the agent.
    * Best effort: on failure the attachment is dropped, the transcript still
    * shows the tool result's `[screenshot]` placeholder (or the image count).
    */
-  private persistImage(
+  private persistAttachment(
     runId: string,
     mediaType: string,
     data: string,
     namePrefix: string = 'screenshot',
-  ): { name: string; url: string; path: string } | null {
+  ): PersistedAttachment | null {
     try {
-      const ext =
-        /png/.test(mediaType) ? 'png'
-        : /jpe?g/.test(mediaType) ? 'jpg'
-        : /webp/.test(mediaType) ? 'webp'
-        : /gif/.test(mediaType) ? 'gif'
-        : 'img';
+      // One mapping, shared with the wire (`packages/contract`): an image keeps the extension it
+      // always had, a file gets `pdf`/`txt`/`md`, and both share the `pasted-<n>` numbering space
+      // below so a `pasted-3.md` can never collide with a `pasted-3.png`.
+      const ext = attachmentExtension(mediaType);
       const dir = join(this.dataDir, 'runs', `${runId}-images`);
       mkdirSync(dir, { recursive: true });
       // Seed from the highest numeric suffix already on disk, NOT the file count:
@@ -3349,7 +3532,7 @@ export class RunManager {
       // of a process (restart case) — afterwards the map is authoritative.
       let seq = this.queuedImageSeq.get(runId);
       if (seq === undefined) seq = highestImageSeq(dir);
-      // `persistImage` is fully synchronous, so two pastes cannot interleave between
+      // `persistAttachment` is fully synchronous, so two pastes cannot interleave between
       // the read of the counter and the write. The exclusive-create flag is the
       // belt-and-braces guard for a stale seed: it degrades to a renamed file rather
       // than a silent overwrite.

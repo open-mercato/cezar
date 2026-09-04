@@ -169,22 +169,47 @@ CLIs you are already logged into, `claude` by default.
 > instead of the real CLI — the whole cockpit works with no `claude` login, so
 > you can explore runs, diffs, variants and the review gate offline.
 
+### Nightly builds — help us shape cezar 🌙
+
+Every night we publish the trunk to npm, so the features landing in the next
+release are one command away:
+
+```bash
+npx cezar-cli@nightly      # everything merged as of last night
+```
+
+**Come build this with us.** cezar is shaped by the people who run it on real
+repos: if you try a nightly and something feels wrong — a workflow that stalls, a
+diff that reads badly, a runner that should exist — [open an
+issue](https://github.com/open-mercato/cezar/issues) and tell us. That feedback,
+early, is worth more than a bug report six weeks after a release, and it is how
+most of the features here got their final shape.
+
+**Know what you're installing.** A nightly is verified (typecheck, unit suites,
+packaged-CLI e2e — the same gate a release runs) but it is *not* a release: it
+can be rough, a flag or a screen may change under you, and something occasionally
+breaks in a way no test caught. Nothing is at risk beyond your patience — every
+task runs in its own git worktree and cezar never auto-merges — but if you need a
+boring day, stay on the stable release. Pin a nightly you liked with its exact
+version (`npx cezar-cli@0.9.2-nightly.20260813.126` — the cockpit prints the
+version it booted, and the date in it tells you how old the build is), and drop
+back to stable any time with a plain `npx cezar-cli`.
+
 ### Preview builds
 
-Every green CI run publishes an installable npm snapshot
-([how it works](docs/publishing.md)), so you can try unreleased code without
-cloning anything:
+Every green CI run also publishes an installable npm snapshot
+([how it works](docs/publishing.md)), so you can try code that has not even
+merged yet:
 
 ```bash
 npx cezar-cli@develop      # current develop head
-npx cezar-cli@main         # current main head (ahead of the latest stable release)
 ```
 
 Every pull request gets its own preview too — the CI bot posts a sticky comment
 on the PR with the exact pinned version to copy-paste
-(`npx cezar-cli@<version>-pr<N>.<run>`). Previews are prerelease versions under
-their own dist-tags; a plain `npx cezar-cli` always resolves to the latest
-stable release.
+(`npx cezar-cli@<version>-pr<N>.<run>`). Nightlies and previews are all
+prerelease versions under their own dist-tags; a plain `npx cezar-cli` always
+resolves to the latest stable release.
 
 ---
 
@@ -234,9 +259,10 @@ Three words, no jargon — **task**, **skill**, **chain**:
 
 - 📋 **Tasks** are the unit of work. Every task is a **run**: `queued → running →
   review / done / failed / cancelled`, with a live event log, per-step token and
-  cost usage, cancel/delete, and — for anything with a diff — a review gate. Paste
-  screenshots into the task, or send follow-up messages into the live session
-  while it works.
+  cost usage, cancel/delete, and — for anything with a diff — a review gate. Attach
+  screenshots, PDFs, `.txt` or `.md` files to the task (paperclip, ⌘V or drag-drop;
+  the agent gets each one as a real file on disk), or send follow-up messages into
+  the live session while it works.
 - 📖 **Skills** are Markdown playbooks. Drop them in `.ai/skills/` or
   `.ai/cezar/skills/`, or pull them from a shared **team skills repo** (a bare
   git clone cached globally in `~/.cache/cez/`). A workflow step references one by
@@ -289,7 +315,7 @@ Eight views, one browser window, all live over Server-Sent Events (seven until y
 
 | View | What's in it |
 |---|---|
-| **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
+| **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots and file attachments), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
 | **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. |
@@ -570,6 +596,20 @@ cezar is not married to one vendor. Every agent step runs through a single
 On startup cezar probes which CLIs are installed and the cockpit only offers
 the backends it found — install any one of the four and you're operational.
 
+**Models come from your own machine.** The model picker does not ship a list of
+vendor releases that goes stale between cezar versions. For Claude, Codex and
+OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
+Code's `list_models` control request; the Codex app-server's `model/list`;
+`opencode models`) and shows exactly that, in that order — so a model your
+account gained yesterday is selectable today with no cezar release, and one your
+provider retired stops being offered. Discovery is read-only, costs no tokens,
+and is cached briefly in memory. If the CLI is missing, logged out, too old or
+slow, the picker quietly falls back to that runner's built-in entries (`auto`
+plus Claude's tier aliases) and says so in a status row; `pi`, which has no
+host-local catalog yet, always shows its built-in entries. `auto` — send no
+model at all and let the CLI decide — is always available, and a model you
+pinned by hand stays selectable even when it is no longer advertised.
+
 **Pick a backend at three levels** (most specific wins):
 
 1. **Config default** — `"defaultRunner": "codex"` in `.ai/cezar/config.json`.
@@ -598,17 +638,6 @@ steps:
 
 Parallel variants (×2/×3) of one task share that task's backend — mixing
 happens per task and per step, not inside a variant group.
-
-**Models come from your own machine.** For Codex and OpenCode, the model picker
-is not a list cezar ships — it asks the installed CLI what it can actually run
-(`codex app-server`'s `model/list`, and `opencode models`), caches the answer in
-memory for five minutes, and shows it. A model your provider rolled out
-yesterday is selectable without a cezar release, and one it retired stops being
-offered. Claude Code has no equivalent local catalog, so it keeps a short list
-of tier aliases and pinned versions. `auto` (let the agent decide) is always
-available, including when the CLI is missing, logged out, or slow — discovery
-never blocks the cockpit, and a model you pinned yourself stays selectable even
-if it is absent from the discovered list.
 
 The seam is deliberately small: a backend is one class implementing the
 `AgentRunner` interface (`packages/cezar/src/core/agent-runner.ts`) that turns a prompt into
@@ -803,17 +832,6 @@ the server, **Zod** at every boundary, **YAML** for workflows, and a **React 19 
 Vite + Tailwind v4 + shadcn/ui** cockpit shipped pre-built in `packages/cezar/web/dist/` — the
 published package carries the built app, so `npx` users never run a bundler.
 Every module is meant to be read in one sitting.
-
----
-
-## Relationship to cezar (the SaaS)
-
-cez is the radically-simple, single-user sibling of
-[**cezar**](https://github.com/comerito/cezar) — the team SaaS cockpit for
-running agents across the whole GitHub issue lifecycle (auto-triage, webhooks,
-Supabase, multi-repo). Same core ideas — agent runner, skills, declarative
-workflows, a live run cockpit — with none of the accounts, database or cloud.
-Start here; graduate to cezar when a team needs shared visibility.
 
 ---
 

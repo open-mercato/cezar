@@ -7,6 +7,7 @@ import { createQueryClient } from './api/query-client'
 import { AppShellContainer } from './components/app-shell-container'
 import { AppearanceProvider } from './components/appearance-provider'
 import { LastLocationController } from './components/last-location-controller'
+import { ReferenceStatusRegistry } from './components/reference-status'
 import { RunNotifications } from './components/run-notifications'
 import { ThemeProvider } from './components/theme-provider'
 import { Toaster } from './components/ui/toaster'
@@ -43,9 +44,16 @@ export function App() {
           <AppearanceProvider>
             <BrowserRouter>
               <LastLocationController />
-              <AppShellContainer>
-                <AppRoutes />
-              </AppShellContainer>
+              {/* At the root for the same reason the event stream is: the sidebar, the task table
+                  and an open run header all paint PR/issue chips, often the SAME ones, and each
+                  asking for itself was several round trips and a staggered wave of colour. They
+                  register what they are painting here instead, and it goes out as one request per
+                  project. */}
+              <ReferenceStatusRegistry>
+                <AppShellContainer>
+                  <AppRoutes />
+                </AppShellContainer>
+              </ReferenceStatusRegistry>
               {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
               <Toaster />
             </BrowserRouter>

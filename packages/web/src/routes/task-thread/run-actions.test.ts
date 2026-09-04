@@ -10,6 +10,7 @@ import {
   isRunActive,
   lastSessionId,
   queuePosition,
+  resolveConflictsPrompt,
   resumeCommand,
   resumeHint,
   runActionFlags,
@@ -43,25 +44,28 @@ describe('runActionFlags — the visibility matrix, all 7 statuses × archived',
   //   active(running|queued|waiting) → cancel, no delete/archive/continue/terminal;
   //   finish only at the waiting/review gates; continue+terminal need a closed run WITH a
   //   session; notes always. `archived` flips nothing here — it only relabels Archive.
+  // `pin` (#935) is the one flag `archived` does turn off, since archiving retires the pin: the
+  // archived rows below assert exactly that, and every live row offers it whatever the status,
+  // because a pin is about what YOU are working on rather than what the engine is doing.
   // `markUnread` (#775) is false in every cell of this matrix because the fixture carries no
   // `finishedAt` — a record with no finish instant can never wear the unread marker, whatever
   // its status says. The flag's real matrix is the FINISHED one in its own describe below.
   const matrix: Array<{ status: RunStatus; expected: Omit<ReturnType<typeof runActionFlags>, 'notes'> }> = [
-    { status: 'queued', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, cancel: true, deleteRun: false } },
-    { status: 'running', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, cancel: true, deleteRun: false } },
-    { status: 'waiting', expected: { finish: true, continueRun: false, terminal: false, archive: false, markUnread: false, cancel: true, deleteRun: false } },
-    { status: 'review', expected: { finish: true, continueRun: true, terminal: true, archive: true, markUnread: false, cancel: false, deleteRun: true } },
-    { status: 'done', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, cancel: false, deleteRun: true } },
-    { status: 'failed', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, cancel: false, deleteRun: true } },
-    { status: 'cancelled', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, cancel: false, deleteRun: true } },
+    { status: 'queued', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, pin: true, cancel: true, deleteRun: false } },
+    { status: 'running', expected: { finish: false, continueRun: false, terminal: false, archive: false, markUnread: false, pin: true, cancel: true, deleteRun: false } },
+    { status: 'waiting', expected: { finish: true, continueRun: false, terminal: false, archive: false, markUnread: false, pin: true, cancel: true, deleteRun: false } },
+    { status: 'review', expected: { finish: true, continueRun: true, terminal: true, archive: true, markUnread: false, pin: true, cancel: false, deleteRun: true } },
+    { status: 'done', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, pin: true, cancel: false, deleteRun: true } },
+    { status: 'failed', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, pin: true, cancel: false, deleteRun: true } },
+    { status: 'cancelled', expected: { finish: false, continueRun: true, terminal: true, archive: true, markUnread: false, pin: true, cancel: false, deleteRun: true } },
   ]
 
   it.each(matrix)('$status (live)', ({ status, expected }) => {
     expect(runActionFlags(run(status))).toEqual({ ...expected, notes: true })
   })
 
-  it.each(matrix)('$status (archived — same flags, only the Archive label flips)', ({ status, expected }) => {
-    expect(runActionFlags(run(status, { archived: true }))).toEqual({ ...expected, notes: true })
+  it.each(matrix)('$status (archived — same flags but the pin, and the Archive label flips)', ({ status, expected }) => {
+    expect(runActionFlags(run(status, { archived: true }))).toEqual({ ...expected, notes: true, pin: false })
   })
 
   it('cancel and delete are mutually exclusive in every cell', () => {
@@ -262,6 +266,21 @@ describe('finishTitle', () => {
   it('review reads as accepting, everything else as closing the session', () => {
     expect(finishTitle('review')).toBe('Accept the changes without a PR')
     expect(finishTitle('waiting')).toBe('Close the session')
+  })
+})
+
+describe('resolveConflictsPrompt', () => {
+  it('names the pull request, because a task can point at more than one', () => {
+    // The reason the number is in the words at all (#901: the PR a task opened AND the PR it is
+    // about both get chips). Told to "resolve the conflicts" with no number, the agent picks one
+    // at even odds — and half the time it is not the chip the user pressed.
+    expect(resolveConflictsPrompt(534)).toBe('Merge head branch and resolve conflicts in PR number 534')
+    expect(resolveConflictsPrompt(902)).toContain('PR number 902')
+  })
+
+  it('still reads as a sentence for a reference with no number', () => {
+    // `taskPrUrl`'s tolerance: a forge whose PR URLs do not end in a number still gets a chip.
+    expect(resolveConflictsPrompt()).toBe('Merge head branch and resolve conflicts in this pull request')
   })
 })
 

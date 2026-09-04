@@ -8,7 +8,7 @@ import type {
   ContentBlock,
 } from './agent-runner.ts';
 import type { AgentSession, SessionOptions } from './agent-runner.ts';
-import { prependSystemPrompt } from './agent-runner.ts';
+import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
@@ -30,6 +30,9 @@ export interface OpencodeRunnerOptions {
 }
 
 const SERVER_START_TIMEOUT_MS = 30_000;
+
+/** Grace between the teardown SIGTERM and the SIGKILL that follows it. */
+export const KILL_GRACE_MS = 4_000;
 
 /**
  * `AgentRunner` over `opencode serve` — a headless HTTP server (the same one
@@ -79,6 +82,9 @@ class OpencodeSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
 
   private readonly child!: ChildProcessWithoutNullStreams;
+  /** "Has the server actually terminated?" — never `child.killed`, which only
+   *  reports delivery and would disarm the escalation (#844/#858). */
+  private readonly hasExited: () => boolean;
   private serverOpen = true;
   private baseUrl: string | undefined;
   private sessionId: string | undefined;
@@ -113,6 +119,8 @@ class OpencodeSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
+  /** One teardown per session — see `terminate()`. */
+  private signalled = false;
 
   constructor(
     private readonly bin: string,
@@ -131,6 +139,7 @@ class OpencodeSession implements AgentSession {
     } catch (err) {
       throw wrapSpawnError(err, bin);
     }
+    this.hasExited = trackChildExit(this.child);
 
     this.child.on('error', (err: NodeJS.ErrnoException) => {
       this.spawnFailed = wrapSpawnError(err, bin);
@@ -179,7 +188,7 @@ class OpencodeSession implements AgentSession {
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.sse.abort();
         this.serverOpen = false;
-        if (!this.child.killed) this.child.kill('SIGTERM');
+        this.terminate();
       }
 
       await this.exited;
@@ -234,10 +243,7 @@ class OpencodeSession implements AgentSession {
     if (!this.serverOpen) return;
     this.serverOpen = false;
     this.sse.abort();
-    if (!this.child.killed) this.child.kill('SIGTERM');
-    setTimeout(() => {
-      if (this.child.exitCode == null && !this.child.killed) this.child.kill('SIGKILL');
-    }, 4_000).unref?.();
+    this.terminate();
   }
 
   interrupt(): void {
@@ -246,7 +252,36 @@ class OpencodeSession implements AgentSession {
       void this.http('POST', `/session/${this.sessionId}/abort`, undefined).catch(() => undefined);
     }
     this.sse.abort();
-    if (!this.child.killed) this.child.kill('SIGTERM');
+    this.terminate();
+  }
+
+  /**
+   * The one place either signal is sent: SIGTERM now, SIGKILL once the grace
+   * window elapses.
+   *
+   * Both steps gate on `hasExited()`, never on `child.killed` — the latter
+   * flips the moment SIGTERM is *delivered*, so the old nested
+   * `exitCode == null && !killed` guard disarmed the escalation for exactly the
+   * server it was written for: one that installs its own SIGTERM handler stayed
+   * alive with `killed = true` and `exitCode === null`, outliving the whole
+   * window (#858, the same defect #844 fixed for the other two backends). Every
+   * caller here is followed by `await this.exited`, so a server that survived
+   * SIGTERM did not just leak — it hung the session's result forever.
+   *
+   * One teardown per session: all three call sites can run for the same session
+   * (`interrupt()` on the deadline, then the result promise's `finally`), and
+   * once SIGTERM is out with SIGKILL armed there is nothing a second pass adds.
+   * The old `!child.killed` test deduplicated this as a side effect of being
+   * wrong; `signalled` keeps that property on purpose.
+   */
+  private terminate(): void {
+    if (this.signalled || this.hasExited()) return;
+    this.signalled = true;
+    this.child.kill('SIGTERM');
+    setTimeout(() => {
+      if (this.hasExited()) return;
+      this.child.kill('SIGKILL');
+    }, KILL_GRACE_MS).unref?.();
   }
 
   // ---- server lifecycle ---------------------------------------------------
