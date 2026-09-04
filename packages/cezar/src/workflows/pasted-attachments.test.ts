@@ -3,14 +3,16 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { HANDOFF_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
 import type { WorkflowDef } from './types.ts';
 import {
   RunManager,
+  attachmentLibraryDir,
   contentBlocksOf,
+  copyToAttachmentLibrary,
   mediaTypeFor,
   pastedAttachmentsNote,
   pastedAttachmentsText,
@@ -89,6 +91,93 @@ describe('pastedAttachmentsText / pastedAttachmentsNote', () => {
     const attachments = [{ name: 'pasted-1.png', url: '/api/v1/x', path: '/abs/pasted-1.png' }];
     expect(pastedAttachmentsNote(attachments)).toEqual({ type: 'text', text: pastedAttachmentsText(attachments) });
   });
+
+  /**
+   * #929 — the library is pointed at as a DIRECTORY, not per file. The run-folder paths already
+   * cover this message; what the library answers is "the brief I attached last week", which is a
+   * file this note has no per-attachment handle on.
+   */
+  it('points at the attachment library without disturbing the per-run paths', () => {
+    const text = pastedAttachmentsText(
+      [{ name: 'pasted-1.md', url: '/api/v1/x', path: '/abs/runs/r-images/pasted-1.md' }],
+      '/repo/.ai/cezar/attachments',
+    );
+    expect(text).toContain('The user attached 1 pasted file, also saved on disk at:');
+    expect(text).toContain('- /abs/runs/r-images/pasted-1.md');
+    expect(text).toContain('kept under their original names in /repo/.ai/cezar/attachments');
+    expect(text).toContain('a document the user names but did not attach to this message');
+    // The #950 closing instruction still lands after it, not before.
+    expect(text.indexOf('/repo/.ai/cezar/attachments')).toBeLessThan(text.indexOf('operate on these files'));
+  });
+
+  /** The #950 wording is load-bearing for every backend that only ever sees text — a note that
+   *  changed shape for a project with no library would be a regression nobody's test caught. */
+  it('is byte-identical to the pre-#929 note when there is no library to name', () => {
+    const text = pastedAttachmentsText([{ name: 'pasted-1.png', url: '/x', path: '/abs/pasted-1.png' }]);
+    expect(text).toBe(
+      'The user attached 1 pasted file, also saved on disk at:\n- /abs/pasted-1.png\n' +
+        'When the task involves saving, uploading, attaching, or transforming the pasted content ' +
+        '(e.g. attaching to a GitHub issue/PR, copying into the repo), operate on these files — do ' +
+        'not attempt to reconstruct them from the conversation.',
+    );
+  });
+});
+
+/**
+ * The attachment library writer (#929). Its whole job is deciding what "a file with this name is
+ * already here" means: the same document attached to six tasks must leave one file, while two
+ * genuinely different `notes.md` must both survive.
+ */
+describe('copyToAttachmentLibrary (#929)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-library-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('files a file under its own name and creates the library on first use', () => {
+    const path = copyToAttachmentLibrary(dataDir, 'brief.md', Buffer.from(BRIEF_MD));
+    expect(path).toBe(join(attachmentLibraryDir(dataDir), 'brief.md'));
+    expect(readFileSync(path as string, 'utf8')).toBe(BRIEF_MD);
+  });
+
+  it('reuses the existing copy when the same document is attached again', () => {
+    const first = copyToAttachmentLibrary(dataDir, 'brief.md', Buffer.from(BRIEF_MD));
+    const second = copyToAttachmentLibrary(dataDir, 'brief.md', Buffer.from(BRIEF_MD));
+    expect(second).toBe(first);
+    expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(['brief.md']);
+  });
+
+  it('keeps both when the name matches but the bytes do not', () => {
+    const first = copyToAttachmentLibrary(dataDir, 'notes.md', Buffer.from('# one\n'));
+    const second = copyToAttachmentLibrary(dataDir, 'notes.md', Buffer.from('# two\n'));
+    expect(first).toBe(join(attachmentLibraryDir(dataDir), 'notes.md'));
+    expect(second).toBe(join(attachmentLibraryDir(dataDir), 'notes-2.md'));
+    const third = copyToAttachmentLibrary(dataDir, 'notes.md', Buffer.from('# three\n'));
+    expect(third).toBe(join(attachmentLibraryDir(dataDir), 'notes-3.md'));
+    // …and the second document, re-attached, still deduplicates onto its own copy.
+    expect(copyToAttachmentLibrary(dataDir, 'notes.md', Buffer.from('# two\n'))).toBe(second);
+    expect(readdirSync(attachmentLibraryDir(dataDir)).sort()).toEqual(['notes-2.md', 'notes-3.md', 'notes.md']);
+  });
+
+  it('suffixes an extensionless name without inventing a dot', () => {
+    copyToAttachmentLibrary(dataDir, 'LICENSE', Buffer.from('a'));
+    expect(copyToAttachmentLibrary(dataDir, 'LICENSE', Buffer.from('b'))).toBe(
+      join(attachmentLibraryDir(dataDir), 'LICENSE-2'),
+    );
+  });
+
+  /** Best-effort by contract: the run folder already holds the file the agent was promised, so a
+   *  library that cannot be written must cost the entry and nothing else. */
+  it('answers null instead of throwing when the library cannot be written', () => {
+    // A regular file where the directory should be — `mkdirSync` cannot proceed past it.
+    writeFileSync(attachmentLibraryDir(dataDir), 'not a directory', 'utf8');
+    expect(copyToAttachmentLibrary(dataDir, 'brief.md', Buffer.from(BRIEF_MD))).toBeNull();
+  });
 });
 
 /**
@@ -145,6 +234,40 @@ describe('attachment media types, extensions and blocks (#950)', () => {
       type: 'file',
       mediaType: 'application/pdf',
       data: TINY_PDF_B64,
+    });
+  });
+
+  /**
+   * #929 — `toPastedContent` is the wire boundary, so it is where a client-supplied name is
+   * sanitized. Past this point nothing in the engine handles a raw one.
+   */
+  it('sanitizes a file’s name at the wire boundary and drops one that cannot be salvaged', () => {
+    expect(toPastedContent({ mediaType: 'text/markdown', data: BRIEF_MD_B64, name: 'brief.md' })).toEqual({
+      type: 'file',
+      mediaType: 'text/markdown',
+      data: BRIEF_MD_B64,
+      name: 'brief.md',
+    });
+    expect(
+      toPastedContent({ mediaType: 'text/plain', data: BRIEF_MD_B64, name: '../../etc/shadow' }),
+    ).toEqual({ type: 'file', mediaType: 'text/plain', data: BRIEF_MD_B64, name: 'shadow.txt' });
+    // Nothing usable survives, so the block carries no name at all rather than an empty one.
+    expect(toPastedContent({ mediaType: 'text/plain', data: BRIEF_MD_B64, name: '...' })).toEqual({
+      type: 'file',
+      mediaType: 'text/plain',
+      data: BRIEF_MD_B64,
+    });
+  });
+
+  /**
+   * The image branch produces a `ContentBlock`, which is the runner protocol and reaches a vendor
+   * API verbatim. An extra key here would survive `contentBlocksOf` and be sent to a backend that
+   * rejects unknown fields — so a name offered for an image must be ignored, not carried.
+   */
+  it('never puts a name on an image block, even when the client sends one', () => {
+    expect(toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' })).toEqual({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
     });
   });
 
@@ -417,6 +540,82 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     const ndjson = readFileSync(join(dataDir, 'runs', `${record.id}.ndjson`), 'utf8');
     expect(ndjson).not.toContain(BRIEF_MD_B64);
     expect(ndjson).not.toContain(TINY_PDF_B64);
+  }, 30_000);
+
+  /**
+   * The library end to end (#929): a named file attached to a task must land in
+   * `.ai/cezar/attachments/` under the name the user picked, and the agent must be told where —
+   * that path is the only one a LATER task could find it by.
+   */
+  it('a named file attachment is filed in the project library and its path reaches the agent', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'library-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const holder: WorkflowDef = {
+      name: 'hold-slot-library',
+      source: 'built-in',
+      steps: [{ id: 'hold', command: `${process.execPath} -e "setTimeout(() => {}, 500)"` }],
+    };
+    manager.startRun(holder, { task: 'occupy the only slot', worktree: false });
+    const record = manager.startRun(workflow, {
+      task: 'read the attached brief',
+      images: [
+        { type: 'file', mediaType: 'text/markdown', data: BRIEF_MD_B64, name: 'alpha-brief.md' },
+        // No name (a client from before #929, or a paste with nothing to go on): still persisted
+        // to the run folder exactly as before, just not filed.
+        { type: 'file', mediaType: 'application/pdf', data: TINY_PDF_B64 },
+      ],
+      worktree: false,
+    });
+
+    const libraryPath = join(attachmentLibraryDir(dataDir), 'alpha-brief.md');
+    // Filed at persist time, so it is on disk before the run is even dequeued.
+    expect(readFileSync(libraryPath, 'utf8')).toBe(BRIEF_MD);
+    expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(['alpha-brief.md']);
+
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+    const after = store.getRun(record.id);
+    expect(after?.status, after?.error).toMatch(/^(done|review)$/);
+
+    const lines = readStdinLines();
+    // Both run-folder paths are still announced — the library is additive, not a replacement.
+    expect(lines[0]?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.md')}`);
+    expect(lines[0]?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, 'pasted-2.pdf')}`);
+    // …and the library is named, so a later task can find `alpha-brief.md` by the name the user
+    // knows it by rather than by this run's `pasted-1.md`.
+    expect(lines[0]?.userText).toContain(`kept under their original names in ${attachmentLibraryDir(dataDir)}`);
+    // The unnamed PDF was persisted to the run folder but never filed.
+    expect(existsSync(join(attachmentLibraryDir(dataDir), 'pasted-2.pdf'))).toBe(false);
+    expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(['alpha-brief.md']);
+    expect(readFileSync(libraryPath, 'utf8')).toBe(BRIEF_MD);
+  }, 30_000);
+
+  /** The agent's own tool screenshots share `persistAttachment` with user uploads. They must not
+   *  share the library — a folder of the agent's screenshots is a log, not a library. */
+  it('never files an agent screenshot or a user image in the library', async () => {
+    const before = existsSync(attachmentLibraryDir(dataDir)) ? readdirSync(attachmentLibraryDir(dataDir)) : [];
+    const workflow: WorkflowDef = {
+      name: 'library-images-test',
+      source: 'built-in',
+      steps: [{ id: 'work', prompt: '{{task}}' }],
+    };
+    const image: ContentBlock = {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
+    };
+    const record = manager.startRun(workflow, { task: 'look at this', images: [image] });
+    await waitForStatus(record.id, ['waiting']);
+    // The mock takes its own tool screenshot during turn 1, so this covers both origins at once.
+    expect(existsSync(join(dataDir, 'runs', `${record.id}-images`, 'pasted-1.png'))).toBe(true);
+    const after = existsSync(attachmentLibraryDir(dataDir)) ? readdirSync(attachmentLibraryDir(dataDir)) : [];
+    expect(after).toEqual(before);
+    manager.finish(record.id);
   }, 30_000);
 
   /** A file stacked onto a still-queued run (#472 + #950). Its path has to reach the opening
