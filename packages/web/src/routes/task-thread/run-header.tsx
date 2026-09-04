@@ -4,6 +4,7 @@ import {
   ArchiveRestoreIcon,
   BotIcon,
   CheckIcon,
+  ChevronDownIcon,
   CircleStopIcon,
   CopyIcon,
   EllipsisVerticalIcon,
@@ -16,7 +17,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useId, useMemo, useReducer, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -77,7 +78,7 @@ import {
   workflowLabel,
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
-import { isHttpUrl } from '@/lib/utils'
+import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
@@ -104,6 +105,16 @@ import { useFinishRun } from './use-finish-run'
  *  A prop rather than a route match so the header stays testable with a bare render. */
 export type RunTab = 'session' | 'changes' | 'commits' | 'files'
 
+/** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
+ *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
+ *  module-level and run-keyed, because the two navigations a reader makes here remount the header
+ *  in opposite ways. A Session → Changes hop resolves a different route element, so it DOES remount
+ *  and plain `useState` would throw the expand away; run A → run B stays on `/tasks/:id`, so React
+ *  reconciles the same element and does NOT remount — the docks below it key themselves by `run.id`
+ *  for exactly this reason — so even lazily-initialized `useState` would carry run A's expansion
+ *  into run B. Session-lifetime only; no server persistence invented for it. */
+const detailsOpenByRun = new Map<string, boolean>()
+
 export function RunHeader({
   run,
   planTally,
@@ -123,6 +134,16 @@ export function RunHeader({
   const hint = resumeHint(run)
   const [notesOpen, setNotesOpen] = useState(false)
   const actions = useRunActions(run, onMarkedUnread)
+
+  // The phone-width meta disclosure (#765). The map is the state — a re-render bump rather than a
+  // mirrored `useState` — so switching runs reads that run's own answer instead of the last one's.
+  const [, bumpDetails] = useReducer((n: number) => n + 1, 0)
+  const detailsId = useId()
+  const detailsOpen = detailsOpenByRun.get(run.id) ?? false
+  const toggleDetails = () => {
+    detailsOpenByRun.set(run.id, !detailsOpen)
+    bumpDetails()
+  }
 
   // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
@@ -144,7 +165,8 @@ export function RunHeader({
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
             {planTally ? (
               // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
-              // the run header").
+              // the run header"). Desktop only since #764: on a phone the dock it mirrors is
+              // itself on screen, so the mirror would spend the tightest row here restating it.
               <span data-slot="plan-mirror" className="hidden text-[11px] text-soft-foreground tabular-nums md:inline">
                 Plan {planTally.done}/{planTally.total}
               </span>
@@ -153,20 +175,48 @@ export function RunHeader({
               {attention.label}
               {queuePosition !== undefined ? ` #${queuePosition}` : ''}
             </Pill>
+            {/* Phone-width only: above `md` the meta row never collapses, so a control to expand
+                it would be a permanently disabled-looking chevron next to always-visible content.
+                On the Session tab of a run with a plan it lands in the slot #764 freed by hiding
+                the plan mirror here; on the three `task-git` tabs no tally is passed at all, so
+                there the row does grow by one control — the price of the collapse. */}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="md:hidden"
+              aria-label={detailsOpen ? 'Hide run details' : 'Show run details'}
+              aria-controls={detailsId}
+              aria-expanded={detailsOpen}
+              onClick={toggleDetails}
+            >
+              <ChevronDownIcon
+                aria-hidden="true"
+                className={cn('transition-transform', detailsOpen && 'rotate-180')}
+              />
+            </Button>
             <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
           </span>
         </div>
 
-        <MetaRow
-          run={run}
-          showTokens={metricVisibility.tokens}
-          showCost={metricVisibility.cost}
-          // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
-          // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
-          // own test), so every capability read here tolerates an absent object. Absent stays
-          // fail-closed — the chip degrades to text rather than linking into a disabled view.
-          automationsAvailable={health.data?.capabilities?.automations === true}
-        />
+        {/* #765: workflow, branch, tracker refs, diff, tokens and cost wrap across several rows on
+            a phone. `hidden` rather than a visual-only class so the collapsed rows leave the
+            accessibility tree instead of lingering as invisible-but-focusable chips. `md:block`
+            keeps the desktop header exactly as it was — this is a narrow-viewport fix, and a
+            desktop reader who has always seen these at a glance should not have to click for them. */}
+        <div id={detailsId} data-slot="run-details" className={cn(detailsOpen ? 'block' : 'hidden', 'md:block')}>
+          <MetaRow
+            run={run}
+            showTokens={metricVisibility.tokens}
+            showCost={metricVisibility.cost}
+            // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
+            // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
+            // own test), so every capability read here tolerates an absent object. Absent stays
+            // fail-closed — the chip degrades to text rather than linking into a disabled view.
+            automationsAvailable={health.data?.capabilities?.automations === true}
+          />
+        </div>
+        {/* Outside the disclosure on purpose: "this run wakes itself up at 14:20" is status, not
+            metadata — it belongs with the pill above, not behind a tap with the diff stats. */}
         <MonitoringSchedule run={run} />
 
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">

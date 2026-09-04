@@ -83,12 +83,19 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
-function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
+function renderHeader(
+  record: ApiRun,
+  onMarkedUnread?: () => void,
+  planTally?: { done: number; total: number },
+) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
         <Routes>
-          <Route path="/tasks/:id" element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} />} />
+          <Route
+            path="/tasks/:id"
+            element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} planTally={planTally} />}
+          />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
         <Toaster />
@@ -702,6 +709,88 @@ describe('notes panel', () => {
     renderHeader(run('running'))
     fireEvent.click(actionBar().getByRole('button', { name: 'Notes' }))
     await screen.findByText('No notes yet — the handoff file is seeded when the task starts.')
+  })
+})
+
+/** A run id no other test has touched. The expand memory is a module-level map keyed by run id
+ *  (the same shape `WorkflowSteps` keeps), so a test that toggles it must not poison the shared
+ *  `r1` fixture every other test in this file renders. */
+let detailsRunSeq = 0
+const freshRunId = () => `details-r${++detailsRunSeq}`
+
+describe('dense run details (#765)', () => {
+  it('collapses the meta row at phone width, and leaves the desktop header as it was', () => {
+    stubFetch()
+    renderHeader(
+      run('done', {
+        id: freshRunId(),
+        branch: 'cez/r1',
+        diffStat: { adds: 42, dels: 7, files: 3 },
+        costUsd: 0.04,
+      }),
+    )
+
+    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
+    const toggle = screen.getByRole('button', { name: 'Show run details' })
+    expect(details.className).toContain('hidden')
+    // The point of the fix: `md:block` means a desktop reader still sees branch, diff, tokens and
+    // cost at a glance, and the control that would ask them to click for it is `md:hidden`.
+    expect(details.className).toContain('md:block')
+    expect(toggle.className).toContain('md:hidden')
+    // A real disclosure relationship, not a visual-only one.
+    expect(details.id).not.toBe('')
+    expect(toggle.getAttribute('aria-controls')).toBe(details.id)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(toggle)
+
+    expect(details.className).not.toContain('hidden')
+    expect(screen.getByRole('button', { name: 'Hide run details' }).getAttribute('aria-expanded')).toBe('true')
+    expect(details.textContent).toContain('cez/r1')
+    expect(details.textContent).toContain('IN 24.6k · OUT 2.4k')
+  })
+
+  it('remembers the expand for that run across a tab switch, and does not leak it to another run', () => {
+    stubFetch()
+    const id = freshRunId()
+    const first = renderHeader(run('done', { id }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show run details' }))
+    first.unmount()
+
+    // Same run, remounted by another task route's header: still expanded, because re-opening it on
+    // every Session → Changes hop is the chore this map exists to avoid.
+    const second = renderHeader(run('done', { id }))
+    expect(screen.queryByRole('button', { name: 'Hide run details' })).not.toBeNull()
+    second.unmount()
+
+    renderHeader(run('done', { id: freshRunId() }))
+    expect(screen.queryByRole('button', { name: 'Show run details' })).not.toBeNull()
+  })
+
+  it('keeps the monitoring schedule out of the disclosure — a self-resuming run is status', () => {
+    stubFetch()
+    renderHeader(
+      run('running', {
+        id: freshRunId(),
+        activity: 'monitoring',
+        monitoringWakeAt: '2026-07-25T10:15:00.000Z',
+      }),
+    )
+
+    const schedule = document.querySelector('[data-slot="monitoring-schedule"]')
+    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
+    expect(schedule).not.toBeNull()
+    expect(details.contains(schedule)).toBe(false)
+  })
+
+  it('drops the plan mirror at phone width — the dock it mirrors is already on screen there', () => {
+    stubFetch()
+    renderHeader(run('running', { id: freshRunId() }), undefined, { done: 1, total: 3 })
+
+    const mirror = document.querySelector('[data-slot="plan-mirror"]') as HTMLElement
+    expect(mirror.textContent).toBe('Plan 1/3')
+    expect(mirror.className).toContain('hidden')
+    expect(mirror.className).toContain('md:inline')
   })
 })
 
