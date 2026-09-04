@@ -670,14 +670,18 @@ const ALLOWED_NAME_EXTENSIONS: Record<string, readonly string[]> = {
   'text/x-markdown': ['md', 'markdown'],
 };
 
-/** Longest stem the library will keep, in characters AND in UTF-8 bytes. Filesystems bound the
- *  entry in BYTES (255 on ext4/APFS/NTFS), and a character bound alone is not one: 100 emoji are
- *  400 bytes, and the write would fail with `ENAMETOOLONG`. That failure is caught and degrades to
- *  no library entry, so the cost of getting this wrong is silent absence rather than a crash —
- *  which is exactly why it is bounded here instead. Both bounds leave room for the extension and
- *  the `-2`/`-99` collision suffix. */
+/** Longest stem the library will keep, in code POINTS and in UTF-8 bytes — `truncateToBounds`
+ *  applies both in one pass. Filesystems bound the entry in BYTES (255 on ext4/APFS/NTFS), and a
+ *  character bound alone is not one: 100 emoji are 400 bytes, and the write would fail with
+ *  `ENAMETOOLONG`. That failure is caught and degrades to no library entry, so the cost of getting
+ *  this wrong is silent absence rather than a crash — which is exactly why it is bounded here
+ *  instead. Both bounds leave room for the extension and the `-2`/`-99` collision suffix. */
 const MAX_ATTACHMENT_NAME_STEM = 100;
 const MAX_ATTACHMENT_NAME_STEM_BYTES = 180;
+
+/** Stems Windows reserves for devices regardless of the extension that follows (`CON.txt` is the
+ *  console, not a file). Matched case-insensitively, because the reservation is too. */
+const WINDOWS_DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
 
 /** UTF-8 width of one code point. Computed rather than measured: this package is Node-free AND
  *  DOM-free by construction (`lib: ["ES2022"]`, `types: []` in its tsconfig), so neither `Buffer`
@@ -687,14 +691,25 @@ function utf8Width(codePoint: number): number {
   return codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
 }
 
-/** Truncate to a UTF-8 byte budget on a code-POINT boundary — iterating a string with `for…of`
- *  yields whole code points, so a surrogate pair is never cut in half into a lone surrogate. */
-function truncateToBytes(value: string, maxBytes: number): string {
+/**
+ * Truncate to BOTH bounds at once, always on a code-POINT boundary. `for…of` yields whole code
+ * points, so a surrogate pair is never cut in half into a lone surrogate.
+ *
+ * The two bounds are applied in the same pass deliberately. Doing the character bound first with
+ * `String.prototype.slice` would count UTF-16 code UNITS, which is exactly the cut this loop
+ * exists to avoid: `'a'.repeat(97) + '😀😀'` sliced at 100 units ends on half of the second
+ * emoji, and the byte pass would then faithfully preserve the half. Node writes a lone surrogate
+ * to the filesystem as `U+FFFD`, so the cost is a library entry ending in `�` — cheap, and
+ * cheaper still to not produce.
+ */
+function truncateToBounds(value: string, maxChars: number, maxBytes: number): string {
   let out = '';
   let bytes = 0;
+  let chars = 0;
   for (const char of value) {
     bytes += utf8Width(char.codePointAt(0) ?? 0);
-    if (bytes > maxBytes) return out;
+    chars += 1;
+    if (bytes > maxBytes || chars > maxChars) return out;
     out += char;
   }
   return out;
@@ -736,13 +751,18 @@ export function sanitizeAttachmentName(name: string, mediaType: string): string 
   const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
   const keepsExtension = allowed.includes(ext);
   const rawStem = keepsExtension ? cleaned.slice(0, dot) : cleaned;
-  const stem = truncateToBytes(rawStem.slice(0, MAX_ATTACHMENT_NAME_STEM), MAX_ATTACHMENT_NAME_STEM_BYTES)
+  const stem = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES)
     // Trailing dots and spaces last, after truncation could have exposed one: Windows refuses an
     // entry that ends in either, and `notes.` would otherwise become `notes..txt`.
     .replace(/[. ]+$/, '')
     .trim();
   if (stem === '') return null;
-  return `${stem}.${keepsExtension ? ext : canonical}`;
+  // The last Windows filename rule, and the only one that is not about characters: these stems
+  // name DEVICES whatever extension follows, so `CON.txt` is the console rather than a file and a
+  // write to it would go somewhere no one can read back. The write is best-effort and would
+  // degrade quietly, which is exactly why it is worth the one line here.
+  const safeStem = WINDOWS_DEVICE_NAMES.test(stem) ? `${stem}-` : stem;
+  return `${safeStem}.${keepsExtension ? ext : canonical}`;
 }
 
 /**

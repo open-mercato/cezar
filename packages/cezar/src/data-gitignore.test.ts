@@ -33,12 +33,20 @@ function serviceSources(dir: string = SRC): string[] {
   });
 }
 
-/** The entries `ensureDataGitignore` writes, read out of its `wanted` array. */
+/**
+ * The entries `ensureDataGitignore` writes, read out of its `wanted` array.
+ *
+ * Comment lines are dropped before the quotes are matched. The array is heavily commented, and
+ * one apostrophe in that prose ("the user's `git status`") would pair a quote across it and inject
+ * a phantom entry — which fails in the one direction this test must never fail in, by making the
+ * cross-check below MORE permissive rather than less.
+ */
 function wantedEntries(): string[] {
   const source = readFileSync(join(SRC, 'index.ts'), 'utf8');
   const block = /function ensureDataGitignore[\s\S]*?const wanted = \[([\s\S]*?)\n {2}\];/.exec(source);
   expect(block, 'ensureDataGitignore’s `wanted` array should be findable in index.ts').toBeTruthy();
-  return [...(block?.[1] ?? '').matchAll(/'([^']+)'/g)].map((m) => m[1] as string);
+  const code = (block?.[1] ?? '').replace(/^\s*\/\/.*$/gm, '');
+  return [...code.matchAll(/'([^']+)'/g)].map((m) => m[1] as string);
 }
 
 /**

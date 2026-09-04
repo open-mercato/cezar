@@ -176,4 +176,17 @@ describe('toAttachmentInput', () => {
     expect(pasted.name).toBe('pasted image')
     expect(toAttachmentInput(pasted).name).toBeUndefined()
   })
+
+  /**
+   * The same rule for a nameless FILE, which is the case that actually reaches the library. The
+   * chip needs a label so it falls back to `pasted.<ext>` — but filing THAT would give a library
+   * of `pasted.md`, `pasted-2.md`, `pasted-3.md`, which is the numbering the library was built to
+   * replace. A name the user did not choose is not a name.
+   */
+  it('never sends the placeholder name a nameless file falls back to either', async () => {
+    const nameless = await fileToPendingAttachment(new File(['# hi'], '', { type: 'text/markdown' }))
+    expect(nameless.name).toBe('pasted.md')
+    expect(nameless.originalName).toBeUndefined()
+    expect(toAttachmentInput(nameless)).toEqual({ mediaType: 'text/markdown', data: btoa('# hi') })
+  })
 })

@@ -103,3 +103,10 @@ PR: #957
 
 - [x] 4.1 BACKWARD_COMPATIBILITY.md and AGENTS.md — cbc63e2e
 - [x] 4.2 Full validation gate — verified 2026-09-04
+
+### Phase 5: Review pass (added after code review on PR #957)
+
+- [x] 5.1 Grant the library to the spawned agent — the note NAMES the directory, but `agentDirectories` never passed it to `--add-dir`, so under `--permission-mode dontAsk` the agent's `Read`/`Glob` on the path it was told to look in were refused with no prompt. Asserted end to end against the mock's captured argv.
+- [x] 5.2 Stop the composer's `pasted.<ext>` display fallback from reaching the wire — it was being filed as `pasted.md`, `pasted-2.md`, …, the exact numbering the library exists to replace. Only a name the upload itself carried is sent now (`originalName`).
+- [x] 5.3 Truncate the stem on a code-point boundary for both bounds at once — the character-first `slice` counted UTF-16 units and could leave a lone surrogate that the byte pass then preserved.
+- [x] 5.4 Refuse a non-bare name inside `copyToAttachmentLibrary` itself, so path safety does not depend on a caller two modules away; plus the Windows reserved device names (`CON.txt`), the note's "documents" wording, and comment-stripping in the ignore-list guard's regex.

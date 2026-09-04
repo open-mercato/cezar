@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   parseAskMarkerResult,
   stripAskMarker,
@@ -381,14 +381,26 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
 
 /**
  * The directories a spawned agent may reach outside its worktree: the run-state
- * folder that holds its handoff file, plus its own temp directory when this run
- * got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed to
- * write would trade one silent failure for another, so the two travel together;
- * under `CEZ_AGENT_TMPDIR=0` there is no per-run directory and the list is
- * exactly what it always was.
+ * folder that holds its handoff file and its pasted attachments, the attachment
+ * library when the project has one (#929), plus its own temp directory when this
+ * run got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed
+ * to write would trade one silent failure for another, so the two travel
+ * together; under `CEZ_AGENT_TMPDIR=0` there is no per-run directory and the
+ * list is exactly what it always was.
+ *
+ * The library is on this list for the same reason `runsDir` is: `pastedAttachmentsText`
+ * NAMES it in the note appended to a message, and a directory an agent is told to look in
+ * but whose `Read`/`Glob` it is refused is worse than one it was never told about — headless
+ * runs use `--permission-mode dontAsk`, so the refusal does not even prompt. Pass `undefined`
+ * when the project has no library yet: `--add-dir` on a path that is not there is its own
+ * failure, and a project where nothing has been filed has nothing to grant.
  */
-export function agentDirectories(runsDir: string, env: Record<string, string>): string[] {
-  return env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+export function agentDirectories(
+  runsDir: string,
+  libraryDir: string | undefined,
+  env: Record<string, string>,
+): string[] {
+  return [runsDir, ...(libraryDir ? [libraryDir] : []), ...(env.TMPDIR ? [env.TMPDIR] : [])];
 }
 
 /**
@@ -453,9 +465,20 @@ const MAX_LIBRARY_COLLISION_ATTEMPTS = 100;
  * Strictly best-effort, exactly like `persistAttachment`: this is a convenience copy of a file
  * that is already safely on disk in the run folder, so a read-only volume or a full disk must cost
  * the user the library entry and nothing else.
+ *
+ * Concurrency note: the exclusive create plus content compare below is exact within one process,
+ * because these writes are synchronous and cannot interleave. Two cezar processes on the same
+ * repository can have the second read a partially written file, miss the dedupe and keep a
+ * redundant `-2` copy. That is the best-effort contract doing its job, not a bug to fix here.
  */
 export function copyToAttachmentLibrary(dataDir: string, name: string, bytes: Buffer): string | null {
   try {
+    // Defense in depth: every caller today comes through `toPastedContent`, which sanitizes at the
+    // wire boundary — but `FileBlock.name` is a plain `string`, so a future route that builds one
+    // directly would hand a raw client value to `join()` below and the failure would be a path
+    // traversal rather than a type error. The check belongs next to the write that would suffer
+    // from its absence.
+    if (name !== basename(name) || name.startsWith('.') || name === '') return null;
     const dir = attachmentLibraryDir(dataDir);
     mkdirSync(dir, { recursive: true });
     const dot = name.lastIndexOf('.');
@@ -542,10 +565,13 @@ export function pastedAttachmentsText(attachments: PersistedAttachment[], librar
   // user attached to some earlier task and now refers to only by name. Naming the folder also
   // keeps the note independent of per-attachment state, which does not survive the re-read at
   // dequeue (`readPersistedAttachments` reconstructs an attachment from its URL alone).
+  // Says "documents", not "files": images and uploads that arrived without a name of their own are
+  // deliberately never filed, so a note promising every attachment would send an agent hunting for
+  // last week's pasted screenshot in a folder that was never going to hold it.
   const library = libraryDir
-    ? `Files attached anywhere in this project are also kept under their original names in ` +
-      `${libraryDir} — look there for a document the user names but did not attach to this ` +
-      `message.\n`
+    ? `Documents (PDF, TXT, MD) attached anywhere in this project are also kept under their ` +
+      `original names in ${libraryDir} — look there for a document the user names but did not ` +
+      `attach to this message.\n`
     : '';
   return (
     `The user attached ${attachments.length} pasted file${attachments.length > 1 ? 's' : ''}, ` +
@@ -2567,7 +2593,11 @@ export class RunManager {
         cwd: state.cwd,
         allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
         bashAllowlist: toolsStep?.bashAllowlist,
-        additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
+        additionalDirectories: agentDirectories(
+          join(this.dataDir, 'runs'),
+          this.grantableAttachmentLibrary(),
+          continueProfile.env,
+        ),
         env: continueProfile.env,
         model: continueModel,
         sessionId,
@@ -3178,7 +3208,11 @@ export class RunManager {
           allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), stepProfile.env),
+          additionalDirectories: agentDirectories(
+            join(this.dataDir, 'runs'),
+            this.grantableAttachmentLibrary(),
+            stepProfile.env,
+          ),
           env: stepProfile.env,
           model: backendModel,
           sessionId,
@@ -3571,6 +3605,17 @@ export class RunManager {
   }
 
   /**
+   * This project's attachment library when it exists on disk, for the two questions that need it:
+   * which directories a spawned agent may reach (`agentDirectories`) and whether a message's note
+   * has a library to point at. `undefined` for a project where nothing has ever been filed — there
+   * is no folder to grant and nothing to name.
+   */
+  private grantableAttachmentLibrary(): string | undefined {
+    const dir = attachmentLibraryDir(this.dataDir);
+    return existsSync(dir) ? dir : undefined;
+  }
+
+  /**
    * The attachment library to name in a message's note, or `undefined` when there is nothing to
    * point at yet — no file attachment on this message, or a project where nothing has ever been
    * filed. Derived from the persisted NAMES rather than from per-attachment state, so it survives
@@ -3578,8 +3623,7 @@ export class RunManager {
    */
   private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
     if (!attachments.some((a) => !isImageAttachmentName(a.name))) return undefined;
-    const dir = attachmentLibraryDir(this.dataDir);
-    return existsSync(dir) ? dir : undefined;
+    return this.grantableAttachmentLibrary();
   }
 
   /**

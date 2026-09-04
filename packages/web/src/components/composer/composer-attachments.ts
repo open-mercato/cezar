@@ -49,9 +49,16 @@ export function attachmentMediaType(file: File): string | null {
 export interface PendingAttachment extends AttachmentInput {
   /** Data-URL for the thumbnail — images only; a file has nothing to preview. */
   preview?: string
-  /** The user's own filename, shown on the chip — and, for a FILE, sent (#929) so the per-project
-   *  attachment library can file the copy under it. The run folder still names the file itself. */
+  /** What the chip shows. Always present, because a chip with no label is worse than a generic
+   *  one — so for an upload that carried no name of its own this is a FALLBACK (`pasted image`,
+   *  `pasted.md`), not something the user chose. Never sent; `originalName` is. */
   name: string
+  /** The name the upload itself carried, absent when it had none — a clipboard paste, typically.
+   *  This is the only one that goes on the wire (#929), because it is the only one the attachment
+   *  library should file a copy under: a library of `pasted.md`, `pasted-2.md`, `pasted-3.md` is
+   *  the numbered clutter the library exists to replace. The run folder names its own copy either
+   *  way. */
+  originalName?: string
   isImage: boolean
 }
 
@@ -70,6 +77,7 @@ export async function fileToPendingAttachment(file: File): Promise<PendingAttach
     data,
     ...(isImage ? { preview: `data:${mediaType};base64,${data}` } : {}),
     name: file.name || (isImage ? 'pasted image' : `pasted.${attachmentExtension(mediaType)}`),
+    ...(file.name ? { originalName: file.name } : {}),
     isImage,
   }
 }
@@ -78,12 +86,14 @@ export async function fileToPendingAttachment(file: File): Promise<PendingAttach
  * Strip a pending attachment down to what goes on the wire — the single place that decides it, so
  * a second composer surface cannot start sending `preview` (a whole second copy of the bytes).
  *
- * The filename rides along for FILES only (#929). An image is almost always a clipboard paste with
- * no filename at all — the chip falls back to the literal `'pasted image'` — and images are not
- * filed in the attachment library, so sending it would be noise the server would have to ignore.
+ * The filename rides along for a FILE THAT HAD ONE (#929). Two exclusions, for the same reason:
+ * an image is almost always a clipboard paste and is not filed in the library at all, and a file
+ * that arrived nameless has only the chip's `pasted.<ext>` fallback to offer — which the library
+ * would dutifully file as `pasted.md`, then `pasted-2.md`, then `pasted-3.md`, reproducing exactly
+ * the numbering the library exists to answer. A name the user did not choose is not a name.
  */
-export function toAttachmentInput({ mediaType, data, name, isImage }: PendingAttachment): AttachmentInput {
-  return { mediaType, data, ...(isImage ? {} : { name }) }
+export function toAttachmentInput({ mediaType, data, originalName, isImage }: PendingAttachment): AttachmentInput {
+  return { mediaType, data, ...(isImage || !originalName ? {} : { name: originalName }) }
 }
 
 export interface AttachmentIntake {

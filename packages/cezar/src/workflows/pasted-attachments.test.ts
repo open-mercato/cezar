@@ -106,6 +106,9 @@ describe('pastedAttachmentsText / pastedAttachmentsNote', () => {
     expect(text).toContain('- /abs/runs/r-images/pasted-1.md');
     expect(text).toContain('kept under their original names in /repo/.ai/cezar/attachments');
     expect(text).toContain('a document the user names but did not attach to this message');
+    // "Documents", not "files": an image and a nameless upload are deliberately never filed, so a
+    // note promising every attachment would send the agent hunting in the wrong folder.
+    expect(text).toContain('Documents (PDF, TXT, MD) attached anywhere in this project');
     // The #950 closing instruction still lands after it, not before.
     expect(text.indexOf('/repo/.ai/cezar/attachments')).toBeLessThan(text.indexOf('operate on these files'));
   });
@@ -169,6 +172,21 @@ describe('copyToAttachmentLibrary (#929)', () => {
     expect(copyToAttachmentLibrary(dataDir, 'LICENSE', Buffer.from('b'))).toBe(
       join(attachmentLibraryDir(dataDir), 'LICENSE-2'),
     );
+  });
+
+  /**
+   * Defense in depth. `toPastedContent` sanitizes at the wire boundary and is the only producer of
+   * `FileBlock.name` today, but that field is a plain `string` — so the writer refuses anything
+   * that is not already a bare segment rather than trusting a caller two modules away. A traversal
+   * that got this far would land outside `.ai/cezar/` entirely.
+   */
+  it('refuses a name that is not already a bare filename, whoever hands it over', () => {
+    expect(copyToAttachmentLibrary(dataDir, '../../etc/shadow', Buffer.from('x'))).toBeNull();
+    expect(copyToAttachmentLibrary(dataDir, 'sub/notes.md', Buffer.from('x'))).toBeNull();
+    expect(copyToAttachmentLibrary(dataDir, '..', Buffer.from('x'))).toBeNull();
+    expect(copyToAttachmentLibrary(dataDir, '.gitignore', Buffer.from('x'))).toBeNull();
+    expect(copyToAttachmentLibrary(dataDir, '', Buffer.from('x'))).toBeNull();
+    expect(existsSync(join(attachmentLibraryDir(dataDir), 'shadow'))).toBe(false);
   });
 
   /** Best-effort by contract: the run folder already holds the file the agent was promised, so a
@@ -357,6 +375,39 @@ describe('sanitizeAttachmentName (#929)', () => {
     const stem = emoji.slice(0, -'.md'.length);
     expect(stem).toBe('😀'.repeat([...stem].length));
     expect([...stem].length).toBe(45);
+  });
+
+  /**
+   * The odd-boundary case, which `'😀'.repeat(100)` above cannot reach: it cuts cleanly at code
+   * unit 100, so a character-first truncation would look correct. Put one ASCII character in front
+   * and unit 100 lands on half of an emoji — the cut a UTF-16 `slice` makes and a code-point loop
+   * does not. Node writes a lone surrogate out as `U+FFFD`, so the symptom would be a library
+   * entry ending in `�` rather than an error anyone would notice.
+   */
+  it('cuts on a code-point boundary even when the bound falls mid-surrogate-pair', () => {
+    const name = sanitizeAttachmentName(`${'a'.repeat(97)}${'😀'.repeat(2)}.md`, 'text/markdown') as string;
+    expect(name).not.toBeNull();
+    // `for…of` yields whole code points, so any value left in the surrogate range is an unpaired
+    // half — a whole emoji reads as U+1F600, never as U+D83D.
+    const lone = [...name]
+      .map((char) => char.codePointAt(0) as number)
+      .filter((code) => code >= 0xd800 && code <= 0xdfff);
+    expect(lone, `lone surrogate in ${JSON.stringify(name)}`).toEqual([]);
+    // 97 ASCII + 2 whole emoji is 99 code points and 105 bytes — inside both bounds, so nothing
+    // is dropped and the pair survives intact.
+    expect(name).toBe(`${'a'.repeat(97)}${'😀'.repeat(2)}.md`);
+  });
+
+  /** The one Windows filename rule that is not about characters: these stems name DEVICES no
+   *  matter what extension follows, so a write to `CON.txt` goes to the console rather than to a
+   *  file anyone can read back. */
+  it('does not hand Windows a reserved device name', () => {
+    expect(sanitizeAttachmentName('CON.txt', 'text/plain')).toBe('CON-.txt');
+    expect(sanitizeAttachmentName('nul', 'text/plain')).toBe('nul-.txt');
+    expect(sanitizeAttachmentName('LPT1.pdf', 'application/pdf')).toBe('LPT1-.pdf');
+    // Only the exact stems are reserved — a name that merely starts with one is a normal file.
+    expect(sanitizeAttachmentName('console.log', 'text/plain')).toBe('console.log');
+    expect(sanitizeAttachmentName('com10.txt', 'text/plain')).toBe('com10.txt');
   });
 
   it('never leaves a trailing dot or space, which Windows refuses outright', () => {
@@ -571,6 +622,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
    */
   it('a named file attachment is filed in the project library and its path reaches the agent', async () => {
     writeFileSync(stdinFile, '', 'utf8');
+    writeFileSync(argsFile, '', 'utf8');
     const workflow: WorkflowDef = {
       name: 'library-test',
       source: 'built-in',
@@ -616,6 +668,15 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     expect(existsSync(join(attachmentLibraryDir(dataDir), 'pasted-2.pdf'))).toBe(false);
     expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(['alpha-brief.md']);
     expect(readFileSync(libraryPath, 'utf8')).toBe(BRIEF_MD);
+
+    // …and the agent is actually ALLOWED to look where it was told to. A run's cwd is its
+    // worktree, headless runs get `--permission-mode dontAsk`, and the library is a sibling of
+    // `runs/` — so without this grant `Read`/`Glob` on the path the note names is refused
+    // outright, with no prompt, and the whole point of the library never reaches the agent.
+    const argv = JSON.parse(readFileSync(argsFile, 'utf8').trim().split('\n')[0] as string) as string[];
+    const granted = argv.flatMap((arg, i) => (arg === '--add-dir' ? [argv[i + 1] as string] : []));
+    expect(granted).toContain(attachmentLibraryDir(dataDir));
+    expect(granted).toContain(join(dataDir, 'runs'));
   }, 30_000);
 
   /** The agent's own tool screenshots share `persistAttachment` with user uploads. They must not
