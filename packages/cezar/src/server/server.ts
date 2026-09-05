@@ -94,6 +94,7 @@ import { toPastedContent, type PastedContent, type RunManager } from '../workflo
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
+import { prepareRunEventForSse, selectInitialSseReplay } from './run-event-replay.ts';
 import {
   collectChanges,
   collectCommitChanges,
@@ -4613,12 +4614,14 @@ export function createApp(deps: ServerDeps) {
         // (dotted types, persisted snapshots AND ephemeral coalesced deltas)
         // ride `ui-event`, which only v2-aware clients subscribe to.
         // EventSource ignores names it has no listener for.
-        const writeEvent = (event: RunEvent) =>
-          stream.writeSSE({
-            id: String(event.seq),
-            event: isV2WireEventType(event.type) ? 'ui-event' : 'run-event',
-            data: JSON.stringify(event),
+        const writeEvent = (event: RunEvent) => {
+          const wireEvent = prepareRunEventForSse(event);
+          return stream.writeSSE({
+            id: String(wireEvent.seq),
+            event: isV2WireEventType(wireEvent.type) ? 'ui-event' : 'run-event',
+            data: JSON.stringify(wireEvent),
           });
+        };
         const onEvent = (payload: { runId: string; event: RunEvent }) => {
           if (payload.runId !== id) return;
           if (replaying) buffered.push(payload.event);
@@ -4637,7 +4640,12 @@ export function createApp(deps: ServerDeps) {
 
         const replay = query.cursor
           ? await readEventsAfterLiveCursor(eventsPath, query.cursor)
-          : { events: store.readEvents(id), boundarySeq: 0 };
+          : {
+              events: requestedAfter === 0
+                ? selectInitialSseReplay(store.readEvents(id))
+                : store.readEvents(id),
+              boundarySeq: 0,
+            };
         maxSeq = Math.max(maxSeq, replay.boundarySeq);
         for (const event of replay.events) {
           if (event.seq <= maxSeq) continue;

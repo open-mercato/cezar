@@ -51,7 +51,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - Variants: `GET /api/v1/groups/:groupId`, `POST /api/v1/groups/:groupId/pick`
 - Inbox: `GET /api/v1/todos`, `DELETE /api/v1/todos/:id`, `POST /api/v1/todos/:id/start` — present always, but **gated** on `CEZ_FOLLOWUPS=1` (#471, off by default): the GET degrades to `200 []` and the two mutators answer `409`. The routes themselves must keep existing and must behave exactly as before once the flag is on.
 - Run history: `GET /api/v1/runs/:id/{history,history-context}` (reverse-paged visible events + compact current-state context; boot/default/project aliases remain identical)
-- SSE: `GET /api/v1/events` (boot project), `GET /api/v1/runs/:id/events` (no-query full replay + live; optional opaque `cursor`/`afterSeq` resume, additive data-frame `id`, payload dedup by `seq`), `GET /api/v1/workspace/events` (all projects; workspace-level, never mirrored — see below)
+- SSE: `GET /api/v1/events` (boot project), `GET /api/v1/runs/:id/events` (byte-bounded recent replay + live when no cursor/resume point is supplied; optional opaque `cursor`/`afterSeq` resume, additive data-frame `id`, payload dedup by `seq`; oversized SSE payloads are projected while full NDJSON/history payloads remain intact), `GET /api/v1/workspace/events` (all projects; workspace-level, never mirrored — see below)
   - Legacy `GET /api/v1/events` is **explicitly boot-project-only** and keeps its exact pre-workspace, un-stamped payload shapes (`run` = the bare `RunRecord`, `run-deleted` = `{id}`, `todos` = the bare item array, `usage` filtered to this project's runs, `ping`). Widening it to carry other projects' events, or stamping its payloads with a project id, would be a silent behavioral break for every script reading it — the all-project stream is `/api/v1/workspace/events`, and each project's own stream is `/api/v1/p/:projectId/events` in the same un-stamped shape.
   - `GET /api/v1/workspace/events` reuses the same event names but stamps every payload with the owning `project` id — additively where the legacy payload is an object (`run` grows a `project` key; `run-deleted` becomes `{id, project}`), wrapped where it is not (`todos` → `{project, items}`; `usage` → `{project, usage}`). `usage` is **filtered per project** — one event per project that has live rows, never a stamped whole and never an empty-record clear. Three workspace-only event names exist for the registry/GUI-clone flows: `project-added`, `project-removed`, `checkout-progress` (payloads relayed verbatim from the emitter). The host-wide `provider-status` event is also workspace-only and deliberately **unstamped**: its additive coarse provider row is `{provider, status, hint?, authFailureId?, enabled?}`. It is emitted on a runtime-authentication latch transition, a successful provider enablement change, and a successful incident-safe retry; runtime rows carry the fixed hint and opaque incident id, while enablement/retry rows carry the current `enabled` value. Evolution is additive: a new workspace event name is inert to older consumers, and subscribing never force-instantiates a project (a lazily-built project's events join streams already open).
 - WebSocket: `GET /api/v1/ws` — the topic subscription bus (spec `.ai/specs/2026-07-23-websocket-subscriptions.md`), upgrade-only and workspace-level (single-mount, never mirrored under `/api/v1/p/`). **The path is protected, the frame protocol is not.** The path is what the `packages/cezar/web/dist` bundle and the Vite dev proxy connect to and what the upgrade guard answers `403` on, so moving or removing it is breaking. The frames (`{type:'subscribe'|'unsubscribe',topic}` up; `{type:'event'|'error'|'ping',…}` down) and the topic names are deliberately **internal**: the cockpit bundle ships in lockstep with the server that serves it, there is no cross-version consumer, and unlike `/api/v1/events` nothing outside this repo can have scripted them. Topic names may therefore be added, renamed or dropped freely — but a topic's payload, when it mirrors an HTTP route's shape (`health` does), inherits that route's contract.
@@ -261,6 +261,21 @@ instruction rather than silently.
 - **No deprecation alias**: the flag *is* the migration path — one env var restores the previous
   behavior wholesale, which is what the "keep the old spelling for a minor release" rule exists to
   provide.
+
+## Bounded cursorless run replay (#882), 2026-08-14
+
+The cursorless `GET /api/v1/runs/:id/events` replay is now a byte-bounded recent tail instead of
+the entire persisted transcript. Individual oversized SSE frames are projected to a bounded wire
+form; the append-only NDJSON file and paged history responses retain the full event payload. This
+is an intentional availability-first narrowing of the protected no-query behavior: multi-megabyte
+full replays caused Safari to abort and immediately reconnect, freezing the cockpit before its
+composer could submit. Consumers that need the complete archive must use the paged `history` route;
+reconnects continue from SSE frame ids through `Last-Event-ID`.
+
+Event names, required envelope fields (`seq`, `ts`, `type`), route spellings, cursor semantics, and
+live ordering are unchanged; only an oversized live payload can receive the same SSE-only bounded
+projection. There is no compatibility alias for the unsafe full replay because it would preserve
+the reconnect amplification this change removes.
 
 ## When in doubt
 

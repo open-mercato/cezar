@@ -292,6 +292,23 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     }
   });
 
+  it('SSE: a cursorless run replay is byte-bounded without rewriting persisted history', async () => {
+    for (let index = 0; index < 40; index += 1) {
+      store.appendEvent(runId, { type: 'note', message: `tail-${index}-${'x'.repeat(100_000)}` });
+    }
+    const oversized = store.appendEvent(runId, { type: 'note', message: `oversized-${'y'.repeat(1_000_000)}` });
+
+    const replay = await sseHead(`/api/v1/runs/${runId}/events`);
+
+    expect(replay.body.length).toBeLessThan(1_600_000);
+    expect(replay.body).not.toContain('tail-0-');
+    expect(replay.body).toContain('tail-39-');
+    expect(replay.body).toContain(`id: ${oversized.seq}`);
+    expect(replay.body).toContain('truncated for SSE');
+    expect(store.readEvents(runId).find(({ seq }) => seq === oversized.seq)?.message)
+      .toBe(oversized.message);
+  });
+
   it('unknown and malformed project ids answer 404 {error}', async () => {
     for (const url of ['/api/v1/p/no-such-project/runs', '/api/v1/p/no-such-project/events']) {
       const res = await apiRequest(app, url);
