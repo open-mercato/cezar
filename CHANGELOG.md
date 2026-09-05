@@ -11,6 +11,24 @@ as its own, and a stale review request or an "Update branch" click can no longer
 rejection.
 
 ## ✨ Features
+- ✨ **What you typed into a task is still there when you come back.** This is a parallel-agent
+  cockpit, so checking on another task mid-sentence is the core loop, not an edge case — and until
+  now a route change unmounted the composer and threw away whatever was in it, with no warning and
+  no way back. Every editable input *inside* a task now keeps its unsent content: the reply
+  composer (text **and** pasted screenshots), the review-notes box, the inline prompt and
+  queued-message editors, and the header's rename. Deliberately invisible — no toast, no badge, no
+  "draft restored" banner: you return and the text is where you left it, thumbnails intact, and an
+  editor that had unsaved text re-opens holding it — a re-opened rename waits for you to confirm it
+  with Enter rather than applying itself on the next click elsewhere. Drafts live on the server
+  (`.ai/cezar/drafts/`,
+  gitignored, `0600`), so they survive a reload, a second browser and a `cez` restart, and they are
+  cleared only by sending them or emptying them — never by age or count. If the send is rejected,
+  the message comes back with its attachments; if the draft cannot be written at all, the cockpit
+  stays silent and keeps it for the session, because a failed draft write must never be louder than
+  the message being written. New additive routes: `GET /api/v1/runs/:id/drafts`, `PUT/DELETE
+  /api/v1/runs/:id/drafts/:surface`, and the `…/images` trio. Worth knowing: a message you typed
+  and chose not to send now rests on disk in your repo directory until you clear it. Spec:
+  `.ai/specs/2026-08-30-thread-composer-draft-persistence.md` (#939).
 - ✨ **Pin the two or three tasks you are actually living in.** The task list is sorted by what
   happens next, which is the right default and a bad fit for a long-running task you keep coming
   back to: it sinks under every newer run, and a finished-but-unmerged one drops into `Recent` and
@@ -28,7 +46,7 @@ rejection.
   `pinned`/`pinnedAt` keys that unpinning deletes rather than writes as `false` — so a record
   written before this, or unpinned after it, is byte-identical to what an older cezar wrote.
   Cross-project pins on the global All-tasks page and in the ⌘K palette are a follow-up. (fixes
-  #935) (#938)
+   #935) (#938)
 - ✨ **Continue a task on another agent account, not just another agent.** The thread's Continue
   carried a runner pill that could switch `claude → codex` but never offered the second Claude
   login the new-task composer has offered since accounts landed — so "finish this one on my other

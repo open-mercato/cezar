@@ -4,6 +4,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { join } from 'node:path';
 import { z } from 'zod';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
+import { deleteRunDrafts } from './drafts.ts';
 // Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
 import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
@@ -1295,6 +1297,9 @@ export class RunStore extends EventEmitter {
         rmSync(this.eventsPath(id), { force: true });
         rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
         rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
+        // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
+        // unreachable by definition, and it may be holding megabytes of pasted screenshots.
+        deleteRunDrafts(this.dataDir, id);
       } catch {
         // best effort — the index is authoritative
       }
@@ -1369,6 +1374,7 @@ export class RunStore extends EventEmitter {
         rmSync(this.eventsPath(stale.id), { force: true });
         rmSync(this.handoffPath(stale.id), { force: true });
         rmSync(this.imagesDir(stale.id), { recursive: true, force: true });
+        deleteRunDrafts(this.dataDir, stale.id);
       } catch {
         // best effort
       }

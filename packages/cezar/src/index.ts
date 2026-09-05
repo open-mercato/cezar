@@ -11,6 +11,7 @@ import {
   providerAuthChecksDisabled,
 } from './core/provider-auth.ts';
 import { applyProviderEnablement } from './core/provider-availability.ts';
+import { ensureDataGitignore } from './data-gitignore.ts';
 import { pruneOrphans } from './git-worktree.ts';
 import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
@@ -662,42 +663,6 @@ function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
   armRepoHandle(store, repoRoot);
   ensureDataGitignore(repoRoot);
   return store;
-}
-
-/** Keep run data out of the user's repo history; workflows/skills stay committable. */
-function ensureDataGitignore(repoRoot: string): void {
-  const path = join(repoRoot, '.ai/cezar', '.gitignore');
-  const wanted = [
-    'runs.json',
-    'runs.json.tmp',
-    'runs/',
-    'worktrees/',
-    'tmp/', // per-run agent temp directories (#785)
-    'todos.json',
-    'todos.json.tmp',
-    'launch-key',
-    'automations.json',
-    'automations.json.tmp',
-    'automation-state.json',
-    'automation-state.json.tmp',
-    'automation-receipts.ndjson',
-    'automation-receipts.ndjson.tmp',
-    'automation-log.ndjson',
-    'automation-log.ndjson.tmp',
-    'automation-poll.lock',
-  ];
-  try {
-    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
-    const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
-    const lines = current.split('\n');
-    const missing = wanted.filter((w) => !lines.includes(w));
-    if (missing.length > 0) {
-      const glue = current && !current.endsWith('\n') ? '\n' : '';
-      writeFileSync(path, `${current}${glue}${missing.join('\n')}\n`, 'utf8');
-    }
-  } catch {
-    // non-fatal
-  }
 }
 
 /** Own package name — for the npm-registry update check (#368). */

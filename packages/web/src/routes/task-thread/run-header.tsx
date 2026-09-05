@@ -17,7 +17,16 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useId, useMemo, useReducer, useState, type ReactNode } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -38,7 +47,7 @@ import {
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
+import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsButton } from '@/components/reference-conflict-action'
@@ -83,6 +92,7 @@ import { cn, isHttpUrl } from '@/lib/utils'
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
+import { useDraft } from './thread-draft'
 import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 
@@ -528,12 +538,49 @@ async function copyToClipboard(text: string, doneMessage: string): Promise<void>
 function EditableTitle({ run }: { run: ApiRun }) {
   const patch = usePatchRun(run.id)
   const title = runTitle(run)
+  // A rename in progress is authored content like any other (#939), and this editor is
+  // uniquely easy to walk away from: it commits on blur, but a route change unmounts it without
+  // one. Only the THREAD's rename is drafted — the Tasks table's rename is not inside a task, so
+  // it keeps today's behavior.
+  const draft = useDraft(run.id, 'title')
   const editor = useTitleEditor(title, (next) =>
     patch.mutate({ title: next }, { onError: (error) => toast(error.message, { tone: 'danger' }) }),
   )
+  const drafted: TitleEditor = {
+    ...editor,
+    setDraft: (value) => {
+      editor.setDraft(value)
+      draft.setText(value)
+    },
+    // Both exits end the rename, so both end the draft — a stored title with no editor open would
+    // re-open one on the next visit for an edit the user already resolved.
+    commit: () => {
+      editor.commit()
+      draft.clear()
+    },
+    cancel: () => {
+      editor.cancel()
+      draft.clear()
+    },
+  }
+
+  // Re-open on what was left unsaved. `hasDraft` goes false the moment it is committed, cancelled
+  // or typed empty, so this cannot re-fire against the user. `begin` rides a ref because the
+  // editor object is rebuilt every render and would otherwise re-run this on each one.
+  //
+  // `beginWith` (not `begin`) also opens it WITHOUT blur-commit until the user types: an editor
+  // that reappeared on its own must not turn the next stray click in the thread into a rename the
+  // user walked away from an hour ago. Enter and Escape still mean what they always meant.
+  const begin = useRef(editor.beginWith)
+  begin.current = editor.beginWith
+  const editing = editor.editing
+  useEffect(() => {
+    if (editing || !draft.ready || !draft.hasDraft) return
+    begin.current(draft.text)
+  }, [draft.hasDraft, draft.ready, draft.text, editing])
 
   if (editor.editing) {
-    return <TitleEditInput editor={editor} className="flex-1 text-[15px] font-semibold" />
+    return <TitleEditInput editor={drafted} className="flex-1 text-[15px] font-semibold" />
   }
 
   return (

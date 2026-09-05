@@ -179,6 +179,84 @@ describe('editable title (#389)', () => {
     expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
   })
 
+  /** #939 — this editor commits on blur, but a route change unmounts it without one, so a
+   *  half-typed rename is exactly the kind of text that used to vanish. */
+  it('re-opens holding a half-typed rename that was never committed', async () => {
+    stubFetch({
+      '/api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            title: { text: 'Half a new na', images: [], updatedAt: '2026-08-30T00:00:00.000Z' },
+          },
+        }),
+    })
+    renderHeader(run('waiting'))
+
+    const input = (await screen.findByLabelText('Task title')) as HTMLInputElement
+    expect(input.value).toBe('Half a new na')
+    // No pencil click was needed — an editor whose text is restored but stays closed is state
+    // the user cannot see.
+  })
+
+  it('a restored rename is not applied by the next stray click — only by Enter', async () => {
+    const sent = stubFetch({
+      '/api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            title: { text: 'Half a new na', images: [], updatedAt: '2026-08-30T00:00:00.000Z' },
+          },
+        }),
+    })
+    renderHeader(run('waiting'))
+    const input = (await screen.findByLabelText('Task title')) as HTMLInputElement
+
+    // The user comes back an hour later and clicks somewhere in the thread. Blur commits for an
+    // editor they opened; this one opened itself, and committing here would silently rename the
+    // task to text they walked away from.
+    fireEvent.blur(input)
+    expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
+    expect((screen.getByLabelText('Task title') as HTMLInputElement).value).toBe('Half a new na')
+
+    // Once they touch it, it is an ordinary rename again.
+    fireEvent.change(input, { target: { value: 'Half a new name' } })
+    fireEvent.blur(input)
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'PATCH')?.body).toEqual({ title: 'Half a new name' }),
+    )
+  })
+
+  it('typing a rename writes it to the draft store, and committing clears it', async () => {
+    const sent = stubFetch()
+    renderHeader(run('waiting'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
+    const input = screen.getByLabelText('Task title')
+    fireEvent.change(input, { target: { value: 'A better name' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/runs/r1/drafts/title')).toMatchObject(
+        { body: { text: '', images: [] } },
+      ),
+    )
+  })
+
+  it('Escape clears the stored rename too — the user resolved it', async () => {
+    const sent = stubFetch()
+    renderHeader(run('waiting'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
+    fireEvent.change(screen.getByLabelText('Task title'), { target: { value: 'Never mind' } })
+    fireEvent.keyDown(screen.getByLabelText('Task title'), { key: 'Escape' })
+
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/runs/r1/drafts/title')).toMatchObject(
+        { body: { text: '', images: [] } },
+      ),
+    )
+    expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
+  })
+
   it('an unchanged or emptied draft is not worth a request', () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))

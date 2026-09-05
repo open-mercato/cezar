@@ -33,6 +33,7 @@ import {
   fileToPendingAttachment,
   MAX_ATTACHMENTS,
   screenFiles,
+  type AttachmentsChangeReason,
   type PendingAttachment,
 } from './composer-attachments'
 import { applyCompletion, detectTrigger, type TriggerState } from './composer-text'
@@ -60,6 +61,15 @@ export interface ComposerProps {
    */
   value?: string
   onValueChange?: (text: string) => void
+  /**
+   * Controlled attachments (pass BOTH or neither) — the exact mirror of the text seam above, and
+   * it must stay that way: the thread host (#939) needs the images to survive navigation with the
+   * text, while `/new` deliberately keeps ITS images uncontrolled (multi-MB base64 has no business
+   * in localStorage). Every internal change — paste, drop, the paperclip, a thumbnail click, the
+   * optimistic clear, the on-error restore — flows through `onImagesChange`.
+   */
+  images?: PendingAttachment[]
+  onImagesChange?: (images: PendingAttachment[], reason: AttachmentsChangeReason) => void
   /** Focus the textarea on mount — the /new hero, where typing is the whole point of arriving. */
   autoFocus?: boolean
   /** Rendered in the footer bar after the paperclip — the /new picker pill row. */
@@ -111,6 +121,8 @@ export function Composer({
   onSubmit,
   value,
   onValueChange,
+  images: controlledImages,
+  onImagesChange,
   autoFocus = false,
   footerStart,
   footerEnd,
@@ -138,11 +150,30 @@ export function Composer({
     setInternalText(resolved)
     onValueChangeRef.current?.(resolved)
   }, [])
-  const [images, setImages] = useState<PendingAttachment[]>([])
+  // Optionally controlled, on the same terms as the text above: `controlledImages` (when given)
+  // shadows the internal state and every write is mirrored to both.
+  const [internalImages, setInternalImages] = useState<PendingAttachment[]>([])
+  const images = controlledImages ?? internalImages
   // Mirrors `images` for reads inside event handlers that must not run through a setState updater
-  // (StrictMode double-invokes those in dev — see addFiles / #double-paste).
+  // (StrictMode double-invokes those in dev — see addFiles / #double-paste). Updated INSIDE
+  // `setImages` as well as on render, so two async appends in one tick compose instead of the
+  // second clobbering the first — that is what the functional-setState form used to buy.
   const imagesRef = useRef(images)
   imagesRef.current = images
+  const onImagesChangeRef = useRef(onImagesChange)
+  onImagesChangeRef.current = onImagesChange
+  const setImages = useCallback(
+    (
+      next: PendingAttachment[] | ((current: PendingAttachment[]) => PendingAttachment[]),
+      reason: AttachmentsChangeReason = 'edit',
+    ) => {
+      const resolved = typeof next === 'function' ? next(imagesRef.current) : next
+      imagesRef.current = resolved
+      setInternalImages(resolved)
+      onImagesChangeRef.current?.(resolved, reason)
+    },
+    [],
+  )
   const [busy, setBusy] = useState(false)
   const [trigger, setTrigger] = useState<TriggerState | null>(null)
   const [menuValue, setMenuValue] = useState('')
@@ -341,9 +372,10 @@ export function Composer({
     if (text.trim() === '' && images.length === 0 && !allowEmptySubmit) return
     const draftText = text
     const draftImages = images
-    // Optimistic clear — the reply feels instant; a rejection restores it above.
+    // Optimistic clear — the reply feels instant; a rejection restores it above. Tagged `submit`
+    // so a controlled host does not mistake it for the user emptying the composer by hand.
     setText('')
-    setImages([])
+    setImages([], 'submit')
     setTrigger(null)
     void send(draftText, draftImages, true)
   }, [allowEmptySubmit, images, send, text])
@@ -422,7 +454,7 @@ export function Composer({
     const merged = text.trim() === '' ? transcript : `${text.replace(/\s*$/, '')} ${transcript}`
     if (alsoSend) {
       setText('')
-      setImages([])
+      setImages([], 'submit')
       void send(merged, images, true)
       return
     }
