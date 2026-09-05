@@ -547,6 +547,76 @@ describe('TasksOverview — inline rename from the table (spec step 15)', () => 
   })
 })
 
+describe('TasksOverview — pinned tasks (#935)', () => {
+  it('sorts pinned rows to the top, whatever their status says', () => {
+    const onTogglePin = vi.fn()
+    renderOverview({
+      runs: [
+        run({ id: 'waiting', status: 'waiting' }),
+        run({ id: 'kept', status: 'done', pinned: true }),
+        run({ id: 'running', status: 'running' }),
+      ],
+      onTogglePin,
+    })
+    const order = [...document.querySelectorAll('[data-slot="task-table-row"]')].map((el) =>
+      el.getAttribute('data-run-id'),
+    )
+    expect(order).toEqual(['kept', 'waiting', 'running'])
+  })
+
+  it('toggles from the row and from the card, reporting the state asked for', () => {
+    const onTogglePin = vi.fn()
+    renderOverview({ runs: [run({ id: 'kept', status: 'done', pinned: true })], onTogglePin })
+
+    fireEvent.click(within(tableRow('kept') as HTMLElement).getByRole('button', { name: 'Unpin task' }))
+    expect(onTogglePin.mock.calls[0]?.[1]).toBe(false)
+    expect(onTogglePin.mock.calls[0]?.[0]).toMatchObject({ id: 'kept' })
+
+    fireEvent.click(within(card('kept') as HTMLElement).getByRole('button', { name: 'Unpin task' }))
+    expect(onTogglePin).toHaveBeenCalledTimes(2)
+  })
+
+  it('the row pin stays reachable without a pointer (a tablet is >=md and cannot hover)', () => {
+    renderOverview({ runs: [run({ id: 'plain', status: 'done' })], onTogglePin: vi.fn() })
+    const pin = tableRow('plain')?.querySelector('[data-slot="pin-toggle"]') as HTMLElement
+    expect(pin.className).toContain('no-hover:opacity-100')
+    expect(pin.className).toContain('opacity-0')
+  })
+
+  it('a pin click does not also open the task — the control owns its click', () => {
+    renderOverview({ runs: [run({ id: 'kept', status: 'done' })], onTogglePin: vi.fn() })
+    fireEvent.click(within(card('kept') as HTMLElement).getByRole('button', { name: 'Pin task' }))
+    expect(location()).toBe('/')
+  })
+
+  it('the archived view ignores pins — that list is history, in its own order', () => {
+    renderOverview({
+      view: 'archived',
+      runs: [
+        run({ id: 'newer', archived: true, createdAt: ago(10_000) }),
+        run({ id: 'older-pinned', archived: true, pinned: true, createdAt: ago(90_000) }),
+      ],
+      onTogglePin: vi.fn(),
+    })
+    const order = [...document.querySelectorAll('[data-slot="task-table-row"]')].map((el) =>
+      el.getAttribute('data-run-id'),
+    )
+    expect(order).toEqual(['newer', 'older-pinned'])
+  })
+
+  it('paints no pin control in the archived view — it would have nowhere to show its result', () => {
+    // The thread header already withholds the action on an archived run (`runActionFlags`).
+    // Offered here it would be worse than inert: the pin sticks, so un-archiving would drop the
+    // task at the top of the active list by a click that looked like it did nothing.
+    renderOverview({
+      view: 'archived',
+      runs: [run({ id: 'gone', archived: true })],
+      onTogglePin: vi.fn(),
+    })
+    expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
+  })
+})
+
 describe('TasksOverview — usage cells', () => {
   const SAMPLE: ProcessUsage = { cpuPct: 38.4, rssBytes: 612 * 1024 ** 2, procCount: 5 }
 

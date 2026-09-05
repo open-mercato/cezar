@@ -415,24 +415,29 @@ describe('task thread', () => {
     )
   })
 
-  it('reflows at iPhone width with no horizontal overflow', () => {
-    browser.setViewport(390, 844)
-    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
-    browser.waitForFunction(`document.querySelectorAll('[data-slot="user-bubble"]').length >= 2`)
-    browser.waitForFunction(`document.querySelector('[data-streamdown="code-block"]') !== null`)
+  it('reflows across small phone widths with no horizontal overflow', () => {
+    for (const [width, height] of [[320, 568], [360, 640], [390, 844]] as const) {
+      browser.setViewport(width, height)
+      browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+      browser.waitForFunction(`document.querySelectorAll('[data-slot="user-bubble"]').length >= 2`)
+      browser.waitForFunction(`document.querySelector('[data-streamdown="code-block"]') !== null`)
 
-    expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
-    // The wide fixture table/code scroll inside their own boxes, not the page.
-    expect(
-      browser.evaluate(`(() => {
-        const main = document.querySelector('[data-slot="main"]')
-        return main.scrollWidth <= main.clientWidth
-      })()`),
-    ).toBe(true)
+      expect(browser.evaluate(`document.documentElement.scrollWidth <= window.innerWidth`)).toBe(true)
+      // The wide fixture table/code scroll inside their own boxes, not the page.
+      expect(
+        browser.evaluate(`(() => {
+          const main = document.querySelector('[data-slot="main"]')
+          return main.scrollWidth <= main.clientWidth
+        })()`),
+      ).toBe(true)
+      expect(browser.evaluate(`document.querySelector('[data-slot="mobile-top-bar"] > div').getBoundingClientRect().height`)).toBe(44)
+      expect(browser.evaluate(`getComputedStyle(document.querySelector('[data-slot="run-header"]')).position`)).toBe('relative')
+      expect(browser.evaluate(`document.querySelector('[aria-label="Reply to the agent"]').rows`)).toBe(1)
 
-    // Phone default: the dock collapses to the odometer (the mockup's mobile reflow).
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('collapsed')
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
+      // Phone default: the dock collapses to the odometer (the mockup's mobile reflow).
+      expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('collapsed')
+      expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
+    }
 
     browser.screenshot(`${artifactsDir}/thread-mobile.png`)
     browser.setViewport(1440, 900)
@@ -460,5 +465,8 @@ describe('task thread', () => {
 
     browser.screenshot(`${artifactsDir}/thread-header-mobile.png`)
     browser.setViewport(1440, 900)
+    browser.goto(`${baseUrl}${scoped(`/tasks/${RUN_ID}`)}`)
+    browser.waitForFunction(`document.querySelector('[data-slot="run-header"]') !== null`)
+    expect(browser.evaluate(`getComputedStyle(document.querySelector('[data-slot="run-header"]')).position`)).toBe('sticky')
   })
 })

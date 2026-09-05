@@ -1,3 +1,6 @@
+// A contract VALUE, not a type: which runners cezar can interrogate for a live catalog is decided
+// once, by the schema `GET /api/v1/models` validates with, so the picker and the route cannot
+// disagree about who has discovery. It narrows `Runner` to `ModelDiscoveryRunner`.
 import { runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import type {
   BackendCheck,
@@ -60,21 +63,23 @@ export interface ModelPreset {
   desc: string
 }
 
-/** Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner
- *  decides. Claude takes tier aliases + pinned versions, the only runner with no host-local
- *  catalog to ask. Codex and OpenCode list `auto` alone: their entries come from discovery
- *  (`runnerDiscoversModels`), because a hard-coded list is stale the moment the host's provider
- *  ships a model — which is exactly what #794 reported for OpenCode. */
+/**
+ * Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner decides.
+ *
+ * For a runner that discovers (`MODEL_DISCOVERY_RUNNERS` — claude, codex, opencode) this list is
+ * only the FALLBACK, used when the host catalog has nothing to offer; a live catalog replaces it.
+ * Nothing dated may be listed for those — pinned ids (`claude-opus-4-8`, `gpt-5.1-codex`) are
+ * exactly the drift discovery exists to end (#794 for OpenCode, #784 for Claude). Claude
+ * therefore keeps only its tier aliases, which stay true across every rollout because the CLI
+ * resolves them itself; Codex and OpenCode list `auto` alone. pi has no host catalog yet, so its
+ * entries are the real picker contents rather than a fallback.
+ */
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   claude: [
     { id: '', label: 'auto', desc: 'Pick the best model per step' },
     { id: 'opus', label: 'opus', desc: 'Deep reasoning for hard tasks' },
     { id: 'sonnet', label: 'sonnet', desc: 'Fast and cheap' },
     { id: 'haiku', label: 'haiku', desc: 'Fastest — simple, scoped tasks' },
-    { id: 'claude-fable-5', label: 'Fable 5', desc: 'Most capable — the Claude 5 family' },
-    { id: 'claude-opus-4-8', label: 'Opus 4.8', desc: 'Pinned version' },
-    { id: 'claude-sonnet-5', label: 'Sonnet 5', desc: 'Pinned version' },
-    { id: 'claude-haiku-4-5', label: 'Haiku 4.5', desc: 'Pinned version' },
   ],
   codex: [
     { id: '', label: 'auto', desc: 'Use your Codex default model' },
@@ -91,6 +96,21 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   ],
 }
 
+/**
+ * Bare id shapes that name a backend's OWN vendor. Structural rather than dated, which is the
+ * point: once the preset lists stopped naming releases (#784, and Codex before it) a
+ * list-membership test could no longer tell that `claude-opus-4-8` is Anthropic's, so the check
+ * moved to the shape every such id shares — including ones that do not exist yet.
+ *
+ * Anchored on a BARE id on purpose. A gateway id names its provider explicitly
+ * (`anthropic/claude-…`, `openai/gpt-…`) and is a legitimate custom model on a backend that
+ * accepts one, so it is left alone here.
+ */
+const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
+  claude: /^claude[-.]/,
+  codex: /^gpt[-.]/,
+}
+
 /** Runners that pick with the canonical `provider/model` convention and span every provider the
  *  host has configured, so an id they list is never EXCLUSIVE to them: pi offers
  *  `openai/gpt-5.1` as a preset and OpenCode serves the very same model from the very same
@@ -99,7 +119,12 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
  *  This is the cockpit's half of the rule the server states structurally — a runner with no
  *  default provider cannot be contradicted, which is why `KNOWN_PRESETS_BY_RUNNER.pi` is empty
  *  in `packages/cezar/src/core/model-presets.ts`. Without it, adding pi's presets here would
- *  silently strip a pinned OpenCode model from the OpenCode picker. */
+ *  silently strip a pinned OpenCode model from the OpenCode picker.
+ *
+ *  It exempts a runner's PRESET LIST, never the vendor shapes above: those name a vendor's own
+ *  native id space (`claude-…`, `gpt-…`), which a `provider/model` runner cannot claim either
+ *  way, so a bare vendor id stays a cross-runner mismatch on pi and OpenCode as much as it is
+ *  on the other backends. */
 const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
 
 /** Keep recognized presets from another backend out of a runner's custom-model escape hatch
@@ -107,11 +132,14 @@ const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
  * Unknown ids remain valid custom models; only a known cross-runner mismatch is discarded. */
 export function modelConflictsWithRunner(model: string, runner: Runner): boolean {
   if (!model || MODELS_BY_RUNNER[runner].some((preset) => preset.id === model)) return false
+  if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false
   return Object.entries(MODELS_BY_RUNNER).some(
     ([other, presets]) =>
       other !== runner &&
       !PROVIDER_SPANNING_RUNNERS.includes(other as Runner) &&
       presets.some((preset) => preset.id !== '' && preset.id === model),
+  ) || Object.entries(NATIVE_MODEL_ID_PREFIX).some(
+    ([other, prefix]) => other !== runner && prefix.test(model),
   )
 }
 
@@ -120,14 +148,19 @@ export function modelsForRunner(
   catalog?: RunnerModelCatalogResponse,
   customIds: readonly (string | null | undefined)[] = [],
 ): readonly ModelPreset[] {
-  const base = [...(MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude)]
+  const presets = MODELS_BY_RUNNER[runner] ?? MODELS_BY_RUNNER.claude
+  const discovered = runnerDiscoversModels(runner) ? (catalog?.models ?? []) : []
+  // A live catalog REPLACES the presets rather than extending them: the whole point is that the
+  // host CLI, not this file, decides which models exist. The presets come back the moment
+  // discovery has nothing — a missing, old or logged-out CLI leaves a usable picker, never an
+  // `auto`-only one (#784).
+  const base = discovered.length > 0 ? [autoPreset(presets)] : [...presets]
   const seen = new Set(base.map((model) => model.id))
-  if (runnerDiscoversModels(runner)) {
-    for (const model of catalog?.models ?? []) {
-      if (!model.id || seen.has(model.id)) continue
-      seen.add(model.id)
-      base.push({ id: model.id, label: model.label || model.id, desc: model.description })
-    }
+  // `discovered` is already empty for a runner without discovery, so no second gate is needed.
+  for (const model of discovered) {
+    if (!model.id || seen.has(model.id)) continue
+    seen.add(model.id)
+    base.push({ id: model.id, label: model.label || model.id, desc: model.description })
   }
   // Native settings may contain a provider-specific/custom id that is not in
   // cezar's static catalog. Keep it representable so the initial selection
@@ -140,8 +173,16 @@ export function modelsForRunner(
   return base
 }
 
-/** How each discovery runner is named in the picker's status line. */
+/** `auto` survives every discovery outcome — it is cezar's own entry (no `--model` at all), not
+ *  something a CLI can stop offering. */
+function autoPreset(presets: readonly ModelPreset[]): ModelPreset {
+  return presets.find((preset) => preset.id === '') ?? { id: '', label: 'auto', desc: '' }
+}
+
+/** How each discovery runner is named in the picker's status line. Keyed by
+ *  `ModelDiscoveryRunner` on purpose: a runner gaining discovery cannot forget its label here. */
 const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
+  claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
 }
