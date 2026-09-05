@@ -2,6 +2,7 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ReactNode } from 'react'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
@@ -87,6 +88,7 @@ function renderHeader(
   record: ApiRun,
   onMarkedUnread?: () => void,
   planTally?: { done: number; total: number },
+  continuationEngine?: ReactNode,
 ) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
@@ -94,7 +96,14 @@ function renderHeader(
         <Routes>
           <Route
             path="/tasks/:id"
-            element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} planTally={planTally} />}
+            element={
+              <RunHeader
+                run={record}
+                onMarkedUnread={onMarkedUnread}
+                planTally={planTally}
+                continuationEngine={continuationEngine}
+              />
+            }
           />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
@@ -1111,6 +1120,31 @@ describe('meta line, tabs, pill and resume hint', () => {
     const menu = await screen.findByRole('menu')
     expect(within(menu).getByText('runner: opencode')).not.toBeNull()
     expect(within(menu).getByText('model: auto')).not.toBeNull()
+  })
+
+  it('offers the next-continuation engine picker inside the existing agent badge', async () => {
+    stubFetch()
+    renderHeader(
+      run('done', { runner: 'claude', model: 'sonnet' }),
+      undefined,
+      undefined,
+      <button type="button" aria-label="Model">sonnet</button>,
+    )
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getByText('Next continuation')).not.toBeNull()
+    expect(within(menu).getByRole('button', { name: 'Model' }).textContent).toBe('sonnet')
+  })
+
+  it('keeps the historical badge read-only when no continuation picker is owned by the view', async () => {
+    stubFetch()
+    renderHeader(run('running', { runner: 'claude', model: 'sonnet' }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).queryByText('Next continuation')).toBeNull()
   })
 
   // #416: the record persists only the runner the caller ASKED for (`src/runs/store.ts`), while

@@ -188,7 +188,11 @@ describe('a resumed session keeps its workflow step tools', () => {
     const id = terminalRun({
       def: CHAIN_DEF,
       steps: [{ id: 'implement', sessionId: 'sess-1', backend: 'codex' }],
+      status: 'failed',
+      error: 'Codex usage limit reached',
     });
+    store.appendEvent(id, { type: 'user-message', text: 'first fix the API' });
+    store.appendEvent(id, { type: 'text', text: 'The API is fixed; UI remains.' });
 
     expect(manager!.continueRun(id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
     const spec = await specAt(0);
@@ -196,6 +200,26 @@ describe('a resumed session keeps its workflow step tools', () => {
     expect(spec.sessionId).toBeUndefined();
     expect(spec.allowedTools).toEqual(TAIL_TOOLS);
     expect(spec.bashAllowlist).toBeUndefined();
+    expect(spec.userPrompt).toContain('You are continuing an existing Cezar task');
+    expect(spec.userPrompt).toContain('Status: failed');
+    expect(spec.userPrompt).toContain('Codex usage limit reached');
+    expect(spec.userPrompt).toContain('User:\nfirst fix the API');
+    expect(spec.userPrompt).toContain('Assistant:\nThe API is fixed; UI remains.');
+    expect(spec.userPrompt).toContain('## New user instruction\nkeep going');
+    await settled(id);
+  });
+
+  it('a same-backend resume leaves provider-native conversation replay untouched', async () => {
+    const id = terminalRun({
+      def: SINGLE_DEF,
+      steps: [{ id: 'work', sessionId: 'sess-1', backend: 'claude' }],
+    });
+    store.appendEvent(id, { type: 'text', text: 'already stored inside the Claude session' });
+
+    expect(manager!.continueRun(id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+    const spec = await specAt(0);
+    expect(spec.resume).toBe(true);
+    expect(spec.userPrompt).toBe('keep going');
     await settled(id);
   });
 
