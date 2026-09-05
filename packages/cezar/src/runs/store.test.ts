@@ -1870,3 +1870,102 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
     expect(RunStore.open(dataDir).getRun('legacy-1')).toBeUndefined();
   });
 });
+
+describe('RunStore — pinned tasks (#935)', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newRun = (store: RunStore): string =>
+    store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+
+  it('setPinned stamps the pin, round-trips it, and returns the record', () => {
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    expect(store.getRun(id)?.pinned).toBeUndefined();
+
+    const updated = store.setPinned(id, true);
+    expect(updated?.pinned).toBe(true);
+    expect(updated?.pinnedAt).toBeDefined();
+
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(id)?.pinned).toBe(true);
+  });
+
+  it('unpinning DELETES both keys rather than writing pinned:false', () => {
+    // The compatibility promise (BACKWARD_COMPATIBILITY.md §3): an unpinned record is
+    // byte-identical to one written by a cezar that never heard of pins.
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    store.setPinned(id, true);
+    store.setPinned(id, false);
+    store.flush();
+
+    const persisted = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as Array<
+      Record<string, unknown>
+    >;
+    const record = persisted.find((entry) => entry.id === id);
+    expect(record).toBeDefined();
+    expect(record).not.toHaveProperty('pinned');
+    expect(record).not.toHaveProperty('pinnedAt');
+  });
+
+  it('is idempotent and unconditional — every status can be pinned', () => {
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    store.updateRun(id, { status: 'running' });
+    expect(store.setPinned(id, true)?.pinned).toBe(true);
+    expect(store.setPinned(id, true)?.pinned).toBe(true);
+    // Unpinning something that was never pinned is legal too, and changes nothing.
+    const other = newRun(store);
+    expect(store.setPinned(other, false)?.pinned).toBeUndefined();
+  });
+
+  it('answers undefined for a run it does not know', () => {
+    expect(RunStore.open(dataDir).setPinned('no-such-run', true)).toBeUndefined();
+  });
+
+  it('archiving clears the pin — one run and in bulk', () => {
+    // Archiving IS resigning from a task, so the pin goes with it. In the store rather than in
+    // the route for the same reason the auto-resume rule is: the "Archive finished" sweep never
+    // goes through a route.
+    const store = RunStore.open(dataDir);
+    const one = newRun(store);
+    store.setPinned(one, true);
+    store.setArchived(one, true);
+    expect(store.getRun(one)?.pinned).toBeUndefined();
+    expect(store.getRun(one)?.pinnedAt).toBeUndefined();
+
+    const swept = newRun(store);
+    store.updateRun(swept, { status: 'done', finishedAt: '2026-08-29T10:00:00.000Z' });
+    store.setPinned(swept, true);
+    expect(store.archiveFinished()).toBeGreaterThanOrEqual(1);
+    expect(store.getRun(swept)?.archived).toBe(true);
+    expect(store.getRun(swept)?.pinned).toBeUndefined();
+
+    // Un-archiving restores the task, never the pin — the same rule the pending resume follows.
+    store.setArchived(one, false);
+    expect(store.getRun(one)?.pinned).toBeUndefined();
+  });
+
+  it('loads a record written before pins existed, and one hand-edited to carry them', () => {
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: 'no-pin' },
+        { ...LEGACY_RUN, id: 'hand-pinned', pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' },
+      ]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('no-pin')?.pinned).toBeUndefined();
+    expect(store.getRun('hand-pinned')?.pinned).toBe(true);
+  });
+});

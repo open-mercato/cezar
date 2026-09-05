@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
 import type {
   githubChecksDataSchema,
+  githubSearchDataSchema,
   githubCommentsDataSchema,
   githubDataSchema,
   githubMergeResponseSchema,
@@ -52,6 +53,7 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     200
   >;
   type GithubChecks200 = InferResponseType<typeof client.api.v1.github.checks.$get, 200>;
+  type GithubSearch200 = InferResponseType<typeof client.api.v1.github.search.$get, 200>;
   type GithubRefStatus200 = InferResponseType<(typeof client.api.v1.github)['ref-status']['$get'], 200>;
   type GithubMergeState200 = InferResponseType<
     (typeof client.api.v1.github.prs)[':number']['merge-state']['$get'],
@@ -102,6 +104,7 @@ describe('src/contract github + repo schemas match the routes exactly', () => {
     Assert<Exact<z.infer<typeof githubDataSchema>, Github200>>,
     Assert<Exact<z.infer<typeof githubCommentsDataSchema>, GithubComments200>>,
     Assert<Exact<z.infer<typeof githubChecksDataSchema>, GithubChecks200>>,
+    Assert<Exact<z.infer<typeof githubSearchDataSchema>, GithubSearch200>>,
     Assert<Exact<z.infer<typeof githubRefStatusDataSchema>, GithubRefStatus200>>,
     Assert<Exact<z.infer<typeof githubPrMergeStateResponseSchema>, GithubMergeState200>>,
     Assert<Exact<z.infer<typeof githubMergeResponseSchema>, GithubMerge200>>,

@@ -102,6 +102,17 @@ const paste = (textarea: HTMLTextAreaElement, files: File[]) =>
   })
 
 describe('submit shortcuts', () => {
+  it('starts as a compact one-row phone input and restores the desktop minimum at md', () => {
+    const { textarea } = renderComposer()
+    const classes = textarea.className.split(/\s+/)
+
+    expect(textarea.rows).toBe(1)
+    expect(classes).toContain('min-h-11')
+    expect(classes).toContain('md:min-h-[54px]')
+    expect(classes).toContain('text-base')
+    expect(classes).toContain('md:text-sm')
+  })
+
   it('Enter sends the trimmed text and clears optimistically', async () => {
     const { onSubmit, textarea } = renderComposer()
     type(textarea, '  hello agent  ')

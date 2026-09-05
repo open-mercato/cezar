@@ -1,13 +1,15 @@
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
+import { useHealth, usePinRun, useReferenceProjectId, useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
+import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
+import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread } from '@/lib/read-state'
@@ -43,6 +45,7 @@ export function TaskQuickList({
   now = Date.now(),
   showTokens = true,
   showCost = true,
+  onTogglePin,
 }: {
   runs: RunRecord[]
   view: ListView
@@ -54,9 +57,15 @@ export function TaskQuickList({
   /** Presentation capability; defaults visible for older health responses and direct renders. */
   showTokens?: boolean
   showCost?: boolean
+  /** Pin/unpin one row (#935). The container owns the mutation, because WHICH project a row
+   *  belongs to is a container's question — this list is painted for other projects too. */
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const counts = listCounts(runs)
   const buckets = groupRuns(runs, view)
+  // Withheld in the archived view, where `groupRuns` answers one `Archived` bucket and never
+  // reads `run.pinned` — the same call the thread header makes on an archived run.
+  const pinToggle = view === 'archived' ? undefined : onTogglePin
 
   return (
     <div data-slot="quick-list">
@@ -88,6 +97,7 @@ export function TaskQuickList({
           now={now}
           showTokens={showTokens}
           showCost={showCost}
+          onTogglePin={pinToggle}
         />
       )}
     </div>
@@ -108,6 +118,7 @@ export function QuickListBuckets({
   scope = null,
   showTokens = true,
   showCost = true,
+  onTogglePin,
 }: {
   buckets: QuickListBucket[]
   currentRunId?: string | null
@@ -115,6 +126,7 @@ export function QuickListBuckets({
   scope?: string | null
   showTokens?: boolean
   showCost?: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   // Which variant groups are open. Local: it is view state about this list, nothing else reads it.
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
@@ -143,6 +155,7 @@ export function QuickListBuckets({
               showCost={showCost}
               expanded={row.kind === 'group' && expanded.has(row.groupId)}
               onToggle={toggleGroup}
+              onTogglePin={onTogglePin}
             />
           ))}
         </div>
@@ -195,6 +208,7 @@ function Row({
   onToggle,
   showTokens,
   showCost,
+  onTogglePin,
 }: {
   row: QuickListRow
   currentRunId: string | null
@@ -204,6 +218,7 @@ function Row({
   onToggle: (groupId: string) => void
   showTokens: boolean
   showCost: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   if (row.kind === 'run') {
     return (
@@ -215,6 +230,7 @@ function Row({
         scope={scope}
         showTokens={showTokens}
         showCost={showCost}
+        onTogglePin={onTogglePin}
       />
     )
   }
@@ -252,6 +268,9 @@ function Row({
           <ScaleIcon className="size-3.5" aria-hidden="true" />
         </Link>
       </div>
+      {/* No pin on the TILE (#935): a pin is per task, and the tile is a stand-in for two or
+          three of them. Expanding it pins the variant you mean, and the tile rises to `Pinned`
+          with it — the same best-ranked-member rule that already moves it between buckets. */}
       {expanded
         ? row.members.map((member) => (
             <RunRow
@@ -264,6 +283,7 @@ function Row({
               variant
               showTokens={showTokens}
               showCost={showCost}
+              onTogglePin={onTogglePin}
             />
           ))
         : null}
@@ -294,6 +314,31 @@ function Row({
  * Before this rule the title was the sole compressible item in a row of `shrink-0` metadata, so
  * it absorbed 100% of any deficit — which is how `775: i…` happened.
  */
+/**
+ * When the row's pin is visible, and what it costs when it is not (#935).
+ *
+ * Zero-width rather than `opacity-0` alone, because of the width-priority rule above: a
+ * permanently reserved 20px slot is 20px the title never gets back, on every row, forever. A
+ * zero-width button is still focusable and still in the tab order, which `hidden` would not be.
+ *
+ * Four things reveal it, and each answers a different way of reaching the row:
+ *  - `group-hover` — the pointer.
+ *  - `group-focus-within` — the keyboard, on the row's own link.
+ *  - `no-hover` — a device that CANNOT hover, where the first two never fire and a
+ *    hover-revealed control is simply unreachable. This is the phone and tablet case; the
+ *    drawer keeps the sidebar's fixed 264px, so the width rule applies there too and the pin
+ *    still cannot be permanent — it is bigger instead (`size-7`), because a 20px target under a
+ *    thumb is not a target. See the variant's definition in `styles/index.css`.
+ *  - `data-[pinned=true]` — an already-pinned row, where the pin is a fact about the row rather
+ *    than an offer, and hiding it would leave `Pinned` unexplained.
+ */
+const ROW_PIN_CLASS =
+  'w-0 overflow-hidden opacity-0' +
+  ' group-hover/task-row:mr-1 group-hover/task-row:w-5 group-hover/task-row:opacity-100' +
+  ' group-focus-within/task-row:mr-1 group-focus-within/task-row:w-5 group-focus-within/task-row:opacity-100' +
+  ' no-hover:mr-1 no-hover:size-7 no-hover:opacity-100' +
+  ' data-[pinned=true]:mr-1 data-[pinned=true]:w-5 data-[pinned=true]:opacity-100'
+
 function RunRow({
   run,
   queuePosition,
@@ -303,6 +348,7 @@ function RunRow({
   variant = false,
   showTokens,
   showCost,
+  onTogglePin,
 }: {
   run: RunRecord
   queuePosition: number | null
@@ -315,6 +361,7 @@ function RunRow({
   variant?: boolean
   showTokens: boolean
   showCost: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const attention = deriveAttention(run)
   const isActive = run.id === currentRunId
@@ -348,7 +395,7 @@ function RunRow({
       // `aria-current`.
       data-active={isActive ? 'true' : undefined}
       className={cn(
-        'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
+        'group/task-row flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
         isActive && 'bg-muted',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
@@ -435,6 +482,16 @@ function RunRow({
           />
         ) : null}
       </Link>
+      {/* The pin (#935), a SIBLING of the Link for the same reason the status dot and the
+          reference chip are: a button inside an anchor is invalid, and this one has its own
+          target. Reveal rules in `ROW_PIN_CLASS`. */}
+      {onTogglePin ? (
+        <PinToggle
+          pinned={Boolean(run.pinned)}
+          onToggle={(pinned) => onTogglePin(run, pinned)}
+          className={ROW_PIN_CLASS}
+        />
+      ) : null}
     </div>
   )
 }
@@ -458,6 +515,7 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
  */
 export function TaskQuickListContainer() {
   const runs = useRuns()
+  const pin = usePinRun()
   const health = useHealth()
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
@@ -494,6 +552,14 @@ export function TaskQuickListContainer() {
         now={now}
         showTokens={visibility.tokens}
         showCost={visibility.cost}
+        // This list is the ACTIVE project's, so the mutation needs no explicit project: the
+        // scoped client already addresses the one the URL names.
+        onTogglePin={(run, pinned) =>
+          pin.mutate(
+            { id: run.id, pinned },
+            { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+          )
+        }
       />
     </ReferenceStatusProvider>
   )

@@ -45,6 +45,7 @@ import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
+import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import {
@@ -163,7 +164,7 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, GithubPrNotFoundError, GH_CHECKS_MAX, GH_REF_STATUS_MAX } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
@@ -862,6 +863,13 @@ const archiveSchema = z.object({
   archived: z.boolean().optional(),
 });
 
+// `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
+// route's shape, deliberately: it is the same kind of per-task flag, and a second spelling for
+// "absent means do the thing" would be one more rule for a client to remember.
+const pinSchema = z.object({
+  pinned: z.boolean().optional(),
+});
+
 // Request-body size guards (#429). A generous global cap keeps a single
 // localhost request from being unbounded (the largest legit body is 4 pasted
 // images at ~7 MB base64 each); the ui-state PUT gets a much tighter cap since
@@ -1036,6 +1044,7 @@ export function createApp(deps: ServerDeps) {
   const bootDataDir = join(bootRoot, '.ai/cezar');
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
     adapters: {
+      claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
     },
@@ -1627,9 +1636,9 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
-    // authoritative host-local catalog (#794), so the client compiles against exactly what this
-    // validates. Claude has no such source: its picker stays on static presets and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be codex or opencode' }), async (c) => {
+    // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
+    // this validates. A runner absent from it has no discovery path and this 400s.
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex or opencode' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -3485,6 +3494,16 @@ export function createApp(deps: ServerDeps) {
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
+    // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
+    // twin in every respect: an absent body pins (the common case), the answer is the updated
+    // record, and the change rides the existing `run` SSE because `setPinned` touches. No new
+    // event and no new response shape.
+    .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
+      const { store } = c.get('project');
+      const run = store.setPinned(c.req.param('id'), c.req.valid('json').pinned !== false);
+      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
     // The per-task off switch for that resume (the workspace setting is Settings → Resources).
     // Idempotent: a run with nothing pending answers 200 too, because "this task will not
     // resume itself" is equally true either way.
@@ -4867,6 +4886,28 @@ export function createApp(deps: ServerDeps) {
       }
       return c.json(await fetchGithubChecks(repoRoot, numbers));
     })
+
+    // Search across ALL states (#730). Additive sibling of `/github`, which lists the OPEN set
+    // only (`gh issue/pr list` defaults to `--state open`) — so the tab's in-memory filter can
+    // never match a closed or merged item, and this is the path it falls back to. Same in-payload
+    // availability degrade as the list (never a 5xx); malformed params are a 400. Deliberately
+    // uncached: it is typed-into, not polled, and the driver's own cap bounds the work.
+    .get(
+      '/github/search',
+      queryZodValidator(
+        z.object({
+          kind: z.enum(['issue', 'pr']),
+          q: z.string().trim().min(1).max(256),
+          limit: z.coerce.number().int().positive().max(GH_SEARCH_MAX).optional(),
+        }),
+        { message: 'invalid search query' },
+      ),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const { kind, q, limit } = c.req.valid('query');
+        return c.json(await searchGithubItems(repoRoot, kind, q, limit));
+      },
+    )
 
     // Batched status for the PR/issue chips a task table paints. Additive sibling of
     // /github/checks and shaped like it: comma-separated positive integers, capped at
