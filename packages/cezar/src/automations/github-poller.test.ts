@@ -87,6 +87,61 @@ describe('GithubPoller', () => {
     ]));
   });
 
+  it('keeps polling when the timeline carries entries other than labeled/unlabeled', async () => {
+    // Every issue anyone has commented on has such an entry, so validating the
+    // whole `/timeline` array against `timelineEventSchema` made label triggers
+    // unusable: the throw escaped `poll()` and no candidate on the page was
+    // evaluated — not even from issues whose own history is all labels (#914).
+    const run = vi.fn(async (_executable: string, args: readonly string[]) => {
+      if (args.some((arg) => arg.includes('/timeline'))) {
+        return JSON.stringify([
+          { id: 1, event: 'labeled', created_at: '2026-07-26T02:00:00.000Z', label: { name: 'other' } },
+          { id: 2, event: 'commented', created_at: '2026-07-26T02:01:00.000Z' },
+          { id: 3, event: 'cross-referenced', created_at: '2026-07-26T02:02:00.000Z' },
+          { id: 4, event: 'labeled', created_at: '2026-07-26T02:03:00.000Z', label: { name: 'triage' } },
+        ]);
+      }
+      return JSON.stringify({ items: [item] });
+    });
+
+    const result = await new GithubPoller({ run }).poll('acme', 'demo', {
+      ...definition,
+      events: ['issue.labeled'],
+      filters: { ...definition.filters, changedLabels: ['triage'] },
+    }, { since: '2026-07-26T01:00:00.000Z' });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      event: 'issue.labeled',
+      number: 7,
+      changedLabel: 'triage',
+      timestamp: '2026-07-26T02:03:00.000Z',
+    });
+  });
+
+  it('drops a labeled entry whose label is malformed instead of failing the poll', async () => {
+    // The filter is `safeParse`, not a widened schema: `timelineEventSchema`
+    // still defines what an entry must look like to be reconstructed from.
+    const run = vi.fn(async (_executable: string, args: readonly string[]) => {
+      if (args.some((arg) => arg.includes('/timeline'))) {
+        return JSON.stringify([
+          { id: 1, event: 'labeled', created_at: '2026-07-26T02:00:00.000Z' },
+          { id: 2, event: 'labeled', created_at: '2026-07-26T02:01:00.000Z', label: { name: 'triage' } },
+        ]);
+      }
+      return JSON.stringify({ items: [item] });
+    });
+
+    const result = await new GithubPoller({ run }).poll('acme', 'demo', {
+      ...definition,
+      events: ['issue.labeled'],
+      filters: { ...definition.filters, changedLabels: ['triage'] },
+    }, { since: '2026-07-26T01:00:00.000Z' });
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({ changedLabel: 'triage' });
+  });
+
   it('builds activity-specific queries for opened and label-event drains', () => {
     expect(buildSearchQuery('acme', 'demo', definition, 'issues', 'created', '2026-07-25T00:00:00.000Z'))
       .toContain('created:>=2026-07-25T00:00:00.000Z');
