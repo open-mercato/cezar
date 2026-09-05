@@ -273,6 +273,13 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean().default(false),
   archivedAt: z.string().optional(),
+  /** Pinned to the top of this project's task list (#935): plain per-task state, the
+   *  same class as `archived` and `seenAt`. Optional with NO default, unlike `archived`:
+   *  absent is what every runs.json written before this carries and it already means
+   *  "not pinned", so nothing needs filling in on parse and an unpin can simply delete
+   *  the key rather than persist a `false` older cezars never wrote. */
+  pinned: z.boolean().optional(),
+  pinnedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
    *  run's thread. A finished run reads as "unread" until it has been seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
@@ -393,6 +400,22 @@ function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null):
 function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
+}
+
+/**
+ * Archiving is resigning from a task, so it retires the pin too (#935) — a pin on a task the
+ * user has filed away is stale by definition, and the archived view collapses into one bucket
+ * anyway, so a surviving pin would be invisible state waiting to surprise whoever unarchives.
+ *
+ * Here rather than in the pin route for the same reason `clearPendingAutoResume` is here: the
+ * bulk "Archive finished" sweep never goes through a route, and it has to obey the rule too.
+ *
+ * Deleted, not set to `false`: absent is what every reader treats as unpinned, and it is the
+ * shape a cezar that has never heard of pins already writes.
+ */
+function clearPin(run: RunRecord): void {
+  delete run.pinned;
+  delete run.pinnedAt;
 }
 
 function eventTextFragments(event: Record<string, unknown>): string[] {
@@ -907,7 +930,30 @@ export class RunStore extends EventEmitter {
     if (!run) return undefined;
     run.archived = archived;
     run.archivedAt = archived ? new Date().toISOString() : undefined;
-    if (archived) clearPendingAutoResume(run);
+    if (archived) {
+      clearPendingAutoResume(run);
+      clearPin(run);
+    }
+    this.touch(run);
+    return run;
+  }
+
+  /** Pin one run to the top of this project's task list, or unpin it (#935). Mirrors
+   *  `setArchived`: sets the fields, then persists + broadcasts via `touch`, so the updated
+   *  record rides the existing `run` SSE with no new event. Idempotent — re-pinning a pinned
+   *  run just re-stamps `pinnedAt`.
+   *
+   *  Unconditional by design, like `setUnread`: pinning is legal for every status, and WHICH
+   *  runs are worth offering the action on is UI policy (`runActionFlags` in the cockpit). */
+  setPinned(id: string, pinned: boolean): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    if (pinned) {
+      run.pinned = true;
+      run.pinnedAt = new Date().toISOString();
+    } else {
+      clearPin(run);
+    }
     this.touch(run);
     return run;
   }
@@ -920,6 +966,7 @@ export class RunStore extends EventEmitter {
         run.archived = true;
         run.archivedAt = new Date().toISOString();
         clearPendingAutoResume(run);
+        clearPin(run);
         this.touch(run);
         count++;
       }

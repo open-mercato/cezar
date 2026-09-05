@@ -106,6 +106,17 @@ const paste = (textarea: HTMLTextAreaElement, files: File[]) =>
   })
 
 describe('submit shortcuts', () => {
+  it('starts as a compact one-row phone input and restores the desktop minimum at md', () => {
+    const { textarea } = renderComposer()
+    const classes = textarea.className.split(/\s+/)
+
+    expect(textarea.rows).toBe(1)
+    expect(classes).toContain('min-h-11')
+    expect(classes).toContain('md:min-h-[54px]')
+    expect(classes).toContain('text-base')
+    expect(classes).toContain('md:text-sm')
+  })
+
   it('Enter sends the trimmed text and clears optimistically', async () => {
     const { onSubmit, textarea } = renderComposer()
     type(textarea, '  hello agent  ')
@@ -331,7 +342,6 @@ describe('the controlled-images seam (#939)', () => {
     preview: 'data:image/png;base64,AAA',
     isImage: true,
     id: 'img1',
-    isImage: true,
   }
 
   it('renders the host\'s images and routes every add and remove through the callback', async () => {

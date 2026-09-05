@@ -83,12 +83,19 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
-function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
+function renderHeader(
+  record: ApiRun,
+  onMarkedUnread?: () => void,
+  planTally?: { done: number; total: number },
+) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
         <Routes>
-          <Route path="/tasks/:id" element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} />} />
+          <Route
+            path="/tasks/:id"
+            element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} planTally={planTally} />}
+          />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
         <Toaster />
@@ -264,15 +271,17 @@ describe('editable title (#389)', () => {
 })
 
 describe('action bar visibility per status (the legacy rules, rendered)', () => {
+  // Pin (#935) is in every row: unlike every other action here it asks nothing of the engine,
+  // so it is offered whatever the run is doing — only archiving takes it away.
   const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Cancel'] },
+    { status: 'queued', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'running', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'waiting', visible: ['Finish', 'Notes', 'Pin', 'Cancel'] },
     // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
+    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
   ]
 
   it.each(matrix)('$status → $visible', ({ status, visible }) => {
@@ -317,7 +326,7 @@ describe('Mark unread (#775)', () => {
     const names = actionBar()
       .getAllByRole('button')
       .map((el) => el.textContent?.trim())
-    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
   })
 
   it.each([
@@ -474,6 +483,38 @@ describe('actions hit their endpoints', () => {
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
+  })
+
+  it('Pin → POST /pin with the flipped flag, and reads Unpin once pinned (#935)', async () => {
+    const sent = stubFetch()
+    renderHeader(run('done'))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Pin' }))
+    await waitFor(() => {
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true })
+    })
+
+    cleanup()
+    const unpinning = stubFetch()
+    renderHeader(run('done', { pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' }))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Unpin' }))
+    await waitFor(() => {
+      expect(unpinning.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: false })
+    })
+  })
+
+  it('an archived run offers no pin at all — archiving retires it (#935)', () => {
+    stubFetch()
+    renderHeader(run('done', { archived: true }))
+    expect(actionBar().queryByRole('button', { name: 'Pin' })).toBeNull()
+    expect(actionBar().queryByRole('button', { name: 'Unpin' })).toBeNull()
+  })
+
+  it('Pin is in the mobile kebab too', async () => {
+    stubFetch()
+    renderHeader(run('running'))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.getByRole('menuitem', { name: 'Pin' })).not.toBeNull()
   })
 
   it('Cancel asks first — the POST fires only after the confirm dialog', async () => {
@@ -749,7 +790,131 @@ describe('notes panel', () => {
   })
 })
 
+/** A run id no other test has touched. The expand memory is a module-level map keyed by run id
+ *  (the same shape `WorkflowSteps` keeps), so a test that toggles it must not poison the shared
+ *  `r1` fixture every other test in this file renders. */
+let detailsRunSeq = 0
+const freshRunId = () => `details-r${++detailsRunSeq}`
+
+describe('dense run details (#765)', () => {
+  it('collapses the meta row at phone width, and leaves the desktop header as it was', () => {
+    stubFetch()
+    renderHeader(
+      run('done', {
+        id: freshRunId(),
+        branch: 'cez/r1',
+        diffStat: { adds: 42, dels: 7, files: 3 },
+        costUsd: 0.04,
+      }),
+    )
+
+    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
+    const toggle = screen.getByRole('button', { name: 'Show run details' })
+    expect(details.className).toContain('hidden')
+    // The point of the fix: `md:block` means a desktop reader still sees branch, diff, tokens and
+    // cost at a glance, and the control that would ask them to click for it is `md:hidden`.
+    expect(details.className).toContain('md:block')
+    expect(toggle.className).toContain('md:hidden')
+    // A real disclosure relationship, not a visual-only one.
+    expect(details.id).not.toBe('')
+    expect(toggle.getAttribute('aria-controls')).toBe(details.id)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(toggle)
+
+    expect(details.className).not.toContain('hidden')
+    expect(screen.getByRole('button', { name: 'Hide run details' }).getAttribute('aria-expanded')).toBe('true')
+    expect(details.textContent).toContain('cez/r1')
+    expect(details.textContent).toContain('IN 24.6k · OUT 2.4k')
+  })
+
+  it('remembers the expand for that run across a tab switch, and does not leak it to another run', () => {
+    stubFetch()
+    const id = freshRunId()
+    const first = renderHeader(run('done', { id }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show run details' }))
+    first.unmount()
+
+    // Same run, remounted by another task route's header: still expanded, because re-opening it on
+    // every Session → Changes hop is the chore this map exists to avoid.
+    const second = renderHeader(run('done', { id }))
+    expect(screen.queryByRole('button', { name: 'Hide run details' })).not.toBeNull()
+    second.unmount()
+
+    renderHeader(run('done', { id: freshRunId() }))
+    expect(screen.queryByRole('button', { name: 'Show run details' })).not.toBeNull()
+  })
+
+  it('keeps the monitoring schedule out of the disclosure — a self-resuming run is status', () => {
+    stubFetch()
+    renderHeader(
+      run('running', {
+        id: freshRunId(),
+        activity: 'monitoring',
+        monitoringWakeAt: '2026-07-25T10:15:00.000Z',
+      }),
+    )
+
+    const schedule = document.querySelector('[data-slot="monitoring-schedule"]')
+    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
+    expect(schedule).not.toBeNull()
+    expect(details.contains(schedule)).toBe(false)
+  })
+
+  it('drops the plan mirror at phone width — the dock it mirrors is already on screen there', () => {
+    stubFetch()
+    renderHeader(run('running', { id: freshRunId() }), undefined, { done: 1, total: 3 })
+
+    const mirror = document.querySelector('[data-slot="plan-mirror"]') as HTMLElement
+    expect(mirror.textContent).toBe('Plan 1/3')
+    expect(mirror.className).toContain('hidden')
+    expect(mirror.className).toContain('md:inline')
+  })
+})
+
 describe('meta line, tabs, pill and resume hint', () => {
+  it('scrolls the run header on phones but restores sticky context on desktop', () => {
+    stubFetch()
+    renderHeader(run('done'))
+
+    const header = document.querySelector('[data-slot="run-header"]') as HTMLElement
+    const classes = header.className.split(/\s+/)
+    expect(classes).toContain('relative')
+    expect(classes).not.toContain('sticky')
+    expect(classes).not.toContain('top-0')
+    expect(classes).toContain('md:sticky')
+    expect(classes).toContain('md:top-0')
+    expect(classes).toContain('px-3')
+    expect(classes).toContain('md:px-6')
+  })
+
+  // The plan mirror hides on phones so the title row keeps its space for the status pill and
+  // the kebab. It switches at `md`, the same breakpoint as the sticky header, the tabs, the
+  // composer and the dock — an `sm:` here would reveal it between 640-768px in a header that
+  // is still not sticky, a state the responsive pass never designed for.
+  it('hides the plan mirror on phones and reveals it at the same md breakpoint as the rest of the header', () => {
+    stubFetch()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route
+              path="/tasks/:id"
+              element={<RunHeader run={run('running')} planTally={{ done: 2, total: 5 }} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const mirror = document.querySelector('[data-slot="plan-mirror"]') as HTMLElement
+    expect(mirror.textContent).toContain('Plan 2/5')
+    const classes = mirror.className.split(/\s+/)
+    expect(classes).toContain('hidden')
+    expect(classes).toContain('md:inline')
+    expect(classes).not.toContain('sm:inline')
+  })
+
   it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
     stubFetch()
     renderHeader(

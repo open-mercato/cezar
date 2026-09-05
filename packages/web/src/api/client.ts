@@ -48,6 +48,7 @@ import type {
   GitCommitResponse,
   GitPushResponse,
   GithubChecksData,
+  GithubSearchData,
   GithubRefStatusData,
   GithubCommentsData,
   GithubData,
@@ -402,8 +403,8 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** Host-local catalog for one discovery runner (`codex`, `opencode` — #794). Workspace-level:
- *  one CLI/account serves every project. */
+/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode` — #794, #784).
+ *  Workspace-level: one CLI/account serves every project. */
 export async function getRunnerModels(
   runner: ModelDiscoveryRunner,
   opts?: ReadOptions,
@@ -793,6 +794,30 @@ export async function getGithubChecks(
   )
 }
 
+/** Search issues/PRs in ANY state (#730). `getGithub` lists the open set only, so the tab's
+ *  in-memory filter cannot reach a closed or merged item — this is the fallback it calls when the
+ *  local filter comes up empty. Degrades to `{ available: false, reason }` server-side. */
+export async function getGithubSearch(
+  kind: 'issue' | 'pr',
+  query: string,
+  params: { limit?: number } = {},
+  opts?: ReadOptions,
+): Promise<GithubSearchData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.search.$get(
+      {
+        param: { projectId: queryScope() },
+        // The search route validates `limit` with `z.coerce.number()`, so the typed client's
+        // query input is `number | undefined` — pass the number, not a stringified copy (the
+        // `/github` list route below coerces from a bare string, hence the difference).
+        query: { kind, q: query, limit: params.limit },
+      },
+      init(opts),
+    ),
+    '/github/search',
+  )
+}
+
 /**
  * Batched status for the PR/issue chips on screen. Takes its project EXPLICITLY, like
  * `getProjectRuns` and `archiveProjectRun` and for the same reason: the global Tasks page stands
@@ -1111,6 +1136,33 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
       json: { archived },
     }),
     runPath(id, '/archive'),
+  )
+}
+
+/** Pins by default; pass `false` to drop the task back into its ordinary bucket (#935). */
+export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { pinned },
+    }),
+    runPath(id, '/pin'),
+  )
+}
+
+/**
+ * The same pin by EXPLICIT project — the twin of `archiveProjectRun` below, and needed for the
+ * same reason one step closer to home: the multi-project sidebar paints a quick-list per
+ * REGISTERED project, so a pin toggle on another project's row would otherwise be sent with the
+ * scope of whichever project the URL happens to name.
+ */
+export async function pinProjectRun(projectId: string, id: string, pinned = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { pinned },
+    }),
+    runPath(id, '/pin'),
   )
 }
 

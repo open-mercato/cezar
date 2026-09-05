@@ -17,6 +17,19 @@
  */
 @import "tw-animate-css";
 
+/* `no-hover:` — the device cannot hover, so a hover-revealed control would be UNREACHABLE.
+ *
+ * The pointer, not the viewport, is the honest axis. `md:` was the obvious spelling and it is
+ * wrong twice over: the drawer keeps the sidebar's fixed 264px, so a width rule written for the
+ * desktop column applies below `md` too, and a tablet in landscape is ≥md while still having no
+ * hover at all. `(hover: none)` asks the actual question, and a desktop machine that merely HAS
+ * a touchscreen still reports `hover: hover` for its primary pointer, so it keeps the quiet
+ * hover-revealed affordance.
+ *
+ * Reach for this on any control that is hidden until hover. Pair it with `focus-visible:`, which
+ * is the keyboard's answer to the same problem. */
+@custom-variant no-hover (@media (hover: none));
+
 /* Streamdown (the thread's markdown renderer) styles itself with Tailwind utility classes that
  * live in node_modules — without this @source Tailwind would purge them and every code block /
  * table / blockquote would render unstyled (diff-highlight-tech.md §4, the documented gotcha). */

@@ -75,6 +75,33 @@ export const githubChecksDataSchema = z.discriminatedUnion('available', [
 export type GithubChecksData = z.infer<typeof githubChecksDataSchema>;
 
 /**
+ * `GET /api/v1/github/search?kind=…&q=…&limit=…` (#730) — issues/PRs in ANY state.
+ *
+ * `GET /api/v1/github` lists the OPEN set only, and the tab's search is an in-memory filter over
+ * exactly that payload, so a closed or merged item is not "outside the fetched window" — it was
+ * never fetched, and nothing the user types can reach it. This is the cross-state lookup the tab
+ * falls back to.
+ *
+ * Not a discriminated union, like `githubDataSchema` and unlike `githubChecksDataSchema`: the
+ * driver always answers the full record and merely flips `available`, so an unavailable payload
+ * still carries `items: []`.
+ */
+export const githubSearchDataSchema = z.object({
+  available: z.boolean(),
+  /** Why it could not search (`gh` missing, no remote, rate-limited…). A hint, never an error. */
+  reason: z.string().optional(),
+  /** The same rows the list ships. `checks` is always `null` here — hydrated lazily through
+   *  `/github/checks`, exactly as list rows have been since #664. */
+  items: z.array(githubItemSchema),
+  /** The hit list filled the server's cap; there may be more matches on the forge. */
+  truncated: z.boolean().optional(),
+  /** Label name → 6-hex color for the labels these hits carry. A closed item often wears labels
+   *  no open one does, which the repo-wide map from the list call would not cover. Additive. */
+  labelColors: z.record(z.string(), z.string()).optional(),
+});
+export type GithubSearchData = z.infer<typeof githubSearchDataSchema>;
+
+/**
  * Where a referenced PR or issue STANDS — the vocabulary a task's tracker chip paints.
  *
  * One flat enum rather than a per-kind union, because the chip renders one status and a union

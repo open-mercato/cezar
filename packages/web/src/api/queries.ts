@@ -19,6 +19,7 @@ import {
   getConfig,
   getGithub,
   getGithubChecks,
+  getGithubSearch,
   getGithubComments,
   getGithubPrChanges,
   getGithubRefStatus,
@@ -61,6 +62,8 @@ import {
   markRunSeen,
   markRunUnseen,
   patchRun,
+  pinProjectRun,
+  pinRun,
   removeQueuedMessage,
   registerProject,
   openAgentAccountFile,
@@ -193,6 +196,10 @@ export const queryKeys = {
    *  same visible window de-dupes to one cache entry. */
   githubChecks: (prNumbers: readonly number[]) =>
     [queryScope(), 'github', 'checks', [...prNumbers].sort((a, b) => a - b).join(',')] as const,
+  /** Cross-state search (`GET /api/github/search`, #730), keyed by kind + the exact query so each
+   *  distinct search caches on its own and re-typing a previous query is instant. */
+  githubSearch: (kind: 'issue' | 'pr', query: string) =>
+    [queryScope(), 'github', 'search', kind, query] as const,
   /** Batched PR/issue chip status. Led by the EXPLICIT project rather than `queryScope()` —
    *  the global Tasks page asks about several projects at once, and two of them may each have a
    *  PR #42. Keyed by the sorted numbers, so the same window de-dupes to one cache entry. */
@@ -255,9 +262,10 @@ export const workspaceQueryKeys = {
  * One runner's host-discovered catalog, cached per runner (#794 — this used to be hard-wired to
  * Codex, which is why OpenCode had nothing but stale presets to show).
  *
- * A runner with no host catalog (claude) never fetches and never resolves data, so its picker
- * falls back to static presets exactly as before — callers can pass any runner and read
- * `data`/`isError` without checking first.
+ * A runner with no host catalog never fetches and never resolves data, so its picker falls back
+ * to static presets — callers can pass any runner and read `data`/`isError` without checking
+ * first. Claude joined the discovering runners in #784; `pi` is the one that still takes the
+ * fallback path today.
  *
  * `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue — hooks
  * cannot be called conditionally) skip the fetch when it definitely won't.
@@ -1350,6 +1358,37 @@ function withoutReceipt(run: RunRecord): RunRecord {
   return rest
 }
 
+/**
+ * Pin one task to the top of its project's list, or unpin it (#935) — `POST /api/runs/:id/pin`.
+ *
+ * Invalidate rather than patch, like the header's archive and unlike the read receipt: the answer
+ * moves the row between buckets, so the list has to be re-bucketed from the authoritative record
+ * anyway, and a pin is not fired at the busy moment a run finishes (the race that makes the
+ * receipt hooks patch a single field instead).
+ *
+ * Both parameters exist for the multi-project sidebar, which paints a quick-list per REGISTERED
+ * project and therefore acts on rows outside the scope the URL names:
+ *  - `projectId` sends the request to the run's OWN project (`queryScope()` would name whichever
+ *    project the page is standing in, which 404s — or, with a colliding run id, pins the wrong
+ *    task). Absent is the ordinary case: the caller is already inside the run's project.
+ *  - `cacheScope` is the key that project's run list is cached under. It is NOT always the
+ *    project id: `useProjectRuns` caches the boot project under `'default'`, because that is the
+ *    scope it mounts unscoped under, and invalidating `[<bootId>, 'runs']` would leave the
+ *    sidebar's boot group showing the pre-pin order.
+ */
+export function usePinRun(projectId?: string, cacheScope?: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
+      projectId === undefined ? pinRun(id, pinned) : pinProjectRun(projectId, id, pinned),
+    // Hierarchical keys: this covers the list AND the open thread's own record.
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
+      }),
+  })
+}
+
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself
  *  grows over SSE (`user-message`, then the agent's turn); the invalidation refreshes the
  *  record (status flips waiting → running). Errors are the CALLER's to surface — the composer
@@ -1434,6 +1473,21 @@ export function useGithubChecks(prNumbers: number[], enabled = true) {
     queryKey: queryKeys.githubChecks(prNumbers),
     queryFn: ({ signal }) => getGithubChecks(prNumbers, { signal }),
     enabled: enabled && prNumbers.length > 0,
+    staleTime: 60_000,
+  })
+}
+
+/** Cross-state search (`/api/github/search`, #730). The list only ever holds OPEN items, so this
+ *  is the only way the tab can surface a closed or merged issue/PR. `enabled` is what keeps it
+ *  cheap: the caller turns it on only for a non-empty query that the in-memory filter could not
+ *  satisfy, and only after debouncing — every call is a `gh` subprocess. `staleTime` matches the
+ *  tab's other GitHub queries so re-typing the same query does not re-shell. Degrade is silent:
+ *  an unavailable payload renders as "could not search", never an error boundary. */
+export function useGithubSearch(kind: 'issue' | 'pr', query: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.githubSearch(kind, query),
+    queryFn: ({ signal }) => getGithubSearch(kind, query, {}, { signal }),
+    enabled: enabled && query.trim() !== '',
     staleTime: 60_000,
   })
 }
