@@ -19,10 +19,12 @@ import {
 } from '@/components/ui/command'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
+import { orderProjects as orderRegistry } from '@/lib/project-order'
 import { isUnread } from '@/lib/read-state'
 import { orderSkillsByUsage } from '@/lib/skills'
 import { runTitle } from '@/lib/task-groups'
 import { useCommandShortcut, useKeyShortcut } from '@/lib/use-command-shortcut'
+import { useProjectOrder } from '@/lib/use-project-order'
 
 /**
  * The ⌘K command palette (spec, "Cross-cutting"): projects, tasks, views, actions, skills —
@@ -177,22 +179,27 @@ export function partitionTasks(tasks: readonly PaletteTask[]): {
 }
 
 /**
- * Most-recently-opened first, then the ACTIVE project dropped to the end.
+ * The sidebar's order, then the ACTIVE project dropped to the end.
  *
- * The recency sort is the sidebar's, byte for byte (`project-groups.tsx`) — the palette must not
- * invent a third order for the same registry. The active project moves last because this group
- * exists to LEAVE the current project: selecting the one you are already in is the only row that
- * can do nothing, so it must never be the row an empty query pre-selects. It stays listed rather
- * than filtered out, so typing your own project's name is not a dead end.
+ * The order itself is not computed here: it is `lib/project-order.ts`, the same module the
+ * sidebar's groups use, so the user's hand-picked order (#952) reaches the palette and the
+ * palette cannot invent a second order for the same registry. Only the active-project rule is the
+ * palette's own — this group exists to LEAVE the current project, so selecting the one you are
+ * already in is the single row that can do nothing and must never be what an empty query
+ * pre-selects. It stays listed rather than filtered out, so typing your own project's name is not
+ * a dead end.
  */
 export function orderProjects(
   projects: readonly ProjectListEntry[],
   activeProjectId: string | null,
+  storedOrder: readonly string[] = [],
 ): ProjectListEntry[] {
-  return [...projects].sort((a, b) => {
-    const activeRank = Number(a.id === activeProjectId) - Number(b.id === activeProjectId)
-    return activeRank || b.lastOpenedAt.localeCompare(a.lastOpenedAt)
-  })
+  const ordered = orderRegistry(projects, storedOrder)
+  // A stable partition rather than a sort: the picked order must survive being split.
+  return [
+    ...ordered.filter((project) => project.id !== activeProjectId),
+    ...ordered.filter((project) => project.id === activeProjectId),
+  ]
 }
 
 export function CommandPalette() {
@@ -325,9 +332,12 @@ function PaletteContent({ close }: { close: () => void }) {
   // when that question has more than one answer. A single-project cockpit issues no request.
   const runsIndex = useRunsIndex(multiProject)
 
+  // The sidebar's hand-picked order (#952), read from the same cached workspace ui-state the
+  // sidebar writes — so a project dragged to the top of the drawer is also the top of this list.
+  const { order: projectOrder } = useProjectOrder()
   const orderedProjects = React.useMemo(
-    () => (multiProject ? orderProjects(registry.projects, activeProjectId) : []),
-    [multiProject, registry, activeProjectId],
+    () => (multiProject ? orderProjects(registry.projects, activeProjectId, projectOrder) : []),
+    [multiProject, registry, activeProjectId, projectOrder],
   )
   const projectNames = React.useMemo(
     () => new Map((registry?.projects ?? []).map((project) => [project.id, project.name])),
