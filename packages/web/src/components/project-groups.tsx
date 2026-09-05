@@ -9,10 +9,10 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core'
 import {
+  rectSortingStrategy,
   SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
-  verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { ChevronDownIcon, GripVerticalIcon } from 'lucide-react'
@@ -223,7 +223,14 @@ export function ProjectGroups({
         accessibility={{ announcements }}
         onDragEnd={handleDragEnd}
       >
-        <SortableContext items={orderedIds} strategy={verticalListSortingStrategy}>
+        {/* `rectSortingStrategy`, NOT the vertical one, and the difference is load-bearing here:
+            the vertical strategy displaces every sibling by the DRAGGED item's height
+            (`-activeNodeRect.height`), which is only correct when every row is the same size. A
+            project group is 34px collapsed and 300–600px expanded — and the active group starts
+            expanded — so the vertical strategy threw collapsed neighbours hundreds of pixels out
+            of place mid-drag. The rect strategy measures each item and moves it to where it will
+            actually land. */}
+        <SortableContext items={orderedIds} strategy={rectSortingStrategy}>
           {groups}
         </SortableContext>
       </DndContext>
@@ -238,9 +245,14 @@ export function ProjectGroups({
  *
  * It occupies its column at every breakpoint rather than appearing on hover: a handle that
  * reserves no space reflows the whole drawer under the pointer the moment it appears, and on
- * touch — where the drawer also lives — there is no hover to appear on. What IS hover-led is the
- * ink: invisible until the row is hovered or something inside it has focus, so six project groups
- * do not read as six grab handles.
+ * touch — where the drawer also lives — there is no hover to appear on.
+ *
+ * The ink is hover-led ONLY where hovering exists. On a hover-capable pointer the grip is
+ * invisible until the row is hovered or something in it has focus, so six project groups do not
+ * read as six grab handles. On a coarse pointer it is simply always visible: there is no hover,
+ * a tap does not fire `:focus-visible`, and the one remaining reveal would have been focusing the
+ * group header — whose job is toggling the disclosure. That left the mobile drawer with a drag
+ * affordance nobody could see, which is no affordance at all.
  */
 function ProjectGrip({
   name,
@@ -270,8 +282,14 @@ function ProjectGrip({
         // scrolls the sheet instead of lifting the group.
         'touch-none focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50',
         'group-hover/row:opacity-100 group-focus-within/row:opacity-100',
+        // No hover to wait for — show it. Keyed off the INPUT (`hover: none`) rather than the
+        // viewport, because a touch laptop at desktop width has the same problem a phone does.
+        '[@media(hover:none)]:opacity-100',
         // Nothing to grab: no ink, no grab cursor, and `disabled` keeps it out of the tab order.
-        disabled && 'cursor-default group-hover/row:opacity-0 group-focus-within/row:opacity-0',
+        // The coarse-pointer reveal has to be undone too, or a dead handle is the ONE grip a
+        // phone would show.
+        disabled &&
+          'cursor-default group-hover/row:opacity-0 group-focus-within/row:opacity-0 [@media(hover:none)]:opacity-0',
       )}
       {...handleProps}
     >
@@ -341,7 +359,12 @@ function ProjectGroup({
   } = useSortable({ id: project.id, disabled: !canDrag })
   // The lifted group follows the pointer on its own transform (no DragOverlay): a project group
   // is a whole nav plus a task list, and a detached copy of that is a second sidebar mid-flight.
-  const dragStyle = { transform: CSS.Transform.toString(transform), transition }
+  //
+  // `Translate`, not `Transform`: the latter also emits the strategy's scaleX/scaleY, and
+  // `rectSortingStrategy` reports those as the ratio between the two swapped rects — swapping a
+  // 34px collapsed group with a 600px expanded one asks for `scaleY(17)`. Only the translation is
+  // wanted; the groups must keep their own size while they move.
+  const dragStyle = { transform: CSS.Translate.toString(transform), transition }
   const grip = (
     <ProjectGrip
       name={project.name}

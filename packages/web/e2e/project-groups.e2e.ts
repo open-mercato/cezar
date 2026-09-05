@@ -368,6 +368,71 @@ describe('the grouped multi-project sidebar', () => {
       body: JSON.stringify({ sidebar: { ...(sidebarBefore ?? {}), projectOrder: undefined } }),
     })
   })
+
+  /**
+   * The same reorder with a group left OPEN — the configuration the test above deliberately
+   * avoids, and the one that matters, because an expanded group is the drawer's default state.
+   *
+   * This exists because the first cut used `verticalListSortingStrategy`, which displaces every
+   * sibling by the DRAGGED item's height. With one 600px group and two 34px ones that threw the
+   * neighbours hundreds of pixels out of place for the whole drag. Collapsing everything first
+   * made the heights uniform, which is exactly the case where that strategy happens to be right —
+   * so the bug could not be seen. Keep a variable-height reorder covered here or the assumption
+   * comes back silently.
+   */
+  it('reorders correctly with a group expanded — no uniform-height assumption', async ({ skip }) => {
+    if (singleProject) skip()
+    const sidebarBefore = (await workspaceUiState()).sidebar ?? null
+    gotoGrouped(scoped(bootProject, '/'))
+
+    // The boot group open (its nav + task list), the other two shut: heights now differ by an
+    // order of magnitude, which is the drawer as a user actually meets it.
+    setGroupExpanded(bootProject, true)
+    for (const id of [ALPHA.id, BETA.id]) setGroupExpanded(id, false)
+    const heights = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="project-group"]')].map((n) => Math.round(n.getBoundingClientRect().height)).join(',')`,
+    )
+    const tallest = Math.max(...String(heights).split(',').map(Number))
+    const shortest = Math.min(...String(heights).split(',').map(Number))
+    // Guard the guard: if every group were the same height this spec would prove nothing.
+    expect(tallest).toBeGreaterThan(shortest * 2)
+
+    const grip = `document.querySelector('${groupGrip(BETA.id)}')`
+    browser.waitForFunction(`${grip} !== null && ${grip}.disabled === false`)
+    browser.evaluate(`${grip}.focus()`)
+    browser.press('Space')
+    browser.waitForFunction(`${grip}.getAttribute('aria-pressed') === 'true'`)
+
+    // BETA (last, collapsed) up over the tall expanded boot group.
+    const movedUp = () =>
+      String(
+        browser.evaluate(`[...document.querySelectorAll('[aria-live]')].map((n) => n.textContent).join(' ')`),
+      ).includes(`${BETA.name} moved to position 2 of 3`)
+    let moved = false
+    for (let press = 0; press < 5 && !moved; press++) {
+      browser.press('ArrowUp')
+      for (let poll = 0; poll < 10 && !moved; poll++) moved = movedUp()
+    }
+    expect(moved).toBe(true)
+    browser.press('Space')
+    browser.waitForFunction(`${renderedOrderJs} === '${[bootProject, BETA.id, ALPHA.id].join(',')}'`)
+
+    // Every group is back at rest: no leftover transform from the drag, and the tall group still
+    // has its own height rather than a scale borrowed from the one it swapped with.
+    const resting = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="project-group"]')].every((n) => {
+         const t = getComputedStyle(n).transform
+         return t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)'
+       })`,
+    )
+    expect(resting).toBe(true)
+
+    await fetch(`${baseUrl}/api/v1/workspace/ui-state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sidebar: { ...(sidebarBefore ?? {}), projectOrder: undefined } }),
+    })
+  })
 })
 
 describe('the constrained single-project workspace', () => {

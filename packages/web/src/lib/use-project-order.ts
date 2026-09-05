@@ -37,8 +37,9 @@ export function useProjectOrder(): {
 } {
   const queryClient = useQueryClient()
   const uiState = useWorkspaceUiState()
+  // The counter IS the "is this still the newest write?" answer: it only ever increments, so a
+  // write whose own number is still the current one is the last one issued.
   const sequence = React.useRef(0)
-  const newestSequence = React.useRef(0)
   const writeChain = React.useRef<Promise<void>>(Promise.resolve())
 
   const order = React.useMemo(
@@ -61,10 +62,9 @@ export function useProjectOrder(): {
       })
 
       const writeSequence = ++sequence.current
-      newestSequence.current = writeSequence
       const pending = writeChain.current.then(async () => {
         const merged = await putWorkspaceUiState({ sidebar }, { keepalive: true })
-        if (writeSequence === newestSequence.current) {
+        if (writeSequence === sequence.current) {
           queryClient.setQueryData<WorkspaceUiState>(workspaceQueryKeys.uiState, merged)
         }
       })
@@ -72,7 +72,7 @@ export function useProjectOrder(): {
         toast(error instanceof Error ? error.message : String(error), { tone: 'danger' })
         // Back to server truth rather than leaving the drawer showing an order the file never
         // took — a silently diverged sidebar is the failure mode worth spending a refetch on.
-        if (writeSequence === newestSequence.current) {
+        if (writeSequence === sequence.current) {
           void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.uiState })
         }
       })

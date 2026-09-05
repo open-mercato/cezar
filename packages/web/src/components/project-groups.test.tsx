@@ -451,6 +451,28 @@ describe('ProjectGroups', () => {
       expect(document.activeElement).toBe(grip('shop'))
     })
 
+    it('shows the grip at rest where there is no hover, and hides it where there is', async () => {
+      // The grip used to be `opacity-0` revealed only by hover / `:focus-visible`, neither of
+      // which a tap produces — so the mobile drawer, one of the two devices this feature exists
+      // to reconcile, had a drag affordance nobody could see. Asserted on the class list rather
+      // than a computed style because jsdom resolves no media queries at all: what is being
+      // pinned is that the coarse-pointer reveal is PRESENT, and that `disabled` still undoes it.
+      serve({ '/api/v1/p/cezar/runs': [] }, { sidebar: { projectOrder: ['cezar', 'shop', 'blog'] } })
+      renderGroups(three())
+
+      await waitFor(() => expect(grip('cezar')?.disabled).toBe(false))
+      const enabled = grip('cezar')!.className
+      expect(enabled).toContain('opacity-0')
+      expect(enabled).toContain('[@media(hover:none)]:opacity-100')
+
+      cleanup()
+      // A grip with nothing to do must not be the one thing a phone DOES show.
+      serve({ '/api/v1/p/cezar/runs': [] })
+      renderGroups([project()])
+      await waitFor(() => expect(grip('cezar')?.disabled).toBe(true))
+      expect(grip('cezar')!.className).toContain('[@media(hover:none)]:opacity-0')
+    })
+
     it('offers no grip on a project whose folder is gone', async () => {
       serve({ '/api/v1/p/cezar/runs': [] })
       renderGroups([
