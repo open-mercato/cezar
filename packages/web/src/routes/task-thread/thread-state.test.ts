@@ -704,6 +704,22 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
     ])
   })
 
+  // #936 — a note that reports something the user LOST (a discarded CEZ:ASK
+  // question) opts into `tone: 'danger'` so it is not the dimmest line in the
+  // thread. Anything else — including every note written before the field
+  // existed — stays dim.
+  it('note with tone: danger → a danger line; an unknown tone stays dim', () => {
+    expect(
+      allItems([
+        line(1, 'note', { message: 'structured question ignored', tone: 'danger' }),
+        line(2, 'note', { message: 'worktree ready', tone: 'loud' }),
+      ]),
+    ).toEqual([
+      { kind: 'note', id: 'v1:1', text: 'structured question ignored', tone: 'danger' },
+      { kind: 'note', id: 'v1:2', text: 'worktree ready', tone: 'dim' },
+    ])
+  })
+
   it('error → a danger line', () => {
     expect(allItems([line(1, 'error', { message: 'claude exited with code 1' })])).toEqual([
       { kind: 'note', id: 'v1:1', text: 'claude exited with code 1', tone: 'danger' },

@@ -36,6 +36,7 @@ import {
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
 import {
+  attachmentInputSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
@@ -44,6 +45,7 @@ import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
+import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import {
@@ -88,7 +90,7 @@ import {
   runHistoryQuerySchema,
   runIdParamSchema,
 } from '@open-mercato/cezar-contract';
-import type { RunManager } from '../workflows/run.ts';
+import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
@@ -162,7 +164,7 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, GithubPrNotFoundError, GH_CHECKS_MAX, GH_REF_STATUS_MAX } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
@@ -593,18 +595,9 @@ const startRunSchema = z
       .max(20_000, 'must be at most 20000 characters')
       .optional()
       .transform((s) => (s ? s : undefined)),
-    // Screenshots pasted into the new-task form — same shape and limits as a
+    // Attachments pasted into the new-task form — same shape and limits as a
     // live-session message; delivered with the first agent step's opening.
-    images: z
-      .array(
-        z.object({
-          mediaType: z.string().regex(/^image\//),
-          // ~5 MB per image once base64-decoded.
-          data: z.string().min(1).max(7_000_000),
-        }),
-      )
-      .max(4)
-      .optional(),
+    images: z.array(attachmentInputSchema).max(4).optional(),
     // Inbox follow-up (#374): the todo the composer was prefilled from
     // (`/new?skill=&ref=&todo=t1`). On a successful start the entry is marked
     // started — the same bookkeeping POST /api/todos/:id/start does, so the
@@ -783,19 +776,16 @@ const openInSchema = z.object({
   path: z.string().max(1_000).optional(),
 });
 
-const imageInputSchema = z.object({
-  mediaType: z.string().regex(/^image\//),
-  // ~5 MB per image once base64-decoded.
-  data: z.string().min(1).max(7_000_000),
-});
-
+// Attachment-carrying bodies validate with the CONTRACT's `attachmentInputSchema` (#950) —
+// images plus the short PDF/TXT/MD allowlist, ~5 MB each once base64-decoded. Imported rather
+// than mirrored here, so the wire cannot drift from what the cockpit compiles against.
 const messageSchema = z
   .object({
     text: z.string().max(100_000).default(''),
-    images: z.array(imageInputSchema).max(4).default([]),
+    images: z.array(attachmentInputSchema).max(4).default([]),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+    message: 'message needs text or at least one attachment',
   });
 
 // PATCH semantics are load-bearing here: an omitted field keeps its current value.
@@ -803,17 +793,17 @@ const messageSchema = z
 const queuedMessagePatchSchema = z
   .object({
     text: z.string().max(100_000).optional(),
-    images: z.array(imageInputSchema).max(4).optional(),
+    images: z.array(attachmentInputSchema).max(4).optional(),
   })
   .refine((m) => m.text !== undefined || m.images !== undefined, {
-    message: 'message edit needs text or images',
+    message: 'message edit needs text or attachments',
   });
 
 // Queued prompt stack bounds (#472). The per-message bounds mirror `messageSchema`
 // above; the one that actually matters is the FOLDED total, because 20 messages of
 // 100 000 chars each would otherwise compose a ~2 M-character {{task}}.
 const MAX_QUEUED_MESSAGES = 20;
-const MAX_QUEUED_IMAGES = 8;
+const MAX_QUEUED_ATTACHMENTS = 8;
 const MAX_FOLDED_TASK_CHARS = 200_000;
 
 /** Length of the prompt a run would execute with — `task` plus its whole stack,
@@ -835,7 +825,7 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 // session rather than being silently dropped.
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
-  images: z.array(imageInputSchema).max(4).optional(),
+  images: z.array(attachmentInputSchema).max(4).optional(),
   runner: z.enum(RUNNER_IDS).optional(),
   model: z.string().max(200).optional(),
   /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
@@ -871,6 +861,13 @@ type TodoStartEnv = ProjectApiEnv & { Variables: { todo: TodoItem } };
 // un-archives. A tiny schema so the route follows the safeParse convention.
 const archiveSchema = z.object({
   archived: z.boolean().optional(),
+});
+
+// `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
+// route's shape, deliberately: it is the same kind of per-task flag, and a second spelling for
+// "absent means do the thing" would be one more rule for a client to remember.
+const pinSchema = z.object({
+  pinned: z.boolean().optional(),
 });
 
 // Request-body size guards (#429). A generous global cap keeps a single
@@ -1047,6 +1044,7 @@ export function createApp(deps: ServerDeps) {
   const bootDataDir = join(bootRoot, '.ai/cezar');
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
     adapters: {
+      claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
     },
@@ -1638,9 +1636,9 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
-    // authoritative host-local catalog (#794), so the client compiles against exactly what this
-    // validates. Claude has no such source: its picker stays on static presets and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be codex or opencode' }), async (c) => {
+    // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
+    // this validates. A runner absent from it has no discovery path and this 400s.
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex or opencode' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -3496,6 +3494,16 @@ export function createApp(deps: ServerDeps) {
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
+    // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
+    // twin in every respect: an absent body pins (the common case), the answer is the updated
+    // record, and the change rides the existing `run` SSE because `setPinned` touches. No new
+    // event and no new response shape.
+    .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
+      const { store } = c.get('project');
+      const run = store.setPinned(c.req.param('id'), c.req.valid('json').pinned !== false);
+      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
     // The per-task off switch for that resume (the workspace setting is Settings → Resources).
     // Idempotent: a run with nothing pending answers 200 too, because "this task will not
     // resume itself" is equally true either way.
@@ -3554,10 +3562,7 @@ export function createApp(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(fallback, parsed.data.agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
-      const images = parsed.data.images?.map((img): ContentBlock => ({
-        type: 'image',
-        source: { type: 'base64', media_type: img.mediaType, data: img.data },
-      }));
+      const images = parsed.data.images?.map(toPastedContent);
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -3701,11 +3706,8 @@ export function createApp(deps: ServerDeps) {
         const blocked = await providerActionError([providerForActiveRun(run)]);
         if (blocked) return c.json({ error: blocked }, 409);
       }
-      const content: ContentBlock[] = [
-        ...parsed.data.images.map((img): ContentBlock => ({
-          type: 'image',
-          source: { type: 'base64', media_type: img.mediaType, data: img.data },
-        })),
+      const content: PastedContent[] = [
+        ...parsed.data.images.map(toPastedContent),
         ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
       ];
       // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
@@ -3727,8 +3729,8 @@ export function createApp(deps: ServerDeps) {
           return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
         }
         const stackedImages = stack.reduce((n, m) => n + (m.images?.length ?? 0), 0);
-        if (stackedImages + parsed.data.images.length > MAX_QUEUED_IMAGES) {
-          return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
+        if (stackedImages + parsed.data.images.length > MAX_QUEUED_ATTACHMENTS) {
+          return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
         }
         const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
         if (prospective > MAX_FOLDED_TASK_CHARS) {
@@ -3763,13 +3765,13 @@ export function createApp(deps: ServerDeps) {
       const effectiveText = parsed.data.text ?? existing.text;
       const effectiveImageCount = parsed.data.images?.length ?? existing.images?.length ?? 0;
       if (!effectiveText.trim() && effectiveImageCount === 0) {
-        return c.json({ error: 'message needs text or at least one image' }, 400);
+        return c.json({ error: 'message needs text or at least one attachment' }, 400);
       }
 
       const others = stack.filter((m) => m.id !== msgId);
       const stackedImages = others.reduce((n, m) => n + (m.images?.length ?? 0), 0);
-      if (stackedImages + effectiveImageCount > MAX_QUEUED_IMAGES) {
-        return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
+      if (stackedImages + effectiveImageCount > MAX_QUEUED_ATTACHMENTS) {
+        return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
       }
       const prospective = foldedLength(run.task, [...others, { text: effectiveText }]);
       if (prospective > MAX_FOLDED_TASK_CHARS) {
@@ -3781,12 +3783,7 @@ export function createApp(deps: ServerDeps) {
         );
       }
 
-      const images: ContentBlock[] | undefined = parsed.data.images?.map(
-          (img): ContentBlock => ({
-            type: 'image',
-            source: { type: 'base64', media_type: img.mediaType, data: img.data },
-          }),
-        );
+      const images: PastedContent[] | undefined = parsed.data.images?.map(toPastedContent);
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
@@ -3843,10 +3840,7 @@ export function createApp(deps: ServerDeps) {
       }
       const result = manager.continueRun(id, {
         text: parsed.data.text,
-        images: parsed.data.images?.map((img): ContentBlock => ({
-          type: 'image',
-          source: { type: 'base64', media_type: img.mediaType, data: img.data },
-        })),
+        images: parsed.data.images?.map(toPastedContent),
         runner: parsed.data.runner,
         model: parsed.data.model,
         agentProfile: parsed.data.agentProfile,
@@ -4029,11 +4023,24 @@ export function createApp(deps: ServerDeps) {
       const file = basename(c.req.param('file'));
       const path = join(dataDir, 'runs', `${run.id}-images`, file);
       if (!existsSync(path)) return c.json({ error: 'not found' }, 404);
-      const type = IMAGE_TYPES[file.split('.').pop() ?? ''] ?? 'application/octet-stream';
+      const ext = file.split('.').pop() ?? '';
+      const image = IMAGE_TYPES[ext];
+      // An image answers exactly as it always has — the cockpit renders it in an `<img>`.
+      // Everything else is a user-supplied file (#950) and leaves under the download headers.
+      const type = image ?? FILE_TYPES[ext] ?? 'application/octet-stream';
       return new Response(readFileSync(path), {
         headers: {
           'content-type': type,
           'cache-control': 'private, max-age=31536000, immutable',
+          ...(image
+            ? {}
+            : {
+                'x-content-type-options': 'nosniff',
+                // Engine-generated names are `pasted-3.pdf`-shaped, but a header value is not the
+                // place to find out otherwise: anything exotic degrades to an underscore rather
+                // than to a quote that could split the header.
+                'content-disposition': `attachment; filename="${file.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+              }),
         },
       });
     })
@@ -4384,13 +4391,26 @@ export function createApp(deps: ServerDeps) {
       return c.json({ opened: true as const, path: root });
     });
 
-  // Agent screenshots — image blocks the run manager persisted out of tool
-  // results (persistImage). `basename` pins reads inside the run's own dir.
+  // Agent screenshots and user attachments — what the run manager persisted out of tool
+  // results and pasted messages (`persistAttachment`). `basename` pins reads inside the
+  // run's own dir.
   const IMAGE_TYPES: Record<string, string> = {
     png: 'image/png',
     jpg: 'image/jpeg',
     webp: 'image/webp',
     gif: 'image/gif',
+  };
+  /**
+   * What a NON-image attachment is served as (#950). These are user-supplied bytes coming back
+   * from the cockpit's own origin, so the content type is the narrowest true one and it never
+   * travels alone: `nosniff` stops a browser from upgrading it to something executable, and an
+   * attachment disposition stops it from being rendered as a document in the cockpit's origin at
+   * all. Anything not named here keeps the pre-existing `application/octet-stream` default.
+   */
+  const FILE_TYPES: Record<string, string> = {
+    pdf: 'application/pdf',
+    txt: 'text/plain; charset=utf-8',
+    md: 'text/plain; charset=utf-8',
   };
   // ---- session git view (redesign R5 Step 1.2 — §"Git/session API additions").
   // Structured sibling of the text-blob /diff above (which stays untouched —
@@ -4866,6 +4886,28 @@ export function createApp(deps: ServerDeps) {
       }
       return c.json(await fetchGithubChecks(repoRoot, numbers));
     })
+
+    // Search across ALL states (#730). Additive sibling of `/github`, which lists the OPEN set
+    // only (`gh issue/pr list` defaults to `--state open`) — so the tab's in-memory filter can
+    // never match a closed or merged item, and this is the path it falls back to. Same in-payload
+    // availability degrade as the list (never a 5xx); malformed params are a 400. Deliberately
+    // uncached: it is typed-into, not polled, and the driver's own cap bounds the work.
+    .get(
+      '/github/search',
+      queryZodValidator(
+        z.object({
+          kind: z.enum(['issue', 'pr']),
+          q: z.string().trim().min(1).max(256),
+          limit: z.coerce.number().int().positive().max(GH_SEARCH_MAX).optional(),
+        }),
+        { message: 'invalid search query' },
+      ),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const { kind, q, limit } = c.req.valid('query');
+        return c.json(await searchGithubItems(repoRoot, kind, q, limit));
+      },
+    )
 
     // Batched status for the PR/issue chips a task table paints. Additive sibling of
     // /github/checks and shaped like it: comma-separated positive integers, capped at

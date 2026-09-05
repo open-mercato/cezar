@@ -545,9 +545,14 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       case 'lifecycle': {
         const text = str(event.message) ?? ''
         if (text === '') break
+        // Notes are dim by default — they are commentary. A note may opt into
+        // `tone: 'danger'` when it reports something the user actually lost, so
+        // it does not render as the dimmest line in the thread (#936). Events
+        // written before that field exists carry no `tone` and stay dim.
+        const tone = event.tone === 'danger' ? 'danger' : 'dim'
         currentTurn().entries.push({
           origin: 'meta',
-          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'dim' },
+          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
         })
         break
       }

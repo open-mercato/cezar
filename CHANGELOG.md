@@ -20,6 +20,38 @@
   own queued-at time but never dates the older conversation it sits above. Sub-agent panels are
   unchanged for now: their entries are one uninterrupted stream with no turn boundaries to hang a
   clock on. Issue: #941.
+
+# 0.10.1 (2026-09-04)
+
+## Highlights
+The cockpit gets easier to live in on a phone and harder to be wrong about. **Pinned tasks** keep
+the two or three you're actively working on at the top of the list, a follow-up can be sent to a
+**different Claude login** than the one that started it, and the composer now takes **PDF, TXT and
+MD** files the same way it's always taken a screenshot. The Claude model picker reads from **your
+own CLI** instead of a hand-written list, and a run's reference chips get several correctness
+passes: a conflicting PR now says so, a task can no longer borrow another repository's pull request
+as its own, and a stale review request or an "Update branch" click can no longer paint over a real
+rejection.
+
+## ✨ Features
+- ✨ **Pin the two or three tasks you are actually living in.** The task list is sorted by what
+  happens next, which is the right default and a bad fit for a long-running task you keep coming
+  back to: it sinks under every newer run, and a finished-but-unmerged one drops into `Recent` and
+  then out of the sidebar's ten-row budget entirely. A task can now be pinned — from the sidebar
+  row (the control appears on hover, and stays lit once pinned), the Tasks table row, the mobile
+  card, or the thread header beside Archive — and pinned tasks gather in a **Pinned** group above
+  `Needs you`, first in that project's table too. A pinned task appears there once and nowhere
+  else, keeps its status and attention dots so one that wants you still says so, and is never
+  evicted by the sidebar's ten-row cap: the ten rows still go to the other groups, so pinning
+  three tasks cannot hide what needs you. Pins are per task and therefore per project — pinning in
+  one repo changes nothing in another — and archiving a task unpins it, because archiving is how
+  you resign from one. The group is absent entirely when nothing is pinned. `POST
+  /api/v1/runs/:id/pin` is a new additive route with the archive route's exact semantics (no body
+  pins, `{pinned:false}` unpins) answering the updated record, and `runs.json` gained optional
+  `pinned`/`pinnedAt` keys that unpinning deletes rather than writes as `false` — so a record
+  written before this, or unpinned after it, is byte-identical to what an older cezar wrote.
+  Cross-project pins on the global All-tasks page and in the ⌘K palette are a follow-up. (fixes
+  #935) (#938)
 - ✨ **Continue a task on another agent account, not just another agent.** The thread's Continue
   carried a runner pill that could switch `claude → codex` but never offered the second Claude
   login the new-task composer has offered since accounts landed — so "finish this one on my other
@@ -32,9 +64,38 @@
   dir that created it, and `claude --resume` under a different login would silently open an empty
   conversation. A host with one agent and one login sees exactly the composer it always saw.
   `POST /api/v1/runs/:id/continue` gained an optional `agentProfile`; an id that no longer exists
-  is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+  is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`. (#924)
+- ✨ **The composer takes a PDF, TXT or MD file the same way it already takes a screenshot.**
+  Paperclip, ⌘V and drag-drop all used to either grey the file out or silently discard it, and the
+  wire would have refused it regardless (`mediaType: /^image\//`). Every attachment-carrying route
+  now widens the same `images` field to accept `application/pdf`, `text/plain` and
+  `text/markdown`/`text/x-markdown` alongside images — the agent is handed the file's on-disk
+  **path**, never its bytes — and a format cezar won't take is now refused out loud, naming the
+  file, instead of vanishing without a word. An attachment with nothing to preview renders as a
+  named chip, in the composer row and on the thread bubble alike. (fixes #950) (#951)
 
 ## 🐛 Fixes
+- 🐛 **A question one closing brace short is now a card, not a wall of JSON.** An agent that ended
+  its turn with a `CEZ:ASK` payload missing its final `}` — the single most common way a
+  hand-written one-line JSON blob gets mangled, and what an output-token limit does to one — lost
+  the whole question: no chips, ~760 characters of raw JSON left in the transcript, and a grey
+  footnote where a three-option card should have been. The task still parked at Needs you, so it
+  looked identical to a question that had never been asked. A bounded repair now sits under the
+  schema: the payload is scanned for its unclosed `{` and `[`, the missing closers are appended,
+  and the result goes through the **unchanged** validator. Only syntax is repaired, never
+  semantics — a stream cut mid-string, after a comma or after a colon is still refused, so is a
+  mismatched closer and an already-balanced payload that failed to parse for some other reason
+  (a trailing comma), and a repair that yields fewer than two options still degrades to plain text
+  exactly as before. A recovered card is never passed off as a clean one: the run records a note
+  saying the question was recovered from an unbalanced payload and asking you to check that the
+  options — and how many of them you may pick — match what was asked, and the raw marker is
+  stripped along with the card it produced rather than left sitting under it. Because that note is
+  the only trace a repair leaves, it renders in the danger tone rather than as the dimmest line in
+  the thread. The two forgiveness layers now read as a pair — presentation drift (unknown keys, an
+  over-long header) was already recovered above the parse; syntax drift is recovered below it.
+  Relatedly, a question that IS lost outright no longer whispers either: its note gets the same
+  treatment, and the marker contract agents receive now says in as many words that the JSON must
+  be syntactically valid. (fixes #936) (#937)
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
   answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
   of that stays true of a branch GitHub is refusing to merge, so a conflicted PR sat there in
@@ -59,7 +120,7 @@
   its own. Offered on the task page, the Tasks table and cards, the sidebar, and the cross-project
   All tasks page alike — that last one fetches the task's record when the panel opens (its index
   row is deliberately too slim to say whether a finished task can be reopened) and sends through
-  the run's OWN project rather than whichever one the page happens to be standing in.
+  the run's OWN project rather than whichever one the page happens to be standing in. (#904)
 - 🐛 **A task that opens its own PR keeps the chip for the PR it was working on.** A task started
   on someone else's PR that pushed a follow-up of its own showed only the new one: the agent
   re-declares `CEZ:PR` with the number it just opened, as the marker contract asks it to, and
@@ -86,6 +147,81 @@
   reports the boot project's repository, so it refused to guess rather than point at the wrong
   repo (#526). It now reads the project registry's own per-project repository — the same source
   All tasks uses — and falls back to health only for the boot project. (#901)
+- 🐛 **A pull request's own repository decides whether cezar trusts it, not just the URL.** A task
+  could adopt a completely unrelated repository's pull request or issue as its own reference chip
+  — a research task that cites one upstream PR in passing was enough to make that PR the task's
+  identity. A referenced link is now vetoed unless it matches the project's own repository or is
+  corroborated by the task's own prompt; the veto only ever removes a candidate, never adds one,
+  and an already-poisoned record self-heals the next time it is read, no migration needed. (fixes
+  #945) (#946)
+- 🐛 **A stale review request, and GitHub's own "Update branch" merge, can no longer clear a real
+  rejection.** A PR rejected by one reviewer while two others never looked showed "Waiting for
+  review" instead of "Changes requested", because any pending review request was read as a
+  re-request regardless of when it was made. A standing request now has to postdate the review it
+  would answer, and a head commit that is itself a merge from `main` — what "Update branch"
+  produces — no longer counts as the author pushing a fix. (#909)
+- 🐛 **Opening another project's task from All tasks or the sidebar no longer 404s until you
+  reload.** A soft navigation under React StrictMode could re-fire the thread's query before the
+  project scope had settled, so the request landed on the wrong project's boot-time route, 404ed,
+  and the cache held onto that miss under the correctly-scoped key. Both scope effects are now
+  layout effects, settled before any request of the commit goes out. (#905)
+- 🐛 **The Changes tab's file tree scrolls on its own.** With a lot of changed files, reaching the
+  bottom of the tree meant dragging the whole diff down with it — the pane had no height cap and
+  no scroller of its own. It now caps at the room left under the sticky chrome and scrolls
+  independently, and a wheel that bottoms out in the tree no longer chains into the diff. (#918)
+- 🐛 **The composer's skill picker can be cleared, and no longer haunts the next task.** Clicking
+  the already-selected skill re-picked it instead of clearing it, the only real exit was an
+  unlabeled `quick-task` row tucked under Workflows, and a skill picked once was silently
+  preselected — and auto-run — for every task after it. "Nothing picked" is now a real state, with
+  three ways back to it: an ✕ on the pill, clicking the selected row again, or the "No skill" row
+  at the top of the list. A new task always starts with no skill picked. (#919)
+- 🐛 **A resumed session keeps the tools its step was actually granted.** A Continue on a parked
+  or closed run, restart recovery, and the usage-limit auto-resume all rebuilt the session with
+  the default tool set, silently dropping any MCP servers or subagents the step declared — and,
+  worse, un-restricting Bash whenever the step had scoped it down. The continuation now resolves
+  its tools from the same persisted workflow definition the fresh run used. (#928)
+- 🐛 **Typing a Polish letter in the composer no longer sends a canned reply.** On macOS, ⌥ is a
+  character modifier, not a chord modifier: ⌥C types `ć` and also fired "Continue.", ⌥A typed `ą`
+  and fired "Yes, approved.", swallowing the keystroke either way. The quick-reply shortcuts now
+  stand down whenever an input, textarea or contenteditable has focus — the same rule ⌘K already
+  follows. (#943)
+- 🐛 **The Claude model picker lists what your own CLI actually offers.** It advertised a
+  hand-written list of releases that goes stale the moment Anthropic ships anything newer — Opus 5
+  was unreachable from the picker until now. Claude gets the same host-local discovery Codex
+  already had; a missing, old, logged-out or slow CLI falls back to the previous presets rather
+  than leaving an `auto`-only picker. (fixes #784) (#841)
+- 🐛 **The GitHub tab's search finds an issue or PR whatever its state.** It only ever searched the
+  open set, so a closed or merged item — the ones you're most often looking for — was invisible.
+  (fixes #730) (#732)
+- 🐛 **Mobile task history reclaims the screen space its chrome was taking.** Header, workflow row,
+  dock and composer spacing are now compact on phones, without touching the desktop layout. (#764)
+- 🐛 **The run header's metadata row collapses behind a disclosure on phones, not the whole page.**
+  Workflow, branch, tracker references, diff stats, token usage and cost wrapped into three or
+  four lines at 390px, pushing the transcript — the reason the screen exists — below the fold. The
+  row now collapses by default below `md` and expands per run; the desktop header is untouched,
+  and a self-resuming run's status pill stays visible outside the disclosure either way.
+  Complements #764's scrolling header, which it is now rebased on top of. (fixes #765) (#873)
+- 🐛 **A fresh task started with a `/skill` command actually runs it.** `/skill` expansion applied
+  to a live reply and to a continuation's opening prompt, but not to a brand-new task's, so a
+  skill visible in the Skills list answered "Unknown command" the first time it was ever used.
+  (#947)
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 **A CI re-run no longer fails the packaged-CLI e2e regardless of the diff.** The
+  release-snapshot test asserts an exact version string, but let the workflow's own
+  `GITHUB_RUN_ATTEMPT` leak into the child process it drives — so a second attempt stamped a `.2`
+  suffix the hard-coded expectation never accounted for. The test environment now pins the attempt
+  the same way it already pins the other CI-only variables. (#911)
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @wojciechszyjka
+- @piotrchabros
+- @blabbler78
+- @matgren
+- @AGmakonts
+- @patzick
 
 # 0.10.0 (2026-08-14)
 

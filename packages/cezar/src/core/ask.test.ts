@@ -220,6 +220,106 @@ describe('parseAskMarkerResult diagnostics', () => {
   });
 });
 
+// #936 — the single most common way an agent mangles a hand-written one-line
+// JSON blob is dropping a trailing closer (or being cut off by an output-token
+// limit). That used to die at `JSON.parse` and throw away a fully-formed card.
+// A bounded closer repair sits under the schema: it appends the missing `}`/`]`
+// and re-parses, but refuses anything that is not ONLY missing closers.
+describe('parseAskMarkerResult — bounded closer repair (#936)', () => {
+  // Verbatim from the issue: valid in every field, one `}` short of parsing.
+  const truncated =
+    'CEZ:ASK {"questions":[{"header":"Lint scope","question":"#95 is an issue, so there is nothing to merge on it directly. How much of the lint backlog should I do and land now?","multiSelect":false,"options":[{"label":"First slice only","description":"The 4 inline-JSX strings (likely untranslated text AGENTS.md forbids) plus the 4 i18next import warnings. One small, reviewable PR I can land today."},{"label":"Rule by rule","description":"A series of PRs, one rule group at a time, lowering the cap as each goes green. Slowest, but each behaviour change stays legible in review."},{"label":"Whole backlog","description":"All 101 to zero and the rules promoted back to error in one PR. Touches ~50 files of working code; highest risk of a silent behaviour change."}]}]';
+
+  it('recovers the real payload that was one closing brace short', () => {
+    const result = parseAskMarkerResult(truncated);
+    expect(result).toMatchObject({ kind: 'valid', normalized: false, repaired: true });
+    if (result.kind !== 'valid') return;
+    expect(result.request.questions).toHaveLength(1);
+    expect(result.request.questions[0]!.header).toBe('Lint scope');
+    expect(result.request.questions[0]!.options.map((o) => o.label)).toEqual([
+      'First slice only',
+      'Rule by rule',
+      'Whole backlog',
+    ]);
+  });
+
+  it('repairs several missing closers at once, innermost first', () => {
+    const result = parseAskMarkerResult(
+      'CEZ:ASK {"questions":[{"header":"H","question":"Q?","options":[{"label":"a"},{"label":"b"}',
+    );
+    expect(result).toMatchObject({ kind: 'valid', repaired: true });
+  });
+
+  it('marks an already-valid payload as not repaired (identical path to before)', () => {
+    expect(parseAskMarkerResult(`CEZ:ASK ${askJson}`)).toMatchObject({
+      kind: 'valid',
+      normalized: false,
+      repaired: false,
+    });
+  });
+
+  // The guards. Each of these is a stream that lost more than its closers, so
+  // repairing it would invent a question the agent never finished asking.
+  it('refuses a payload cut mid-string', () => {
+    expect(
+      parseAskMarkerResult(
+        'CEZ:ASK {"questions":[{"header":"H","question":"Q?","options":[{"label":"a"},{"label":"b',
+      ),
+    ).toMatchObject({ kind: 'invalid-json' });
+  });
+
+  it('refuses a payload that ends after a comma or a colon', () => {
+    expect(
+      parseAskMarkerResult('CEZ:ASK {"questions":[{"header":"H","question":"Q?"},'),
+    ).toMatchObject({ kind: 'invalid-json' });
+    expect(parseAskMarkerResult('CEZ:ASK {"questions":')).toMatchObject({ kind: 'invalid-json' });
+  });
+
+  it('refuses a mismatched closer', () => {
+    expect(
+      parseAskMarkerResult('CEZ:ASK {"questions":[{"header":"H","question":"Q?","options":[}'),
+    ).toMatchObject({ kind: 'invalid-json' });
+  });
+
+  it('refuses an already-balanced payload that fails to parse for another reason', () => {
+    // A trailing comma — balanced, so there is nothing for the repair to add.
+    expect(parseAskMarkerResult('CEZ:ASK {"questions":[],}')).toMatchObject({
+      kind: 'invalid-json',
+    });
+  });
+
+  it('refuses prose that merely happens to end in a closer', () => {
+    expect(parseAskMarkerResult('CEZ:ASK see the options above }')).toMatchObject({
+      kind: 'invalid-json',
+    });
+  });
+
+  it('is not fooled by braces or escaped quotes inside string values', () => {
+    const result = parseAskMarkerResult(
+      'CEZ:ASK {"questions":[{"header":"H","question":"Use {a: 1} or \\"b\\"?","options":[{"label":"{a: 1}"},{"label":"\\"b\\""}]}]',
+    );
+    expect(result).toMatchObject({ kind: 'valid', repaired: true });
+    if (result.kind === 'valid')
+      expect(result.request.questions[0]!.options.map((o) => o.label)).toEqual(['{a: 1}', '"b"']);
+  });
+
+  // The repair fixes syntax only. The schema stays exactly as strict as it was:
+  // a truncation that eats options past the 2-option minimum still degrades.
+  it('still rejects a repaired payload that fails the schema', () => {
+    expect(
+      parseAskMarkerResult('CEZ:ASK {"questions":[{"header":"H","question":"Q?","options":[]'),
+    ).toMatchObject({ kind: 'invalid-structure' });
+  });
+
+  it('still normalizes presentation drift in a repaired payload', () => {
+    const result = parseAskMarkerResult(
+      'CEZ:ASK {"questions":[{"header":"thirteen char","question":"Q?","options":[{"label":"a"},{"label":"b"}]}]',
+    );
+    expect(result).toMatchObject({ kind: 'valid', normalized: true, repaired: true });
+    if (result.kind === 'valid') expect(result.request.questions[0]!.header).toBe('thirteen cha');
+  });
+});
+
 describe('stripAskMarker', () => {
   it('removes a trailing CEZ:ASK marker for display', () => {
     expect(stripAskMarker(`Pick one.\nCEZ:ASK ${askJson}`)).toBe('Pick one.');
@@ -257,6 +357,21 @@ describe('stripAskMarker', () => {
   it('keeps a marker whose payload is not valid JSON at all', () => {
     const invalid = 'Pick one.\nCEZ:ASK {"questions": [}';
     expect(stripAskMarker(invalid)).toBe(invalid);
+  });
+
+  // #936 — a repaired payload renders a card, so its raw marker must go with
+  // it. The old regex required a trailing `}`; a payload missing that brace
+  // ends on `]` and would have left ~760 characters of JSON under the card.
+  it('strips a marker whose payload was repaired and ends on a bracket', () => {
+    const repaired =
+      'Pick one.\nCEZ:ASK {"questions":[{"header":"H","question":"Q?","options":[{"label":"a"},{"label":"b"}]}]';
+    expect(parseAskMarker(repaired)).not.toBeNull();
+    expect(stripAskMarker(repaired)).toBe('Pick one.');
+  });
+
+  it('keeps a marker whose payload lost more than its closers', () => {
+    const cut = 'Pick one.\nCEZ:ASK {"questions":[{"header":"H","question":"Q?","options":[{"label":"a';
+    expect(stripAskMarker(cut)).toBe(cut);
   });
 });
 

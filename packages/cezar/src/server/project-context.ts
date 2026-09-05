@@ -3,6 +3,7 @@ import { AutomationStore } from '../automations/store.ts';
 import { reconcileAutomationReceipts } from '../automations/task-template.ts';
 import { DEFAULT_WORKTREE_RETENTION, resolveWorktreeRetention } from '../config.ts';
 import { pruneOrphans } from '../git-worktree.ts';
+import { armRepoHandle } from '../runs/arm-repo-handle.ts';
 import { reclaimWorktrees } from '../runs/retention.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -229,6 +230,15 @@ export class ProjectContexts {
         await reclaimWorktrees(project.root, store, keep).catch(() => [] as string[]);
       }
       await manager.recover();
+      // Which repository this project IS (#945), so the referenced tier stops adopting another
+      // repo's PR/issue as a task's subject. Fire-and-forget on purpose — it costs a `gh` spawn
+      // and building a context must not wait on the network. `project.root` is already realpath'd.
+      //
+      // Armed only once the build has SUCCEEDED. Arming beside `RunStore.open` would outlive a
+      // failed build: the promise still resolves after `teardown` flushed the index and detached
+      // every listener, and a healed record would then `touch()` a store whose lifecycle had
+      // ended — scheduling a `runs.json` write from a context nobody owns any more.
+      armRepoHandle(store, project.root);
       return { id: project.id, root: project.root, dataDir, store, manager, automationStore, launchKey };
     } catch (err) {
       // A failed build must not leak the half-built context's subscriptions.

@@ -71,11 +71,6 @@ const RepoGitRoute = lazy(() =>
 const GithubRoute = lazy(() =>
   import('./routes/github/github').then((m) => ({ default: m.GithubRoute })),
 )
-/** `/github`'s index (#417) — restores the last-selected tab. Same chunk as `GithubRoute`,
- *  just a second named export off the same lazy import. */
-const GithubIndexRoute = lazy(() =>
-  import('./routes/github/github').then((m) => ({ default: m.GithubIndexRoute })),
-)
 
 /** Lazy because the builder carries dnd-kit (R6 Step 1.6) — drag machinery only this surface
  *  uses, so only this surface pays for it. */
@@ -407,7 +402,12 @@ export function AppRoutes() {
           path="github"
           element={
             <Suspense fallback={<GithubLoading />}>
-              <GithubIndexRoute />
+              {/* `GithubRoute` itself, with `index`, rather than a wrapper component: React
+                  reconciles by element type, so any other type here would unmount the route on
+                  the hop to `github/issues/:n` and reset its search text — losing the very
+                  cross-state hit the user clicked (#730). The `prs` pair below already renders
+                  one type across its two paths, which is why it never had that bug. */}
+              <GithubRoute view="issues" index />
             </Suspense>
           }
         />
