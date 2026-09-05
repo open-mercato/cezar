@@ -14,7 +14,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -472,6 +472,67 @@ function EditableTitle({ run }: { run: ApiRun }) {
   )
 }
 
+/** Copyable task branch with confirmation kept local so hovering it does not re-render MetaRow. */
+function CopyBranchChip({ branch }: { branch: string }) {
+  const [copied, setCopied] = useState(false)
+  const [tooltipOpen, setTooltipOpen] = useState(false)
+  const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (dismissTimer.current !== null) clearTimeout(dismissTimer.current)
+    },
+    [],
+  )
+
+  const copy = () => {
+    if (!navigator.clipboard) {
+      toast(`Branch: ${branch}`)
+      return
+    }
+    void navigator.clipboard
+      .writeText(branch)
+      .then(() => {
+        setCopied(true)
+        setTooltipOpen(true)
+        if (dismissTimer.current !== null) clearTimeout(dismissTimer.current)
+        dismissTimer.current = setTimeout(() => {
+          dismissTimer.current = null
+          setTooltipOpen(false)
+        }, 1_500)
+      })
+      .catch(() => toast(`Branch: ${branch}`))
+  }
+
+  return (
+    <TooltipProvider>
+      <Tooltip
+          open={tooltipOpen}
+          onOpenChange={(open) => {
+            if (open && dismissTimer.current === null) setCopied(false)
+            setTooltipOpen(open)
+          }}
+        >
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              data-slot="branch-chip"
+              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              aria-label={`Copy branch name ${branch}`}
+              onClick={copy}
+            >
+              {branch}
+              <span className="sr-only" role="status">
+                {copied ? 'Branch name copied' : ''}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{copied ? 'Copied' : 'Copy branch name'}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 /** workflow · branch chip · ± on the left; tokens · cost · agent icon on the right (mockup
  *  `.meta-row`, #416). Each part renders only when the record carries it — absence is absence,
  *  not a placeholder. Runner and model no longer sit in the loose dot-list (#416): they read as
@@ -491,8 +552,6 @@ function MetaRow({
    *  plain text, because the route it used to link to is disabled. */
   automationsAvailable: boolean
 }) {
-  const [branchCopied, setBranchCopied] = useState(false)
-  const [branchTooltipOpen, setBranchTooltipOpen] = useState(false)
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
   const repoBase = useProjectRepoBase()
@@ -517,40 +576,7 @@ function MetaRow({
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
   const branch = run.branch
   if (branch) {
-    parts.push(
-      <TooltipProvider key="branch">
-        <Tooltip open={branchTooltipOpen} onOpenChange={setBranchTooltipOpen}>
-          <TooltipTrigger asChild>
-            <button
-              type="button"
-              data-slot="branch-chip"
-              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label={`Copy branch name ${branch}`}
-              onClick={() => {
-                if (!navigator.clipboard) {
-                  toast(`Branch: ${branch}`)
-                  return
-                }
-                void navigator.clipboard
-                  .writeText(branch)
-                  .then(() => {
-                    setBranchCopied(true)
-                    setBranchTooltipOpen(true)
-                    window.setTimeout(() => {
-                      setBranchCopied(false)
-                      setBranchTooltipOpen(false)
-                    }, 1_500)
-                  })
-                  .catch(() => toast(`Branch: ${branch}`))
-              }}
-            >
-              {branch}
-            </button>
-          </TooltipTrigger>
-          <TooltipContent>{branchCopied ? 'Copied' : 'Copy branch name'}</TooltipContent>
-        </Tooltip>
-      </TooltipProvider>,
-    )
+    parts.push(<CopyBranchChip key="branch" branch={branch} />)
   }
   // EVERY PR the task points at, in `taskReferences` order — the same order, and the same
   // statuses, the global Tasks table paints. A task opened on someone else's PR that pushes a

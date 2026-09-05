@@ -25,6 +25,7 @@ beforeEach(() => {
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -1128,7 +1129,57 @@ describe('meta line, tabs, pill and resume hint', () => {
     await waitFor(() => {
       expect(writeText).toHaveBeenCalledWith('cez/feature-branch')
       expect(screen.getAllByText('Copied').length).toBeGreaterThan(0)
+      expect(screen.getByRole('status').textContent).toBe('Branch name copied')
     })
+  })
+
+  it('keeps the full confirmation window after a rapid second copy', async () => {
+    vi.useFakeTimers()
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+    const chip = screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' })
+
+    fireEvent.click(chip)
+    await act(async () => {})
+    act(() => vi.advanceTimersByTime(1_000))
+    fireEvent.click(chip)
+    await act(async () => {})
+    act(() => vi.advanceTimersByTime(500))
+
+    expect(writeText).toHaveBeenCalledTimes(2)
+    expect(screen.getAllByText('Copied').length).toBeGreaterThan(0)
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['has no Clipboard API', {}],
+    ['is denied clipboard access', { clipboard: { writeText: () => Promise.reject(new Error('denied')) } }],
+  ])('shows the branch itself when the browser %s', async (_case, navigatorStub) => {
+    stubFetch()
+    vi.stubGlobal('navigator', navigatorStub)
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+
+    expect(await screen.findByText('Branch: cez/feature-branch')).not.toBeNull()
+  })
+
+  it('clears the pending copy confirmation when the header unmounts', async () => {
+    vi.useFakeTimers()
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: () => Promise.resolve() } })
+    const view = renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+    await act(async () => {})
+    const dismissCall = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1_500)
+    expect(dismissCall).toBeGreaterThanOrEqual(0)
+    const dismissTimer = setTimeoutSpy.mock.results[dismissCall]?.value
+    view.unmount()
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(dismissTimer)
+    vi.useRealTimers()
   })
 
   it('a queued run shows its position in the pill, from the shared runs list', async () => {
