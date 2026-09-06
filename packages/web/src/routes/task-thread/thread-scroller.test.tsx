@@ -48,6 +48,23 @@ describe('ThreadRows — the threshold-switched renderer', () => {
     expect(rendered[0]!.className).toContain('w-full')
   })
 
+  it('drops the content-visibility hint on an engine with no scroll anchoring (iOS)', () => {
+    // WebKit answers `false` here and has no scroll anchoring to hide the row-height corrections
+    // content-visibility causes, so the rows must render plainly there. See threadRowClass.
+    // jsdom ships no `CSS` at all, which is why the probe's unknown answer has to be the
+    // shipped behavior — every other test in this file asserts the hint IS there.
+    const supports = vi.fn((property: string) => property !== 'overflow-anchor')
+    vi.stubGlobal('CSS', { supports })
+
+    render(<ThreadRows runId="r1" rows={rows(5)} mode="flat" controls={controls()} />)
+
+    const rendered = document.querySelectorAll('[data-slot="thread-row"]')
+    expect(rendered).toHaveLength(5)
+    expect(rendered[0]!.className).not.toContain('content-visibility')
+    expect(rendered[0]!.className).toContain('flex-col') // …and nothing else moved
+    expect(supports).toHaveBeenCalledWith('overflow-anchor', 'auto')
+  })
+
   it('virtual mode mounts the virtua container instead', () => {
     render(<ThreadRows runId="r1" rows={rows(400)} mode="virtual" controls={controls()} />)
     const region = document.querySelector('[data-slot="thread-rows"]')!

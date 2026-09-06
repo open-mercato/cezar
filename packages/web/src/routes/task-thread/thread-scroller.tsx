@@ -20,6 +20,7 @@ import {
   saveThreadMeasurements,
   saveThreadScroll,
   threadAnchorScrollTop,
+  threadRowClass,
   type ThreadRowPosition,
 } from './thread-scroll'
 
@@ -32,6 +33,20 @@ import {
  * only scroller — flat rows scroll it natively, virtua receives it via `scrollRef`, and this
  * hook is the only code steering it. Nothing here owns a nested scroll container.
  */
+
+/**
+ * Does this engine re-point `scrollTop` when content above the viewport changes size?
+ *
+ * Read at render rather than once at import: it is one `CSS.supports` call per rows render, and
+ * a module-level constant would freeze whatever the first test in a file happened to stub.
+ * Unknown counts as YES — every engine that cannot answer the question is also not the one this
+ * guards against (WebKit answers it, with `false`), and the safe default is the behavior that
+ * shipped.
+ */
+export function hasScrollAnchoring(): boolean {
+  if (typeof CSS === 'undefined' || typeof CSS.supports !== 'function') return true
+  return CSS.supports('overflow-anchor', 'auto')
+}
 
 /** One renderable thread row — a user bubble, a grouped block, whatever the view flattened. */
 export interface ThreadRow {
@@ -400,17 +415,14 @@ export function ThreadRows({
   controls: ThreadScrollControls
 }) {
   if (mode === 'virtual') return <VirtualRows runId={runId} rows={rows} controls={controls} />
+  // content-visibility skips render work for off-screen rows, and the intrinsic-size hint keeps
+  // the scrollbar stable before a skipped row is first measured — but only an engine with scroll
+  // anchoring can hide the moment that hint is corrected. See threadRowClass.
+  const rowClass = threadRowClass(hasScrollAnchoring())
   return (
     <div ref={controls.attachContent} data-slot="thread-rows" data-virtualized="false">
       {rows.map((row) => (
-        // content-visibility skips render work for off-screen rows; the intrinsic-size hint
-        // keeps the scrollbar stable before a skipped row is first measured.
-        <div
-          key={row.key}
-          data-slot="thread-row"
-          data-row-key={row.key}
-          className="flex w-full flex-col pb-2.5 [contain-intrinsic-block-size:auto_3rem] [content-visibility:auto]"
-        >
+        <div key={row.key} data-slot="thread-row" data-row-key={row.key} className={rowClass}>
           {row.node}
         </div>
       ))}
