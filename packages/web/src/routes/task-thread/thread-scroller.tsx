@@ -21,6 +21,7 @@ import {
   saveThreadScroll,
   threadAnchorScrollTop,
   threadRowClass,
+  type ThreadRowAnchor,
   type ThreadRowPosition,
 } from './thread-scroll'
 
@@ -166,6 +167,9 @@ export function useThreadScroll(
   /** A finger is on the scroller right now — no programmatic scroll may run under it. */
   const touchActiveRef = useRef(false)
   const pointerHistoryConsumedRef = useRef(false)
+  /** Where the reader's eyes are, for the anchoring polyfill below. Undefined = nothing to hold. */
+  const readingAnchorRef = useRef<ThreadRowAnchor | undefined>(undefined)
+  const anchorFrameRef = useRef(0)
   const rowKeysRef = useRef(rowKeys)
   rowKeysRef.current = rowKeys
 
@@ -251,6 +255,49 @@ export function useThreadScroll(
     //    window, virtua's at-rest sub-pixel corrections near the tail would re-pin a reader
     //    who just wheeled up. A slow scrollbar drag to the tail (>2s) misses the window,
     //    accepted — wheel and touch cover real readers.
+    // THE ANCHORING POLYFILL (only where the engine has none — see hasScrollAnchoring).
+    //
+    // Content above the reader legitimately changes height while an agent works: a streaming
+    // tool-output box grows toward its 216px cap, a finished one gains its "Show all N lines"
+    // control, an image loads, the header re-wraps as the token count gets wider. Every one of
+    // those pushes everything below it down, and a reader parked in the middle of the thread
+    // goes with it. Chrome re-points scrollTop at the same content (scroll anchoring); WebKit —
+    // every browser on iOS — does not. Measured on a live thread at 390×844: 200px of growth
+    // above the viewport moved the reader exactly 200px.
+    //
+    // So we do what the platform won't: remember the row the reader is looking at, and after a
+    // resize put it back where it was. Flat mode only — past the virtualization threshold virtua
+    // owns offset compensation, and a second corrector would fight it.
+    const polyfillAnchoring = !hasScrollAnchoring()
+    const trackReadingAnchor = () => {
+      // Pinned readers are handled by the pin itself, and a restore in flight owns the offset.
+      if (!polyfillAnchoring || stuckRef.current || pendingRestoreRef.current !== null) return
+      if (anchorFrameRef.current !== 0) return // at most one measurement per frame
+      anchorFrameRef.current = requestAnimationFrame(() => {
+        anchorFrameRef.current = 0
+        const current = scrollElRef.current
+        if (!current || stuckRef.current) return
+        readingAnchorRef.current = firstVisibleThreadAnchor(
+          current.getBoundingClientRect().top,
+          measuredRows(current),
+        )
+      })
+    }
+    const holdReadingAnchor = () => {
+      const anchor = readingAnchorRef.current
+      if (!polyfillAnchoring || anchor === undefined || virtualizerRef.current) return
+      const viewportTop = scroller.getBoundingClientRect().top
+      const corrected = threadAnchorScrollTop(
+        scroller.scrollTop,
+        viewportTop,
+        anchor,
+        measuredRows(scroller),
+        scroller.scrollTop, // the row is gone (evicted): hold still rather than guess
+      )
+      // Sub-pixel noise is not a jump; correcting it would fight momentum scrolling for nothing.
+      if (Math.abs(corrected - scroller.scrollTop) >= 1) setOffset(corrected)
+    }
+
     const RESTICK_INTENT_MS = 2000
     let downIntentAt = 0
     let lastTouchY: number | null = null
@@ -345,6 +392,9 @@ export function useThreadScroll(
       if (pendingRestoreRef.current === null) {
         saveThreadScroll(viewKey, { top: scroller.scrollTop, atBottom: near })
       }
+      // The anchor has to be captured BEFORE the mutation that moves it, and scrolling is the
+      // only thing that changes which row the reader is on.
+      trackReadingAnchor()
     }
     scroller.addEventListener('scroll', onScroll, { passive: true })
     scroller.addEventListener('wheel', onWheel, { passive: true })
@@ -375,12 +425,20 @@ export function useThreadScroll(
           // the agent works" report, which only phones can produce because only a touch scroll
           // is a gesture the browser is already animating. `onTouchEnd` re-pins if still stuck.
           if (!touchActiveRef.current) toBottom()
+        } else {
+          // Away from the tail: keep the reader on the row they are reading. Unlike the pin,
+          // this one DOES run under a finger — it is compensation, not repositioning, so the
+          // content stays visually still exactly when a drag would otherwise be yanked.
+          holdReadingAnchor()
         }
       })
       observer.observe(content)
     }
 
     return () => {
+      cancelAnimationFrame(anchorFrameRef.current)
+      anchorFrameRef.current = 0
+      readingAnchorRef.current = undefined // another view's row is not this reader's anchor
       scroller.removeEventListener('scroll', onScroll)
       scroller.removeEventListener('wheel', onWheel)
       scroller.removeEventListener('touchstart', onTouchStart)

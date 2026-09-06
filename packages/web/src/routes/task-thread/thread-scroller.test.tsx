@@ -201,6 +201,91 @@ describe('useThreadScroll — growth must not scroll under a finger', () => {
     expect(scroller.scrollTop).toBe(1_500)
   })
 
+  /**
+   * The anchoring polyfill. Rows above the reader change height while an agent works — a
+   * streaming tool box grows toward its cap, a finished one gains "Show all N lines", an image
+   * loads — and an engine without scroll anchoring pushes the reader down by exactly that much.
+   * Measured on a live thread at 390×844: 200 px of growth above the viewport = 200 px of drift.
+   */
+  describe('holding the reader’s row when content above it grows', () => {
+    /** A scroller whose rows have stated heights, so the anchor math has real geometry to read
+     *  (jsdom lays nothing out and reports every rect as zero). */
+    function layOut(scroller: HTMLElement, heights: number[]) {
+      let top = scroller.scrollTop === 0 ? 0 : -scroller.scrollTop
+      const rows = [...scroller.querySelectorAll<HTMLElement>('[data-slot="thread-row"]')]
+      rows.forEach((row, index) => {
+        const height = heights[index]!
+        const rect = { top, bottom: top + height, height }
+        row.getBoundingClientRect = () => rect as DOMRect
+        top += height
+      })
+      scroller.getBoundingClientRect = () => ({ top: 0, bottom: 500, height: 500 }) as DOMRect
+    }
+
+    function AnchorHarness({ rowCount }: { rowCount: number }) {
+      const controls = useThreadScroll('run-anchor:main')
+      return (
+        <main
+          ref={(element) => {
+            if (element) {
+              // `element.scrollTop`, not 0: a pill toggle re-renders this harness, React re-runs
+              // an inline ref, and re-defining the property would silently rewind the very
+              // position under test.
+              Object.defineProperties(element, {
+                scrollTop: { value: element.scrollTop, writable: true, configurable: true },
+                clientHeight: { value: 500, configurable: true },
+                scrollHeight: { value: 4_000, configurable: true },
+              })
+            }
+          }}
+          data-slot="main"
+        >
+          <ThreadRows runId="r1" rows={rows(rowCount)} mode="flat" controls={controls} />
+        </main>
+      )
+    }
+
+    it('gives back exactly what the growth above took, on an engine with no anchoring', () => {
+      vi.stubGlobal('CSS', { supports: (property: string) => property !== 'overflow-anchor' })
+      const grow = stubGrowthObserver()
+      render(<AnchorHarness rowCount={6} />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+
+      // The reader scrolls up (an upward touch drag is what unpins), landing on row 3.
+      fireEvent.touchStart(scroller, { touches: [{ clientY: 100 }] })
+      fireEvent.touchMove(scroller, { touches: [{ clientY: 200 }] })
+      scroller.scrollTop = 600
+      layOut(scroller, [200, 200, 200, 200, 200, 200])
+      act(() => fireEvent.scroll(scroller)) // captures the anchor for the frame
+
+      // …and a row ABOVE them grows by 120px, pushing everything below down.
+      layOut(scroller, [200, 320, 200, 200, 200, 200])
+      grow()
+
+      // Without the polyfill the reader would be 120px further down the page.
+      expect(scroller.scrollTop).toBe(720)
+    })
+
+    it('leaves the scroller alone where the engine anchors natively', () => {
+      vi.stubGlobal('CSS', { supports: () => true })
+      const grow = stubGrowthObserver()
+      render(<AnchorHarness rowCount={6} />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+
+      fireEvent.touchStart(scroller, { touches: [{ clientY: 100 }] })
+      fireEvent.touchMove(scroller, { touches: [{ clientY: 200 }] })
+      scroller.scrollTop = 600
+      layOut(scroller, [200, 200, 200, 200, 200, 200])
+      act(() => fireEvent.scroll(scroller))
+
+      layOut(scroller, [200, 320, 200, 200, 200, 200])
+      grow()
+
+      // The browser does this itself; a second corrector would only fight it.
+      expect(scroller.scrollTop).toBe(600)
+    })
+  })
+
   it('a touch that ended away from the tail stays where the reader left it', () => {
     const grow = stubGrowthObserver()
     render(<PinnedHarness viewKey="run-away:main" />)
