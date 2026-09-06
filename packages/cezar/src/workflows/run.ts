@@ -73,8 +73,8 @@ async function configuredModelProvider(
 ): Promise<string | undefined> {
   return readAgentModelProvider(backend, repoRoot).catch(() => undefined);
 }
-/** An interactive session that hears nothing from the user closes itself. */
-export const IDLE_TIMEOUT_MS = 15 * 60_000;
+/* An interactive session that hears nothing from the user closes itself after
+ * `resources.sessionIdleMinutes` (default 15, `null` = never) — see `armIdleTimer`. */
 /**
  * Task-completion marker from the agent contract (HANDOFF_INSTRUCTIONS): a
  * turn whose text ends with `CEZ:DONE` means "goal achieved, nothing to ask" —
@@ -3560,15 +3560,24 @@ export class RunManager {
 
   private armIdleTimer(runId: string, state: ActiveRun): void {
     this.clearIdleTimer(state);
+    // Read at arm time, not boot: the semaphore snapshot refreshes on every
+    // settings PUT, so a changed `sessionIdleMinutes` applies to the next park
+    // without a restart. `null` = never close on idle — the run's remaining
+    // exits are a user message and (if autonomous) the nudge, which is what an
+    // operator choosing it asked for; unlike a #661-era parked monitor, a
+    // `waiting` run is visible in the cockpit with its ask card and holds no
+    // `maxParallel` slot (#347).
+    const minutes = this.semaphore.sessionIdleMinutes();
+    if (minutes === null) return;
     state.idleTimer = setTimeout(() => {
       if (state.session?.open && !state.cancelled) {
         this.store.appendEvent(runId, {
           type: 'lifecycle',
-          message: `session closed after ${Math.round(IDLE_TIMEOUT_MS / 60_000)}m of inactivity`,
+          message: `session closed after ${minutes}m of inactivity`,
         });
         state.session.end();
       }
-    }, IDLE_TIMEOUT_MS);
+    }, minutes * 60_000);
     state.idleTimer.unref?.();
   }
 

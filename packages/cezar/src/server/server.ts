@@ -492,6 +492,7 @@ export interface WorkspaceConfigResponse {
     maxParallel: number;
     maxMonitoringSessions: number;
     monitoringWakeIntervalMinutes: number | null;
+    sessionIdleMinutes: number | null;
     autoResumeOnUsageLimit: boolean;
     memoryLimitMb: number | null;
     worktreeRetentionDefault: number;
@@ -2810,6 +2811,7 @@ export function createApp(deps: ServerDeps) {
       maxParallel: config.resources.maxParallel,
       maxMonitoringSessions: config.resources.maxMonitoringSessions,
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
+      sessionIdleMinutes: config.resources.sessionIdleMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
@@ -2878,6 +2880,9 @@ export function createApp(deps: ServerDeps) {
           }
           if (resources?.monitoringWakeIntervalMinutes !== undefined) {
             config.resources.monitoringWakeIntervalMinutes = resources.monitoringWakeIntervalMinutes;
+          }
+          if (resources?.sessionIdleMinutes !== undefined) {
+            config.resources.sessionIdleMinutes = resources.sessionIdleMinutes;
           }
           if (resources?.autoResumeOnUsageLimit !== undefined) {
             config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
@@ -2956,6 +2961,7 @@ export function createApp(deps: ServerDeps) {
         maxParallel: z.number().int().min(1).max(16).optional(),
         maxMonitoringSessions: z.number().int().min(0).max(16).optional(),
         monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
+        sessionIdleMinutes: z.number().int().min(1).max(1440).nullable().optional(),
         autoResumeOnUsageLimit: z.boolean().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
         worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),

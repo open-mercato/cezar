@@ -1056,6 +1056,103 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
 });
 
 /**
+ * The `waiting` idle timeout is configurable (`resources.sessionIdleMinutes`). Default 15
+ * — exactly the constant it replaced, so a zero-config parked session still closes itself
+ * — while `null` never closes (a deliberate operator choice; #661 is the precedent that a
+ * parked session need not be bounded by this timer) and a custom value closes at that
+ * value with a lifecycle message that names it. Driven dry through the mock (a markerless
+ * turn-end parks as `waiting`).
+ */
+describe('configurable waiting-session idle timeout', () => {
+  // Fresh repo + manager per test, like the #490 suite above: these runs PARK, and a
+  // `worktree:false` parked run holds the exclusive repo-root lock.
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let currentId: string | undefined;
+  const savedEnv: Record<string, string | undefined> = {};
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-idle-'));
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    currentId = undefined;
+  });
+
+  afterEach(() => {
+    if (currentId) manager.cancel(currentId); // release the session + repo lock
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 15_000) => {
+    const deadline = Date.now() + ms;
+    while (!pred(store.getRun(id))) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+
+  it('a zero-config waiting park still arms the idle timer — the default path is unchanged', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const state = (manager as unknown as { active: Map<string, { idleTimer?: NodeJS.Timeout }> }).active.get(record.id);
+    expect(state?.idleTimer).toBeDefined();
+  }, 30_000);
+
+  it('sessionIdleMinutes: null parks a waiting session with NO idle timer', async () => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { sessionIdleMinutes: null } }),
+    });
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    const state = (manager as unknown as {
+      active: Map<string, { idleTimer?: NodeJS.Timeout; session?: { open: boolean } }>;
+    }).active.get(record.id);
+    expect(state?.idleTimer).toBeUndefined();
+    expect(state?.session?.open).toBe(true); // nothing is scheduled to close it
+  }, 30_000);
+
+  it('a custom timeout closes the idle session and the lifecycle message names it', async () => {
+    manager.dispose();
+    manager = new RunManager(store, repoRoot, {
+      semaphore: new WorkspaceSemaphore({ initial: { sessionIdleMinutes: 0.001 } }),
+    });
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, () => {
+      const path = join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`);
+      if (!existsSync(path)) return false;
+      return readFileSync(path, 'utf8').includes('session closed after 0.001m of inactivity');
+    });
+    const events = readFileSync(join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`), 'utf8')
+      .trim().split('\n').map((line) => JSON.parse(line) as { type: string; message?: string });
+    // The configured minutes, never the old constant's 15.
+    expect(events.some(
+      (event) => event.type === 'lifecycle' && event.message === 'session closed after 0.001m of inactivity',
+    )).toBe(true);
+  }, 30_000);
+});
+
+/**
  * #473 — the `CEZ:ASK` marker parks a turn-end as `waiting` (attention, NOT
  * monitoring) AND emits an `ask.requested` v2 event so the cockpit renders a
  * structured question as clickable chips. The marker is stripped from the v1

@@ -40,6 +40,7 @@ function serve(resources: Partial<WorkspaceConfigResponse['resources']> = {}) {
       maxParallel: 2,
       maxMonitoringSessions: 2,
       monitoringWakeIntervalMinutes: null,
+      sessionIdleMinutes: 15,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,
@@ -100,6 +101,9 @@ const monitoringSelect = () => document.querySelector<HTMLSelectElement>('[data-
 const wakeMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-monitoring-wake-mode"]')
 const wakeInterval = () => document.querySelector<HTMLInputElement>('[data-slot="resources-monitoring-wake-interval"]')
 const saveWake = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-monitoring-wake"]')
+const idleMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-session-idle-mode"]')
+const idleMinutes = () => document.querySelector<HTMLInputElement>('[data-slot="resources-session-idle-minutes"]')
+const saveIdle = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-session-idle"]')
 
 afterEach(() => {
   act(() => resetToasts())
@@ -161,6 +165,44 @@ describe('Global settings → Resources', () => {
     fireEvent.click(saveWake()!)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { monitoringWakeIntervalMinutes: 5 } })
+  })
+
+  it('shows the shipped 15-minute idle timeout and saves "never close"', async () => {
+    serve({ sessionIdleMinutes: 15 })
+    renderResources()
+    await waitFor(() => expect(idleMode()).not.toBeNull())
+    expect(idleMode()!.value).toBe('close')
+    expect(idleMinutes()!.value).toBe('15')
+    fireEvent.change(idleMode()!, { target: { value: 'never' } })
+    expect(idleMinutes()).toBeNull()
+    fireEvent.click(saveIdle()!)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { sessionIdleMinutes: null } })
+  })
+
+  it('shows an explicit never-close and saves a custom idle timeout', async () => {
+    serve({ sessionIdleMinutes: null })
+    renderResources()
+    await waitFor(() => expect(idleMode()).not.toBeNull())
+    expect(idleMode()!.value).toBe('never')
+    expect(idleMinutes()).toBeNull()
+    fireEvent.change(idleMode()!, { target: { value: 'close' } })
+    fireEvent.change(idleMinutes()!, { target: { value: '240' } })
+    fireEvent.click(saveIdle()!)
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { sessionIdleMinutes: 240 } })
+  })
+
+  it('rejects an out-of-range idle timeout — Save stays disabled and nothing is PUT', async () => {
+    serve()
+    renderResources()
+    await waitFor(() => expect(idleMinutes()).not.toBeNull())
+    for (const bad of ['0', '1441', '12.5', '-1']) {
+      fireEvent.change(idleMinutes()!, { target: { value: bad } })
+      expect(saveIdle()!.disabled).toBe(true)
+      expect(document.querySelector('[data-slot="resources-session-idle-invalid"]')).not.toBeNull()
+    }
+    expect(puts()).toHaveLength(0)
   })
 
   it('shows auto-resume on by default and saves the opt-out', async () => {
