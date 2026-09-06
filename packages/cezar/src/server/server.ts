@@ -178,6 +178,7 @@ import {
 } from './provider-action-gate.ts';
 import {
   ASSET_CACHE_CONTROL,
+  SHELL_CACHE_CONTROL,
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
@@ -1385,7 +1386,11 @@ export function createApp(deps: ServerDeps) {
   const serveShell = (c: Context): Response | undefined => {
     const distIndex = join(distDir, 'index.html');
     // existsSync per request, like the reads below: `npm run build:web` in a
-    // running cockpit takes effect on the next reload, no restart.
+    // running cockpit takes effect on the next reload, no restart. That promise
+    // only reaches a DEVICE if the shell says it may not be reused without
+    // asking (SHELL_CACHE_CONTROL) — the assets it names are immutable, so one
+    // cached shell pins an entire stale cockpit. Both responses carry it: the
+    // hint page becomes the app the moment the build lands.
     const target = resolveGetRequest({
       path: c.req.path,
       distExists: existsSync(distIndex),
@@ -1399,11 +1404,11 @@ export function createApp(deps: ServerDeps) {
         console.log('cezar: web/dist is missing — run `npm run build:web` to build the cockpit');
       }
       return new Response(BUILD_HINT_HTML, {
-        headers: { 'content-type': HTML_TYPE },
+        headers: { 'content-type': HTML_TYPE, 'cache-control': SHELL_CACHE_CONTROL },
       });
     }
     return new Response(readFileSync(distIndex), {
-      headers: { 'content-type': HTML_TYPE },
+      headers: { 'content-type': HTML_TYPE, 'cache-control': SHELL_CACHE_CONTROL },
     });
   };
 
