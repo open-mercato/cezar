@@ -253,8 +253,10 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
 
     type(textarea, 'read this')
     fireEvent.keyDown(textarea, { key: 'Enter' })
+    // The filename rides along since #929 — it is what the attachment library files the copy
+    // under, and the only handle the agent gets on a file it never sees the bytes of.
     expect(onSubmit).toHaveBeenCalledWith('read this', [
-      { mediaType: 'text/markdown', data: btoa('# hi') },
+      { mediaType: 'text/markdown', data: btoa('# hi'), name: 'brief.md' },
     ])
   })
 

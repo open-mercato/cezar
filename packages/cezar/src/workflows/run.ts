@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   parseAskMarkerResult,
   stripAskMarker,
@@ -36,6 +36,7 @@ import {
   attachmentExtension,
   isImageAttachmentName,
   isImageMediaType,
+  sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
@@ -419,14 +420,26 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
 
 /**
  * The directories a spawned agent may reach outside its worktree: the run-state
- * folder that holds its handoff file, plus its own temp directory when this run
- * got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed to
- * write would trade one silent failure for another, so the two travel together;
- * under `CEZ_AGENT_TMPDIR=0` there is no per-run directory and the list is
- * exactly what it always was.
+ * folder that holds its handoff file and its pasted attachments, the attachment
+ * library when the project has one (#929), plus its own temp directory when this
+ * run got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed
+ * to write would trade one silent failure for another, so the two travel
+ * together; under `CEZ_AGENT_TMPDIR=0` there is no per-run directory and the
+ * list is exactly what it always was.
+ *
+ * The library is on this list for the same reason `runsDir` is: `pastedAttachmentsText`
+ * NAMES it in the note appended to a message, and a directory an agent is told to look in
+ * but whose `Read`/`Glob` it is refused is worse than one it was never told about — headless
+ * runs use `--permission-mode dontAsk`, so the refusal does not even prompt. Pass `undefined`
+ * when the project has no library yet: `--add-dir` on a path that is not there is its own
+ * failure, and a project where nothing has been filed has nothing to grant.
  */
-export function agentDirectories(runsDir: string, env: Record<string, string>): string[] {
-  return env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+export function agentDirectories(
+  runsDir: string,
+  libraryDir: string | undefined,
+  env: Record<string, string>,
+): string[] {
+  return [runsDir, ...(libraryDir ? [libraryDir] : []), ...(env.TMPDIR ? [env.TMPDIR] : [])];
 }
 
 /**
@@ -468,6 +481,68 @@ export interface PersistedAttachment {
   path: string;
 }
 
+/** The per-project attachment library (#929): one folder per repository holding every document a
+ *  user has attached to any task in it, under the name they know it by. Ignored via
+ *  `ensureDataGitignore` — it is USER content and must never surface in their `git status`. */
+export function attachmentLibraryDir(dataDir: string): string {
+  return join(dataDir, 'attachments');
+}
+
+/** How many `<stem>-<n>.<ext>` variants to try before giving up on a name. */
+const MAX_LIBRARY_COLLISION_ATTEMPTS = 100;
+
+/**
+ * File a copy of an attachment in the per-project library and answer where it landed, or `null`
+ * when it could not be filed.
+ *
+ * Two files with the same name are the common case here, not the edge case — a library spanning
+ * every task in a repository collects a great many `notes.md` — so the name is resolved against
+ * CONTENT first: byte-identical means the same document, and the existing copy is reused rather
+ * than duplicated (attaching the same brief to six tasks leaves one file, not six). Only a genuine
+ * clash — same name, different bytes — takes a `-2`/`-3` suffix.
+ *
+ * Strictly best-effort, exactly like `persistAttachment`: this is a convenience copy of a file
+ * that is already safely on disk in the run folder, so a read-only volume or a full disk must cost
+ * the user the library entry and nothing else.
+ *
+ * Concurrency note: the exclusive create plus content compare below is exact within one process,
+ * because these writes are synchronous and cannot interleave. Two cezar processes on the same
+ * repository can have the second read a partially written file, miss the dedupe and keep a
+ * redundant `-2` copy. That is the best-effort contract doing its job, not a bug to fix here.
+ */
+export function copyToAttachmentLibrary(dataDir: string, name: string, bytes: Buffer): string | null {
+  try {
+    // Defense in depth: every caller today comes through `toPastedContent`, which sanitizes at the
+    // wire boundary — but `FileBlock.name` is a plain `string`, so a future route that builds one
+    // directly would hand a raw client value to `join()` below and the failure would be a path
+    // traversal rather than a type error. The check belongs next to the write that would suffer
+    // from its absence.
+    if (name !== basename(name) || name.startsWith('.') || name === '') return null;
+    const dir = attachmentLibraryDir(dataDir);
+    mkdirSync(dir, { recursive: true });
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    for (let attempt = 1; attempt <= MAX_LIBRARY_COLLISION_ATTEMPTS; attempt += 1) {
+      const candidate = attempt === 1 ? name : `${stem}-${attempt}${ext}`;
+      const path = join(dir, candidate);
+      try {
+        // Exclusive create, so two runs persisting at once cannot overwrite each other's file
+        // between the existence check and the write.
+        writeFileSync(path, bytes, { flag: 'wx' });
+        return path;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      // Taken. The same document already filed here is a hit, not a collision.
+      if (readFileSync(path).equals(bytes)) return path;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A user attachment that is NOT an image (#950) — a PDF, a `.txt`, a `.md`.
  *
@@ -480,6 +555,11 @@ export interface FileBlock {
   type: 'file';
   mediaType: string;
   data: string;
+  /** The user's own filename, ALREADY through `sanitizeAttachmentName` — `toPastedContent` is the
+   *  wire boundary and does it there, so no raw client string travels past it. Absent when the
+   *  client sent none, or when nothing usable survived sanitization. Names the copy in the
+   *  per-project attachment library (#929); the run folder still names files itself. */
+  name?: string;
 }
 
 /** What the routes hand the engine: image/text blocks the session will see, plus file blocks it
@@ -489,10 +569,20 @@ export type PastedContent = ContentBlock | FileBlock;
 /** One wire attachment (`{mediaType, data}`) as the engine wants it: an image the model can view,
  *  or a file it will only ever be given the path of. The single mapping the four attachment-
  *  carrying routes share, so none of them can invent a different one. */
-export function toPastedContent(attachment: { mediaType: string; data: string }): PastedContent {
-  return isImageMediaType(attachment.mediaType)
-    ? { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } }
-    : { type: 'file', mediaType: attachment.mediaType, data: attachment.data };
+export function toPastedContent(attachment: {
+  mediaType: string;
+  data: string;
+  name?: string;
+}): PastedContent {
+  if (isImageMediaType(attachment.mediaType)) {
+    // Deliberately unchanged, and deliberately NOT carrying the name: this branch produces a
+    // `ContentBlock`, which is the runner protocol (`AGENT_PROTOCOL.md`) and goes to a backend
+    // verbatim. An extra key here would survive `contentBlocksOf` and reach a vendor API that
+    // rejects unknown fields.
+    return { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } };
+  }
+  const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
+  return { type: 'file', mediaType: attachment.mediaType, data: attachment.data, ...(name ? { name } : {}) };
 }
 
 /** The image blocks of a mixed list — what may be delivered to a session. */
@@ -507,11 +597,24 @@ export function contentBlocksOf(content: readonly PastedContent[]): ContentBlock
  * files as files — and the only usable reference on backends (codex,
  * opencode) whose `textOf()` drops image blocks before reaching the model.
  */
-export function pastedAttachmentsText(attachments: PersistedAttachment[]): string {
+export function pastedAttachmentsText(attachments: PersistedAttachment[], libraryDir?: string): string {
   const list = attachments.map((a) => `- ${a.path}`).join('\n');
+  // The library (#929) is pointed at as a DIRECTORY rather than per-file, deliberately: the paths
+  // above already cover the files on THIS message, and what the library is for is the file the
+  // user attached to some earlier task and now refers to only by name. Naming the folder also
+  // keeps the note independent of per-attachment state, which does not survive the re-read at
+  // dequeue (`readPersistedAttachments` reconstructs an attachment from its URL alone).
+  // Says "documents", not "files": images and uploads that arrived without a name of their own are
+  // deliberately never filed, so a note promising every attachment would send an agent hunting for
+  // last week's pasted screenshot in a folder that was never going to hold it.
+  const library = libraryDir
+    ? `Documents (PDF, TXT, MD) attached anywhere in this project are also kept under their ` +
+      `original names in ${libraryDir} — look there for a document the user names but did not ` +
+      `attach to this message.\n`
+    : '';
   return (
     `The user attached ${attachments.length} pasted file${attachments.length > 1 ? 's' : ''}, ` +
-    `also saved on disk at:\n${list}\n` +
+    `also saved on disk at:\n${list}\n${library}` +
     `When the task involves saving, uploading, attaching, or transforming the pasted content ` +
     `(e.g. attaching to a GitHub issue/PR, copying into the repo), operate on these files — do ` +
     `not attempt to reconstruct them from the conversation.`
@@ -520,8 +623,8 @@ export function pastedAttachmentsText(attachments: PersistedAttachment[]): strin
 
 /** Same note as `pastedAttachmentsText`, wrapped as a trailing `ContentBlock`
  *  ready to append to a message's content array. */
-export function pastedAttachmentsNote(attachments: PersistedAttachment[]): ContentBlock {
-  return { type: 'text', text: pastedAttachmentsText(attachments) };
+export function pastedAttachmentsNote(attachments: PersistedAttachment[], libraryDir?: string): ContentBlock {
+  return { type: 'text', text: pastedAttachmentsText(attachments, libraryDir) };
 }
 
 /** Variant letters + the fixed diversification hints (spec 010). A runs the
@@ -2020,7 +2123,9 @@ export class RunManager {
     // here rather than letting one reach a backend that has no idea what it is.
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
-    const deliverable = persisted.length ? [...expanded, pastedAttachmentsNote(persisted)] : expanded;
+    const deliverable = persisted.length
+      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted))]
+      : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
       this.clearIdleTimer(state);
@@ -2519,13 +2624,17 @@ export class RunManager {
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
         userPrompt: attachments.length
-          ? `${openingPrompt}\n\n${pastedAttachmentsText(attachments)}`
+          ? `${openingPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`
           : openingPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
         bashAllowlist: toolsStep?.bashAllowlist,
-        additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
+        additionalDirectories: agentDirectories(
+          join(this.dataDir, 'runs'),
+          this.grantableAttachmentLibrary(),
+          continueProfile.env,
+        ),
         env: continueProfile.env,
         model: continueModel,
         sessionId,
@@ -2962,7 +3071,9 @@ export class RunManager {
     // at all. Deliberately NOT nested in the branch above: gating the paths on an image block
     // existing is what would leave an agent holding a task about a `.pdf` it was never told the
     // location of.
-    if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
+    if (attachments.length) {
+      userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`;
+    }
 
     const sessionId = randomUUID();
     const backend = step.runner ?? taskBackend;
@@ -3135,7 +3246,11 @@ export class RunManager {
           allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), stepProfile.env),
+          additionalDirectories: agentDirectories(
+            join(this.dataDir, 'runs'),
+            this.grantableAttachmentLibrary(),
+            stepProfile.env,
+          ),
           env: stepProfile.env,
           model: backendModel,
           sessionId,
@@ -3484,6 +3599,11 @@ export class RunManager {
    * Persist every attachment a user message carries — images and files alike (#950) — into the
    * run's own attachment folder, in the order they were attached. The returned paths are what the
    * agent is told about; the caller decides which of them also ride along as viewable blocks.
+   *
+   * A named FILE is additionally filed in the per-project attachment library (#929). This is the
+   * only caller that does so, which is what keeps the library to user uploads: `persistAttachment`
+   * is also how the agent's own tool screenshots land, and a folder of those would be a log, not
+   * a library.
    */
   private persistPastedAttachments(
     runId: string,
@@ -3494,10 +3614,54 @@ export class RunManager {
         b.type === 'image'
           ? this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted')
           : b.type === 'file'
-            ? this.persistAttachment(runId, b.mediaType, b.data, 'pasted')
+            ? this.fileInAttachmentLibrary(this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name)
             : null,
       )
       .filter((saved): saved is PersistedAttachment => saved !== null);
+  }
+
+  /**
+   * Copy a just-persisted file into the per-project attachment library (#929), under the name the
+   * user knows it by.
+   *
+   * The bytes are re-read from the run folder rather than decoded again from the message: the two
+   * copies are then byte-identical by construction, which is what the library's content dedupe
+   * compares on. A file that arrived without a usable name is left out — the library exists to be
+   * browsable by name, and `pasted-3.md` is exactly what it is an answer to.
+   */
+  private fileInAttachmentLibrary(
+    saved: PersistedAttachment | null,
+    name: string | undefined,
+  ): PersistedAttachment | null {
+    if (!saved || !name) return saved;
+    try {
+      copyToAttachmentLibrary(this.dataDir, name, readFileSync(saved.path));
+    } catch {
+      // Best-effort by contract: the run folder already holds the file the agent was promised.
+    }
+    return saved;
+  }
+
+  /**
+   * This project's attachment library when it exists on disk, for the two questions that need it:
+   * which directories a spawned agent may reach (`agentDirectories`) and whether a message's note
+   * has a library to point at. `undefined` for a project where nothing has ever been filed — there
+   * is no folder to grant and nothing to name.
+   */
+  private grantableAttachmentLibrary(): string | undefined {
+    const dir = attachmentLibraryDir(this.dataDir);
+    return existsSync(dir) ? dir : undefined;
+  }
+
+  /**
+   * The attachment library to name in a message's note, or `undefined` when there is nothing to
+   * point at yet — no file attachment on this message, or a project where nothing has ever been
+   * filed. Derived from the persisted NAMES rather than from per-attachment state, so it survives
+   * the dequeue/restart re-read that reconstructs an attachment from its URL alone.
+   */
+  private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
+    if (!attachments.some((a) => !isImageAttachmentName(a.name))) return undefined;
+    return this.grantableAttachmentLibrary();
   }
 
   /**
