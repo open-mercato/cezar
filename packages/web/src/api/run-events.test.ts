@@ -55,6 +55,11 @@ const line = (seq: number, type: string, rest: Record<string, unknown> = {}) =>
 beforeEach(() => {
   FakeEventSource.instances = []
   vi.stubGlobal('EventSource', FakeEventSource)
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    callback(0)
+    return 1
+  })
+  vi.stubGlobal('cancelAnimationFrame', () => undefined)
 })
 
 afterEach(() => {
@@ -126,6 +131,38 @@ describe('useRunEvents — subscription', () => {
     ])
   })
 
+  it('batches frames received in one animation window into one state update', () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frames.push(callback)
+      return frames.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+      frames[id - 1] = () => undefined
+    })
+
+    let renders = 0
+    const { result } = renderHook(() => {
+      renders += 1
+      return useRunEvents('run-1')
+    })
+    const source = FakeEventSource.last
+    const initialRenders = renders
+
+    source.emit('ui-event', line(1, 'item.delta', { itemId: 'm1', field: 'text', delta: 'a' }))
+    source.emit('ui-event', line(2, 'item.delta', { itemId: 'm1', field: 'text', delta: 'b' }))
+    source.emit('ui-event', line(3, 'item.delta', { itemId: 'm1', field: 'text', delta: 'c' }))
+
+    expect(result.current).toEqual([])
+    expect(renders).toBe(initialRenders)
+    expect(frames).toHaveLength(1)
+
+    act(() => frames.shift()?.(0))
+
+    expect(result.current.map(({ seq }) => seq)).toEqual([1, 2, 3])
+    expect(renders).toBe(initialRenders + 1)
+  })
+
   it('survives a malformed frame — one bad line costs one line', () => {
     const { result } = renderHook(() => useRunEvents('run-1'))
     const source = FakeEventSource.last
@@ -180,6 +217,7 @@ describe('useRunEvents — liveness watchdog (#424)', () => {
     const second = FakeEventSource.last
     second.emit('run-event', line(1, 'stdout', { text: 'a' }))
     second.emit('run-event', line(2, 'stdout', { text: 'b' }))
+    act(() => vi.advanceTimersByTime(20))
     expect(result.current.map((event) => event.seq)).toEqual([1, 2])
   })
 

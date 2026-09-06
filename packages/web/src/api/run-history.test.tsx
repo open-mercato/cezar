@@ -73,6 +73,11 @@ beforeEach(() => {
   vi.clearAllMocks()
   // jsdom deliberately has no native EventSource; the stream hook degrades to no live frames.
   Reflect.deleteProperty(globalThis, 'EventSource')
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    callback(0)
+    return 1
+  })
+  vi.stubGlobal('cancelAnimationFrame', () => undefined)
 })
 
 describe('useRunHistory', () => {

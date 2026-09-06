@@ -44,7 +44,10 @@ export function parseRunEvent(data: string): RunEvent | null {
 }
 
 /**
- * Subscribe to one run's event stream and accumulate the raw ordered list.
+ * Subscribe to one run's event stream and accumulate the raw ordered list. Frames are published
+ * to React at most once per animation frame: EventSource can deliver many token/output deltas in
+ * one frame, and exposing each one separately would make every consumer rebuild its transcript
+ * for every chunk.
  *
  * The list resets when `runId` changes (a different run's events are not "earlier state" of
  * this one) and the socket closes on unmount — an EventSource left unclosed retries forever.
@@ -81,6 +84,8 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let disposed = false
     let compactionRequested = false
+    let pendingEvents: RunEvent[] = []
+    let frameHandle: number | undefined
     const CLOSED = 2 // EventSource.CLOSED, spelled literally like global-events.tsx
     const REOPEN_DELAY_MS = 1_500
 
@@ -95,15 +100,13 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
     let lastFrameAt = Date.now()
     let livenessTimer: ReturnType<typeof setInterval> | undefined
 
-    const onFrame = (event: Event) => {
-      // Any frame proves the socket is alive — bump the watchdog before the dedup drop, so a
-      // replayed prefix (which is dropped below) still counts as liveness.
-      lastFrameAt = Date.now()
-      const parsed = parseRunEvent((event as MessageEvent<string>).data)
-      if (!parsed || !(parsed.seq > maxSeq)) return
-      maxSeq = parsed.seq
+    const flushPendingEvents = (): void => {
+      frameHandle = undefined
+      if (pendingEvents.length === 0) return
+      const batch = pendingEvents
+      pendingEvents = []
       setEvents((current) => {
-        const next = [...current, parsed]
+        const next = [...current, ...batch]
         if (
           !compactionRequested &&
           compactAt !== undefined &&
@@ -116,6 +119,35 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
         }
         return maxEvents === undefined || next.length <= maxEvents ? next : next.slice(-maxEvents)
       })
+    }
+
+    const scheduleFlush = (): void => {
+      if (frameHandle !== undefined) return
+      if (typeof requestAnimationFrame === 'function') {
+        // Keep the assignment after the call guarded: a test/embedded document may provide a
+        // synchronous rAF shim, while browsers invoke it asynchronously.
+        let ranSynchronously = false
+        const handle = requestAnimationFrame(() => {
+          ranSynchronously = true
+          flushPendingEvents()
+        })
+        if (!ranSynchronously) frameHandle = handle
+      } else {
+        // SSR/test environments may not expose rAF. There is no browser event loop to optimize
+        // there, so publish synchronously and keep the hook's non-browser behavior deterministic.
+        flushPendingEvents()
+      }
+    }
+
+    const onFrame = (event: Event) => {
+      // Any frame proves the socket is alive — bump the watchdog before the dedup drop, so a
+      // replayed prefix (which is dropped below) still counts as liveness.
+      lastFrameAt = Date.now()
+      const parsed = parseRunEvent((event as MessageEvent<string>).data)
+      if (!parsed || !(parsed.seq > maxSeq)) return
+      maxSeq = parsed.seq
+      pendingEvents.push(parsed)
+      scheduleFlush()
     }
 
     // The keepalive carries no payload we accumulate — it exists only to prove the socket is
@@ -205,6 +237,9 @@ export function useRunEvents(runId: string | undefined, options: RunEventStreamO
       disposed = true
       clearTimeout(reopenTimer)
       clearInterval(livenessTimer)
+      if (frameHandle !== undefined) cancelAnimationFrame(frameHandle)
+      frameHandle = undefined
+      pendingEvents = []
       document.removeEventListener('visibilitychange', onVisibilityChange)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('pageshow', onPageShow)
