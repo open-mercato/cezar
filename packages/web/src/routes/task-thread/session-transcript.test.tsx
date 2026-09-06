@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun, RunEvent, UiToolItem } from '@open-mercato/cezar-api-client'
 
+import { sameData } from '@/lib/same-data'
+
 import claudeSubagent from '../../../../cezar/src/core/__fixtures__/claude/subagent-task.expected.json'
 import codexReview from '../../../../cezar/src/core/__fixtures__/codex/review-mode.expected.json'
 import opencodeSubtask from '../../../../cezar/src/core/__fixtures__/opencode/subtask-nested.expected.json'
@@ -95,6 +97,32 @@ describe('transcript adapters and row building', () => {
       'turn-1:user',
       'turn-1:answer',
     ])
+  })
+
+  /**
+   * The premise the live-thread memo rests on: the reducer is a pure fold, so re-folding the
+   * same events yields row models that are equal by VALUE though new by reference — and one more
+   * delta changes exactly one of them. If this ever stops holding, the memo below stops biting
+   * and a running session goes back to re-rendering the whole thread ~25×/s.
+   */
+  it('re-folds the same events into row models that are equal by value', () => {
+    const events = (tail: string): RunEvent[] =>
+      asRunEvents([
+        { type: 'item.completed', item: { kind: 'message', id: 'm1', role: 'assistant', text: 'Settled prose' } },
+        { type: 'item.completed', item: { kind: 'tool', id: 't1', name: 'Bash', toolKind: 'execute', title: 'Ran npm test', status: 'completed', output: 'all green' } },
+        { type: 'item.updated', item: { kind: 'message', id: 'm2', role: 'assistant', text: tail } },
+      ])
+    const rowsFor = (tail: string) =>
+      buildTranscriptRows(mainTranscriptSections(run(), reduceThread(events(tail))), 'r1')
+
+    const before = rowsFor('Wri')
+    const same = rowsFor('Wri')
+    expect(same).not.toBe(before) // a fresh fold: every object is new…
+    expect(same.every((row, index) => sameData(row, before[index]))).toBe(true) // …and equal
+
+    const grown = rowsFor('Writing')
+    expect(grown).toHaveLength(before.length)
+    expect(grown.filter((row, index) => !sameData(row, before[index]))).toHaveLength(1)
   })
 
   it('groups the same normalized entries for an agent section', () => {
@@ -216,6 +244,36 @@ describe('SessionTranscript', () => {
     expect(document.querySelector('[data-slot="ask-card"]')?.textContent).toContain(
       'Open the main session',
     )
+  })
+
+  /**
+   * The live-thread memo, observed through the one row renderer a test can count: `renderAsk`
+   * runs exactly when its row renders. A streaming frame re-folds the transcript and hands every
+   * row a new-but-equal model, and the settled rows must sit it out — that skipped work is what
+   * gives a phone's main thread room to scroll while an agent writes.
+   */
+  it('leaves settled rows alone when a live frame only grows the last one', () => {
+    const renderAsk = vi.fn(() => <p data-slot="test-ask">ask</p>)
+    const sections = (tail: string): TranscriptSection[] => [
+      {
+        id: 'agent:memo',
+        entries: [
+          { kind: 'ask', id: 'ask-1', resolved: false, questions: [{ id: 'q1', header: 'Choice', question: 'Continue?', options: [{ label: 'Yes' }] }] },
+          { kind: 'message', id: 'm1', role: 'assistant', text: tail },
+        ],
+      },
+    ]
+    const view = render(
+      <SessionTranscript runId="r1" viewId="memo" sections={sections('Wri')} mode="panel" renderAsk={renderAsk} />,
+    )
+    expect(renderAsk).toHaveBeenCalledTimes(1)
+
+    view.rerender(
+      <SessionTranscript runId="r1" viewId="memo" sections={sections('Writing')} mode="panel" renderAsk={renderAsk} />,
+    )
+
+    expect(renderAsk).toHaveBeenCalledTimes(1) // the settled ask row was not re-rendered…
+    expect(document.querySelector('[data-slot="assistant-message"]')?.textContent).toContain('Writing') // …the live one was
   })
 
   it('provides a bounded, keyboard-scrollable panel with a stable scrollbar gutter', () => {

@@ -148,6 +148,8 @@ export function useThreadScroll(
   const wheelGestureActiveRef = useRef(false)
   const wheelGestureTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const touchHistoryConsumedRef = useRef(false)
+  /** A finger is on the scroller right now — no programmatic scroll may run under it. */
+  const touchActiveRef = useRef(false)
   const pointerHistoryConsumedRef = useRef(false)
   const rowKeysRef = useRef(rowKeys)
   rowKeysRef.current = rowKeys
@@ -281,7 +283,14 @@ export function useThreadScroll(
     }
     const onTouchStart = (event: TouchEvent) => {
       touchHistoryConsumedRef.current = false
+      touchActiveRef.current = true
       lastTouchY = event.touches[0]?.clientY ?? null
+    }
+    // A finger on the glass owns the scroller. Growth-driven re-pinning resumes when it lifts —
+    // if the gesture went upward at all, `unstick()` has already cancelled it.
+    const onTouchEnd = () => {
+      touchActiveRef.current = false
+      if (stuckRef.current && pendingRestoreRef.current === null) toBottom()
     }
     const onTouchMove = (event: TouchEvent) => {
       const y = event.touches[0]?.clientY
@@ -326,6 +335,10 @@ export function useThreadScroll(
     scroller.addEventListener('wheel', onWheel, { passive: true })
     scroller.addEventListener('touchstart', onTouchStart, { passive: true })
     scroller.addEventListener('touchmove', onTouchMove, { passive: true })
+    // On the window: a drag that started on the thread can end anywhere (over the dock, off the
+    // edge), and a touch left "active" would park the pin for good.
+    window.addEventListener('touchend', onTouchEnd, { passive: true })
+    window.addEventListener('touchcancel', onTouchEnd, { passive: true })
     scroller.addEventListener('pointerdown', onPointerDown, { passive: true })
     window.addEventListener('pointerup', onPointerUp, { passive: true })
     scroller.addEventListener('keydown', onKey)
@@ -342,7 +355,11 @@ export function useThreadScroll(
           setOffset(Math.min(pending, maxTop))
           if (maxTop >= pending) pendingRestoreRef.current = null // reached — restore done
         } else if (stuckRef.current) {
-          toBottom()
+          // …but NEVER while a finger is on the glass. A `scrollTop` write mid-drag moves the
+          // content out from under the touch that is holding it — the "scrolling jumps while
+          // the agent works" report, which only phones can produce because only a touch scroll
+          // is a gesture the browser is already animating. `onTouchEnd` re-pins if still stuck.
+          if (!touchActiveRef.current) toBottom()
         }
       })
       observer.observe(content)
@@ -353,6 +370,8 @@ export function useThreadScroll(
       scroller.removeEventListener('wheel', onWheel)
       scroller.removeEventListener('touchstart', onTouchStart)
       scroller.removeEventListener('touchmove', onTouchMove)
+      window.removeEventListener('touchend', onTouchEnd)
+      window.removeEventListener('touchcancel', onTouchEnd)
       scroller.removeEventListener('pointerdown', onPointerDown)
       window.removeEventListener('pointerup', onPointerUp)
       scroller.removeEventListener('keydown', onKey)

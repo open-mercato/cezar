@@ -200,7 +200,8 @@ describe('useRunHistory', () => {
 
     await waitFor(() => expect(mockHistory).toHaveBeenCalledTimes(2))
     // Nothing was compacted, so the events the SSE already delivered are still what renders.
-    expect(result.current.visibleEvents.at(-1)?.seq).toBe(300)
+    // Awaited because the live tail is coalesced before it reaches the renderer (LIVE_FRAME_MS).
+    await waitFor(() => expect(result.current.visibleEvents.at(-1)?.seq).toBe(300))
     // A failed compaction is not a load failure: the transcript must NOT drop to full replay.
     expect(result.current.fallback).toBe(false)
     await new Promise((resolve) => setTimeout(resolve, 0))

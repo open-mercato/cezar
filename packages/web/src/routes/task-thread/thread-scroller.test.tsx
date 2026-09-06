@@ -113,6 +113,94 @@ describe('useThreadScroll — outside a shell scroller (jsdom, tests, storybook-
   })
 })
 
+/**
+ * The phone case: a thread pinned to its tail keeps writing `scrollTop` as the agent's output
+ * grows. On a touch device that write lands in the middle of a gesture the browser is already
+ * animating, and the content jumps out from under the finger holding it — "scrolling the task
+ * conversation jumps while the agent is working". The pin is not wrong, only its timing is.
+ */
+describe('useThreadScroll — growth must not scroll under a finger', () => {
+  /** A ResizeObserver whose callback this test can fire — jsdom lays nothing out on its own. */
+  function stubGrowthObserver(): () => void {
+    let grow: (() => void) | undefined
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          grow = callback
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    return () => act(() => grow?.())
+  }
+
+  function PinnedHarness({ viewKey }: { viewKey: string }) {
+    const controls = useThreadScroll(viewKey)
+    return (
+      <main
+        ref={(element) => {
+          if (element) {
+            Object.defineProperties(element, {
+              scrollTop: { value: element.scrollTop, writable: true, configurable: true },
+              clientHeight: { value: 500, configurable: true },
+              scrollHeight: { value: 2_000, configurable: true },
+            })
+          }
+        }}
+        data-slot="main"
+      >
+        <div ref={controls.attachContent} />
+      </main>
+    )
+  }
+
+  it('holds the pin while a finger is on the scroller, then re-pins when it lifts', () => {
+    const grow = stubGrowthObserver()
+    render(<PinnedHarness viewKey="run-touch:main" />)
+    const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+    expect(scroller.scrollTop).toBe(1_500) // arrived at the live tail, pinned
+
+    fireEvent.touchStart(scroller, { touches: [{ clientY: 400 }] })
+    scroller.scrollTop = 900 // the drag itself — the browser's, not ours
+    grow() // …and the agent appends another line mid-gesture
+
+    expect(scroller.scrollTop).toBe(900) // the pin did NOT yank the content out from under it
+
+    fireEvent.touchEnd(scroller)
+    expect(scroller.scrollTop).toBe(1_500) // gesture over, still pinned: back to the tail
+  })
+
+  it('pins on growth as before when no finger is down', () => {
+    const grow = stubGrowthObserver()
+    render(<PinnedHarness viewKey="run-mouse:main" />)
+    const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+    scroller.scrollTop = 900
+
+    grow()
+
+    expect(scroller.scrollTop).toBe(1_500)
+  })
+
+  it('a touch that ended away from the tail stays where the reader left it', () => {
+    const grow = stubGrowthObserver()
+    render(<PinnedHarness viewKey="run-away:main" />)
+    const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+
+    fireEvent.touchStart(scroller, { touches: [{ clientY: 200 }] })
+    // Finger moving DOWN pans the content up — the gesture that unpins.
+    fireEvent.touchMove(scroller, { touches: [{ clientY: 260 }] })
+    scroller.scrollTop = 400
+    fireEvent.touchEnd(scroller)
+
+    expect(scroller.scrollTop).toBe(400)
+    grow()
+    expect(scroller.scrollTop).toBe(400)
+  })
+})
+
 describe('useThreadScroll — route arrival (#761)', () => {
   function ArrivalHarness({ viewKey }: { viewKey: string }) {
     const controls = useThreadScroll(viewKey)
