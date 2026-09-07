@@ -165,8 +165,12 @@ function normalizeAskRequest(value: unknown): unknown {
  * e.g. a trailing comma, and stays rejected). Only syntax is repaired: the
  * result goes through the unchanged `askRequestSchema`, so a repair that yields
  * fewer than 2 options or a bad header still degrades to plain text.
+ *
+ * Exported for `src/units/markers.ts`, which parses `CEZ:SPAWN` / `CEZ:REPORT` the same way and
+ * must forgive the same slip on the same terms — the recovery rule is a property of how models
+ * emit long one-line JSON, not of the ask card, and a second copy of it would drift.
  */
-function closeUnbalancedJson(src: string): string | null {
+export function closeUnbalancedJson(src: string): string | null {
   const text = src.trimEnd();
   if (!/[}\]]$/.test(text)) return null;
   const stack: string[] = [];

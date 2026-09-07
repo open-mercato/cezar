@@ -47,6 +47,9 @@ import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeS
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+// The `unit` object's inferred type (spec 2026-09-08-units-hierarchy). A contract TYPE only —
+// the schema itself is imported as a value by `runs/store.ts`, which is what persists it.
+import type { RunUnit } from '@open-mercato/cezar-contract';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
@@ -379,6 +382,12 @@ export interface StartRunInput {
   /** Follow-up inbox generation (spec 007, #444). Omitted means enabled for
    *  compatibility; the handoff journal runs either way. */
   generateFollowups?: boolean;
+  /** This run's place in a unit hierarchy (spec 2026-09-08-units-hierarchy):
+   *  role, mission, parent and budget. Persisted on the record at creation,
+   *  because that is where every later consumer reads it — `execute()` runs
+   *  from the RECORD, not from this input, and so does restart recovery.
+   *  Absent on every ordinary run, which is what keeps units additive. */
+  unit?: RunUnit;
   /** Attachments from the queued prompt stack (#472), re-encoded from disk by
    *  `hydrateQueuedInput` at dequeue. Kept separate from `images` because those
    *  are persisted into `taskImages` by `startRun()` — folding
@@ -834,6 +843,13 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow });
+    // The unit hierarchy's place for this run (spec 2026-09-08-units-hierarchy), written the way
+    // automation provenance is (`automations/task-template.ts`): an update straight after create,
+    // rather than a tenth key on `createRun`'s parameter object. Persisting it here — not merely
+    // holding it on the input — is what makes it survive: `execute()`, restart recovery and the
+    // turn-end handlers all read the RECORD, and a mission whose root lost its `unit` on a
+    // restart would be a tree with no root.
+    if (input.unit) this.store.updateRun(run.id, { unit: input.unit });
     // Initial pasted attachments must be visible while the run is still queued (#612),
     // and must survive a restart before a slot opens. Persist them before the job
     // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
@@ -1128,6 +1144,12 @@ export class RunManager {
         // reads `input.autonomous`. Without this a recovered autonomous run would run
         // non-autonomously and later wrongly park at `review`.
         autonomous: run.autonomous,
+        // Re-thread the unit the same way and for the same reason (spec
+        // 2026-09-08-units-hierarchy): this is the one engine path that rebuilds a StartRunInput
+        // from the record instead of going through `startRun`, so a mission run recovered after
+        // a restart would otherwise resume as an ordinary flat task — no role, no mission, no
+        // parent to report to.
+        unit: run.unit,
         // Preserve an explicit worktree opt-out across a queued restart.
         worktree: run.worktree,
       }),

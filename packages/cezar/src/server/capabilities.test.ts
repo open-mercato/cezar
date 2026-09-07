@@ -160,6 +160,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       followups: true,
       singleProject: false,
       automations: false,
+      units: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
@@ -200,11 +201,40 @@ describe('resolveCapabilities — automations (#801)', () => {
     },
   );
 
-  // The three opt-in capabilities are independent switches; turning one on must never
+  // The opt-in capabilities are independent switches; turning one on must never
   // imply another, or a user enabling automations would silently get the inbox too.
   it('does not turn on any other opt-in capability', () => {
     expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' })).toMatchObject({
       automations: true,
+      followups: false,
+      singleProject: false,
+      units: false,
+    });
+  });
+});
+
+describe('resolveCapabilities — units (spec 2026-09-08-units-hierarchy)', () => {
+  it('is OFF by default — the unit hierarchy is opt-in', () => {
+    expect(resolveCapabilities({}).units).toBe(false);
+  });
+
+  it('is on with CEZ_UNITS=1', () => {
+    expect(resolveCapabilities({ CEZ_UNITS: '1' }).units).toBe(true);
+  });
+
+  it.each(['0', 'true', 'yes', '', 'on'])(
+    'stays off for CEZ_UNITS=%j — only an exact "1" opts in',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_UNITS: value }).units).toBe(false);
+    },
+  );
+
+  // Units is the widest cost-widening flag in the app (one turn can create four more runs), so
+  // it matters most here that enabling it enables nothing else.
+  it('does not turn on any other opt-in capability', () => {
+    expect(resolveCapabilities({ CEZ_UNITS: '1' })).toMatchObject({
+      units: true,
+      automations: false,
       followups: false,
       singleProject: false,
     });

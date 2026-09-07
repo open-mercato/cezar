@@ -39,6 +39,8 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/automations', '$post'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id', '$put'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id/check', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/missions', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/units/prompts/:role', '$put'>>,
     Assert<HasTypedBody<'/api/v1/projects', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/checkout', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/:projectId', '$patch'>>,
@@ -107,6 +109,10 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedInput<'/api/v1/github/prs/:number/changes', '$get', 'param'>>,
     Assert<HasTypedInput<'/api/v1/repo/commit/:sha', '$get', 'query'>>,
     Assert<HasTypedInput<'/api/v1/automation-log', '$get', 'query'>>,
+    // The role enum is validated as a PATH PARAM, so an unknown role is a 400 from middleware
+    // rather than an `undefined` index into the defaults inside the handler.
+    Assert<HasTypedInput<'/api/v1/units/prompts/:role', '$put', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/units/prompts/:role', '$delete', 'param'>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

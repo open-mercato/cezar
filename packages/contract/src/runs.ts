@@ -4,6 +4,10 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+// Same one-way direction: the units family owns the `unit` object's shape, the run record embeds
+// one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
+// `contract-parity.runs.test.ts` cannot drift apart by construction.
+import { unitSchema } from './units.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -180,6 +184,15 @@ export const runRecordSchema = z.object({
       githubUrl: z.string(),
     })
     .optional(),
+  /**
+   * This run's place in a unit hierarchy (spec `.ai/specs/2026-09-08-units-hierarchy.md`) — its
+   * role, the mission it belongs to, its parent, its budget and the reports moving through it.
+   *
+   * Absent on every ordinary run, which is what makes the whole feature additive: a run without
+   * a `unit` behaves exactly as it always has, and the turn-end marker parsing is skipped for it
+   * even when `capabilities.units` is on.
+   */
+  unit: unitSchema.optional(),
   status: runStatusSchema,
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */

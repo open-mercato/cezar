@@ -29,6 +29,17 @@
  * definitions, receipts and high-watermarks survive the flag being off, so
  * unsetting it and restarting restores the feature wholesale.
  *
+ * `units` (spec 2026-09-08-units-hierarchy): the hierarchical army of runs —
+ * Caesar → Legate → Centurion — is **opt-in** via `CEZ_UNITS=1` and off by
+ * default. It is the widest cost-widening feature in the app (one agent turn
+ * can create four more runs), so off means genuinely absent: the `Missions`
+ * nav item is gone, the `/missions` and `/units/*` endpoints refuse, the
+ * `CEZ:SPAWN` / `CEZ:REPORT` markers are not parsed at turn end, and no role
+ * prompt is composed into any run. Activation is strict, like the three
+ * capabilities above. Nothing on disk is touched: per-repo role prompts under
+ * `.ai/cezar/units/` and the `unit` field on existing run records survive the
+ * flag being off, so unsetting it and restarting restores the feature whole.
+ *
  * Usage presentation: token counts and monetary cost stay visible by default.
  * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
  * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
@@ -128,6 +139,7 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
  *  `CEZ_FOLLOWUPS=1` ⇒ the follow-up inbox exists (#471).
  *  `CEZ_AUTOMATIONS=1` ⇒ GitHub automations exist (#801).
+ *  `CEZ_UNITS=1` ⇒ the unit hierarchy exists (spec 2026-09-08-units-hierarchy).
  *
  *  Read per request — cheap, and tests/ops can flip `CEZ_REMOTE` live. `followups` is honest
  *  per request too, but flipping it ON at runtime is only half a switch: the per-dataDir
@@ -137,7 +149,11 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *
  *  `automations` carries the same caveat and for the same reason: the workspace scheduler is
  *  started once, on the server's `listening` event, so flipping the flag on afterwards gates
- *  the routes open without ever starting the poller. Boot-time flag, same wording. */
+ *  the routes open without ever starting the poller. Boot-time flag, same wording.
+ *
+ *  `units` is boot-time for a third reason: a unit run's role prompt is composed into its system
+ *  prompt when the run STARTS, so flipping the flag on mid-flight would open the routes while
+ *  every run already in the tree kept behaving flatly. Set it and restart. */
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
@@ -149,6 +165,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS === '1',
+    units: env.CEZ_UNITS === '1',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,
     costMetrics,

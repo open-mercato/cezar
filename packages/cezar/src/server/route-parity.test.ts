@@ -36,6 +36,7 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
   const savedFollowups = process.env.CEZ_FOLLOWUPS;
   const savedSingleProject = process.env.CEZ_SINGLE_PROJECT;
   const savedAutomations = process.env.CEZ_AUTOMATIONS;
+  const savedUnits = process.env.CEZ_UNITS;
   const savedDryRun = process.env.CEZ_DRY_RUN;
   let home: string;
   let repoRoot: string;
@@ -58,6 +59,10 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     // route. Left off, the whole `/automations*` family would answer an identical 409 under all
     // three spellings — parity would pass while testing nothing about those routes.
     process.env.CEZ_AUTOMATIONS = '1';
+    // Units are opt-in on the same terms (spec 2026-09-08-units-hierarchy) and for the same
+    // reason: left off, every `/missions` and `/units/*` route would answer an identical 409
+    // under all three spellings, and parity would pass while testing nothing about them.
+    process.env.CEZ_UNITS = '1';
     // Deterministic on any machine: no network, no real agent CLIs.
     process.env.CEZ_DRY_RUN = '1';
     // `skillsRepos: []` disables team skills — no background clone can warm a
@@ -101,6 +106,8 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     else process.env.CEZ_SINGLE_PROJECT = savedSingleProject;
     if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
     else process.env.CEZ_AUTOMATIONS = savedAutomations;
+    if (savedUnits === undefined) delete process.env.CEZ_UNITS;
+    else process.env.CEZ_UNITS = savedUnits;
     if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
     else process.env.CEZ_DRY_RUN = savedDryRun;
   });

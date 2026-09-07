@@ -39,8 +39,18 @@ import {
   attachmentInputSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
+  startMissionInputSchema,
+  unitPromptInputSchema,
+  unitRoleSchema,
   updateProjectInputSchema,
+  type UnitPrompt,
 } from '@open-mercato/cezar-contract';
+import {
+  listUnitPrompts,
+  resetUnitPrompt,
+  resolveUnitPrompt,
+  writeUnitPrompt,
+} from '../units/prompts.ts';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -426,6 +436,9 @@ const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 t
 
 /** 409 body for every automations route while GitHub automations are off (#801). */
 const AUTOMATIONS_OFF = 'GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them';
+
+/** 409 body for every units route while the unit hierarchy is off (spec 2026-09-08-units-hierarchy). */
+const UNITS_OFF = 'units are disabled — set CEZ_UNITS=1 to enable them';
 
 // ---- variant-compare response shapes (spec 010) ----------------------------
 // Named and exported so `api-types.test.ts` can drift-guard the cockpit's
@@ -3439,6 +3452,130 @@ export function createApp(deps: ServerDeps) {
       return check ? c.json(check) : c.json({ error: 'not found' }, 404);
     });
 
+  /**
+   * The units gate (spec `.ai/specs/2026-09-08-units-hierarchy.md`, Q1) — the automations gate,
+   * one flag over: with `CEZ_UNITS` unset, every route of the feature answers 409 before touching
+   * a store or a prompt file.
+   *
+   * Middleware on EXPLICIT paths, never `use('*')`, for the reason `requireAutomations` spells
+   * out above: this family is mounted with `.route('/', …)` alongside a dozen unrelated sub-apps,
+   * and `route()` re-registers a sub-app's middleware under the mount prefix — a `'*'` here would
+   * gate the entire `/api/v1` surface, `/health` included.
+   */
+  const requireUnits = async (c: Context, next: Next) => {
+    if (!capabilities().units) return c.json({ error: UNITS_OFF }, 409);
+    await next();
+  };
+
+  /**
+   * The mission prompt: the user's objective, plus their standing rules as a block the agent
+   * reads as rules rather than as more objective. They go into the TASK, not the system prompt —
+   * the system prompt is the ROLE, shared by every run at that rank, and these belong to one
+   * mission.
+   */
+  const missionTask = (objective: string, constraints: string[] | undefined): string => {
+    const rules = (constraints ?? []).map((line) => line.trim()).filter((line) => line.length > 0);
+    if (rules.length === 0) return objective;
+    return `${objective}\n\n## Constraints\n${rules.map((line) => `- ${line}`).join('\n')}`;
+  };
+
+  // ---- chained family: units (project-scoped) ----
+  // Project-scoped because both halves are: a mission starts a run in ONE project's store, and
+  // the role prompts are per-repo files under that project's `.ai/cezar/units/`.
+  const unitsRoutes = new Hono<ProjectApiEnv>()
+    .use('/missions', requireUnits)
+    .use('/missions/*', requireUnits)
+    .use('/units', requireUnits)
+    .use('/units/*', requireUnits)
+
+    /**
+     * Start a mission. `legionary` is today's plain task and gets NO `unit` at all — the size is
+     * how a user says "no hierarchy for this one", and attaching a unit anyway would opt every
+     * such task into marker parsing it never asked for.
+     *
+     * The root's `unit.missionId` is its OWN id, which is only knowable after creation — hence
+     * create-then-update, the order `automations/task-template.ts` writes provenance in. Nothing
+     * races on it: `startRun` only enqueues the job, and the engine reads `unit` off the RECORD
+     * at execute time rather than off the input it was handed.
+     */
+    .post('/missions', jsonZodValidator(startMissionInputSchema), async (c) => {
+      const { root: repoRoot, manager, store } = c.get('project');
+      const body = c.req.valid('json');
+      // A mission is one agent on the objective; the hierarchy comes from the role prompt and the
+      // spawn marker, not from a longer chain. `quick-task` is the built-in and always comes back
+      // after a delete — but fall back to the constant rather than 404 a mission because one
+      // repo's workflows directory would not load.
+      const { workflows } = await loadWorkflows(repoRoot);
+      const workflow = workflows.find((w) => w.name === QUICK_TASK_WORKFLOW.name) ?? QUICK_TASK_WORKFLOW;
+      const role = body.unit === 'army' ? ('caesar' as const) : ('centurion' as const);
+      const rung = body.unit === 'legionary' ? undefined : body.ladder?.[role];
+      if (agentModelsLocked(repoRoot) && rung?.model?.trim()) {
+        return c.json({ error: AGENT_MODELS_LOCKED_ERROR }, 409);
+      }
+      const fallback = rung?.runner ?? (await loadConfig(repoRoot)).defaultRunner;
+      const blocked = await providerActionError(providersRequiredByWorkflow(workflow, fallback));
+      if (blocked) return c.json({ error: blocked }, 409);
+      const task = missionTask(body.objective, body.constraints);
+      if (body.unit === 'legionary') {
+        return c.json({ id: manager.startRun(workflow, { task }).id }, 201);
+      }
+      const run = manager.startRun(workflow, {
+        task,
+        systemPrompt: (await resolveUnitPrompt(repoRoot, role)).text,
+        runner: rung?.runner,
+        model: rung?.model,
+        // A commander that parks at `waiting` after every turn cannot run a mission — it has to
+        // keep going on its own once its children report (spec Q4/§Root).
+        autonomous: true,
+      });
+      store.updateRun(run.id, {
+        unit: {
+          role,
+          missionId: run.id,
+          // Spread conditionally: `budgetUsd: undefined` types a key as always-present that
+          // `JSON.stringify` then drops, which is exactly the drift the parity guards fail on.
+          ...(body.budgetUsd !== undefined ? { budgetUsd: body.budgetUsd } : {}),
+          ...(body.ladder ? { ladder: body.ladder } : {}),
+        },
+      });
+      return c.json({ id: run.id }, 201);
+    })
+
+    .get('/units/prompts', async (c) => {
+      return c.json({ prompts: await listUnitPrompts(c.get('project').root) });
+    })
+
+    .put(
+      '/units/prompts/:role',
+      paramZodValidator(z.object({ role: unitRoleSchema })),
+      jsonZodValidator(unitPromptInputSchema),
+      async (c) => {
+        const { role } = c.req.valid('param');
+        const { text } = c.req.valid('json');
+        await writeUnitPrompt(c.get('project').root, role, text);
+        // Answers the saved entry, so the editor's `edited` badge follows from the response
+        // rather than from the client optimistically assuming the write landed.
+        //
+        // Annotated `UnitPrompt` rather than left to infer, exactly like the forge-availability
+        // literal in the automations family: an object literal's `source: 'file'` is narrower
+        // than the shape the contract describes, and the parity guard reads a route that is
+        // narrower than its schema as drift just as loudly as one that is wider. Both prompt
+        // mutators answer ONE shape — the same one `GET /units/prompts` lists.
+        const saved: UnitPrompt = { role, text, source: 'file' };
+        return c.json(saved);
+      },
+    )
+
+    .delete('/units/prompts/:role', paramZodValidator(z.object({ role: unitRoleSchema })), async (c) => {
+      const { role } = c.req.valid('param');
+      const root = c.get('project').root;
+      await resetUnitPrompt(root, role);
+      // Answers the RESTORED default rather than `{ok: true}`: "delete" here means "put the
+      // shipped prompt back", and the editor has to render something the instant it returns.
+      const restored: UnitPrompt = { role, ...(await resolveUnitPrompt(root, role)) };
+      return c.json(restored);
+    });
+
   // ---- runs ----------------------------------------------------------------
 
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
@@ -5327,6 +5464,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', workflowsRoutes)
     .route('/', planRoutes)
     .route('/', automationsRoutes)
+    .route('/', unitsRoutes)
     .route('/', runsRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
