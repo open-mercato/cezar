@@ -2237,7 +2237,19 @@ export class RunManager {
       record?.worktreePath && existsSync(record.worktreePath)
         ? record.worktreePath
         : this.repoRoot;
-    const state: ActiveRun = { cancelled: false, interrupt: () => undefined, cwd };
+    // `autonomous` comes off the RECORD, not off an input: a continuation builds its OWN
+    // ActiveRun (the second construction site of this shared shape — #811), and without these
+    // two fields the turn-end nudge below read `undefined` and every autonomous continuation
+    // parked at `waiting` like a normal one. The record is the durable copy `execute` wrote at
+    // start and `recover` preserves. `autoContinues` restarts per session, which is the point:
+    // the cap bounds ONE unattended stretch, and a human Continue is attention.
+    const state: ActiveRun = {
+      cancelled: false,
+      interrupt: () => undefined,
+      cwd,
+      autonomous: record?.autonomous === true,
+      autoContinues: 0,
+    };
     this.active.set(runId, state);
     this.starting.delete(runId);
     if (state.cwd === this.repoRoot) {
@@ -2360,21 +2372,9 @@ export class RunManager {
         }
         if (sessionOpen) {
           // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to
-          // keep going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`.
-          const autoContinued =
-            state.autonomous &&
-            (state.autoContinues ?? 0) < MAX_AUTO_CONTINUES &&
-            !state.cancelled &&
-            (() => {
-              const sent = state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }]);
-              if (!sent) return false;
-              state.autoContinues = (state.autoContinues ?? 0) + 1;
-              this.store.appendEvent(runId, {
-                type: 'note',
-                message: `autonomous — continuing without pausing (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
-              });
-              return true;
-            })();
+          // keep going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`. Shared
+          // with `runAgentStep`'s twin turn-end so the two cannot drift.
+          const autoContinued = this.tryAutonomousNudge(runId, state);
           if (!autoContinued) {
             // `CEZ:ASK` → park `waiting` (attention) AND surface the structured
             // question as an ask card (#473). `CEZ:MONITORING` → non-attention
@@ -3034,14 +3034,22 @@ export class RunManager {
           return;
         }
         const waiting = interactive && sessionOpen;
-        if (waiting) {
+        // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to keep
+        // going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`. The SAME helper
+        // `runContinuation`'s twin turn-end calls — this branch was missing here entirely, so an
+        // autonomous run's FIRST session parked like any other (the nudge only ever existed on
+        // the continuation path). Gated on `waiting`: a non-interactive step's session belongs to
+        // the workflow loop, which moves to the next step on its own.
+        const autoContinued = waiting ? this.tryAutonomousNudge(runId, state, step.id) : false;
+        if (waiting && !autoContinued) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
           // cockpit renders as an ask card (#473) — or the agent declared it is
           // still working on its own downstream work with `CEZ:MONITORING`, which
           // parks as `running`/`activity:'monitoring'`, a non-attention state,
           // instead of raising "needs you" (#490). Lifecycle is identical: the
-          // run frees its slot and keeps the idle timer.
+          // run frees its slot and keeps the idle timer. The autonomous nudge
+          // above still wins over either.
           if (ask) emitAskRequested(sink, ask);
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
@@ -3556,6 +3564,45 @@ export class RunManager {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Autonomous mode (#autonomous): a turn ended with the session still open. Instead of handing
+   * the ball back to the user, nudge the agent to keep going. Returns `true` when the nudge was
+   * actually sent — the caller must then NOT park the run (no `waiting` status, no idle timer,
+   * the `maxParallel` slot stays held), because the session is working again.
+   *
+   * ONE helper for BOTH turn-end handlers — `runAgentStep` (the run's first session) and
+   * `runContinuation` (a resumed one). They are near-identical by construction, and a lifecycle
+   * change applied to only one of them ships half a fix (#811; AGENTS.md § "Changing a mechanism
+   * that already works"). The nudge lived in `runContinuation` alone and was unreachable there
+   * too, because that site's `ActiveRun` never carried `autonomous`.
+   *
+   * Every exit of a nudged run — the loop is bounded, it is not a new dead end:
+   *  - the NEXT turn-end: `CEZ:DONE` closes the session and the run settles (`done`, or `review`
+   *    for a non-autonomous run with changes); a plain turn nudges again; `CEZ:ASK` and
+   *    `CEZ:MONITORING` are OVERRIDDEN while budget remains (the nudge deliberately wins over
+   *    both) and take effect on the first turn after the cap;
+   *  - the cap: at `MAX_AUTO_CONTINUES` this returns `false` and the turn parks exactly as a
+   *    non-autonomous one does today — `waiting` (or `monitoring`), idle timer armed, slot freed;
+   *  - `cancel` (`state.cancelled`) and the memory-limit pause (which clears `state.autonomous`,
+   *    see `enforceMemoryLimit`) each stop it before the next nudge;
+   *  - the session ending for any reason (agent exit, crash, `finish`, idle timeout) leaves
+   *    through the normal exit path — `sendMessage` on a closed session returns false, so a dead
+   *    session parks rather than silently looping.
+   */
+  private tryAutonomousNudge(runId: string, state: ActiveRun, stepId?: string): boolean {
+    if (!state.autonomous) return false;
+    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    if (state.cancelled) return false;
+    if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
+    state.autoContinues = (state.autoContinues ?? 0) + 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      ...(stepId ? { stepId } : {}),
+      message: `autonomous — continuing without pausing (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
+    });
+    return true;
   }
 
   private armIdleTimer(runId: string, state: ActiveRun): void {
