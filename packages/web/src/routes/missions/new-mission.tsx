@@ -1,0 +1,312 @@
+import { XIcon } from 'lucide-react'
+import { useState, type FormEvent, type KeyboardEvent } from 'react'
+
+import { useHealth, useStartMission } from '@/api/queries'
+import { EnginePills, engineBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { UnitRoleChip } from '@/components/unit-role-chip'
+import { useNavigate } from '@/lib/project-router'
+import { cn } from '@/lib/utils'
+import type { UnitLadder, UnitRole, UnitSize } from '@open-mercato/cezar-api-client'
+
+import { MissionsFrame, UnitsOffState } from './missions'
+
+/**
+ * `/p/:projectId/missions/new` — the mission composer (spec
+ * `.ai/specs/2026-09-08-units-hierarchy.md` §Cockpit).
+ *
+ * Three decisions, in the order they matter: WHAT (the objective and the standing rules), HOW BIG
+ * (the size, which is really "how many layers of agent may this become"), and ON WHAT (the
+ * escalation ladder — which backend and model each rank runs on).
+ *
+ * There is no order-of-battle preview by design (spec Q5): the commander's first turn plans and
+ * spawns, and a preview it is free to ignore would cost tokens before the user has committed.
+ */
+
+/** The sizes, in the order the cards are read: smallest first, so "Army" is a deliberate step up
+ *  rather than the thing the eye lands on. Default is `army` all the same — a user who came to
+ *  the MISSION composer wants the hierarchy; a plain task has its own composer at `/new`. */
+const SIZES: Array<{ id: UnitSize; title: string; blurb: string }> = [
+  {
+    id: 'legionary',
+    title: 'Legionary',
+    blurb: 'One agent, one task — what New task does today.',
+  },
+  {
+    id: 'squad',
+    title: 'Squad',
+    blurb: 'A centurion splits the job across its own sub-agents and reviews the evidence.',
+  },
+  {
+    id: 'army',
+    title: 'Army',
+    blurb: 'Caesar forms legions of legates and centurions, and reports once.',
+  },
+]
+
+/** Which ranks a size actually places, and therefore which ladder rows are worth showing. A row
+ *  for a rank the mission never creates is a control whose value the server would ignore. */
+export function ladderRolesFor(size: UnitSize): UnitRole[] {
+  if (size === 'army') return ['caesar', 'legate', 'centurion']
+  if (size === 'squad') return ['centurion']
+  return []
+}
+
+const EMPTY_PICK: EnginePick = { runner: null, model: null, account: null }
+
+export function NewMissionRoute() {
+  const health = useHealth()
+  const navigate = useNavigate()
+  const start = useStartMission()
+
+  const [objective, setObjective] = useState('')
+  const [size, setSize] = useState<UnitSize>('army')
+  const [constraints, setConstraints] = useState<string[]>([])
+  const [constraintDraft, setConstraintDraft] = useState('')
+  const [budget, setBudget] = useState('')
+  const [error, setError] = useState('')
+
+  // One pick per rank, and all three resolved unconditionally: the ROWS are conditional, the
+  // hooks cannot be. A rank the current size does not place keeps its pick, so flipping Squad →
+  // Army → Squad does not lose what the user chose for Caesar on the way through.
+  const [caesarPick, setCaesarPick] = useState<EnginePick>(EMPTY_PICK)
+  const [legatePick, setLegatePick] = useState<EnginePick>(EMPTY_PICK)
+  const [centurionPick, setCenturionPick] = useState<EnginePick>(EMPTY_PICK)
+  const picks: Record<UnitRole, EnginePick> = {
+    caesar: caesarPick,
+    legate: legatePick,
+    centurion: centurionPick,
+  }
+  const setPick: Record<UnitRole, (pick: EnginePick) => void> = {
+    caesar: setCaesarPick,
+    legate: setLegatePick,
+    centurion: setCenturionPick,
+  }
+  const resolved: Record<UnitRole, ReturnType<typeof useResolvedEngine>> = {
+    caesar: useResolvedEngine(caesarPick),
+    legate: useResolvedEngine(legatePick),
+    centurion: useResolvedEngine(centurionPick),
+  }
+
+  if (health.data === undefined) return <MissionsFrame title="New mission"><p className="text-sm text-muted-foreground">Loading…</p></MissionsFrame>
+  if (health.data.capabilities?.units !== true) return <UnitsOffState />
+
+  const roles = ladderRolesFor(size)
+
+  const addConstraint = () => {
+    const rule = constraintDraft.trim()
+    if (rule === '' || constraints.includes(rule)) {
+      setConstraintDraft('')
+      return
+    }
+    setConstraints((current) => [...current, rule])
+    setConstraintDraft('')
+  }
+
+  /**
+   * The mission body.
+   *
+   * `engineBody` rather than `engineRunBody`: a ladder rung is exactly `{runner?, model?}` and has
+   * no `agentProfile` field, so the account-carrying sibling would put a key on the wire the
+   * schema does not have. Empty rungs are dropped and an entirely empty ladder is omitted —
+   * conditional spread per the HTTP-API rule, because `ladder: undefined` types a key as
+   * always-present that `JSON.stringify` then drops, which the parity guards read as drift.
+   */
+  const ladder = (): UnitLadder | undefined => {
+    const entries = roles.flatMap((role) => {
+      const { runner, model } = engineBody(resolved[role])
+      const rung = { ...(runner ? { runner } : {}), ...(model ? { model } : {}) }
+      return Object.keys(rung).length > 0 ? [[role, rung] as const] : []
+    })
+    return entries.length > 0 ? (Object.fromEntries(entries) as UnitLadder) : undefined
+  }
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault()
+    const text = objective.trim()
+    if (text === '') return
+    setError('')
+    // An empty field is "no ceiling", not zero. Anything unparseable is refused here rather than
+    // sent — the server would 400 on it, and the message it would answer with is about a body the
+    // user never saw.
+    const trimmedBudget = budget.trim()
+    const budgetUsd = trimmedBudget === '' ? undefined : Number(trimmedBudget)
+    if (budgetUsd !== undefined && (!Number.isFinite(budgetUsd) || budgetUsd < 0)) {
+      setError('The budget must be a number of dollars, or empty for no ceiling.')
+      return
+    }
+    const rungs = ladder()
+    try {
+      const { id } = await start.mutateAsync({
+        objective: text,
+        unit: size,
+        ...(budgetUsd === undefined ? {} : { budgetUsd }),
+        ...(constraints.length > 0 ? { constraints } : {}),
+        ...(rungs ? { ladder: rungs } : {}),
+      })
+      // A legionary IS a plain task — there is no tree to look at, so it lands in its own thread.
+      // Anything larger goes to the tree, which is where its children will appear.
+      navigate(size === 'legionary' ? `/tasks/${id}` : '/missions')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  return (
+    <MissionsFrame
+      title="New mission"
+      subtitle="Give one objective to a commander. It plans the work, splits it across agents of its own, and reports back once."
+    >
+      <form data-slot="new-mission" onSubmit={submit} className="flex flex-col gap-6">
+        <section className="flex flex-col gap-2">
+          <Label htmlFor="mission-objective">Objective</Label>
+          <Textarea
+            id="mission-objective"
+            data-slot="mission-objective"
+            value={objective}
+            onChange={(event) => setObjective(event.target.value)}
+            placeholder="What should this mission achieve? Name the outcome, not the steps — the commander plans those."
+            maxLength={100_000}
+            className="min-h-32"
+          />
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <Label>Size</Label>
+          <div data-slot="mission-sizes" className="grid gap-2.5 sm:grid-cols-3">
+            {SIZES.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                data-slot="mission-size"
+                data-size={option.id}
+                data-selected={size === option.id ? 'true' : undefined}
+                aria-pressed={size === option.id}
+                onClick={() => setSize(option.id)}
+                className={cn(
+                  'flex flex-col gap-1 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:bg-muted',
+                  size === option.id && 'border-primary bg-primary/5 hover:bg-primary/5',
+                )}
+              >
+                <span className="text-[13.5px] font-semibold">{option.title}</span>
+                <span className="text-[12.5px] text-muted-foreground">{option.blurb}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <Label htmlFor="mission-constraint">Constraints</Label>
+          <p className="text-[12.5px] text-muted-foreground">
+            Standing rules for every agent on this mission — “never force-push”, “tests must pass
+            before you report”. Press Enter to add one.
+          </p>
+          <div className="flex gap-2">
+            <Input
+              id="mission-constraint"
+              data-slot="mission-constraint-input"
+              value={constraintDraft}
+              maxLength={400}
+              onChange={(event) => setConstraintDraft(event.target.value)}
+              onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
+                if (event.key !== 'Enter') return
+                // The composer's own submit is a click on Start; Enter here adds a chip and must
+                // not post a half-filled mission on the way.
+                event.preventDefault()
+                addConstraint()
+              }}
+              placeholder="Add a rule…"
+            />
+            <Button type="button" variant="outline" onClick={addConstraint} disabled={constraintDraft.trim() === ''}>
+              Add
+            </Button>
+          </div>
+          {constraints.length > 0 ? (
+            <div data-slot="mission-constraints" className="flex flex-wrap gap-1.5">
+              {constraints.map((rule) => (
+                <button
+                  key={rule}
+                  type="button"
+                  data-slot="mission-constraint"
+                  onClick={() => setConstraints((current) => current.filter((entry) => entry !== rule))}
+                  title={`Remove “${rule}”`}
+                  className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2.5 py-px text-[12px] font-medium text-foreground transition-colors hover:bg-danger/10 hover:text-danger"
+                >
+                  {rule}
+                  <XIcon aria-hidden="true" className="size-3" />
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <Label htmlFor="mission-budget">Budget</Label>
+          <p className="text-[12.5px] text-muted-foreground">
+            The whole mission’s ceiling in USD, carved up as it delegates. Leave empty for no
+            ceiling — the behaviour every cezar task has today.
+          </p>
+          <Input
+            id="mission-budget"
+            data-slot="mission-budget"
+            type="number"
+            min={0}
+            step="0.5"
+            inputMode="decimal"
+            value={budget}
+            onChange={(event) => setBudget(event.target.value)}
+            placeholder="e.g. 20"
+            className="max-w-40"
+          />
+        </section>
+
+        <section className="flex flex-col gap-2">
+          <Label>Escalation ladder</Label>
+          <p className="text-[12.5px] text-muted-foreground">
+            Which backend and model each rank runs on. Untouched, a rank uses this project’s
+            defaults — the same fallback a plain task takes.
+          </p>
+          {roles.length === 0 ? (
+            <p data-slot="mission-ladder-empty" className="text-[12.5px] text-soft-foreground">
+              A plain task uses the composer defaults.
+            </p>
+          ) : (
+            <div data-slot="mission-ladder" className="flex flex-col gap-2">
+              {roles.map((role) => (
+                <div
+                  key={role}
+                  data-slot="mission-ladder-row"
+                  data-role={role}
+                  className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-3 py-2"
+                >
+                  <UnitRoleChip role={role} />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <EnginePills pick={picks[role]} onChange={setPick[role]} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {error ? (
+          <p data-slot="mission-error" role="alert" className="text-[13px] text-danger">
+            {error}
+          </p>
+        ) : null}
+
+        <div className="flex items-center gap-2">
+          <Button type="submit" disabled={objective.trim() === '' || start.isPending}>
+            {start.isPending ? 'Starting…' : 'Start mission'}
+          </Button>
+          <Button type="button" variant="ghost" onClick={() => navigate(-1)}>
+            Cancel
+          </Button>
+        </div>
+      </form>
+    </MissionsFrame>
+  )
+}

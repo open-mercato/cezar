@@ -58,7 +58,7 @@ function SectionNav({
 }: {
   scope: SettingsScope
   activeId: SettingsSection['id'] | null
-  capabilities?: Pick<Capabilities, 'singleProject'>
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'units'>>
 }) {
   const { NavLink } = navComponents(scope)
   return (
@@ -120,7 +120,7 @@ function SectionPills({
 }: {
   scope: SettingsScope
   activeId: SettingsSection['id']
-  capabilities?: Pick<Capabilities, 'singleProject'>
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'units'>>
 }) {
   const { NavLink } = navComponents(scope)
   return (
@@ -167,7 +167,7 @@ export function SettingsSectionRoute({
 }: {
   section: SettingsSection
   scope: SettingsScope
-  capabilities?: Pick<Capabilities, 'singleProject'>
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'units'>>
 }) {
   const Body = section.component
   return (
@@ -201,7 +201,7 @@ export function SettingsSectionRoute({
  *  page; on desktop it sits beside the nav as a plain directory). */
 export function SettingsIndexRoute({ scope, capabilities }: {
   scope: SettingsScope
-  capabilities?: Pick<Capabilities, 'singleProject'>
+  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'units'>>
 }) {
   const { Link } = navComponents(scope)
   const global = scope === 'global'
