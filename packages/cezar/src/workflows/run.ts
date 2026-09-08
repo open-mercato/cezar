@@ -240,9 +240,16 @@ interface ActiveRun {
   };
 }
 
-/** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever. */
-const MAX_AUTO_CONTINUES = 40;
-const AUTONOMOUS_NUDGE =
+/** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
+ *  Exported so the tests assert against the real cap instead of restating `40`. */
+export const MAX_AUTO_CONTINUES = 40;
+/** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
+ *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
+ *  the nudge carries no `mock:` marker of its own). Rewording it without updating that mock does
+ *  not fail loudly at the seam — the nudge still fires and the mock simply never finishes, so the
+ *  autonomous tests time out with an unhelpful "condition not met in time". `autonomous-nudge.test.ts`
+ *  pins the coupling so the drift is caught here rather than there. */
+export const AUTONOMOUS_NUDGE =
   'Continue working autonomously until the task is fully complete. Do not ask me for confirmation or clarification — make reasonable assumptions and proceed. When everything is done, end the session with your done signal.';
 const MONITORING_WAKE_NUDGE =
   'Re-check the downstream work you were monitoring. Continue toward the task goal; emit CEZ:MONITORING again only if it is still pending.';
@@ -2370,11 +2377,13 @@ export class RunManager {
           state.session?.end();
           return;
         }
+        // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to
+        // keep going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`. Shared
+        // with `runAgentStep`'s twin turn-end so the two cannot drift — including the shape:
+        // hoisted out of the branch below because the heartbeat at the end of this handler
+        // needs to know whether the turn parked.
+        const autoContinued = sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask) : false;
         if (sessionOpen) {
-          // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to
-          // keep going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`. Shared
-          // with `runAgentStep`'s twin turn-end so the two cannot drift.
-          const autoContinued = this.tryAutonomousNudge(runId, state);
           if (!autoContinued) {
             // `CEZ:ASK` → park `waiting` (attention) AND surface the structured
             // question as an ask card (#473). `CEZ:MONITORING` → non-attention
@@ -2407,10 +2416,14 @@ export class RunManager {
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
           this.store.updateRun(runId, { autoResumeAttempts: undefined });
         }
+        // A nudged turn did NOT park, so it must not report that it did: the handoff file is
+        // the rolling context the agent reads back on resume (spec 007), not a log, and an
+        // autonomous run writing up to MAX_AUTO_CONTINUES "status=waiting" lines would tell it
+        // the exact opposite of what happened.
         appendHandoffHeartbeat(
           this.dataDir,
           runId,
-          `turn complete — status=${monitoring ? 'monitoring' : sessionOpen ? 'waiting' : 'running'}`,
+          `turn complete — status=${autoContinued ? 'running (autonomous nudge)' : monitoring ? 'monitoring' : sessionOpen ? 'waiting' : 'running'}`,
         );
       }
     };
@@ -3040,7 +3053,7 @@ export class RunManager {
         // autonomous run's FIRST session parked like any other (the nudge only ever existed on
         // the continuation path). Gated on `waiting`: a non-interactive step's session belongs to
         // the workflow loop, which moves to the next step on its own.
-        const autoContinued = waiting ? this.tryAutonomousNudge(runId, state, step.id) : false;
+        const autoContinued = waiting ? this.tryAutonomousNudge(runId, state, step.id, ask) : false;
         if (waiting && !autoContinued) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
@@ -3073,10 +3086,12 @@ export class RunManager {
         }
         // Cez's own heartbeat — the handoff stays current even when the
         // agent forgets to write (spec 007).
+        // A nudged turn did NOT park — see the twin in `runContinuation` for why the handoff
+        // file must not claim otherwise.
         appendHandoffHeartbeat(
           this.dataDir,
           runId,
-          `turn complete — status=${monitoring ? 'monitoring' : waiting ? 'waiting' : 'running'}`,
+          `turn complete — status=${autoContinued ? 'running (autonomous nudge)' : monitoring ? 'monitoring' : waiting ? 'waiting' : 'running'}`,
         );
       }
     };
@@ -3589,9 +3604,20 @@ export class RunManager {
    *    see `enforceMemoryLimit`) each stop it before the next nudge;
    *  - the session ending for any reason (agent exit, crash, `finish`, idle timeout) leaves
    *    through the normal exit path — `sendMessage` on a closed session returns false, so a dead
-   *    session parks rather than silently looping.
+   *    session parks rather than silently looping;
+   *  - a NATIVE `ask.requested` (Claude's AskUser, Codex's `requestUserInput` bridge — #473,
+   *    #565) still parks the run at `waiting` MID-turn through `handleRunnerUiEvent`, which
+   *    carries no autonomous guard. That is the one exit the nudge does not currently cover:
+   *    the portable `CEZ:ASK` marker is a turn-end signal this helper can outrank, a native ask
+   *    is not. Named here so the gap is recorded where someone reasoning about autonomous
+   *    liveness will look for it.
    */
-  private tryAutonomousNudge(runId: string, state: ActiveRun, stepId?: string): boolean {
+  private tryAutonomousNudge(
+    runId: string,
+    state: ActiveRun,
+    stepId: string,
+    ask: AskRequest | null,
+  ): boolean {
     if (!state.autonomous) return false;
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     if (state.cancelled) return false;
@@ -3599,9 +3625,23 @@ export class RunManager {
     state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
-      ...(stepId ? { stepId } : {}),
+      stepId,
       message: `autonomous — continuing without pausing (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
     });
+    // The nudge deliberately outranks a valid `CEZ:ASK` while budget remains — but
+    // `stripAskMarker` has already removed the question from the turn's visible text, and
+    // `resolveAskTurn` only produces notes for a MALFORMED marker. Without this the question
+    // an agent actually asked leaves no trace anywhere in the transcript, so whoever opens the
+    // run after it parks at the cap cannot see that one was ever asked.
+    if (ask) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — question overridden by the auto-continue nudge: ${ask.questions
+          .map((question) => question.question)
+          .join(' | ')}`,
+      });
+    }
     return true;
   }
 

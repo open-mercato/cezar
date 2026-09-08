@@ -2,10 +2,11 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
-import { RunManager } from './run.ts';
+import { AUTONOMOUS_NUDGE, MAX_AUTO_CONTINUES, RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -73,20 +74,21 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     }
   };
 
-  const readEvents = (id: string): Array<{ type: string; message?: string }> => {
+  const readEvents = (id: string): Array<{ type: string; message?: string; stepId?: string }> => {
     const path = join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`);
     if (!existsSync(path)) return [];
     return readFileSync(path, 'utf8')
       .trim()
       .split('\n')
       .filter(Boolean)
-      .map((line) => JSON.parse(line) as { type: string; message?: string });
+      .map((line) => JSON.parse(line) as { type: string; message?: string; stepId?: string });
   };
 
+  const notesMatching = (id: string, needle: string) =>
+    readEvents(id).filter((e) => e.type === 'note' && String(e.message).includes(needle));
+
   const nudgeNotes = (id: string): string[] =>
-    readEvents(id)
-      .filter((e) => e.type === 'note' && String(e.message).includes('autonomous — continuing'))
-      .map((e) => String(e.message));
+    notesMatching(id, 'autonomous — continuing').map((e) => String(e.message));
 
   /** Every status the record ever passed through — a park can be brief, so polling the record
    *  could miss it. The store is the SSE bus and emits one `run` event per update. */
@@ -109,7 +111,9 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
 
     // The nudge fires on the first session's turn end — the site that had no branch at all.
     await waitFor(record.id, () => nudgeNotes(record.id).length > 0);
-    expect(nudgeNotes(record.id)[0]).toContain('autonomous — continuing without pausing (1/40)');
+    expect(nudgeNotes(record.id)[0]).toContain(
+      `autonomous — continuing without pausing (1/${MAX_AUTO_CONTINUES})`,
+    );
 
     // And the nudged turn ends with CEZ:DONE, so the run settles instead of sitting on a slot.
     await waitFor(record.id, (r) => r?.status === 'done');
@@ -143,7 +147,16 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
 
     // `runContinuation` builds its OWN ActiveRun; it must read `autonomous` off the record.
     await waitFor(record.id, () => nudgeNotes(record.id).length > 0);
-    expect(nudgeNotes(record.id)[0]).toContain('autonomous — continuing without pausing (1/40)');
+    expect(nudgeNotes(record.id)[0]).toContain(
+      `autonomous — continuing without pausing (1/${MAX_AUTO_CONTINUES})`,
+    );
+    // Same helper, same event SHAPE: every other event this handler writes is attributed to the
+    // continuation's own step, and the cockpit keys transcript items by `stepId`. A nudge note
+    // from a continuation must not be the one anonymous event in the file.
+    expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toBe(
+      store.getRun(record.id)?.currentStepId,
+    );
+    expect(notesMatching(record.id, 'autonomous — continuing')[0]?.stepId).toMatch(/^continue-/);
     await waitFor(record.id, (r) => r?.status === 'done');
     expect(statuses).not.toContain('waiting');
   }, 40_000);
@@ -168,10 +181,50 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     currentId = record.id;
     await waitFor(record.id, (r) => r?.status === 'waiting', 120_000);
     const notes = nudgeNotes(record.id);
-    expect(notes).toHaveLength(40); // MAX_AUTO_CONTINUES
-    expect(notes[0]).toContain('(1/40)');
-    expect(notes[39]).toContain('(40/40)');
+    expect(notes).toHaveLength(MAX_AUTO_CONTINUES);
+    expect(notes[0]).toContain(`(1/${MAX_AUTO_CONTINUES})`);
+    expect(notes[MAX_AUTO_CONTINUES - 1]).toContain(
+      `(${MAX_AUTO_CONTINUES}/${MAX_AUTO_CONTINUES})`,
+    );
     // The cap hands the run back exactly as a non-autonomous turn end does.
     expect(store.getRun(record.id)?.activity).toBeUndefined();
   }, 180_000);
+
+  it('records the CEZ:ASK it overrides, so an overridden question is not lost', async () => {
+    // The nudge deliberately outranks `CEZ:ASK` while budget remains — but `stripAskMarker`
+    // removes the marker from the visible text and no ask card is emitted, so without an
+    // explicit note the question would leave NO trace in the transcript at all.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:autonomous mock:ask pick a date library',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, () => nudgeNotes(record.id).length > 0);
+    const overrides = notesMatching(record.id, 'question overridden by the auto-continue nudge');
+    expect(overrides).toHaveLength(1);
+    expect(String(overrides[0]?.message)).toContain(
+      'Which date library should I standardize on?',
+    );
+    expect(overrides[0]?.stepId).toBe('task');
+
+    // The run keeps going rather than parking on the question it just overrode.
+    await waitFor(record.id, (r) => r?.status === 'done');
+  }, 40_000);
+
+  it('keeps the nudge text the dry-run mock recognises', () => {
+    // `scripts/mock-claude.mjs` ends a nudged turn with CEZ:DONE by matching the OPENING WORDS
+    // of the nudge (it carries no `mock:` marker of its own). Rewording the nudge without
+    // updating the mock does not fail at the seam: the nudge still fires, the mock just never
+    // finishes, and the autonomous tests above die on their waitFor deadline with "condition
+    // not met in time" — pointing at neither side. Pin the coupling where it is readable.
+    const mock = readFileSync(
+      fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url)),
+      'utf8',
+    );
+    const prefix = /AUTONOMOUS_NUDGE_PREFIX = '([^']+)'/.exec(mock)?.[1];
+    expect(prefix, 'mock-claude.mjs no longer declares AUTONOMOUS_NUDGE_PREFIX').toBeTruthy();
+    expect(AUTONOMOUS_NUDGE.startsWith(String(prefix))).toBe(true);
+  });
 });
