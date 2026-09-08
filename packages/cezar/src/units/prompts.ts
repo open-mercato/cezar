@@ -182,8 +182,19 @@ export function unitPromptsDir(repoRoot: string): string {
   return join(repoRoot, '.ai', 'cezar', 'units');
 }
 
-/** The file one role's override lives in. */
+/**
+ * The file one role's override lives in.
+ *
+ * The role is re-checked against `UNIT_ROLES` at RUNTIME even though its type already says it is
+ * one of three literals: the value is interpolated straight into a filesystem path, and the
+ * callers upstream are places where that type is a claim rather than a guarantee — a `:role`
+ * path param, and a `unit.role` read back off a hand-edited run record. Defence in depth (the
+ * routes validate too): a `..` that reached here would read and write outside
+ * `.ai/cezar/units`. Throwing is right for the same reason the schema rejects: there is no
+ * sensible file for a role that does not exist.
+ */
 export function unitPromptPath(repoRoot: string, role: UnitRole): string {
+  if (!UNIT_ROLES.includes(role)) throw new Error(`unknown unit role: ${String(role)}`);
   return join(unitPromptsDir(repoRoot), `${role}.md`);
 }
 
@@ -195,13 +206,19 @@ export function unitPromptPath(repoRoot: string, role: UnitRole): string {
  * there and unreadable (`default`, with ONE warning). A blank override is treated as absent
  * rather than as an empty system prompt: an empty file is what a failed save looks like, and a
  * unit run with no role prompt does not know how to spawn or report at all.
+ *
+ * The path is resolved OUTSIDE the try on purpose: a read that fails degrades to the default,
+ * but an unknown role is not a read failure — it has no default either, and swallowing
+ * `unitPromptPath`'s guard here would turn it into a session opened with `undefined` for a
+ * system prompt.
  */
 export async function resolveUnitPrompt(
   repoRoot: string,
   role: UnitRole,
 ): Promise<{ text: string; source: 'default' | 'file' }> {
+  const path = unitPromptPath(repoRoot, role);
   try {
-    const text = await readFile(unitPromptPath(repoRoot, role), 'utf8');
+    const text = await readFile(path, 'utf8');
     if (text.trim().length === 0) return { text: DEFAULT_UNIT_PROMPTS[role], source: 'default' };
     return { text, source: 'file' };
   } catch (error) {
@@ -229,9 +246,10 @@ export async function listUnitPrompts(repoRoot: string): Promise<UnitPrompt[]> {
  * truncated one, and a truncated role prompt is a unit run that cannot delegate.
  */
 export async function writeUnitPrompt(repoRoot: string, role: UnitRole, text: string): Promise<void> {
-  const dir = unitPromptsDir(repoRoot);
-  await mkdir(dir, { recursive: true });
+  // Resolved (and therefore role-checked) BEFORE the mkdir: a rejected role must leave the repo
+  // exactly as it found it, directory included.
   const path = unitPromptPath(repoRoot, role);
+  await mkdir(unitPromptsDir(repoRoot), { recursive: true });
   const tmp = `${path}.tmp`;
   await writeFile(tmp, text, 'utf8');
   await rename(tmp, path);

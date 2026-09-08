@@ -142,6 +142,35 @@ describe('buildMissionTrees — orphans', () => {
     expect(trees[0]?.root.children).toEqual([])
   })
 
+  /**
+   * A true 2-cycle names NO root: each run is the other's child, so the first pass files both
+   * away and the mission disappears from the page entirely — two runs that may be live, spending,
+   * or waiting for a human, rendered as nothing at all. Every member of a cycle is therefore
+   * promoted to a root, and the emitted guard collapses them back into a single tree.
+   */
+  it('surfaces a parent cycle as one tree instead of dropping both runs', () => {
+    const runs = [
+      unitRun({ role: 'caesar', missionId: 'm1', parentRunId: 'b' }, { id: 'a', createdAt: ago(90_000) }),
+      unitRun({ role: 'legate', missionId: 'm1', parentRunId: 'a' }, { id: 'b', createdAt: ago(30_000) }),
+    ]
+    const trees = buildMissionTrees(runs)
+    const ids = flattenMissions(trees).map((node) => node.run.id)
+    expect([...ids].sort()).toEqual(['a', 'b']) // neither vanished…
+    expect(new Set(ids).size).toBe(ids.length) // …and neither was emitted twice
+    expect(trees).toHaveLength(1)
+  })
+
+  it('keeps a node hanging off a cycle it is not itself part of', () => {
+    const runs = [
+      unitRun({ role: 'caesar', missionId: 'm1', parentRunId: 'b' }, { id: 'a', createdAt: ago(90_000) }),
+      unitRun({ role: 'legate', missionId: 'm1', parentRunId: 'a' }, { id: 'b', createdAt: ago(60_000) }),
+      unitRun({ role: 'centurion', missionId: 'm1', parentRunId: 'a' }, { id: 'c', createdAt: ago(30_000) }),
+    ]
+    const ids = flattenMissions(buildMissionTrees(runs)).map((node) => node.run.id)
+    expect([...ids].sort()).toEqual(['a', 'b', 'c'])
+    expect(new Set(ids).size).toBe(3)
+  })
+
   it('emits every node exactly once', () => {
     const runs = [
       unitRun({ role: 'caesar', missionId: 'm1' }, { id: 'm1' }),

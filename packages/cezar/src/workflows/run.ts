@@ -674,6 +674,22 @@ export class RunManager {
   private readonly waiting = new Set<string>();
   /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
   private readonly monitoring = new Set<string>();
+  /**
+   * The subset of `monitoring` parked because it SPAWNED children (spec
+   * 2026-09-08-units-hierarchy §Markers), rather than because an agent asked to watch its own
+   * downstream work.
+   *
+   * These are exempt from the slot count OUTRIGHT — `maxMonitoringSessions` does not bound them
+   * (see `busySlots`), and it must not: a commander parks precisely so that its children can
+   * have its slot. Counting the third such parent as busy is what makes an army whose legates
+   * each spawn centurions queue its own tree forever (`busySlots === maxParallel`, no exit), and
+   * starve every other project on the shared semaphore with it. A parked commander's process is
+   * idle; the runs it waits for are the ones that need the capacity.
+   *
+   * Invariant `unitParents ⊆ monitoring`, held by routing every add/delete through
+   * `enterMonitoring` / `leaveMonitoring` — nothing else writes either set.
+   */
+  private readonly unitParents = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
   /** Interrupted agent turns recovered after a process restart. Unlike an
    *  explicit user Continue, these are bulk scheduler work and must re-enter
@@ -779,6 +795,10 @@ export class RunManager {
     this.autoResumeTimers.clear();
     this.active.clear();
     this.waiting.clear();
+    // The monitoring subsets are cleared with `waiting`, whose subset they are: a disposed
+    // manager holds no slots and must not keep claiming exemptions for runs it no longer owns.
+    this.monitoring.clear();
+    this.unitParents.clear();
     this.starting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
@@ -993,8 +1013,44 @@ export class RunManager {
    */
   private busySlots(): number {
     const ordinaryWaiting = this.waiting.size - this.monitoring.size;
-    const exemptMonitoring = Math.min(this.monitoring.size, this.semaphore.maxMonitoringSessions());
-    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring;
+    // A commander parked on its own `CEZ:SPAWN` is exempt WITHOUT a cap (spec
+    // 2026-09-08-units-hierarchy). `maxMonitoringSessions` bounds how many agents may sit
+    // watching their own downstream work while the host still runs `maxParallel` real tasks —
+    // but a spawned parent's children ARE those tasks, so bounding it makes the tree wait on
+    // itself: three legates parked on their centurions is `busySlots === maxParallel` with no
+    // exit, in this project and in every other one sharing the semaphore.
+    let spawnParked = 0;
+    for (const runId of this.unitParents) if (this.monitoring.has(runId)) spawnParked += 1;
+    const watchers = this.monitoring.size - spawnParked;
+    const exemptMonitoring = Math.min(watchers, this.semaphore.maxMonitoringSessions());
+    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
+  }
+
+  /**
+   * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
+   * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
+   * construction site of a shared in-memory object").
+   *
+   * `spawnParked` says WHY it parked: `true` only when this turn's `CEZ:SPAWN` created children.
+   * A commander that parks again on a plain `CEZ:MONITORING` after its children reported is an
+   * ordinary watcher again, which is why the flag is rewritten on every park, never OR-ed.
+   */
+  private enterMonitoring(runId: string, spawnParked: boolean): void {
+    this.monitoring.add(runId);
+    if (spawnParked) this.unitParents.add(runId);
+    else this.unitParents.delete(runId);
+  }
+
+  /**
+   * Leave the monitoring set — the ONE exit, and every transition out of the state goes through
+   * it: a child's report or a user message (`deliverMessage`), the next turn ending in anything
+   * but a park, a native `ask.requested`, the session's own teardown, and `dropActive` (cancel,
+   * settle, restart recovery). The monitoring wake timer is deliberately NOT one: its nudge is
+   * delivered into the same parked session and the turn it starts ends back here.
+   */
+  private leaveMonitoring(runId: string): void {
+    this.monitoring.delete(runId);
+    this.unitParents.delete(runId);
   }
 
   /** Epoch ms of this manager's oldest queued run (the semaphore's fairness
@@ -1340,7 +1396,7 @@ export class RunManager {
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.waiting.delete(runId);
-    this.monitoring.delete(runId);
+    this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
     this.memoryPausing.delete(runId);
@@ -1437,6 +1493,26 @@ export class RunManager {
     const { pendingReports: _flushed, ...rest } = unit;
     this.store.updateRun(runId, { unit: rest });
     return pendingReportsBlock(pending);
+  }
+
+  /**
+   * The other half of "persist, then deliver": drop the one pending entry a LIVE path has just
+   * accepted (`reportSettledChildToParent`).
+   *
+   * Without it the report is delivered into the parent's session AND kept on the record, so the
+   * parent's next session opens with a `## Reports from your units` block restating everything
+   * it was already told — every session, forever, since the flush is the only reader that ever
+   * cleared the list. Matched on `fromRunId` AND the instant, so a second report from the same
+   * child (a run continued and settled again) cannot ack the first one's entry.
+   */
+  private ackPendingReport(runId: string, fromRunId: string, at: string): void {
+    const unit = this.store.getRun(runId)?.unit;
+    const pending = unit?.pendingReports;
+    if (!unit || !pending?.length) return;
+    const kept = pending.filter((entry) => entry.fromRunId !== fromRunId || entry.at !== at);
+    if (kept.length === pending.length) return;
+    const { pendingReports: _acked, ...rest } = unit;
+    this.store.updateRun(runId, { unit: kept.length ? { ...rest, pendingReports: kept } : rest });
   }
 
   /**
@@ -1695,13 +1771,9 @@ export class RunManager {
         role: child.unit?.role ?? 'centurion',
         resumeNotes,
       });
+      const at = new Date().toISOString();
       this.updateUnit(parentId, (unit) =>
-        withPendingReport(unit, {
-          fromRunId: child.id,
-          title: child.title,
-          report,
-          at: new Date().toISOString(),
-        }),
+        withPendingReport(unit, { fromRunId: child.id, title: child.title, report, at }),
       );
 
       // The delivery below is NOT user-authored, so it leaves no bubble in the parent's thread
@@ -1712,6 +1784,15 @@ export class RunManager {
         message: `report received from ${child.unit?.role ?? 'unit'} "${child.title}" (${child.id}) — status ${report.status}`,
       });
 
+      // A CANCELLED child is persisted and nothing more: it is the ONE settle that must not wake
+      // anybody. A cancel cascades children-first (`cancelDescendants`), so the commander is
+      // already cancelled — or about to be — by the time its children's processes die here, and
+      // every live rung below would fight that: `deliverMessage` restarts a turn on a session
+      // being torn down, and the last rung would `continueRun` the very run the user just
+      // stopped, resurrecting a cancelled mission from its own cancellation. The report stays on
+      // the record, so a commander the user later continues by hand still learns what happened.
+      if (child.status === 'cancelled') return;
+
       // A report is fresh evidence, so the parent's automatic re-check budget starts over — the
       // wake counter exists to bound a monitor nobody is feeding, and this one just got fed.
       const parentState = this.active.get(parentId);
@@ -1720,11 +1801,23 @@ export class RunManager {
         this.store.updateRun(parentId, { monitoringWakeCapReached: undefined });
       }
 
+      // Persist-then-ACK. The pending entry exists to survive the two rungs that can die with the
+      // process; once a LIVE path has taken the report — the open session has it, or the queued
+      // prompt stack carries it into the session that is about to open — the parent has been told,
+      // and leaving the entry behind would make `flushPendingReports` prepend the same report to
+      // every session the run ever opens again. The rungs that only PROMISE delivery
+      // (`deferMessage`'s buffer, which is in-memory, and the continuation, which may never be
+      // dequeued) keep it.
       const blocks: PastedContent[] = [{ type: 'text', text }];
-      if (this.deliverMessage(parentId, blocks, false)) return;
-      if (this.enqueueMessage(parentId, blocks)) return;
+      if (this.deliverMessage(parentId, blocks, false) || this.enqueueMessage(parentId, blocks)) {
+        this.ackPendingReport(parentId, child.id, at);
+        return;
+      }
       if (this.deferMessage(parentId, blocks)) return;
-      if (['done', 'failed', 'cancelled', 'review'].includes(parent.status)) {
+      // `cancelled` is deliberately NOT continuable from a child's report, though `continueRun`
+      // itself permits it (that is the user's own "Continue" on a stopped run). Nothing a child
+      // says may restart a mission a human cancelled.
+      if (['done', 'failed', 'review'].includes(parent.status)) {
         this.continueRun(parentId, { text }, true);
       }
     } catch {
@@ -2535,7 +2628,7 @@ export class RunManager {
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
-      this.monitoring.delete(runId);
+      this.leaveMonitoring(runId);
       // Clear any `monitoring` activity — the agent is actively working again
       // (spec 2026-07-18-subagent-monitoring-status, #490).
       this.store.updateRun(runId, { status: 'running', activity: undefined });
@@ -2933,13 +3026,15 @@ export class RunManager {
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
               this.store.updateStep(runId, stepId, { status: 'running' });
-              this.monitoring.add(runId);
+              // A park caused by this turn's own `CEZ:SPAWN` is slot-exempt outright — see
+              // `enterMonitoring` and `busySlots`.
+              this.enterMonitoring(runId, unitTurn.spawned);
               this.clearIdleTimer(state);
               this.armMonitoringWakeTimer(runId, state);
             } else {
               this.store.updateRun(runId, { status: 'waiting', activity: undefined });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
-              this.monitoring.delete(runId);
+              this.leaveMonitoring(runId);
               this.clearMonitoringWakeTimer(state, runId);
             }
             this.waiting.add(runId);
@@ -3633,13 +3728,15 @@ export class RunManager {
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
-            this.monitoring.add(runId);
+            // The twin of `runContinuation`'s park: a spawn-caused park is slot-exempt outright
+            // (`enterMonitoring` / `busySlots`), a plain `CEZ:MONITORING` one is capped.
+            this.enterMonitoring(runId, unitTurn.spawned);
             this.clearIdleTimer(state);
             this.armMonitoringWakeTimer(runId, state);
           } else {
             this.store.updateRun(runId, { status: 'waiting', activity: undefined });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
-            this.monitoring.delete(runId);
+            this.leaveMonitoring(runId);
             this.clearMonitoringWakeTimer(state, runId);
           }
           this.waiting.add(runId);
@@ -3775,7 +3872,7 @@ export class RunManager {
     } finally {
       this.recordUsagePeaks(runId);
       this.clearIdleTimer(state);
-      this.monitoring.delete(runId);
+      this.leaveMonitoring(runId);
       this.waiting.delete(runId);
       this.clearMonitoringWakeTimer(state, runId);
       state.session = undefined;
@@ -3807,7 +3904,7 @@ export class RunManager {
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
-    this.monitoring.delete(runId);
+    this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
     this.waiting.add(runId);
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });

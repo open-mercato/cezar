@@ -96,6 +96,27 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
   const childrenOf = (parentId: string): RunRecord[] =>
     store.listRuns().filter((r) => r.unit?.parentRunId === parentId);
 
+  const settled = (r: RunRecord | undefined): boolean =>
+    r !== undefined && ['done', 'review', 'failed', 'cancelled'].includes(r.status);
+
+  /** Everything the mock has been handed on stdin so far — '' before its first session opens. */
+  const stdin = (file: string): string => {
+    try {
+      return readFileSync(file, 'utf8');
+    } catch {
+      return '';
+    }
+  };
+
+  /** The full inbound message containing `needle` (the scripted replies only echo a slice). */
+  const delivered = (file: string, needle: string): string | undefined =>
+    stdin(file)
+      .trim()
+      .split('\n')
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { userText: string })
+      .find((entry) => entry.userText.includes(needle))?.userText;
+
   const activeState = (id: string) =>
     (manager as unknown as {
       active: Map<string, { monitoringWakeTimer?: NodeJS.Timeout; unitRole?: string }>;
@@ -153,6 +174,28 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       const texts = store.readEvents(record.id).filter((e) => e.type === 'text');
       expect(texts.some((e) => String((e as { text?: unknown }).text).includes('CEZ:SPAWN'))).toBe(false);
     }, 40_000);
+
+    it('surrenders the commander’s slot to its children even past maxMonitoringSessions', async () => {
+      // The starvation shape, at its smallest: ONE slot, ONE monitoring exemption — and that
+      // exemption already taken by an ordinary monitor. The commander is then the SECOND
+      // monitor, and counting it as busy (`busySlots` capped every monitor at
+      // `maxMonitoringSessions`) makes it hold the only slot forever: neither legate is ever
+      // dispatched, the commander waits for reports that cannot be produced, and every other
+      // project on the shared semaphore waits behind it. Its process is idle — the runs that
+      // need the slot are its children.
+      reboot({ maxParallel: 1, maxMonitoringSessions: 1 });
+      const watcher = start('mock:monitoring watching a build');
+      await waitFor(watcher.id, (r) => r?.activity === 'monitoring');
+
+      const record = start('mock:spawn take the hill', caesar('m13', 20));
+      await waitFor(record.id, (r) => r?.activity === 'monitoring');
+      const children = childrenOf(record.id);
+      expect(children).toHaveLength(2);
+      for (const child of children) started.push(child.id);
+
+      // BOTH legates reach a terminal state: the parked commander held nothing.
+      for (const child of children) await waitFor(child.id, settled, 40_000);
+    }, 90_000);
 
     it('refuses a centurion — the hierarchy stops at the rank that does the work', async () => {
       reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
@@ -232,23 +275,55 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       await waitFor(child.id, (r) => r?.status === 'done' || r?.status === 'review');
 
       // Q7 rung 1: the parent's live session heard it.
-      await waitFor(parent.id, () => readFileSync(stdinFile, 'utf8').includes('Report from legate'));
-      const delivered = readFileSync(stdinFile, 'utf8')
-        .trim()
-        .split('\n')
-        .map((line) => JSON.parse(line) as { userText: string })
-        .find((entry) => entry.userText.includes('Report from legate'));
-      expect(delivered?.userText).toContain(`"${store.getRun(child.id)?.title}"`);
-      expect(delivered?.userText).toContain(child.id);
-      expect(delivered?.userText).toContain('status done');
+      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from legate'));
+      const text = delivered(stdinFile, 'Report from legate');
+      expect(text).toContain(`"${store.getRun(child.id)?.title}"`);
+      expect(text).toContain(child.id);
+      expect(text).toContain('status done');
       // The branch is what makes a report actionable — it is what the parent has to merge (Q3).
-      expect(delivered?.userText).toContain(`branch ${store.getRun(child.id)?.branch}`);
+      expect(text).toContain(`branch ${store.getRun(child.id)?.branch}`);
       // Delivering wakes the monitor: it is working again, not parked.
       expect(store.getRun(parent.id)?.activity).toBeUndefined();
       // The delivery is not user-authored, so the thread would otherwise show nothing at all.
       expect(notes(parent.id).some((n) => n.startsWith('report received from legate'))).toBe(true);
-      // …and the report is persisted regardless, so a restart cannot lose it (Q7).
-      expect(store.getRun(parent.id)?.unit?.pendingReports?.[0]?.fromRunId).toBe(child.id);
+      // Persist-then-ACK: the report was written to the record BEFORE the delivery (that is what
+      // survives a restart mid-hand-off), and the live session taking it is what retires the
+      // entry. Leaving it behind is not "belt and braces" — `flushPendingReports` would then
+      // prepend this same report to every session this commander ever opens again.
+      await waitFor(parent.id, (r) => (r?.unit?.pendingReports?.length ?? 0) === 0);
+    }, 60_000);
+
+    it('does not re-flush a live-delivered report into the parent’s next session', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+
+      const parent = start('mock:monitoring waiting on my legates', caesar('m14'));
+      await waitFor(parent.id, (r) => r?.activity === 'monitoring');
+      const child = start('mock:report take the left flank', {
+        role: 'legate',
+        missionId: 'm14',
+        parentRunId: parent.id,
+      });
+      await waitFor(child.id, (r) => r?.status === 'done' || r?.status === 'review');
+      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from legate'));
+
+      // Let the commander finish the turn the report started, then close its session: what is
+      // under test is the NEXT one. (Whether the fixture's own reply ends that turn or parks it
+      // is not this test's business, so both endings are driven to the same settled state.)
+      await waitFor(parent.id, (r) => settled(r) || r?.status === 'waiting');
+      if (store.getRun(parent.id)?.status === 'waiting') expect(manager.finish(parent.id)).toBe(true);
+      await waitFor(parent.id, settled);
+      expect(manager.continueRun(parent.id, { text: 'mock:done regroup the century' }).ok).toBe(true);
+      await waitFor(parent.id, () => stdin(stdinFile).includes('regroup the century'));
+
+      // The continuation's OPENING prompt is where `flushPendingReports` prepends its block. The
+      // commander was already told about this child live, so telling it again — on this session
+      // and on every one after it — is a report delivered twice.
+      const opening = delivered(stdinFile, 'regroup the century');
+      expect(opening).toBeDefined();
+      expect(opening).not.toContain('## Reports from your units');
+      expect(opening).not.toContain(child.id);
     }, 60_000);
 
     it('persists a pending report for a parent with no session, and flushes it into its next prompt', async () => {
@@ -315,6 +390,84 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       expect(store.getRun(id)?.status).toBe('cancelled');
     }
   }, 20_000);
+
+  /**
+   * A cascade cancels children FIRST, so every child settles around — and routinely after — its
+   * own commander. Both rungs of the settle→parent ladder have to survive that ordering, and
+   * each is pinned on its own below because the live cascade cannot schedule the race for us.
+   */
+  describe('a cancel is final — nothing below may undo it', () => {
+    it('persists a cancelled child’s report without waking its commander', async () => {
+      // No monitoring exemption, one slot: the commander parks on its own monitor and the legate
+      // stays QUEUED, so the cancel path under test is the queued one — synchronous, no race.
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = start('mock:monitoring holding the line', caesar('m15'));
+      await waitFor(parent.id, (r) => r?.activity === 'monitoring');
+      const child = start('take the left flank', {
+        role: 'legate',
+        missionId: 'm15',
+        parentRunId: parent.id,
+      });
+      await waitFor(child.id, (r) => r?.status === 'queued');
+
+      expect(manager.cancel(child.id)).toBe(true);
+      await waitFor(parent.id, (r) => (r?.unit?.pendingReports?.length ?? 0) > 0);
+
+      // A cancelled child is the one settle that must not wake anybody: in a cascade its
+      // commander is already cancelled (or being cancelled) by the time its process dies, and a
+      // live delivery there restarts a turn on a session being torn down.
+      expect(store.getRun(parent.id)?.status).toBe('running');
+      expect(store.getRun(parent.id)?.activity).toBe('monitoring');
+      // Nothing is lost: the report is on the record for the commander's next session.
+      expect(store.getRun(parent.id)?.unit?.pendingReports?.[0]?.fromRunId).toBe(child.id);
+      expect(store.getRun(parent.id)?.unit?.pendingReports?.[0]?.report.status).toBe('blocked');
+    }, 40_000);
+
+    it('never continues a cancelled commander from a child that settles after it', async () => {
+      // The order the cascade produces, made deterministic: the commander is cancelled first and
+      // its legate settles afterwards. `continueRun` permits a `cancelled` run — that is the
+      // user's own Continue button — so the last rung of the report ladder used to re-queue the
+      // very mission the user had just stopped.
+      const parent = start('mock:monitoring holding the line', caesar('m16'));
+      await waitFor(parent.id, (r) => r?.activity === 'monitoring');
+      expect(manager.cancel(parent.id)).toBe(true);
+      await waitFor(parent.id, (r) => r?.status === 'cancelled');
+
+      const child = start('mock:report take the left flank', {
+        role: 'legate',
+        missionId: 'm16',
+        parentRunId: parent.id,
+      });
+      await waitFor(child.id, (r) => r?.status === 'done' || r?.status === 'review');
+      await waitFor(parent.id, (r) => (r?.unit?.pendingReports?.length ?? 0) > 0);
+      await new Promise((r) => setTimeout(r, 500));
+
+      const root = store.getRun(parent.id);
+      expect(root?.status).toBe('cancelled'); // not resurrected as `queued`
+      expect(root?.steps.some((step) => step.id.startsWith('continue-'))).toBe(false);
+      expect(manager.isActive(parent.id)).toBe(false);
+      // The report still reached the record, so a human Continue picks it up.
+      expect(root?.unit?.pendingReports?.[0]?.fromRunId).toBe(child.id);
+    }, 60_000);
+
+    it('leaves a whole cancelled army settled, with no run brought back', async () => {
+      const root = start('mock:spawn take the hill', caesar('m17', 20));
+      await waitFor(root.id, (r) => r?.activity === 'monitoring');
+      const children = childrenOf(root.id);
+      expect(children).toHaveLength(2);
+      for (const child of children) started.push(child.id);
+
+      expect(manager.cancel(root.id)).toBe(true);
+      for (const id of [root.id, ...children.map((c) => c.id)]) await waitFor(id, settled);
+      // Every child's teardown has to have run before this is worth asserting.
+      await new Promise((r) => setTimeout(r, 1_500));
+
+      const settledRoot = store.getRun(root.id);
+      expect(settledRoot?.status).toBe('cancelled');
+      expect(settledRoot?.steps.some((step) => step.id.startsWith('continue-'))).toBe(false);
+      expect(manager.isActive(root.id)).toBe(false);
+    }, 90_000);
+  });
 
   // ---- the Guard (Q4) -----------------------------------------------------------------------
 

@@ -4,11 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { UNIT_ROLES, unitSpawnSchema } from '@open-mercato/cezar-contract';
+import type { UnitRole } from '@open-mercato/cezar-contract';
 import {
   DEFAULT_UNIT_PROMPTS,
   listUnitPrompts,
   resetUnitPrompt,
   resolveUnitPrompt,
+  unitPromptPath,
   unitPromptsDir,
   writeUnitPrompt,
 } from './prompts.ts';
@@ -94,6 +96,24 @@ describe('unit role prompts', () => {
     const prompts = await listUnitPrompts(repoRoot);
     expect(prompts.map((p) => p.role)).toEqual([...UNIT_ROLES]);
     expect(prompts.map((p) => p.source)).toEqual(['default', 'default', 'file']);
+  });
+
+  /**
+   * Defence in depth for the one value in this module that becomes a filesystem path. The type
+   * says `UnitRole`, but every caller upstream is a place where that is a CLAIM rather than a
+   * guarantee: a `:role` path param off the wire, and a `unit.role` read back off a run record a
+   * user can hand-edit. A role that is not one of the three must not resolve to a path at all —
+   * `../../../etc/passwd` would otherwise read and write outside `.ai/cezar/units`.
+   */
+  it('refuses a role that is not one of the three instead of building a path from it', async () => {
+    const bogus = '../../../etc/passwd' as UnitRole;
+    expect(() => unitPromptPath(repoRoot, bogus)).toThrow(/unknown unit role/);
+    expect(() => unitPromptPath(repoRoot, 'legionary' as UnitRole)).toThrow(/unknown unit role/);
+    // And the readers/writers do not swallow it — a resolve that fell through to the default
+    // would hand a session `undefined` for its whole role prompt.
+    await expect(resolveUnitPrompt(repoRoot, bogus)).rejects.toThrow(/unknown unit role/);
+    await expect(writeUnitPrompt(repoRoot, bogus, 'x')).rejects.toThrow(/unknown unit role/);
+    await expect(resetUnitPrompt(repoRoot, bogus)).rejects.toThrow(/unknown unit role/);
   });
 
   it('a hand-written file cezar never wrote is read the same way', async () => {

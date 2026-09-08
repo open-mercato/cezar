@@ -134,7 +134,10 @@ export const unitSpawnSchema = z
             title: z.string().min(1).max(120),
             objective: z.string().min(1).max(4000),
             scope: z.string().max(1000).optional(),
-            allowed_tools: z.array(z.string()).max(16).optional(),
+            /** Tool NAMES, so each is bounded like every other string here (#429): the list
+             *  reaches a spawned process's `allowedTools`, and an unbounded element is an
+             *  unbounded argument. */
+            allowed_tools: z.array(z.string().max(80)).max(16).optional(),
             max_cost: z.number().positive().optional(),
             success_criteria: z.string().max(1000).optional(),
             required_evidence: z.string().max(1000).optional(),

@@ -135,15 +135,20 @@ function byNewest(a: UnitRun, b: UnitRun): number {
  * Losing a running child because its parent was archived would hide live spend, and hiding a
  * waiting child would hide something asking for a human.
  *
- * Cycles cannot happen (a parent id is written at spawn, before the child exists) but are
- * survived anyway: a node is emitted at most once, so a corrupt file costs a missing edge rather
- * than a stack overflow.
+ * **Cycles** should not happen — a parent id is written at spawn, before the child exists — but a
+ * hand-edited or corrupt `runs.json` can still name one, and a cycle names NO root: every member
+ * is somebody's child, so the first pass files each one under another and the whole mission
+ * would disappear from the page. Any node whose ancestor chain revisits a node it has already
+ * walked is therefore promoted to a root, and the build below emits each node once — so a
+ * 2-cycle surfaces as one tree broken at whichever member sorts first, never as nothing.
  */
 export function buildMissionTrees(runs: readonly ApiRun[]): MissionTree[] {
   const unitRuns = runs.filter(isUnitRun)
   const byId = new Map(unitRuns.map((run) => [run.id, run]))
 
   const childrenOf = new Map<string, UnitRun[]>()
+  /** child id → the node it was filed under, which is what the cycle walk below climbs. */
+  const attachedTo = new Map<string, string>()
   const roots: UnitRun[] = []
   for (const run of unitRuns) {
     const parentId = run.unit.parentRunId
@@ -163,9 +168,26 @@ export function buildMissionTrees(runs: readonly ApiRun[]): MissionTree[] {
       roots.push(run)
       continue
     }
+    attachedTo.set(run.id, attachTo)
     const siblings = childrenOf.get(attachTo)
     if (siblings) siblings.push(run)
     else childrenOf.set(attachTo, [run])
+  }
+
+  // Promote every member of a cycle. Promoting all of them rather than picking one keeps this a
+  // local decision (no tie-break to get wrong): the emitted guard in the build loop collapses
+  // them into a single tree, and the edges are left in place so the cycle still renders as the
+  // nesting the records describe rather than as a row of flat orphans.
+  for (const [childId] of attachedTo) {
+    const seen = new Set<string>([childId])
+    let cursor = attachedTo.get(childId)
+    while (cursor !== undefined && !seen.has(cursor)) {
+      seen.add(cursor)
+      cursor = attachedTo.get(cursor)
+    }
+    if (cursor === undefined) continue // the chain reached a root — the ordinary case
+    const run = byId.get(childId)
+    if (run) roots.push(run)
   }
 
   const emitted = new Set<string>()
@@ -178,27 +200,30 @@ export function buildMissionTrees(runs: readonly ApiRun[]): MissionTree[] {
     return nodeOf(run, depth, children)
   }
 
-  return roots
-    .sort(byNewest)
-    .filter((run) => !emitted.has(run.id))
-    .map((run) => {
-      const root = build(run, 0)
-      const nodes = flattenMission(root)
-      const budgets = nodes.filter((node) => node.budgetUsd !== undefined)
-      return {
-        root,
-        missionId: root.run.id,
-        needsGuard: nodes.some((node) => node.needsGuard),
-        totalCostUsd: nodes.reduce((sum, node) => sum + node.costUsd, 0),
-        ...(budgets.length === 0
-          ? {}
-          : { totalBudgetUsd: budgets.reduce((sum, node) => sum + (node.budgetUsd ?? 0), 0) }),
-        nodeCount: nodes.length,
-        updatedAt: nodes
-          .map((node) => missionUpdatedAt(node.run))
-          .reduce((newest, at) => (Date.parse(at) > Date.parse(newest) ? at : newest)),
-      }
+  const trees: MissionTree[] = []
+  // Sequential, not `.filter().map()`: `filter` runs to completion before the first `build`, so
+  // it reads an `emitted` set that is still empty and cannot skip a promoted cycle member that
+  // an earlier tree has since absorbed.
+  for (const run of [...roots].sort(byNewest)) {
+    if (emitted.has(run.id)) continue
+    const root = build(run, 0)
+    const nodes = flattenMission(root)
+    const budgets = nodes.filter((node) => node.budgetUsd !== undefined)
+    trees.push({
+      root,
+      missionId: root.run.id,
+      needsGuard: nodes.some((node) => node.needsGuard),
+      totalCostUsd: nodes.reduce((sum, node) => sum + node.costUsd, 0),
+      ...(budgets.length === 0
+        ? {}
+        : { totalBudgetUsd: budgets.reduce((sum, node) => sum + (node.budgetUsd ?? 0), 0) }),
+      nodeCount: nodes.length,
+      updatedAt: nodes
+        .map((node) => missionUpdatedAt(node.run))
+        .reduce((newest, at) => (Date.parse(at) > Date.parse(newest) ? at : newest)),
     })
+  }
+  return trees
 }
 
 /** One mission's nodes in DISPLAY order (parent, then its subtree) — what the table renders row
