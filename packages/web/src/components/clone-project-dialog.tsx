@@ -18,6 +18,24 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
 /**
+ * GitHub prints this URL when an otherwise-valid OAuth token still needs SAML
+ * authorization for the repository's organization. The failed `gh` process
+ * cannot resume after the browser flow, so the dialog turns the URL into a
+ * trusted link and makes the required retry explicit.
+ *
+ * Keep this deliberately narrower than "find a URL": clone errors include
+ * output influenced by the remote, and rendering arbitrary output as a link
+ * would make the local cockpit an excellent phishing surface.
+ */
+export function githubSsoUrl(error: unknown): string | null {
+  if (!(error instanceof Error)) return null
+  const match = error.message.match(
+    /https:\/\/github\.com\/orgs\/[A-Za-z0-9._-]+\/sso\?authorization_request=[A-Za-z0-9._~-]+/,
+  )
+  return match?.[0] ?? null
+}
+
+/**
  * "Add project → Clone from GitHub" (multi-project spec, "Add project" option B / step 4.3).
  *
  * The mockup's three parts, and what each one is faithful to:
@@ -49,6 +67,7 @@ export function CloneProjectDialog({
   const projects = useProjects()
   const checkout = useCheckoutProject()
   const navigate = useNavigate()
+  const ssoUrl = githubSsoUrl(checkout.error)
 
   // One id per mounted dialog. The dialog is mounted only while open (AddProjectMenu), so a
   // second clone attempt in a second opening is a second id — which is the point: a stale
@@ -180,9 +199,25 @@ export function CloneProjectDialog({
         ) : null}
 
         {checkout.isError ? (
-          <p data-slot="clone-error" className="text-[13px] text-danger">
-            {checkout.error instanceof Error ? checkout.error.message : 'could not clone that repository'}
-          </p>
+          <div data-slot="clone-error" className="grid gap-1.5 text-[13px] text-danger">
+            <p className="whitespace-pre-wrap break-words">
+              {checkout.error instanceof Error ? checkout.error.message : 'could not clone that repository'}
+            </p>
+            {ssoUrl ? (
+              <p>
+                <a
+                  data-slot="clone-sso-link"
+                  className="font-medium underline underline-offset-2"
+                  href={ssoUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Authorize this GitHub organization
+                </a>
+                {' — then return here and retry the clone.'}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         <DialogFooter>
@@ -194,7 +229,7 @@ export function CloneProjectDialog({
             disabled={url.trim() === '' || effectiveName === '' || checkout.isPending}
             onClick={clone}
           >
-            {checkout.isPending ? 'Cloning…' : 'Clone'}
+            {checkout.isPending ? 'Cloning…' : checkout.isError ? 'Retry clone' : 'Clone'}
           </Button>
         </DialogFooter>
       </DialogContent>
