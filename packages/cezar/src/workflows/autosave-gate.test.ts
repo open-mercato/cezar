@@ -20,7 +20,7 @@ interface TimerState {
 }
 
 interface TimerSeam {
-  armAutosave(state: TimerState): void;
+  armAutosave(state: TimerState, stageOnlyHarness?: boolean): void;
   clearAutosaveTimer(state: TimerState): void;
 }
 
@@ -87,6 +87,13 @@ describe('periodic autosave gate (#471)', () => {
     const rootState: TimerState = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
     manager.armAutosave(rootState);
     expect(rootState.autosaveTimer).toBeUndefined();
+  });
+
+  it('never arms the timer for a stage-only harness run', () => {
+    process.env.CEZ_AUTOSAVE = '1';
+    const state: TimerState = { cancelled: false, interrupt: () => undefined, cwd: worktreePath };
+    manager.armAutosave(state, true);
+    expect(state.autosaveTimer).toBeUndefined();
   });
 
   it('AUTOSAVE_INTERVAL_MS stays the spec-006 90 s contract', () => {

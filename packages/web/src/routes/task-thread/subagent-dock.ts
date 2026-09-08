@@ -218,10 +218,18 @@ export function subagentCounts(agents: SubagentSummary[]): { done: number; total
 /**
  * The one-line readout for an agent, used by BOTH the collapsed head and the expanded row so
  * the two can never tell different stories about the same agent. A stalled agent is not
- * starting — the run ended under it, and the transcript will never move again.
+ * starting — the run ended under it, and the transcript will never move again. Neither is a
+ * settled one: a harness skill session can complete without ever attributing children (run
+ * 56633cdc closed with the head reading "starting…" over a staged, finished run), so a missing
+ * activity line on a settled agent reports the outcome instead.
  */
 export function subagentActivityText(agent: SubagentSummary): string {
-  return agent.activity ?? (agent.stalled === true ? 'never finished' : 'starting…')
+  if (agent.activity !== undefined) return agent.activity
+  if (agent.stalled === true) return 'never finished'
+  if (agent.status === 'completed') return 'finished'
+  if (agent.status === 'failed') return 'failed'
+  if (agent.status === 'declined') return 'declined'
+  return 'starting…'
 }
 
 /**

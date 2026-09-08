@@ -1,3 +1,4 @@
+import { codexReasoningEffortOf } from './reasoning-effort.ts';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentEvent,
@@ -18,6 +19,7 @@ import {
 import { parseAskRequest, type AskQuestion } from './ask.ts';
 import { readNdjson } from './ndjson.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
+import { terminateAgentProcessTree } from './process-tree.ts';
 import {
   CodexAppServerRpc,
   codexSpawnError,
@@ -141,7 +143,17 @@ class CodexSession implements AgentSession {
     private readonly opts: SessionOptions,
   ) {
     try {
-      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env);
+      // Stage-only harness phases run under the workspace-write sandbox, whose
+      // write boundary is the worktree — but the phase-result contract lives in
+      // the run's agent-output dir OUTSIDE it. Grant exactly the declared extra
+      // directories as writable roots, mirroring what claude's `--add-dir`
+      // already does; without this a codex implementer finishes the work and
+      // then EPERMs on the one file the driver requires (eval run d6ebd27c).
+      const writableRoots =
+        spec.env?.CEZ_HARNESS_STAGE_ONLY === '1' && spec.additionalDirectories?.length
+          ? ['-c', `sandbox_workspace_write.writable_roots=${JSON.stringify(spec.additionalDirectories)}`]
+          : [];
+      this.child = spawnCodexAppServer(bin, spec.cwd, spec.env, writableRoots);
       this.rpc = new CodexAppServerRpc(this.child);
     } catch (err) {
       throw codexSpawnError(err, bin);
@@ -157,20 +169,12 @@ class CodexSession implements AgentSession {
 
     // Optional wall-clock kill switch (disabled for interactive sessions).
     const limitMs = spec.timeoutMs ?? timeoutMs;
-    let killTimer: NodeJS.Timeout | undefined;
     let deadline: NodeJS.Timeout | undefined;
     if (limitMs > 0) {
       deadline = setTimeout(() => {
         this.timedOut = true;
         this.interrupt();
         this.child.stdout.destroy();
-        killTimer = setTimeout(() => {
-          if (!this.hasExited()) {
-            this.terminatedByCezar = true;
-            this.child.kill('SIGKILL');
-          }
-        }, KILL_GRACE_MS);
-        killTimer.unref?.();
       }, limitMs);
       deadline.unref?.();
     }
@@ -215,7 +219,6 @@ class CodexSession implements AgentSession {
         }
       } finally {
         if (deadline) clearTimeout(deadline);
-        if (killTimer) clearTimeout(killTimer);
         if (this.autoEndTimer) clearTimeout(this.autoEndTimer);
         this.stdinOpen = false;
       }
@@ -277,6 +280,10 @@ class CodexSession implements AgentSession {
     return this.child.pid;
   }
 
+  get processGroup(): boolean {
+    return true;
+  }
+
   sendMessage(content: ContentBlock[]): boolean {
     if (!this.stdinOpen) return false;
     if (this.autoEndTimer) {
@@ -330,9 +337,13 @@ class CodexSession implements AgentSession {
         () => undefined,
       );
     }
+    // Liveness is `hasExited()`, never `child.killed`, which only reports that a
+    // signal was delivered (#844). Ours coming back must not read as an agent
+    // failure (#703) — and the teardown is tree-wide so the app-server's own
+    // children die with it.
     if (!this.hasExited()) {
       this.terminatedByCezar = true;
-      this.child.kill('SIGTERM');
+      terminateAgentProcessTree(this.child, KILL_GRACE_MS);
     }
   }
 
@@ -347,8 +358,16 @@ class CodexSession implements AgentSession {
       // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
       // keeps container installs working when bubblewrap cannot create a UID map (#563).
       // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
-      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
+      sandbox:
+        this.spec.env?.CEZ_HARNESS_STAGE_ONLY === '1' ||
+        process.env.CEZ_CODEX_NETWORK === '0'
+          ? 'workspace-write'
+          : 'danger-full-access',
       approvalPolicy: 'never',
+      // Reasoning effort (user feedback 2026-07-24): the seam's neutral tier
+      // mapped to codex's own levels (`max` → `xhigh`), camelCase like the
+      // sibling overrides. `clean()` drops it when unset.
+      modelReasoningEffort: codexReasoningEffortOf(this.spec.reasoningEffort) ?? undefined,
     };
     if (this.spec.resume && this.spec.sessionId) {
       await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });

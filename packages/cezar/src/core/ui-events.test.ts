@@ -75,11 +75,20 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
       'ask.requested': 'thread',
       'usage.updated': 'gauge',
       'image': 'thread',
+      // Harness driver events (spec 2026-07-23-harness-orchestration):
+      // phase transitions feed the rail (meta), readiness feeds the models
+      // dock, council rounds render as thread cards + the Review tab, packet
+      // snapshots feed the Packets surface, stage feeds the review gate.
+      'harness.phase.updated': 'meta',
+      'harness.readiness.updated': 'dock',
+      'harness.council.updated': 'thread',
+      'harness.packet.updated': 'dock',
+      'harness.stage.updated': 'meta',
     } as const satisfies Record<UiEventType, 'thread' | 'meta' | 'dock' | 'gauge' | 'reserved'>;
 
     // And the map has no extra keys either: its key set IS the event set.
     assertType<Equal<keyof typeof renderRelevance, UiEventType>>();
-    expect(Object.keys(renderRelevance)).toHaveLength(15);
+    expect(Object.keys(renderRelevance)).toHaveLength(20);
   });
 
   it('the event union narrows on `type`', () => {
@@ -107,6 +116,11 @@ describe('UiEvent vocabulary (compile-time contract)', () => {
         case 'permission.resolved':
         case 'ask.requested':
         case 'image':
+        case 'harness.phase.updated':
+        case 'harness.readiness.updated':
+        case 'harness.council.updated':
+        case 'harness.packet.updated':
+        case 'harness.stage.updated':
           return event.type;
         default: {
           // Exhaustiveness: a new variant makes this line fail to compile.

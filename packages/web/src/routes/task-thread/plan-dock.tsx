@@ -1,5 +1,5 @@
 import { ChevronDownIcon } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import type { PlanEntry, PlanStatus } from '@open-mercato/cezar-api-client'
 import { cn } from '@/lib/utils'
@@ -20,8 +20,10 @@ const openByRun = new Map<string, boolean>()
 
 /** Desktop starts expanded, phones collapsed (the mockup's mobile reflow keeps only the
  *  odometer). jsdom has no matchMedia — that environment counts as desktop. */
-function defaultOpen(): boolean {
-  return typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 768px)').matches
+function defaultOpen(entries: PlanEntry[]): boolean {
+  const desktop =
+    typeof window.matchMedia !== 'function' || window.matchMedia('(min-width: 768px)').matches
+  return desktop && planActiveEntry(entries) !== undefined
 }
 
 /** The "N/M" odometer math: completed entries over all entries the agent still
@@ -44,7 +46,14 @@ export function planActiveEntry(entries: PlanEntry[]): PlanEntry | undefined {
 }
 
 export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry[] }) {
-  const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen())
+  const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen(entries))
+  const hasActiveEntry = planActiveEntry(entries) !== undefined
+  useEffect(() => {
+    if (!hasActiveEntry) {
+      openByRun.set(runId, false)
+      setOpen(false)
+    }
+  }, [hasActiveEntry, runId])
   if (entries.length === 0) return null // full-replacement can empty the plan — nothing to dock
 
   const { done, total } = planCounts(entries)

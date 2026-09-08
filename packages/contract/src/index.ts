@@ -14,3 +14,4 @@ export * from './skills.ts';
 export * from './agent-config.ts';
 export * from './agent-profiles.ts';
 export * from './automations.ts';
+export * from './harness.ts';

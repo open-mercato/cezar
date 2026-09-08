@@ -2,6 +2,10 @@ import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:ch
 import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
+import {
+  AGENT_PROCESS_DETACHED,
+  terminateAgentProcessTree,
+} from './process-tree.ts';
 
 export interface CodexAppServerMessage {
   id?: number | string;
@@ -24,16 +28,20 @@ export function buildCodexAppServerEnv(extraEnv?: Record<string, string>): NodeJ
   return buildChildEnv({ backend: 'codex', extraEnv });
 }
 
-/** Spawn the authenticated host's app-server with the same least-privilege env used by runs. */
+/** Spawn the authenticated host's app-server with the same least-privilege env used by runs.
+ *  `configArgs` are `-c key=value` CLI config overrides applied to the whole server process —
+ *  the only spawn-time knob codex offers for sandbox policy details like writable roots. */
 export function spawnCodexAppServer(
   bin: string,
   cwd: string,
   extraEnv?: Record<string, string>,
+  configArgs: readonly string[] = [],
 ): ChildProcessWithoutNullStreams {
   try {
-    return nodeSpawn(bin, ['app-server'], {
+    return nodeSpawn(bin, ['app-server', ...configArgs], {
       cwd,
       env: buildCodexAppServerEnv(extraEnv),
+      detached: AGENT_PROCESS_DETACHED,
     });
   } catch (error) {
     throw codexSpawnError(error, bin);
@@ -45,7 +53,9 @@ export class CodexAppServerRpc {
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
 
-  constructor(readonly child: ChildProcessWithoutNullStreams) {}
+  constructor(readonly child: ChildProcessWithoutNullStreams) {
+    this.child.stdin.on('error', () => undefined);
+  }
 
   allocateId(): number {
     return this.nextId++;
@@ -123,16 +133,11 @@ export function endCodexAppServer(
   let killTimer: NodeJS.Timeout | undefined;
   const termTimer = setTimeout(() => {
     if (!hasExited()) {
+      // The caller's flag first (#703 — the exit this provokes is ours), then
+      // the tree teardown with its own group-checked SIGKILL escalation.
       onSignal?.();
-      child.kill('SIGTERM');
+      killTimer = terminateAgentProcessTree(child, EOF_KILL_GRACE_MS);
     }
-    killTimer = setTimeout(() => {
-      if (!hasExited()) {
-        onSignal?.();
-        child.kill('SIGKILL');
-      }
-    }, EOF_KILL_GRACE_MS);
-    killTimer.unref?.();
     onTimers?.(termTimer, killTimer);
   }, EOF_TERM_GRACE_MS);
   termTimer.unref?.();

@@ -145,6 +145,9 @@ const CONFIG: ConfigResponse = {
   systemPrompt: null,
   defaultModels: {},
   modelsLocked: false,
+  // The multi-model feature flag is ON for this suite so the Multi-model surface stays
+  // exercised; the default-off gate has its own test.
+  multiModel: true,
   maxParallel: 2,
   memoryLimitMb: null,
   worktreeRetention: 10,
@@ -386,11 +389,44 @@ describe('the hero surface', () => {
     expect(requests.some((r) => r.method === 'POST')).toBe(false)
     expect(location()).toBe('/new')
   })
+
+  it('the Multi-model tab exists only behind the multiModel flag (off by default)', async () => {
+    serve({ config: { multiModel: false } })
+    renderNewTask()
+    await pillReady()
+    // Task-only composer: no mode tablist at all, and a persisted multi draft
+    // falls back to the Task surface instead of stranding.
+    expect(document.querySelector('[data-slot="multi-model-tab"]')).toBeNull()
+    expect(screen.queryByRole('tablist', { name: 'Composer mode' })).toBeNull()
+    expect(screen.getByText('Runs in an isolated worktree — review everything before it lands.')).toBeTruthy()
+  })
 })
 
 // ---- picker data flows ------------------------------------------------------------------------
 
 describe('picker data flows', () => {
+  it('updates the harness role pickers when Claude model discovery changes', async () => {
+    serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
+    const { client } = renderNewTask()
+    await pillReady()
+    fireEvent.click(screen.getByRole('tab', { name: 'Multi-model' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Orchestrator model' }))
+    await waitFor(() => expect(client.getQueryState(workspaceQueryKeys.models('claude'))?.fetchStatus).toBe('idle'))
+
+    act(() => {
+      client.setQueryData(workspaceQueryKeys.models('claude'), {
+        runner: 'claude',
+        models: [{ id: 'claude-future', label: 'Future Claude', description: 'Discovered by the CLI' }],
+        source: 'live',
+        stale: false,
+      })
+    })
+
+    fireEvent.click(await screen.findByRole('option', { name: /claude · Future Claude/ }))
+    expect(screen.getByRole('button', { name: 'Orchestrator model' }).textContent).toContain('Future Claude')
+    expect(readDraft().harnessRoles?.orchestrator).toMatchObject({ runner: 'claude', model: 'claude-future' })
+  })
+
   it('hides the runner pill on a single-backend host (legacy rule)', async () => {
     serve()
     renderNewTask()
@@ -470,6 +506,10 @@ describe('picker data flows', () => {
     writeDraft({
       text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', variants: 1,
       planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -955,6 +995,7 @@ describe('submit', () => {
     writeDraft({
       text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null,
       variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
+      composerMode: null, harnessMode: null, harnessSkillProfile: null, harnessRoles: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
     renderNewTask()

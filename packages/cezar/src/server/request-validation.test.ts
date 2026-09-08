@@ -41,6 +41,7 @@ describe('request validation bounds (#429)', () => {
         continueText = opts.text;
         return { ok: true };
       },
+      isActive: () => false,
     } as unknown as RunManager;
     app = createApp({
       repoRoot,

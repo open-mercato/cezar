@@ -367,8 +367,10 @@ export async function materializeSkillDir(repoRoot: string, skill: Skill): Promi
   return true;
 }
 
-/** Append a pattern to git's `info/exclude` (idempotent, non-fatal). */
-async function excludeFromGit(repoRoot: string, pattern: string): Promise<void> {
+/** Append a pattern to git's `info/exclude` (idempotent, non-fatal). Exported
+ *  for the generic materializer (`skills-materialize.ts`), which shares the
+ *  keep-out-of-the-user's-git discipline. */
+export async function excludeFromGit(repoRoot: string, pattern: string): Promise<void> {
   try {
     // Resolve the real exclude file: in a linked worktree (spec 006) `.git`
     // is a file and `info/exclude` lives in the shared common dir — which
@@ -378,7 +380,12 @@ async function excludeFromGit(repoRoot: string, pattern: string): Promise<void> 
       LIST_TIMEOUT_MS,
       repoRoot,
     );
-    const gitDir = probe.ok && probe.stdout.trim() ? probe.stdout.trim() : join(repoRoot, '.git');
+    // Not a repository → nothing to exclude FROM. Bail instead of fabricating
+    // a phantom `.git/info/` in a plain folder (seen 2026-07-24: a non-git
+    // project dir grew a `.git` holding only `info/exclude`, which then read
+    // as a broken repo to everything downstream).
+    if (!probe.ok || !probe.stdout.trim()) return;
+    const gitDir = probe.stdout.trim();
     const excludePath = join(gitDir, 'info', 'exclude');
     let prev = '';
     try {

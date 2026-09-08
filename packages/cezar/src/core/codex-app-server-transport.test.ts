@@ -77,8 +77,12 @@ describe('Codex app-server transport', () => {
 
 /**
  * #703 — the runner can only tell its own teardown apart from a codex failure
- * if the watchdog reports every signal it sends. Without the callback firing,
- * the SIGTERM the escalation issues comes back as an unexplained 143.
+ * if the watchdog reports BEFORE the teardown it provokes, or the exit can
+ * race ahead of the flag. Teardown itself is `terminateAgentProcessTree` (one
+ * group SIGTERM with its own group-checked SIGKILL escalation — exercised
+ * against real processes in `process-tree.test.ts`); a fake without a pid
+ * deliberately makes the group signal a no-op, because a made-up pid would
+ * signal a real process group on the host.
  */
 describe('endCodexAppServer watchdog', () => {
   function signallableChild(): {
@@ -92,13 +96,14 @@ describe('endCodexAppServer watchdog', () => {
       stdin: new PassThrough(),
       exitCode: null as number | null,
       signalCode: null as NodeJS.Signals | null,
-      killed: false,
-      // Mirrors Node: `killed` records that a signal was *delivered*, not that
-      // the child died. An app-server with its own SIGTERM handler stays alive
-      // with the flag already set (#844).
+      // Node sets `killed` when a signal is *delivered*, not when the child
+      // dies, and an app-server with its own SIGTERM handler runs on with the
+      // flag already true. Pre-set here because that is the exact state the old
+      // `!child.killed` guard read as "already gone", skipping the teardown for
+      // the one process it exists for (#844).
+      killed: true,
       kill: (signal: NodeJS.Signals) => {
         signals.push(signal);
-        Object.assign(child, { killed: true });
         return true;
       },
     }) as unknown as ChildProcessWithoutNullStreams;
@@ -109,25 +114,24 @@ describe('endCodexAppServer watchdog', () => {
     return { child, signals, exit };
   }
 
-  it('reports each escalation step so the runner can classify the exit', () => {
+  it('reports the teardown before it starts so the runner can classify the exit', () => {
     vi.useFakeTimers();
     try {
       const { child, signals } = signallableChild();
-      // How many signals had been sent when the callback fired — the flag must
-      // be set BEFORE each kill, or the exit can race ahead of it.
-      const reportedBeforeKill: number[] = [];
-      endCodexAppServer(child, undefined, () => reportedBeforeKill.push(signals.length));
+      let reported = 0;
+      endCodexAppServer(child, undefined, () => {
+        reported += 1;
+      });
 
       // EOF alone: the server is given the full grace period first.
-      expect(signals).toEqual([]);
+      expect(reported).toBe(0);
 
       vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
-      expect(signals).toEqual(['SIGTERM']);
-      expect(reportedBeforeKill).toEqual([0]);
-
-      vi.advanceTimersByTime(EOF_KILL_GRACE_MS);
-      expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
-      expect(reportedBeforeKill).toEqual([0, 1]);
+      // Flagged killed but never exited — the state that used to veto teardown.
+      expect(child.killed).toBe(true);
+      expect(child.exitCode).toBeNull();
+      expect(reported).toBe(1);
+      expect(signals).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -146,45 +150,6 @@ describe('endCodexAppServer watchdog', () => {
       vi.advanceTimersByTime(EOF_TERM_GRACE_MS + EOF_KILL_GRACE_MS);
       expect(signals).toEqual([]);
       expect(reported).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  // #844 — the regression that gating on `child.killed` produced: the SIGTERM
-  // this watchdog sends sets the flag, so the escalation vetoed itself and an
-  // app-server that handles SIGTERM survived the entire teardown window.
-  it('escalates to SIGKILL even though Node already flagged the child as killed', () => {
-    vi.useFakeTimers();
-    try {
-      const { child, signals } = signallableChild();
-      endCodexAppServer(child);
-
-      vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
-      expect(signals).toEqual(['SIGTERM']);
-      // Delivery, not death: the app-server handled the signal and runs on.
-      expect(child.killed).toBe(true);
-      expect(child.exitCode).toBeNull();
-
-      vi.advanceTimersByTime(EOF_KILL_GRACE_MS);
-      expect(signals).toEqual(['SIGTERM', 'SIGKILL']);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it('stops escalating once the app-server really exits after SIGTERM', () => {
-    vi.useFakeTimers();
-    try {
-      const { child, signals, exit } = signallableChild();
-      endCodexAppServer(child);
-
-      vi.advanceTimersByTime(EOF_TERM_GRACE_MS);
-      expect(signals).toEqual(['SIGTERM']);
-      exit(143);
-
-      vi.advanceTimersByTime(EOF_KILL_GRACE_MS);
-      expect(signals).toEqual(['SIGTERM']);
     } finally {
       vi.useRealTimers();
     }

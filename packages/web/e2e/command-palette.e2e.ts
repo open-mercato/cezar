@@ -33,7 +33,7 @@ afterAll(() => {
 
 describe('command palette', () => {
   it('opens on Ctrl+K, filters to a nav item, and Enter navigates and closes it', () => {
-    browser.goto(baseUrl + '/')
+    browser.goto(`${baseUrl}/p/${bootProject}/`)
     browser.waitForFunction(`document.querySelector('[data-slot="sidebar"]') !== null`)
     expect(browser.count(ROOT)).toBe(0)
 

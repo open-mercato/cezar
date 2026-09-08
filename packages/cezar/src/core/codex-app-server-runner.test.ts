@@ -20,6 +20,28 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
+/** Records tree teardowns instead of performing them while a fake child is
+ *  installed: its made-up pid would otherwise have `process.kill(-pid)` reach a
+ *  real process group on the host. The real-process tests in this file keep the
+ *  real teardown, and what it does — group SIGTERM, then a
+ *  group-liveness-checked SIGKILL — is covered by `process-tree.test.ts`. */
+const treeHook = vi.hoisted(() => ({
+  recording: false,
+  calls: [] as Array<[unknown, number]>,
+}));
+
+vi.mock('./process-tree.ts', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./process-tree.ts')>();
+  return {
+    ...actual,
+    terminateAgentProcessTree: (child: never, graceMs: number) => {
+      if (!treeHook.recording) return actual.terminateAgentProcessTree(child, graceMs);
+      treeHook.calls.push([child, graceMs]);
+      return setTimeout(() => {}, 0);
+    },
+  };
+});
+
 /**
  * #703 backend parity — `claude-cli-runner.test.ts` proves the Claude half;
  * this is the same session-level shape for Codex. The fix only holds if BOTH
@@ -61,6 +83,42 @@ describe('a teardown cezar initiated (codex app-server)', () => {
     ).toBe(true);
   }, 15_000);
 
+  it('forces the restricted sandbox for stage-only harness phases', async () => {
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const session = runner.startSession(
+      {
+        userPrompt: 'review without publishing',
+        cwd: process.cwd(),
+        env: { CEZ_HARNESS_STAGE_ONLY: '1' },
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    await expect(session.result).resolves.toMatchObject({ sessionId: 'th_mock_1' });
+  }, 15_000);
+
+  it('grants additional directories as writable roots under the stage-only sandbox', async () => {
+    // The phase-result contract writes OUTSIDE the worktree (the run's
+    // agent-output dir). Claude gets it via --add-dir; codex must get it as
+    // sandbox_workspace_write.writable_roots or the implementer finishes the
+    // work and then EPERMs on the one file the driver requires (run d6ebd27c).
+    const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
+    const session = runner.startSession(
+      {
+        userPrompt: 'implement the phase',
+        cwd: process.cwd(),
+        env: {
+          CEZ_HARNESS_STAGE_ONLY: '1',
+          MOCK_CODEX_REQUIRE_WRITABLE_ROOTS: '/data/runs/x-harness/agent-output',
+        },
+        additionalDirectories: ['/data/runs/x-harness/agent-output'],
+      },
+      undefined,
+      { autoEndAfterFirstTurn: true },
+    );
+    await expect(session.result).resolves.toMatchObject({ sessionId: 'th_mock_1' });
+  }, 15_000);
+
   it('surfaces a failed turn as an AgentEvent error', async () => {
     const runner = new CodexAppServerRunner({ bin: mockBin, timeoutMs: 0 });
     const events: AgentEvent[] = [];
@@ -79,12 +137,15 @@ describe('a teardown cezar initiated (codex app-server)', () => {
 
 /**
  * #844 — the runner's own SIGTERM sets `ChildProcess.killed`, so a watchdog
- * gated on `!child.killed` refused to escalate for exactly the app-server it
+ * gated on `!child.killed` refused to tear down for exactly the app-server it
  * was written for: one that handles the signal and keeps running. The guard now
  * tracks real termination, and `terminatedByCezar` (#703) is still set before
- * every signal so the resulting 137/143 stays a teardown note, not a failure.
+ * every teardown so the resulting 137/143 stays a teardown note, not a failure.
+ *
+ * The teardown itself is `terminateAgentProcessTree`, asserted here as a call
+ * rather than as signals — see the module mock above.
  */
-describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM', () => {
+describe('teardown for an app-server that survives SIGTERM', () => {
   function signallableChild(): {
     child: ChildProcessWithoutNullStreams;
     signals: NodeJS.Signals[];
@@ -98,12 +159,12 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
       stderr: new PassThrough(),
       exitCode: null as number | null,
       signalCode: null as NodeJS.Signals | null,
-      killed: false,
+      // Delivery flips `killed` whether or not the child dies; an app-server
+      // that handles SIGTERM runs on with the flag already true.
+      killed: true,
       pid: 4243,
-      // Node's semantics: delivery flips `killed` whether or not the child dies.
       kill: (signal: NodeJS.Signals) => {
         signals.push(signal);
-        Object.assign(child, { killed: true });
         return true;
       },
     }) as unknown as ChildProcessWithoutNullStreams;
@@ -117,16 +178,19 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
   function withFakeChild(run: (fake: ReturnType<typeof signallableChild>) => void): void {
     const fake = signallableChild();
     spawnHook.override = () => fake.child;
+    treeHook.calls.length = 0;
+    treeHook.recording = true;
     vi.useFakeTimers();
     try {
       run(fake);
     } finally {
       vi.useRealTimers();
+      treeHook.recording = false;
       spawnHook.override = null;
     }
   }
 
-  it('escalates on the wall-clock timeout even after Node flagged the child as killed', () => {
+  it('tears the tree down on the wall-clock timeout even after Node flagged the child as killed', () => {
     withFakeChild((fake) => {
       const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 20 }).startSession({
         userPrompt: 'do it',
@@ -135,34 +199,14 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
       void session.result.catch(() => undefined);
 
       vi.advanceTimersByTime(20);
-      expect(fake.signals).toEqual(['SIGTERM']);
-      // Delivered, not dead — the state that used to disable the escalation.
+      // Delivered, not dead — the state that used to disable the teardown.
       expect(fake.child.killed).toBe(true);
       expect(fake.child.exitCode).toBeNull();
-
-      vi.advanceTimersByTime(KILL_GRACE_MS);
-      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+      expect(treeHook.calls).toEqual([[fake.child, KILL_GRACE_MS]]);
     });
   });
 
-  it('stops escalating once the app-server really exits after SIGTERM', () => {
-    withFakeChild((fake) => {
-      const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 20 }).startSession({
-        userPrompt: 'do it',
-        cwd: process.cwd(),
-      });
-      void session.result.catch(() => undefined);
-
-      vi.advanceTimersByTime(20);
-      expect(fake.signals).toEqual(['SIGTERM']);
-      fake.exit(143);
-
-      vi.advanceTimersByTime(KILL_GRACE_MS);
-      expect(fake.signals).toEqual(['SIGTERM']);
-    });
-  });
-
-  it('does not signal a second time once interrupt() saw the child exit', () => {
+  it('does not touch an app-server that interrupt() saw exit', () => {
     withFakeChild((fake) => {
       const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 0 }).startSession({
         userPrompt: 'do it',
@@ -172,6 +216,7 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
       fake.exit(0);
 
       session.interrupt();
+      expect(treeHook.calls).toEqual([]);
       expect(fake.signals).toEqual([]);
     });
   });
