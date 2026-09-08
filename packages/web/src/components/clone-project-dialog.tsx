@@ -1,5 +1,5 @@
 import { SettingsIcon } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useNavigate } from 'react-router'
 
 import { onWorkspaceEvent } from '@/api/global-events'
@@ -64,6 +64,8 @@ export function CloneProjectDialog({
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
   const [progress, setProgress] = useState<string | null>(null)
+  const [awaitingSso, setAwaitingSso] = useState(false)
+  const ssoRetryArmed = useRef(false)
   const projects = useProjects()
   const checkout = useCheckoutProject()
   const navigate = useNavigate()
@@ -103,8 +105,10 @@ export function CloneProjectDialog({
   const projectsDir = projects.data?.projectsDir ?? ''
   const target = effectiveName === '' ? '' : `${projectsDir.replace(/\/+$/, '')}/${effectiveName}`
 
-  const clone = () => {
+  const clone = useCallback(() => {
     if (url.trim() === '' || checkout.isPending) return
+    ssoRetryArmed.current = false
+    setAwaitingSso(false)
     setProgress(null)
     checkout.mutate(
       { url: url.trim(), checkoutId, ...(name.trim() === '' ? {} : { name: name.trim() }) },
@@ -117,11 +121,38 @@ export function CloneProjectDialog({
         },
       },
     )
-  }
+  }, [checkout, checkoutId, name, navigate, onOpenChange, url])
+
+  // Authorizing an existing OAuth token changes GitHub's server-side token
+  // grant; it cannot wake the `gh repo clone` process that already exited.
+  // Returning to this tab is the only browser signal available to the local
+  // cockpit, so retry once on focus/visibility after the user follows the SSO
+  // link. The ref prevents browsers that emit both events from cloning twice.
+  useEffect(() => {
+    if (!awaitingSso) return
+    const retry = (): void => {
+      if (!ssoRetryArmed.current) return
+      ssoRetryArmed.current = false
+      setAwaitingSso(false)
+      clone()
+    }
+    const retryWhenVisible = (): void => {
+      if (document.visibilityState === 'visible') retry()
+    }
+    window.addEventListener('focus', retry)
+    document.addEventListener('visibilitychange', retryWhenVisible)
+    return () => {
+      window.removeEventListener('focus', retry)
+      document.removeEventListener('visibilitychange', retryWhenVisible)
+    }
+  }, [awaitingSso, clone])
 
   return (
     <Dialog open={open} onOpenChange={(next) => (checkout.isPending ? undefined : onOpenChange(next))}>
-      <DialogContent data-slot="clone-project-dialog" className="sm:max-w-lg">
+      <DialogContent
+        data-slot="clone-project-dialog"
+        className="min-w-0 max-h-[calc(100dvh-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-lg"
+      >
         <DialogHeader>
           <DialogTitle>Clone from GitHub</DialogTitle>
           <DialogDescription>
@@ -199,24 +230,34 @@ export function CloneProjectDialog({
         ) : null}
 
         {checkout.isError ? (
-          <div data-slot="clone-error" className="grid gap-1.5 text-[13px] text-danger">
-            <p className="whitespace-pre-wrap break-words">
-              {checkout.error instanceof Error ? checkout.error.message : 'could not clone that repository'}
-            </p>
+          <div data-slot="clone-error" className="grid min-w-0 gap-1.5 text-[13px] text-danger">
             {ssoUrl ? (
-              <p>
-                <a
-                  data-slot="clone-sso-link"
-                  className="font-medium underline underline-offset-2"
-                  href={ssoUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Authorize this GitHub organization
-                </a>
-                {' — then return here and retry the clone.'}
+              <>
+                <p>GitHub requires SAML authorization for this organization.</p>
+                <p>
+                  <a
+                    data-slot="clone-sso-link"
+                    className="font-medium underline underline-offset-2"
+                    href={ssoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={() => {
+                      ssoRetryArmed.current = true
+                      setAwaitingSso(true)
+                    }}
+                  >
+                    Authorize this GitHub organization
+                  </a>
+                  {awaitingSso
+                    ? ' — waiting for you to return; cezar will retry automatically.'
+                    : ' — cezar will retry when you return to this tab.'}
+                </p>
+              </>
+            ) : (
+              <p className="min-w-0 whitespace-pre-wrap break-all">
+                {checkout.error instanceof Error ? checkout.error.message : 'could not clone that repository'}
               </p>
-            ) : null}
+            )}
           </div>
         ) : null}
 
