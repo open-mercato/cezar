@@ -33,6 +33,9 @@ let turn = 0;
 // answers the nudge ends with CEZ:DONE — so a dry-run test can watch a nudged run complete
 // rather than time out.
 let autonomousArmed = false;
+// Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
+// and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
+// coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
 const AUTONOMOUS_NUDGE_PREFIX = 'Continue working autonomously';
 
 // A tiny generated PNG (320x200) standing in for a browser screenshot.
