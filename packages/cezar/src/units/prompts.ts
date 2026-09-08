@@ -22,12 +22,23 @@ import type { UnitPrompt, UnitRole } from '@open-mercato/cezar-contract';
 import { UNIT_ROLES } from '@open-mercato/cezar-contract';
 
 /**
- * The placeholder the ENGINE fills in with the branch/merge rule (child branch naming, how an
- * accepted child's work is folded into the mission branch). It is deliberately a marker rather
- * than prose: the rule depends on how `spawnChildren` sets up a child's worktree, which is the
- * engine's decision, and a prompt that guessed at it would be confidently wrong.
+ * The branch/merge rule, filled in from what the engine actually does (spec Q3): every child gets
+ * its OWN worktree, forked off the parent's branch — `spawnChildren` seeds the child record with
+ * `baseBranch: parent.branch`, and `execute()` already prefers a recorded base over the
+ * configured one. Nothing in cezar merges a child branch back: that is the commander's own work,
+ * in its own worktree, which is precisely why the rule has to live in the prompt.
  */
-const CHILD_BRANCH_RULE = '{{CHILD_BRANCH_RULE}}';
+const CHILD_BRANCH_RULE = `Branches and merges — no code does this for you, so read it twice.
+
+You work in your own git worktree, on your own branch. A child you spawn forks off YOUR BRANCH AS YOU COMMITTED IT at the moment of the spawn, into a worktree and a branch of its own.
+
+- COMMIT your work before every CEZ:SPAWN. Anything you left uncommitted does not exist for your children, and they will either redo it or contradict it.
+- Each child's report names the branch it worked on. That branch is the deliverable — a child never merges anything anywhere.
+- When a report arrives, VALIDATE it first: read that branch's diff, run the tests and commands the child claims to have run. A report is a claim until you have checked it.
+- For each child you accept, merge its branch into your own worktree: \`git merge --no-ff <child branch>\`. One child at a time, re-running the repository's checks after each merge.
+- Sibling conflicts are yours to resolve. You handed out the scopes, so two children touching the same lines is your decision to settle — resolve it in your worktree and commit the merge. Never send a conflict back down to a child.
+- A child whose branch you reject is not merged. Either re-task that piece with a new CEZ:SPAWN carrying what you learned, or drop it and say so plainly in your own report.
+- Never merge into the repository's base branch (main / master / develop) yourself, and never push to it. Your branch is where the mission's result accumulates; a human opens the pull request.`;
 
 /** The `CEZ:SPAWN` payload, spelled exactly as `unitSpawnSchema` accepts it. */
 const SPAWN_CONTRACT = `Delegating — the CEZ:SPAWN marker. To hand work down one rank, end your turn with a single line:

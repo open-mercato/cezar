@@ -126,6 +126,46 @@ describe('recover() and the unit field', () => {
     expect(rebuilt[0]?.unit).toBeUndefined();
   });
 
+  /**
+   * The other half of a restart, and the one with no `dropActive` under it: a child parked
+   * `waiting` when cezar exited is SETTLED by `recover()` — a terminal transition reached through
+   * none of this process's registries. Its parent has to learn about it anyway (spec
+   * 2026-09-08-units-hierarchy Q7), and the only channel that survives a restart is the pending
+   * report on the parent's own record.
+   */
+  it('reports a waiting child settled by recovery to its parent', async () => {
+    const units = process.env.CEZ_UNITS;
+    process.env.CEZ_UNITS = '1';
+    try {
+      const parent = store.createRun({ title: 'commander', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(parent.id, { status: 'waiting', unit: { role: 'caesar', missionId: parent.id } });
+      const child = store.createRun({
+        title: 'flank left',
+        workflow: 'quick-task',
+        task: 'take the left flank',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateRun(child.id, {
+        status: 'waiting',
+        workflowDef: WORKFLOW_DEF,
+        unit: { role: 'legate', missionId: parent.id, parentRunId: parent.id },
+      });
+
+      await new RunManager(store, repoRoot, { semaphore: frozen() }).recover();
+
+      expect(store.getRun(child.id)?.status).toBe('done');
+      expect(store.getRun(child.id)?.unit?.role).toBe('legate'); // the unit survives the settle
+      const pending = store.getRun(parent.id)?.unit?.pendingReports ?? [];
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.fromRunId).toBe(child.id);
+      // No CEZ:REPORT was ever emitted, so the report is synthesised from what the run left.
+      expect(pending[0]?.report.status).toBe('done');
+    } finally {
+      if (units === undefined) delete process.env.CEZ_UNITS;
+      else process.env.CEZ_UNITS = units;
+    }
+  });
+
   it('survives the record being written and read back off disk', () => {
     const { id, unit } = queuedUnitRun();
     store.flush();

@@ -142,11 +142,26 @@ describe('unit role prompts', () => {
       }
     });
 
-    it('leaves the child-branch rule for the engine to fill in, in both commanding prompts', () => {
-      expect(DEFAULT_UNIT_PROMPTS.caesar).toContain('{{CHILD_BRANCH_RULE}}');
-      expect(DEFAULT_UNIT_PROMPTS.legate).toContain('{{CHILD_BRANCH_RULE}}');
-      // The centurion never merges anything, so it has no branch rule to fill.
-      expect(DEFAULT_UNIT_PROMPTS.centurion).not.toContain('{{CHILD_BRANCH_RULE}}');
+    /**
+     * The child-branch rule (spec Q3) is the half of the design NO code enforces: cezar forks a
+     * child off `parent.branch` and stops there, so "commit before spawning" and "merge what you
+     * accept" exist only as prose. A prompt that lost them would describe a mechanism that
+     * silently does not happen — a caesar spawning off an uncommitted tip, and child branches
+     * nobody ever folds back in.
+     */
+    it('states the filled-in child-branch rule in both commanding prompts', () => {
+      for (const role of UNIT_ROLES) {
+        expect(DEFAULT_UNIT_PROMPTS[role]).not.toContain('{{CHILD_BRANCH_RULE}}');
+      }
+      for (const role of ['caesar', 'legate'] as const) {
+        const prompt = DEFAULT_UNIT_PROMPTS[role];
+        expect(prompt).toMatch(/COMMIT your work before every CEZ:SPAWN/i);
+        expect(prompt).toContain('git merge --no-ff');
+        expect(prompt).toMatch(/sibling conflicts are yours/i);
+        expect(prompt).toMatch(/never merge into the repository's base branch/i);
+      }
+      // The centurion commands nobody, so it has no child branch to merge and is told of none.
+      expect(DEFAULT_UNIT_PROMPTS.centurion).not.toContain('git merge --no-ff');
     });
 
     /**

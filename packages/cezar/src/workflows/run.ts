@@ -26,6 +26,7 @@ import {
   appendHandoffHeartbeat,
   followupsEnabled,
   handoffPath,
+  readHandoff,
   seedHandoffFile,
 } from '../handoff.ts';
 import { todosPath } from '../todos.ts';
@@ -49,7 +50,34 @@ import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 // The `unit` object's inferred type (spec 2026-09-08-units-hierarchy). A contract TYPE only —
 // the schema itself is imported as a value by `runs/store.ts`, which is what persists it.
-import type { RunUnit } from '@open-mercato/cezar-contract';
+import type { RunUnit, UnitRole, UnitSpawn } from '@open-mercato/cezar-contract';
+// The unit hierarchy (spec 2026-09-08-units-hierarchy). Every import below is inert unless the
+// feature is ON *and* the run carries a `unit`: `unitOf()` is the single gate, and a run without
+// one takes byte-for-byte the path it took before this feature existed.
+import { resolveCapabilities } from '../server/capabilities.ts';
+import {
+  parseReportMarkerResult,
+  parseSpawnMarkerResult,
+  stripReportMarker,
+  stripSpawnMarker,
+  type UnitMarkerParseResult,
+} from '../units/markers.ts';
+import { resolveUnitPrompt } from '../units/prompts.ts';
+import {
+  CHILD_ROLE,
+  MAX_CHILDREN_IN_FLIGHT,
+  childSettleReport,
+  childTaskEnvelope,
+  childrenOf,
+  handoffSectionExcerpt,
+  inFlightChildren,
+  isTerminalStatus,
+  pendingReportsBlock,
+  remainingBudgetUsd,
+  unitSubagentTools,
+  usd,
+  withPendingReport,
+} from '../units/engine.ts';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
@@ -118,6 +146,27 @@ function stripDoneMarker(text: string): string {
  *  `stripDoneMarker`; same delta-backend caveat). */
 function stripMonitoringMarker(text: string): string {
   return text.replace(/\s*CEZ:MONITORING\s*$/, '');
+}
+/**
+ * Strip a trailing `CEZ:SPAWN` / `CEZ:REPORT` payload from one text event, the way
+ * `stripDoneMarker` and `stripAskMarker` strip theirs (spec 2026-09-08-units-hierarchy §Markers).
+ *
+ * Called ONLY for a run that has a `unit` while the hierarchy is on: a task that never opted in
+ * must render its own text byte-for-byte as it always has, even if it happens to write the word
+ * `CEZ:SPAWN`. `stripDoneMarker` has already run on the way in, so the trailing `CEZ:DONE` a
+ * reporting child appends is out of the way and the payload is the last thing in the text.
+ */
+function stripUnitMarkers(text: string): string {
+  return stripReportMarker(stripSpawnMarker(text));
+}
+/** One refused unit marker, as the transcript explains it. The `CEZ:ASK` rejection's twin
+ *  (`askMarkerRejection`) — same shape, same tone, same rule about never echoing the payload. */
+function unitMarkerRejection(keyword: string, result: UnitMarkerParseResult<unknown>): string | undefined {
+  if (result.kind === 'invalid-json') return `${keyword} ignored — the payload is not valid JSON`;
+  if (result.kind !== 'invalid-structure') return undefined;
+  const issue = result.issues[0];
+  const location = issue?.path.length ? ` at ${issue.path.join('.')}` : '';
+  return `${keyword} ignored — the payload failed validation${location}${issue ? `: ${issue.message}` : ''}`;
 }
 /** Emit the v2 `ask.requested` event for a parsed marker (the cockpit renders
  *  it as an ask card, #473). Returns the minted request id. */
@@ -228,6 +277,23 @@ interface ActiveRun {
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
+  /**
+   * The unit hierarchy's per-session snapshot (spec 2026-09-08-units-hierarchy), resolved by
+   * `prepareUnitSession` — which BOTH construction sites call, because `ActiveRun` is built in
+   * `execute` AND in `runContinuation` and a field only one of them populates is exactly the
+   * half-fix AGENTS.md describes.
+   *
+   * `unitRole` doubles as the gate for the cheap per-event decisions (marker stripping,
+   * sub-agent tools): present ⇔ the feature is on and this run has a `unit`. Anything that
+   * WRITES re-reads the record instead, because the stored `unit` changes under us (a report, a
+   * pending report, the over-budget flag).
+   */
+  unitRole?: UnitRole;
+  /** This run's own role prompt, composed into every session's system prompt. */
+  unitPrompt?: string;
+  /** The role prompt one rung down — what a `CEZ:SPAWN` hands its children. Resolved with the
+   *  session rather than at spawn time so the turn-end handler stays synchronous. */
+  unitChildPrompt?: string;
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; root runs ordinarily do unless the
    *  explicit unsafe bypass is active. */
@@ -424,6 +490,23 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
     .map((p) => p?.trim())
     .filter((p): p is string => Boolean(p))
     .join('\n\n---\n\n');
+}
+
+/**
+ * The ROLE prompt part of a unit run's system prompt (spec 2026-09-08-units-hierarchy §Role
+ * prompts) — composed at BOTH session sites, from the RECORD's `unit.role`, so a mission run
+ * knows how to spawn and report on its first step, on every Continue, and after a restart.
+ *
+ * De-duplicated against the run's extra system prompt, and that is not a micro-optimisation:
+ * `POST /missions` and `spawnChildren` both seed the run's extra prompt with the very same role
+ * text, so composing both would hand the backend ~8 KB of identical instructions twice. When the
+ * two differ — a repo edited `.ai/cezar/units/<role>.md` after the run started — both ride
+ * along, newest first, because dropping either would silently un-teach the run one of them.
+ */
+export function unitRolePromptPart(rolePrompt: string | undefined, extra: string | undefined): string | undefined {
+  const role = rolePrompt?.trim();
+  if (!role) return undefined;
+  return role === extra?.trim() ? undefined : role;
 }
 
 /**
@@ -1120,6 +1203,9 @@ export class RunManager {
         type: 'lifecycle',
         message: `${reason} — workflow definition not recoverable, task failed`,
       });
+      // The third terminal transition outside `dropActive` (see `recover`): a queued run failing
+      // here never became active, so its parent hears about it only from this call.
+      this.reportSettledChildToParent(run.id);
       return;
     }
     // Re-apply the inbox ceiling (#471). `execute()` gates again at spawn time, so the agent is
@@ -1194,6 +1280,11 @@ export class RunManager {
           message: 'cezar restarted — the open session was settled',
         });
         await this.settleSuccess(run.id);
+        // A terminal transition that never passes through `dropActive`: this run was live in the
+        // PREVIOUS process and is in none of this one's registries. A settled child still owes
+        // its parent a report (spec 2026-09-08-units-hierarchy Q7) — and a restart is precisely
+        // the case the durable pending report exists for.
+        this.reportSettledChildToParent(run.id);
         continue;
       }
       // `running`: the process died mid-turn. Mark it interrupted (the state
@@ -1268,6 +1359,12 @@ export class RunManager {
     // left a window — measured as exactly one extra task — where the queue saw a free slot and
     // an account that looked healthy, and started work that was already doomed.
     this.scheduleAutoResumeIfLimited(runId);
+    // A settled CHILD owes its parent a report (spec 2026-09-08-units-hierarchy §Reports and
+    // settle). Here for the same reason the two hooks above are: every terminal transition funnels
+    // through this one method, and a parent parked on `monitoring` has no other way to learn that
+    // the run it is waiting for has ended. BEFORE `releaseSlot`, so a parent that has to be
+    // resumed through the queue is already queued when the pump sweeps.
+    this.reportSettledChildToParent(runId);
     this.releaseSlot();
     // A run leaving the active registry is a terminal transition (done/review/
     // failed/cancelled) — the one moment the finished-worktree count can grow.
@@ -1280,6 +1377,378 @@ export class RunManager {
     // there is no keep-count to respect and nothing left to recover from it. A
     // Continue (or an auto-resume) re-creates it through `agentEnv`.
     removeAgentTmpDir(this.dataDir, runId);
+  }
+
+  // ---- the unit hierarchy (spec 2026-09-08-units-hierarchy) ----------------------------------
+
+  /**
+   * THE gate. Everything in this section starts here, and it answers `undefined` in the two cases
+   * that must stay byte-for-byte unchanged: the feature is off (`CEZ_UNITS` unset — Q1), or this
+   * is an ordinary run that never joined a mission.
+   *
+   * Deliberately re-read from the store on every call rather than cached on the `ActiveRun`: the
+   * stored `unit` is written DURING a turn (a report, a pending report from a settled child, the
+   * over-budget flag), so a snapshot taken when the session opened would be a stale object that
+   * a later write would then resurrect.
+   */
+  private unitOf(runId: string): RunUnit | undefined {
+    if (!resolveCapabilities().units) return undefined;
+    return this.store.getRun(runId)?.unit;
+  }
+
+  /** Persist a patch onto the run's `unit`, off the CURRENT record. */
+  private updateUnit(runId: string, patch: (unit: RunUnit) => RunUnit): void {
+    const unit = this.store.getRun(runId)?.unit;
+    if (!unit) return;
+    this.store.updateRun(runId, { unit: patch(unit) });
+  }
+
+  /**
+   * Resolve everything a unit session needs before it opens: this run's role prompt, and the role
+   * prompt one rung down that a `CEZ:SPAWN` will hand its children.
+   *
+   * Called from BOTH `ActiveRun` construction sites (`execute` and `runContinuation`) — the shape
+   * AGENTS.md warns about, routed through one helper so it cannot be half-applied. Resolving the
+   * child prompt here, ahead of any spawn, is also what keeps the turn-end handler synchronous:
+   * reading a file in the middle of the park decision would race the very state it decides on.
+   */
+  private async prepareUnitSession(runId: string, state: ActiveRun): Promise<void> {
+    const unit = this.unitOf(runId);
+    if (!unit) return;
+    state.unitRole = unit.role;
+    state.unitPrompt = (await resolveUnitPrompt(this.repoRoot, unit.role)).text;
+    const childRole = CHILD_ROLE[unit.role];
+    if (childRole) state.unitChildPrompt = (await resolveUnitPrompt(this.repoRoot, childRole)).text;
+  }
+
+  /**
+   * The reports a parent's children left while it had no session (spec Q7). Returned as the
+   * `## Reports from your units` block for the opening prompt, and cleared in the same breath —
+   * a flush that did not clear would re-deliver every report the parent has ever received on
+   * every later session.
+   *
+   * Delivery-only, like the `/skill` expansion beside it: the transcript keeps showing the
+   * user's own text, and this block is what the SESSION is given.
+   */
+  private flushPendingReports(runId: string): string | undefined {
+    const unit = this.unitOf(runId);
+    const pending = unit?.pendingReports;
+    if (!unit || !pending?.length) return undefined;
+    const { pendingReports: _flushed, ...rest } = unit;
+    this.store.updateRun(runId, { unit: rest });
+    return pendingReportsBlock(pending);
+  }
+
+  /**
+   * One finished turn's unit markers, for BOTH turn-end handlers (spec §Markers).
+   *
+   * ONE helper, called from `runAgentStep` and `runContinuation`, because they are hand-duplicated
+   * and AGENTS.md's worked example is precisely a lifecycle change that reached only one of them.
+   * The caller keeps the park decision; this returns the three facts that decision needs.
+   *
+   * Precedence is `CEZ:DONE` > `CEZ:SPAWN` > `CEZ:REPORT` > `CEZ:ASK` > `CEZ:MONITORING` > plain
+   * end, with one deliberate refinement: a `CEZ:DONE` turn still RECORDS its report. The role
+   * prompts ask for "CEZ:REPORT, then CEZ:DONE on the next line", so treating done as a reason to
+   * skip the report would discard every report a child ever sends — while still refusing to spawn
+   * children on a turn that declares the run finished, which is what the precedence is for.
+   */
+  private handleUnitMarkers(
+    runId: string,
+    turnText: string,
+    ctx: { state: ActiveRun; stepId: string; done: boolean },
+  ): { hasUnit: boolean; spawned: boolean; overBudget: boolean } {
+    const idle = { hasUnit: false, spawned: false, overBudget: false };
+    const unit = this.unitOf(runId);
+    if (!unit) return idle;
+    const note = (message: string, tone?: 'danger') =>
+      this.store.appendEvent(runId, { type: 'note', stepId: ctx.stepId, message, ...(tone ? { tone } : {}) });
+
+    // The done marker comes off first so a trailing `CEZ:DONE` cannot be read as part of the
+    // payload that precedes it — both marker parsers capture greedily to end-of-text.
+    const text = stripDoneMarker(turnText.trimEnd());
+
+    const report = parseReportMarkerResult(text);
+    if (report.kind === 'valid') {
+      this.updateUnit(runId, (current) => ({ ...current, report: report.payload }));
+      if (report.repaired) {
+        note('unit report recovered from an unbalanced CEZ:REPORT payload — check its evidence and errors are complete', 'danger');
+      }
+    } else if (report.kind !== 'none') {
+      note(unitMarkerRejection('CEZ:REPORT', report) ?? 'CEZ:REPORT ignored', 'danger');
+    }
+
+    if (ctx.done) return { hasUnit: true, spawned: false, overBudget: false };
+
+    let spawned = false;
+    const spawn = parseSpawnMarkerResult(text);
+    if (spawn.kind === 'valid') {
+      spawned = this.spawnChildren(runId, unit, spawn.payload, ctx.state, note);
+    } else if (spawn.kind !== 'none') {
+      note(unitMarkerRejection('CEZ:SPAWN', spawn) ?? 'CEZ:SPAWN ignored', 'danger');
+    }
+
+    return { hasUnit: true, spawned, overBudget: this.enforceUnitBudget(runId, note) };
+  }
+
+  /**
+   * The turn-end budget brake (spec Q6 ii): a unit run that has spent its ceiling stops running
+   * itself. The caller then skips the autonomous nudge, clears the monitoring wake timer and
+   * parks `waiting` — the three exits a run has, closed in one place, so an over-budget run
+   * cannot wake itself back up.
+   *
+   * The note fires ONCE (guarded by the persisted flag) while the brake keeps answering true:
+   * a run that is over budget is over budget on every subsequent turn too.
+   */
+  private enforceUnitBudget(runId: string, note: (message: string, tone?: 'danger') => void): boolean {
+    const run = this.store.getRun(runId);
+    const unit = run?.unit;
+    const budget = unit?.budgetUsd;
+    if (!run || !unit || budget === undefined) return false;
+    const spent = run.costUsd ?? 0;
+    if (spent < budget) return false;
+    if (!unit.overBudget) {
+      this.updateUnit(runId, (current) => ({ ...current, overBudget: true }));
+      note(
+        `budget spent — ${usd(spent)} of ${usd(budget)}. The run parks for you instead of continuing on its own; send a message to take it further.`,
+        'danger',
+      );
+    }
+    return true;
+  }
+
+  /**
+   * `CEZ:SPAWN` — create the child runs one rank below this one (spec §Child run creation).
+   *
+   * Every refusal is a transcript note and NO state change (Q6): a refused spawn leaves the
+   * parent exactly where today's rules put it, which is what makes a bad payload a message rather
+   * than a broken mission. Refusals are also all-or-nothing per payload — spawning two of four
+   * children and refusing the rest would hand the commander a plan half-executed, with no way to
+   * tell which half.
+   *
+   * Returns whether children were actually created; the caller parks the parent as a monitor when
+   * they were.
+   */
+  private spawnChildren(
+    parentId: string,
+    unit: RunUnit,
+    spawn: UnitSpawn,
+    state: ActiveRun,
+    note: (message: string, tone?: 'danger') => void,
+  ): boolean {
+    const childRole = CHILD_ROLE[unit.role];
+    if (!childRole) {
+      note(
+        `CEZ:SPAWN refused — a ${unit.role} has no rank below it. Legionaries are your backend's own sub-agents (the Task tool), not cezar runs; dispatch them yourself or do the work directly.`,
+        'danger',
+      );
+      return false;
+    }
+    const parent = this.store.getRun(parentId);
+    if (!parent) return false;
+
+    const runs = this.store.listRuns();
+    const inFlight = inFlightChildren(runs, parentId).length;
+    if (inFlight + spawn.children.length > MAX_CHILDREN_IN_FLIGHT) {
+      note(
+        `CEZ:SPAWN refused — ${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight and ${spawn.children.length} more requested; the cap is ${MAX_CHILDREN_IN_FLIGHT} per commander. Wait for reports, then spawn again.`,
+        'danger',
+      );
+      return false;
+    }
+
+    const budgets = this.carveChildBudgets(parent, runs, spawn);
+    if ('refused' in budgets) {
+      note(`CEZ:SPAWN refused — ${budgets.refused}`, 'danger');
+      return false;
+    }
+
+    const created: RunRecord[] = [];
+    spawn.children.forEach((child, index) => {
+      const rung = unit.ladder?.[childRole];
+      const budgetUsd = budgets.perChild[index];
+      const workflow: WorkflowDef = {
+        name: '(planned)',
+        source: 'built-in',
+        steps: [
+          {
+            id: 'task',
+            name: child.title,
+            prompt: '{{task}}',
+            // The order's own tool list when it names one (#430: `allowedTools` is the only tool
+            // seam a step has), else the run-wide default plus whatever the role needs.
+            ...(child.allowed_tools?.length ? { allowedTools: child.allowed_tools } : {}),
+          },
+        ],
+      };
+      const record = this.startRun(workflow, {
+        task: childTaskEnvelope(child, { id: parentId, branch: parent.branch, role: unit.role }),
+        // The child's own role prompt, resolved with this session (`prepareUnitSession`). The
+        // engine composes it from the record too, so this is the belt to that braces — but it is
+        // also what the run header echoes as "the system prompt this run used".
+        ...(state.unitChildPrompt ? { systemPrompt: state.unitChildPrompt } : {}),
+        // The mission ladder decides the child's backend and model; absent a rung it inherits the
+        // parent's, which is the only answer that cannot surprise a user who picked one engine.
+        runner: rung?.runner ?? parent.runner,
+        ...(rung?.model ?? parent.model ? { model: rung?.model ?? parent.model } : {}),
+        // A child parked at `waiting` after every turn would need a human per rung; the tree only
+        // works if the ranks answer to each other (spec §Child run creation).
+        autonomous: true,
+        unit: {
+          role: childRole,
+          missionId: unit.missionId,
+          parentRunId: parentId,
+          ...(budgetUsd !== undefined ? { budgetUsd } : {}),
+          ...(unit.ladder ? { ladder: unit.ladder } : {}),
+        },
+      });
+      // The task list shows the order's own title rather than the first line of the envelope.
+      this.store.updateRun(record.id, {
+        title: child.title,
+        // Fork the child's worktree off the PARENT's branch (spec Q3). `execute()` already
+        // prefers a recorded `baseBranch` over the configured one, so seeding it here is the
+        // whole of the change — nothing in the worktree block moves. A parent running in the
+        // repo root has no branch to fork, and the child then forks the configured base as any
+        // ordinary run does.
+        ...(parent.branch ? { baseBranch: parent.branch } : {}),
+      });
+      created.push(this.store.getRun(record.id) ?? record);
+    });
+
+    note(
+      `delegated to ${created.length} ${childRole}${created.length === 1 ? '' : 's'}: ${created
+        .map((child) => `"${child.title}" (${child.id})`)
+        .join(', ')}`,
+    );
+    return created.length > 0;
+  }
+
+  /**
+   * Carve each child's ceiling out of what the parent has left (spec §Budget).
+   *
+   * Two passes, and the order is the point: children that NAME a `max_cost` are checked against
+   * the remaining budget first, then whatever is left is split evenly among the children that
+   * named none. Handing the first un-costed child the entire remainder — the literal reading —
+   * would refuse its own siblings in the same payload for lack of budget, which reads to a
+   * commander as cezar rejecting a plan it had just accepted.
+   *
+   * An uncapped parent (no `budgetUsd`) carves nothing: its children inherit whatever cap they
+   * named, or none, which is what every cezar run did before this feature.
+   */
+  private carveChildBudgets(
+    parent: RunRecord,
+    runs: readonly RunRecord[],
+    spawn: UnitSpawn,
+  ): { perChild: Array<number | undefined> } | { refused: string } {
+    const remaining = remainingBudgetUsd(parent, childrenOf(runs, parent.id));
+    if (remaining === undefined) return { perChild: spawn.children.map((child) => child.max_cost) };
+    if (remaining <= 0) {
+      return {
+        refused: `no budget left (${usd(parent.unit?.budgetUsd ?? 0)} allotted, ${usd(parent.costUsd ?? 0)} spent, the rest already promised to children). Report what has been achieved instead of shrinking the remaining work.`,
+      };
+    }
+    const named = spawn.children.reduce((sum, child) => sum + (child.max_cost ?? 0), 0);
+    if (named > remaining) {
+      return {
+        refused: `the requested caps total ${usd(named)} but only ${usd(remaining)} of the budget is left. Spawn fewer children, or smaller ones.`,
+      };
+    }
+    const uncosted = spawn.children.filter((child) => child.max_cost === undefined).length;
+    const share = uncosted > 0 ? (remaining - named) / uncosted : 0;
+    if (uncosted > 0 && share <= 0) {
+      return {
+        refused: `${uncosted} child${uncosted === 1 ? '' : 'ren'} named no max_cost and the whole remaining ${usd(remaining)} is already claimed by the others. Give every child an explicit max_cost.`,
+      };
+    }
+    return { perChild: spawn.children.map((child) => child.max_cost ?? share) };
+  }
+
+  /**
+   * A child settled — tell its parent (spec Q7).
+   *
+   * "Who fires this?" has exactly one honest answer in cezar: nothing does, unless something is
+   * wired to a terminal transition. There is no process-exit callback and no sub-agent-completion
+   * event, so a parent parked on `monitoring` waiting for children would sit there until a human
+   * typed something. This is that wiring, hung off `dropActive` (and off the queued-cancel path,
+   * which never reaches it).
+   *
+   * The report is PERSISTED first and always, then delivered down a ladder of four rungs — an
+   * open session, a still-queued prompt stack, the starting-up buffer, and finally a fresh
+   * continuation for a parent that has already finished. Persisting first is what makes a restart
+   * between the two survivable: the live delivery dies with the process, the pending report does
+   * not, and the parent's next session opens holding it.
+   */
+  private reportSettledChildToParent(runId: string): void {
+    try {
+      const child = this.store.getRun(runId);
+      const parentId = child?.unit?.parentRunId;
+      if (!child || !parentId) return;
+      if (!resolveCapabilities().units) return;
+      if (!isTerminalStatus(child.status)) return;
+      const parent = this.store.getRun(parentId);
+      if (!parent?.unit) return;
+
+      // A child that never emitted `CEZ:REPORT` still reports: its resume notes are the closest
+      // thing to a summary it left behind, and silence would be indistinguishable from "still
+      // working" to the parent.
+      const resumeNotes = handoffSectionExcerpt(readHandoff(this.dataDir, runId), '## Resume notes');
+      const { text, report } = childSettleReport(child, {
+        role: child.unit?.role ?? 'centurion',
+        resumeNotes,
+      });
+      this.updateUnit(parentId, (unit) =>
+        withPendingReport(unit, {
+          fromRunId: child.id,
+          title: child.title,
+          report,
+          at: new Date().toISOString(),
+        }),
+      );
+
+      // The delivery below is NOT user-authored, so it leaves no bubble in the parent's thread
+      // (the monitoring wake nudge behaves the same way). Without this note a commander would
+      // simply start talking about a report nobody could see it had been handed.
+      this.store.appendEvent(parentId, {
+        type: 'note',
+        message: `report received from ${child.unit?.role ?? 'unit'} "${child.title}" (${child.id}) — status ${report.status}`,
+      });
+
+      // A report is fresh evidence, so the parent's automatic re-check budget starts over — the
+      // wake counter exists to bound a monitor nobody is feeding, and this one just got fed.
+      const parentState = this.active.get(parentId);
+      if (parentState) parentState.monitoringWakeups = 0;
+      if (parent.monitoringWakeCapReached) {
+        this.store.updateRun(parentId, { monitoringWakeCapReached: undefined });
+      }
+
+      const blocks: PastedContent[] = [{ type: 'text', text }];
+      if (this.deliverMessage(parentId, blocks, false)) return;
+      if (this.enqueueMessage(parentId, blocks)) return;
+      if (this.deferMessage(parentId, blocks)) return;
+      if (['done', 'failed', 'cancelled', 'review'].includes(parent.status)) {
+        this.continueRun(parentId, { text }, true);
+      }
+    } catch {
+      // A terminal transition must never fail over its bookkeeping. The pending report is already
+      // on the record by the time anything below it can throw, so the parent still learns.
+    }
+  }
+
+  /**
+   * Cancel every descendant, deepest first (spec Q6): a cancelled commander whose children kept
+   * spending would be a cost brake that does not brake. `false` returns are ignored on purpose —
+   * a child that already settled has nothing to cancel, which is a fine outcome, not an error.
+   *
+   * `seen` bounds the walk to each run once, so a record whose `parentRunId` somehow points back
+   * up the tree cannot spin.
+   */
+  private cancelDescendants(parentId: string, seen: Set<string>): void {
+    if (!resolveCapabilities().units) return;
+    for (const child of childrenOf(this.store.listRuns(), parentId)) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      this.cancelDescendants(child.id, seen);
+      this.cancelOne(child.id);
+    }
   }
 
   // ---- usage-limit auto-resume (spec 2026-08-03-auto-resume-after-usage-limit) --------------
@@ -1673,7 +2142,21 @@ export class RunManager {
     return true;
   }
 
+  /**
+   * Cancel a run — and, when it commands any, its whole subtree first (spec
+   * 2026-09-08-units-hierarchy Q6, the third budget brake).
+   *
+   * Depth-first and children-before-parent: a commander cancelled while its legates kept working
+   * would be a cost brake that stops the one run that was only supervising. The answer is still
+   * this run's own — a cascade that cancelled nothing must not make `cancel` claim it did.
+   */
   cancel(runId: string): boolean {
+    this.cancelDescendants(runId, new Set([runId]));
+    return this.cancelOne(runId);
+  }
+
+  /** One run's cancellation, with no regard for a hierarchy — what `cancel` has always done. */
+  private cancelOne(runId: string): boolean {
     // Still waiting in the queue: just drop it there.
     const queuedAt = this.queue.indexOf(runId);
     if (queuedAt >= 0) {
@@ -1682,6 +2165,10 @@ export class RunManager {
       this.pendingContinuations.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
+      // A queued run never entered `active`, so it never reaches `dropActive` — the one terminal
+      // transition that misses the settle hook. Without this a parent waiting on a child the user
+      // cancelled from the queue would wait for a report nobody would ever send.
+      this.reportSettledChildToParent(runId);
       return true;
     }
     const state = this.active.get(runId);
@@ -2292,6 +2779,11 @@ export class RunManager {
     // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
     // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
     state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
+    // The unit hierarchy's session snapshot — the SECOND of the two `ActiveRun` construction
+    // sites (spec 2026-09-08-units-hierarchy; AGENTS.md § "every construction site"). A Continue
+    // that skipped this would resume a legate with no role prompt, no way to spawn, and no
+    // markers parsed: a mission run that quietly degrades into an ordinary task.
+    await this.prepareUnitSession(runId, state);
 
     this.store.updateRun(runId, {
       status: 'running',
@@ -2337,7 +2829,10 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        const stripped = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        // A unit run's own control markers are protocol noise in the transcript too — but only
+        // for a run that opted in, so a plain task's text is persisted exactly as before.
+        const text = state.unitRole ? stripUnitMarkers(stripped) : stripped;
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -2366,11 +2861,30 @@ export class RunManager {
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        // The unit markers (spec 2026-09-08-units-hierarchy §Markers), through the ONE helper
+        // both turn-end handlers call: `CEZ:REPORT` is stored, `CEZ:SPAWN` creates the children,
+        // and the budget brake is read. Inert for a run with no `unit`.
+        const unitTurn = this.handleUnitMarkers(runId, turnText, {
+          state,
+          stepId,
+          done: Boolean(done),
+        });
         // `CEZ:ASK` → the user is genuinely blocked; wins over `CEZ:MONITORING`
-        // (a pending question is always attention), loses to `CEZ:DONE` (#473).
-        const { ask, notes: askNotes } = resolveAskTurn(turnText, Boolean(sessionOpen) && !done);
+        // (a pending question is always attention), loses to `CEZ:DONE` (#473)
+        // and to `CEZ:SPAWN`, which outranks it in the unit precedence.
+        const { ask, notes: askNotes } = resolveAskTurn(
+          turnText,
+          Boolean(sessionOpen) && !done && !unitTurn.spawned,
+        );
+        // A spawn parks the parent exactly as `CEZ:MONITORING` does — it is waiting on its
+        // children, not on the user, and it has to surrender its slot to them. An over-budget run
+        // parks `waiting` instead, whatever it asked for (Q6 ii).
         const monitoring =
-          sessionOpen && !done && !ask && MONITORING_MARKER_RE.test(turnText.trimEnd());
+          sessionOpen &&
+          !done &&
+          !ask &&
+          !unitTurn.overBudget &&
+          (unitTurn.spawned || MONITORING_MARKER_RE.test(turnText.trimEnd()));
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         if (done) {
@@ -2383,8 +2897,20 @@ export class RunManager {
         if (sessionOpen) {
           // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to
           // keep going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`.
+          //
+          // Three unit exceptions (spec 2026-09-08-units-hierarchy), and each closes a hole the
+          // nudge would otherwise punch through this feature's guarantees:
+          //  - a turn that SPAWNED is waiting on its children, and nudging it would make the
+          //    commander keep working while holding the slot its children need;
+          //  - the Guard (Q4): an autonomous unit run must not answer its own `CEZ:ASK`. That is
+          //    the whole point of asking before something irreversible. A NON-unit autonomous run
+          //    keeps today's behaviour — that guarantee is pinned by its own test;
+          //  - the budget brake (Q6 ii): a run that has spent its ceiling stops spending.
           const autoContinued =
             state.autonomous &&
+            !unitTurn.spawned &&
+            !unitTurn.overBudget &&
+            !(unitTurn.hasUnit && Boolean(ask)) &&
             (state.autoContinues ?? 0) < MAX_AUTO_CONTINUES &&
             !state.cancelled &&
             (() => {
@@ -2530,13 +3056,20 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
-    const openingPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
+    const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
+    // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
+    // of whatever prompted it — a commander resumed by its own children's reports has to be told
+    // what they said. Delivery-only, like the `/skill` rewrite above.
+    const unitReports = this.flushPendingReports(runId);
+    const openingPrompt = unitReports ? `${unitReports}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
         // run's extra system prompt (already resolved at execute time and
-        // echoed on the record) rides along with the handoff contract.
+        // echoed on the record) rides along with the handoff contract, and a
+        // unit run's ROLE prompt rides along with both (spec §Role prompts).
         systemPrompt: composeSystemPrompt(
+          unitRolePromptPart(state.unitPrompt, record?.systemPrompt),
           record?.systemPrompt,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
@@ -2545,7 +3078,14 @@ export class RunManager {
           : openingPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
-        allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+        // A centurion's legionaries are its backend's own sub-agents, so its tool list must carry
+        // the sub-agent tool on a resumed session too — a Continue that silently dropped it would
+        // leave the rank that does the work with no century (spec Q2).
+        allowedTools: unitSubagentTools(
+          toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          state.unitRole,
+          continueBackend,
+        ),
         bashAllowlist: toolsStep?.bashAllowlist,
         additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
         env: continueProfile.env,
@@ -2762,6 +3302,10 @@ export class RunManager {
     // Every ActiveRun construction site must carry the registry — `runContinuation` builds
     // its own, and the one that skipped this leaked raw `/skill` text to the backend (#811).
     state.skills = skills;
+    // Same rule, same reason, for the unit hierarchy's session snapshot (role prompt, the child
+    // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
+    // twin is in `runContinuation`.
+    await this.prepareUnitSession(runId, state);
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
@@ -2968,6 +3512,11 @@ export class RunManager {
     // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
     userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? []);
     if (chainNote) userPrompt = `${chainNote}\n\n---\n\n${userPrompt}`;
+    // A commander recovered after a restart opens its first session holding whatever its children
+    // reported while it was gone (spec Q7). Prepended and cleared here, after the slash expansion
+    // so a leading `/skill` still matched, and before the failure/attachment suffixes.
+    const unitReports = this.flushPendingReports(runId);
+    if (unitReports) userPrompt = `${unitReports}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
       userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
     }
@@ -3004,7 +3553,10 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        const stripped = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        // The twin of the continuation's strip: unit markers leave the transcript, but only for a
+        // run that has a `unit` (spec §Markers — parsed only when the feature is on).
+        const text = state.unitRole ? stripUnitMarkers(stripped) : stripped;
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
@@ -3033,18 +3585,31 @@ export class RunManager {
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        // The unit markers, through the same ONE helper `runContinuation` calls (spec
+        // 2026-09-08-units-hierarchy §Markers). Not gated on `interactive`: a report and a spawn
+        // are the agent telling cezar what it did, and a chained workflow's non-final step that
+        // reported would otherwise be heard by nobody. The PARK below stays interactive-only,
+        // exactly as it always was.
+        const unitTurn = this.handleUnitMarkers(runId, turnText, {
+          state,
+          stepId: step.id,
+          done: Boolean(done),
+        });
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
-        // `CEZ:DONE` (#473).
+        // `CEZ:DONE` (#473) and to `CEZ:SPAWN` (unit precedence).
         const { ask, notes: askNotes } = resolveAskTurn(
           turnText,
-          Boolean(interactive && sessionOpen) && !done,
+          Boolean(interactive && sessionOpen) && !done && !unitTurn.spawned,
         );
+        // A spawn parks the commander like `CEZ:MONITORING` does — it waits on its children and
+        // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
         const monitoring =
           interactive &&
           sessionOpen &&
           !done &&
           !ask &&
-          MONITORING_MARKER_RE.test(turnText.trimEnd());
+          !unitTurn.overBudget &&
+          (unitTurn.spawned || MONITORING_MARKER_RE.test(turnText.trimEnd()));
         turnText = '';
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
@@ -3142,10 +3707,13 @@ export class RunManager {
     try {
       session = runner.startSession(
         {
-          // Skill body, then the run's extra prompt (POST override or config
-          // default), then the handoff/todos contract — every agent step.
+          // Skill body, then a unit run's ROLE prompt (spec 2026-09-08-units-hierarchy §Role
+          // prompts — who this rank is, how it delegates, reports and asks), then the run's extra
+          // prompt (POST override or config default, which may amend either), then the
+          // handoff/todos contract — every agent step.
           systemPrompt: composeSystemPrompt(
             systemPrompt,
+            unitRolePromptPart(state.unitPrompt, extraSystemPrompt),
             extraSystemPrompt,
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
@@ -3154,7 +3722,15 @@ export class RunManager {
           userPrompt,
           images,
           cwd: state.cwd,
-          allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+          // A centurion dispatches legionaries through claude's own sub-agent tool (spec Q2), so
+          // its tool list gets `Task`/`Agent` when the step (or the default) left them out —
+          // otherwise the rank that does the work reads a role prompt telling it to delegate to
+          // a tool its own policy denies. Additive, claude-only, and a no-op for every other run.
+          allowedTools: unitSubagentTools(
+            step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
+            state.unitRole,
+            stepBackend,
+          ),
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
           additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), stepProfile.env),
