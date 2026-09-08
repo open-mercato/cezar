@@ -23,6 +23,7 @@ describe('agent profiles API', () => {
   const saved = {
     home: process.env.CEZ_HOME,
     remote: process.env.CEZ_REMOTE,
+    remoteAgentAccounts: process.env.CEZ_REMOTE_AGENT_ACCOUNTS,
     dryRun: process.env.CEZ_DRY_RUN,
   };
   let home: string;
@@ -34,6 +35,7 @@ describe('agent profiles API', () => {
     repoRoot = mkdtempSync(join(realpathSync(tmpdir()), 'cez-profiles-repo-'));
     process.env.CEZ_HOME = home;
     delete process.env.CEZ_REMOTE;
+    delete process.env.CEZ_REMOTE_AGENT_ACCOUNTS;
     // Deterministic on any machine: no real agent CLIs are probed.
     process.env.CEZ_DRY_RUN = '1';
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -46,6 +48,7 @@ describe('agent profiles API', () => {
     for (const [key, value] of [
       ['CEZ_HOME', saved.home],
       ['CEZ_REMOTE', saved.remote],
+      ['CEZ_REMOTE_AGENT_ACCOUNTS', saved.remoteAgentAccounts],
       ['CEZ_DRY_RUN', saved.dryRun],
     ] as const) {
       if (value === undefined) delete process.env[key];
@@ -741,6 +744,32 @@ describe('agent profiles API', () => {
       }
       expect((await loadAgentAccounts()).accounts).toEqual([]);
     });
+
+    it('allows account management when the authenticated deployment explicitly opts in', async () => {
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const { status, body } = await send('POST', '/api/v1/workspace/agent-profiles', {
+        provider: 'claude', label: 'Work', configDir: claudeDir('claude-work'),
+      });
+      expect(status).toBe(201);
+      expect(await list()).toMatchObject({
+        editable: true,
+        profiles: expect.arrayContaining([
+          expect.objectContaining({ id: body.profile.id, label: 'Work' }),
+        ]),
+      });
+
+      const selected = await send('PUT', '/api/v1/workspace/agent-profiles/selection', {
+        projectId: null, provider: 'claude', profileId: body.profile.id,
+      });
+      expect(selected.status).toBe(200);
+      expect((selected.body as unknown as { defaults: Record<string, string> }).defaults)
+        .toEqual({ claude: body.profile.id });
+
+      const opened = await send('POST', `/api/v1/workspace/agent-profiles/${body.profile.id}/open`, {
+        file: 'folder',
+      });
+      expect(opened.status).toBe(409);
+    });
   });
 
   /**
@@ -878,7 +907,7 @@ describe('agent profiles API', () => {
         const answer = (await res.json()) as { error: string; command?: string };
         // No host path, and the same words whether or not the id exists.
         expect(answer.command).toBeUndefined();
-        expect(answer.error).toContain('managed from the machine that owns the checkout');
+        expect(answer.error).toContain('CEZ_REMOTE_AGENT_ACCOUNTS=1');
         expect(JSON.stringify(answer)).not.toContain(home);
       }
     });

@@ -106,9 +106,9 @@ export type AgentAccountSelection = z.infer<typeof agentAccountSelectionSchema>;
 /**
  * `GET /api/v1/workspace/agent-profiles` — every account, discovered defaults first.
  *
- * `editable` is false in hosted mode (`CEZ_REMOTE`), where the whole family is refused: defining
- * a profile points an agent at a local directory, and the listing echoes absolute paths carrying
- * the username. Same posture as `PUT /api/v1/agent-config/:id`.
+ * `editable` is false in hosted mode (`CEZ_REMOTE`) unless the operator explicitly enables remote
+ * account management: defining a profile points an agent at a local directory, and the listing
+ * echoes absolute paths carrying the username.
  */
 export const agentProfilesResponseSchema = z.object({
   editable: z.boolean(),
@@ -122,7 +122,7 @@ export const agentProfilesResponseSchema = z.object({
    *  Served here rather than on `GET /api/v1/projects` because it is stored beside the accounts it
    *  names (`~/.cezar/agent-accounts.json`) — one file, so deleting an account and scrubbing every
    *  reference to it is one atomic write, and neither can be dropped by a cezar version that never
-   *  heard of accounts. Empty in hosted mode, where the whole family is withheld. */
+   *  heard of accounts. Empty when remote account management is withheld. */
   selections: z.record(z.string(), agentAccountSelectionSchema),
   /** The machine-wide fallback account per provider, used by any repo that has chosen none. */
   defaults: agentAccountSelectionSchema,
@@ -171,7 +171,8 @@ export type AgentAccountStatusResponse = z.infer<typeof agentAccountStatusRespon
  * A SEPARATE, on-demand route rather than a field on the listing, and that is the whole point of
  * "hidden by default": if the listing carried an email, hiding it in the UI would be theatre — it
  * would already be in the response, the query cache and devtools. It is fetched only when the user
- * asks, is refused in hosted mode, and is never logged or persisted.
+ * asks, is refused in hosted mode unless remote account management was explicitly enabled, and is
+ * never logged or persisted.
  *
  * `fields` is a labelled list rather than a fixed shape because what an agent knows about its own
  * login differs; inventing an empty "Organization" for one that has no such concept would be a

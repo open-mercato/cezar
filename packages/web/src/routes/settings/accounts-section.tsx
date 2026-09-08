@@ -69,8 +69,9 @@ import { AddAccountDialog } from './add-account-dialog'
  * identity, and raw CLI output never cross this boundary" — so it is built to stay narrow: the data
  * is NOT a field on the accounts listing, it comes from its own on-demand route
  * (`useAgentAccountDetails`, `enabled` only once the row is expanded), and it is refused in hosted
- * mode. Nothing fetches it until a person asks, which is what makes "hidden by default" mean the
- * data is absent from the page rather than merely unrendered.
+ * mode unless remote account management is explicitly enabled. Nothing fetches it until a person
+ * asks, which is what makes "hidden by default" mean the data is absent from the page rather than
+ * merely unrendered.
  *
  * Rename and Remove live in that same panel rather than on the collapsed row. A row is a reading
  * surface — which account, where, signed in or not — and Remove sitting on it put a destructive
@@ -154,8 +155,8 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
       >
         <h2 className="text-sm font-semibold text-foreground">Agent accounts</h2>
         <p data-slot="accounts-hosted" className="text-[13px] text-soft-foreground">
-          Agent accounts are managed from the machine that owns the checkout — this cockpit runs in
-          hosted mode.
+          Agent accounts are disabled for remote access. On a trusted, authenticated self-hosted
+          deployment, set CEZ_REMOTE_AGENT_ACCOUNTS=1 and restart cezar.
         </p>
       </div>
     )
