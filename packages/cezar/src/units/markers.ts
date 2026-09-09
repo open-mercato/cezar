@@ -102,9 +102,54 @@ export function parseSpawnMarkerResult(turnText: string): UnitMarkerParseResult<
   return parseMarker(turnText, SPAWN_KEYWORD, unitSpawnSchema);
 }
 
-/** Parse a trailing `CEZ:REPORT <json>` with an actionable result. */
+/**
+ * Clip a report's strings and lists to the bounds `unitReportSchema` sets, so a report that is
+ * only TOO LONG is accepted rather than refused.
+ *
+ * A report is a statement about work already done — unlike a spawn, no key in it is a brake, so
+ * nothing is lost by shortening. Refusing it costs far more: observed live, an implementer wrote
+ * one side-effect line of 500 characters, ended the same turn with CEZ:DONE, and settled with no
+ * structured report at all — its commander then had to re-validate everything by hand. The clip
+ * is reported as `repaired`, so the transcript still says the payload was not what the agent sent.
+ */
+function clipReport(raw: unknown): unknown {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw;
+  const source = raw as Record<string, unknown>;
+  const clipString = (value: unknown, max: number) => (typeof value === 'string' ? value.slice(0, max) : value);
+  const clipList = (value: unknown, max: number, each: number) =>
+    Array.isArray(value) ? value.slice(0, max).map((item) => clipString(item, each)) : value;
+  return {
+    ...source,
+    result: clipString(source.result, 4000),
+    evidence: clipList(source.evidence, 12, 400),
+    side_effects: clipList(source.side_effects, 12, 400),
+    errors: clipList(source.errors, 12, 400),
+    suggestions: clipList(source.suggestions, 8, 400),
+    recommended_next_action: clipString(source.recommended_next_action, 1000),
+  };
+}
+
+/** Parse a trailing `CEZ:REPORT <json>` with an actionable result. A payload refused only for
+ *  length is clipped to the schema's bounds and accepted as `repaired`. */
 export function parseReportMarkerResult(turnText: string): UnitMarkerParseResult<UnitReport> {
-  return parseMarker(turnText, REPORT_KEYWORD, unitReportSchema);
+  const strict = parseMarker(turnText, REPORT_KEYWORD, unitReportSchema);
+  if (strict.kind !== 'invalid-structure') return strict;
+  const candidate = lastMarkerCandidate(turnText.trimEnd(), REPORT_KEYWORD);
+  if (candidate === null) return strict;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(trimTrailingControlMarkers(candidate));
+  } catch {
+    const closed = closeUnbalancedJson(trimTrailingControlMarkers(candidate));
+    if (closed === null) return strict;
+    try {
+      raw = JSON.parse(closed);
+    } catch {
+      return strict;
+    }
+  }
+  const clipped = unitReportSchema.safeParse(clipReport(raw));
+  return clipped.success ? { kind: 'valid', payload: clipped.data, repaired: true } : strict;
 }
 
 /** The `parseAskMarker` twin: the payload, or `null` when there is no marker or it is invalid. */

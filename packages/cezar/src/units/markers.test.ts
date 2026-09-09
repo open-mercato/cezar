@@ -194,9 +194,22 @@ describe('CEZ:REPORT', () => {
       .toBe('invalid-structure');
   });
 
-  it('refuses more than 12 evidence lines', () => {
+  it('clips a report that is only TOO LONG instead of refusing it, and says so', () => {
+    // Observed live: one 500-character side-effect line, on a turn that also ended with
+    // CEZ:DONE, cost a commander the whole structured report. A report is a statement, not a
+    // brake, so length is clipped and the payload accepted as repaired.
     const evidence = Array.from({ length: 13 }, (_, i) => `line ${i}`);
-    expect(parseReportMarkerResult(report({ ...VALID_REPORT, evidence })).kind).toBe('invalid-structure');
+    const long = 'x'.repeat(500);
+    const parsed = parseReportMarkerResult(report({ ...VALID_REPORT, evidence, side_effects: [long] }));
+    expect(parsed.kind).toBe('valid');
+    if (parsed.kind !== 'valid') return;
+    expect(parsed.repaired).toBe(true);
+    expect(parsed.payload.evidence).toHaveLength(12);
+    expect(parsed.payload.side_effects[0]).toHaveLength(400);
+  });
+
+  it('still refuses a report whose STRUCTURE is wrong, not merely long', () => {
+    expect(parseReportMarkerResult(report({ ...VALID_REPORT, status: 'won' })).kind).toBe('invalid-structure');
   });
 
   it('reports malformed JSON as invalid-json', () => {
