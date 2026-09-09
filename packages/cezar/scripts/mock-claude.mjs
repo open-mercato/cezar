@@ -26,6 +26,15 @@ emit({ type: 'system', subtype: 'init' });
 
 let turn = 0;
 
+// `mock:autonomous` → the autonomous auto-nudge fixture (#autonomous). Cezar's nudge text is
+// fixed and carries no `mock:` marker, so a marker-per-message mock could never end such a
+// session: the first turn would end plainly, every nudge would end plainly, and the run would
+// only stop at MAX_AUTO_CONTINUES. This one flag ARMS the session instead — the turn that
+// answers the nudge ends with CEZ:DONE — so a dry-run test can watch a nudged run complete
+// rather than time out.
+let autonomousArmed = false;
+const AUTONOMOUS_NUDGE_PREFIX = 'Continue working autonomously';
+
 // A tiny generated PNG (320x200) standing in for a browser screenshot.
 const MOCK_SCREENSHOT_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAACMklEQVR42u3csQnAIBRFUQdJY+b4tfvP4AhCLKyyghAMMRw4Ezz/bU0RBdhUMgEIGBAwIGAQMCBgQMCAgEHAgIABAYOAAQEDAgYEDAIGBAwsCLhfDdiUgEHAgIABAYOAAQEDAgYEDAIGBAwIGAT8vlEr/ImAQcACBgELGAQsYAQsYBCwgEHAAgYBe3IELGAQsIBBwAJGwAIGAQsYBCxgELCAEbCAQcACBgELGAQMAhYwCFjAIGABI2D/QgMCBgEDAgYEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgIBBwCYAAQMCBgQMAgYEDAgYEDAIGBAwIGAQMCBgQMCAgEHAgIABAQMCBgEDAgYEDAIGBAwIGBAwCBgQMCBgQMAgYEDAgIBBwICAAQEDAgYBAwIGBAwCtgIIGBAwIGAQMCBgQMCAgEHAgIABAYOAeejMB/McjIAFLGABW0HAAhYwmhSwgAUsYAQsYAELGAELWMACRsACFrCAEbCABSxgBCxgAQtYwAhYwAIWMAIWsIAFjIAFLGABI2ABC1jACFjAAhYwAhawgAWMgAUsYAEjYAELWMACRsACFrCAEbCABSxgBCxgAQsYAQtYwAJGwAIWMCBgQMAgYEDAgIBBwICAAQEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgYEDAIGBAwICAQcCAgAEBAwIGAQMCBgQMCBgEDAgYEDAIGBAwIGBAwCBgQMCAgAEBg4ABAQMCBgEDAgYEDAgYBAx8xQ1bxBr9kelHqgAAAABJRU5ErkJggg==';
@@ -96,8 +105,15 @@ async function respond(userText, imageCount) {
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child
   // parked instead of settling into the report its parent is waiting for.
+  // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
+  // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
+  if (userText.includes('mock:autonomous')) autonomousArmed = true;
   const doneMarker =
-    userText.includes('mock:done') || userText.includes('mock:report') ? '\n\nCEZ:DONE' : '';
+    userText.includes('mock:done') ||
+    userText.includes('mock:report') ||
+    (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
+      ? '\n\nCEZ:DONE'
+      : '';
   // `mock:spawn` → a valid CEZ:SPAWN with two children, so the delegation path (children created
   // one rank down, the parent parked as a monitor) is testable dry. `mock:spawn-bad` → a
   // MALFORMED payload, proving graceful degradation: a transcript note, no children, and the
