@@ -50,7 +50,7 @@ import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 // The `unit` object's inferred type (spec 2026-09-08-units-hierarchy). A contract TYPE only —
 // the schema itself is imported as a value by `runs/store.ts`, which is what persists it.
-import type { RunUnit, UnitRole, UnitSpawn } from '@open-mercato/cezar-contract';
+import type { RunUnit, UnitResources, UnitRole, UnitSpawn } from '@open-mercato/cezar-contract';
 // The unit hierarchy (spec 2026-09-08-units-hierarchy). Every import below is inert unless the
 // feature is ON *and* the run carries a `unit`: `unitOf()` is the single gate, and a run without
 // one takes byte-for-byte the path it took before this feature existed.
@@ -62,7 +62,7 @@ import {
   stripSpawnMarker,
   type UnitMarkerParseResult,
 } from '../units/markers.ts';
-import { resolveUnitPrompt } from '../units/prompts.ts';
+import { composeUnitPrompt, resolveUnitPrompt } from '../units/prompts.ts';
 import {
   appendLedger,
   inboxDigest,
@@ -80,6 +80,7 @@ import {
 import {
   CHILD_ROLE,
   MAX_CHILDREN_IN_FLIGHT,
+  childRoleFor,
   childSettleReport,
   childTaskEnvelope,
   childrenOf,
@@ -324,9 +325,10 @@ interface ActiveRun {
   unitRole?: UnitRole;
   /** This run's own role prompt, composed into every session's system prompt. */
   unitPrompt?: string;
-  /** The role prompt one rung down — what a `CEZ:SPAWN` hands its children. Resolved with the
-   *  session rather than at spawn time so the turn-end handler stays synchronous. */
-  unitChildPrompt?: string;
+  /** The role prompts of every rank BELOW this run's — what a `CEZ:SPAWN` hands its children
+   *  (a caesar may spawn legates or centurions directly). Resolved with the session rather than
+   *  at spawn time so the turn-end handler stays synchronous. */
+  unitChildPrompts?: Partial<Record<UnitRole, string>>;
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; root runs ordinarily do unless the
    *  explicit unsafe bypass is active. */
@@ -1071,7 +1073,12 @@ export class RunManager {
     for (const runId of this.unitParents) if (this.monitoring.has(runId)) spawnParked += 1;
     const watchers = this.monitoring.size - spawnParked;
     const exemptMonitoring = Math.min(watchers, this.semaphore.maxMonitoringSessions());
-    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
+    // A mission that set its own `parallel` limit runs under THAT count (`pump`), not under the
+    // workspace's: its executing runs are exempt here, or a mission wider than `maxParallel`
+    // would freeze every other project on the shared semaphore while it ran.
+    return (
+      this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked - this.missionExemptSlots()
+    );
   }
 
   /**
@@ -1185,16 +1192,23 @@ export class RunManager {
         // Only pay for the config read when something is actually held: a queued record may name
         // no runner, and then the account it would use is the configured default.
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
-        while (this.queue.length > 0 && capacity()) {
+        // A run under a mission-scoped `parallel` limit starts under its MISSION's count, not the
+        // workspace's (user decision: an army may run wider than the global cap without widening
+        // it for every project). Everything else needs `capacity()` exactly as before.
+        const startable = (id: string): boolean => {
+          const queued = this.store.getRun(id);
+          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
+          const missionParallel = this.missionParallelOf(queued);
+          if (missionParallel !== undefined && queued?.unit) {
+            return repo !== null && this.missionInFlight(queued.unit.missionId) < missionParallel;
+          }
+          return capacity();
+        };
+        while (this.queue.length > 0) {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
-          const next = !anyHold
-            ? 0
-            : this.queue.findIndex((id) => {
-                const queued = this.store.getRun(id);
-                return !queued || !accountHeldFor(queued, holds, defaultRunner ?? 'claude');
-              });
-          if (next === -1) break; // everything queued is waiting on a held account
+          const next = this.queue.findIndex(startable);
+          if (next === -1) break; // nothing queued can start right now
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
@@ -1520,9 +1534,54 @@ export class RunManager {
     const unit = this.unitOf(runId);
     if (!unit) return;
     state.unitRole = unit.role;
-    state.unitPrompt = (await resolveUnitPrompt(this.repoRoot, unit.role)).text;
-    const childRole = CHILD_ROLE[unit.role];
-    if (childRole) state.unitChildPrompt = (await resolveUnitPrompt(this.repoRoot, childRole)).text;
+    // The rank's prompt plus the KIND's addendum (a reviewer, a researcher, a planner) — composed
+    // identically here and at spawn, so the de-duplication against the record's own system
+    // prompt still recognises them as the same text.
+    state.unitPrompt = composeUnitPrompt((await resolveUnitPrompt(this.repoRoot, unit.role)).text, unit.kind);
+    const prompts: Partial<Record<UnitRole, string>> = {};
+    for (let role = CHILD_ROLE[unit.role]; role; role = CHILD_ROLE[role]) {
+      prompts[role] = (await resolveUnitPrompt(this.repoRoot, role)).text;
+    }
+    state.unitChildPrompts = prompts;
+  }
+
+  /** The mission's resource limits — read off the ROOT's record, so a change there binds every
+   *  spawn and pump below it without copying. Absent = today's constants. */
+  private missionResources(missionId: string): UnitResources {
+    return this.store.getRun(missionId)?.unit?.resources ?? {};
+  }
+
+  /**
+   * The mission-scoped parallel limit of a run, or `undefined` for a run that is not under one:
+   * an ordinary run, a unit run of a mission that set none, or any run while units are off. A
+   * run under a limit is admitted by `pump` under ITS mission's count and is exempt from the
+   * workspace and project caps in `busySlots` — the two halves of one rule, and both read this.
+   */
+  private missionParallelOf(run: RunRecord | undefined): number | undefined {
+    const missionId = run?.unit?.missionId;
+    if (!missionId || !resolveCapabilities().units) return undefined;
+    return this.missionResources(missionId).parallel;
+  }
+
+  /** How many of a mission's runs are executing right now — active or starting, not parked. */
+  private missionInFlight(missionId: string): number {
+    let count = 0;
+    for (const runId of new Set([...this.active.keys(), ...this.starting])) {
+      if (this.waiting.has(runId)) continue;
+      if (this.store.getRun(runId)?.unit?.missionId === missionId) count += 1;
+    }
+    return count;
+  }
+
+  /** The runs exempt from the workspace/project caps because their mission carries its own. */
+  private missionExemptSlots(): number {
+    if (!resolveCapabilities().units) return 0;
+    let count = 0;
+    for (const runId of new Set([...this.active.keys(), ...this.starting])) {
+      if (this.waiting.has(runId)) continue;
+      if (this.missionParallelOf(this.store.getRun(runId)) !== undefined) count += 1;
+    }
+    return count;
   }
 
   /**
@@ -1764,22 +1823,34 @@ export class RunManager {
     state: ActiveRun,
     note: (message: string, tone?: 'danger') => void,
   ): boolean {
-    const childRole = CHILD_ROLE[unit.role];
-    if (!childRole) {
+    if (!CHILD_ROLE[unit.role]) {
       note(
         `CEZ:SPAWN refused — a ${unit.role} has no rank below it. Legionaries are your backend's own sub-agents (the Task tool), not cezar runs; dispatch them yourself or do the work directly.`,
         'danger',
       );
       return false;
     }
+    // Every child's rank, resolved up front: the requested one when it is below the spawner's,
+    // else one rung down — and the whole payload refused when any request is not below the
+    // spawner (all-or-nothing, like every other refusal here).
+    const roles: UnitRole[] = [];
+    for (const child of spawn.children) {
+      const role = childRoleFor(unit.role, child.rank);
+      if (!role) {
+        note(`CEZ:SPAWN refused — "${child.title}" asks for rank ${child.rank}, which is not below yours (${unit.role}).`, 'danger');
+        return false;
+      }
+      roles.push(role);
+    }
     const parent = this.store.getRun(parentId);
     if (!parent) return false;
 
     const runs = this.store.listRuns();
     const inFlight = inFlightChildren(runs, parentId).length;
-    if (inFlight + spawn.children.length > MAX_CHILDREN_IN_FLIGHT) {
+    const maxChildren = this.missionResources(unit.missionId).maxChildren ?? MAX_CHILDREN_IN_FLIGHT;
+    if (inFlight + spawn.children.length > maxChildren) {
       note(
-        `CEZ:SPAWN refused — ${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight and ${spawn.children.length} more requested; the cap is ${MAX_CHILDREN_IN_FLIGHT} per commander. Wait for reports, then spawn again.`,
+        `CEZ:SPAWN refused — ${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight and ${spawn.children.length} more requested; the cap is ${maxChildren} per commander. Wait for reports, then spawn again.`,
         'danger',
       );
       return false;
@@ -1793,8 +1864,10 @@ export class RunManager {
 
     const created: RunRecord[] = [];
     spawn.children.forEach((child, index) => {
+      const childRole = roles[index] ?? 'centurion';
       const rung = unit.ladder?.[childRole];
       const budgetUsd = budgets.perChild[index];
+      const childPrompt = state.unitChildPrompts?.[childRole];
       const workflow: WorkflowDef = {
         name: '(planned)',
         source: 'built-in',
@@ -1818,7 +1891,7 @@ export class RunManager {
         // The child's own role prompt, resolved with this session (`prepareUnitSession`). The
         // engine composes it from the record too, so this is the belt to that braces — but it is
         // also what the run header echoes as "the system prompt this run used".
-        ...(state.unitChildPrompt ? { systemPrompt: state.unitChildPrompt } : {}),
+        ...(childPrompt ? { systemPrompt: composeUnitPrompt(childPrompt, child.kind) } : {}),
         // The mission ladder decides the child's backend and model; absent a rung it inherits the
         // parent's, which is the only answer that cannot surprise a user who picked one engine.
         runner: rung?.runner ?? parent.runner,
@@ -1830,6 +1903,8 @@ export class RunManager {
           role: childRole,
           missionId: unit.missionId,
           parentRunId: parentId,
+          ...(child.kind && child.kind !== 'implement' ? { kind: child.kind } : {}),
+          ...(child.review_of?.length ? { reviewOf: child.review_of } : {}),
           ...(budgetUsd !== undefined ? { budgetUsd } : {}),
           ...(unit.ladder ? { ladder: unit.ladder } : {}),
         },
@@ -1860,7 +1935,7 @@ export class RunManager {
       try {
         writeOrder(this.dataDir, unit.missionId, record.id, {
           title: child.title,
-          role: childRole,
+          role: `${childRole}${child.kind && child.kind !== 'implement' ? ` (${child.kind})` : ''}`,
           parentRunId: parentId,
           text: task,
         });
@@ -1874,6 +1949,7 @@ export class RunManager {
         runId: record.id,
         parentRunId: parentId,
         role: childRole,
+        kind: child.kind ?? 'implement',
         title: child.title,
         ...(budgetUsd !== undefined ? { budgetUsd } : {}),
       });
@@ -1881,8 +1957,8 @@ export class RunManager {
     });
 
     note(
-      `delegated to ${created.length} ${childRole}${created.length === 1 ? '' : 's'}: ${created
-        .map((child) => `"${child.title}" (${child.id})`)
+      `delegated to ${created.length} unit${created.length === 1 ? '' : 's'}: ${created
+        .map((child) => `"${child.title}" (${child.unit?.role ?? 'unit'}${child.unit?.kind ? `, ${child.unit.kind}` : ''}, ${child.id})`)
         .join(', ')}`,
     );
     return created.length > 0;

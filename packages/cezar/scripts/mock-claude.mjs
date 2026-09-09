@@ -136,8 +136,25 @@ async function respond(userText, imageCount) {
   // The children's objectives deliberately carry `mock:report` and NOT `mock:spawn`: a child
   // whose own task text asked for a spawn would delegate again on its first turn, and the fixture
   // would fan out until the in-flight cap stopped it.
+  // `mock:spawn-direct` → a caesar spawning CENTURIONS directly ("rank"), one of them a reviewer
+  // ("kind": "review" of the other), so flexible composition is testable dry.
   const spawnMarker = userText.includes('mock:spawn-bad')
     ? '\n\nCEZ:SPAWN {"children":[{"title":"broken"'
+    : userText.includes('mock:spawn-direct')
+      ? '\n\nCEZ:SPAWN ' +
+        JSON.stringify({
+          children: [
+            { title: 'Implement the flank', objective: 'mock:report do it', rank: 'centurion', max_cost: 2 },
+            {
+              title: 'Review the flank',
+              objective: 'mock:report judge it',
+              rank: 'centurion',
+              kind: 'review',
+              review_of: ['cez/00000000'],
+              max_cost: 1,
+            },
+          ],
+        })
     : userText.includes('mock:spawn')
       ? '\n\nCEZ:SPAWN ' +
         JSON.stringify({

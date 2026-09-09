@@ -3,6 +3,7 @@ import type { RunRecord } from '../runs/store.ts';
 import {
   CHILD_ROLE,
   MAX_PENDING_REPORTS,
+  childRoleFor,
   childSettleReport,
   childTaskEnvelope,
   handoffSectionExcerpt,
@@ -31,6 +32,17 @@ const record = (over: Partial<RunRecord> = {}): RunRecord =>
   }) as RunRecord;
 
 describe('the ranks', () => {
+  it('resolves a requested rank only when it is strictly below the spawner’s', () => {
+    expect(childRoleFor('caesar', undefined)).toBe('legate');
+    expect(childRoleFor('caesar', 'centurion')).toBe('centurion');
+    expect(childRoleFor('caesar', 'legate')).toBe('legate');
+    expect(childRoleFor('legate', undefined)).toBe('centurion');
+    expect(childRoleFor('legate', 'centurion')).toBe('centurion');
+    expect(childRoleFor('legate', 'legate')).toBeUndefined(); // its own rank
+    expect(childRoleFor('centurion', undefined)).toBeUndefined();
+    expect(childRoleFor('centurion', 'centurion')).toBeUndefined();
+  });
+
   it('hands work exactly one rung down, and stops at the centurion', () => {
     expect(CHILD_ROLE.caesar).toBe('legate');
     expect(CHILD_ROLE.legate).toBe('centurion');
@@ -92,6 +104,19 @@ describe('remainingBudgetUsd', () => {
 });
 
 describe('childTaskEnvelope', () => {
+  it('spells out a review unit’s kind and what it reviews', () => {
+    const text = childTaskEnvelope(
+      { title: 'Review the left flank', objective: 'judge it', kind: 'review', review_of: ['cez/abcd1234'] },
+      { id: 'p', role: 'legate' },
+    );
+    expect(text).toContain('- Kind: review');
+    expect(text).toContain('you do not implement it');
+    expect(text).toContain('- Review of: cez/abcd1234');
+    // an implementer's order says nothing about kind — the pre-existing envelope
+    expect(childTaskEnvelope({ title: 't', objective: 'o' }, { id: 'p', role: 'legate' })).not.toContain('Kind:');
+  });
+
+
   it('lists only the fields the order actually carries, plus the fork point and the commander', () => {
     const text = childTaskEnvelope(
       { title: 'Left flank', objective: 'take the left half', scope: 'src/left/**', max_cost: 2.5 },

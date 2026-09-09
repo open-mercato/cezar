@@ -170,7 +170,7 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
         expect(child.task).toContain(`- Ordered by: the caesar on run ${record.id}`);
       }
       // And the commander's transcript says who it delegated to.
-      expect(notes(record.id).some((n) => n.startsWith('delegated to 2 legates:'))).toBe(true);
+      expect(notes(record.id).some((n) => n.startsWith('delegated to 2 units:') && n.includes('(legate,'))).toBe(true);
       // The raw payload never reaches the transcript as prose.
       const texts = store.readEvents(record.id).filter((e) => e.type === 'text');
       expect(texts.some((e) => String((e as { text?: unknown }).text).includes('CEZ:SPAWN'))).toBe(false);
@@ -350,6 +350,70 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       expect(suggestion).toBeTruthy();
       expect(readFileSync(join(missionDirOf(parent.id), 'inbox', 'root', suggestion!), 'utf8')).toContain('split billing out of this order');
       expect(readFileSync(join(missionDirOf(parent.id), 'units', child.id.slice(0, 8), 'report.md'), 'utf8')).toContain('"status": "done"');
+    }, 60_000);
+  });
+
+  // ---- flexible composition and per-mission resources ---------------------------------------
+
+  describe('rank, kind and mission resources', () => {
+    it('lets a caesar spawn centurions directly, one of them a reviewer with a review target', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const record = start('mock:spawn-direct split this up', caesar('m12', 20));
+      await waitFor(record.id, (r) => r?.activity === 'monitoring');
+      const children = childrenOf(record.id);
+      expect(children.map((c) => c.unit?.role)).toEqual(['centurion', 'centurion']);
+      const reviewer = children.find((c) => c.unit?.kind === 'review');
+      expect(reviewer?.unit?.reviewOf).toEqual(['cez/00000000']);
+      expect(reviewer?.task).toContain('- Kind: review');
+      // The record echoes the system prompt a run used once it has RUN (execute writes it), so
+      // let both children settle before reading theirs.
+      for (const child of children) await waitFor(child.id, settled, 40_000);
+      expect(store.getRun(reviewer!.id)?.systemPrompt).toMatch(/Your KIND is review/);
+      const implementer = children.find((c) => c.unit?.kind === undefined);
+      expect(store.getRun(implementer!.id)?.systemPrompt).not.toMatch(/Your KIND is/);
+      expect(store.getRun(implementer!.id)?.systemPrompt).toMatch(/CENTURION/);
+      expect(notes(record.id).some((n) => n.includes('centurion, review'))).toBe(true);
+    }, 60_000);
+
+    it('caps children in flight at the mission’s own maxChildren', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const record = start('mock:spawn one more push', caesar('m13', 20));
+      // The mission root's own record carries the resources; here the root IS this run.
+      store.updateRun(record.id, { unit: { ...caesar('m13', 20), missionId: record.id, resources: { maxChildren: 1 } } });
+      await waitFor(record.id, (r) => r?.status === 'waiting');
+      expect(childrenOf(record.id)).toHaveLength(0);
+      expect(notes(record.id).some((n) => n.includes('CEZ:SPAWN refused') && n.includes('the cap is 1'))).toBe(true);
+    }, 40_000);
+
+    it('runs a mission with its own parallel limit wider than the workspace cap, without widening the cap', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const root = store.createRun({ title: 'army', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(root.id, { status: 'waiting', unit: { role: 'caesar', missionId: root.id, resources: { parallel: 2 } } });
+      const unit = (title: string): RunUnit => ({ role: 'centurion', missionId: root.id, parentRunId: root.id });
+      const a = start('mock:slow first flank', unit('a'));
+      const b = start('mock:slow second flank', unit('b'));
+      // Both mission runs execute at once under the mission's count of 2 …
+      await waitFor(a.id, (r) => r?.status === 'running');
+      await waitFor(b.id, (r) => r?.status === 'running');
+      // … and an ordinary run still gets the workspace's single slot, because mission runs are
+      // exempt from it rather than consuming it.
+      const plain = start('mock:done ordinary task');
+      await waitFor(plain.id, (r) => r?.status === 'running' || settled(r));
+      // A third mission run waits for the mission's own count.
+      const c = start('mock:slow third flank', unit('c'));
+      await new Promise((r) => setTimeout(r, 1_500));
+      expect(store.getRun(c.id)?.status).toBe('queued');
+    }, 60_000);
+
+    it('keeps a mission with no parallel limit under the workspace cap, exactly as before', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const root = store.createRun({ title: 'army', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(root.id, { status: 'waiting', unit: { role: 'caesar', missionId: root.id } });
+      const a = start('mock:slow first flank', { role: 'centurion', missionId: root.id, parentRunId: root.id });
+      const b = start('mock:slow second flank', { role: 'centurion', missionId: root.id, parentRunId: root.id });
+      await waitFor(a.id, (r) => r?.status === 'running');
+      await new Promise((r) => setTimeout(r, 1_500));
+      expect(store.getRun(b.id)?.status).toBe('queued');
     }, 60_000);
   });
 

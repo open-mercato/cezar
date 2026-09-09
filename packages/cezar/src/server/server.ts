@@ -3537,6 +3537,16 @@ export function createApp(deps: ServerDeps) {
           // `JSON.stringify` then drops, which is exactly the drift the parity guards fail on.
           ...(body.budgetUsd !== undefined ? { budgetUsd: body.budgetUsd } : {}),
           ...(body.ladder ? { ladder: body.ladder } : {}),
+          // The mission's own resource limits live on the ROOT; every spawn and pump below reads
+          // them there. Spread conditionally for the same parity reason as the budget.
+          ...(body.parallel !== undefined || body.maxChildren !== undefined
+            ? {
+                resources: {
+                  ...(body.parallel !== undefined ? { parallel: body.parallel } : {}),
+                  ...(body.maxChildren !== undefined ? { maxChildren: body.maxChildren } : {}),
+                },
+              }
+            : {}),
         },
       });
       // The mission directory's brief — the user's actual ask, which every rank is told to read
@@ -3548,6 +3558,8 @@ export function createApp(deps: ServerDeps) {
           objective: body.objective,
           ...(body.constraints?.length ? { constraints: body.constraints } : {}),
           ...(body.budgetUsd !== undefined ? { budgetUsd: body.budgetUsd } : {}),
+          ...(body.parallel !== undefined ? { parallel: body.parallel } : {}),
+          ...(body.maxChildren !== undefined ? { maxChildren: body.maxChildren } : {}),
           ...(body.ladder ? { ladder: body.ladder } : {}),
           rootRole: role,
         });

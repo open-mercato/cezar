@@ -53,14 +53,25 @@ describe('CEZ:SPAWN', () => {
     expect(parsed.kind === 'valid' && parsed.payload.children[0]).toEqual(child);
   });
 
-  it('accepts four children and refuses a fifth — the in-flight cap is in the schema', () => {
-    const four = Array.from({ length: 4 }, (_, i) => ({ ...CHILD, title: `Child ${i}` }));
-    expect(parseSpawnMarkerResult(spawn({ children: four })).kind).toBe('valid');
-    const five = [...four, { ...CHILD, title: 'Child 5' }];
-    const parsed = parseSpawnMarkerResult(spawn({ children: five }));
+  it('accepts a wide payload and refuses only an absurd one — the in-flight cap is the mission’s, enforced by the engine', () => {
+    const eight = Array.from({ length: 8 }, (_, i) => ({ ...CHILD, title: `Child ${i}` }));
+    expect(parseSpawnMarkerResult(spawn({ children: eight })).kind).toBe('valid');
+    const tooMany = Array.from({ length: 33 }, (_, i) => ({ ...CHILD, title: `Child ${i}` }));
+    const parsed = parseSpawnMarkerResult(spawn({ children: tooMany }));
     expect(parsed.kind).toBe('invalid-structure');
     if (parsed.kind !== 'invalid-structure') return;
     expect(parsed.issues.some((issue) => issue.path.includes('children'))).toBe(true);
+  });
+
+  it('parses rank, kind and review_of — the flexible-composition keys', () => {
+    const parsed = parseSpawnMarkerResult(
+      spawn({ children: [{ ...CHILD, rank: 'centurion', kind: 'review', review_of: ['cez/abcd1234', 'abcd1234'] }] }),
+    );
+    expect(parsed.kind).toBe('valid');
+    if (parsed.kind !== 'valid') return;
+    expect(parsed.payload.children[0]).toMatchObject({ rank: 'centurion', kind: 'review', review_of: ['cez/abcd1234', 'abcd1234'] });
+    expect(parseSpawnMarkerResult(spawn({ children: [{ ...CHILD, rank: 'caesar' }] })).kind).toBe('invalid-structure');
+    expect(parseSpawnMarkerResult(spawn({ children: [{ ...CHILD, kind: 'audit' }] })).kind).toBe('invalid-structure');
   });
 
   it('refuses an empty children array — a spawn that spawns nothing is a mistake, not a no-op', () => {

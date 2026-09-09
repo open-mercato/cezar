@@ -13,6 +13,7 @@ import {
   unitPromptPath,
   unitPromptsDir,
   writeUnitPrompt,
+  composeUnitPrompt,
 } from './prompts.ts';
 
 /**
@@ -185,6 +186,29 @@ describe('unit role prompts', () => {
         expect(prompt).toContain('"suggestions"');
         expect(prompt).toMatch(/never redefine the objective/i);
       }
+    });
+
+    it('teaches rank, kind and review_of in the spawn contract, and the legate that it manages', () => {
+      for (const role of ['caesar', 'legate'] as const) {
+        const prompt = DEFAULT_UNIT_PROMPTS[role];
+        expect(prompt).toContain('"rank"');
+        expect(prompt).toContain('"kind"');
+        expect(prompt).toContain('"review_of"');
+        expect(prompt).not.toMatch(/1 to 4 entries/);
+      }
+      expect(DEFAULT_UNIT_PROMPTS.legate).toMatch(/MANAGEMENT layer/);
+      expect(DEFAULT_UNIT_PROMPTS.caesar).toContain('plan.md');
+    });
+
+    it('composes a kind addendum on top of the rank prompt, and nothing for an implementer', () => {
+      expect(composeUnitPrompt('ROLE', 'implement')).toBe('ROLE');
+      expect(composeUnitPrompt('ROLE', undefined)).toBe('ROLE');
+      const review = composeUnitPrompt('ROLE', 'review');
+      expect(review.startsWith('ROLE\n\n')).toBe(true);
+      expect(review).toMatch(/verdict/);
+      expect(review).toMatch(/edit nothing on the reviewed branch/i);
+      expect(composeUnitPrompt('ROLE', 'research')).toMatch(/change nothing/i);
+      expect(composeUnitPrompt('ROLE', 'plan')).toContain('plan.md');
     });
 
     it('carries the Guard rule in every role — it must not weaken down the ranks', () => {

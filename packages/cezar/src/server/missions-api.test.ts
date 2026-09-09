@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
@@ -146,6 +146,23 @@ describe('POST /api/v1/missions', () => {
     it('persists the mission budget on the root', async () => {
       const { id } = await start({ objective: 'x', unit: 'army', budgetUsd: 12.5 });
       expect(store.getRun(id)?.unit?.budgetUsd).toBe(12.5);
+    });
+
+    it('persists the mission’s own resource limits on the root, and only when given', async () => {
+      const { id } = await start({ objective: 'x', unit: 'army', parallel: 8, maxChildren: 6 });
+      expect(store.getRun(id)?.unit?.resources).toEqual({ parallel: 8, maxChildren: 6 });
+      const plain = await start({ objective: 'x', unit: 'army' });
+      const unit = store.getRun(plain.id)?.unit;
+      expect(unit && 'resources' in unit).toBe(false);
+    });
+
+    it('writes the mission brief into the mission directory with the objective and limits', async () => {
+      const { id } = await start({ objective: 'Ship the thing', unit: 'army', constraints: ['never touch billing'], budgetUsd: 12, parallel: 4 });
+      const brief = readFileSync(join(repoRoot, '.ai/cezar/missions', id, 'brief.md'), 'utf8');
+      expect(brief).toContain('Ship the thing');
+      expect(brief).toContain('- never touch billing');
+      expect(brief).toContain('up to 4 at once');
+      expect(brief).toContain('$12.00');
     });
 
     it('leaves budgetUsd ABSENT when none was given, rather than writing a zero', async () => {

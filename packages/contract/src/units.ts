@@ -38,6 +38,33 @@ export const UNIT_ROLES = ['caesar', 'legate', 'centurion'] as const;
 export const unitRoleSchema = z.enum(UNIT_ROLES);
 export type UnitRole = z.infer<typeof unitRoleSchema>;
 
+/**
+ * What a unit is FOR, orthogonal to its rank (user decision: flexible composition). A commander
+ * may spawn implementers and, separately, reviewers of their work; a research unit reads and
+ * reports; a plan unit writes the order of battle. `implement` is the default and the
+ * pre-existing behaviour.
+ */
+export const UNIT_KINDS = ['implement', 'review', 'research', 'plan'] as const;
+export const unitKindSchema = z.enum(UNIT_KINDS);
+export type UnitKind = z.infer<typeof unitKindSchema>;
+
+/**
+ * Per-mission resource limits, set when the mission starts and read from the ROOT's record by
+ * every spawn and every pump. Both optional: absent means today's behaviour.
+ *
+ *  - `parallel` — how many of this mission's runs may execute at once. When set, the mission's
+ *    runs are admitted under THIS count instead of the workspace/project `maxParallel`, which is
+ *    what lets an army run wider than the global cap without widening it for every project;
+ *  - `maxChildren` — children in flight per commander (default 4).
+ *
+ * No upper bound on purpose: scale is the user's call at mission start, not a constant's.
+ */
+export const unitResourcesSchema = z.object({
+  parallel: z.number().int().min(1).optional(),
+  maxChildren: z.number().int().min(1).optional(),
+});
+export type UnitResources = z.infer<typeof unitResourcesSchema>;
+
 /** One rung of the mission ladder: which backend and model a role's runs are dispatched to.
  *  Both optional — an omitted rung falls back to the project's own defaults, the same way
  *  `POST /runs` falls back when the composer names neither. */
@@ -80,6 +107,9 @@ export const unitReportSchema = z.object({
   side_effects: z.array(z.string().max(400)).max(12).default([]),
   errors: z.array(z.string().max(400)).max(12).default([]),
   recommended_next_action: z.string().max(1000).optional(),
+  /** A REVIEW unit's verdict on the work it was given to review (`review_of`). The commander
+   *  merges only after `approve`; `changes` names what to fix in `result`/`errors`. */
+  verdict: z.enum(['approve', 'changes', 'reject']).optional(),
   /** Upward suggestions — what the mission root should know that is outside this unit's order.
    *  The engine forwards them to the root's inbox at settle, so the middle ranks never have to
    *  relay them. Suggest, never redefine: the objective stays the user's. */
@@ -109,6 +139,12 @@ export const unitSchema = z.object({
   missionId: z.string(),
   /** Absent on the root; present on every spawned child. */
   parentRunId: z.string().optional(),
+  /** What this unit is for. Absent = `implement`, the pre-existing behaviour. */
+  kind: unitKindSchema.optional(),
+  /** For a `review` unit: the run ids or branches it reviews. */
+  reviewOf: z.array(z.string().max(120)).max(8).optional(),
+  /** On the ROOT only: the mission's resource limits (read by every spawn and pump below it). */
+  resources: unitResourcesSchema.optional(),
   /** This node's spend ceiling in USD. Absent = no ceiling of its own (the parent's still binds). */
   budgetUsd: z.number().nonnegative().optional(),
   ladder: unitLadderSchema.optional(),
@@ -155,6 +191,13 @@ export const unitSpawnSchema = z
           .object({
             title: z.string().min(1).max(120),
             objective: z.string().min(1).max(4000),
+            /** The rank to spawn at — any rank BELOW the spawner's (a caesar may spawn
+             *  centurions directly). Absent = one rung down, the pre-existing behaviour. */
+            rank: z.enum(['legate', 'centurion']).optional(),
+            /** What the child is for. Absent = `implement`. */
+            kind: unitKindSchema.optional(),
+            /** For `kind: "review"`: the run ids or branches to review. */
+            review_of: z.array(z.string().max(120)).max(8).optional(),
             scope: z.string().max(1000).optional(),
             /** Tool NAMES, so each is bounded like every other string here (#429): the list
              *  reaches a spawned process's `allowedTools`, and an unbounded element is an
@@ -168,9 +211,10 @@ export const unitSpawnSchema = z
           .strict(),
       )
       .min(1)
-      /** Four in flight per parent (spec Q2): `maxParallel` defaults to 2 and only two monitors
-       *  are slot-exempt, so a wider fan-out starves its own tree. */
-      .max(4),
+      /** A sanity bound on ONE payload. The real cap — children in flight per commander — is
+       *  the mission's `resources.maxChildren` (default 4), enforced by the engine against what
+       *  is already running, not by the schema against what is asked for. */
+      .max(32),
   })
   .strict();
 export type UnitSpawn = z.infer<typeof unitSpawnSchema>;
@@ -200,6 +244,10 @@ export const startMissionInputSchema = z.object({
   ladder: unitLadderSchema.optional(),
   /** Standing rules appended to the objective as a `## Constraints` block. */
   constraints: z.array(z.string().max(400)).max(20).optional(),
+  /** Mission-scoped concurrency (see `unitResourcesSchema.parallel`). Absent = the global cap. */
+  parallel: z.number().int().min(1).optional(),
+  /** Children in flight per commander. Absent = 4. */
+  maxChildren: z.number().int().min(1).optional(),
 });
 export type StartMissionInput = z.input<typeof startMissionInputSchema>;
 

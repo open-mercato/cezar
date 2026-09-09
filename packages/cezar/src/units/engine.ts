@@ -11,7 +11,7 @@
  * enough to read in one sitting because the arithmetic and the prose live here, under test on
  * their own.
  */
-import type { RunUnit, UnitPendingReport, UnitReport, UnitRole, UnitSpawnChild } from '@open-mercato/cezar-contract';
+import type { RunUnit, UnitKind, UnitPendingReport, UnitReport, UnitRole, UnitSpawnChild } from '@open-mercato/cezar-contract';
 import type { RunnerId } from '../core/agent-runner.ts';
 import type { RunRecord } from '../runs/store.ts';
 
@@ -24,9 +24,30 @@ export const CHILD_ROLE: Record<UnitRole, UnitRole | undefined> = {
   centurion: undefined,
 };
 
-/** Children in flight under ONE parent (spec Q2). `maxParallel` defaults to 2 and only two
- *  monitors are slot-exempt, so a wider fan-out starves its own tree. */
+/** Children in flight under ONE parent when the mission set no `resources.maxChildren`
+ *  (spec Q2). `maxParallel` defaults to 2 and only two monitors are slot-exempt, so a wider
+ *  default fan-out would starve its own tree; a mission that wants more says so at start. */
 export const MAX_CHILDREN_IN_FLIGHT = 4;
+
+/** The ranks, top down. A spawn may name any rank strictly BELOW the spawner's. */
+const RANK_ORDER: readonly UnitRole[] = ['caesar', 'legate', 'centurion'];
+
+/**
+ * The rank a spawn creates: the requested one when it is below the spawner's, else one rung
+ * down. `undefined` for a request the spawner may not make — its own rank or one above it, or
+ * anything from a centurion, which has no rank below it at all.
+ */
+export function childRoleFor(spawner: UnitRole, requested: UnitRole | undefined): UnitRole | undefined {
+  const below = CHILD_ROLE[spawner];
+  if (!below) return undefined;
+  if (requested === undefined) return below;
+  return RANK_ORDER.indexOf(requested) > RANK_ORDER.indexOf(spawner) ? requested : undefined;
+}
+
+/** What a unit is for; absent on every pre-existing record means `implement`. */
+export function unitKindOf(unit: Pick<RunUnit, 'kind'> | undefined): UnitKind {
+  return unit?.kind ?? 'implement';
+}
 
 /** How many settled-child reports a parent keeps waiting for its next session (spec Q7). A
  *  bound, not a policy: the list is flushed into a PROMPT, and an unbounded one would grow into
@@ -104,6 +125,13 @@ export function childTaskEnvelope(
   extraLines: readonly string[] = [],
 ): string {
   const lines: string[] = [];
+  const kind = child.kind ?? 'implement';
+  if (kind !== 'implement') {
+    lines.push(
+      `- Kind: ${kind}${kind === 'review' ? ' — you review the work named below and give a verdict; you do not implement it' : kind === 'research' ? ' — you read and report; you change nothing in the repository' : ' — you write the plan; you change no code'}`,
+    );
+  }
+  if (child.review_of?.length) lines.push(`- Review of: ${child.review_of.join(', ')}`);
   if (child.scope) lines.push(`- Scope: ${child.scope}`);
   if (child.allowed_tools?.length) lines.push(`- Allowed tools: ${child.allowed_tools.join(', ')}`);
   if (child.max_cost !== undefined) lines.push(`- Max cost: ${usd(child.max_cost)}`);
@@ -209,6 +237,7 @@ export function childSettleReport(
   if (report.evidence.length) parts.push(`evidence: ${report.evidence.join(' · ')}`);
   if (report.errors.length) parts.push(`errors: ${report.errors.join(' · ')}`);
   if (report.side_effects.length) parts.push(`side effects: ${report.side_effects.join(' · ')}`);
+  if (report.verdict) parts.push(`verdict: ${report.verdict}`);
   if (report.recommended_next_action) parts.push(`recommended next: ${report.recommended_next_action}`);
   if (report.suggestions.length) parts.push(`suggestions for the mission: ${report.suggestions.join(' · ')}`);
   if (child.costUsd !== undefined) parts.push(`cost ${usd(child.costUsd)}`);
