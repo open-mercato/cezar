@@ -122,6 +122,24 @@ describe('CEZ:SPAWN', () => {
     expect(parseSpawnMarkerResult(text).kind).toBe('invalid-json');
   });
 
+  it('tolerates the trailing CEZ:MONITORING line the role prompts ask for after a spawn', () => {
+    // Observed live: a by-the-book commander ends its turn with the spawn line and then a
+    // monitoring line. The candidate runs to end-of-text, so without the trim the monitoring line
+    // is swallowed into the JSON and the spawn is refused — which was fatal for the run.
+    const text = `${spawn({ children: [CHILD] })}\nCEZ:MONITORING`;
+    const parsed = parseSpawnMarkerResult(text);
+    expect(parsed.kind).toBe('valid');
+    if (parsed.kind === 'valid') expect(parsed.payload.children).toHaveLength(1);
+    expect(stripSpawnMarker(text)).toBe('Planning done.');
+  });
+
+  it('anchors on the LAST keyword occurrence — earlier prose mentioning it does not hijack the marker', () => {
+    const text = `As CEZ:SPAWN requires, I decompose first.\n\nCEZ:SPAWN ${JSON.stringify({ children: [CHILD] })}`;
+    expect(parseSpawnMarkerResult(text).kind).toBe('valid');
+    // The strip removes only the marker, never the prose that mentioned it.
+    expect(stripSpawnMarker(text)).toBe('As CEZ:SPAWN requires, I decompose first.');
+  });
+
   describe('stripping', () => {
     it('removes a valid marker from the displayed text', () => {
       expect(stripSpawnMarker(spawn({ children: [CHILD] }))).toBe('Planning done.');
@@ -182,6 +200,13 @@ describe('CEZ:REPORT', () => {
 
   it('is absent from ordinary prose', () => {
     expect(parseReportMarkerResult('Here is my report, in prose.')).toEqual({ kind: 'none' });
+  });
+
+  it('tolerates the CEZ:DONE line a unit appends after its report', () => {
+    const text = `Finished.\n\nCEZ:REPORT ${JSON.stringify({ status: 'done', result: 'all green' })}\nCEZ:DONE`;
+    const parsed = parseReportMarkerResult(text);
+    expect(parsed.kind).toBe('valid');
+    if (parsed.kind === 'valid') expect(parsed.payload.result).toBe('all green');
   });
 
   it('matches only a trailing marker', () => {

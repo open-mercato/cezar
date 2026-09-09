@@ -22,7 +22,12 @@
 import type { z } from 'zod';
 import type { UnitReport, UnitSpawn } from '@open-mercato/cezar-contract';
 import { unitReportSchema, unitSpawnSchema } from '@open-mercato/cezar-contract';
-import { closeUnbalancedJson } from '../core/ask.ts';
+import {
+  closeUnbalancedJson,
+  lastMarkerCandidate,
+  stripLastMarker,
+  trimTrailingControlMarkers,
+} from '../core/ask.ts';
 import type { AskParseIssue } from '../core/ask.ts';
 
 /** The strict marker shapes — a trailing `CEZ:SPAWN`/`CEZ:REPORT` whose payload runs from the
@@ -30,10 +35,12 @@ import type { AskParseIssue } from '../core/ask.ts';
 export const SPAWN_MARKER_RE = /CEZ:SPAWN[ \t]+(\{[\s\S]*\})\s*$/;
 export const REPORT_MARKER_RE = /CEZ:REPORT[ \t]+(\{[\s\S]*\})\s*$/;
 
-/** Looser twins, so diagnostics can tell a MALFORMED trailing marker from ordinary prose that
- *  merely mentions one. Same split `ask.ts` makes and for the same reason. */
-const SPAWN_MARKER_CANDIDATE_RE = /CEZ:SPAWN[ \t]+([\s\S]*)$/;
-const REPORT_MARKER_CANDIDATE_RE = /CEZ:REPORT[ \t]+([\s\S]*)$/;
+/** The two keywords. The payload candidate is everything after the LAST occurrence of one
+ *  (`lastMarkerCandidate`), so prose that merely mentions the keyword earlier in the turn cannot
+ *  hijack the real marker line, and a trailing `CEZ:MONITORING`/`CEZ:DONE` line the role prompts
+ *  ask for is trimmed before parsing. Same split `ask.ts` makes and for the same reason. */
+const SPAWN_KEYWORD = 'CEZ:SPAWN';
+const REPORT_KEYWORD = 'CEZ:REPORT';
 
 /** One zod complaint, flattened. The same shape `parseAskMarkerResult` reports, so a turn-end
  *  handler can render any of the three markers' failures through one path. */
@@ -61,17 +68,18 @@ function issuesOf(error: z.ZodError): UnitMarkerParseIssue[] {
  *  them ends up with a repair layer the other lacks. */
 function parseMarker<S extends z.ZodType>(
   turnText: string,
-  candidate: RegExp,
+  keyword: string,
   schema: S,
 ): UnitMarkerParseResult<z.infer<S>> {
-  const match = candidate.exec(turnText.trimEnd());
-  if (!match || match[1] === undefined) return { kind: 'none' };
+  const candidate = lastMarkerCandidate(turnText.trimEnd(), keyword);
+  if (candidate === null) return { kind: 'none' };
+  const payload = trimTrailingControlMarkers(candidate);
   let raw: unknown;
   let repaired = false;
   try {
-    raw = JSON.parse(match[1]);
+    raw = JSON.parse(payload);
   } catch (error) {
-    const closed = closeUnbalancedJson(match[1]);
+    const closed = closeUnbalancedJson(payload);
     try {
       if (closed === null) throw error;
       raw = JSON.parse(closed);
@@ -91,12 +99,12 @@ function parseMarker<S extends z.ZodType>(
 /** Parse a trailing `CEZ:SPAWN <json>` with an actionable result. Unknown keys and a fifth child
  *  are `invalid-structure`, not a silent trim (`unitSpawnSchema` is `.strict()`). */
 export function parseSpawnMarkerResult(turnText: string): UnitMarkerParseResult<UnitSpawn> {
-  return parseMarker(turnText, SPAWN_MARKER_CANDIDATE_RE, unitSpawnSchema);
+  return parseMarker(turnText, SPAWN_KEYWORD, unitSpawnSchema);
 }
 
 /** Parse a trailing `CEZ:REPORT <json>` with an actionable result. */
 export function parseReportMarkerResult(turnText: string): UnitMarkerParseResult<UnitReport> {
-  return parseMarker(turnText, REPORT_MARKER_CANDIDATE_RE, unitReportSchema);
+  return parseMarker(turnText, REPORT_KEYWORD, unitReportSchema);
 }
 
 /** The `parseAskMarker` twin: the payload, or `null` when there is no marker or it is invalid. */
@@ -124,10 +132,10 @@ export function parseReportMarker(turnText: string): UnitReport | null {
  */
 export function stripSpawnMarker(text: string): string {
   if (parseSpawnMarker(text) === null) return text;
-  return text.replace(/\s*CEZ:SPAWN[ \t]+[\s\S]*$/, '');
+  return stripLastMarker(text, SPAWN_KEYWORD);
 }
 
 export function stripReportMarker(text: string): string {
   if (parseReportMarker(text) === null) return text;
-  return text.replace(/\s*CEZ:REPORT[ \t]+[\s\S]*$/, '');
+  return stripLastMarker(text, REPORT_KEYWORD);
 }
