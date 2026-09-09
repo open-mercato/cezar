@@ -167,10 +167,10 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
         expect(child.task).toContain(`- Scope: src/${flank}/**`);
         expect(child.task).toContain('- Max cost: $2.50');
         expect(child.task).toContain(`- Parent branch (your fork point): ${parent?.branch}`);
-        expect(child.task).toContain(`- Ordered by: the caesar on run ${record.id}`);
+        expect(child.task).toContain(`- Ordered by: the commander on run ${record.id}`);
       }
       // And the commander's transcript says who it delegated to.
-      expect(notes(record.id).some((n) => n.startsWith('delegated to 2 units:') && n.includes('(legate,'))).toBe(true);
+      expect(notes(record.id).some((n) => n.startsWith('delegated to 2 units:') && n.includes('(manager,'))).toBe(true);
       // The raw payload never reaches the transcript as prose.
       const texts = store.readEvents(record.id).filter((e) => e.type === 'text');
       expect(texts.some((e) => String((e as { text?: unknown }).text).includes('CEZ:SPAWN'))).toBe(false);
@@ -371,8 +371,8 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       expect(store.getRun(reviewer!.id)?.systemPrompt).toMatch(/Your KIND is review/);
       const implementer = children.find((c) => c.unit?.kind === undefined);
       expect(store.getRun(implementer!.id)?.systemPrompt).not.toMatch(/Your KIND is/);
-      expect(store.getRun(implementer!.id)?.systemPrompt).toMatch(/CENTURION/);
-      expect(notes(record.id).some((n) => n.includes('centurion, review'))).toBe(true);
+      expect(store.getRun(implementer!.id)?.systemPrompt).toMatch(/You are a WORKER/);
+      expect(notes(record.id).some((n) => n.includes('worker, review'))).toBe(true);
     }, 60_000);
 
     it('caps children in flight at the mission’s own maxChildren', async () => {
@@ -506,8 +506,8 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       await waitFor(child.id, (r) => r?.status === 'done' || r?.status === 'review');
 
       // Q7 rung 1: the parent's live session heard it.
-      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from legate'));
-      const text = delivered(stdinFile, 'Report from legate');
+      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from manager'));
+      const text = delivered(stdinFile, 'Report from manager');
       expect(text).toContain(`"${store.getRun(child.id)?.title}"`);
       expect(text).toContain(child.id);
       expect(text).toContain('status done');
@@ -516,7 +516,7 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       // Delivering wakes the monitor: it is working again, not parked.
       expect(store.getRun(parent.id)?.activity).toBeUndefined();
       // The delivery is not user-authored, so the thread would otherwise show nothing at all.
-      expect(notes(parent.id).some((n) => n.startsWith('report received from legate'))).toBe(true);
+      expect(notes(parent.id).some((n) => n.startsWith('report received from manager'))).toBe(true);
       // Persist-then-ACK: the report was written to the record BEFORE the delivery (that is what
       // survives a restart mid-hand-off), and the live session taking it is what retires the
       // entry. Leaving it behind is not "belt and braces" — `flushPendingReports` would then
@@ -537,7 +537,7 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
         parentRunId: parent.id,
       });
       await waitFor(child.id, (r) => r?.status === 'done' || r?.status === 'review');
-      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from legate'));
+      await waitFor(parent.id, () => stdin(stdinFile).includes('Report from manager'));
 
       // Let the commander finish the turn the report started, then close its session: what is
       // under test is the NEXT one. (Whether the fixture's own reply ends that turn or parks it

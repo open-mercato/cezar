@@ -82,6 +82,7 @@ import {
   CHILD_ROLE,
   MAX_CHILDREN_IN_FLIGHT,
   childRoleFor,
+  roleLabel,
   childSettleReport,
   childTaskEnvelope,
   childrenOf,
@@ -1804,7 +1805,7 @@ export class RunManager {
         from: runId,
         subject: `Blocked on a Guard question — ${run?.title ?? runId}`,
         body: [
-          `Your ${unit.role} "${run?.title ?? runId}" (${runId}) has parked on a question only the human can answer:`,
+          `Your ${roleLabel(unit.role)} "${run?.title ?? runId}" (${runId}) has parked on a question only the human can answer:`,
           ...questions.map((question) => `- ${question}`),
           '',
           'It holds one of your children-in-flight slots until it is answered in the Guard inbox. You cannot answer on the human\'s behalf; you can re-plan around it, wait, or raise the decision yourself with CEZ:ASK if the mission depends on it.',
@@ -1870,7 +1871,7 @@ export class RunManager {
   ): boolean {
     if (!CHILD_ROLE[unit.role]) {
       note(
-        `CEZ:SPAWN refused — a ${unit.role} has no rank below it. Legionaries are your backend's own sub-agents (the Task tool), not cezar runs; dispatch them yourself or do the work directly.`,
+        `CEZ:SPAWN refused — a ${roleLabel(unit.role)} has no rank below it. Sub-agents are your backend's own (the Task tool), not cezar runs; dispatch them yourself or do the work directly.`,
         'danger',
       );
       return false;
@@ -1882,7 +1883,7 @@ export class RunManager {
     for (const child of spawn.children) {
       const role = childRoleFor(unit.role, child.rank);
       if (!role) {
-        note(`CEZ:SPAWN refused — "${child.title}" asks for rank ${child.rank}, which is not below yours (${unit.role}).`, 'danger');
+        note(`CEZ:SPAWN refused — "${child.title}" asks for rank ${child.rank} (${roleLabel(child.rank)}), which is not below yours (${roleLabel(unit.role)}).`, 'danger');
         return false;
       }
       roles.push(role);
@@ -2003,7 +2004,7 @@ export class RunManager {
 
     note(
       `delegated to ${created.length} unit${created.length === 1 ? '' : 's'}: ${created
-        .map((child) => `"${child.title}" (${child.unit?.role ?? 'unit'}${child.unit?.kind ? `, ${child.unit.kind}` : ''}, ${child.id})`)
+        .map((child) => `"${child.title}" (${roleLabel(child.unit?.role)}${child.unit?.kind ? `, ${child.unit.kind}` : ''}, ${child.id})`)
         .join(', ')}`,
     );
     return created.length > 0;
@@ -2099,7 +2100,7 @@ export class RunManager {
         if (suggestions.length && child.id !== missionId) {
           writeInboxMessage(this.dataDir, missionId, 'root', {
             from: child.id,
-            subject: `Suggestions from ${child.unit?.role ?? 'unit'} "${child.title}"`,
+            subject: `Suggestions from ${roleLabel(child.unit?.role)} "${child.title}"`,
             body: suggestions.map((line) => `- ${line}`).join('\n'),
           });
         }
@@ -2121,7 +2122,7 @@ export class RunManager {
       // simply start talking about a report nobody could see it had been handed.
       this.store.appendEvent(parentId, {
         type: 'note',
-        message: `report received from ${child.unit?.role ?? 'unit'} "${child.title}" (${child.id}) — status ${report.status}`,
+        message: `report received from ${roleLabel(child.unit?.role)} "${child.title}" (${child.id}) — status ${report.status}`,
       });
 
       // A CANCELLED child is persisted and nothing more: it is the ONE settle that must not wake

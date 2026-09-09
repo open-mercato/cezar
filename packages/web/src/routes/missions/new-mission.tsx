@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { UnitRoleChip } from '@/components/unit-role-chip'
+import { RomanTooltip, UNIT_SIZE_LABELS, UNIT_SIZE_LORE, UnitRoleChip } from '@/components/unit-role-chip'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import type { UnitLadder, UnitRole, UnitSize } from '@open-mercato/cezar-api-client'
@@ -32,18 +32,18 @@ import { MissionsFrame, UnitsOffState } from './missions'
 const SIZES: Array<{ id: UnitSize; title: string; blurb: string }> = [
   {
     id: 'legionary',
-    title: 'Legionary',
+    title: UNIT_SIZE_LABELS.legionary,
     blurb: 'One agent, one task — what New task does today.',
   },
   {
     id: 'squad',
-    title: 'Squad',
-    blurb: 'A centurion splits the job across its own sub-agents and reviews the evidence.',
+    title: UNIT_SIZE_LABELS.squad,
+    blurb: 'A worker splits the job across its own sub-agents and reviews the evidence.',
   },
   {
     id: 'army',
-    title: 'Army',
-    blurb: 'Caesar forms legions of legates and centurions, and reports once.',
+    title: UNIT_SIZE_LABELS.army,
+    blurb: 'A commander plans, delegates to managers and workers (or straight to workers), has the work reviewed, and reports once.',
   },
 ]
 
@@ -211,7 +211,7 @@ export function NewMissionRoute() {
                   size === option.id && 'border-primary bg-primary/5 hover:bg-primary/5',
                 )}
               >
-                <span className="text-[13.5px] font-semibold">{option.title}</span>
+                <span className="text-[13.5px] font-semibold"><RomanTooltip lore={UNIT_SIZE_LORE[option.id]}><span data-slot="mission-size-title">{option.title}</span></RomanTooltip></span>
                 <span className="text-[12.5px] text-muted-foreground">{option.blurb}</span>
               </button>
             ))}

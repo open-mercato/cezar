@@ -127,7 +127,7 @@ describe('childTaskEnvelope', () => {
     expect(text).toContain('- Scope: src/left/**');
     expect(text).toContain('- Max cost: $2.50');
     expect(text).toContain('- Parent branch (your fork point): cez/abc12345');
-    expect(text).toContain('- Ordered by: the caesar on run p1');
+    expect(text).toContain('- Ordered by: the commander on run p1');
     // Nothing invented for the keys the commander left out.
     expect(text).not.toContain('Success criteria');
     expect(text).not.toContain('Retry limit');
@@ -136,7 +136,7 @@ describe('childTaskEnvelope', () => {
   it('omits the fork point for a commander running in the repository working tree', () => {
     const text = childTaskEnvelope({ title: 't', objective: 'o' }, { id: 'p1', role: 'legate' });
     expect(text).not.toContain('Parent branch');
-    expect(text).toContain('- Ordered by: the legate on run p1');
+    expect(text).toContain('- Ordered by: the manager on run p1');
   });
 });
 
@@ -179,7 +179,7 @@ describe('childSettleReport', () => {
     });
     const { text, report } = childSettleReport(child, { role: 'legate' });
     expect(report.status).toBe('partial'); // the child's own words, not cezar's status
-    expect(text).toContain('Report from legate "Left flank"');
+    expect(text).toContain('Report from manager "Left flank"');
     expect(text).toContain('branch cez/9999 off cez/parent');
     expect(text).toContain('status partial (cezar: done)');
     expect(text).toContain('evidence: npm test → 4 passed');

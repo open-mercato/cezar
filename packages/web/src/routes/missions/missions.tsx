@@ -82,7 +82,7 @@ export function MissionsRoute() {
 /** The page chassis, shared with the Guard inbox so the two read as one area. */
 export function MissionsFrame({
   title = 'Missions',
-  subtitle = 'A mission is a tree of runs: Caesar commands legates, legates command centurions, and the centurions do the work.',
+  subtitle = 'A mission is a tree of runs: a commander plans and delegates, managers steer and review, and workers do the work.',
   icon,
   action,
   children,

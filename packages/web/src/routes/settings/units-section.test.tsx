@@ -86,7 +86,7 @@ describe('UnitsSection', () => {
   it('lists the three ranks with their edited/default provenance', async () => {
     renderSection()
     await waitFor(() => expect(roleRow('caesar')).not.toBeNull())
-    expect(roleRow('caesar').textContent).toContain('Caesar')
+    expect(roleRow('caesar').textContent).toContain('Commander')
     expect(roleRow('caesar').querySelector('[data-slot="unit-prompt-source"]')?.textContent).toBe(
       'default',
     )

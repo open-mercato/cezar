@@ -29,6 +29,12 @@ export const CHILD_ROLE: Record<UnitRole, UnitRole | undefined> = {
  *  default fan-out would starve its own tree; a mission that wants more says so at start. */
 export const MAX_CHILDREN_IN_FLIGHT = 4;
 
+/** What each rank is called to a user and to an agent. The ids stay Roman on the wire and on disk. */
+export const ROLE_LABELS: Record<UnitRole, string> = { caesar: 'commander', legate: 'manager', centurion: 'worker' };
+export function roleLabel(role: UnitRole | undefined): string {
+  return role ? ROLE_LABELS[role] : 'unit';
+}
+
 /** The ranks, top down. A spawn may name any rank strictly BELOW the spawner's. */
 const RANK_ORDER: readonly UnitRole[] = ['caesar', 'legate', 'centurion'];
 
@@ -139,7 +145,7 @@ export function childTaskEnvelope(
   if (child.required_evidence) lines.push(`- Required evidence: ${child.required_evidence}`);
   if (child.retry_limit !== undefined) lines.push(`- Retry limit: ${child.retry_limit}`);
   if (parent.branch) lines.push(`- Parent branch (your fork point): ${parent.branch}`);
-  lines.push(`- Ordered by: the ${parent.role} on run ${parent.id}`);
+  lines.push(`- Ordered by: the ${roleLabel(parent.role)} on run ${parent.id}`);
   lines.push(...extraLines);
   return `${child.objective}\n\n## Task order\n${lines.join('\n')}`;
 }
@@ -244,7 +250,7 @@ export function childSettleReport(
   if (child.diffStat) {
     parts.push(`diff ${child.diffStat.files} files, +${child.diffStat.adds} -${child.diffStat.dels}`);
   }
-  const text = `Report from ${context.role} "${child.title}" (${where}): ${parts.join('; ')}`;
+  const text = `Report from ${roleLabel(context.role)} "${child.title}" (${where}): ${parts.join('; ')}`;
   return { text, report };
 }
 

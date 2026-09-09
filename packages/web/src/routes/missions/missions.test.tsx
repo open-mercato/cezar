@@ -98,7 +98,7 @@ describe('MissionsRoute', () => {
     expect(rowFor('m1')?.getAttribute('data-role')).toBe('caesar')
     expect(rowFor('a1')?.getAttribute('data-role')).toBe('centurion')
     // The rank chips read as their display names, not as the enum spelling.
-    expect(rowFor('m1')?.querySelector('[data-slot="unit-role"]')?.textContent).toBe('Caesar')
+    expect(rowFor('m1')?.querySelector('[data-slot="unit-role"]')?.textContent).toBe('Commander')
   })
 
   it('leaves plain tasks out — a run with no unit is not a one-node mission', async () => {
