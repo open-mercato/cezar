@@ -121,10 +121,13 @@ async function respond(userText, imageCount) {
   // A refusal delivered back into the session (`MARKER_REFUSAL_PREFIX` in `src/workflows/run.ts`,
   // which this script cannot import — `units-engine.test.ts` asserts the coupling) is answered
   // with CEZ:DONE: the dry run proves the model GOT another turn and settles instead of looping.
+  // An inbox digest delivered into the session is answered with CEZ:DONE for the same reason
+  // as a refusal: the dry run proves the message reached the model, then settles.
   const doneMarker =
     userText.includes('mock:done') ||
     userText.includes('mock:report') ||
     userText.includes(MARKER_REFUSAL_PREFIX) ||
+    userText.includes('## Mission inbox') ||
     (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
       ? '\n\nCEZ:DONE'
       : '';
@@ -236,8 +239,10 @@ async function respond(userText, imageCount) {
     ? '\nCEZ:PR=4242\nCEZ:ISSUE=17\nCEZ:TITLE=implementing marker refs'
     : '';
 
-  // `mock:slow` → hold the turn for ~25 s so queue states are observable.
+  // `mock:slow` → hold the turn for ~25 s so queue states are observable. `mock:pause` → ~2 s,
+  // long enough for a test to drop a file into the run's inbox before its turn ends.
   if (userText.includes('mock:slow')) await sleep(25_000);
+  else if (userText.includes('mock:pause')) await sleep(2_000);
 
   // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
   // the credential failure in an `is_error` result even though its subtype is

@@ -211,6 +211,16 @@ describe('unit role prompts', () => {
       expect(composeUnitPrompt('ROLE', 'plan')).toContain('plan.md');
     });
 
+    it('routes questions one rank at a time through the inboxes and keeps CEZ:ASK for the human', () => {
+      for (const role of UNIT_ROLES) {
+        const prompt = DEFAULT_UNIT_PROMPTS[role];
+        expect(prompt).toMatch(/Escalation goes one rank at a time/);
+        expect(prompt).toMatch(/file in your commander's inbox/);
+        expect(prompt).toMatch(/goes to the human, with CEZ:ASK/);
+      }
+      expect(DEFAULT_UNIT_PROMPTS.caesar).toMatch(/A child parked on a Guard question appears in your inbox/);
+    });
+
     it('carries the Guard rule in every role — it must not weaken down the ranks', () => {
       for (const role of UNIT_ROLES) {
         const prompt = DEFAULT_UNIT_PROMPTS[role];

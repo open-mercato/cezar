@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  parseAskMarker,
   parseAskMarkerResult,
   stripAskMarker,
   type AskMarkerParseResult,
@@ -1677,12 +1678,36 @@ export class RunManager {
     }
 
     const overBudget = this.enforceUnitBudget(runId, note);
-    const rePrompted = !spawned && !overBudget && this.rePromptRefusals(runId, ctx.state, ctx.stepId, refusals);
+    const rePrompted =
+      (!spawned && !overBudget && this.rePromptRefusals(runId, ctx.state, ctx.stepId, refusals)) ||
+      (!spawned && !overBudget && this.deliverOwnInbox(runId, ctx.state, ctx.stepId, text));
     // The filesystem channel's SIGNAL: this turn may have written into a sibling's or the root's
     // inbox. Wake every parked recipient now — the writer's turn end is the one moment cezar
     // knows something may have changed on disk without watching it.
     this.notifyMissionInboxes(unit.missionId, runId);
     return { hasUnit: true, spawned, overBudget, rePrompted };
+  }
+
+  /**
+   * A unit's OWN inbox at its own turn end: what a commander or a sibling wrote while it was
+   * working. Delivered into the still-open session the way a refusal is — the run is working
+   * again, not parking — so a unit that never parks (an autonomous implementer nudged turn after
+   * turn) still hears its commander within one turn. Not on a turn that asked: a run parking on
+   * the Guard waits for the human, and a message must not stand in for the answer.
+   */
+  private deliverOwnInbox(runId: string, state: ActiveRun, stepId: string, turnText: string): boolean {
+    if (!state.autonomous || state.cancelled || !state.session?.open) return false;
+    if (parseAskMarker(turnText) !== null) return false;
+    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    const digest = this.flushInbox(runId);
+    if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
+    state.autoContinues = (state.autoContinues ?? 0) + 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId,
+      message: `mission inbox digest delivered into the session at turn end (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
+    });
+    return true;
   }
 
   // ---- the mission directory (the filesystem channel) ---------------------------------------
@@ -1761,15 +1786,35 @@ export class RunManager {
    */
   private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): void {
     const requestId = emitAskRequested(sink, ask);
-    if (!this.unitOf(runId)) return;
+    const unit = this.unitOf(runId);
+    if (!unit) return;
+    const questions = ask.questions.map((question) => question.question.slice(0, 400));
     this.updateUnit(runId, (current) => ({
       ...current,
-      pendingAsk: {
-        requestId,
-        questions: ask.questions.map((question) => question.question.slice(0, 400)),
-        askedAt: new Date().toISOString(),
-      },
+      pendingAsk: { requestId, questions, askedAt: new Date().toISOString() },
     }));
+    // A child parked on the Guard is invisible to its commander otherwise (audit R11): it holds
+    // a fan-out slot and answers nothing until a human visits /guard. Tell the commander through
+    // its inbox — and wake it if it is parked — so it can decide whether the mission waits, works
+    // around, or escalates with a question of its own. The commander cannot answer for the human.
+    if (!unit.parentRunId) return;
+    const run = this.store.getRun(runId);
+    try {
+      writeInboxMessage(this.dataDir, unit.missionId, inboxName(unit.parentRunId, unit.missionId), {
+        from: runId,
+        subject: `Blocked on a Guard question — ${run?.title ?? runId}`,
+        body: [
+          `Your ${unit.role} "${run?.title ?? runId}" (${runId}) has parked on a question only the human can answer:`,
+          ...questions.map((question) => `- ${question}`),
+          '',
+          'It holds one of your children-in-flight slots until it is answered in the Guard inbox. You cannot answer on the human\'s behalf; you can re-plan around it, wait, or raise the decision yourself with CEZ:ASK if the mission depends on it.',
+        ].join('\n'),
+      });
+      appendLedger(this.dataDir, unit.missionId, { type: 'guard-ask', runId, parentRunId: unit.parentRunId, questions });
+      this.notifyMissionInboxes(unit.missionId, runId);
+    } catch {
+      // best effort
+    }
   }
 
   /** The answer arrived (any message delivered into the session): the question is no longer pending. */

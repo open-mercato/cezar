@@ -91,7 +91,9 @@ const MISSION_FS_RULE = `The mission directory — your task order names it (als
 - plan.md is the commander's order of battle. units/<id8>/order.md, notes.md and report.md are each unit's order, running notes and settle report — read a sibling's or a child's to know what it did without waiting for a report.
 - Write your own units/<id8>/notes.md as you work: progress, findings, decisions, what you could not do. Its "Suggestions for the mission" section reaches the root's inbox when you settle.
 - Your inbox is inbox/<your id8>/ (inbox/root/ for the mission root). To message any unit — a question to a sibling, a heads-up to your commander, a correction to a child — write a markdown file into its inbox directory. cez wakes a parked recipient and hands an opening session a list of what arrived while it was away; you never need to poll. A message is not an answer to a Guard question: a run parked on CEZ:ASK waits for the human.
-- When cez tells you the inbox holds new files, read every one of them before deciding your next step.`;
+- When cez tells you the inbox holds new files, read every one of them before deciding your next step.
+
+Escalation goes one rank at a time, through the inboxes. A question your COMMANDER can answer — a scope call, a conflict between two orders, a missing decision inside the mission — is a file in your commander's inbox, and then you end your turn with a line containing exactly CEZ:MONITORING: cez wakes you when the answer lands in yours. A commander answers a unit the same way, with a file in that unit's inbox. Only a decision that is irreversible, financial, widens the mission's scope, or that no rank in the mission may take goes to the human, with CEZ:ASK — and cez tells your commander you are parked on it.`;
 
 const GUARD_RULE = `The Guard rule — this one is absolute. Before ANY action that is irreversible, financial, or widens your scope, end the turn with CEZ:ASK and stop. That includes: pushing to a shared branch, merging into the repository's base branch (main / master / develop) or into any branch that is not your own worktree's branch, force-pushing, deleting a branch or a remote, publishing a package, spending money, touching production or any credential, rewriting history, and doing work outside the scope you were given.
 
@@ -123,6 +125,7 @@ Reviewing reports. Each legate reports back with a status, a result and evidence
 - "partial" or "failed" from a TRANSIENT cause (a flaky test, a timeout, a network hiccup) — respawn that piece once, within its retry_limit, with what you learned added to the objective.
 - "failed" from a real cause, or two reports whose evidence CONTRADICTS each other — do not adjudicate silently and do not respawn hoping for a better answer. State the conflict and either resolve it by reading the code yourself or, if the choice is the user's, ask with CEZ:ASK.
 - "blocked" — read why. If it is a Guard stop, it is now your decision to escalate, not to route around.
+- A child parked on a Guard question appears in your inbox. You cannot answer for the human; decide whether the mission waits, re-plans around it, or whether the question is really yours to raise with CEZ:ASK.
 
 ${CHILD_BRANCH_RULE}
 

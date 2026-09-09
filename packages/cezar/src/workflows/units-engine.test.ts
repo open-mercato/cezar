@@ -417,6 +417,51 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
     }, 60_000);
   });
 
+  // ---- the escalation ladder over the file channel ------------------------------------------
+
+  describe('the escalation ladder', () => {
+    it('hands a working unit its own inbox at turn end instead of parking it', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-own-inbox.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+      const root = store.createRun({ title: 'army', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(root.id, { status: 'waiting', unit: { role: 'caesar', missionId: root.id } });
+      // A two-second first turn: long enough to drop a file into the run's inbox before it ends.
+      const child = start('mock:pause work on it', { role: 'centurion', missionId: root.id, parentRunId: root.id }, { autonomous: true });
+      // Only once the session has its opening prompt: a file written before that rides in on the
+      // session-open digest instead, which is the other path and not the one under test here.
+      await waitFor(child.id, () => stdin(stdinFile).includes('work on it'));
+      const inbox = join(repoRoot, '.ai/cezar/missions', root.id, 'inbox', child.id.slice(0, 8));
+      mkdirSync(inbox, { recursive: true });
+      writeFileSync(join(inbox, 'from-commander.md'), '# Redirect\n\nStop at the API layer.\n');
+      await waitFor(child.id, settled, 40_000);
+      expect(store.getRun(child.id)?.status).toBe('done'); // the mock answers a digest with DONE
+      expect(delivered(stdinFile, '## Mission inbox')).toContain('from-commander.md');
+      expect(notes(child.id).some((n) => n.startsWith('mission inbox digest delivered into the session at turn end'))).toBe(true);
+    }, 60_000);
+
+    it('tells a parked commander, through its inbox, that a child is blocked on the Guard', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-blocked.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+      const parent = start('mock:monitoring waiting on my legates', caesar('m14'));
+      store.updateRun(parent.id, { unit: { ...caesar('m14'), missionId: parent.id } });
+      await waitFor(parent.id, (r) => r?.activity === 'monitoring');
+      const child = start('mock:ask which library?', { role: 'legate', missionId: parent.id, parentRunId: parent.id }, { autonomous: true });
+      await waitFor(child.id, (r) => r?.status === 'waiting');
+      expect(store.getRun(child.id)?.unit?.pendingAsk?.questions).toHaveLength(1);
+      const rootInbox = join(repoRoot, '.ai/cezar/missions', parent.id, 'inbox', 'root');
+      const files = readdirSync(rootInbox);
+      const blocked = files.find((name) => name.includes('blocked-on-a-guard'));
+      expect(blocked).toBeTruthy();
+      expect(readFileSync(join(rootInbox, blocked!), 'utf8')).toContain('parked on a question only the human can answer');
+      await waitFor(parent.id, () => stdin(stdinFile).includes('## Mission inbox'));
+      expect(delivered(stdinFile, '## Mission inbox')).toContain(blocked!);
+      // The child itself stays parked for the human: nothing answered its question.
+      expect(store.getRun(child.id)?.status).toBe('waiting');
+    }, 60_000);
+  });
+
   // ---- the pending question (the Guard, Q4) -------------------------------------------------
 
   describe('pendingAsk', () => {
