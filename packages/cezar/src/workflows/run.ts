@@ -159,6 +159,16 @@ function stripMonitoringMarker(text: string): string {
 function stripUnitMarkers(text: string): string {
   return stripReportMarker(stripSpawnMarker(text));
 }
+/**
+ * What one finished turn's unit markers decided (spec 2026-09-08-units-hierarchy §Markers) — the
+ * three facts the park decision and the autonomous nudge both need. `hasUnit` is false for every
+ * ordinary run, and then the other two are false too.
+ */
+interface UnitTurnResult {
+  hasUnit: boolean;
+  spawned: boolean;
+  overBudget: boolean;
+}
 /** One refused unit marker, as the transcript explains it. The `CEZ:ASK` rejection's twin
  *  (`askMarkerRejection`) — same shape, same tone, same rule about never echoing the payload. */
 function unitMarkerRejection(keyword: string, result: UnitMarkerParseResult<unknown>): string | undefined {
@@ -1539,8 +1549,8 @@ export class RunManager {
     runId: string,
     turnText: string,
     ctx: { state: ActiveRun; stepId: string; done: boolean },
-  ): { hasUnit: boolean; spawned: boolean; overBudget: boolean } {
-    const idle = { hasUnit: false, spawned: false, overBudget: false };
+  ): UnitTurnResult {
+    const idle: UnitTurnResult = { hasUnit: false, spawned: false, overBudget: false };
     const unit = this.unitOf(runId);
     if (!unit) return idle;
     const note = (message: string, tone?: 'danger') =>
@@ -3011,7 +3021,7 @@ export class RunManager {
         // with `runAgentStep`'s twin turn-end so the two cannot drift — including the shape:
         // hoisted out of the branch below because the heartbeat at the end of this handler
         // needs to know whether the turn parked.
-        const autoContinued = sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask) : false;
+        const autoContinued = sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, unitTurn) : false;
         if (sessionOpen) {
           if (!autoContinued) {
             // `CEZ:ASK` → park `waiting` (attention) AND surface the structured
@@ -3723,7 +3733,7 @@ export class RunManager {
         // autonomous run's FIRST session parked like any other (the nudge only ever existed on
         // the continuation path). Gated on `waiting`: a non-interactive step's session belongs to
         // the workflow loop, which moves to the next step on its own.
-        const autoContinued = waiting ? this.tryAutonomousNudge(runId, state, step.id, ask) : false;
+        const autoContinued = waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, unitTurn) : false;
         if (waiting && !autoContinued) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
@@ -4300,8 +4310,20 @@ export class RunManager {
     state: ActiveRun,
     stepId: string,
     ask: AskRequest | null,
+    unitTurn: UnitTurnResult,
   ): boolean {
     if (!state.autonomous) return false;
+    // Three unit exceptions (spec 2026-09-08-units-hierarchy), each closing a hole the nudge would
+    // otherwise punch through the feature's guarantees — and living HERE, in the one helper both
+    // turn-end handlers call, so neither site can drift from the other:
+    //  - a turn that SPAWNED is waiting on its children; nudging it would keep the commander
+    //    working while holding the slot its children need;
+    //  - the Guard (Q4): an autonomous unit run must not answer its own `CEZ:ASK` — that is the
+    //    whole point of asking before something irreversible. A NON-unit autonomous run keeps
+    //    the override below, pinned by its own test;
+    //  - the budget brake (Q6 ii): a run that has spent its ceiling stops spending.
+    if (unitTurn.spawned || unitTurn.overBudget) return false;
+    if (unitTurn.hasUnit && ask) return false;
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     if (state.cancelled) return false;
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
