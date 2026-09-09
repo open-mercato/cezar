@@ -26,8 +26,12 @@ the report actually reflect what happened.
 **Mission 2 — the Legate can finish and answer.** Releases a settled child's unspent budget back to
 its parent (R3), gives an over-budget mission a path back to autonomous operation (R21), fixes the
 cockpit's budget double-count (R17), and teaches the Guard inbox to tell a genuine question apart
-from a budget halt or an exhausted wake cap (R5). Depends on Mission 1 (shares
-`enforceUnitBudget`'s turn-end call site).
+from a budget halt or an exhausted wake cap (R5). It also builds the escalation ladder proper —
+`CEZ:ESCALATE`/`CEZ:ANSWER`, routed one rank at a time, reaching a human only when the question is
+irreversible or financial or the round cap trips (R12) — and the live "child is blocked" notice that
+tells a commander which of its children is stuck (R11). Depends on Mission 1 (shares
+`enforceUnitBudget`'s turn-end call site, and the ladder needs Mission 1's persisted `pendingAsk` to
+survive a restart).
 
 **Mission 3 — the Legate knows and steers.** Gives every child an engine-composed envelope (mission
 brief, siblings, newest reports — R13); adds a marker to message, re-scope or stop a running child;
@@ -62,7 +66,7 @@ shape.
 | D2 | Concurrency | A **mission-scoped** parallel limit: a new optional field on the mission record and composer (not the global `resources.maxParallel` knob, `config.ts:36`). Default equals today's global `maxParallel` (2), so a mission that never sets it is byte-for-byte unchanged. The composer pre-fills **4** for an `army` mission only. | Answers `00-SUMMARY.md` open question 9(c) without its stated blast radius — raising the *global* semaphore would widen concurrency for every project sharing it, not just missions that want it. |
 | D3 | Verification | A **Review Centurion** rank/step that re-reads a child's diff and evidence before the parent accepts — not engine-run `verify_commands`. Roughly doubles the cost of a reviewed piece of work; accepted as the price of not trusting a child's own honesty about its own work. Answers `00-SUMMARY.md` open question 11 with option (4) from `02-roles/SUMMARY.md` P9's own ranked list, not its top pick (1). | A dedicated, independent rank cannot be fooled the way a child re-running its own claimed command can; the audit itself ranked (4) "best independent verification" and only deprioritized it for cost, which this decision accepts paying. |
 | D4 | Ladder defaults (Caesar's recommendation, adopted) | Per-role model defaults (`02-roles/SUMMARY.md` P5) ship as **composer pre-fill only**, never as an engine default-path change. An API-started, zero-config mission still gets one model across all three ranks, exactly as today. | Shipping it as a real default changes what every existing zero-config mission does (`00-SUMMARY.md` open question 10's stated risk); pre-fill gets the UX benefit with zero blast radius on anything that doesn't go through the composer. |
-| D5 | The `CEZ:ASK` escape hatch (Caesar's recommendation, adopted) | Stays a **permanent** escape hatch at every rank, even after Mission 3 adds `CEZ:DIRECT` and Mission 4 adds the Review Centurion. Answers `00-SUMMARY.md` open question 3: no rank is ever refused a direct page to the human. | An escalation or verification mechanism that can itself get stuck must not be the only way out; `CEZ:ASK` is the one path that always reaches a human because it needs no other rank's cooperation. |
+| D5 | The `CEZ:ASK` escape hatch (Caesar's recommendation, adopted) | Stays a **permanent** escape hatch at every rank, even after Mission 2 adds the `CEZ:ESCALATE`/`CEZ:ANSWER` ladder, Mission 3 adds `CEZ:DIRECT` and Mission 4 adds the Review Centurion. The engine never refuses a non-Caesar `CEZ:ASK`. Answers `00-SUMMARY.md` open question 3: no rank is ever refused a direct page to the human. | An escalation or verification mechanism that can itself get stuck must not be the only way out; `CEZ:ASK` is the one path that always reaches a human because it needs no other rank's cooperation. |
 
 Two further scoping notes, not user decisions but load-bearing for what follows:
 
@@ -396,11 +400,72 @@ Update `guard.tsx`'s `SUBTITLE` (confirmed present at `guard.tsx:83`) to stop ov
 unit run that stopped to ask" now that the inbox also carries budget-halt and wake-cap rows with a
 visible `guardReason` label distinguishing them.
 
+**5. The escalation ladder proper: `CEZ:ESCALATE` / `CEZ:ANSWER`, one rank at a time.**
+*Source: `01-communication/SUMMARY.md` P5 (fixes F3 = `00-SUMMARY.md` R12, plus F15/F16).*
+A new unit-only marker **pair**, parsed in `packages/cezar/src/units/markers.ts` through the same
+shared generic `parseMarker` helper (`markers.ts:62`, confirmed) the spawn and report markers already
+use — deliberately **not** an extension of `ask.ts`, which is shared non-unit infrastructure carrying
+no notion of rank. Schema in `packages/contract/src/units.ts`, `.strict()` like `unitSpawnSchema`:
+`{ requestId?: string, irreversible: boolean, financial: boolean, questions: askQuestion[1..4] }`;
+`CEZ:ANSWER` carries `{ requestId, answers }`. Both markers inherit Mission 1 item 1's
+last-occurrence anchoring and trailing-marker tolerance for free — that is the main reason this item
+lands *after* Mission 1 rather than beside it.
+*Routing (the whole point of the item):* an escalation is delivered **one hop**, to
+`unit.parentRunId`, through the same three-rung ladder `reportSettledChildToParent` already uses
+(`run.ts:1756`, the `deliverMessage` → `enqueueMessage` → deferred-continue cascade at `run.ts:1812`,
+confirmed) — reuse that cascade, do not write a second one. A dead or settled ancestor is skipped
+upward. A question reaches the **human** in exactly three cases, and no others: `irreversible ||
+financial` is true and the current holder is the Caesar/root; the round cap trips; or no live
+ancestor remains. Answers travel back **down** the same cascade, fired synchronously from the
+answering rank's own turn-end when it emits a valid `CEZ:ANSWER`.
+*Guard-filter change, mandatory in the same commit:* narrow `needsGuard` (`missions.ts:106`,
+confirmed) to exclude a run that is waiting on a **live ancestor** — otherwise the ladder ships as a
+no-op that re-floods the same inbox item 4 just taught to be precise (`01-communication/SUMMARY.md`
+F15). Add `'escalated'` to item 4's `guardReason` union rather than a second field.
+*Prompt change, mandatory in the same commit:* teach `LEGATE_PROMPT` and `CENTURION_PROMPT` the
+marker pair (`prompts.ts`) — without it no model ever emits it and the ladder is dead on the default
+path (`01-communication/SUMMARY.md` F16, the audit's own "a replacement that ships OFF is not a
+replacement" standard). The plain `CEZ:ASK` wording **stays** in all three prompts per decision D5.
+*Round cap:* a `unit.escalationRounds` counter on the escalating run, incremented per hop, defaulting
+to **3** round-trips; on trip, the question goes straight to the human with a note naming the cap.
+The cap's *value* remains an open question (see Open questions remaining #1) — the *mechanism* is not
+optional, since without it a two-rank disagreement can bounce indefinitely and never reach anyone.
+
+**6. A live "child is blocked" notice to the parent.**
+*Source: `01-communication/SUMMARY.md` P6 (fixes F2 = `00-SUMMARY.md` R11).*
+Today a child parked on `CEZ:ASK` is invisible to its commander *and* still eats a quarter of its
+fan-out: `TERMINAL_STATUSES` excludes `waiting` (`engine.ts:42`, confirmed) so the report gate at
+`run.ts:1756` returns early and the parent is told nothing, while `IN_FLIGHT_STATUSES` *includes*
+`waiting` (`engine.ts:37`, confirmed) so the child still counts against `MAX_CHILDREN_IN_FLIGHT = 4`
+(`engine.ts:29`, confirmed). Add `unit.blockedChildren?: { fromRunId, title, askedAt }[]` to
+`packages/contract/src/units.ts` and its `store.ts` persistence twin, bounded exactly like
+`pendingReports` is by `withPendingReport`/`MAX_PENDING_REPORTS` (`engine.ts:192`, `:34`, confirmed)
+— add a sibling `withBlockedChild` helper there rather than inlining the slice twice. Append on the
+one edge existing code already computes: beside `emitAskRequested` (`run.ts:3025` in
+`runContinuation` and `run.ts:3727` in `runAgentStep`, both confirmed), and route one line of prose
+to the parent through **the same delivery helper item 5 extracts**, so the two paths cannot drift.
+**No `continueRun` rung** on this path: a blocked-child notice must never resurrect a settled or
+cancelled parent — it is information, not a wake source.
+*Relation to item 5:* `01-communication/SUMMARY.md` P6 notes it is "largely subsumed by P5 if the
+ladder ships." It is kept here deliberately: the ladder covers a child that *escalates*, this covers
+a child that uses the D5 escape hatch and asks the human directly — which decision D5 guarantees
+stays possible at every rank forever. Build item 5 first, then item 6 on top of its extracted helper;
+the marginal cost is small and the coverage gap is real.
+
 ### Files and functions touched
 
-`packages/cezar/src/units/engine.ts` (`remainingBudgetUsd` only), `packages/cezar/src/workflows/run.ts`
-(`carveChildBudgets` and `enforceUnitBudget` only — no other function in this large file), one new
-route in `packages/cezar/src/server/server.ts` (the budget PATCH, alongside the existing
+`packages/cezar/src/units/engine.ts` (`remainingBudgetUsd`, plus a new `withBlockedChild` beside
+`withPendingReport`), `packages/cezar/src/units/markers.ts` (two new marker parsers over the existing
+`parseMarker` helper — no change to the spawn/report parsers Mission 1 owns),
+`packages/cezar/src/units/prompts.ts` (the escalation paragraph only — Mission 1 owns the merge/edit
+rewrite in the same file, which is why these two missions must not run in parallel),
+`packages/contract/src/units.ts` (`unitEscalationSchema`, `unitAnswerSchema`, `blockedChildren`,
+`escalationRounds`) and its `packages/cezar/src/runs/store.ts` persistence twin (the parity test must
+pass), `packages/cezar/src/workflows/run.ts` (`carveChildBudgets` and `enforceUnitBudget` only among
+existing functions, plus one new escalation-delivery helper extracted from
+`reportSettledChildToParent`'s cascade and called from both turn-end sites beside
+`emitAskRequested` — no other existing function in this large file), one new route in
+`packages/cezar/src/server/server.ts` (the budget PATCH, alongside the existing
 `/missions`/`/units/prompts*` family at `:3486-3577`), `packages/web/src/lib/missions.ts`
 (`buildMissionTrees`, `nodeOf`, `MissionNode` type), `packages/web/src/routes/missions/guard.tsx`
 (`SUBTITLE`, row rendering).
@@ -419,6 +484,15 @@ corrected expectation as part of this fix, not left passing by accident. Item 4 
 halves: `guardReason` is a new derived field, `needsGuard`'s wake-cap OR only ever flips a
 currently-`false` value to `true` for a run that genuinely needs a human, never the reverse.
 
+Item 5 is the one item in this mission that changes an existing default path, and it does so in two
+steps that must ship together: until the prompt paragraph lands, no model emits the new markers and
+behaviour is byte-for-byte unchanged; after it lands, a question that previously always paged the
+human may instead stop one rank up. `CEZ:ASK` is untouched at every rank (decision D5), so the
+escape hatch never closes and no question can become unreachable — the worst case of a ladder bug is
+a question that arrives via `CEZ:ASK` instead, which is exactly today's behaviour. Item 6 is strictly
+additive: a new bounded array on a record that is absent today, appended on an edge existing code
+already computes, with no knob and no new wake source.
+
 ### State transitions and who fires them
 
 - **`overBudget` cleared** — exactly one new firer: the budget PATCH route (item 2), which also
@@ -426,6 +500,19 @@ currently-`false` value to `true` for a run that genuinely needs a human, never 
   is fixed to also clear it, so after this mission there remain exactly two ways out, both explicit.
 - **`guardReason`** — purely derived, recomputed on every read, no stored state, no transition.
 - **`totalBudgetUsd`** — pure function of already-read data, same lifecycle as today, no transition.
+- **`escalated-waiting`** (item 5) — *entered* by the escalating run's own turn-end handler on a
+  valid `CEZ:ESCALATE`, which parks it exactly as `CEZ:ASK` parks a run today. *Exited* by exactly
+  four firers, all of them synchronous with some turn end, none of them a new timer: (a) the
+  ancestor's turn-end delivering a valid `CEZ:ANSWER` back down the cascade; (b) the same run
+  re-escalating under the round cap (a fresh entry replaces the old, `requestId` preserved);
+  (c) the round cap tripping, which converts the escalation into an ordinary human-facing ask and
+  hands it to the Guard inbox with `guardReason: 'escalated'`; (d) the cancel cascade. A restart
+  with an open escalation re-delivers it rather than settling — this reuses Mission 1 item 4's
+  `blocked` rule and item 5's persisted `pendingAsk`, and is why this item cannot precede Mission 1.
+- **`blockedChildren` entry** (item 6) — *created* once per ask by whichever turn-end handler fired
+  `emitAskRequested` for a unit child (idempotent: a second still-blocked turn adds nothing).
+  *Removed* by the child's own status leaving `waiting` for any reason — answered, settled, failed or
+  cancelled — fired from the same status-write path that already notifies the parent on settle.
 
 ### Tests to pin
 
@@ -443,6 +530,21 @@ caesar + $5 carved legate fixture; add a 3-level fully-carved chain case; add a 
 `unit.overBudget: true` asserting `guardReason === 'overBudget'`; add a
 `monitoringWakeCapReached: true` fixture asserting `needsGuard === true`.
 
+`packages/cezar/src/units/markers.test.ts` — round-trip the `CEZ:ESCALATE`/`CEZ:ANSWER` examples
+exactly as printed in the prompts (the round-trip test `02-roles/SUMMARY.md` F15 says is missing for
+`CEZ:REPORT` today, not repeated for a new marker); unknown keys rejected; a trailing
+`CEZ:MONITORING` line tolerated (Mission 1 item 1's guarantee, re-pinned for the new markers).
+`packages/cezar/src/units/engine.test.ts` — `withBlockedChild` bounds the array and is idempotent
+for the same `fromRunId`. `packages/cezar/src/workflows/units-engine.test.ts` — a centurion's
+escalation reaches its legate and does **not** appear in `/guard`; an `irreversible: true`
+escalation held by the Caesar reaches the human; a dead intermediate rank is skipped one hop
+further up; the round cap terminates and lands the question on the human with
+`guardReason: 'escalated'`; a restart with an open escalation re-delivers instead of settling; a
+plain `CEZ:ASK` from a centurion still reaches the human directly (decision D5's escape hatch,
+pinned as a permanent guarantee); a monitoring parent receives the blocked-child notice
+immediately; a parent with a closed session gets a durable `blockedChildren` entry flushed into its
+next prompt; the entry clears on unblock; a settled parent is **not** resurrected by a notice.
+
 ### Suggested legate/centurion split and rough budget
 
 - **Centurion A** — item 1 (`remainingBudgetUsd`, pure function, isolated). ~$3.
@@ -450,8 +552,17 @@ caesar + $5 carved legate fixture; add a 3-level fully-carved chain case; add a 
   item 1 merged first for the ceiling-solving arithmetic. ~$5.
 - **Centurion C** — items 3 and 4 together (`packages/web/src/lib/missions.ts` — both touch the
   same file, doing them separately would just create merge friction). ~$4.
-- **Legate** — coordinate B waiting on A, review/merge all three. ~$3.
-- **Total: ~$15.**
+- **Centurion D** — item 5, the escalation ladder: markers, contract schemas, the extracted
+  delivery helper, both turn-end call sites, the prompt paragraph, and the `needsGuard` narrowing.
+  The largest single piece in the plan; must land after C because it edits the same `missions.ts`
+  `guardReason` union. ~$12.
+- **Centurion E** — item 6, on top of D's extracted helper. ~$4.
+- **Review Centurion** — item 5 only, re-reading D's diff and evidence per decision D3. This is the
+  one piece in Missions 1-3 large and default-path-touching enough to justify the review step
+  before Mission 4 makes it routine. ~$5.
+- **Legate** — coordinate B waiting on A and E waiting on D, adjudicate the review verdict,
+  review/merge all five. ~$7.
+- **Total: ~$40.**
 
 ### Acceptance criteria
 
@@ -463,11 +574,23 @@ caesar + $5 carved legate fixture; add a 3-level fully-carved chain case; add a 
 - `/guard` shows a distinct label for an over-budget row versus a genuine-ask row versus a
   wake-cap-exhausted row (currently invisible from `/guard`/`/missions` entirely).
 - `missions.test.ts` passes with the corrected `totalBudgetUsd` expectations.
+- A centurion emitting `CEZ:ESCALATE` with `irreversible: false, financial: false` parks, its legate
+  receives the question in its own session, and nothing appears in `/guard`; the legate's
+  `CEZ:ANSWER` unparks the centurion on the legate's own turn end.
+- The same escalation held by a Caesar with `irreversible: true` reaches the human, and so does one
+  that has bounced past the round cap — labelled `escalated` in the Guard inbox.
+- A plain `CEZ:ASK` from any rank still reaches the human unchanged (decision D5), pinned by a test
+  that would fail if the ladder ever swallowed it.
+- A commander with a child parked on `CEZ:ASK` can name that child from its own session, and a
+  parent whose session was closed when the child blocked sees the notice in its next prompt.
 
 ### Dependencies
 
-Mission 1 (shared `enforceUnitBudget` call site via item 3's rebase and the `pendingAsk` field this
-mission's item 4 optionally consumes).
+Mission 1 (shared `enforceUnitBudget` call site via item 3's rebase; the `pendingAsk` field item 4
+consumes and item 5 *requires* to survive a restart; item 1's last-occurrence marker anchoring, which
+the two new markers inherit; and `prompts.ts`, which Mission 1 rewrites for merge/edit wording and
+this mission extends with the escalation paragraph — the reason these two missions must land in
+order rather than in parallel worktrees).
 
 ---
 
@@ -924,13 +1047,11 @@ Explicitly out of scope for all four missions above, carried forward from `00-SU
 "not sequenced into these three, deliberately deferred" list plus items this plan's own missions
 identified as out of their reach:
 
-- **`CEZ:ESCALATE`/`CEZ:ANSWER` — the full escalation ladder** (`00-SUMMARY.md` R12,
-  `01-communication/SUMMARY.md` P5). Deliberately not built here: it is an **L**-effort redesign
-  that changes a default path (routing a question one hop at a time instead of straight to the
-  human) and needs `pendingAsk` (Mission 1 item 5) to exist first as a durable base. The user's
-  decision D5 (the plain `CEZ:ASK` escape hatch stays permanent at every rank) already answers the
-  question this ladder was partly meant to settle (`00-SUMMARY.md` open question 3) — a ladder
-  built later composes with that decision without reopening it.
+- **A cockpit surface for the escalation ladder** — a view showing where a question currently sits
+  in the tree and which rank is holding it. The ladder's engine and marker halves ship in Mission 2
+  (items 5-6); the Guard inbox learns to *exclude* a question waiting on a live ancestor and to
+  label a capped-out one, which is enough to keep the inbox honest, but there is no affordance for
+  watching a question travel. UI-only, no engine dependency, land it whenever convenient.
 - **Engine-run `verify_commands`** (`02-roles/SUMMARY.md` P9's option 1). Superseded by decision D3
   — the Review Centurion is the chosen verification mechanism; engine-executed child-named strings
   remain unbuilt and, per D3's own reasoning, deliberately so.
@@ -975,10 +1096,11 @@ Deduplicated against `00-SUMMARY.md`'s own list (§e) and the two per-audit list
 answered by this plan's Resolved assumptions or by a specific mission's work item are marked
 resolved below rather than repeated as open.
 
-1. **Escalation round cap, if/when `CEZ:ESCALATE` (Deferred above) is eventually built.** Is 3
-   round-trips right, or should it scale with rank distance (a legate↔Caesar hop costs more than
-   centurion↔legate, since the middle rank burns budget deciding)? Unresolved because the mechanism
-   itself is deferred; whoever scopes that follow-up mission needs this answered first.
+1. **The escalation round cap's value** (Mission 2 item 5 ships the *mechanism*, defaulted to 3).
+   Is 3 round-trips right, or should it scale with rank distance (a legate↔Caesar hop costs more
+   than centurion↔legate, since the middle rank burns budget deciding)? The default is safe either
+   way — the cap only ever routes a question to the human *sooner* — so this does not block
+   Mission 2, but it is worth ruling on before the ladder has real usage to calibrate against.
 2. **`MAX_PENDING_REPORTS = 20`.** Keep as a constant and just surface drops, or make it
    configurable for army-sized missions? Not touched by any mission above; genuinely open.
 3. **Should `rescope` be `CEZ:DIRECT`'s own distinct action value** (as this plan's Mission 3 item 2
