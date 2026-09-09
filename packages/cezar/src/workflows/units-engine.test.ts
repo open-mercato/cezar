@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -284,6 +284,73 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       await waitFor(record.id, (r) => r?.status === 'waiting');
       expect(notes(record.id).some((n) => n.startsWith('refusal delivered back'))).toBe(false);
     }, 40_000);
+  });
+
+  // ---- the mission directory (the filesystem channel) ---------------------------------------
+
+  describe('the mission directory', () => {
+    const missionDirOf = (missionId: string) => join(repoRoot, '.ai/cezar/missions', missionId);
+
+    it('writes each child’s order and seeds its notes at spawn, and names the paths in the order', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const record = start('mock:spawn split this up', caesar('m9', 20));
+      await waitFor(record.id, (r) => r?.activity === 'monitoring');
+      const children = childrenOf(record.id);
+      expect(children).toHaveLength(2);
+      for (const child of children) {
+        const dir = join(missionDirOf('m9'), 'units', child.id.slice(0, 8));
+        expect(readFileSync(join(dir, 'order.md'), 'utf8')).toContain(child.title);
+        expect(readFileSync(join(dir, 'notes.md'), 'utf8')).toContain('## Suggestions for the mission');
+        // The task the child actually runs names its own files — no placeholder survives.
+        expect(child.task).toContain(join(dir, 'notes.md'));
+        expect(child.task).not.toContain('{{MISSION_PATHS}}');
+        expect(child.task).toContain('brief.md');
+      }
+      const ledger = readFileSync(join(missionDirOf('m9'), 'ledger.jsonl'), 'utf8').trim().split('\n');
+      expect(ledger.filter((line) => line.includes('"type":"spawn"'))).toHaveLength(2);
+    }, 60_000);
+
+    it('wakes a parked commander when a file lands in its inbox, and hands a later session the digest', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-inbox.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+
+      const parent = start('mock:monitoring waiting on my legates', caesar('m10'));
+      store.updateRun(parent.id, { unit: { ...caesar('m10'), missionId: parent.id } });
+      await waitFor(parent.id, (r) => r?.activity === 'monitoring');
+      // A child whose turn ends is the SIGNAL: it wrote into the root's inbox, then finished.
+      const inbox = join(missionDirOf(parent.id), 'inbox', 'root');
+      mkdirSync(inbox, { recursive: true });
+      writeFileSync(join(inbox, 'scope-question.md'), '# Scope\n\nMay I touch billing?\n');
+      const child = start('mock:report take the left flank', {
+        role: 'legate',
+        missionId: parent.id,
+        parentRunId: parent.id,
+      });
+      await waitFor(child.id, settled);
+      await waitFor(parent.id, () => stdin(stdinFile).includes('Mission inbox'));
+      const notice = delivered(stdinFile, 'Mission inbox');
+      expect(notice).toContain(join(inbox, 'scope-question.md'));
+      expect(store.getRun(parent.id)?.unit?.inboxSeenAt).toBeTruthy();
+      expect(notes(parent.id).some((n) => n.includes('new mission inbox message'))).toBe(true);
+    }, 60_000);
+
+    it('forwards a settled child’s suggestions to the root’s inbox', async () => {
+      const parent = start('mock:monitoring waiting', caesar('m11'));
+      store.updateRun(parent.id, { unit: { ...caesar('m11'), missionId: parent.id } });
+      await waitFor(parent.id, (r) => r?.activity === 'monitoring');
+      const child = start('mock:report-suggest take the right flank', {
+        role: 'legate',
+        missionId: parent.id,
+        parentRunId: parent.id,
+      });
+      await waitFor(child.id, settled);
+      const files = readdirSync(join(missionDirOf(parent.id), 'inbox', 'root'));
+      const suggestion = files.find((name) => name.includes('suggestions'));
+      expect(suggestion).toBeTruthy();
+      expect(readFileSync(join(missionDirOf(parent.id), 'inbox', 'root', suggestion!), 'utf8')).toContain('split billing out of this order');
+      expect(readFileSync(join(missionDirOf(parent.id), 'units', child.id.slice(0, 8), 'report.md'), 'utf8')).toContain('"status": "done"');
+    }, 60_000);
   });
 
   // ---- the pending question (the Guard, Q4) -------------------------------------------------

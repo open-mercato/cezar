@@ -104,6 +104,11 @@ async function respond(userText, imageCount) {
         confidence: 0.9,
         side_effects: [],
         errors: [],
+        // `mock:report-suggest` → the same report carrying upward suggestions, so the engine's
+        // forwarding of them to the mission root's inbox is testable dry.
+        ...(userText.includes('mock:report-suggest')
+          ? { suggestions: ['split billing out of this order — it is a mission of its own'] }
+          : {}),
       })
     : '';
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE

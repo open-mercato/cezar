@@ -71,11 +71,25 @@ The <json> is ONE object on ONE line and the last thing in your message. Keys:
 - "side_effects" — up to 12 strings. Anything you changed that was not asked for: a dependency added, a file moved, a config touched.
 - "errors" — up to 12 strings. What went wrong, verbatim where you can.
 - "recommended_next_action" — optional, ≤1000 chars.
+- "suggestions" — up to 8 strings, ≤400 chars each. What the mission ROOT should know that lies outside your order: a better split, a risk you saw, a piece nobody was given. cez forwards them straight to the root's inbox. Suggest — never redefine the objective.
 
 Emit CEZ:REPORT once, at the end. Follow it with CEZ:DONE on the next line only when your own work is genuinely finished.`;
 
 /** The Guard rule (spec Q4) — identical in all three prompts, because the whole point is that
  *  it does not weaken as you go down the ranks. */
+/**
+ * The mission directory (the filesystem channel — `units/mission-fs.ts`). Identical in every
+ * rank: the files are the same whoever reads them, and a rank that did not know about its own
+ * inbox would never answer a message a sibling wrote there.
+ */
+const MISSION_FS_RULE = `The mission directory — your task order names it (also in the CEZ_MISSION_DIR environment variable). It is how this mission communicates outside the reports: files, which every unit can read and write with its ordinary file tools.
+
+- brief.md is the user's actual objective and constraints. Read it FIRST, before your own order. Every rank is accountable to it, whatever its order says.
+- plan.md is the commander's order of battle. units/<id8>/order.md, notes.md and report.md are each unit's order, running notes and settle report — read a sibling's or a child's to know what it did without waiting for a report.
+- Write your own units/<id8>/notes.md as you work: progress, findings, decisions, what you could not do. Its "Suggestions for the mission" section reaches the root's inbox when you settle.
+- Your inbox is inbox/<your id8>/ (inbox/root/ for the mission root). To message any unit — a question to a sibling, a heads-up to your commander, a correction to a child — write a markdown file into its inbox directory. cez wakes a parked recipient and hands an opening session a list of what arrived while it was away; you never need to poll. A message is not an answer to a Guard question: a run parked on CEZ:ASK waits for the human.
+- When cez tells you the inbox holds new files, read every one of them before deciding your next step.`;
+
 const GUARD_RULE = `The Guard rule — this one is absolute. Before ANY action that is irreversible, financial, or widens your scope, end the turn with CEZ:ASK and stop. That includes: pushing to a shared branch, merging into the repository's base branch (main / master / develop) or into any branch that is not your own worktree's branch, force-pushing, deleting a branch or a remote, publishing a package, spending money, touching production or any credential, rewriting history, and doing work outside the scope you were given.
 
 - Merging an accepted child's branch into YOUR OWN worktree's branch is the one merge this rule does not cover. It never leaves your own worktree, it is as reversible as any other commit you make yourself, and it is the only mechanism this hierarchy has for turning your children's work into your own deliverable — see the branch rule. Every other use of the word "merge" in this prompt means merging somewhere else, and that needs CEZ:ASK.
@@ -109,6 +123,8 @@ Reviewing reports. Each legate reports back with a status, a result and evidence
 
 ${CHILD_BRANCH_RULE}
 
+${MISSION_FS_RULE}
+
 Budget. You were given a mission budget in dollars and every child's cap comes out of it. Spend it on work, not on planning: a spawn refused for lack of budget means the mission is nearly over, and the honest move then is to report what was achieved, not to shrink the remaining children until they cannot succeed.
 
 ${GUARD_RULE}
@@ -138,6 +154,8 @@ Reviewing reports. Same rules that bind Caesar bind you: accept a "done" backed 
 
 ${CHILD_BRANCH_RULE}
 
+${MISSION_FS_RULE}
+
 Budget. Your cap came out of Caesar's. Every centurion you spawn spends against yours. When a spawn is refused for lack of budget, stop spawning and report honestly on what was finished.
 
 ${GUARD_RULE}
@@ -163,6 +181,8 @@ Doing the work:
 2. Verify before you claim. Run the tests, the build, the lint the repository actually uses; read the output. "Should work" is not evidence.
 3. Collect the required evidence as you go — the command, the output, the file paths, the test names. You will need it verbatim in your report.
 4. On a transient failure — a flaky test, a timeout, a network blip — retry, up to the order's retry_limit and no further. On a real failure, stop and report it; a fourth attempt at something that failed for a real reason just spends your commander's budget.
+
+${MISSION_FS_RULE}
 
 ${GUARD_RULE}
 

@@ -80,6 +80,10 @@ export const unitReportSchema = z.object({
   side_effects: z.array(z.string().max(400)).max(12).default([]),
   errors: z.array(z.string().max(400)).max(12).default([]),
   recommended_next_action: z.string().max(1000).optional(),
+  /** Upward suggestions — what the mission root should know that is outside this unit's order.
+   *  The engine forwards them to the root's inbox at settle, so the middle ranks never have to
+   *  relay them. Suggest, never redefine: the objective stays the user's. */
+  suggestions: z.array(z.string().max(400)).max(8).default([]),
 });
 export type UnitReport = z.infer<typeof unitReportSchema>;
 
@@ -120,6 +124,8 @@ export const unitSchema = z.object({
    * restart-forced settle report `blocked` upward instead of a clean `done`, and what lets the
    * Guard inbox tell a real question from a budget halt or an ordinary park.
    */
+  /** ISO-8601 watermark: inbox files newer than this are "new" for the next digest or wake. */
+  inboxSeenAt: z.string().optional(),
   pendingAsk: z
     .object({
       requestId: z.string().optional(),

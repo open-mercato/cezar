@@ -175,6 +175,18 @@ describe('unit role prompts', () => {
       }
     });
 
+    it('teaches every rank the mission directory — brief first, notes, inbox — and the suggestions field', () => {
+      for (const role of UNIT_ROLES) {
+        const prompt = DEFAULT_UNIT_PROMPTS[role];
+        expect(prompt).toContain('brief.md');
+        expect(prompt).toMatch(/Read it FIRST/);
+        expect(prompt).toContain('notes.md');
+        expect(prompt).toContain('inbox/root/');
+        expect(prompt).toContain('"suggestions"');
+        expect(prompt).toMatch(/never redefine the objective/i);
+      }
+    });
+
     it('carries the Guard rule in every role — it must not weaken down the ranks', () => {
       for (const role of UNIT_ROLES) {
         const prompt = DEFAULT_UNIT_PROMPTS[role];

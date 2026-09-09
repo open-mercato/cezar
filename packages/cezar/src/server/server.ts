@@ -51,6 +51,7 @@ import {
   resolveUnitPrompt,
   writeUnitPrompt,
 } from '../units/prompts.ts';
+import { appendLedger, writeBrief } from '../units/mission-fs.ts';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -3499,7 +3500,7 @@ export function createApp(deps: ServerDeps) {
      * at execute time rather than off the input it was handed.
      */
     .post('/missions', jsonZodValidator(startMissionInputSchema), async (c) => {
-      const { root: repoRoot, manager, store } = c.get('project');
+      const { root: repoRoot, manager, store, dataDir } = c.get('project');
       const body = c.req.valid('json');
       // A mission is one agent on the objective; the hierarchy comes from the role prompt and the
       // spawn marker, not from a longer chain. `quick-task` is the built-in and always comes back
@@ -3538,6 +3539,22 @@ export function createApp(deps: ServerDeps) {
           ...(body.ladder ? { ladder: body.ladder } : {}),
         },
       });
+      // The mission directory's brief — the user's actual ask, which every rank is told to read
+      // first. Written state, never required: a brief that cannot be written is a mission with no
+      // file channel, not a failed start.
+      try {
+        writeBrief(dataDir, {
+          missionId: run.id,
+          objective: body.objective,
+          ...(body.constraints?.length ? { constraints: body.constraints } : {}),
+          ...(body.budgetUsd !== undefined ? { budgetUsd: body.budgetUsd } : {}),
+          ...(body.ladder ? { ladder: body.ladder } : {}),
+          rootRole: role,
+        });
+        appendLedger(dataDir, run.id, { type: 'mission-start', runId: run.id, unit: body.unit, role });
+      } catch {
+        // best effort
+      }
       return c.json({ id: run.id }, 201);
     })
 

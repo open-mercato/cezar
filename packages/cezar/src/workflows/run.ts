@@ -64,6 +64,20 @@ import {
 } from '../units/markers.ts';
 import { resolveUnitPrompt } from '../units/prompts.ts';
 import {
+  appendLedger,
+  inboxDigest,
+  inboxName,
+  listInbox,
+  missionDir,
+  missionEnvelopeLines,
+  notesSuggestions,
+  seedNotes,
+  unitPaths,
+  writeInboxMessage,
+  writeOrder,
+  writeReport,
+} from '../units/mission-fs.ts';
+import {
   CHILD_ROLE,
   MAX_CHILDREN_IN_FLIGHT,
   childSettleReport,
@@ -544,7 +558,11 @@ export function unitRolePromptPart(rolePrompt: string | undefined, extra: string
  * exactly what it always was.
  */
 export function agentDirectories(runsDir: string, env: Record<string, string>): string[] {
-  return env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+  const dirs = env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+  // A unit run's mission directory (spec units-improvements: the filesystem channel) — its brief,
+  // its notes, its inbox. Same rule as TMPDIR: the env names it, so the file tools must reach it.
+  if (env.CEZ_MISSION_DIR) dirs.push(env.CEZ_MISSION_DIR);
+  return dirs;
 }
 
 /**
@@ -893,11 +911,15 @@ export class RunManager {
    *  temp directory throws `AgentTempDirError` at the caller rather than
    *  turning into empty command output inside a running agent. */
   private agentEnv(runId: string, generateFollowups = true): Record<string, string> {
+    const unit = this.unitOf(runId);
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
       ...agentTmpEnv(this.dataDir, runId),
+      // The mission directory — brief, notes, inbox — for a unit run only. Absent (not empty) on
+      // an ordinary run, so `agentDirectories` adds nothing and the env is byte-for-byte as before.
+      ...(unit ? { CEZ_MISSION_DIR: missionDir(this.dataDir, unit.missionId) } : {}),
     };
   }
 
@@ -1597,7 +1619,56 @@ export class RunManager {
 
     const overBudget = this.enforceUnitBudget(runId, note);
     const rePrompted = !spawned && !overBudget && this.rePromptRefusals(runId, ctx.state, ctx.stepId, refusals);
+    // The filesystem channel's SIGNAL: this turn may have written into a sibling's or the root's
+    // inbox. Wake every parked recipient now — the writer's turn end is the one moment cezar
+    // knows something may have changed on disk without watching it.
+    this.notifyMissionInboxes(unit.missionId, runId);
     return { hasUnit: true, spawned, overBudget, rePrompted };
+  }
+
+  // ---- the mission directory (the filesystem channel) ---------------------------------------
+
+  /**
+   * What arrived in this run's inbox since it last looked, as the block its opening session is
+   * handed — and the watermark moves in the same breath, so the next session does not re-read
+   * it. Paths only: the agent reads the files itself.
+   */
+  private flushInbox(runId: string): string | undefined {
+    const unit = this.unitOf(runId);
+    if (!unit) return undefined;
+    const recipient = inboxName(runId, unit.missionId);
+    const items = listInbox(this.dataDir, unit.missionId, recipient, unit.inboxSeenAt);
+    if (items.length === 0) return undefined;
+    this.updateUnit(runId, (current) => ({ ...current, inboxSeenAt: new Date().toISOString() }));
+    return inboxDigest(items, unitPaths(this.dataDir, unit.missionId, runId).inbox);
+  }
+
+  /**
+   * Wake every PARKED unit of a mission whose inbox holds files newer than its watermark. Only a
+   * run parked as a monitor is woken live — it is waiting on exactly this kind of event. A run
+   * parked `waiting` (on the Guard, on its budget) stays parked: the digest reaches it when its
+   * session next opens, and a notice must never answer a question on the human's behalf. The
+   * writer itself is skipped — its own turn just ended.
+   */
+  private notifyMissionInboxes(missionId: string, writerId: string): void {
+    if (!resolveCapabilities().units) return;
+    for (const run of this.store.listRuns()) {
+      if (run.id === writerId || run.unit?.missionId !== missionId) continue;
+      if (run.status !== 'running' || run.activity !== 'monitoring') continue;
+      const state = this.active.get(run.id);
+      if (!state?.session?.open) continue;
+      const recipient = inboxName(run.id, missionId);
+      const items = listInbox(this.dataDir, missionId, recipient, run.unit.inboxSeenAt);
+      if (items.length === 0) continue;
+      const digest = inboxDigest(items, unitPaths(this.dataDir, missionId, run.id).inbox);
+      if (!digest || !this.deliverMessage(run.id, [{ type: 'text', text: digest }], false)) continue;
+      this.updateUnit(run.id, (current) => ({ ...current, inboxSeenAt: new Date().toISOString() }));
+      this.store.appendEvent(run.id, {
+        type: 'note',
+        message: `${items.length} new mission inbox message${items.length === 1 ? '' : 's'} — delivered into the session`,
+      });
+      appendLedger(this.dataDir, missionId, { type: 'inbox-notice', runId: run.id, files: items.map((item) => item.name) });
+    }
   }
 
   /**
@@ -1739,7 +1810,11 @@ export class RunManager {
         ],
       };
       const record = this.startRun(workflow, {
-        task: childTaskEnvelope(child, { id: parentId, branch: parent.branch, role: unit.role }),
+        task: childTaskEnvelope(child, { id: parentId, branch: parent.branch, role: unit.role }, [
+          // The mission directory lines are composed against the id the run is ABOUT to get:
+          // `startRun` mints it, so the envelope is finished below once it exists.
+          '{{MISSION_PATHS}}',
+        ]),
         // The child's own role prompt, resolved with this session (`prepareUnitSession`). The
         // engine composes it from the record too, so this is the belt to that braces — but it is
         // also what the run header echoes as "the system prompt this run used".
@@ -1768,6 +1843,39 @@ export class RunManager {
         // repo root has no branch to fork, and the child then forks the configured base as any
         // ordinary run does.
         ...(parent.branch ? { baseBranch: parent.branch } : {}),
+      });
+      // Finish the envelope now the id exists: the order the child reads names ITS OWN notes and
+      // inbox, then the same text is written to the mission directory as `order.md`.
+      const paths = unitPaths(this.dataDir, unit.missionId, record.id);
+      const task = (this.store.getRun(record.id)?.task ?? '').replace(
+        '{{MISSION_PATHS}}',
+        missionEnvelopeLines(paths).join('\n'),
+      );
+      this.store.updateRun(record.id, { task });
+      // `execute` reads the QUEUED job's input, not the record, so the finished envelope has to
+      // reach both — a child whose job still carried the placeholder would be ordered to read
+      // files at a path that says `{{MISSION_PATHS}}`.
+      const job = this.pendingJobs.get(record.id);
+      if (job) job.input.task = task;
+      try {
+        writeOrder(this.dataDir, unit.missionId, record.id, {
+          title: child.title,
+          role: childRole,
+          parentRunId: parentId,
+          text: task,
+        });
+        seedNotes(this.dataDir, unit.missionId, record.id, child.title);
+      } catch {
+        // written state, never required — a mission directory that cannot be written is a
+        // mission with no file channel, not a refused spawn
+      }
+      appendLedger(this.dataDir, unit.missionId, {
+        type: 'spawn',
+        runId: record.id,
+        parentRunId: parentId,
+        role: childRole,
+        title: child.title,
+        ...(budgetUsd !== undefined ? { budgetUsd } : {}),
       });
       created.push(this.store.getRun(record.id) ?? record);
     });
@@ -1857,6 +1965,35 @@ export class RunManager {
       this.updateUnit(parentId, (unit) =>
         withPendingReport(unit, { fromRunId: child.id, title: child.title, report, at }),
       );
+      // The filesystem channel's copy of the report, and the child's upward suggestions — from
+      // its report and from the section of its notes the seed reserved for them — forwarded to
+      // the ROOT's inbox so no middle rank has to relay them (user decision: units may suggest,
+      // never redefine). Best-effort, like every other write into the mission directory.
+      const missionId = child.unit?.missionId ?? parent.unit.missionId;
+      try {
+        writeReport(this.dataDir, missionId, child.id, text, report);
+        const suggestions = [...report.suggestions];
+        const fromNotes = notesSuggestions(this.dataDir, missionId, child.id);
+        if (fromNotes) suggestions.push(fromNotes);
+        if (suggestions.length && child.id !== missionId) {
+          writeInboxMessage(this.dataDir, missionId, 'root', {
+            from: child.id,
+            subject: `Suggestions from ${child.unit?.role ?? 'unit'} "${child.title}"`,
+            body: suggestions.map((line) => `- ${line}`).join('\n'),
+          });
+        }
+      } catch {
+        // written state, never required
+      }
+      appendLedger(this.dataDir, missionId, {
+        type: 'settle',
+        runId: child.id,
+        parentRunId: parentId,
+        status: child.status,
+        reportStatus: report.status,
+        ...(child.costUsd !== undefined ? { costUsd: child.costUsd } : {}),
+      });
+      this.notifyMissionInboxes(missionId, child.id);
 
       // The delivery below is NOT user-authored, so it leaves no bubble in the parent's thread
       // (the monitoring wake nudge behaves the same way). Without this note a commander would
@@ -3234,7 +3371,9 @@ export class RunManager {
     // of whatever prompted it — a commander resumed by its own children's reports has to be told
     // what they said. Delivery-only, like the `/skill` rewrite above.
     const unitReports = this.flushPendingReports(runId);
-    const openingPrompt = unitReports ? `${unitReports}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
+    const unitInbox = this.flushInbox(runId);
+    const unitBlocks = [unitReports, unitInbox].filter((block): block is string => Boolean(block));
+    const openingPrompt = unitBlocks.length ? `${unitBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -3689,7 +3828,9 @@ export class RunManager {
     // reported while it was gone (spec Q7). Prepended and cleared here, after the slash expansion
     // so a leading `/skill` still matched, and before the failure/attachment suffixes.
     const unitReports = this.flushPendingReports(runId);
-    if (unitReports) userPrompt = `${unitReports}\n\n---\n\n${userPrompt}`;
+    const unitInbox = this.flushInbox(runId);
+    const unitBlocks = [unitReports, unitInbox].filter((block): block is string => Boolean(block));
+    if (unitBlocks.length) userPrompt = `${unitBlocks.join('\n\n')}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
       userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
     }

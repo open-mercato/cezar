@@ -148,6 +148,7 @@ describe('childSettleReport', () => {
           evidence: ['npm test → 4 passed'],
           side_effects: [],
           errors: ['the other half needs a decision'],
+          suggestions: [],
         },
       },
     });
@@ -212,7 +213,7 @@ describe('childSettleReport', () => {
           missionId: 'm',
           parentRunId: 'p',
           pendingAsk: { questions: ['old?'], askedAt: '2026-09-09T10:00:00.000Z' },
-          report: { status: 'done', result: 'answered and finished', evidence: [], side_effects: [], errors: [] },
+          report: { status: 'done', result: 'answered and finished', evidence: [], side_effects: [], errors: [], suggestions: [] },
         },
       }),
       { role: 'centurion' },
@@ -225,7 +226,7 @@ describe('pending reports', () => {
   const entry = (n: number) => ({
     fromRunId: `c${n}`,
     title: `child ${n}`,
-    report: { status: 'done' as const, result: `r${n}`, evidence: [], side_effects: [], errors: [] },
+    report: { status: 'done' as const, result: `r${n}`, evidence: [], side_effects: [], errors: [], suggestions: [] },
     at: '2026-09-08T10:00:00.000Z',
   });
 

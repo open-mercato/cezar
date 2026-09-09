@@ -100,6 +100,8 @@ export function usd(amount: number): string {
 export function childTaskEnvelope(
   child: UnitSpawnChild,
   parent: { id: string; branch?: string; role: UnitRole },
+  /** Extra order lines the ENGINE composes — the mission directory paths (`missionEnvelopeLines`). */
+  extraLines: readonly string[] = [],
 ): string {
   const lines: string[] = [];
   if (child.scope) lines.push(`- Scope: ${child.scope}`);
@@ -110,6 +112,7 @@ export function childTaskEnvelope(
   if (child.retry_limit !== undefined) lines.push(`- Retry limit: ${child.retry_limit}`);
   if (parent.branch) lines.push(`- Parent branch (your fork point): ${parent.branch}`);
   lines.push(`- Ordered by: the ${parent.role} on run ${parent.id}`);
+  lines.push(...extraLines);
   return `${child.objective}\n\n## Task order\n${lines.join('\n')}`;
 }
 
@@ -185,6 +188,7 @@ export function childSettleReport(
           evidence: [],
           side_effects: [],
           errors: child.error ? [child.error] : [],
+          suggestions: [],
         } satisfies UnitReport)
       : ({
           status: statusToReportStatus(child.status),
@@ -195,6 +199,7 @@ export function childSettleReport(
           evidence: [],
           side_effects: [],
           errors: child.error ? [child.error] : [],
+          suggestions: [],
         } satisfies UnitReport));
 
   const where = child.branch
@@ -205,6 +210,7 @@ export function childSettleReport(
   if (report.errors.length) parts.push(`errors: ${report.errors.join(' · ')}`);
   if (report.side_effects.length) parts.push(`side effects: ${report.side_effects.join(' · ')}`);
   if (report.recommended_next_action) parts.push(`recommended next: ${report.recommended_next_action}`);
+  if (report.suggestions.length) parts.push(`suggestions for the mission: ${report.suggestions.join(' · ')}`);
   if (child.costUsd !== undefined) parts.push(`cost ${usd(child.costUsd)}`);
   if (child.diffStat) {
     parts.push(`diff ${child.diffStat.files} files, +${child.diffStat.adds} -${child.diffStat.dels}`);
