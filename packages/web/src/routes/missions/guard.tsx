@@ -60,6 +60,14 @@ export function GuardRoute() {
               className="flex flex-wrap items-center gap-2.5 rounded-lg border border-border bg-card px-3.5 py-2.5 shadow-xs"
             >
               <UnitRoleChip role={node.role} />
+              {node.parkReason ? (
+                <span
+                  data-slot="guard-reason"
+                  className="rounded-full border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                >
+                  {node.parkReason === 'question' ? 'question' : 'parked'}
+                </span>
+              ) : null}
               <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                 {runTitle(node)}
               </span>

@@ -67,6 +67,8 @@ export function NewMissionRoute() {
   const [constraints, setConstraints] = useState<string[]>([])
   const [constraintDraft, setConstraintDraft] = useState('')
   const [budget, setBudget] = useState('')
+  const [parallel, setParallel] = useState('')
+  const [maxChildren, setMaxChildren] = useState('')
   const [error, setError] = useState('')
 
   // One pick per rank, and all three resolved unconditionally: the ROWS are conditional, the
@@ -138,12 +140,30 @@ export function NewMissionRoute() {
       setError('The budget must be a number of dollars, or empty for no ceiling.')
       return
     }
+    // The mission's own concurrency and fan-out: empty means today's limits. A whole number of
+    // at least one, or refused here for the same reason the budget is.
+    const positiveInt = (raw: string, label: string): number | undefined | null => {
+      const trimmed = raw.trim()
+      if (trimmed === '') return undefined
+      const value = Number(trimmed)
+      if (!Number.isInteger(value) || value < 1) {
+        setError(`${label} must be a whole number of at least 1, or empty for the default.`)
+        return null
+      }
+      return value
+    }
+    const parallelRuns = positiveInt(parallel, 'Parallel runs')
+    if (parallelRuns === null) return
+    const childrenCap = positiveInt(maxChildren, 'Children per commander')
+    if (childrenCap === null) return
     const rungs = ladder()
     try {
       const { id } = await start.mutateAsync({
         objective: text,
         unit: size,
         ...(budgetUsd === undefined ? {} : { budgetUsd }),
+        ...(parallelRuns === undefined ? {} : { parallel: parallelRuns }),
+        ...(childrenCap === undefined ? {} : { maxChildren: childrenCap }),
         ...(constraints.length > 0 ? { constraints } : {}),
         ...(rungs ? { ladder: rungs } : {}),
       })
@@ -262,6 +282,43 @@ export function NewMissionRoute() {
             className="max-w-40"
           />
         </section>
+
+        {size === 'legionary' ? null : (
+          <section className="flex flex-col gap-2">
+            <Label htmlFor="mission-parallel">Resources</Label>
+            <p className="text-[12.5px] text-muted-foreground">
+              How many of this mission’s runs may execute at once, and how many children one
+              commander may have in flight. Empty keeps the workspace’s limits; a mission with its
+              own parallel limit runs under it instead of the global cap.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <Input
+                id="mission-parallel"
+                data-slot="mission-parallel"
+                type="number"
+                min={1}
+                step="1"
+                inputMode="numeric"
+                value={parallel}
+                onChange={(event) => setParallel(event.target.value)}
+                placeholder="parallel runs"
+                className="max-w-40"
+              />
+              <Input
+                id="mission-max-children"
+                data-slot="mission-max-children"
+                type="number"
+                min={1}
+                step="1"
+                inputMode="numeric"
+                value={maxChildren}
+                onChange={(event) => setMaxChildren(event.target.value)}
+                placeholder="children per commander (4)"
+                className="max-w-56"
+              />
+            </div>
+          </section>
+        )}
 
         <section className="flex flex-col gap-2">
           <Label>Escalation ladder</Label>

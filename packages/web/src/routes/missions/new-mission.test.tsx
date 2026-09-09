@@ -138,6 +138,29 @@ describe('NewMissionRoute', () => {
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/missions'))
   })
 
+  it('posts the mission’s own resource limits when set, and omits them when left empty', async () => {
+    renderComposer()
+    await waitFor(() => expect(sizeCard('army')).not.toBeNull())
+    fireEvent.change(objective(), { target: { value: 'Run wide' } })
+    fireEvent.change(document.querySelector('[data-slot="mission-parallel"]')!, { target: { value: '8' } })
+    fireEvent.change(document.querySelector('[data-slot="mission-max-children"]')!, { target: { value: '6' } })
+    fireEvent.click(start())
+    await waitFor(() => expect(posted).toHaveLength(1))
+    expect(posted[0]?.body).toMatchObject({ objective: 'Run wide', unit: 'army', parallel: 8, maxChildren: 6 })
+  })
+
+  it('refuses a zero resource limit before posting — the field’s own constraint stops the submit', async () => {
+    renderComposer()
+    await waitFor(() => expect(sizeCard('army')).not.toBeNull())
+    fireEvent.change(objective(), { target: { value: 'Run wide' } })
+    const parallel = document.querySelector('[data-slot="mission-parallel"]') as HTMLInputElement
+    fireEvent.change(parallel, { target: { value: '0' } })
+    fireEvent.click(start())
+    await new Promise((r) => setTimeout(r, 200))
+    expect(parallel.checkValidity()).toBe(false) // min=1: the form never submits
+    expect(posted).toHaveLength(0)
+  })
+
   it('drops an added constraint when its chip is clicked', async () => {
     renderComposer()
     await waitFor(() => expect(sizeCard('army')).not.toBeNull())

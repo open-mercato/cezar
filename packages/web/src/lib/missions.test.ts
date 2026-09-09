@@ -235,6 +235,18 @@ describe('buildMissionTrees — roll-ups', () => {
     expect(mission?.needsGuard).toBe(true)
   })
 
+  it('names why a node is parked, and keeps a budget halt out of the Guard', () => {
+    const asking = unitRun({ role: 'centurion', missionId: 'ask', pendingAsk: { questions: ['Delete it?'], askedAt: 'now' } }, { id: 'ask', status: 'waiting' })
+    const halted = unitRun({ role: 'centurion', missionId: 'halt', overBudget: true }, { id: 'halt', status: 'waiting' })
+    const parked = unitRun({ role: 'centurion', missionId: 'park' }, { id: 'park', status: 'waiting' })
+    const running = unitRun({ role: 'centurion', missionId: 'run' }, { id: 'run', status: 'running' })
+    const byId = new Map(buildMissionTrees([asking, halted, parked, running]).map((tree) => [tree.missionId, tree.root]))
+    expect(byId.get('ask')).toMatchObject({ needsGuard: true, parkReason: 'question' })
+    expect(byId.get('halt')).toMatchObject({ needsGuard: false, parkReason: 'budget' })
+    expect(byId.get('park')).toMatchObject({ needsGuard: true, parkReason: 'parked' })
+    expect(byId.get('run')?.parkReason).toBeUndefined()
+  })
+
   it('leaves a mission with nothing waiting alone', () => {
     const runs = [
       unitRun({ role: 'caesar', missionId: 'm1' }, { id: 'm1', status: 'done' }),

@@ -62,6 +62,13 @@ export interface MissionNode {
    * the only line that changes.
    */
   needsGuard: boolean
+  /**
+   * Why a `waiting` node is parked, so the inbox can say it instead of calling every park a
+   * question: `question` — a persisted Guard ask nobody has answered; `budget` — the run spent its
+   * ceiling and parks for a top-up; `parked` — an ordinary turn end (an exhausted nudge cap, a
+   * plain stop). Absent when the run is not waiting.
+   */
+  parkReason?: 'question' | 'budget' | 'parked'
   children: MissionNode[]
 }
 
@@ -103,7 +110,13 @@ function nodeOf(run: UnitRun, depth: number, children: MissionNode[]): MissionNo
           budgetRatio: budgetUsd > 0 ? costUsd / budgetUsd : costUsd > 0 ? Number.POSITIVE_INFINITY : 1,
         }),
     childCount: children.length,
-    needsGuard: run.status === 'waiting',
+    // A budget halt is not a question: it parks the run for a top-up, and listing it in the Guard
+    // inbox as something to answer misleads whoever opens it (audit R5). Everything else parked at
+    // `waiting` still needs a human — a persisted question first, an ordinary park otherwise.
+    needsGuard: run.status === 'waiting' && run.unit.overBudget !== true,
+    ...(run.status === 'waiting'
+      ? { parkReason: run.unit.pendingAsk ? ('question' as const) : run.unit.overBudget ? ('budget' as const) : ('parked' as const) }
+      : {}),
     children,
   }
 }
