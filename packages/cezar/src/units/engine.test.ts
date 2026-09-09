@@ -70,6 +70,25 @@ describe('remainingBudgetUsd', () => {
     const children = [record({ id: 'c1', unit: { role: 'legate', missionId: 'm', parentRunId: 'p' } })];
     expect(remainingBudgetUsd(parent(5, 1), children)).toBeCloseTo(4);
   });
+
+  /**
+   * Audit R3: three legates lost their final centurion to a refusal that fired while real budget
+   * remained, because a settled child's reservation was never released. A settled child is charged
+   * what it spent; one still in flight keeps reserving its ceiling.
+   */
+  it('releases a settled child’s unspent reservation and keeps an in-flight child’s whole ceiling', () => {
+    const children = [
+      record({ id: 'done', status: 'done', costUsd: 1.6, unit: { role: 'legate', missionId: 'm', parentRunId: 'p', budgetUsd: 2.5 } }),
+      record({ id: 'live', status: 'running', costUsd: 0.4, unit: { role: 'legate', missionId: 'm', parentRunId: 'p', budgetUsd: 2.5 } }),
+    ];
+    // 10 − 1 (own) − 1.6 (settled, actual) − 2.5 (in flight, reserved)
+    expect(remainingBudgetUsd(parent(10, 1), children)).toBeCloseTo(4.9);
+  });
+
+  it('charges a settled child with no recorded cost its full ceiling — a data gap never under-charges', () => {
+    const children = [record({ id: 'c1', status: 'failed', unit: { role: 'legate', missionId: 'm', parentRunId: 'p', budgetUsd: 2 } })];
+    expect(remainingBudgetUsd(parent(5, 0), children)).toBeCloseTo(3);
+  });
 });
 
 describe('childTaskEnvelope', () => {
@@ -158,6 +177,47 @@ describe('childSettleReport', () => {
 
     const silent = childSettleReport(record({ status: 'done' }), { role: 'centurion' });
     expect(silent.report.result).toContain('no structured report');
+  });
+
+  /**
+   * The Guard's premise (spec Q4): a run that settled while parked on its own question was
+   * BLOCKED, whatever cezar's terminal status says — a restart force-settles `waiting` as `done`,
+   * and reporting that upward as success is exactly the lie the pending question exists to stop.
+   */
+  it('reports an unanswered question as blocked, naming it — even when cezar says done', () => {
+    const asking = childSettleReport(
+      record({
+        status: 'done',
+        unit: {
+          role: 'centurion',
+          missionId: 'm',
+          parentRunId: 'p',
+          pendingAsk: { questions: ['Delete the old migration?'], askedAt: '2026-09-09T10:00:00.000Z' },
+        },
+      }),
+      { role: 'centurion', resumeNotes: 'about to clean up' },
+    );
+    expect(asking.report.status).toBe('blocked');
+    expect(asking.report.result).toContain('Delete the old migration?');
+    expect(asking.report.result).toContain('before a reply arrived');
+    expect(asking.text).toContain('status blocked (cezar: done)');
+  });
+
+  it('lets the child’s own report win over a stale pending question', () => {
+    const own = childSettleReport(
+      record({
+        status: 'done',
+        unit: {
+          role: 'centurion',
+          missionId: 'm',
+          parentRunId: 'p',
+          pendingAsk: { questions: ['old?'], askedAt: '2026-09-09T10:00:00.000Z' },
+          report: { status: 'done', result: 'answered and finished', evidence: [], side_effects: [], errors: [] },
+        },
+      }),
+      { role: 'centurion' },
+    );
+    expect(own.report.status).toBe('done');
   });
 });
 

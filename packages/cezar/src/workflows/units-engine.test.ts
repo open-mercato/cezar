@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { RunUnit } from '@open-mercato/cezar-contract';
@@ -244,6 +245,60 @@ describe('the unit engine (spec 2026-09-08-units-hierarchy)', () => {
       // what the commander tried to do.
       const texts = store.readEvents(record.id).filter((e) => e.type === 'text');
       expect(texts.some((e) => String((e as { text?: unknown }).text).includes('CEZ:SPAWN'))).toBe(true);
+    }, 40_000);
+
+    /**
+     * Audit D4: a refused marker used to be a transcript note the model never saw. An autonomous
+     * commander then idled on its 15-minute timer and was settled `done` with an empty branch —
+     * twice in one mission. The refusal now goes back into the open session as a re-prompt; the
+     * mock answers it with CEZ:DONE, which is the proof the model got another turn.
+     */
+    it('delivers a refusal back into an autonomous commander’s session instead of parking it', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const stdinFile = join(repoRoot, 'mock-stdin-refusal.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+
+      const record = start('mock:spawn-bad delegate this', caesar('m5b', 20), { autonomous: true });
+      await waitFor(record.id, settled);
+      expect(childrenOf(record.id)).toHaveLength(0);
+      expect(store.getRun(record.id)?.status).toBe('done'); // the re-prompted turn ended with DONE
+      expect(notes(record.id).some((n) => n.includes('CEZ:SPAWN ignored'))).toBe(true);
+      expect(notes(record.id).some((n) => n.startsWith('refusal delivered back into the session'))).toBe(true);
+      const rePrompt = delivered(stdinFile, 'cez refused a control marker');
+      expect(rePrompt).toContain('CEZ:SPAWN ignored');
+      expect(rePrompt).toContain('corrected marker');
+    }, 60_000);
+
+    it('keeps the mock’s refusal trigger a prefix of the engine’s — reword one, this fails here', () => {
+      const engine = readFileSync(fileURLToPath(new URL('./run.ts', import.meta.url)), 'utf8');
+      const mock = readFileSync(fileURLToPath(new URL('../../scripts/mock-claude.mjs', import.meta.url)), 'utf8');
+      const enginePrefix = /const MARKER_REFUSAL_PREFIX = '([^']+)'/.exec(engine)?.[1];
+      const mockPrefix = /const MARKER_REFUSAL_PREFIX = '([^']+)'/.exec(mock)?.[1];
+      expect(enginePrefix && mockPrefix && enginePrefix.startsWith(mockPrefix)).toBe(true);
+    });
+
+    it('leaves a NON-autonomous commander parked on a refusal, note only (unchanged)', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const record = start('mock:spawn-bad delegate this', caesar('m5c', 20));
+      await waitFor(record.id, (r) => r?.status === 'waiting');
+      expect(notes(record.id).some((n) => n.startsWith('refusal delivered back'))).toBe(false);
+    }, 40_000);
+  });
+
+  // ---- the pending question (the Guard, Q4) -------------------------------------------------
+
+  describe('pendingAsk', () => {
+    it('records a unit run’s question when it parks and clears it when an answer is delivered', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const record = start('mock:ask which library?', caesar('m8'), { autonomous: true });
+      await waitFor(record.id, (r) => r?.status === 'waiting');
+      const pending = store.getRun(record.id)?.unit?.pendingAsk;
+      expect(pending?.questions).toHaveLength(1);
+      expect(pending?.askedAt).toBeTruthy();
+      expect(manager.sendMessage(record.id, [{ type: 'text', text: 'mock:done use date-fns' }])).toBe(true);
+      expect(store.getRun(record.id)?.unit?.pendingAsk).toBeUndefined();
+      await waitFor(record.id, settled);
     }, 40_000);
   });
 

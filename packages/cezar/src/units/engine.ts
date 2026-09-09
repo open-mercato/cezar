@@ -67,7 +67,19 @@ export function inFlightChildren(runs: readonly RunRecord[], parentId: string): 
 export function remainingBudgetUsd(parent: RunRecord, children: readonly RunRecord[]): number | undefined {
   const budget = parent.unit?.budgetUsd;
   if (budget === undefined) return undefined;
-  const promised = children.reduce((sum, child) => sum + (child.unit?.budgetUsd ?? 0), 0);
+  // A child still in flight reserves its whole ceiling — it may yet spend it. A SETTLED child is
+  // charged what it actually cost, so the unspent part of its reservation flows back to the
+  // parent. Without this a commander's headroom only ever shrank: three audits lost their final
+  // centurion to a refusal that fired while real budget remained. `costUsd ?? budgetUsd` keeps
+  // a settled child with no recorded cost from being under-charged by a data gap.
+  const promised = children.reduce(
+    (sum, child) =>
+      sum +
+      (isTerminalStatus(child.status)
+        ? (child.costUsd ?? child.unit?.budgetUsd ?? 0)
+        : (child.unit?.budgetUsd ?? 0)),
+    0,
+  );
   return budget - (parent.costUsd ?? 0) - promised;
 }
 
@@ -159,18 +171,31 @@ export function childSettleReport(
   context: { role: UnitRole; resumeNotes?: string },
 ): { text: string; report: UnitReport } {
   const own = child.unit?.report;
+  // A run that settled while still parked on its own question never got its answer: that is a
+  // BLOCK, whatever cezar's terminal status says. A restart force-settles every `waiting` run as
+  // `done`, and reporting that upward as success would turn "I stopped and asked before doing
+  // something irreversible" into a clean `done` nobody ever answered — the Guard's whole premise.
+  const unanswered = own ? undefined : child.unit?.pendingAsk;
   const report: UnitReport =
     own ??
-    ({
-      status: statusToReportStatus(child.status),
-      result:
-        context.resumeNotes?.trim() ||
-        child.error?.trim() ||
-        'no structured report — the run settled without emitting CEZ:REPORT',
-      evidence: [],
-      side_effects: [],
-      errors: child.error ? [child.error] : [],
-    } satisfies UnitReport);
+    (unanswered
+      ? ({
+          status: 'blocked',
+          result: `unanswered question — the run settled (${child.status}) before a reply arrived: ${unanswered.questions.join(' | ')}`,
+          evidence: [],
+          side_effects: [],
+          errors: child.error ? [child.error] : [],
+        } satisfies UnitReport)
+      : ({
+          status: statusToReportStatus(child.status),
+          result:
+            context.resumeNotes?.trim() ||
+            child.error?.trim() ||
+            'no structured report — the run settled without emitting CEZ:REPORT',
+          evidence: [],
+          side_effects: [],
+          errors: child.error ? [child.error] : [],
+        } satisfies UnitReport));
 
   const where = child.branch
     ? `${child.id}, branch ${child.branch}${child.baseBranch ? ` off ${child.baseBranch}` : ''}`

@@ -114,8 +114,24 @@ export const unitSchema = z.object({
   pendingReports: z.array(unitPendingReportSchema).optional(),
   /** Set at turn end once `costUsd ≥ budgetUsd`: the run parks and stops auto-continuing (Q6). */
   overBudget: z.boolean().optional(),
+  /**
+   * The question this run is parked on (the Guard, Q4), written beside the `ask.requested` event
+   * and cleared when an answer is delivered into the session. Its presence is what lets a
+   * restart-forced settle report `blocked` upward instead of a clean `done`, and what lets the
+   * Guard inbox tell a real question from a budget halt or an ordinary park.
+   */
+  pendingAsk: z
+    .object({
+      requestId: z.string().optional(),
+      /** The question texts, one per question, so a report can name what went unanswered. */
+      questions: z.array(z.string().max(400)).max(4),
+      /** ISO-8601 instant the question was asked. */
+      askedAt: z.string(),
+    })
+    .optional(),
 });
 export type RunUnit = z.infer<typeof unitSchema>;
+export type UnitPendingAsk = NonNullable<RunUnit['pendingAsk']>;
 
 /**
  * `CEZ:SPAWN <json>` — how a unit run delegates one role downward.

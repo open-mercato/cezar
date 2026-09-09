@@ -166,6 +166,50 @@ describe('recover() and the unit field', () => {
     }
   });
 
+  /**
+   * The Guard across a restart (audit R9): a child parked on its own `CEZ:ASK` is force-settled
+   * like any other `waiting` run — but what reaches its commander must say BLOCKED, naming the
+   * question, never a clean `done` nobody answered. The sibling above pins the other half: a
+   * `waiting` child with no open question still reports `done` exactly as before.
+   */
+  it('reports a child force-settled on an unanswered question as blocked, not done', async () => {
+    const units = process.env.CEZ_UNITS;
+    process.env.CEZ_UNITS = '1';
+    try {
+      const parent = store.createRun({ title: 'commander', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(parent.id, { status: 'waiting', unit: { role: 'caesar', missionId: parent.id } });
+      const child = store.createRun({
+        title: 'guard duty',
+        workflow: 'quick-task',
+        task: 'ask before deleting',
+        steps: [{ id: 'work', name: 'Work', kind: 'agent' }],
+      });
+      store.updateRun(child.id, {
+        status: 'waiting',
+        workflowDef: WORKFLOW_DEF,
+        unit: {
+          role: 'centurion',
+          missionId: parent.id,
+          parentRunId: parent.id,
+          pendingAsk: { questions: ['Delete the old migration?'], askedAt: new Date().toISOString() },
+        },
+      });
+
+      await new RunManager(store, repoRoot, { semaphore: frozen() }).recover();
+
+      expect(store.getRun(child.id)?.status).toBe('done'); // cezar's own settle is unchanged
+      // The question stays on the terminal record as the honest trace of what went unanswered.
+      expect(store.getRun(child.id)?.unit?.pendingAsk?.questions).toEqual(['Delete the old migration?']);
+      const pending = store.getRun(parent.id)?.unit?.pendingReports ?? [];
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.report.status).toBe('blocked');
+      expect(pending[0]?.report.result).toContain('Delete the old migration?');
+    } finally {
+      if (units === undefined) delete process.env.CEZ_UNITS;
+      else process.env.CEZ_UNITS = units;
+    }
+  });
+
   it('survives the record being written and read back off disk', () => {
     const { id, unit } = queuedUnitRun();
     store.flush();

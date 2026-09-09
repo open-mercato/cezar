@@ -37,6 +37,8 @@ let autonomousArmed = false;
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
 const AUTONOMOUS_NUDGE_PREFIX = 'Continue working autonomously';
+// Must stay a prefix of `MARKER_REFUSAL_PREFIX` in `src/workflows/run.ts` (same coupling rule).
+const MARKER_REFUSAL_PREFIX = 'cez refused a control marker';
 
 // A tiny generated PNG (320x200) standing in for a browser screenshot.
 const MOCK_SCREENSHOT_B64 =
@@ -111,9 +113,13 @@ async function respond(userText, imageCount) {
   // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
   // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
   if (userText.includes('mock:autonomous')) autonomousArmed = true;
+  // A refusal delivered back into the session (`MARKER_REFUSAL_PREFIX` in `src/workflows/run.ts`,
+  // which this script cannot import — `units-engine.test.ts` asserts the coupling) is answered
+  // with CEZ:DONE: the dry run proves the model GOT another turn and settles instead of looping.
   const doneMarker =
     userText.includes('mock:done') ||
     userText.includes('mock:report') ||
+    userText.includes(MARKER_REFUSAL_PREFIX) ||
     (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
       ? '\n\nCEZ:DONE'
       : '';

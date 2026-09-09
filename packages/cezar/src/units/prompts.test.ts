@@ -147,9 +147,31 @@ describe('unit role prompts', () => {
       expect(DEFAULT_UNIT_PROMPTS.centurion).toContain('no sub-agent tool');
     });
 
-    it('tells the two commanding roles not to edit files themselves', () => {
+    it('tells the two commanding roles not to write the work themselves — integration excepted', () => {
       for (const role of ['caesar', 'legate'] as const) {
-        expect(DEFAULT_UNIT_PROMPTS[role]).toMatch(/do not edit files yourself/i);
+        expect(DEFAULT_UNIT_PROMPTS[role]).toMatch(/do not write the (mission's|task order's) work yourself/i);
+        expect(DEFAULT_UNIT_PROMPTS[role]).toMatch(/the one exception is integration/i);
+      }
+    });
+
+    /**
+     * The merge-vs-Guard contradiction (audit 02-roles F1): the branch rule ORDERS a commander to
+     * merge accepted child branches, so the Guard must name that in-worktree merge as the one
+     * merge it does not cover — or a literal reader deadlocks at its first accepted child.
+     */
+    it('names the in-worktree child merge as the one merge the Guard does not cover', () => {
+      for (const role of ['caesar', 'legate'] as const) {
+        expect(DEFAULT_UNIT_PROMPTS[role]).toMatch(/does not cover/i);
+      }
+      for (const role of UNIT_ROLES) {
+        expect(DEFAULT_UNIT_PROMPTS[role]).not.toMatch(/merging anything/i);
+      }
+    });
+
+    it('tells commanders the spawn line is the last thing in the turn — no marker after it', () => {
+      for (const role of ['caesar', 'legate'] as const) {
+        expect(DEFAULT_UNIT_PROMPTS[role]).toMatch(/spawn line is the LAST thing/);
+        expect(DEFAULT_UNIT_PROMPTS[role]).not.toMatch(/After spawning, end your turn with a line containing exactly CEZ:MONITORING/);
       }
     });
 

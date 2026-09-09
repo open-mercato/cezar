@@ -168,7 +168,16 @@ interface UnitTurnResult {
   hasUnit: boolean;
   spawned: boolean;
   overBudget: boolean;
+  /** A refused marker was delivered back into the still-open session as a re-prompt, so the
+   *  run is working again and the caller must NOT park it (the nudge's own contract). */
+  rePrompted: boolean;
 }
+
+/**
+ * How a refusal is delivered back to the agent. Must stay a prefix of the message
+ * `handleUnitMarkers` sends: `scripts/mock-claude.mjs` recognises it to answer a refusal dry.
+ */
+const MARKER_REFUSAL_PREFIX = 'cez refused a control marker in your last turn';
 /** One refused unit marker, as the transcript explains it. The `CEZ:ASK` rejection's twin
  *  (`askMarkerRejection`) — same shape, same tone, same rule about never echoing the payload. */
 function unitMarkerRejection(keyword: string, result: UnitMarkerParseResult<unknown>): string | undefined {
@@ -1550,11 +1559,17 @@ export class RunManager {
     turnText: string,
     ctx: { state: ActiveRun; stepId: string; done: boolean },
   ): UnitTurnResult {
-    const idle: UnitTurnResult = { hasUnit: false, spawned: false, overBudget: false };
+    const idle: UnitTurnResult = { hasUnit: false, spawned: false, overBudget: false, rePrompted: false };
     const unit = this.unitOf(runId);
     if (!unit) return idle;
-    const note = (message: string, tone?: 'danger') =>
+    // Every refusal this turn, collected so ONE re-prompt can carry them all back into the session.
+    // A note alone is a transcript write the model never sees: a refused commander used to idle
+    // out on its 15-minute timer and settle `done` with an empty branch — observed twice.
+    const refusals: string[] = [];
+    const note = (message: string, tone?: 'danger') => {
       this.store.appendEvent(runId, { type: 'note', stepId: ctx.stepId, message, ...(tone ? { tone } : {}) });
+      if (tone === 'danger') refusals.push(message);
+    };
 
     // The done marker comes off first so a trailing `CEZ:DONE` cannot be read as part of the
     // payload that precedes it — both marker parsers capture greedily to end-of-text.
@@ -1570,7 +1585,7 @@ export class RunManager {
       note(unitMarkerRejection('CEZ:REPORT', report) ?? 'CEZ:REPORT ignored', 'danger');
     }
 
-    if (ctx.done) return { hasUnit: true, spawned: false, overBudget: false };
+    if (ctx.done) return { hasUnit: true, spawned: false, overBudget: false, rePrompted: false };
 
     let spawned = false;
     const spawn = parseSpawnMarkerResult(text);
@@ -1580,7 +1595,57 @@ export class RunManager {
       note(unitMarkerRejection('CEZ:SPAWN', spawn) ?? 'CEZ:SPAWN ignored', 'danger');
     }
 
-    return { hasUnit: true, spawned, overBudget: this.enforceUnitBudget(runId, note) };
+    const overBudget = this.enforceUnitBudget(runId, note);
+    const rePrompted = !spawned && !overBudget && this.rePromptRefusals(runId, ctx.state, ctx.stepId, refusals);
+    return { hasUnit: true, spawned, overBudget, rePrompted };
+  }
+
+  /**
+   * Deliver this turn's refusals back into the agent's open session and ask for a corrected
+   * marker — the same primitive the autonomous nudge uses, counted against the same cap
+   * (`MAX_AUTO_CONTINUES`) so a model that keeps emitting a bad payload is bounded, not looped.
+   * Autonomous runs only: a run that parks for a human anyway leaves the refusal note for them.
+   * Returns whether a message was sent; the caller then treats the run as working again.
+   */
+  private rePromptRefusals(runId: string, state: ActiveRun, stepId: string, refusals: string[]): boolean {
+    if (refusals.length === 0 || !state.autonomous || state.cancelled) return false;
+    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    const text =
+      `${MARKER_REFUSAL_PREFIX}:\n${refusals.map((line) => `- ${line}`).join('\n')}\n\n` +
+      'Nothing was spawned or recorded from it. Re-read the payload rules in your role prompt and end this turn with a corrected marker as the very last line — or, if the refusal is right, with your report instead.';
+    if (!state.session?.sendMessage([{ type: 'text', text }])) return false;
+    state.autoContinues = (state.autoContinues ?? 0) + 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId,
+      message: `refusal delivered back into the session for a corrected marker (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
+    });
+    return true;
+  }
+
+  /**
+   * Surface a `CEZ:ASK` as the ask card (#473) and, for a unit run, persist it as the pending
+   * question (the Guard, spec Q4): a restart-forced settle reports it `blocked` instead of
+   * `done`, and the Guard inbox can tell a real question from a budget halt. Cleared by
+   * `deliverMessage` when an answer reaches the session.
+   */
+  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): void {
+    const requestId = emitAskRequested(sink, ask);
+    if (!this.unitOf(runId)) return;
+    this.updateUnit(runId, (current) => ({
+      ...current,
+      pendingAsk: {
+        requestId,
+        questions: ask.questions.map((question) => question.question.slice(0, 400)),
+        askedAt: new Date().toISOString(),
+      },
+    }));
+  }
+
+  /** The answer arrived (any message delivered into the session): the question is no longer pending. */
+  private clearPendingAsk(runId: string): void {
+    if (!this.unitOf(runId)?.pendingAsk) return;
+    this.updateUnit(runId, ({ pendingAsk: _answered, ...rest }) => rest);
   }
 
   /**
@@ -2642,6 +2707,7 @@ export class RunManager {
     const deliverable = persisted.length ? [...expanded, pastedAttachmentsNote(persisted)] : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
+      this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
@@ -3021,7 +3087,8 @@ export class RunManager {
         // with `runAgentStep`'s twin turn-end so the two cannot drift — including the shape:
         // hoisted out of the branch below because the heartbeat at the end of this handler
         // needs to know whether the turn parked.
-        const autoContinued = sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, unitTurn) : false;
+        const autoContinued =
+          unitTurn.rePrompted || (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, unitTurn) : false);
         if (sessionOpen) {
           if (!autoContinued) {
             // `CEZ:ASK` → park `waiting` (attention) AND surface the structured
@@ -3029,7 +3096,7 @@ export class RunManager {
             // `running`/`activity:'monitoring'` (#490). Both share the waiting
             // lifecycle (free the slot, keep the idle timer); the autonomous
             // nudge above still wins over either.
-            if (ask) emitAskRequested(sink, ask);
+            if (ask) this.recordAsk(runId, sink, ask);
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
               this.store.updateStep(runId, stepId, { status: 'running' });
@@ -3733,7 +3800,8 @@ export class RunManager {
         // autonomous run's FIRST session parked like any other (the nudge only ever existed on
         // the continuation path). Gated on `waiting`: a non-interactive step's session belongs to
         // the workflow loop, which moves to the next step on its own.
-        const autoContinued = waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, unitTurn) : false;
+        const autoContinued =
+          unitTurn.rePrompted || (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, unitTurn) : false);
         if (waiting && !autoContinued) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
@@ -3743,7 +3811,7 @@ export class RunManager {
           // instead of raising "needs you" (#490). Lifecycle is identical: the
           // run frees its slot and keeps the idle timer. The autonomous nudge
           // above still wins over either.
-          if (ask) emitAskRequested(sink, ask);
+          if (ask) this.recordAsk(runId, sink, ask);
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
