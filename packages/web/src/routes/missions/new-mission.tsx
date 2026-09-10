@@ -7,10 +7,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { UNIT_SIZE_LABELS, UnitRoleChip } from '@/components/unit-role-chip'
+import { UnitRoleChip } from '@/components/unit-role-chip'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
-import type { UnitLadder, UnitRole, UnitSize } from '@open-mercato/cezar-api-client'
+import type { UnitLadder, UnitRole } from '@open-mercato/cezar-api-client'
 
 import { MissionsFrame, UnitsOffState } from './missions'
 
@@ -19,41 +19,17 @@ import { MissionsFrame, UnitsOffState } from './missions'
  * `.ai/specs/2026-09-08-units-hierarchy.md` §Cockpit).
  *
  * Three decisions, in the order they matter: WHAT (the objective and the standing rules), HOW BIG
- * (the size, which is really "how many layers of agent may this become"), and ON WHAT (the
+ * (a mission is always the hierarchy — the commander picks its own depth), and ON WHAT (the
  * escalation ladder — which backend and model each rank runs on).
  *
  * There is no order-of-battle preview by design (spec Q5): the commander's first turn plans and
  * spawns, and a preview it is free to ignore would cost tokens before the user has committed.
  */
 
-/** The sizes, in the order the cards are read: smallest first, so "Army" is a deliberate step up
- *  rather than the thing the eye lands on. Default is `army` all the same — a user who came to
- *  the MISSION composer wants the hierarchy; a plain task has its own composer at `/new`. */
-const SIZES: Array<{ id: UnitSize; title: string; blurb: string }> = [
-  {
-    id: 'legionary',
-    title: UNIT_SIZE_LABELS.legionary,
-    blurb: 'One agent, one task — what New task does today.',
-  },
-  {
-    id: 'squad',
-    title: UNIT_SIZE_LABELS.squad,
-    blurb: 'A worker splits the job across its own sub-agents and reviews the evidence.',
-  },
-  {
-    id: 'army',
-    title: UNIT_SIZE_LABELS.army,
-    blurb: 'A commander plans, delegates to managers and workers (or straight to workers), has the work reviewed, and reports once.',
-  },
-]
-
-/** Which ranks a size actually places, and therefore which ladder rows are worth showing. A row
- *  for a rank the mission never creates is a control whose value the server would ignore. */
-export function ladderRolesFor(size: UnitSize): UnitRole[] {
-  if (size === 'army') return ['caesar', 'legate', 'centurion']
-  if (size === 'squad') return ['centurion']
-  return []
-}
+/** The ranks a mission places, and therefore the ladder rows worth showing. A mission is always
+ *  the hierarchy: the commander decides at runtime whether it needs managers or spawns workers
+ *  directly, so there is no size to choose here — a plain task has its own composer at `/new`. */
+export const MISSION_ROLES: UnitRole[] = ['caesar', 'legate', 'centurion']
 
 const EMPTY_PICK: EnginePick = { runner: null, model: null, account: null }
 
@@ -63,7 +39,6 @@ export function NewMissionRoute() {
   const start = useStartMission()
 
   const [objective, setObjective] = useState('')
-  const [size, setSize] = useState<UnitSize>('army')
   const [constraints, setConstraints] = useState<string[]>([])
   const [constraintDraft, setConstraintDraft] = useState('')
   const [budget, setBudget] = useState('')
@@ -96,7 +71,7 @@ export function NewMissionRoute() {
   if (health.data === undefined) return <MissionsFrame title="New mission"><p className="text-sm text-muted-foreground">Loading…</p></MissionsFrame>
   if (health.data.capabilities?.units !== true) return <UnitsOffState />
 
-  const roles = ladderRolesFor(size)
+  const roles = MISSION_ROLES
 
   const addConstraint = () => {
     const rule = constraintDraft.trim()
@@ -160,16 +135,15 @@ export function NewMissionRoute() {
     try {
       const { id } = await start.mutateAsync({
         objective: text,
-        unit: size,
+        unit: 'army',
         ...(budgetUsd === undefined ? {} : { budgetUsd }),
         ...(parallelRuns === undefined ? {} : { parallel: parallelRuns }),
         ...(childrenCap === undefined ? {} : { maxChildren: childrenCap }),
         ...(constraints.length > 0 ? { constraints } : {}),
         ...(rungs ? { ladder: rungs } : {}),
       })
-      // A legionary IS a plain task — there is no tree to look at, so it lands in its own thread.
-      // Anything larger goes to the tree, which is where its children will appear.
-      navigate(size === 'legionary' ? `/tasks/${id}` : '/missions')
+      // The tree is where the mission's children will appear.
+      navigate('/missions')
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
@@ -192,30 +166,6 @@ export function NewMissionRoute() {
             maxLength={100_000}
             className="min-h-32"
           />
-        </section>
-
-        <section className="flex flex-col gap-2">
-          <Label>Size</Label>
-          <div data-slot="mission-sizes" className="grid gap-2.5 sm:grid-cols-3">
-            {SIZES.map((option) => (
-              <button
-                key={option.id}
-                type="button"
-                data-slot="mission-size"
-                data-size={option.id}
-                data-selected={size === option.id ? 'true' : undefined}
-                aria-pressed={size === option.id}
-                onClick={() => setSize(option.id)}
-                className={cn(
-                  'flex flex-col gap-1 rounded-lg border border-border bg-card p-3 text-left transition-colors hover:bg-muted',
-                  size === option.id && 'border-primary bg-primary/5 hover:bg-primary/5',
-                )}
-              >
-                <span className="text-[13.5px] font-semibold">{option.title}</span>
-                <span className="text-[12.5px] text-muted-foreground">{option.blurb}</span>
-              </button>
-            ))}
-          </div>
         </section>
 
         <section className="flex flex-col gap-2">
@@ -283,7 +233,7 @@ export function NewMissionRoute() {
           />
         </section>
 
-        {size === 'legionary' ? null : (
+        {(
           <section className="flex flex-col gap-2">
             <Label htmlFor="mission-parallel">Resources</Label>
             <p className="text-[12.5px] text-muted-foreground">

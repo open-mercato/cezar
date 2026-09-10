@@ -4,7 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import { NewMissionRoute, ladderRolesFor } from '@/routes/missions/new-mission'
+import { MISSION_ROLES, NewMissionRoute } from '@/routes/missions/new-mission'
 
 /**
  * The mission composer (spec `2026-09-08-units-hierarchy` §Cockpit): the size decides which
@@ -60,8 +60,6 @@ const ladderRoles = () =>
   [...document.querySelectorAll('[data-slot="mission-ladder-row"]')].map((row) =>
     row.getAttribute('data-role'),
   )
-const sizeCard = (size: string) =>
-  document.querySelector(`[data-slot="mission-size"][data-size="${size}"]`) as HTMLElement
 const objective = () => document.querySelector('[data-slot="mission-objective"]') as HTMLElement
 const start = () => screen.getByText('Start mission')
 
@@ -76,40 +74,23 @@ afterEach(() => {
 
 /** The pure half — which ranks a size places. Asserted on its own so the rendering test below is
  *  about the rows, not about the rule. */
-describe('ladderRolesFor', () => {
-  it('places the ranks each size actually creates', () => {
-    expect(ladderRolesFor('army')).toEqual(['caesar', 'legate', 'centurion'])
-    expect(ladderRolesFor('squad')).toEqual(['centurion'])
-    expect(ladderRolesFor('legionary')).toEqual([])
+describe('MISSION_ROLES', () => {
+  it('places every rank — the commander decides the depth at runtime, not the composer', () => {
+    expect(MISSION_ROLES).toEqual(['caesar', 'legate', 'centurion'])
   })
 })
 
 describe('NewMissionRoute', () => {
-  it('opens on Army with a rung for every rank it places', async () => {
+  it('opens with a ladder rung for every rank and no size to choose', async () => {
     renderComposer()
-    await waitFor(() => expect(sizeCard('army')).not.toBeNull())
-    expect(sizeCard('army').getAttribute('data-selected')).toBe('true')
+    await waitFor(() => expect(objective()).not.toBeNull())
+    expect(document.querySelector('[data-slot="mission-size"]')).toBeNull()
     expect(ladderRoles()).toEqual(['caesar', 'legate', 'centurion'])
-  })
-
-  it('narrows the ladder to the centurion for a squad', async () => {
-    renderComposer()
-    await waitFor(() => expect(sizeCard('squad')).not.toBeNull())
-    fireEvent.click(sizeCard('squad'))
-    expect(ladderRoles()).toEqual(['centurion'])
-  })
-
-  it('drops the ladder entirely for a legionary, and says why', async () => {
-    renderComposer()
-    await waitFor(() => expect(sizeCard('legionary')).not.toBeNull())
-    fireEvent.click(sizeCard('legionary'))
-    expect(ladderRoles()).toEqual([])
-    expect(screen.getByText('A plain task uses the composer defaults.')).toBeTruthy()
   })
 
   it('posts the objective, size, constraints and budget — and nothing the user left alone', async () => {
     renderComposer()
-    await waitFor(() => expect(sizeCard('army')).not.toBeNull())
+    await waitFor(() => expect(objective()).not.toBeNull())
 
     fireEvent.change(objective(), { target: { value: 'Ship the release' } })
     const constraint = document.querySelector('[data-slot="mission-constraint-input"]') as HTMLElement
@@ -140,7 +121,7 @@ describe('NewMissionRoute', () => {
 
   it('posts the mission’s own resource limits when set, and omits them when left empty', async () => {
     renderComposer()
-    await waitFor(() => expect(sizeCard('army')).not.toBeNull())
+    await waitFor(() => expect(objective()).not.toBeNull())
     fireEvent.change(objective(), { target: { value: 'Run wide' } })
     fireEvent.change(document.querySelector('[data-slot="mission-parallel"]')!, { target: { value: '8' } })
     fireEvent.change(document.querySelector('[data-slot="mission-max-children"]')!, { target: { value: '6' } })
@@ -151,7 +132,7 @@ describe('NewMissionRoute', () => {
 
   it('refuses a zero resource limit before posting — the field’s own constraint stops the submit', async () => {
     renderComposer()
-    await waitFor(() => expect(sizeCard('army')).not.toBeNull())
+    await waitFor(() => expect(objective()).not.toBeNull())
     fireEvent.change(objective(), { target: { value: 'Run wide' } })
     const parallel = document.querySelector('[data-slot="mission-parallel"]') as HTMLInputElement
     fireEvent.change(parallel, { target: { value: '0' } })
@@ -163,7 +144,7 @@ describe('NewMissionRoute', () => {
 
   it('drops an added constraint when its chip is clicked', async () => {
     renderComposer()
-    await waitFor(() => expect(sizeCard('army')).not.toBeNull())
+    await waitFor(() => expect(objective()).not.toBeNull())
     fireEvent.change(objective(), { target: { value: 'Ship it' } })
     const constraint = document.querySelector('[data-slot="mission-constraint-input"]') as HTMLElement
     fireEvent.change(constraint, { target: { value: 'never force-push' } })
@@ -175,20 +156,9 @@ describe('NewMissionRoute', () => {
     expect(posted[0]?.body).toEqual({ objective: 'Ship it', unit: 'army' })
   })
 
-  it('lands a legionary in its own thread — there is no tree to look at', async () => {
-    renderComposer()
-    await waitFor(() => expect(sizeCard('legionary')).not.toBeNull())
-    fireEvent.click(sizeCard('legionary'))
-    fireEvent.change(objective(), { target: { value: 'One small thing' } })
-    fireEvent.click(start())
-    await waitFor(() => expect(posted).toHaveLength(1))
-    expect(posted[0]?.body).toEqual({ objective: 'One small thing', unit: 'legionary' })
-    await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/tasks/mission-1'))
-  })
-
   it('refuses to start on an empty objective', async () => {
     renderComposer()
-    await waitFor(() => expect(sizeCard('army')).not.toBeNull())
+    await waitFor(() => expect(objective()).not.toBeNull())
     expect((start() as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(start())
     expect(posted).toHaveLength(0)

@@ -1,4 +1,4 @@
-import type { UnitRole, UnitSize } from '@open-mercato/cezar-api-client'
+import type { UnitRole } from '@open-mercato/cezar-api-client'
 
 import { cn } from '@/lib/utils'
 
@@ -20,13 +20,6 @@ export const UNIT_ROLE_LABELS: Record<UnitRole, string> = {
   caesar: 'Commander',
   legate: 'Manager',
   centurion: 'Worker',
-}
-
-/** The mission sizes, in the same plain language. */
-export const UNIT_SIZE_LABELS: Record<UnitSize, string> = {
-  legionary: 'Single task',
-  squad: 'Team',
-  army: 'Hierarchy',
 }
 
 export function UnitRoleChip({ role, className }: { role: UnitRole; className?: string }) {
