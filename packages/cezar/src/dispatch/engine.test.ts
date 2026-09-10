@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import type { RunRecord } from '../runs/store.ts';
 import {
-  CHILD_ROLE,
+  MAX_CHILDREN_IN_FLIGHT,
   MAX_PENDING_REPORTS,
-  childRoleFor,
   childSettleReport,
   childTaskEnvelope,
+  childrenOf,
   handoffSectionExcerpt,
+  inFlightChildren,
   isTerminalStatus,
   pendingReportsBlock,
   remainingBudgetUsd,
-  unitSubagentTools,
   withPendingReport,
 } from './engine.ts';
 
 /**
- * The arithmetic and the prose behind the unit engine (spec 2026-09-08-units-hierarchy). Pure
+ * The arithmetic and the prose behind task dispatch (spec 2026-09-10-dispatch). Pure
  * functions, so these run in milliseconds and pin the decisions the end-to-end suite
  * (`workflows/units-engine.test.ts`) can only observe through a whole dry run.
  */
@@ -31,36 +31,17 @@ const record = (over: Partial<RunRecord> = {}): RunRecord =>
     ...over,
   }) as RunRecord;
 
-describe('the ranks', () => {
-  it('resolves a requested rank only when it is strictly below the spawner’s', () => {
-    expect(childRoleFor('caesar', undefined)).toBe('legate');
-    expect(childRoleFor('caesar', 'centurion')).toBe('centurion');
-    expect(childRoleFor('caesar', 'legate')).toBe('legate');
-    expect(childRoleFor('legate', undefined)).toBe('centurion');
-    expect(childRoleFor('legate', 'centurion')).toBe('centurion');
-    expect(childRoleFor('legate', 'legate')).toBeUndefined(); // its own rank
-    expect(childRoleFor('centurion', undefined)).toBeUndefined();
-    expect(childRoleFor('centurion', 'centurion')).toBeUndefined();
-  });
-
-  it('hands work exactly one rung down, and stops at the centurion', () => {
-    expect(CHILD_ROLE.caesar).toBe('legate');
-    expect(CHILD_ROLE.legate).toBe('centurion');
-    // Not "another centurion", not "a legionary run" — the hierarchy ends here on purpose (Q2).
-    expect(CHILD_ROLE.centurion).toBeUndefined();
-  });
-
+describe('the settled statuses', () => {
   it('counts every settled status as terminal — a cancelled child still owes a report', () => {
-    for (const status of ['done', 'review', 'failed', 'cancelled']) {
-      expect(isTerminalStatus(status)).toBe(true);
-    }
+    for (const status of ['done', 'review', 'failed', 'cancelled']) expect(isTerminalStatus(status)).toBe(true);
     for (const status of ['queued', 'running', 'waiting']) expect(isTerminalStatus(status)).toBe(false);
+    expect(MAX_CHILDREN_IN_FLIGHT).toBe(4);
   });
 });
 
 describe('remainingBudgetUsd', () => {
   const parent = (budgetUsd: number | undefined, costUsd?: number): RunRecord =>
-    record({ id: 'p', costUsd, unit: budgetUsd === undefined ? { role: 'caesar', missionId: 'm' } : { role: 'caesar', missionId: 'm', budgetUsd } });
+    record({ id: 'p', costUsd, dispatch: budgetUsd === undefined ? { rootRunId: 'm' } : { rootRunId: 'm', budgetUsd } });
 
   it('is undefined for an uncapped commander — no ceiling is the pre-existing behaviour', () => {
     expect(remainingBudgetUsd(parent(undefined), [])).toBeUndefined();
@@ -68,8 +49,8 @@ describe('remainingBudgetUsd', () => {
 
   it('subtracts what is spent AND what is already promised to children', () => {
     const children = [
-      record({ id: 'c1', unit: { role: 'legate', missionId: 'm', parentRunId: 'p', budgetUsd: 3 } }),
-      record({ id: 'c2', unit: { role: 'legate', missionId: 'm', parentRunId: 'p', budgetUsd: 2 } }),
+      record({ id: 'c1', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 3 } }),
+      record({ id: 'c2', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 2 } }),
     ];
     expect(remainingBudgetUsd(parent(10, 1.5), children)).toBeCloseTo(3.5);
   });
@@ -79,77 +60,64 @@ describe('remainingBudgetUsd', () => {
   });
 
   it('counts a child with no ceiling of its own as promising nothing', () => {
-    const children = [record({ id: 'c1', unit: { role: 'legate', missionId: 'm', parentRunId: 'p' } })];
+    const children = [record({ id: 'c1', dispatch: { rootRunId: 'm', parentRunId: 'p' } })];
     expect(remainingBudgetUsd(parent(5, 1), children)).toBeCloseTo(4);
   });
 
   /**
-   * Audit R3: three legates lost their final centurion to a refusal that fired while real budget
+   * Audit R3: three commanders lost their final child to a refusal that fired while real budget
    * remained, because a settled child's reservation was never released. A settled child is charged
    * what it spent; one still in flight keeps reserving its ceiling.
    */
   it('releases a settled child’s unspent reservation and keeps an in-flight child’s whole ceiling', () => {
     const children = [
-      record({ id: 'done', status: 'done', costUsd: 1.6, unit: { role: 'legate', missionId: 'm', parentRunId: 'p', budgetUsd: 2.5 } }),
-      record({ id: 'live', status: 'running', costUsd: 0.4, unit: { role: 'legate', missionId: 'm', parentRunId: 'p', budgetUsd: 2.5 } }),
+      record({ id: 'done', status: 'done', costUsd: 1.6, dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 2.5 } }),
+      record({ id: 'live', status: 'running', costUsd: 0.4, dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 2.5 } }),
     ];
     // 10 − 1 (own) − 1.6 (settled, actual) − 2.5 (in flight, reserved)
     expect(remainingBudgetUsd(parent(10, 1), children)).toBeCloseTo(4.9);
   });
 
   it('charges a settled child with no recorded cost its full ceiling — a data gap never under-charges', () => {
-    const children = [record({ id: 'c1', status: 'failed', unit: { role: 'legate', missionId: 'm', parentRunId: 'p', budgetUsd: 2 } })];
+    const children = [record({ id: 'c1', status: 'failed', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 2 } })];
     expect(remainingBudgetUsd(parent(5, 0), children)).toBeCloseTo(3);
   });
 });
 
 describe('childTaskEnvelope', () => {
-  it('spells out a review unit’s kind and what it reviews', () => {
+  it('spells out a review task’s kind and what it reviews', () => {
     const text = childTaskEnvelope(
       { title: 'Review the left flank', objective: 'judge it', kind: 'review', review_of: ['cez/abcd1234'] },
-      { id: 'p', role: 'legate' },
+      { id: 'p' },
     );
     expect(text).toContain('- Kind: review');
     expect(text).toContain('you do not implement it');
     expect(text).toContain('- Review of: cez/abcd1234');
     // an implementer's order says nothing about kind — the pre-existing envelope
-    expect(childTaskEnvelope({ title: 't', objective: 'o' }, { id: 'p', role: 'legate' })).not.toContain('Kind:');
+    expect(childTaskEnvelope({ title: 't', objective: 'o' }, { id: 'p' })).not.toContain('Kind:');
   });
 
 
   it('lists only the fields the order actually carries, plus the fork point and the commander', () => {
     const text = childTaskEnvelope(
       { title: 'Left flank', objective: 'take the left half', scope: 'src/left/**', max_cost: 2.5 },
-      { id: 'p1', branch: 'cez/abc12345', role: 'caesar' },
+      { id: 'p1', branch: 'cez/abc12345' },
     );
     expect(text.startsWith('take the left half')).toBe(true);
     expect(text).toContain('## Task order');
     expect(text).toContain('- Scope: src/left/**');
     expect(text).toContain('- Max cost: $2.50');
     expect(text).toContain('- Parent branch (your fork point): cez/abc12345');
-    expect(text).toContain('- Ordered by: the commander on run p1');
+    expect(text).toContain('- Ordered by: run p1');
     // Nothing invented for the keys the commander left out.
     expect(text).not.toContain('Success criteria');
     expect(text).not.toContain('Retry limit');
   });
 
   it('omits the fork point for a commander running in the repository working tree', () => {
-    const text = childTaskEnvelope({ title: 't', objective: 'o' }, { id: 'p1', role: 'legate' });
+    const text = childTaskEnvelope({ title: 't', objective: 'o' }, { id: 'p1' });
     expect(text).not.toContain('Parent branch');
-    expect(text).toContain('- Ordered by: the manager on run p1');
-  });
-});
-
-describe('unitSubagentTools', () => {
-  it('gives a claude centurion its century and leaves the list alone otherwise', () => {
-    expect(unitSubagentTools(['Read'], 'centurion', 'claude')).toEqual(['Read', 'Task', 'Agent']);
-    expect(unitSubagentTools(['Read', 'Task'], 'centurion', 'claude')).toEqual(['Read', 'Task', 'Agent']);
-    // Commanders delegate through CEZ:SPAWN, not through sub-agents.
-    expect(unitSubagentTools(['Read'], 'caesar', 'claude')).toEqual(['Read']);
-    // Other backends have no sub-agent tool and ignore allowedTools entirely (#430).
-    expect(unitSubagentTools(['Read'], 'centurion', 'codex')).toEqual(['Read']);
-    // And a run with no unit is untouched — the whole feature is inert for it.
-    expect(unitSubagentTools(['Read'], undefined, 'claude')).toEqual(['Read']);
+    expect(text).toContain('- Ordered by: run p1');
   });
 });
 
@@ -163,9 +131,8 @@ describe('childSettleReport', () => {
       baseBranch: 'cez/parent',
       costUsd: 0.42,
       diffStat: { files: 2, adds: 12, dels: 3 },
-      unit: {
-        role: 'legate',
-        missionId: 'm',
+      dispatch: {
+        rootRunId: 'm',
         parentRunId: 'p',
         report: {
           status: 'partial',
@@ -177,9 +144,9 @@ describe('childSettleReport', () => {
         },
       },
     });
-    const { text, report } = childSettleReport(child, { role: 'legate' });
+    const { text, report } = childSettleReport(child);
     expect(report.status).toBe('partial'); // the child's own words, not cezar's status
-    expect(text).toContain('Report from manager "Left flank"');
+    expect(text).toContain('Report from task "Left flank"');
     expect(text).toContain('branch cez/9999 off cez/parent');
     expect(text).toContain('status partial (cezar: done)');
     expect(text).toContain('evidence: npm test → 4 passed');
@@ -190,18 +157,17 @@ describe('childSettleReport', () => {
 
   it('still reports for a child that never emitted one — silence is indistinguishable from working', () => {
     const cancelled = childSettleReport(record({ status: 'cancelled', branch: 'cez/1' }), {
-      role: 'centurion',
       resumeNotes: 'was halfway through the migration',
     });
     expect(cancelled.report.status).toBe('blocked'); // stopped, not failed
     expect(cancelled.report.result).toBe('was halfway through the migration');
 
-    const failed = childSettleReport(record({ status: 'failed', error: 'engine crashed' }), { role: 'centurion' });
+    const failed = childSettleReport(record({ status: 'failed', error: 'engine crashed' }));
     expect(failed.report.status).toBe('failed');
     expect(failed.report.errors).toEqual(['engine crashed']);
     expect(failed.text).toContain('no branch — it ran in the repository working tree');
 
-    const silent = childSettleReport(record({ status: 'done' }), { role: 'centurion' });
+    const silent = childSettleReport(record({ status: 'done' }));
     expect(silent.report.result).toContain('no structured report');
   });
 
@@ -214,14 +180,13 @@ describe('childSettleReport', () => {
     const asking = childSettleReport(
       record({
         status: 'done',
-        unit: {
-          role: 'centurion',
-          missionId: 'm',
+        dispatch: {
+        rootRunId: 'm',
           parentRunId: 'p',
           pendingAsk: { questions: ['Delete the old migration?'], askedAt: '2026-09-09T10:00:00.000Z' },
         },
       }),
-      { role: 'centurion', resumeNotes: 'about to clean up' },
+      { resumeNotes: 'about to clean up' },
     );
     expect(asking.report.status).toBe('blocked');
     expect(asking.report.result).toContain('Delete the old migration?');
@@ -233,16 +198,13 @@ describe('childSettleReport', () => {
     const own = childSettleReport(
       record({
         status: 'done',
-        unit: {
-          role: 'centurion',
-          missionId: 'm',
+        dispatch: {
+        rootRunId: 'm',
           parentRunId: 'p',
           pendingAsk: { questions: ['old?'], askedAt: '2026-09-09T10:00:00.000Z' },
           report: { status: 'done', result: 'answered and finished', evidence: [], side_effects: [], errors: [], suggestions: [] },
         },
-      }),
-      { role: 'centurion' },
-    );
+      }));
     expect(own.report.status).toBe('done');
   });
 });
@@ -256,7 +218,7 @@ describe('pending reports', () => {
   });
 
   it('keeps the newest, bounded — the list is flushed into a prompt, not a log', () => {
-    let unit = { role: 'caesar' as const, missionId: 'm' };
+    const unit = { rootRunId: 'm' };
     let carrier: ReturnType<typeof withPendingReport> = unit;
     for (let i = 0; i < MAX_PENDING_REPORTS + 3; i += 1) carrier = withPendingReport(carrier, entry(i));
     expect(carrier.pendingReports).toHaveLength(MAX_PENDING_REPORTS);
@@ -266,7 +228,7 @@ describe('pending reports', () => {
   it('renders as prose a commander reads, and nothing at all when there is none', () => {
     expect(pendingReportsBlock([])).toBeUndefined();
     const block = pendingReportsBlock([entry(1)]);
-    expect(block).toContain('## Reports from your units');
+    expect(block).toContain('## Reports from your dispatched tasks');
     expect(block).toContain('"child 1" (c1');
     expect(block).toContain('status done; r1');
   });

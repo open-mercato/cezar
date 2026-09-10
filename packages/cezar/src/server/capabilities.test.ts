@@ -160,7 +160,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       followups: true,
       singleProject: false,
       automations: false,
-      units: false,
+      dispatch: false,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
@@ -208,32 +208,32 @@ describe('resolveCapabilities — automations (#801)', () => {
       automations: true,
       followups: false,
       singleProject: false,
-      units: false,
+      dispatch: false,
     });
   });
 });
 
-describe('resolveCapabilities — units (spec 2026-09-08-units-hierarchy)', () => {
+describe('resolveCapabilities — dispatch (spec 2026-09-10-dispatch)', () => {
   it('is OFF by default — the unit hierarchy is opt-in', () => {
-    expect(resolveCapabilities({}).units).toBe(false);
+    expect(resolveCapabilities({}).dispatch).toBe(false);
   });
 
   it('is on with CEZ_UNITS=1', () => {
-    expect(resolveCapabilities({ CEZ_UNITS: '1' }).units).toBe(true);
+    expect(resolveCapabilities({ CEZ_DISPATCH: '1' }).dispatch).toBe(true);
   });
 
   it.each(['0', 'true', 'yes', '', 'on'])(
-    'stays off for CEZ_UNITS=%j — only an exact "1" opts in',
+    'stays off for CEZ_DISPATCH=%j — only an exact "1" opts in',
     (value) => {
-      expect(resolveCapabilities({ CEZ_UNITS: value }).units).toBe(false);
+      expect(resolveCapabilities({ CEZ_DISPATCH: value }).dispatch).toBe(false);
     },
   );
 
-  // Units is the widest cost-widening flag in the app (one turn can create four more runs), so
-  // it matters most here that enabling it enables nothing else.
+  // Dispatch is the widest cost-widening flag in the app (one task can create four more runs),
+  // so it matters most here that enabling it enables nothing else.
   it('does not turn on any other opt-in capability', () => {
-    expect(resolveCapabilities({ CEZ_UNITS: '1' })).toMatchObject({
-      units: true,
+    expect(resolveCapabilities({ CEZ_DISPATCH: '1' })).toMatchObject({
+      dispatch: true,
       automations: false,
       followups: false,
       singleProject: false,

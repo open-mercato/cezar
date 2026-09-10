@@ -35,12 +35,14 @@ import { runMigrations } from './workspace/migrations.ts';
 import { registerProject, shouldRegisterProject } from './workspace/projects.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
+import { runTaskCommand } from './dispatch/task-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
 Usage:
   cezar                     start the cockpit (server + GUI) for the current repo
   cezar run "<task>"        run a task headless in the terminal
+  cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=1)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -78,6 +80,12 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the
+  // cockpit's parser can refuse them. It only talks to an already-running cockpit.
+  if (process.argv[2] === 'task') {
+    process.exitCode = await runTaskCommand(process.argv.slice(3));
+    return;
+  }
   const { values, positionals } = parseArgs({
     options: {
       port: { type: 'string', short: 'p', default: '4321' },
@@ -213,7 +221,7 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore });
+  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
   const providerAuth = new ProviderAuthService();
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -274,6 +282,9 @@ async function serveCommand(
         `    and make sure this interface is not reachable from the internet.\n`,
     );
   }
+  // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
+  // Set before the first run can start, read by every manager's `agentEnv` while CEZ_DISPATCH=1.
+  process.env.CEZ_API_URL = `http://127.0.0.1:${port}`;
   startServer({
     repoRoot,
     store,

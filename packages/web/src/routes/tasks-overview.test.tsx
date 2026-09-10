@@ -1154,3 +1154,70 @@ describe('TasksOverviewRoute — wired to the app', () => {
     })
   })
 })
+
+/**
+ * Task dispatch in the list (spec `.ai/specs/2026-09-10-dispatch.md`): a child task renders
+ * NESTED under the task that dispatched it, in that task's own place in the ordering — never as
+ * a second top-level row. The nesting rule itself is table-tested in `lib/task-tree.test.ts`;
+ * what is worth a DOM test is that both layouts of this page actually paint it.
+ */
+describe('dispatched subtasks nest under their parent', () => {
+  const rowIds = () =>
+    [...document.querySelectorAll('[data-slot="task-table-row"]')].map((row) =>
+      row.getAttribute('data-run-id'),
+    )
+  const depthOf = (id: string) => tableRow(id)?.getAttribute('data-depth')
+
+  it('puts a child directly under its parent, indented, wherever the parent sorted', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'newer', createdAt: ago(1_000) }),
+        run({ id: 'parent', createdAt: ago(50_000) }),
+        run({ id: 'child', createdAt: ago(10_000), dispatch: { rootRunId: 'parent', parentRunId: 'parent' } }),
+      ],
+    })
+    // `child` is newer than `parent` and would sort above it on its own — it follows its parent.
+    expect(rowIds()).toEqual(['newer', 'parent', 'child'])
+    expect(depthOf('parent')).toBe('0')
+    expect(depthOf('child')).toBe('1')
+  })
+
+  it('counts the subtasks on the parent row and nothing on a childless one', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'p' }),
+        run({ id: 'c1', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+        run({ id: 'c2', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+        run({ id: 'alone' }),
+      ],
+    })
+    expect(tableRow('p')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('2 subtasks')
+    expect(tableRow('alone')?.querySelector('[data-slot="subtask-count"]')).toBeNull()
+    expect(tableRow('c1')?.querySelector('[data-slot="subtask-count"]')).toBeNull()
+  })
+
+  // The rule that keeps a filtered list honest — a row must never vanish because the search
+  // removed the task that ordered it.
+  it('shows a child whose parent is not in the list as a top-level row', () => {
+    renderOverview({
+      runs: [run({ id: 'orphan', dispatch: { rootRunId: 'gone', parentRunId: 'gone' } })],
+    })
+    expect(rowIds()).toEqual(['orphan'])
+    expect(depthOf('orphan')).toBe('0')
+  })
+
+  it('nests the card view identically — the two layouts are one list at two widths', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'p' }),
+        run({ id: 'c', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    const ids = [...document.querySelectorAll('[data-slot="task-card"]')].map((el) =>
+      el.getAttribute('data-run-id'),
+    )
+    expect(ids).toEqual(['p', 'c'])
+    expect(card('c')?.getAttribute('data-depth')).toBe('1')
+    expect(card('p')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('1 subtask')
+  })
+})

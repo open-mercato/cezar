@@ -95,13 +95,8 @@ import type {
   ImportableSkill,
   Skill,
   StartTodoResponse,
-  StartMissionInput,
-  StartMissionResponse,
   TodoItem,
   UiState,
-  UnitPrompt,
-  UnitPromptsResponse,
-  UnitRole,
   WorkflowsResponse,
   WorkspaceConfigResponse,
   WorkspaceUiState,
@@ -1690,65 +1685,6 @@ export async function getAutomationLog(
       init(opts),
     ),
     `/automation-log?automationId=${encodeURIComponent(id)}`,
-  )
-}
-
-// ---- units: missions and role prompts (spec 2026-09-08-units-hierarchy) ----------------------
-//
-// Project-scoped, both halves: a mission starts a run in ONE project's store, and the role
-// prompts are per-repo files under that project's `.ai/cezar/units/`. Every call here answers
-// 409 while `capabilities.units` is off, which is why each surface gates on health BEFORE it
-// fetches rather than painting the refusal as an error (the automations pattern).
-
-/** Start a mission — `legionary` is a plain task, `squad` roots a Centurion, `army` a Caesar.
- *  Answers the ROOT run's id: the composer navigates to the tree (or, for a legionary, straight
- *  into the thread it just created). */
-export async function startMission(body: StartMissionInput): Promise<StartMissionResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].missions.$post({
-      param: { projectId: queryScope() },
-      json: body,
-    }),
-    '/missions',
-  )
-}
-
-/** Every role's effective system prompt, with the `default`/`file` provenance the Settings
- *  editor renders as its badge. Always all three roles. */
-export async function getUnitPrompts(opts?: ReadOptions): Promise<UnitPromptsResponse> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].units.prompts.$get(
-      { param: { projectId: queryScope() } },
-      init(opts),
-    ),
-    '/units/prompts',
-  )
-}
-
-/** Override one role's prompt (writes `.ai/cezar/units/<role>.md`). Answers the SAVED entry, so
- *  the editor's badge follows the server rather than an optimistic guess. */
-export async function putUnitPrompt(role: UnitRole, text: string): Promise<UnitPrompt> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].units.prompts[':role'].$put({
-      // No `encodeURIComponent` here, unlike the id-bearing call sites: the route param is typed
-      // as the ROLE ENUM, and encoding widens it to `string`. The three role names are bare
-      // lowercase words validated by that same enum server-side, so there is nothing to escape.
-      param: { projectId: queryScope(), role },
-      json: { text },
-    }),
-    `/units/prompts/${encodeURIComponent(role)}`,
-  )
-}
-
-/** Restore one role's shipped default (deletes the override file). Answers the RESTORED entry,
- *  so the editor has something to render the instant it returns. */
-export async function resetUnitPrompt(role: UnitRole): Promise<UnitPrompt> {
-  return unwrap(
-    await cez.api.v1.p[':projectId'].units.prompts[':role'].$delete({
-      // Unencoded for the same reason as the PUT above: the param is the role enum, not an id.
-      param: { projectId: queryScope(), role },
-    }),
-    `/units/prompts/${encodeURIComponent(role)}`,
   )
 }
 

@@ -322,3 +322,34 @@ describe('resolveAutoApply', () => {
     })
   })
 })
+
+/** The built-in list itself. Its CONTENTS are a product decision, so only the invariants that
+ *  would break a surface are pinned here — plus the one template that exists to teach a feature. */
+describe('DEFAULT_PROMPT_TEMPLATES', () => {
+  it('has unique, non-empty ids and labels — the menu keys on the id', () => {
+    const ids = DEFAULT_PROMPT_TEMPLATES.map((t) => t.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const template of DEFAULT_PROMPT_TEMPLATES) {
+      expect(template.id.trim()).not.toBe('')
+      expect(template.label.trim()).not.toBe('')
+      expect(template.text.trim()).not.toBe('')
+    }
+  })
+
+  // Every other built-in tells ONE task how to do its own work. This is the worked example of a
+  // task that fans work out to dispatched children and then waits for their reports (spec
+  // `.ai/specs/2026-09-10-dispatch.md`), so its shape is load-bearing: the `cez task create`
+  // invocation, the concurrency ceiling, and the CEZ:MONITORING end that makes the waiting work.
+  it('ships the dispatching example, with the CLI call and the monitoring end intact', () => {
+    const template = DEFAULT_PROMPT_TEMPLATES.find((t) => t.id === 'review-open-prs')
+    expect(template?.label).toBe('Review open PRs')
+    expect(template?.text).toContain('gh pr list --state open')
+    expect(template?.text).toContain('cez task create --kind review --review-of <headRefName>')
+    expect(template?.text).toContain('at most 4 at a time')
+    expect(template?.text).toContain('CEZ:MONITORING')
+  })
+
+  it('survives its own normalizer unchanged — the built-ins must round-trip', () => {
+    expect(normalizePromptTemplates(DEFAULT_PROMPT_TEMPLATES)).toEqual(DEFAULT_PROMPT_TEMPLATES)
+  })
+})

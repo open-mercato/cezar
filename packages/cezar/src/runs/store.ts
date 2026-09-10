@@ -9,8 +9,8 @@ import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
-// `unit` object and its wire half are literally the same schema, so they cannot drift.
-import { unitSchema } from '@open-mercato/cezar-contract';
+// `dispatch` object and its wire half are literally the same schema, so they cannot drift.
+import { dispatchSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -184,10 +184,10 @@ export const runRecordSchema = z.object({
       githubUrl: z.string().url(),
     })
     .optional(),
-  /** This run's place in a unit hierarchy (spec 2026-09-08-units-hierarchy): role, mission,
+  /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent,
    *  parent, budget, its own report and the reports waiting for its next session.
    *
-   *  The CONTRACT's own `unitSchema` rather than a hand-copied twin — the one shape in this file
+   *  The CONTRACT's own `dispatchSchema` rather than a hand-copied twin — the one shape in this file
    *  that is imported instead of restated, the way `workspace/migrations.ts` imports
    *  `workspaceUiStateSchema`. Copying it would mean maintaining a nine-key nested object in two
    *  places whose only guard is a compile-time parity test; importing it makes them the same
@@ -195,9 +195,9 @@ export const runRecordSchema = z.object({
    *  this reason, so no packaging follows from it.)
    *
    *  `.catch(undefined)` like `workflowDef` below: `runs.json` is plain, hand-editable JSON, and
-   *  a `unit` that no longer fits must drop the FIELD, never the whole index. The run then reads
+   *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
    *  as an ordinary flat task — degraded, but running. */
-  unit: unitSchema.optional().catch(undefined),
+  dispatch: dispatchSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.

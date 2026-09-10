@@ -90,10 +90,6 @@ export type AppShellProps = {
    *  opt-in via `CEZ_AUTOMATIONS=1`. Defaults to shown for the same reason as `forgeAvailable`;
    *  the container passes the health payload's truth. */
   automationsAvailable?: boolean
-  /** Units gating (spec `2026-09-08-units-hierarchy`): `false` drops the Missions and Guard nav
-   *  items — the hierarchy of runs is opt-in via `CEZ_UNITS=1`. Defaults to shown for the same
-   *  reason as `forgeAvailable`; the container passes the health payload's truth. */
-  unitsAvailable?: boolean
   /** Single-project capability gating: hides workspace-expansion affordances. Defaults off so
    *  standalone and older callers preserve the multi-project shell. */
   singleProject?: boolean
@@ -161,7 +157,6 @@ export function AppShell({
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
-  unitsAvailable = true,
   singleProject = false,
   banner,
   projectGroups,
@@ -225,7 +220,6 @@ export function AppShell({
       forge: forgeAvailable,
       inbox: inboxAvailable,
       automations: automationsAvailable,
-      units: unitsAvailable,
     }),
     repo,
     // The badge belongs to the Inbox item — with the item gone there is nothing to badge.

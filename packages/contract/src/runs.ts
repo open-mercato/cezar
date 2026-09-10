@@ -4,10 +4,10 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
-// Same one-way direction: the units family owns the `unit` object's shape, the run record embeds
+// Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
-import { unitSchema } from './units.ts';
+import { dispatchSchema } from './dispatch.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -185,14 +185,11 @@ export const runRecordSchema = z.object({
     })
     .optional(),
   /**
-   * This run's place in a unit hierarchy (spec `.ai/specs/2026-09-08-units-hierarchy.md`) — its
-   * role, the mission it belongs to, its parent, its budget and the reports moving through it.
-   *
-   * Absent on every ordinary run, which is what makes the whole feature additive: a run without
-   * a `unit` behaves exactly as it always has, and the turn-end marker parsing is skipped for it
-   * even when `capabilities.units` is on.
+   * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
+   * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
+   * always has.
    */
-  unit: unitSchema.optional(),
+  dispatch: dispatchSchema.optional(),
   status: runStatusSchema,
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
@@ -350,6 +347,9 @@ export const runIndexEntrySchema = z.object({
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
+  /** The run's place in a dispatch tree (spec 2026-09-10-dispatch), the two keys the global
+   *  page needs to nest a child under its parent. Absent on a plain task. */
+  dispatch: dispatchSchema.pick({ rootRunId: true, parentRunId: true }).optional(),
   /** When the agent actually started, as opposed to when the task was created. The global page's
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),

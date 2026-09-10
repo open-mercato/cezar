@@ -1,5 +1,8 @@
 # Units improvements — implementation plan
 
+> **Superseded (2026-09-10):** the missions/units feature was removed and replaced by task dispatch — see `2026-09-10-dispatch.md` and `units-research/00-verdict.md`. Kept for the record.
+
+
 > Slug: `units-improvements-plan` · Status: proposed
 
 ## TLDR

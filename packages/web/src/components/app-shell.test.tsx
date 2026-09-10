@@ -110,8 +110,6 @@ describe('AppShell', () => {
       'Git',
       'GitHub',
       'Automations',
-      'Missions',
-      'Guard',
       'Skills',
       'Workflows',
       'Settings',
@@ -123,8 +121,6 @@ describe('AppShell', () => {
       '/git',
       '/github',
       '/automations',
-      '/missions',
-      '/guard',
       '/skills',
       '/workflows',
       '/settings',
@@ -153,24 +149,6 @@ describe('AppShell', () => {
     renderShell('/', { automationsAvailable: true })
     expect(within(nav()).getAllByRole('link').map((a) => a.getAttribute('href')))
       .toContain('/automations')
-  })
-
-  // Same degradation for the opt-in units capability (spec `2026-09-08-units-hierarchy`), and
-  // both of its items go together: the Guard is a filtered view of the same tree.
-  it('drops the Missions and Guard items when the units capability is off', () => {
-    renderShell('/', { unitsAvailable: false })
-    const links = within(nav()).getAllByRole('link')
-    const hrefs = links.map((a) => a.getAttribute('href'))
-    expect(hrefs).not.toContain('/missions')
-    expect(hrefs).not.toContain('/guard')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.units).length)
-  })
-
-  it('shows the Missions and Guard items once the units capability is on', () => {
-    renderShell('/', { unitsAvailable: true })
-    const hrefs = within(nav()).getAllByRole('link').map((a) => a.getAttribute('href'))
-    expect(hrefs).toContain('/missions')
-    expect(hrefs).toContain('/guard')
   })
 
   describe('active nav state follows the current route', () => {

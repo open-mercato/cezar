@@ -1,61 +1,25 @@
 /**
- * The unit hierarchy's PURE half (spec `.ai/specs/2026-09-08-units-hierarchy.md`).
+ * Task dispatch — the PURE half (spec `.ai/specs/2026-09-10-dispatch.md`).
  *
- * Everything here is a function of its arguments: which role is one rung down, how much budget a
- * parent has left, what a task order reads like, what a settled child's report says. The stateful
- * half — parsing a turn, creating child runs, waking a parent — lives in `RunManager`
- * (`workflows/run.ts`), because it is the thing that owns the store, the queue and the timers.
- *
- * The split is not decoration. Both turn-end handlers route through ONE private helper in the
- * manager (AGENTS.md § "the two near-identical turn-end handlers"), and that helper is only short
- * enough to read in one sitting because the arithmetic and the prose live here, under test on
- * their own.
+ * Everything here is a function of its arguments: how much budget a parent has left, what a task
+ * order reads like, what a settled child's report says. The stateful half — creating child runs,
+ * waking a parent — lives in `RunManager` (`workflows/run.ts`), which owns the store, the queue and
+ * the timers. Both turn-end handlers route through ONE helper there, and it stays short because
+ * the arithmetic and the prose live here, under test on their own.
  */
-import type { RunUnit, UnitKind, UnitPendingReport, UnitReport, UnitRole, UnitSpawnChild } from '@open-mercato/cezar-contract';
-import type { RunnerId } from '../core/agent-runner.ts';
+import type {
+  DispatchInput,
+  DispatchPendingReport,
+  DispatchReport,
+  RunDispatch,
+} from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
 
-/** One rung down. `centurion` has no rung below it: legionaries are its backend's own sub-agents,
- *  not cezar runs (spec Q2), which is why a centurion's `CEZ:SPAWN` is refused rather than
- *  silently flattened into a fourth layer of runs. */
-export const CHILD_ROLE: Record<UnitRole, UnitRole | undefined> = {
-  caesar: 'legate',
-  legate: 'centurion',
-  centurion: undefined,
-};
-
-/** Children in flight under ONE parent when the mission set no `resources.maxChildren`
- *  (spec Q2). `maxParallel` defaults to 2 and only two monitors are slot-exempt, so a wider
- *  default fan-out would starve its own tree; a mission that wants more says so at start. */
+/** Children in flight under ONE parent. `maxParallel` defaults to 2 and only two monitors are
+ *  slot-exempt, so a wider fan-out would starve its own tree. */
 export const MAX_CHILDREN_IN_FLIGHT = 4;
 
-/** What each rank is called to a user and to an agent. The ids stay Roman on the wire and on disk. */
-export const ROLE_LABELS: Record<UnitRole, string> = { caesar: 'commander', legate: 'manager', centurion: 'worker' };
-export function roleLabel(role: UnitRole | undefined): string {
-  return role ? ROLE_LABELS[role] : 'unit';
-}
-
-/** The ranks, top down. A spawn may name any rank strictly BELOW the spawner's. */
-const RANK_ORDER: readonly UnitRole[] = ['caesar', 'legate', 'centurion'];
-
-/**
- * The rank a spawn creates: the requested one when it is below the spawner's, else one rung
- * down. `undefined` for a request the spawner may not make — its own rank or one above it, or
- * anything from a centurion, which has no rank below it at all.
- */
-export function childRoleFor(spawner: UnitRole, requested: UnitRole | undefined): UnitRole | undefined {
-  const below = CHILD_ROLE[spawner];
-  if (!below) return undefined;
-  if (requested === undefined) return below;
-  return RANK_ORDER.indexOf(requested) > RANK_ORDER.indexOf(spawner) ? requested : undefined;
-}
-
-/** What a unit is for; absent on every pre-existing record means `implement`. */
-export function unitKindOf(unit: Pick<RunUnit, 'kind'> | undefined): UnitKind {
-  return unit?.kind ?? 'implement';
-}
-
-/** How many settled-child reports a parent keeps waiting for its next session (spec Q7). A
+/** How many settled-child reports a parent keeps waiting for its next session . A
  *  bound, not a policy: the list is flushed into a PROMPT, and an unbounded one would grow into
  *  a context window no model can read. */
 export const MAX_PENDING_REPORTS = 20;
@@ -63,8 +27,7 @@ export const MAX_PENDING_REPORTS = 20;
 /** A child that still counts against the in-flight cap — anything that has not settled. */
 const IN_FLIGHT_STATUSES: readonly string[] = ['queued', 'running', 'waiting'];
 
-/** The four settled statuses. A child reaching any of them reports to its parent (spec §Reports
- *  and settle) — `cancelled` included, because a parent waiting on a child a user killed would
+/** The four settled statuses. A child reaching any of them reports to its parent  — `cancelled` included, because a parent waiting on a child a user killed would
  *  otherwise wait forever. */
 export const TERMINAL_STATUSES: readonly string[] = ['done', 'review', 'failed', 'cancelled'];
 
@@ -72,9 +35,9 @@ export function isTerminalStatus(status: string): boolean {
   return TERMINAL_STATUSES.includes(status);
 }
 
-/** Every run whose `unit.parentRunId` names this parent, in store order. */
+/** Every run whose `dispatch.parentRunId` names this parent, in store order. */
 export function childrenOf(runs: readonly RunRecord[], parentId: string): RunRecord[] {
-  return runs.filter((run) => run.unit?.parentRunId === parentId);
+  return runs.filter((run) => run.dispatch?.parentRunId === parentId);
 }
 
 /** The subset still working — what the fan-out cap counts. */
@@ -92,19 +55,19 @@ export function inFlightChildren(runs: readonly RunRecord[], parentId: string): 
  * allowed to omit `max_cost` while something is left.
  */
 export function remainingBudgetUsd(parent: RunRecord, children: readonly RunRecord[]): number | undefined {
-  const budget = parent.unit?.budgetUsd;
+  const budget = parent.dispatch?.budgetUsd;
   if (budget === undefined) return undefined;
   // A child still in flight reserves its whole ceiling — it may yet spend it. A SETTLED child is
   // charged what it actually cost, so the unspent part of its reservation flows back to the
   // parent. Without this a commander's headroom only ever shrank: three audits lost their final
-  // centurion to a refusal that fired while real budget remained. `costUsd ?? budgetUsd` keeps
+  // child to a refusal that fired while real budget remained. `costUsd ?? budgetUsd` keeps
   // a settled child with no recorded cost from being under-charged by a data gap.
   const promised = children.reduce(
     (sum, child) =>
       sum +
       (isTerminalStatus(child.status)
-        ? (child.costUsd ?? child.unit?.budgetUsd ?? 0)
-        : (child.unit?.budgetUsd ?? 0)),
+        ? (child.costUsd ?? child.dispatch?.budgetUsd ?? 0)
+        : (child.dispatch?.budgetUsd ?? 0)),
     0,
   );
   return budget - (parent.costUsd ?? 0) - promised;
@@ -125,17 +88,15 @@ export function usd(amount: number): string {
  * work will be merged back into), and the run id is what makes a report traceable.
  */
 export function childTaskEnvelope(
-  child: UnitSpawnChild,
-  parent: { id: string; branch?: string; role: UnitRole },
-  /** Extra order lines the ENGINE composes — the mission directory paths (`missionEnvelopeLines`). */
+  child: DispatchInput,
+  parent: { id: string; branch?: string },
+  /** Extra order lines the ENGINE composes — the tree directory paths (`treeEnvelopeLines`). */
   extraLines: readonly string[] = [],
 ): string {
   const lines: string[] = [];
   const kind = child.kind ?? 'implement';
-  if (kind !== 'implement') {
-    lines.push(
-      `- Kind: ${kind}${kind === 'review' ? ' — you review the work named below and give a verdict; you do not implement it' : kind === 'research' ? ' — you read and report; you change nothing in the repository' : ' — you write the plan; you change no code'}`,
-    );
+  if (kind === 'review') {
+    lines.push('- Kind: review — you review the work named below and give a verdict; you do not implement it');
   }
   if (child.review_of?.length) lines.push(`- Review of: ${child.review_of.join(', ')}`);
   if (child.scope) lines.push(`- Scope: ${child.scope}`);
@@ -145,27 +106,9 @@ export function childTaskEnvelope(
   if (child.required_evidence) lines.push(`- Required evidence: ${child.required_evidence}`);
   if (child.retry_limit !== undefined) lines.push(`- Retry limit: ${child.retry_limit}`);
   if (parent.branch) lines.push(`- Parent branch (your fork point): ${parent.branch}`);
-  lines.push(`- Ordered by: the ${roleLabel(parent.role)} on run ${parent.id}`);
+  lines.push(`- Ordered by: run ${parent.id}`);
   lines.push(...extraLines);
   return `${child.objective}\n\n## Task order\n${lines.join('\n')}`;
-}
-
-/**
- * The claude sub-agent tools a CENTURION needs (spec Q2): its legionaries ARE the backend's own
- * sub-agents, so a centurion whose `allowedTools` omits `Task` has no century at all — it would
- * read its role prompt, try to dispatch, and be denied by its own tool policy.
- *
- * Additive and claude-only: codex/opencode ignore `allowedTools` entirely (#430) and have no
- * equivalent tool, and the centurion prompt already says to do the work itself there.
- */
-export function unitSubagentTools(
-  base: readonly string[],
-  role: UnitRole | undefined,
-  backend: RunnerId,
-): string[] {
-  if (role !== 'centurion' || backend !== 'claude') return [...base];
-  const missing = ['Task', 'Agent'].filter((tool) => !base.includes(tool));
-  return missing.length ? [...base, ...missing] : [...base];
 }
 
 /** Lines of one markdown section of a handoff file, the way `handoffProgressExcerpt` reads the
@@ -187,7 +130,7 @@ export function handoffSectionExcerpt(text: string, header: string, maxLines = 4
 /** What a settled run's cezar status means as a REPORT status, for a child that never emitted a
  *  `CEZ:REPORT` of its own. `review` is work finished and waiting for a human, not a failure;
  *  `cancelled` is neither done nor failed — somebody stopped it, which is a block. */
-function statusToReportStatus(status: string): UnitReport['status'] {
+function statusToReportStatus(status: string): DispatchReport['status'] {
   if (status === 'done' || status === 'review') return 'done';
   if (status === 'failed') return 'failed';
   if (status === 'cancelled') return 'blocked';
@@ -205,15 +148,15 @@ function statusToReportStatus(status: string): UnitReport['status'] {
  */
 export function childSettleReport(
   child: RunRecord,
-  context: { role: UnitRole; resumeNotes?: string },
-): { text: string; report: UnitReport } {
-  const own = child.unit?.report;
+  context: { resumeNotes?: string } = {},
+): { text: string; report: DispatchReport } {
+  const own = child.dispatch?.report;
   // A run that settled while still parked on its own question never got its answer: that is a
   // BLOCK, whatever cezar's terminal status says. A restart force-settles every `waiting` run as
   // `done`, and reporting that upward as success would turn "I stopped and asked before doing
   // something irreversible" into a clean `done` nobody ever answered — the Guard's whole premise.
-  const unanswered = own ? undefined : child.unit?.pendingAsk;
-  const report: UnitReport =
+  const unanswered = own ? undefined : child.dispatch?.pendingAsk;
+  const report: DispatchReport =
     own ??
     (unanswered
       ? ({
@@ -223,7 +166,7 @@ export function childSettleReport(
           side_effects: [],
           errors: child.error ? [child.error] : [],
           suggestions: [],
-        } satisfies UnitReport)
+        } satisfies DispatchReport)
       : ({
           status: statusToReportStatus(child.status),
           result:
@@ -234,7 +177,7 @@ export function childSettleReport(
           side_effects: [],
           errors: child.error ? [child.error] : [],
           suggestions: [],
-        } satisfies UnitReport));
+        } satisfies DispatchReport));
 
   const where = child.branch
     ? `${child.id}, branch ${child.branch}${child.baseBranch ? ` off ${child.baseBranch}` : ''}`
@@ -245,27 +188,27 @@ export function childSettleReport(
   if (report.side_effects.length) parts.push(`side effects: ${report.side_effects.join(' · ')}`);
   if (report.verdict) parts.push(`verdict: ${report.verdict}`);
   if (report.recommended_next_action) parts.push(`recommended next: ${report.recommended_next_action}`);
-  if (report.suggestions.length) parts.push(`suggestions for the mission: ${report.suggestions.join(' · ')}`);
+  if (report.suggestions.length) parts.push(`suggestions for the root: ${report.suggestions.join(' · ')}`);
   if (child.costUsd !== undefined) parts.push(`cost ${usd(child.costUsd)}`);
   if (child.diffStat) {
     parts.push(`diff ${child.diffStat.files} files, +${child.diffStat.adds} -${child.diffStat.dels}`);
   }
-  const text = `Report from ${roleLabel(context.role)} "${child.title}" (${where}): ${parts.join('; ')}`;
+  const text = `Report from task "${child.title}" (${where}): ${parts.join('; ')}`;
   return { text, report };
 }
 
 /** Append a report to a parent's pending list, keeping the newest `MAX_PENDING_REPORTS`. */
-export function withPendingReport(unit: RunUnit, entry: UnitPendingReport): RunUnit {
-  const pendingReports = [...(unit.pendingReports ?? []), entry].slice(-MAX_PENDING_REPORTS);
-  return { ...unit, pendingReports };
+export function withPendingReport(dispatch: RunDispatch, entry: DispatchPendingReport): RunDispatch {
+  const pendingReports = [...(dispatch.pendingReports ?? []), entry].slice(-MAX_PENDING_REPORTS);
+  return { ...dispatch, pendingReports };
 }
 
 /**
  * The block prepended to a parent's prompt when its session opens holding pending reports
- * (spec Q7). Rendered as prose rather than JSON for the same reason the delivered message is:
+ * . Rendered as prose rather than JSON for the same reason the delivered message is:
  * a commander reads its children's reports, it does not parse them.
  */
-export function pendingReportsBlock(reports: readonly UnitPendingReport[]): string | undefined {
+export function pendingReportsBlock(reports: readonly DispatchPendingReport[]): string | undefined {
   if (reports.length === 0) return undefined;
   const lines = reports.map((entry) => {
     const parts = [`status ${entry.report.status}`, entry.report.result];
@@ -273,5 +216,5 @@ export function pendingReportsBlock(reports: readonly UnitPendingReport[]): stri
     if (entry.report.errors.length) parts.push(`errors: ${entry.report.errors.join(' · ')}`);
     return `- "${entry.title}" (${entry.fromRunId}, ${entry.at}): ${parts.join('; ')}`;
   });
-  return `## Reports from your units\n${lines.join('\n')}`;
+  return `## Reports from your dispatched tasks\n${lines.join('\n')}`;
 }

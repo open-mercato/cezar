@@ -16,7 +16,6 @@ import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-ro
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
 import { InboxRoute } from './routes/inbox'
-import { MissionsLoading } from './routes/missions/missions-loading'
 import { NewTaskRoute } from './routes/new-task'
 import { NotFoundRoute } from './routes/not-found'
 import { RepoGitLoading } from './routes/repo-git/repo-git-loading'
@@ -83,18 +82,6 @@ const WorkflowsRoute = lazy(() =>
  *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
  *  bundle as a static Settings section). */
 const SkillsRoute = lazy(() => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
-
-/** Lazy because units are OPT-IN (spec `2026-09-08-units-hierarchy`, Q1): on a server without
- *  `CEZ_UNITS=1` these three surfaces are unreachable, and a static import would still charge
- *  every visitor for them — including the mission composer's engine pickers. The three share a
- *  chunk on purpose: they import each other's frame, and anyone who opens one opens the others. */
-const MissionsRoute = lazy(() =>
-  import('./routes/missions/missions').then((m) => ({ default: m.MissionsRoute })),
-)
-const NewMissionRoute = lazy(() =>
-  import('./routes/missions/new-mission').then((m) => ({ default: m.NewMissionRoute })),
-)
-const GuardRoute = lazy(() => import('./routes/missions/guard').then((m) => ({ default: m.GuardRoute })))
 
 /** `/settings/skills` moved to the top-level `/skills` (out of the Settings shell). Redirect —
  *  preserving the `?skill=` selection and any hash — so pasted links and saved bookmarklets
@@ -287,11 +274,6 @@ const PAGE_TITLE_ROUTES = [
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
-  // Before the area pattern below: the list is first-match-wins, and the composer deserves its
-  // own title the way `/new` has one.
-  { pattern: '/missions/new', pageLabel: 'New mission' },
-  { pattern: '/missions/*', pageLabel: 'Missions' },
-  { pattern: '/guard', pageLabel: 'Guard' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
   { pattern: '/workflows/*', pageLabel: 'Workflows' },
@@ -465,34 +447,6 @@ export function AppRoutes() {
         <Route path="automations/new" element={<AutomationsRoute mode="new" />} />
         <Route path="automations/:automationId" element={<AutomationsRoute mode="edit" />} />
         <Route path="automations/:automationId/log" element={<AutomationsRoute mode="log" />} />
-
-        {/* Units (spec `2026-09-08-units-hierarchy`). The nav items are capability-gated in the
-            shell; the ROUTES stay registered so a pasted link renders the honest "units are off"
-            explainer instead of a 404 — the same contract the GitHub tab keeps. */}
-        <Route
-          path="missions"
-          element={
-            <Suspense fallback={<MissionsLoading />}>
-              <MissionsRoute />
-            </Suspense>
-          }
-        />
-        <Route
-          path="missions/new"
-          element={
-            <Suspense fallback={<MissionsLoading />}>
-              <NewMissionRoute />
-            </Suspense>
-          }
-        />
-        <Route
-          path="guard"
-          element={
-            <Suspense fallback={<MissionsLoading />}>
-              <GuardRoute />
-            </Suspense>
-          }
-        />
 
         {/* The skills catalog (R6 Step 1.4) — its own top-level surface, no settings sub-nav.
             `/settings/skills` redirects here (below) so pasted links keep working. */}

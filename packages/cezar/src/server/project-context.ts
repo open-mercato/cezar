@@ -214,7 +214,7 @@ export class ProjectContexts {
       ?? AutomationStore.open(dataDir);
     reconcileAutomationReceipts(automationStore, store);
     this.notifyStoreCreated(store);
-    const manager = new RunManager(store, project.root, { semaphore: this.semaphore });
+    const manager = new RunManager(store, project.root, { semaphore: this.semaphore, projectId: project.id });
     try {
       const launchKey = ensureLaunchKey(dataDir);
       // Startup reconcile (spec 006) + count-based retention (#483) — the same

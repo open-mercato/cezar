@@ -37,8 +37,6 @@ let autonomousArmed = false;
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
 const AUTONOMOUS_NUDGE_PREFIX = 'Continue working autonomously';
-// Must stay a prefix of `MARKER_REFUSAL_PREFIX` in `src/workflows/run.ts` (same coupling rule).
-const MARKER_REFUSAL_PREFIX = 'cez refused a control marker';
 
 // A tiny generated PNG (320x200) standing in for a browser screenshot.
 const MOCK_SCREENSHOT_B64 =
@@ -91,26 +89,6 @@ function writeHandoffAndTodo() {
 async function respond(userText, imageCount) {
   turn += 1;
   await sleep(250);
-  // `mock:report` → a valid CEZ:REPORT payload, the unit hierarchy's upward channel (spec
-  // 2026-09-08-units-hierarchy). It is followed by CEZ:DONE the way the role prompts tell a unit
-  // run to end: report, then done on the next line — which is also the ordering the engine has to
-  // survive, since both markers are parsed from the end of the same turn text.
-  const reportMarker = userText.includes('mock:report')
-    ? '\n\nCEZ:REPORT ' +
-      JSON.stringify({
-        status: 'done',
-        result: 'Took the left flank; the login handler now answers 401 (dry run).',
-        evidence: ['npm test -- auth → 12 passed', 'src/auth/login.ts:42'],
-        confidence: 0.9,
-        side_effects: [],
-        errors: [],
-        // `mock:report-suggest` → the same report carrying upward suggestions, so the engine's
-        // forwarding of them to the mission root's inbox is testable dry.
-        ...(userText.includes('mock:report-suggest')
-          ? { suggestions: ['split billing out of this order — it is a mission of its own'] }
-          : {}),
-      })
-    : '';
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child
@@ -118,68 +96,13 @@ async function respond(userText, imageCount) {
   // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
   // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
   if (userText.includes('mock:autonomous')) autonomousArmed = true;
-  // A refusal delivered back into the session (`MARKER_REFUSAL_PREFIX` in `src/workflows/run.ts`,
-  // which this script cannot import — `units-engine.test.ts` asserts the coupling) is answered
-  // with CEZ:DONE: the dry run proves the model GOT another turn and settles instead of looping.
-  // An inbox digest delivered into the session is answered with CEZ:DONE for the same reason
-  // as a refusal: the dry run proves the message reached the model, then settles.
+  // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
+  // message reached the model, then settles.
   const doneMarker =
     userText.includes('mock:done') ||
-    userText.includes('mock:report') ||
-    userText.includes(MARKER_REFUSAL_PREFIX) ||
-    userText.includes('## Mission inbox') ||
+    userText.includes('## Tree inbox') ||
     (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
       ? '\n\nCEZ:DONE'
-      : '';
-  // `mock:spawn` → a valid CEZ:SPAWN with two children, so the delegation path (children created
-  // one rank down, the parent parked as a monitor) is testable dry. `mock:spawn-bad` → a
-  // MALFORMED payload, proving graceful degradation: a transcript note, no children, and the
-  // parent parks exactly as it would have without the marker.
-  //
-  // The children's objectives deliberately carry `mock:report` and NOT `mock:spawn`: a child
-  // whose own task text asked for a spawn would delegate again on its first turn, and the fixture
-  // would fan out until the in-flight cap stopped it.
-  // `mock:spawn-direct` → a caesar spawning CENTURIONS directly ("rank"), one of them a reviewer
-  // ("kind": "review" of the other), so flexible composition is testable dry.
-  const spawnMarker = userText.includes('mock:spawn-bad')
-    ? '\n\nCEZ:SPAWN {"children":[{"title":"broken"'
-    : userText.includes('mock:spawn-direct')
-      ? '\n\nCEZ:SPAWN ' +
-        JSON.stringify({
-          children: [
-            { title: 'Implement the flank', objective: 'mock:report do it', rank: 'centurion', max_cost: 2 },
-            {
-              title: 'Review the flank',
-              objective: 'mock:report judge it',
-              rank: 'centurion',
-              kind: 'review',
-              review_of: ['cez/00000000'],
-              max_cost: 1,
-            },
-          ],
-        })
-    : userText.includes('mock:spawn')
-      ? '\n\nCEZ:SPAWN ' +
-        JSON.stringify({
-          children: [
-            {
-              title: 'Take the left flank',
-              objective: 'mock:report handle the left half of the objective',
-              scope: 'src/left/**',
-              max_cost: 2.5,
-              success_criteria: 'the left half compiles and its tests pass',
-              retry_limit: 1,
-            },
-            {
-              title: 'Take the right flank',
-              objective: 'mock:report handle the right half of the objective',
-              scope: 'src/right/**',
-              max_cost: 2.5,
-              success_criteria: 'the right half compiles and its tests pass',
-              retry_limit: 1,
-            },
-          ],
-        })
       : '';
   // `mock:monitoring` → the reply ends with CEZ:MONITORING, the "still working
   // on downstream work" marker (#490), so the monitoring-status path is testable dry.
@@ -559,7 +482,7 @@ async function respond(userText, imageCount) {
       type: 'assistant',
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${spawnMarker}${reportMarker}${doneMarker}${monitoringMarker}${askMarker}` }],
+        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}` }],
         usage: { input_tokens: 300, output_tokens: 90 },
       },
     });
@@ -579,7 +502,7 @@ async function respond(userText, imageCount) {
     type: 'assistant',
     message: {
       role: 'assistant',
-      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${spawnMarker}${reportMarker}${doneMarker}${monitoringMarker}${askMarker}` }],
+      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}` }],
       usage: { input_tokens: 200, output_tokens: 60 },
     },
   });
