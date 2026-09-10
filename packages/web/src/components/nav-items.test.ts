@@ -22,11 +22,6 @@ describe('activeNavPath', () => {
     ['/workflows', '/workflows'],
     ['/workflows/ship-it', '/workflows'],
 
-    // The units area: the composer is still the Missions item's, and the Guard is its own.
-    ['/missions', '/missions'],
-    ['/missions/new', '/missions'],
-    ['/guard', '/guard'],
-
     // Skills is its own top-level surface now (was /settings/skills).
     ['/skills', '/skills'],
 
@@ -75,8 +70,6 @@ describe('NAV_ITEMS', () => {
       'Git',
       'GitHub',
       'Automations',
-      'Missions',
-      'Guard',
       'Skills',
       'Workflows',
       'Settings',
@@ -95,17 +88,14 @@ describe('NAV_ITEMS', () => {
 /** The gates: the GitHub item exists exactly while health reports the forge driver (R6 Step 1.1),
  *  the Inbox item exactly while it reports the opt-in `capabilities.followups` (#471), and the
  *  Automations item exactly while it reports a forge AND the opt-in `capabilities.automations`
- *  (#801), and the Missions + Guard items exactly while it reports `capabilities.units` (spec
- *  `2026-09-08-units-hierarchy`). Each gate owns ONLY its own items, and all default to absent
- *  while health is unknown. */
+ *  (#801). Each gate owns ONLY its own items, and all default to absent while health is
+ *  unknown. */
 describe('visibleNavItems', () => {
   const labelsOf = (opts?: Parameters<typeof visibleNavItems>[0]) =>
     visibleNavItems(opts).map((item) => item.label)
 
   it('with everything available, the full nav renders', () => {
-    expect(visibleNavItems({ forge: true, inbox: true, automations: true, units: true })).toEqual(
-      NAV_ITEMS,
-    )
+    expect(visibleNavItems({ forge: true, inbox: true, automations: true })).toEqual(NAV_ITEMS)
   })
 
   it('without a forge, the GitHub AND Automations items drop out', () => {
@@ -149,35 +139,8 @@ describe('visibleNavItems', () => {
     expect(labelsOf({ forge: true, inbox: false })).not.toContain('Automations')
   })
 
-  it('without the units opt-in, exactly Missions and Guard drop out', () => {
-    expect(labelsOf({ forge: true, inbox: true, automations: true, units: false })).toEqual([
-      'Tasks',
-      'Inbox',
-      'Git',
-      'GitHub',
-      'Automations',
-      'Skills',
-      'Workflows',
-      'Settings',
-    ])
-  })
-
-  // Both units items ride ONE capability — a server with the hierarchy on has a tree to show and
-  // a queue that can fill; one without has neither, so they can never appear apart.
-  it('the units opt-in brings back Missions and Guard together', () => {
-    expect(labelsOf({ units: true })).toEqual([
-      'Tasks',
-      'Git',
-      'Missions',
-      'Guard',
-      'Skills',
-      'Workflows',
-      'Settings',
-    ])
-  })
-
   it('drops all three when nothing is available', () => {
-    expect(labelsOf({ forge: false, inbox: false, automations: false, units: false })).toEqual([
+    expect(labelsOf({ forge: false, inbox: false, automations: false })).toEqual([
       'Tasks',
       'Git',
       'Skills',
@@ -187,19 +150,15 @@ describe('visibleNavItems', () => {
   })
 
   it('defaults to absent — the nav claims nothing before health answers', () => {
-    expect(labelsOf()).toEqual(
-      labelsOf({ forge: false, inbox: false, automations: false, units: false }),
-    )
+    expect(labelsOf()).toEqual(labelsOf({ forge: false, inbox: false, automations: false }))
   })
 
   it('never invents an item — the result is always a subset of NAV_ITEMS, in order', () => {
     for (const forge of [true, false]) {
       for (const inbox of [true, false]) {
         for (const automations of [true, false]) {
-          for (const units of [true, false]) {
-            const items = visibleNavItems({ forge, inbox, automations, units })
-            expect(NAV_ITEMS.filter((i) => items.includes(i))).toEqual(items)
-          }
+          const items = visibleNavItems({ forge, inbox, automations })
+          expect(NAV_ITEMS.filter((i) => items.includes(i))).toEqual(items)
         }
       }
     }

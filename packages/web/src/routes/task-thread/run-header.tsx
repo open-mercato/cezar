@@ -45,7 +45,6 @@ import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
 import { TabLink } from '@/components/tab-link'
-import { UnitRoleChip } from '@/components/unit-role-chip'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -220,9 +219,10 @@ export function RunHeader({
         {/* Outside the disclosure on purpose: "this run wakes itself up at 14:20" is status, not
             metadata — it belongs with the pill above, not behind a tap with the diff stats. */}
         <MonitoringSchedule run={run} />
-        {/* Also outside it, for the same reason: a commander's children are what this run IS
-            doing right now, not metadata about how it started. */}
-        <UnitChildrenLine run={run} />
+        {/* Also outside it, for the same reason: who ordered this task, and what it dispatched,
+            are what the run IS doing right now, not metadata about how it started. */}
+        <DispatchParentLine run={run} />
+        <DispatchChildrenLine run={run} />
 
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
@@ -599,25 +599,6 @@ function MetaRow({
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
-  // A unit run's RANK, and — on a child — the way back up the tree. Provenance, like the
-  // automation chip below, so it is shown whether or not `capabilities.units` is still on: a run
-  // started under a hierarchy keeps its `unit` forever, and hiding the rank on a server that
-  // later turned the flag off would leave a thread that cannot explain who spawned it.
-  if (run.unit) {
-    parts.push(<UnitRoleChip key="unit-role" role={run.unit.role} className="py-px" />)
-    if (run.unit.parentRunId) {
-      parts.push(
-        <Link
-          key="unit-parent"
-          to={`/tasks/${run.unit.parentRunId}`}
-          data-slot="unit-parent"
-          className="rounded-sm border border-border bg-card px-1.5 py-px text-[11px] font-medium hover:text-foreground"
-        >
-          ↑ parent
-        </Link>,
-      )
-    }
-  }
   if (run.branch) {
     parts.push(
       <span
@@ -763,28 +744,63 @@ function MetaRow({
 }
 
 /**
- * "Units: <child> · <child> …" — one collapsed row naming the runs this one spawned (spec
- * `2026-09-08-units-hierarchy` §Cockpit).
+ * "Dispatched by <parent>" — one row linking a dispatched task back to the task that ordered it
+ * (spec `.ai/specs/2026-09-10-dispatch.md`).
+ *
+ * Provenance, so it renders whether or not `capabilities.dispatch` is still on: a run created by
+ * a dispatch keeps its `dispatch.parentRunId` forever, and hiding the line on a server that later
+ * turned the flag off would leave a thread that cannot explain who ordered it. The parent's TITLE
+ * comes from the run list this page already holds; a parent outside that list (another project,
+ * or pruned) still gets its link, labelled by its id.
+ */
+function DispatchParentLine({ run }: { run: ApiRun }) {
+  const runs = useRuns()
+  const parentRunId = run.dispatch?.parentRunId
+  if (parentRunId === undefined) return null
+  const parent = (runs.data ?? []).find((candidate) => candidate.id === parentRunId)
+  const attention = parent ? deriveAttention(parent) : null
+  return (
+    <div
+      data-slot="dispatch-parent-line"
+      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+    >
+      <span className="shrink-0">Dispatched by</span>
+      <Link
+        to={`/tasks/${parentRunId}`}
+        data-slot="dispatch-parent"
+        data-run-id={parentRunId}
+        className="inline-flex min-w-0 items-center gap-1.5 truncate hover:text-foreground"
+      >
+        {attention ? <StatusDot tone={attention.tone} pulse={attention.pulse} /> : null}
+        <span className="truncate">{parent ? runTitle(parent) : parentRunId}</span>
+      </Link>
+    </div>
+  )
+}
+
+/**
+ * "Subtasks: <child> · <child> …" — one collapsed row naming the tasks this one dispatched.
  *
  * Derived from the run list this page already holds rather than fetched: a child's link is its
  * id and its dot is its status, both of which `useRuns()` carries and keeps live over the run
- * stream. Nothing renders for a run with no children — which is every run on a server that never
- * turned units on, and every centurion (whose legionaries are its backend's own sub-agents, not
- * runs, and belong to the agents dock instead).
+ * stream. Nothing renders for a run that dispatched nothing — which is every run on a server
+ * that never turned dispatch on.
  *
- * Deliberately ONE row, truncated: the full tree is `/missions`, and a header that grew a list
+ * Deliberately ONE row, truncated: the full tree is the task list, and a header that grew a list
  * would push the transcript off the screen exactly when a parent has the most children.
  */
-function UnitChildrenLine({ run }: { run: ApiRun }) {
+function DispatchChildrenLine({ run }: { run: ApiRun }) {
   const runs = useRuns()
-  const children = (runs.data ?? []).filter((candidate) => candidate.unit?.parentRunId === run.id)
-  if (run.unit === undefined || children.length === 0) return null
+  const children = (runs.data ?? []).filter(
+    (candidate) => candidate.dispatch?.parentRunId === run.id,
+  )
+  if (children.length === 0) return null
   return (
     <div
-      data-slot="unit-children"
+      data-slot="dispatch-children"
       className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
     >
-      <span className="shrink-0">Units</span>
+      <span className="shrink-0">Subtasks</span>
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden">
         {children.map((child) => {
           const attention = deriveAttention(child)
@@ -792,7 +808,7 @@ function UnitChildrenLine({ run }: { run: ApiRun }) {
             <Link
               key={child.id}
               to={`/tasks/${child.id}`}
-              data-slot="unit-child"
+              data-slot="dispatch-child"
               data-run-id={child.id}
               title={`${runTitle(child)} — ${attention.label}`}
               className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"

@@ -1,5 +1,8 @@
 # Units — a hierarchical army of runs (MVP)
 
+> **Superseded (2026-09-10):** the missions/units feature was removed and replaced by task dispatch — see `2026-09-10-dispatch.md` and `units-research/00-verdict.md`. Kept for the record.
+
+
 > Slug: `units-hierarchy` · Status: implementing · Opt-in: `CEZ_UNITS=1` → `capabilities.units`
 
 ## TLDR

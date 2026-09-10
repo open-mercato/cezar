@@ -49,15 +49,12 @@ export const capabilitiesSchema = z.object({
    */
   automations: z.boolean(),
   /**
-   * `true` means `CEZ_UNITS=1` opted this server into the unit hierarchy (spec
-   * `.ai/specs/2026-09-08-units-hierarchy.md`). Off — the default — the whole feature is absent:
-   * no `Missions` nav item anywhere it is rendered, the `/api/v1/…/{missions,units/*}` family
-   * answers `409`, the `CEZ:SPAWN` / `CEZ:REPORT` markers are not parsed at turn end, and no role
-   * prompt is composed into a run.
-   *
-   * REQUIRED for the same reason as `automations` above: this server always sends it.
+   * `true` means `CEZ_DISPATCH=1` opted this server into task dispatch (spec
+   * `.ai/specs/2026-09-10-dispatch.md`): every task learns the `cez task` CLI in its system
+   * prompt and the `/runs/:id/{dispatch,report}` routes answer. Off — the default — those routes
+   * answer 409 and no prompt mentions dispatching.
    */
-  units: z.boolean(),
+  dispatch: z.boolean(),
   /**
    * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
    * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation

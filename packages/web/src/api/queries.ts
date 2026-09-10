@@ -75,10 +75,6 @@ import {
   sendProjectRunMessage,
   putAgentConfigFile,
   retryProviderAuth,
-  getUnitPrompts,
-  putUnitPrompt,
-  resetUnitPrompt,
-  startMission,
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
@@ -103,9 +99,6 @@ import type {
   RunRecord,
   SelectAgentProfileInput,
   SetAgentConfigInput,
-  StartMissionInput,
-  UnitPrompt,
-  UnitRole,
   UpdateAgentProfileInput,
   UpdateProjectInput,
 } from '@open-mercato/cezar-api-client'
@@ -219,16 +212,6 @@ export const queryKeys = {
   githubMergeState: (number: number) => [queryScope(), 'github', 'merge-state', number] as const,
   get openTargets() {
     return [queryScope(), 'open-targets'] as const
-  },
-  /** The units family (spec `2026-09-08-units-hierarchy`). Hierarchical like `runs`, so a
-   *  future second units read (the ledger) invalidates alongside the prompts under one key.
-   *  The mission TREE has no key of its own on purpose: it is derived from `useRuns()` by
-   *  `lib/missions.ts`, so it is already live over the run stream. */
-  units: {
-    get all() {
-      return [queryScope(), 'units'] as const
-    },
-    prompts: () => [queryScope(), 'units', 'prompts'] as const,
   },
 }
 
@@ -785,75 +768,6 @@ export function useRuns() {
   return useQuery({
     queryKey: queryKeys.runs.list(),
     queryFn: ({ signal }) => getRuns({ signal }),
-  })
-}
-
-/**
- * The three role prompts (spec `2026-09-08-units-hierarchy` §Role prompts).
- *
- * `enabled` rather than always-on: every `/units/*` route answers 409 while `capabilities.units`
- * is off, and a fetch fired before health has answered would paint that refusal as an error over
- * the honest "units are off" explainer. Settings → Units passes the capability, so the request
- * only ever leaves on a server that has the family.
- *
- * `staleTime` because a prompt file changes when someone edits it here — and this hook's own
- * mutations write the answer straight into the cache, so a refetch would only re-fetch what it
- * already knows.
- */
-export function useUnitPrompts(enabled = true) {
-  return useQuery({
-    queryKey: queryKeys.units.prompts(),
-    queryFn: ({ signal }) => getUnitPrompts({ signal }),
-    enabled,
-    staleTime: 60_000,
-  })
-}
-
-/** Replace one role's prompt in the cached list with the entry the server answered — the
- *  `edited`/`default` badge follows the WRITE rather than an optimistic guess. Shared by the
- *  save and restore mutations, which differ only in which route they call. */
-function patchCachedUnitPrompt(queryClient: QueryClient, saved: UnitPrompt): void {
-  queryClient.setQueryData(
-    queryKeys.units.prompts(),
-    (current: { prompts: UnitPrompt[] } | undefined) =>
-      current === undefined
-        ? current
-        : {
-            ...current,
-            prompts: current.prompts.map((entry) => (entry.role === saved.role ? saved : entry)),
-          },
-  )
-}
-
-/** Save one role's prompt override. Errors are the CALLER's to surface (the section toasts). */
-export function useSaveUnitPrompt() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: ({ role, text }: { role: UnitRole; text: string }) => putUnitPrompt(role, text),
-    onSuccess: (saved) => patchCachedUnitPrompt(queryClient, saved),
-  })
-}
-
-/** Restore one role's shipped default. The response IS the restored prompt, so the editor can
- *  repaint from it without a refetch. */
-export function useResetUnitPrompt() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (role: UnitRole) => resetUnitPrompt(role),
-    onSuccess: (restored) => patchCachedUnitPrompt(queryClient, restored),
-  })
-}
-
-/**
- * Start a mission (`POST /missions`). Invalidates the run list because the mission's root run —
- * and, for a legionary, the plain task — is a new row in it; the tree the Missions page paints
- * is derived from that same list, so one invalidation refreshes both.
- */
-export function useStartMission() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (body: StartMissionInput) => startMission(body),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 }
 

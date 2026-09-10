@@ -26,6 +26,18 @@ emit({ type: 'system', subtype: 'init' });
 
 let turn = 0;
 
+// `mock:autonomous` → the autonomous auto-nudge fixture (#autonomous). Cezar's nudge text is
+// fixed and carries no `mock:` marker, so a marker-per-message mock could never end such a
+// session: the first turn would end plainly, every nudge would end plainly, and the run would
+// only stop at MAX_AUTO_CONTINUES. This one flag ARMS the session instead — the turn that
+// answers the nudge ends with CEZ:DONE — so a dry-run test can watch a nudged run complete
+// rather than time out.
+let autonomousArmed = false;
+// Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
+// and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
+// coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
+const AUTONOMOUS_NUDGE_PREFIX = 'Continue working autonomously';
+
 // A tiny generated PNG (320x200) standing in for a browser screenshot.
 const MOCK_SCREENSHOT_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAACMklEQVR42u3csQnAIBRFUQdJY+b4tfvP4AhCLKyyghAMMRw4Ezz/bU0RBdhUMgEIGBAwIGAQMCBgQMCAgEHAgIABAYOAAQEDAgYEDAIGBAwsCLhfDdiUgEHAgIABAYOAAQEDAgYEDAIGBAwIGAT8vlEr/ImAQcACBgELGAQsYAQsYBCwgEHAAgYBe3IELGAQsIBBwAJGwAIGAQsYBCxgELCAEbCAQcACBgELGAQMAhYwCFjAIGABI2D/QgMCBgEDAgYEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgIBBwCYAAQMCBgQMAgYEDAgYEDAIGBAwIGAQMCBgQMCAgEHAgIABAQMCBgEDAgYEDAIGBAwIGBAwCBgQMCBgQMAgYEDAgIBBwICAAQEDAgYBAwIGBAwCtgIIGBAwIGAQMCBgQMCAgEHAgIABAYOAeejMB/McjIAFLGABW0HAAhYwmhSwgAUsYAQsYAELGAELWMACRsACFrCAEbCABSxgBCxgAQtYwAhYwAIWMAIWsIAFjIAFLGABI2ABC1jACFjAAhYwAhawgAWMgAUsYAEjYAELWMACRsACFrCAEbCABSxgBCxgAQsYAQtYwAJGwAIWMCBgQMAgYEDAgIBBwICAAQEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgYEDAIGBAwICAQcCAgAEBAwIGAQMCBgQMCBgEDAgYEDAIGBAwIGBAwCBgQMCAgAEBg4ABAQMCBgEDAgYEDAgYBAx8xQ1bxBr9kelHqgAAAABJRU5ErkJggg==';
@@ -77,59 +89,20 @@ function writeHandoffAndTodo() {
 async function respond(userText, imageCount) {
   turn += 1;
   await sleep(250);
-  // `mock:report` → a valid CEZ:REPORT payload, the unit hierarchy's upward channel (spec
-  // 2026-09-08-units-hierarchy). It is followed by CEZ:DONE the way the role prompts tell a unit
-  // run to end: report, then done on the next line — which is also the ordering the engine has to
-  // survive, since both markers are parsed from the end of the same turn text.
-  const reportMarker = userText.includes('mock:report')
-    ? '\n\nCEZ:REPORT ' +
-      JSON.stringify({
-        status: 'done',
-        result: 'Took the left flank; the login handler now answers 401 (dry run).',
-        evidence: ['npm test -- auth → 12 passed', 'src/auth/login.ts:42'],
-        confidence: 0.9,
-        side_effects: [],
-        errors: [],
-      })
-    : '';
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
   // a unit that has reported is finished, and a report with no done marker would leave the child
   // parked instead of settling into the report its parent is waiting for.
+  // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
+  // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
+  if (userText.includes('mock:autonomous')) autonomousArmed = true;
+  // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
+  // message reached the model, then settles.
   const doneMarker =
-    userText.includes('mock:done') || userText.includes('mock:report') ? '\n\nCEZ:DONE' : '';
-  // `mock:spawn` → a valid CEZ:SPAWN with two children, so the delegation path (children created
-  // one rank down, the parent parked as a monitor) is testable dry. `mock:spawn-bad` → a
-  // MALFORMED payload, proving graceful degradation: a transcript note, no children, and the
-  // parent parks exactly as it would have without the marker.
-  //
-  // The children's objectives deliberately carry `mock:report` and NOT `mock:spawn`: a child
-  // whose own task text asked for a spawn would delegate again on its first turn, and the fixture
-  // would fan out until the in-flight cap stopped it.
-  const spawnMarker = userText.includes('mock:spawn-bad')
-    ? '\n\nCEZ:SPAWN {"children":[{"title":"broken"'
-    : userText.includes('mock:spawn')
-      ? '\n\nCEZ:SPAWN ' +
-        JSON.stringify({
-          children: [
-            {
-              title: 'Take the left flank',
-              objective: 'mock:report handle the left half of the objective',
-              scope: 'src/left/**',
-              max_cost: 2.5,
-              success_criteria: 'the left half compiles and its tests pass',
-              retry_limit: 1,
-            },
-            {
-              title: 'Take the right flank',
-              objective: 'mock:report handle the right half of the objective',
-              scope: 'src/right/**',
-              max_cost: 2.5,
-              success_criteria: 'the right half compiles and its tests pass',
-              retry_limit: 1,
-            },
-          ],
-        })
+    userText.includes('mock:done') ||
+    userText.includes('## Tree inbox') ||
+    (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
+      ? '\n\nCEZ:DONE'
       : '';
   // `mock:monitoring` → the reply ends with CEZ:MONITORING, the "still working
   // on downstream work" marker (#490), so the monitoring-status path is testable dry.
@@ -189,8 +162,10 @@ async function respond(userText, imageCount) {
     ? '\nCEZ:PR=4242\nCEZ:ISSUE=17\nCEZ:TITLE=implementing marker refs'
     : '';
 
-  // `mock:slow` → hold the turn for ~25 s so queue states are observable.
+  // `mock:slow` → hold the turn for ~25 s so queue states are observable. `mock:pause` → ~2 s,
+  // long enough for a test to drop a file into the run's inbox before its turn ends.
   if (userText.includes('mock:slow')) await sleep(25_000);
+  else if (userText.includes('mock:pause')) await sleep(2_000);
 
   // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
   // the credential failure in an `is_error` result even though its subtype is
@@ -507,7 +482,7 @@ async function respond(userText, imageCount) {
       type: 'assistant',
       message: {
         role: 'assistant',
-        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${spawnMarker}${reportMarker}${doneMarker}${monitoringMarker}${askMarker}` }],
+        content: [{ type: 'text', text: `Done with the first pass — opened a draft PR: https://github.com/open-mercato/demo/pull/123. Anything to adjust? (dry-run mock)${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}` }],
         usage: { input_tokens: 300, output_tokens: 90 },
       },
     });
@@ -527,7 +502,7 @@ async function respond(userText, imageCount) {
     type: 'assistant',
     message: {
       role: 'assistant',
-      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${spawnMarker}${reportMarker}${doneMarker}${monitoringMarker}${askMarker}` }],
+      content: [{ type: 'text', text: `Follow-up #${turn - 1} received: "${userText.slice(0, 100)}".${imgNote} Applied (dry run).${refsMarkers}${doneMarker}${monitoringMarker}${askMarker}` }],
       usage: { input_tokens: 200, output_tokens: 60 },
     },
   });

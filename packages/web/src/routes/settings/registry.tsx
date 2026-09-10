@@ -9,7 +9,6 @@ import {
   IdCardIcon,
   PackageCheckIcon,
   KeyboardIcon,
-  NetworkIcon,
   NotebookPenIcon,
   PaletteIcon,
 } from 'lucide-react'
@@ -27,7 +26,6 @@ import { ProjectsSection } from './projects-section'
 import { PromptTemplatesSection } from './prompt-templates-section'
 import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
-import { UnitsSection } from './units-section'
 import { WorktreesSection } from './worktrees-section'
 
 /**
@@ -59,7 +57,6 @@ export type SettingsSectionId =
   | 'prompt-templates'
   | 'keyboard'
   | 'skills'
-  | 'units'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -134,14 +131,6 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
     component: PromptTemplatesSection,
     scope: 'project',
   },
-  {
-    id: 'units',
-    title: 'Units',
-    description: 'The system prompt each rank of a mission is given.',
-    icon: NetworkIcon,
-    component: UnitsSection,
-    scope: 'project',
-  },
   // ---- global scope (`/settings/global/…`) — the user and the machine, in mockup order -----
   {
     id: 'appearance',
@@ -209,17 +198,12 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  */
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Partial<Pick<Capabilities, 'singleProject' | 'units'>>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>
       !section.hidden &&
       section.scope === scope &&
-      !(capabilities?.singleProject === true && section.id === 'projects') &&
-      // Units are opt-in (`CEZ_UNITS=1`, spec `2026-09-08-units-hierarchy`). Absent capabilities
-      // mean "health has not answered", and the honesty rule the nav follows applies here too:
-      // a section whose every request would 409 must not be listed until the server says it is
-      // there. The ROUTE stays registered, so a pasted URL renders the section's own explainer.
-      !(section.id === 'units' && capabilities?.units !== true),
+      !(capabilities?.singleProject === true && section.id === 'projects'),
   )
 }

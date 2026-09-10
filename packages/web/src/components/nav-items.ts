@@ -2,9 +2,7 @@ import {
   GitBranchIcon,
   InboxIcon,
   ListChecksIcon,
-  NetworkIcon,
   SettingsIcon,
-  ShieldCheckIcon,
   SparklesIcon,
   WorkflowIcon,
   ZapIcon,
@@ -34,11 +32,6 @@ export type NavItem = {
    *  Independent of `forge`: the Automations item carries BOTH, because the feature needs a
    *  forge to poll AND the operator's opt-in to exist at all. See `visibleNavItems`. */
   automations?: boolean
-  /** Units-gated (spec `2026-09-08-units-hierarchy`): the item exists only while `/api/health`
-   *  reports `capabilities.units` — the hierarchy of runs is opt-in via `CEZ_UNITS=1`. Carried by
-   *  BOTH the Missions and the Guard items: the Guard is a filtered view of the same tree, so a
-   *  server without units has nothing for it to show. See `visibleNavItems`. */
-  units?: boolean
 }
 
 /** The sidebar nav from the spec's "App shell & navigation" section, in mockup order.
@@ -53,11 +46,6 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], forge: true, automations: true },
-  { to: '/missions', label: 'Missions', icon: NetworkIcon, match: ['/missions'], units: true },
-  // Its own item rather than a tab inside Missions: the Guard is what the user opens when
-  // something is waiting for THEM, and burying it a click deep is how an agent ends up parked
-  // overnight on a question nobody saw.
-  { to: '/guard', label: 'Guard', icon: ShieldCheckIcon, match: ['/guard'], units: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
   { to: '/settings', label: 'Settings', icon: SettingsIcon, match: ['/settings'] },
@@ -71,8 +59,6 @@ export type NavAvailability = {
   inbox?: boolean
   /** `capabilities.automations` — the opt-in GitHub automations (#801). */
   automations?: boolean
-  /** `capabilities.units` — the opt-in hierarchy of runs (spec `2026-09-08-units-hierarchy`). */
-  units?: boolean
 }
 
 /**
@@ -80,8 +66,7 @@ export type NavAvailability = {
  * unless the health payload says its feature is there. The forge-gated GitHub item needs the
  * forge driver (spec §"GitHub tab (forge tab)"); the Inbox item needs `capabilities.followups`,
  * which is off unless `CEZ_FOLLOWUPS=1` (#471); the Automations item needs a forge AND
- * `capabilities.automations`, which is off unless `CEZ_AUTOMATIONS=1` (#801); the Missions and
- * Guard items need `capabilities.units`, off unless `CEZ_UNITS=1`.
+ * `capabilities.automations`, which is off unless `CEZ_AUTOMATIONS=1` (#801).
  *
  * Gates are ANDed per item, never ORed, which is what lets one item carry two of them: an
  * automations opt-in on a repo with no GitHub remote still has nothing to poll.
@@ -95,13 +80,11 @@ export function visibleNavItems({
   forge = false,
   inbox = false,
   automations = false,
-  units = false,
 }: NavAvailability = {}): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
-    && (item.automations ? automations : true)
-    && (item.units ? units : true))
+    && (item.automations ? automations : true))
 }
 
 /** Does `pathname` sit inside the area rooted at `prefix`?
