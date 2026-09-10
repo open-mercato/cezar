@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
-import { RomanTooltip, UNIT_SIZE_LABELS, UNIT_SIZE_LORE, UnitRoleChip } from '@/components/unit-role-chip'
+import { UNIT_SIZE_LABELS, UnitRoleChip } from '@/components/unit-role-chip'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 import type { UnitLadder, UnitRole, UnitSize } from '@open-mercato/cezar-api-client'
@@ -211,7 +211,7 @@ export function NewMissionRoute() {
                   size === option.id && 'border-primary bg-primary/5 hover:bg-primary/5',
                 )}
               >
-                <span className="text-[13.5px] font-semibold"><RomanTooltip lore={UNIT_SIZE_LORE[option.id]}><span data-slot="mission-size-title">{option.title}</span></RomanTooltip></span>
+                <span className="text-[13.5px] font-semibold">{option.title}</span>
                 <span className="text-[12.5px] text-muted-foreground">{option.blurb}</span>
               </button>
             ))}
