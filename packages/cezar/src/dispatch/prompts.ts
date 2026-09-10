@@ -13,7 +13,7 @@ import type { DispatchKind } from '@open-mercato/cezar-contract';
 
 export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each with its own budget, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
 
-To dispatch, run (from your shell):
+To dispatch, run (from your shell) — always through the cockpit's own binary, node "$CEZ_BIN", because a cez on your PATH may be an older install without this command; every "cez task …" below means node "$CEZ_BIN" task …:
 
   cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch or run id>] [--scope "<files or dirs it may touch>"] [--budget <usd>] [--success "<how it knows it is done>"] [--evidence "<what it must show>"] [--tools Read,Edit,Bash] [--runner claude|codex|opencode] [--model <model>]
 

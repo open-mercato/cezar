@@ -885,6 +885,9 @@ export class RunManager {
       // is byte-for-byte as before.
       ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
       ...(apiUrl && this.projectId ? { CEZ_PROJECT_ID: this.projectId } : {}),
+      // The cockpit's OWN entrypoint, so an agent runs `node "$CEZ_BIN" task …` and never an older
+      // `cez` that happens to be on its PATH without the command (observed on the first live run).
+      ...(apiUrl && process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
       // The tree directory — brief, notes, inbox — for a run in a dispatch tree only.
       ...(dispatch ? { CEZ_TREE_DIR: treeDir(this.dataDir, dispatch.rootRunId) } : {}),
     };

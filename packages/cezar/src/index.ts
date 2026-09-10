@@ -285,6 +285,7 @@ async function serveCommand(
   // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
   // Set before the first run can start, read by every manager's `agentEnv` while CEZ_DISPATCH=1.
   process.env.CEZ_API_URL = `http://127.0.0.1:${port}`;
+  process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
   startServer({
     repoRoot,
     store,

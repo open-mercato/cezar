@@ -9,6 +9,9 @@ describe('the dispatch prompt', () => {
       expect(DISPATCH_PROMPT).toContain(flag);
     }
     expect(DISPATCH_PROMPT).toContain('cez task create');
+    // The first live run found an older `cez` on the agents' PATH: the prompt must route through
+    // the cockpit's own entrypoint.
+    expect(DISPATCH_PROMPT).toContain('node "$CEZ_BIN" task');
     expect(DISPATCH_PROMPT).toContain('cez task report');
     expect(DISPATCH_PROMPT).toContain('--verdict');
     expect(DISPATCH_PROMPT).toContain('--suggestions');
