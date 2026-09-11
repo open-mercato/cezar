@@ -83,7 +83,8 @@ export function cliTargetResumes(run: RunRecord, targetId: string): boolean {
 export interface RunActionFlags {
   /** waiting → close the session; review → accept the changes without a PR. Both POST /finish. */
   finish: boolean
-  /** Reopen the last agent session in-process. */
+  /** Carry the run on in-process: reopening the last agent session when there is one, otherwise a
+   *  fresh session briefed with the previous one's transcript. */
   continueRun: boolean
   /** Hand the session to a real terminal (open-in-cli). */
   terminal: boolean
@@ -108,7 +109,12 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
   const hasSession = lastSessionId(run) !== undefined
   return {
     finish: run.status === 'waiting' || run.status === 'review',
-    continueRun: !active && hasSession,
+    // Deliberately NOT gated on `hasSession`, unlike `terminal`. The server continues a run with
+    // no reattachable session by opening a fresh one on the previous session's transcript, so a
+    // task that crashed before its first spawn is still a task the user can carry forward — the
+    // whole point being that a failure never becomes a dead end. Terminal keeps the gate: handing
+    // a shell `claude --resume <id>` needs an id that exists.
+    continueRun: !active,
     terminal: !active && hasSession,
     notes: true,
     archive: !active,
@@ -141,6 +147,14 @@ export function resolveConflictsPrompt(prNumber?: number): string {
 /** The Finish button's tooltip — review-gate accept reads differently from closing a session. */
 export function finishTitle(status: RunStatus): string {
   return status === 'review' ? 'Accept the changes without a PR' : 'Close the session'
+}
+
+/** The Continue button's tooltip. One button, two promises: reattaching to a live-again session is
+ *  not the same as starting over from a replay of it, and the weaker one has to say so. */
+export function continueTitle(run: RunRecord): string {
+  return lastSessionId(run) === undefined
+    ? 'Start a new session — the previous conversation is replayed to the agent'
+    : 'Reopen the session'
 }
 
 /**

@@ -78,7 +78,14 @@ import { isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
-import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
+import {
+  cliTargetResumes,
+  cliTargetRunner,
+  continueTitle,
+  finishTitle,
+  resumeHint,
+  runActionFlags,
+} from './run-actions'
 import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
 
@@ -189,7 +196,7 @@ export function RunHeader({
               <Button
                 variant="outline"
                 size="sm"
-                title={actions.continuation.reason ?? 'Reopen the session'}
+                title={actions.continuation.reason ?? continueTitle(run)}
                 disabled={actions.continueRun.isPending || !actions.continuation.canContinue}
                 onClick={() => actions.continueRun.mutate()}
               >
@@ -813,7 +820,7 @@ function ActionsKebab({
         {flags.continueRun ? (
           <DropdownMenuItem
             disabled={!actions.continuation.canContinue || actions.continueRun.isPending}
-            title={actions.continuation.reason}
+            title={actions.continuation.reason ?? continueTitle(run)}
             onSelect={() => actions.continueRun.mutate()}
           >
             <PlayIcon aria-hidden="true" /> Continue

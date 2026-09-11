@@ -631,12 +631,22 @@ describe('RunManager.continueRun override', () => {
     expect(store.getRun(id)?.agentProfile).toBe('klaudiusz');
   });
 
-  it('refuses to continue a run with no resumable session (no override persisted)', () => {
+  /** A run with NO session to reattach to is continued in a fresh one, briefed with the previous
+   *  session's transcript (spec 2026-09-11-continue-without-a-session) — it used to be refused,
+   *  which left a task that crashed before its first spawn with no action but Delete. The override
+   *  is persisted exactly as it is for any other continuation; only the session id is absent. */
+  it('continues a run with no resumable session, on a fresh session, honouring the override', () => {
     const record = store.createRun({ title: 't', workflow: 'quick-task', task: 't', runner: 'claude', steps: [] });
     store.updateRun(record.id, { status: 'done' });
-    const result = manager.continueRun(record.id, { runner: 'codex' });
-    expect(result.ok).toBe(false);
-    expect(store.getRun(record.id)?.runner).toBe('claude');
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => {
+      calls.push(args);
+    };
+
+    expect(manager.continueRun(record.id, { runner: 'codex' })).toEqual({ ok: true });
+    expect(store.getRun(record.id)?.runner).toBe('codex');
+    expect(calls[0]?.[2]).toBeUndefined(); // nothing to resume — a new session
+    expect(calls[0]?.[3]).toBe('codex');
   });
 });
 

@@ -47,11 +47,13 @@ describe('askDeliveryMode — where an ask answer goes, per run status', () => {
     expect(askDeliveryMode(run(status))).toBe('resume')
   })
 
-  // Nothing to reopen: the card must say so rather than offer chips that cannot deliver.
+  // No session id either — and still `resume`, because `/continue` answers that case by opening
+  // a fresh session briefed with the old one's transcript. There is no closed run whose question
+  // has nowhere to go, which is why the card no longer has an inert state to render.
   it.each(['review', 'done', 'failed', 'cancelled'] as const)(
-    '%s without a recorded session → unavailable',
+    '%s without a recorded session → resume, on a fresh session',
     (status) => {
-      expect(askDeliveryMode(run(status, { steps: [step()] }))).toBe('unavailable')
+      expect(askDeliveryMode(run(status, { steps: [step()] }))).toBe('resume')
     },
   )
 

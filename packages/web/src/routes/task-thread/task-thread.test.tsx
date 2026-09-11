@@ -651,17 +651,20 @@ describe('ThreadView', () => {
   })
 
   /**
-   * The scope boundary: the queued branch is `queued` ONLY, and the composer only stays live
-   * on a closed run that HAS a session to resume. This `done` run has none, so it is the one
-   * remaining genuinely-disabled state — and it is told so honestly, without offering a
-   * Continue it cannot perform.
+   * A closed run with NO session id — the shape a crash before the first spawn leaves behind.
+   * It used to be the one genuinely-disabled composer state ("no session to resume"), which
+   * meant a task that died early could only be deleted. Continue covers it now by opening a
+   * fresh session on a replay of the old one, and the placeholder promises exactly that —
+   * not "pick up where you left off", which is a different and stronger claim.
    */
-  it('closed with no resumable session → disabled composer, and no Continue invented', () => {
+  it('closed with no session → the composer still offers Continue, as a NEW session', async () => {
     renderView(<ThreadView run={run('done')} thread={reduceThread(EVENTS)} />)
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
-    expect(textarea.disabled).toBe(true)
-    expect(textarea.placeholder).toBe('Session closed — no session to resume.')
-    expect(document.querySelector('[data-slot="follow-up-engine"]')).toBeNull()
+    await waitFor(() => expect(textarea.disabled).toBe(false))
+    expect(textarea.placeholder).toBe(
+      'Continue in a new session — the previous conversation is replayed to the agent…',
+    )
+    expect((screen.getByLabelText('Continue') as HTMLButtonElement).disabled).toBe(false)
     expect(document.querySelector('[data-slot="queued-hint"]')).toBeNull()
   })
 

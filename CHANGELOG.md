@@ -16,6 +16,24 @@
   is a 400, matching `POST /api/v1/runs`. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
 
 ## 🐛 Fixes
+- 🐛 **A task that crashed before its agent started is no longer a dead end.** Continue used to
+  need a recorded session id, so a run killed in the window between "accepted" and "spawned" —
+  most often a cezar restart while it queued for the repository working tree — came back as
+  `cezar restarted — could not resume the interrupted task (no agent session to resume)` above a
+  read-only composer saying `Session closed — no session to resume.` Nothing about the task was
+  broken: the worktree, the branch, the handoff file and the prompt were all still there. The only
+  action left was Delete. Continue now covers that case by opening a **new** session briefed with
+  the old one's record — the original task, how the previous attempt ended, and a bounded replay of
+  the conversation (oldest messages dropped first, with the count named, so a long thread cannot
+  fill the context window with history before the agent reads its instruction). The thread says
+  which of the two it did, and the composer promises the weaker one honestly: *Continue in a new
+  session — the previous conversation is replayed to the agent*, never "pick up where you left
+  off". A run that DOES have a session still resumes it, unchanged and without a summary of a
+  conversation it is already in. Restart recovery follows the same rule, so an interrupted task
+  now carries on by itself instead of stopping at the line above; so does a runner or account
+  switch, which has always started a fresh session and until now lost the conversation doing it.
+  Terminal ("Open in CLI") deliberately still needs a real session id — it hands one to a shell.
+  Spec: `.ai/specs/2026-09-11-continue-without-a-session.md`.
 - 🐛 **A pull request with merge conflicts no longer reads "ready to merge".** The chip's status
   answers *whose move is it* — `ready` means open, checks green, nobody waited on — and every word
   of that stays true of a branch GitHub is refusing to merge, so a conflicted PR sat there in

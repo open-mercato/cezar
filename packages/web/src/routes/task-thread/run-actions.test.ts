@@ -42,8 +42,9 @@ const run = (status: RunStatus, extra: Partial<RunRecord> = {}): RunRecord => ({
 describe('runActionFlags — the visibility matrix, all 7 statuses × archived', () => {
   // The legacy header's rules verbatim (web/app.js `updateDetail`):
   //   active(running|queued|waiting) → cancel, no delete/archive/continue/terminal;
-  //   finish only at the waiting/review gates; continue+terminal need a closed run WITH a
-  //   session; notes always. `archived` flips nothing here — it only relabels Archive.
+  //   finish only at the waiting/review gates; continue needs a closed run (terminal additionally
+  //   needs a recorded session); notes always. `archived` flips nothing here — it only relabels
+  //   Archive.
   // `markUnread` (#775) is false in every cell of this matrix because the fixture carries no
   // `finishedAt` — a record with no finish instant can never wear the unread marker, whatever
   // its status says. The flag's real matrix is the FINISHED one in its own describe below.
@@ -74,11 +75,19 @@ describe('runActionFlags — the visibility matrix, all 7 statuses × archived',
     }
   })
 
-  it('continue/terminal need a session — a closed run without one offers neither', () => {
+  // Terminal still needs a session id — it splices one into a shell command. Continue does not:
+  // the server opens a fresh session on a replay of the old one, so a run that crashed before
+  // its first spawn is recoverable instead of being a task whose only action is Delete.
+  it('a closed run with no recorded session still offers Continue, but not Terminal', () => {
     const flags = runActionFlags(run('failed', { steps: [step()] }))
-    expect(flags.continueRun).toBe(false)
+    expect(flags.continueRun).toBe(true)
     expect(flags.terminal).toBe(false)
     expect(flags.deleteRun).toBe(true)
+  })
+
+  it('an ACTIVE run offers neither, session or not — the engine owns it', () => {
+    expect(runActionFlags(run('running', { steps: [step()] })).continueRun).toBe(false)
+    expect(runActionFlags(run('running')).continueRun).toBe(false)
   })
 })
 

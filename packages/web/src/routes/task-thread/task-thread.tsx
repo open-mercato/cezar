@@ -34,7 +34,7 @@ import { PlanDock, planCounts } from './plan-dock'
 import { collectSubagents, findSubagent, subagentChildren } from './subagent-dock'
 import { SubagentSheet } from './subagent-sheet'
 import { AcceptCelebration, ReviewPanel } from './review-panel'
-import { queuePosition } from './run-actions'
+import { lastSessionId, queuePosition } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
 import { useRunRecordReconcile } from './run-reconcile'
@@ -199,6 +199,12 @@ export function ThreadView({
   const continueAction = useContinueAction(run)
   const hasContinuation = !sessionOpen && !queued && continueAction.available
   const continuable = hasContinuation && continueAction.canContinue
+  // …and the fifth: a closed run with NO session to reattach to — a crash before the backend ever
+  // minted one, most often. Continue still works there (the server opens a fresh session on the
+  // old one's transcript), but it is a different promise from "pick up where you left off", so the
+  // composer says which of the two it is offering rather than letting the user assume the stronger
+  // one.
+  const freshSession = continuable && lastSessionId(run) === undefined
   // A closed session can never settle its in-flight items — nothing in the reducer rewrites a
   // `running` item on `session.ended`, so an interrupted fan-out stays `running` in the
   // persisted stream forever. Without this, reopening it pulses `Agents · 0/1` above a dead
@@ -455,10 +461,10 @@ export function ThreadView({
                 : (text, images) => sendMessage.mutateAsync({ text, images })
             }
             disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
-            // Only reachable now by a closed run with NO session to resume — which is exactly
-            // the one case where Continue is not on offer either. Left honest rather than
-            // rewritten: "closed" is all such a run can be told.
-            disabledReason={providerBlocked ? providerReason : 'Session closed — no session to resume.'}
+            // Unreachable while a provider is connected: every terminal run can now be continued,
+            // with or without a session to reattach to. Kept as the honest last word for the case
+            // where `continueAction.available` is false anyway.
+            disabledReason={providerBlocked ? providerReason : 'Session closed.'}
             // The engine pills ride the enabled footer, so the picked runner/model and the
             // typed prompt reach `POST /continue` in one request.
             footerEnd={
@@ -476,6 +482,7 @@ export function ThreadView({
             sendAriaLabel={continuable ? 'Continue' : 'Send'}
             placeholder={
               queued ? 'Add to the prompt — sent when the run starts…'
+              : freshSession ? 'Continue in a new session — the previous conversation is replayed to the agent…'
               : continuable ? 'Continue — add a prompt, or send to just reopen the session…'
               : run.status === 'waiting' ? 'Reply — / for skills, @ for files…'
               : 'Message the agent — / for skills, @ for files…'
