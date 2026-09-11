@@ -273,6 +273,11 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** The last `CEZ:ASK` the autonomous nudge overrode, as its joined question text. An agent
+   *  that asks the SAME thing again right after being nudged is blocked on something the nudge
+   *  cannot answer (a disabled capability, a missing credential), and parks instead of burning
+   *  the remaining nudges — the live-session lesson behind `tryAutonomousNudge`. */
+  lastOverriddenAsk?: string;
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
@@ -4366,6 +4371,19 @@ export class RunManager {
     if (dispatchTurn.hasDispatch && ask) return false;
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     if (state.cancelled) return false;
+    // A question repeated verbatim after a nudge is not a preference the agent can settle on
+    // its own — it is a blocker (the cockpit refused `cez task create`, a login is missing) that
+    // the nudge would merely make it work around, at full cost, until the cap. Park the run on
+    // the question instead, so the operator sees it now rather than after 40 more turns.
+    const askKey = ask ? ask.questions.map((question) => question.question).join(' | ') : undefined;
+    if (askKey !== undefined && askKey === state.lastOverriddenAsk) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — the same question was asked again after a nudge, so the run parks on it instead of continuing: ${askKey}`,
+      });
+      return false;
+    }
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
     state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
@@ -4379,12 +4397,11 @@ export class RunManager {
     // an agent actually asked leaves no trace anywhere in the transcript, so whoever opens the
     // run after it parks at the cap cannot see that one was ever asked.
     if (ask) {
+      state.lastOverriddenAsk = askKey;
       this.store.appendEvent(runId, {
         type: 'note',
         stepId,
-        message: `autonomous — question overridden by the auto-continue nudge: ${ask.questions
-          .map((question) => question.question)
-          .join(' | ')}`,
+        message: `autonomous — question overridden by the auto-continue nudge: ${askKey}`,
       });
     }
     return true;

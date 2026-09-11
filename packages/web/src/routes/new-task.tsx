@@ -58,6 +58,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { toast } from '@/components/ui/toaster'
 import {
   autoApplyText,
+  availablePromptTemplates,
   normalizePromptTemplates,
   resolveAutoApply,
 } from '@/lib/prompt-templates'
@@ -197,8 +198,12 @@ export function NewTaskRoute() {
   // applies them on selection — but only into a box the user has not typed in (`resolveAutoApply`).
   const composerRef = useRef<ComposerHandle>(null)
   const templates = useMemo(
-    () => normalizePromptTemplates(uiState.data?.promptTemplates),
-    [uiState.data?.promptTemplates],
+    () =>
+      availablePromptTemplates(
+        normalizePromptTemplates(uiState.data?.promptTemplates),
+        health.data?.capabilities,
+      ),
+    [uiState.data?.promptTemplates, health.data?.capabilities],
   )
   const autoText = autoApplyText(templates, source?.source === 'skill' ? [source.ref] : [])
   const draftTextRef = useRef(draft.text)

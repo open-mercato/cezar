@@ -63,8 +63,8 @@ export const DEFAULT_PROMPT_TEMPLATES: readonly PromptTemplate[] = [
   // The one built-in that DISPATCHES (spec `.ai/specs/2026-09-10-dispatch.md`): every template
   // above tells one task how to do its own work, and this one is the worked example of a task
   // that fans work out to children and then waits for their reports. It is a template rather
-  // than a feature so it costs nothing on a server with `capabilities.dispatch` off — the
-  // `cez task create` line simply answers 409 there, the way any other unavailable CLI would.
+  // than a feature so it costs nothing on a server with `capabilities.dispatch` off — where
+  // `availablePromptTemplates` keeps it out of the composers (`DISPATCH_TEMPLATE_IDS`).
   {
     id: 'review-open-prs',
     label: 'Review open PRs',
@@ -76,9 +76,29 @@ export const DEFAULT_PROMPT_TEMPLATES: readonly PromptTemplate[] = [
       + '#<number>" "Review pull request #<number> (<title>) on branch <headRefName>: read the '
       + 'diff, run the tests, and report a verdict with findings."`, at most 4 at a time. Then '
       + 'end your turn with CEZ:MONITORING and, when their reports arrive, summarise every '
-      + 'verdict in one message.',
+      + 'verdict in one message. If `cez task create` is refused or unavailable, stop and report '
+      + 'that dispatch is disabled on this cockpit — do not review the PRs yourself and do not '
+      + 'use sub-agents instead.',
   },
 ]
+
+/**
+ * Templates that only make sense when the server can dispatch (`capabilities.dispatch`): the
+ * built-in "Review open PRs" tells the agent to run `cez task create`, and on a cockpit started
+ * without `CEZ_DISPATCH=1` that call is refused. Offering the template there sends an autonomous
+ * run into a refusal it then works around at full cost — the live-session failure behind this
+ * gate. Hidden from the composers while the capability is off or still unknown; Settings keeps
+ * listing it so the text stays editable.
+ */
+export const DISPATCH_TEMPLATE_IDS: ReadonlySet<string> = new Set(['review-open-prs'])
+
+export function availablePromptTemplates(
+  templates: readonly PromptTemplate[],
+  capabilities: { dispatch?: boolean } | undefined,
+): PromptTemplate[] {
+  if (capabilities?.dispatch === true) return [...templates]
+  return templates.filter((template) => !DISPATCH_TEMPLATE_IDS.has(template.id))
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object'

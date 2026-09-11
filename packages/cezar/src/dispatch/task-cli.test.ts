@@ -78,6 +78,13 @@ describe('cez task', () => {
     expect(none.calls).toHaveLength(0);
   });
 
+  it('answers --help on a subcommand instead of refusing it as an unknown option', async () => {
+    const h = harness({ status: 200, body: {} });
+    expect(await runTaskCommand(['create', '--help'], env, h.io)).toBe(0);
+    expect(h.out[0]).toContain('cez task create');
+    expect(h.calls).toHaveLength(0);
+  });
+
   it('list prints the tree this task belongs to, indented, with status, cost and verdicts', async () => {
     const h = harness({
       status: 200,

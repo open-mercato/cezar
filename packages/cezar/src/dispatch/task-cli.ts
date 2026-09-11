@@ -68,8 +68,13 @@ export async function runTaskCommand(
   }
   const api = base(env);
   if (!api) {
-    io.error('cez task: CEZ_API_URL is not set — this command only works inside a task run by a cockpit with CEZ_DISPATCH=1');
+    io.error('cez task: CEZ_API_URL is not set — this command only works inside a task run by a cockpit started with CEZ_DISPATCH=1. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is unavailable.');
     return 2;
+  }
+
+  if (rest.includes('--help') || rest.includes('-h')) {
+    io.log(USAGE);
+    return 0;
   }
 
   try {

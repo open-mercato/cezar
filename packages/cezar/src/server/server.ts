@@ -429,7 +429,8 @@ const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 t
 const AUTOMATIONS_OFF = 'GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them';
 
 /** 409 body for every dispatch route while task dispatch is off (spec 2026-09-10-dispatch). */
-const DISPATCH_OFF = 'dispatch is disabled — set CEZ_DISPATCH=1 to enable it';
+const DISPATCH_OFF =
+  'dispatch is disabled on this cockpit — the operator must start it with CEZ_DISPATCH=1. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.';
 
 // ---- variant-compare response shapes (spec 010) ----------------------------
 // Named and exported so `api-types.test.ts` can drift-guard the cockpit's

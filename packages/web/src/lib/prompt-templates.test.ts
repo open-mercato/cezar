@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   autoApplyText,
+  availablePromptTemplates,
   DEFAULT_PROMPT_TEMPLATES,
   insertTemplate,
   makeTemplateId,
@@ -351,5 +352,19 @@ describe('DEFAULT_PROMPT_TEMPLATES', () => {
 
   it('survives its own normalizer unchanged — the built-ins must round-trip', () => {
     expect(normalizePromptTemplates(DEFAULT_PROMPT_TEMPLATES)).toEqual(DEFAULT_PROMPT_TEMPLATES)
+  })
+})
+
+describe('availablePromptTemplates', () => {
+  it('hides the dispatching built-in unless the server reports capabilities.dispatch', () => {
+    const ids = (caps: { dispatch?: boolean } | undefined) =>
+      availablePromptTemplates(DEFAULT_PROMPT_TEMPLATES, caps).map((t) => t.id)
+    expect(ids(undefined)).not.toContain('review-open-prs')
+    expect(ids({ dispatch: false })).not.toContain('review-open-prs')
+    expect(ids({ dispatch: true })).toContain('review-open-prs')
+    // Everything else is untouched either way.
+    expect(ids({ dispatch: false })).toEqual(
+      DEFAULT_PROMPT_TEMPLATES.map((t) => t.id).filter((id) => id !== 'review-open-prs'),
+    )
   })
 })

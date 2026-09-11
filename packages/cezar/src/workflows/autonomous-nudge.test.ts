@@ -190,6 +190,26 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     expect(store.getRun(record.id)?.activity).toBeUndefined();
   }, 180_000);
 
+  it('parks on a question the agent repeats after a nudge instead of nudging it to the cap', async () => {
+    // The live-session failure this pins: the agent asked how to proceed around a refused
+    // `cez task create`, the nudge overrode it forty times, and the agent improvised at full
+    // cost. The first override stands (the #967 rule); the same question asked again parks.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-repeat pick a date library',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(1);
+    expect(notesMatching(record.id, 'question overridden by the auto-continue nudge')).toHaveLength(1);
+    const parked = notesMatching(record.id, 'the same question was asked again after a nudge');
+    expect(parked).toHaveLength(1);
+    expect(String(parked[0]?.message)).toContain('Which date library should I standardize on?');
+    // The repeated question reaches the operator as a real ask card, not a silent park.
+    expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(true);
+  }, 90_000);
+
   it('records the CEZ:ASK it overrides, so an overridden question is not lost', async () => {
     // The nudge deliberately outranks `CEZ:ASK` while budget remains — but `stripAskMarker`
     // removes the marker from the visible text and no ask card is emitted, so without an

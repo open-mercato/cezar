@@ -89,7 +89,7 @@ describe('the dispatch routes', () => {
     for (const path of ['/api/v1/runs/p/dispatch', '/api/v1/runs/p/report']) {
       const res = await apiRequest(app, path, json({ objective: 'x', status: 'done', result: 'r' }));
       expect(res.status).toBe(409);
-      expect(await res.json()).toEqual({ error: 'dispatch is disabled — set CEZ_DISPATCH=1 to enable it' });
+      expect(((await res.json()) as { error: string }).error).toMatch(/^dispatch is disabled on this cockpit — .*CEZ_DISPATCH=1.*stop and report/);
     }
   });
 });

@@ -33,6 +33,7 @@ let turn = 0;
 // answers the nudge ends with CEZ:DONE — so a dry-run test can watch a nudged run complete
 // rather than time out.
 let autonomousArmed = false;
+let askRepeat = false;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -96,6 +97,9 @@ async function respond(userText, imageCount) {
   // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
   // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
   if (userText.includes('mock:autonomous')) autonomousArmed = true;
+  // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
+  // the agent that is blocked on something no nudge can fix and keeps asking about it.
+  if (userText.includes('mock:ask-repeat')) askRepeat = true;
   // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
   // message reached the model, then settles.
   const doneMarker =
@@ -141,7 +145,7 @@ async function respond(userText, imageCount) {
               },
             ],
           })
-      : userText.includes('mock:ask')
+      : userText.includes('mock:ask') || askRepeat
       ? '\n\nCEZ:ASK ' +
         JSON.stringify({
           questions: [
