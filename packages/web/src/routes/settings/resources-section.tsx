@@ -33,6 +33,10 @@ const MAX_PARALLEL_MAX = 16
 const MAX_MONITORING_MAX = 16
 const WAKE_INTERVAL_MIN = 1
 const WAKE_INTERVAL_MAX = 60
+const IDLE_MINUTES_MIN = 1
+const IDLE_MINUTES_MAX = 1440
+/** The shipped default (and what a server that predates the key enforces). */
+const IDLE_MINUTES_DEFAULT = 15
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
 const MEMORY_MIN_MB = 256
 
@@ -84,6 +88,22 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   const saveWake = () => save.mutate(
     { resources: { monitoringWakeIntervalMinutes: wakeMode === 'park' ? null : wakeNum } },
     { onSuccess: () => toast(wakeMode === 'park' ? 'Monitoring will stay parked' : `Monitoring will re-check every ${wakeNum} minutes`) },
+  )
+  // NOT `?? 15`: explicit null (never close) must survive, so only an ABSENT key — a server
+  // that predates it, which still closes at the fixed 15 — reads as the shipped default.
+  const configuredIdle = config.resources.sessionIdleMinutes === undefined
+    ? IDLE_MINUTES_DEFAULT
+    : config.resources.sessionIdleMinutes
+  const [idleMode, setIdleMode] = useState<'never' | 'close'>(configuredIdle === null ? 'never' : 'close')
+  const [idleMinutes, setIdleMinutes] = useState(String(configuredIdle ?? IDLE_MINUTES_DEFAULT))
+  const idleNum = Number(idleMinutes)
+  const idleInvalid = !Number.isInteger(idleNum) || idleNum < IDLE_MINUTES_MIN || idleNum > IDLE_MINUTES_MAX
+  const idleSaved = idleMode === 'never'
+    ? configuredIdle === null
+    : !idleInvalid && configuredIdle === idleNum
+  const saveIdle = () => save.mutate(
+    { resources: { sessionIdleMinutes: idleMode === 'never' ? null : idleNum } },
+    { onSuccess: () => toast(idleMode === 'never' ? 'Idle sessions will stay open' : `Idle sessions will close after ${idleNum} minutes`) },
   )
   // Shipped ON: a server that predates the key answers without it, and reading that as "off"
   // would silently disable the feature on the one client that cannot tell the difference.
@@ -223,6 +243,47 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           <p data-slot="resources-monitoring-wake-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 60 minutes.</p>
         ) : (
           <p className="text-[11px] text-soft-foreground">Applied consistently to Claude, Codex and OpenCode.</p>
+        )}
+      </SettingsField>
+
+      <SettingsField
+        title="Session idle timeout"
+        hint="How long a session waiting on your reply may sit idle before it is closed. A closed session is always recoverable with Continue. Never keeps it open — for long interactive sessions like a workshop parked on a question."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            aria-label="Session idle timeout"
+            data-slot="resources-session-idle-mode"
+            value={idleMode}
+            disabled={save.isPending}
+            onChange={(event) => setIdleMode(event.target.value as 'never' | 'close')}
+            className="rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            <option value="close">Close after a delay</option>
+            <option value="never">Never close idle sessions</option>
+          </select>
+          {idleMode === 'close' ? (
+            <>
+              <input
+                type="number"
+                min={IDLE_MINUTES_MIN}
+                max={IDLE_MINUTES_MAX}
+                aria-label="Idle timeout in minutes"
+                data-slot="resources-session-idle-minutes"
+                value={idleMinutes}
+                disabled={save.isPending}
+                onChange={(event) => setIdleMinutes(event.target.value)}
+                className="block w-24 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+              />
+              <span className="text-xs text-soft-foreground">minutes</span>
+            </>
+          ) : null}
+          <Button type="button" variant="outline" size="sm" data-action="resources-save-session-idle" disabled={idleSaved || (idleMode === 'close' && idleInvalid) || save.isPending} onClick={saveIdle}>Save</Button>
+        </div>
+        {idleMode === 'close' && idleInvalid ? (
+          <p data-slot="resources-session-idle-invalid" className="text-[11px] text-danger">Enter a whole number from 1 to 1440 minutes.</p>
+        ) : (
+          <p className="text-[11px] text-soft-foreground">A waiting session holds no task slot either way.</p>
         )}
       </SettingsField>
 

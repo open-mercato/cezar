@@ -30,6 +30,7 @@ function serve(
       maxParallel: 2,
       maxMonitoringSessions: 2,
       monitoringWakeIntervalMinutes: null,
+      sessionIdleMinutes: 15,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 10,

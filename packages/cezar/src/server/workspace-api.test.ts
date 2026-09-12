@@ -103,6 +103,7 @@ describe('the workspace settings API (step 2.7)', () => {
         maxParallel: 2,
         maxMonitoringSessions: 2,
         monitoringWakeIntervalMinutes: 5,
+        sessionIdleMinutes: 15,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
         worktreeRetentionDefault: 10,
@@ -152,6 +153,7 @@ describe('the workspace settings API (step 2.7)', () => {
         maxParallel: 5,
         maxMonitoringSessions: 3,
         monitoringWakeIntervalMinutes: 5,
+        sessionIdleMinutes: 15,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
         worktreeRetentionDefault: 10,
@@ -189,6 +191,27 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(semaphore.monitoringWakeIntervalMinutes()).toBeNull();
   });
 
+  /** The `waiting` idle timeout ships at 15, so the writes worth pinning are the two that leave
+   *  the default: `null` (never close) must survive the round-trip to the semaphore un-re-defaulted,
+   *  and a custom number must land the same way. */
+  it('PUT sessionIdleMinutes round-trips null and a custom value to the semaphore', async () => {
+    expect(semaphore.sessionIdleMinutes()).toBe(15); // the zero-config default
+    const res = await putConfig({ resources: { sessionIdleMinutes: null } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.sessionIdleMinutes).toBeNull();
+    expect(
+      ((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.sessionIdleMinutes,
+    ).toBeNull();
+    expect((rawConfig().resources as Record<string, unknown>).sessionIdleMinutes).toBeNull();
+    expect(semaphore.sessionIdleMinutes()).toBeNull();
+
+    const custom = await putConfig({ resources: { sessionIdleMinutes: 240 } });
+    expect(custom.status).toBe(200);
+    expect(((await custom.json()) as WorkspaceConfigResponse).resources.sessionIdleMinutes).toBe(240);
+    expect((rawConfig().resources as Record<string, unknown>).sessionIdleMinutes).toBe(240);
+    expect(semaphore.sessionIdleMinutes()).toBe(240);
+  });
+
   it('partial updates leave the other keys untouched', async () => {
     await putConfig({ resources: { maxParallel: 5 } });
     await putConfig({ resources: { worktreeRetentionDefault: 3 } });
@@ -196,6 +219,7 @@ describe('the workspace settings API (step 2.7)', () => {
       maxParallel: 5,
       maxMonitoringSessions: 2,
       monitoringWakeIntervalMinutes: 5,
+      sessionIdleMinutes: 15,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
       worktreeRetentionDefault: 3,

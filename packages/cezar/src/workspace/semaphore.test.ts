@@ -29,6 +29,7 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.maxParallel()).toBe(2);
     expect(sem.memoryLimitMb()).toBeNull();
     expect(sem.monitoringWakeIntervalMinutes()).toBe(5); // #810 — monitoring must self-resume
+    expect(sem.sessionIdleMinutes()).toBe(15); // the fixed timeout the knob replaced
     expect(sem.busy()).toBe(0);
   });
 
@@ -61,6 +62,37 @@ describe('WorkspaceSemaphore', () => {
       wake = 9;
       await sem.refresh();
       expect(sem.monitoringWakeIntervalMinutes()).toBe(9);
+    });
+  });
+
+  /** Same absent-vs-null discipline as the wake cadence: `null` (never close on idle) is a
+   *  real operator choice and `null ?? 15` would silently override it. */
+  describe('sessionIdleMinutes: absent vs. explicit null', () => {
+    it('falls back to the shipped default only when the key is ABSENT', () => {
+      const sem = new WorkspaceSemaphore({ initial: { maxParallel: 2, sessionIdleMinutes: undefined } });
+      expect(sem.sessionIdleMinutes()).toBe(15);
+    });
+
+    it('preserves an explicit null (never close on idle)', () => {
+      const sem = new WorkspaceSemaphore({ initial: { sessionIdleMinutes: null } });
+      expect(sem.sessionIdleMinutes()).toBeNull();
+    });
+
+    it('preserves an explicit timeout', () => {
+      const sem = new WorkspaceSemaphore({ initial: { sessionIdleMinutes: 240 } });
+      expect(sem.sessionIdleMinutes()).toBe(240);
+    });
+
+    it('a refresh that reports null disarms, and one that reports a number re-arms', async () => {
+      let idle: number | null = null;
+      const sem = new WorkspaceSemaphore({
+        load: () => Promise.resolve({ maxParallel: 2, memoryLimitMb: null, sessionIdleMinutes: idle }),
+      });
+      await sem.refresh();
+      expect(sem.sessionIdleMinutes()).toBeNull();
+      idle = 90;
+      await sem.refresh();
+      expect(sem.sessionIdleMinutes()).toBe(90);
     });
   });
 
