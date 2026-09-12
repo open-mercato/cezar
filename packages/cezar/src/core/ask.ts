@@ -92,9 +92,47 @@ export function parseAskRequest(value: unknown): AskRequest | null {
  */
 export const ASK_MARKER_RE = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/;
 
-/** Looser than `ASK_MARKER_RE` so diagnostics can distinguish a malformed
- * trailing marker from ordinary assistant prose. */
-const ASK_MARKER_CANDIDATE_RE = /CEZ:ASK[ \t]+([\s\S]*)$/;
+/**
+ * The payload candidate of the LAST `<keyword> ` occurrence in a turn — everything from there to
+ * end-of-text — or `null` when the keyword never appears followed by whitespace.
+ *
+ * The LAST occurrence, deliberately. A model narrates: "as CEZ:ASK requires, here is my
+ * question:" and then emits the real marker line. Anchoring on the first mention (what a
+ * non-global `.exec()` does) captured that prose as the payload and refused a well-formed marker
+ * as invalid JSON — observed on live unit runs, where the refusal was fatal. The candidate is
+ * looser than the strict `*_MARKER_RE` shapes on purpose, so diagnostics can still distinguish a
+ * malformed trailing marker from ordinary prose.
+ */
+function lastMarkerCandidate(turnText: string, keyword: string): string | null {
+  const re = new RegExp(`${keyword}[ \\t]+`, 'g');
+  let last: RegExpExecArray | null = null;
+  for (const match of turnText.matchAll(re)) last = match;
+  if (!last) return null;
+  return turnText.slice(last.index + last[0].length);
+}
+
+/**
+ * Drop the control-marker lines a role prompt tells an agent to append AFTER its payload
+ * (`CEZ:MONITORING` after a dispatch, `CEZ:DONE` after a report). They are protocol, not JSON, and
+ * a candidate that runs to end-of-text would otherwise carry them into `JSON.parse` — a failure
+ * `closeUnbalancedJson` cannot repair, because nothing is unbalanced.
+ */
+function trimTrailingControlMarkers(candidate: string): string {
+  return candidate.replace(/(?:\s*\n\s*CEZ:(?:MONITORING|DONE)\s*)+$/, '').trimEnd();
+}
+
+/**
+ * Remove the LAST `<keyword> …` marker from a text, from the keyword to end-of-text (a repaired
+ * payload, #936, may end short of the closers this module appended). The twin of
+ * `lastMarkerCandidate`: an earlier prose mention of the keyword survives the strip.
+ */
+function stripLastMarker(text: string, keyword: string): string {
+  const re = new RegExp(`${keyword}[ \\t]+`, 'g');
+  let last: RegExpExecArray | null = null;
+  for (const match of text.matchAll(re)) last = match;
+  if (!last) return text;
+  return text.slice(0, last.index).replace(/\s+$/, '');
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -210,14 +248,15 @@ function issuesOf(error: z.ZodError): AskParseIssue[] {
  * rejected so the raw fallback stays readable.
  */
 export function parseAskMarkerResult(turnText: string): AskMarkerParseResult {
-  const match = ASK_MARKER_CANDIDATE_RE.exec(turnText.trimEnd());
-  if (!match || match[1] === undefined) return { kind: 'none' };
+  const candidate = lastMarkerCandidate(turnText.trimEnd(), 'CEZ:ASK');
+  if (candidate === null) return { kind: 'none' };
+  const payload = trimTrailingControlMarkers(candidate);
   let raw: unknown;
   let repaired = false;
   try {
-    raw = JSON.parse(match[1]);
+    raw = JSON.parse(payload);
   } catch (error) {
-    const closed = closeUnbalancedJson(match[1]);
+    const closed = closeUnbalancedJson(payload);
     try {
       if (closed === null) throw error;
       raw = JSON.parse(closed);
@@ -268,5 +307,5 @@ export function parseAskMarker(turnText: string): AskRequest | null {
  */
 export function stripAskMarker(text: string): string {
   if (parseAskMarker(text) === null) return text;
-  return text.replace(/\s*CEZ:ASK[ \t]+[\s\S]*$/, '');
+  return stripLastMarker(text, 'CEZ:ASK');
 }

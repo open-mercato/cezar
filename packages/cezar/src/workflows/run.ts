@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  parseAskMarker,
   parseAskMarkerResult,
   stripAskMarker,
   type AskMarkerParseResult,
@@ -26,6 +27,7 @@ import {
   appendHandoffHeartbeat,
   followupsEnabled,
   handoffPath,
+  readHandoff,
   seedHandoffFile,
 } from '../handoff.ts';
 import { todosPath } from '../todos.ts';
@@ -47,6 +49,40 @@ import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeS
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
+// Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
+// ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
+// takes byte-for-byte the path it took before this feature existed.
+import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
+import { resolveCapabilities } from '../server/capabilities.ts';
+import { composeDispatchPrompt } from '../dispatch/prompts.ts';
+import {
+  appendLedger,
+  inboxDigest,
+  inboxName,
+  listInbox,
+  notesSuggestions,
+  seedNotes,
+  taskPaths,
+  treeDir,
+  treeEnvelopeLines,
+  writeBrief,
+  writeInboxMessage,
+  writeOrder,
+  writeReport,
+} from '../dispatch/tree-fs.ts';
+import {
+  MAX_CHILDREN_IN_FLIGHT,
+  childSettleReport,
+  childTaskEnvelope,
+  childrenOf,
+  handoffSectionExcerpt,
+  inFlightChildren,
+  isTerminalStatus,
+  pendingReportsBlock,
+  remainingBudgetUsd,
+  usd,
+  withPendingReport,
+} from '../dispatch/engine.ts';
 import { reclaimWorktrees, rematerializeReclaimedWorktree } from '../runs/retention.ts';
 import {
   AgentTempDirError,
@@ -117,6 +153,21 @@ function stripDoneMarker(text: string): string {
 function stripMonitoringMarker(text: string): string {
   return text.replace(/\s*CEZ:MONITORING\s*$/, '');
 }
+/**
+ * What one finished turn decided about dispatch (spec 2026-09-10-dispatch) — the facts the park
+ * decision and the autonomous nudge both need. `hasDispatch` is false for every ordinary run, and
+ * then the others are false too.
+ */
+interface DispatchTurnResult {
+  hasDispatch: boolean;
+  /** This turn created children through `dispatch()` — the run parks as a monitor for them. */
+  dispatched: boolean;
+  overBudget: boolean;
+  /** The run's own inbox was delivered into the still-open session, so it is working again and
+   *  the caller must NOT park it (the nudge's own contract). */
+  rePrompted: boolean;
+}
+
 /** Emit the v2 `ask.requested` event for a parsed marker (the cockpit renders
  *  it as an ask card, #473). Returns the minted request id. */
 function emitAskRequested(sink: UiEventSink, ask: AskRequest): string {
@@ -223,13 +274,37 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** The last `CEZ:ASK` the autonomous nudge overrode, as its joined question text. An agent
+   *  that asks the SAME thing again right after being nudged is blocked on something the nudge
+   *  cannot answer (a disabled capability, a missing credential), and parks instead of burning
+   *  the remaining nudges — the live-session lesson behind `tryAutonomousNudge`. */
+  lastOverriddenAsk?: string;
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
+  /**
+   * The dispatch prompt this session runs under (spec 2026-09-10-dispatch), resolved by
+   * `prepareDispatchSession` — which BOTH construction sites call, because `ActiveRun` is built in
+   * `execute` AND in `runContinuation` and a field only one of them populates is exactly the
+   * half-fix AGENTS.md describes. Present ⇔ the feature is on. Anything that WRITES re-reads the
+   * record instead, because the stored `dispatch` changes under us.
+   */
+  dispatchPrompt?: string;
+  /** Set by `dispatch()` during a turn, read and cleared at that turn's end: the run parks as a
+   *  monitor for the children it just created. */
+  dispatchedThisTurn?: boolean;
   /** Release for exclusive execution in the user's repository working tree.
    *  Worktree-backed runs never need it; root runs ordinarily do unless the
    *  explicit unsafe bypass is active. */
   releaseRepoRoot?: () => void;
+  /** An in-place run (`cwd === repoRoot`) that parked — on a question, or as a monitor waiting
+   *  for its dispatched children — gives the exclusive working-tree lease back while it sits
+   *  (`parkRepoRoot`), so other in-place tasks are not stuck behind a session that is not
+   *  touching the tree. `deliverMessage` takes it back before the session resumes. */
+  repoRootParked?: boolean;
+  /** The one in-flight re-acquire, so several wake-ups arriving while it waits share it instead
+   *  of each chaining a lease of its own behind the first (which would never be released). */
+  repoRootResume?: Promise<boolean>;
   /** Durable directional-usage accounting state for the current runner
    * invocation. Provider-local turn ids are unique only within this epoch. */
   usageInvocation?: {
@@ -254,6 +329,16 @@ export const AUTONOMOUS_NUDGE =
   'Continue working autonomously until the task is fully complete. Do not ask me for confirmation or clarification — make reasonable assumptions and proceed. When everything is done, end the session with your done signal.';
 const MONITORING_WAKE_NUDGE =
   'Re-check the downstream work you were monitoring. Continue toward the task goal; emit CEZ:MONITORING again only if it is still pending.';
+/**
+ * Handed to a dispatch-tree run that ran IN the repository working tree, parked, gave the
+ * exclusive lease back (`parkRepoRoot`) and had to WAIT to get it again — meaning another in-place
+ * task held it meanwhile and may have edited the tree (spec 2026-09-10-dispatch).
+ *
+ * Not sent on the fast path (`claimFreeRepoRoot`): a tree nobody else held cannot have changed, and
+ * a warning on every wake-up is a warning nobody reads.
+ */
+const REPO_ROOT_RESUMED_NOTE =
+  'While you were parked, another task held this repository working tree and may have changed files in it. Re-read anything you are about to edit or reason about before you act on it — your earlier view of the tree may be out of date.';
 
 /**
  * Auto-resume after a provider usage limit (spec 2026-08-03-auto-resume-after-usage-limit).
@@ -387,6 +472,14 @@ export interface StartRunInput {
   /** Follow-up inbox generation (spec 007, #444). Omitted means enabled for
    *  compatibility; the handoff journal runs either way. */
   generateFollowups?: boolean;
+  /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind and
+   *  budget. Persisted on the record at creation, because that is where every later consumer
+   *  reads it — `execute()` runs from the RECORD, and so does restart recovery. */
+  dispatch?: RunDispatch;
+  /** The composer's Dispatch toggle (spec 2026-09-10-dispatch): start this run as the ROOT of a
+   *  dispatch tree with the user's limits. Persisted as `dispatch.intent`; a worktree opt-out is
+   *  overridden, because children fork the root's commits and an in-place run has no branch. */
+  dispatchIntent?: DispatchIntent;
   /** Attachments from the queued prompt stack (#472), re-encoded from disk by
    *  `hydrateQueuedInput` at dequeue. Kept separate from `images` because those
    *  are persisted into `taskImages` by `startRun()` — folding
@@ -426,6 +519,21 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
 }
 
 /**
+ * The DISPATCH prompt part of a run's system prompt (spec 2026-09-10-dispatch) — composed at
+ * BOTH session sites, so a task knows how to dispatch and report on its first step, on every
+ * Continue, and after a restart.
+ *
+ * De-duplicated against the run's extra system prompt, and that is not a micro-optimisation:
+ * `dispatch()` seeds a child's extra prompt with the very same text, so composing both would
+ * hand the backend the same instructions twice.
+ */
+export function dispatchPromptPart(prompt: string | undefined, extra: string | undefined): string | undefined {
+  const part = prompt?.trim();
+  if (!part) return undefined;
+  return part === extra?.trim() ? undefined : part;
+}
+
+/**
  * The directories a spawned agent may reach outside its worktree: the run-state
  * folder that holds its handoff file, plus its own temp directory when this run
  * got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed to
@@ -434,7 +542,12 @@ export function composeSystemPrompt(...parts: Array<string | undefined>): string
  * exactly what it always was.
  */
 export function agentDirectories(runsDir: string, env: Record<string, string>): string[] {
-  return env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+  const dirs = env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+  // A dispatched run's tree directory (spec 2026-09-10-dispatch: the filesystem channel) — its
+  // brief, its notes, its inbox. Same rule as TMPDIR: the env names it, so the file tools must
+  // reach it.
+  if (env.CEZ_TREE_DIR) dirs.push(env.CEZ_TREE_DIR);
+  return dirs;
 }
 
 /**
@@ -590,6 +703,22 @@ export class RunManager {
   private readonly waiting = new Set<string>();
   /** Durable monitoring subset. Only the configured number receives the waiting-slot exemption. */
   private readonly monitoring = new Set<string>();
+  /**
+   * The subset of `monitoring` parked because it SPAWNED children (spec
+   * 2026-09-10-dispatch A5), rather than because an agent asked to watch its own
+   * downstream work.
+   *
+   * These are exempt from the slot count OUTRIGHT — `maxMonitoringSessions` does not bound them
+   * (see `busySlots`), and it must not: a commander parks precisely so that its children can
+   * have its slot. Counting the third such parent as busy is what makes a tree whose tasks
+   * each dispatch children queue itself forever (`busySlots === maxParallel`, no exit), and
+   * starve every other project on the shared semaphore with it. A parked commander's process is
+   * idle; the runs it waits for are the ones that need the capacity.
+   *
+   * Invariant `unitParents ⊆ monitoring`, held by routing every add/delete through
+   * `enterMonitoring` / `leaveMonitoring` — nothing else writes either set.
+   */
+  private readonly unitParents = new Set<string>();
   private readonly pendingJobs = new Map<string, { workflow: WorkflowDef; input: StartRunInput }>();
   /** Interrupted agent turns recovered after a process restart. Unlike an
    *  explicit user Continue, these are bulk scheduler work and must re-enter
@@ -619,6 +748,10 @@ export class RunManager {
    * (#438). `CEZ_DISABLE_REPO_LOCK=1` deliberately bypasses this safety lease.
    */
   private repoRootTail: Promise<void> = Promise.resolve();
+  /** Leases chained onto `repoRootTail` and not yet released — holders and waiters alike. Zero
+   *  means the tree is free right now, which is what lets a parked in-place run take it back
+   *  synchronously (`claimFreeRepoRoot`) instead of round-tripping through a promise. */
+  private repoRootBusy = 0;
 
   /** `.ai/cezar` — where the per-task handoff files and todos.json live. */
   private readonly dataDir: string;
@@ -650,12 +783,17 @@ export class RunManager {
    *  dispose() so a torn-down project stops counting against the cap. */
   private readonly offSemaphore: () => void;
 
+  /** The workspace-registry id of this manager's project — what a dispatched agent's `cez task`
+   *  CLI needs to address the right project over the API (spec 2026-09-10-dispatch). */
+  private readonly projectId: string | undefined;
+
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
-    options: { semaphore?: WorkspaceSemaphore } = {},
+    options: { semaphore?: WorkspaceSemaphore; projectId?: string } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
+    this.projectId = options.projectId;
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
@@ -695,6 +833,10 @@ export class RunManager {
     this.autoResumeTimers.clear();
     this.active.clear();
     this.waiting.clear();
+    // The monitoring subsets are cleared with `waiting`, whose subset they are: a disposed
+    // manager holds no slots and must not keep claiming exemptions for runs it no longer owns.
+    this.monitoring.clear();
+    this.unitParents.clear();
     this.starting.clear();
     this.queue.length = 0;
     this.pendingJobs.clear();
@@ -763,11 +905,25 @@ export class RunManager {
    *  temp directory throws `AgentTempDirError` at the caller rather than
    *  turning into empty command output inside a running agent. */
   private agentEnv(runId: string, generateFollowups = true): Record<string, string> {
+    const dispatch = this.dispatchOf(runId);
+    // The same ONE gate the dispatch prompt uses, so an agent is never told about a CLI whose
+    // address it was not given (and never given an address it was not told about).
+    const apiUrl = this.dispatchReachable() ? process.env.CEZ_API_URL : undefined;
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
       CEZ_TODOS_FILE: generateFollowups ? todosPath(this.dataDir) : '',
       ...agentTmpEnv(this.dataDir, runId),
+      // Task dispatch (spec 2026-09-10-dispatch): where the `cez task` CLI reaches this server and
+      // which project the run belongs to. Absent (not empty) while the feature is off, so the env
+      // is byte-for-byte as before.
+      ...(apiUrl ? { CEZ_API_URL: apiUrl } : {}),
+      ...(apiUrl && this.projectId ? { CEZ_PROJECT_ID: this.projectId } : {}),
+      // The cockpit's OWN entrypoint, so an agent runs `node "$CEZ_BIN" task …` and never an older
+      // `cez` that happens to be on its PATH without the command (observed on the first live run).
+      ...(apiUrl && process.env.CEZ_BIN ? { CEZ_BIN: process.env.CEZ_BIN } : {}),
+      // The tree directory — brief, notes, inbox — for a run in a dispatch tree only.
+      ...(dispatch ? { CEZ_TREE_DIR: treeDir(this.dataDir, dispatch.rootRunId) } : {}),
     };
   }
 
@@ -811,9 +967,13 @@ export class RunManager {
   ): RunRecord {
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
-    const effectiveInput = agentModelsLocked(this.repoRoot)
-      ? { ...input, model: undefined }
-      : input;
+    const effectiveInput = {
+      ...(agentModelsLocked(this.repoRoot) ? { ...input, model: undefined } : input),
+      // A root started with the composer's Dispatch toggle always gets a worktree: children fork
+      // its commits, and an in-place run has no branch to fork. Overridden on the INPUT, which is
+      // what `execute()` reads, not only on the record.
+      ...(input.dispatchIntent && input.worktree === false ? { worktree: undefined } : {}),
+    };
     const run = this.store.createRun({
       title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
@@ -834,7 +994,7 @@ export class RunManager {
       autonomous: input.autonomous === true,
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
-      worktree: !group && input.worktree === false ? false : undefined,
+      worktree: !group && !input.dispatchIntent && input.worktree === false ? false : undefined,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) })),
@@ -842,6 +1002,14 @@ export class RunManager {
     // Persist the full definition so a queued run survives a restart (#367) —
     // ad-hoc "(planned)" chains exist nowhere else to re-resolve from.
     this.store.updateRun(run.id, { workflowDef: workflow });
+    // The run's place in a dispatch tree (spec 2026-09-10-dispatch), written the way
+    // automation provenance is (`automations/task-template.ts`): an update straight after create,
+    // rather than a tenth key on `createRun`'s parameter object. Persisting it here — not merely
+    // holding it on the input — is what makes it survive: `execute()`, restart recovery and the
+    // turn-end handlers all read the RECORD, and a tree whose root lost its `dispatch` on a
+    // restart would be a tree with no root.
+    if (input.dispatch) this.store.updateRun(run.id, { dispatch: input.dispatch });
+    else if (input.dispatchIntent) this.store.updateRun(run.id, { dispatch: { rootRunId: run.id, intent: input.dispatchIntent } });
     // Initial pasted attachments must be visible while the run is still queued (#612),
     // and must survive a restart before a slot opens. Persist them before the job
     // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
@@ -902,8 +1070,44 @@ export class RunManager {
    */
   private busySlots(): number {
     const ordinaryWaiting = this.waiting.size - this.monitoring.size;
-    const exemptMonitoring = Math.min(this.monitoring.size, this.semaphore.maxMonitoringSessions());
-    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring;
+    // A task parked on its own dispatch is exempt WITHOUT a cap (spec
+    // 2026-09-10-dispatch A5). `maxMonitoringSessions` bounds how many agents may sit
+    // watching their own downstream work while the host still runs `maxParallel` real tasks —
+    // but a spawned parent's children ARE those tasks, so bounding it makes the tree wait on
+    // itself: three parents parked on their children is `busySlots === maxParallel` with no
+    // exit, in this project and in every other one sharing the semaphore.
+    let spawnParked = 0;
+    for (const runId of this.unitParents) if (this.monitoring.has(runId)) spawnParked += 1;
+    const watchers = this.monitoring.size - spawnParked;
+    const exemptMonitoring = Math.min(watchers, this.semaphore.maxMonitoringSessions());
+    return this.active.size + this.starting.size - ordinaryWaiting - exemptMonitoring - spawnParked;
+  }
+
+  /**
+   * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
+   * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
+   * construction site of a shared in-memory object").
+   *
+   * `spawnParked` says WHY it parked: `true` only when this turn dispatched children.
+   * A commander that parks again on a plain `CEZ:MONITORING` after its children reported is an
+   * ordinary watcher again, which is why the flag is rewritten on every park, never OR-ed.
+   */
+  private enterMonitoring(runId: string, spawnParked: boolean): void {
+    this.monitoring.add(runId);
+    if (spawnParked) this.unitParents.add(runId);
+    else this.unitParents.delete(runId);
+  }
+
+  /**
+   * Leave the monitoring set — the ONE exit, and every transition out of the state goes through
+   * it: a child's report or a user message (`deliverMessage`), the next turn ending in anything
+   * but a park, a native `ask.requested`, the session's own teardown, and `dropActive` (cancel,
+   * settle, restart recovery). The monitoring wake timer is deliberately NOT one: its nudge is
+   * delivered into the same parked session and the turn it starts ends back here.
+   */
+  private leaveMonitoring(runId: string): void {
+    this.monitoring.delete(runId);
+    this.unitParents.delete(runId);
   }
 
   /** Epoch ms of this manager's oldest queued run (the semaphore's fairness
@@ -990,16 +1194,16 @@ export class RunManager {
         // Only pay for the config read when something is actually held: a queued record may name
         // no runner, and then the account it would use is the configured default.
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
-        while (this.queue.length > 0 && capacity()) {
+        const startable = (id: string): boolean => {
+          const queued = this.store.getRun(id);
+          if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
+          return capacity();
+        };
+        while (this.queue.length > 0) {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
-          const next = !anyHold
-            ? 0
-            : this.queue.findIndex((id) => {
-                const queued = this.store.getRun(id);
-                return !queued || !accountHeldFor(queued, holds, defaultRunner ?? 'claude');
-              });
-          if (next === -1) break; // everything queued is waiting on a held account
+          const next = this.queue.findIndex(startable);
+          if (next === -1) break; // nothing queued can start right now
           const runId = this.queue.splice(next, 1)[0];
           if (!runId) break;
           // A forced sweep has to reach the spawn: the gate inside `execute` asks the same
@@ -1112,6 +1316,9 @@ export class RunManager {
         type: 'lifecycle',
         message: `${reason} — workflow definition not recoverable, task failed`,
       });
+      // The third terminal transition outside `dropActive` (see `recover`): a queued run failing
+      // here never became active, so its parent hears about it only from this call.
+      this.reportSettledChildToParent(run.id);
       return;
     }
     // Re-apply the inbox ceiling (#471). `execute()` gates again at spawn time, so the agent is
@@ -1136,6 +1343,12 @@ export class RunManager {
         // reads `input.autonomous`. Without this a recovered autonomous run would run
         // non-autonomously and later wrongly park at `review`.
         autonomous: run.autonomous,
+        // Re-thread the dispatch the same way and for the same reason (spec
+        // 2026-09-10-dispatch A11): this is the one engine path that rebuilds a StartRunInput
+        // from the record instead of going through `startRun`, so a dispatched run recovered after
+        // a restart would otherwise resume as an ordinary flat task — no tree, no
+        // parent to report to.
+        dispatch: run.dispatch,
         // Preserve an explicit worktree opt-out across a queued restart.
         worktree: run.worktree,
       }),
@@ -1180,6 +1393,27 @@ export class RunManager {
           message: 'cezar restarted — the open session was settled',
         });
         await this.settleSuccess(run.id);
+        // A terminal transition that never passes through `dropActive`: this run was live in the
+        // PREVIOUS process and is in none of this one's registries. A settled child still owes
+        // its parent a report (spec 2026-09-10-dispatch §Engine) — and a restart is precisely
+        // the case the durable pending report exists for.
+        this.reportSettledChildToParent(run.id);
+        continue;
+      }
+      // `running` with no agent session anywhere on the record: the process died while the run
+      // was still on its way to one — queued behind the working-tree lease, or spawning. There
+      // is nothing to resume, so it goes back to the queue whole rather than failing on
+      // "no agent session to resume" with no way forward (the first live dispatch tree lost a
+      // task exactly there).
+      if (!run.steps.some((step) => step.sessionId)) {
+        for (const step of run.steps) {
+          if (step.status === 'running' || step.status === 'waiting') {
+            this.store.updateStep(run.id, step.id, { status: 'pending' });
+          }
+        }
+        this.store.updateRun(run.id, { status: 'queued', startedAt: undefined, currentStepId: undefined });
+        const requeued = this.store.getRun(run.id);
+        if (requeued) await this.reviveQueuedRun(requeued, 'cezar restarted — the task had not reached its agent session');
         continue;
       }
       // `running`: the process died mid-turn. Mark it interrupted (the state
@@ -1235,7 +1469,7 @@ export class RunManager {
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.waiting.delete(runId);
-    this.monitoring.delete(runId);
+    this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
     this.memoryPausing.delete(runId);
@@ -1254,6 +1488,12 @@ export class RunManager {
     // left a window — measured as exactly one extra task — where the queue saw a free slot and
     // an account that looked healthy, and started work that was already doomed.
     this.scheduleAutoResumeIfLimited(runId);
+    // A settled CHILD owes its parent a report (spec 2026-09-10-dispatch §Engine — the settle
+    // ladder). Here for the same reason the two hooks above are: every terminal transition funnels
+    // through this one method, and a parent parked on `monitoring` has no other way to learn that
+    // the run it is waiting for has ended. BEFORE `releaseSlot`, so a parent that has to be
+    // resumed through the queue is already queued when the pump sweeps.
+    this.reportSettledChildToParent(runId);
     this.releaseSlot();
     // A run leaving the active registry is a terminal transition (done/review/
     // failed/cancelled) — the one moment the finished-worktree count can grow.
@@ -1266,6 +1506,497 @@ export class RunManager {
     // there is no keep-count to respect and nothing left to recover from it. A
     // Continue (or an auto-resume) re-creates it through `agentEnv`.
     removeAgentTmpDir(this.dataDir, runId);
+  }
+
+  // ---- task dispatch (spec 2026-09-10-dispatch) ----------------------------------------------
+
+  /** Is dispatch on at all? One read, so the gate cannot drift between the sites below. */
+  private dispatchEnabled(): boolean {
+    return resolveCapabilities().dispatch;
+  }
+
+  /**
+   * Can a task actually REACH the dispatch routes? The flag being on is not enough: `CEZ_API_URL`
+   * and `CEZ_BIN` are set by `serveCommand`, so a headless `cezar run` has neither — no cockpit to
+   * call, and no entrypoint to call it with.
+   *
+   * The gate for everything an agent is TOLD about dispatch (the prompt), as opposed to what the
+   * engine does with a `dispatch` record it already has. A headless run that was taught the CLI
+   * would take `cez task create`'s refusal as its instruction — "stop and report that dispatch is
+   * unavailable" — and abandon work it could have done itself. Same reason
+   * `availablePromptTemplates` hides the dispatching template when the capability is off: a
+   * capability an agent cannot use must not be described to it.
+   */
+  private dispatchReachable(): boolean {
+    return this.dispatchEnabled() && Boolean(process.env.CEZ_API_URL);
+  }
+
+  /**
+   * THE gate for everything that needs a `dispatch` record: answers `undefined` when the feature
+   * is off (`CEZ_DISPATCH=0`) or when this run has neither dispatched nor been dispatched.
+   * Re-read from the store on every call rather than cached: the stored object is written DURING
+   * a turn (a report, a pending report from a settled child, the over-budget flag).
+   */
+  private dispatchOf(runId: string): RunDispatch | undefined {
+    if (!this.dispatchEnabled()) return undefined;
+    return this.store.getRun(runId)?.dispatch;
+  }
+
+  /** Persist a patch onto the run's `dispatch`, off the CURRENT record. */
+  private updateDispatch(runId: string, patch: (dispatch: RunDispatch) => RunDispatch): void {
+    const dispatch = this.store.getRun(runId)?.dispatch;
+    if (!dispatch) return;
+    this.store.updateRun(runId, { dispatch: patch(dispatch) });
+  }
+
+  /**
+   * Resolve what a session needs before it opens: the dispatch prompt (with the review addendum
+   * for a review child). Called from BOTH `ActiveRun` construction sites.
+   *
+   * Gated on `dispatchReachable`, not on the flag alone — a headless run with no cockpit behind it
+   * gets no dispatch prompt and behaves exactly as it did before this feature existed.
+   */
+  private prepareDispatchSession(runId: string, state: ActiveRun): void {
+    if (!this.dispatchReachable()) return;
+    const dispatch = this.store.getRun(runId)?.dispatch;
+    // The intent block belongs to the ROOT the user started; a child reads its order instead.
+    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+  }
+
+  /**
+   * The reports a parent's children left while it had no session. Returned as the block for the
+   * opening prompt, and cleared in the same breath — a flush that did not clear would re-deliver
+   * every report on every later session.
+   */
+  private flushPendingReports(runId: string): string | undefined {
+    const dispatch = this.dispatchOf(runId);
+    const pending = dispatch?.pendingReports;
+    if (!dispatch || !pending?.length) return undefined;
+    const { pendingReports: _flushed, ...rest } = dispatch;
+    this.store.updateRun(runId, { dispatch: rest });
+    return pendingReportsBlock(pending);
+  }
+
+  /** Drop the one pending entry a LIVE delivery has just accepted (matched on run AND instant). */
+  private ackPendingReport(runId: string, fromRunId: string, at: string): void {
+    const dispatch = this.store.getRun(runId)?.dispatch;
+    const pending = dispatch?.pendingReports;
+    if (!dispatch || !pending?.length) return;
+    const kept = pending.filter((entry) => entry.fromRunId !== fromRunId || entry.at !== at);
+    if (kept.length === pending.length) return;
+    const { pendingReports: _acked, ...rest } = dispatch;
+    this.store.updateRun(runId, { dispatch: kept.length ? { ...rest, pendingReports: kept } : rest });
+  }
+
+  /**
+   * One finished turn, for BOTH turn-end handlers. The caller keeps the park decision; this
+   * returns the facts it needs: whether this turn dispatched children (park as their monitor),
+   * whether the budget brake fired (park `waiting`), and whether the run's own inbox was handed
+   * back into the session (working again, do not park).
+   */
+  private handleDispatchTurn(
+    runId: string,
+    turnText: string,
+    ctx: { state: ActiveRun; stepId: string; done: boolean },
+  ): DispatchTurnResult {
+    const idle: DispatchTurnResult = { hasDispatch: false, dispatched: false, overBudget: false, rePrompted: false };
+    const dispatch = this.dispatchOf(runId);
+    const dispatched = Boolean(ctx.state.dispatchedThisTurn);
+    ctx.state.dispatchedThisTurn = false;
+    if (!dispatch) return idle;
+    if (ctx.done) return { hasDispatch: true, dispatched: false, overBudget: false, rePrompted: false };
+    const note = (message: string, tone?: 'danger') =>
+      this.store.appendEvent(runId, { type: 'note', stepId: ctx.stepId, message, ...(tone ? { tone } : {}) });
+    const overBudget = this.enforceDispatchBudget(runId, note);
+    const rePrompted = !dispatched && !overBudget && this.deliverOwnInbox(runId, ctx.state, ctx.stepId, turnText);
+    // The filesystem channel's SIGNAL: this turn may have written into a sibling's or the root's
+    // inbox. Wake every parked recipient now — the writer's turn end is the one moment cezar
+    // knows something may have changed on disk without watching it.
+    this.notifyTreeInboxes(dispatch.rootRunId, runId);
+    return { hasDispatch: true, dispatched, overBudget, rePrompted };
+  }
+
+  /**
+   * A task's OWN inbox at its own turn end: what its parent or a sibling wrote while it was
+   * working. Delivered into the still-open session so the run is working again, not parking —
+   * a task that never parks still hears its parent within one turn. Not on a turn that asked: a
+   * run parking on the Guard waits for the human, and a message must not stand in for the answer.
+   */
+  private deliverOwnInbox(runId: string, state: ActiveRun, stepId: string, turnText: string): boolean {
+    if (!state.autonomous || state.cancelled || !state.session?.open) return false;
+    if (parseAskMarker(turnText) !== null) return false;
+    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    const digest = this.flushInbox(runId);
+    if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
+    state.autoContinues = (state.autoContinues ?? 0) + 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId,
+      message: `tree inbox digest delivered into the session at turn end (${state.autoContinues}/${MAX_AUTO_CONTINUES})`,
+    });
+    return true;
+  }
+
+  /** What arrived in this run's inbox since it last looked, as the opening-prompt block; the
+   *  watermark moves in the same breath. Paths only: the agent reads the files itself. */
+  private flushInbox(runId: string): string | undefined {
+    const dispatch = this.dispatchOf(runId);
+    if (!dispatch) return undefined;
+    const recipient = inboxName(runId, dispatch.rootRunId);
+    const items = listInbox(this.dataDir, dispatch.rootRunId, recipient, dispatch.inboxSeenAt);
+    if (items.length === 0) return undefined;
+    this.updateDispatch(runId, (current) => ({ ...current, inboxSeenAt: new Date().toISOString() }));
+    return inboxDigest(items, taskPaths(this.dataDir, dispatch.rootRunId, runId).inbox);
+  }
+
+  /**
+   * Wake every PARKED task of a tree whose inbox holds files newer than its watermark. Only a run
+   * parked as a monitor is woken live. A run parked `waiting` (on the Guard, on its budget) stays
+   * parked: the digest reaches it when its session next opens, and a notice must never answer a
+   * question on the human's behalf. The writer itself is skipped — its own turn just ended.
+   */
+  private notifyTreeInboxes(rootRunId: string, writerId: string): void {
+    if (!this.dispatchEnabled()) return;
+    for (const run of this.store.listRuns()) {
+      if (run.id === writerId || run.dispatch?.rootRunId !== rootRunId) continue;
+      if (run.status !== 'running' || run.activity !== 'monitoring') continue;
+      const state = this.active.get(run.id);
+      if (!state?.session?.open) continue;
+      const recipient = inboxName(run.id, rootRunId);
+      const items = listInbox(this.dataDir, rootRunId, recipient, run.dispatch.inboxSeenAt);
+      if (items.length === 0) continue;
+      const digest = inboxDigest(items, taskPaths(this.dataDir, rootRunId, run.id).inbox);
+      if (!digest || !this.deliverMessage(run.id, [{ type: 'text', text: digest }], false)) continue;
+      this.updateDispatch(run.id, (current) => ({ ...current, inboxSeenAt: new Date().toISOString() }));
+      this.store.appendEvent(run.id, {
+        type: 'note',
+        message: `${items.length} new tree inbox message${items.length === 1 ? '' : 's'} — delivered into the session`,
+      });
+      appendLedger(this.dataDir, rootRunId, { type: 'inbox-notice', runId: run.id, files: items.map((item) => item.name) });
+    }
+  }
+
+  /**
+   * Surface a `CEZ:ASK` as the ask card (#473) and, for a dispatched run, persist it as the pending
+   * question: a restart-forced settle reports it `blocked` instead of `done`. Cleared by
+   * `deliverMessage` when an answer reaches the session. A child parked on the Guard is told to its
+   * parent through the inbox — the parent cannot answer for the human, but it can re-plan.
+   */
+  private recordAsk(runId: string, sink: UiEventSink, ask: AskRequest): void {
+    const requestId = emitAskRequested(sink, ask);
+    const dispatch = this.dispatchOf(runId);
+    if (!dispatch) return;
+    const questions = ask.questions.map((question) => question.question.slice(0, 400));
+    this.updateDispatch(runId, (current) => ({
+      ...current,
+      pendingAsk: { requestId, questions, askedAt: new Date().toISOString() },
+    }));
+    if (!dispatch.parentRunId) return;
+    const run = this.store.getRun(runId);
+    try {
+      writeInboxMessage(this.dataDir, dispatch.rootRunId, inboxName(dispatch.parentRunId, dispatch.rootRunId), {
+        from: runId,
+        subject: `Blocked on a Guard question — ${run?.title ?? runId}`,
+        body: [
+          `Your task "${run?.title ?? runId}" (${runId}) has parked on a question only the human can answer:`,
+          ...questions.map((question) => `- ${question}`),
+          '',
+          "It holds one of your children-in-flight slots until it is answered in the cockpit. You cannot answer on the human's behalf; you can re-plan around it, wait, or raise the decision yourself with CEZ:ASK if your own work depends on it.",
+        ].join('\n'),
+      });
+      appendLedger(this.dataDir, dispatch.rootRunId, { type: 'guard-ask', runId, parentRunId: dispatch.parentRunId, questions });
+      this.notifyTreeInboxes(dispatch.rootRunId, runId);
+    } catch {
+      // best effort
+    }
+  }
+
+  /** The answer arrived (any message delivered into the session): the question is no longer pending. */
+  private clearPendingAsk(runId: string): void {
+    if (!this.dispatchOf(runId)?.pendingAsk) return;
+    this.updateDispatch(runId, ({ pendingAsk: _answered, ...rest }) => rest);
+  }
+
+  /**
+   * The turn-end budget brake: a dispatched run that has spent its ceiling stops running itself.
+   * The caller then skips the autonomous nudge, clears the monitoring wake timer and parks
+   * `waiting`. The note fires ONCE (guarded by the persisted flag) while the brake keeps answering.
+   */
+  private enforceDispatchBudget(runId: string, note: (message: string, tone?: 'danger') => void): boolean {
+    const run = this.store.getRun(runId);
+    const dispatch = run?.dispatch;
+    const budget = dispatch?.budgetUsd;
+    if (!run || !dispatch || budget === undefined) return false;
+    const spent = run.costUsd ?? 0;
+    if (spent < budget) return false;
+    if (!dispatch.overBudget) {
+      this.updateDispatch(runId, (current) => ({ ...current, overBudget: true }));
+      note(
+        `budget spent — ${usd(spent)} of ${usd(budget)}. The run parks for you instead of continuing on its own; send a message to take it further.`,
+        'danger',
+      );
+    }
+    return true;
+  }
+
+  /**
+   * `POST /runs/:id/dispatch` — create ONE child of `parentId` (spec 2026-09-10-dispatch), usually
+   * called by the parent's own agent through `cez task create`.
+   *
+   * Every refusal is a transcript note on the parent and NO state change — the caller gets the
+   * reason back as the route's 409 body. A parent that had no `dispatch` record becomes a root the
+   * first time it dispatches: its tree directory is created and its brief written from its own
+   * task text. The child forks its worktree off the parent's branch, inherits runner and model
+   * unless the order names others, gets a budget carved out of the parent's, and always runs
+   * autonomously — a child parked at `waiting` after every turn would need a human per rung.
+   */
+  dispatch(parentId: string, input: DispatchInput): { id: string; branch?: string } | { refused: string } {
+    if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
+    const parent = this.store.getRun(parentId);
+    if (!parent) return { refused: `no such run: ${parentId}` };
+    if (isTerminalStatus(parent.status)) return { refused: `run ${parentId} has already settled (${parent.status})` };
+    const note = (message: string, tone?: 'danger') =>
+      this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
+
+    const runs = this.store.listRuns();
+    // The user's limits, when the root was started with the composer's Dispatch toggle: they may
+    // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
+    const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
+    const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
+    const inFlight = inFlightChildren(runs, parentId).length;
+    if (inFlight + 1 > inFlightCap) {
+      const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < MAX_CHILDREN_IN_FLIGHT ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
+      note(`dispatch refused — ${refused}`, 'danger');
+      return { refused };
+    }
+    if (intent?.maxSubtasks !== undefined) {
+      const rootId = parent.dispatch?.rootRunId ?? parent.id;
+      const total = runs.filter((r) => r.dispatch?.rootRunId === rootId && r.id !== rootId).length;
+      if (total + 1 > intent.maxSubtasks) {
+        const refused = `this tree already has ${total} subtask${total === 1 ? '' : 's'}; the user capped it at ${intent.maxSubtasks}. Finish with what exists and report.`;
+        note(`dispatch refused — ${refused}`, 'danger');
+        return { refused };
+      }
+    }
+
+    // The parent becomes a root on its first dispatch; a dispatched parent keeps its tree.
+    const rootRunId = parent.dispatch?.rootRunId ?? parent.id;
+    if (!parent.dispatch) this.store.updateRun(parentId, { dispatch: { rootRunId } });
+
+    const budget = this.carveChildBudget(this.store.getRun(parentId) ?? parent, runs, input.max_cost ?? intent?.budgetUsd);
+    if ('refused' in budget) {
+      note(`dispatch refused — ${budget.refused}`, 'danger');
+      return { refused: budget.refused };
+    }
+
+    const title = input.title ?? input.objective.split('\n')[0]?.slice(0, 120) ?? 'dispatched task';
+    const workflow: WorkflowDef = {
+      name: '(planned)',
+      source: 'built-in',
+      steps: [
+        {
+          id: 'task',
+          name: title,
+          prompt: '{{task}}',
+          // The order's own tool list when it names one (#430: `allowedTools` is the only tool
+          // seam a step has), else the run-wide default.
+          ...(input.allowed_tools?.length ? { allowedTools: input.allowed_tools } : {}),
+        },
+      ],
+    };
+    const record = this.startRun(workflow, {
+      // The tree directory lines are composed against the id the run is ABOUT to get: `startRun`
+      // mints it, so the envelope is finished below once it exists.
+      task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
+      systemPrompt: composeDispatchPrompt(input.kind),
+      runner: input.runner ?? intent?.runner ?? parent.runner,
+      ...(input.model ?? intent?.model ?? parent.model ? { model: input.model ?? intent?.model ?? parent.model } : {}),
+      autonomous: true,
+      dispatch: {
+        rootRunId,
+        parentRunId: parentId,
+        ...(input.kind && input.kind !== 'implement' ? { kind: input.kind } : {}),
+        ...(input.review_of?.length ? { reviewOf: input.review_of } : {}),
+        ...(budget.budgetUsd !== undefined ? { budgetUsd: budget.budgetUsd } : {}),
+      },
+    });
+    // The task list shows the order's own title rather than the first line of the envelope, and
+    // the child forks its worktree off the PARENT's branch: `execute()` prefers a recorded
+    // `baseBranch` over the configured one, so seeding it is the whole of the change.
+    this.store.updateRun(record.id, { title, ...(parent.branch ? { baseBranch: parent.branch } : {}) });
+    const paths = taskPaths(this.dataDir, rootRunId, record.id);
+    const task = (this.store.getRun(record.id)?.task ?? '').replace('{{TREE_PATHS}}', treeEnvelopeLines(paths).join('\n'));
+    this.store.updateRun(record.id, { task });
+    // `execute` reads the QUEUED job's input, not the record, so the finished envelope has to
+    // reach both.
+    const job = this.pendingJobs.get(record.id);
+    if (job) job.input.task = task;
+    try {
+      writeBrief(this.dataDir, rootRunId, this.store.getRun(rootRunId)?.task ?? parent.task);
+      writeOrder(this.dataDir, rootRunId, record.id, {
+        title,
+        kind: input.kind ?? 'implement',
+        parentRunId: parentId,
+        text: task,
+      });
+      seedNotes(this.dataDir, rootRunId, record.id, title);
+    } catch {
+      // written state, never required — a tree directory that cannot be written is a tree with no
+      // file channel, not a refused dispatch
+    }
+    appendLedger(this.dataDir, rootRunId, {
+      type: 'dispatch',
+      runId: record.id,
+      parentRunId: parentId,
+      kind: input.kind ?? 'implement',
+      title,
+      ...(budget.budgetUsd !== undefined ? { budgetUsd: budget.budgetUsd } : {}),
+    });
+    const child = this.store.getRun(record.id) ?? record;
+    note(`dispatched "${title}" (${input.kind ?? 'implement'}, ${record.id})${budget.budgetUsd !== undefined ? ` with ${usd(budget.budgetUsd)}` : ''}`);
+    // This turn parks as a monitor for the child when it ends (see `handleDispatchTurn`).
+    const state = this.active.get(parentId);
+    if (state) state.dispatchedThisTurn = true;
+    return { id: child.id, ...(child.branch ? { branch: child.branch } : {}) };
+  }
+
+  /**
+   * `POST /runs/:id/report` — a dispatched task records its own report (the `cez task report`
+   * CLI). Last one wins. Delivered to the parent when the run SETTLES, not now: the run is still
+   * working, and its parent hears from it once, with the branch and the cost attached.
+   */
+  recordReport(runId: string, report: DispatchReport): boolean {
+    if (!this.dispatchOf(runId)) return false;
+    this.updateDispatch(runId, (current) => ({ ...current, report }));
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId: this.active.get(runId)?.currentStepId,
+      message: `report recorded — status ${report.status}${report.verdict ? `, verdict ${report.verdict}` : ''}`,
+    });
+    return true;
+  }
+
+  /**
+   * Carve one child's ceiling out of what the parent has left. A parent with no ceiling of its
+   * own carves nothing: the child inherits whatever cap it named, or none. A child that names no
+   * cost under a capped parent gets the whole remainder — one child at a time, there is nobody
+   * to share it with.
+   */
+  private carveChildBudget(
+    parent: RunRecord,
+    runs: readonly RunRecord[],
+    maxCost: number | undefined,
+  ): { budgetUsd: number | undefined } | { refused: string } {
+    const remaining = remainingBudgetUsd(parent, childrenOf(runs, parent.id));
+    if (remaining === undefined) return { budgetUsd: maxCost };
+    if (remaining <= 0) {
+      return {
+        refused: `no budget left (${usd(parent.dispatch?.budgetUsd ?? 0)} allotted, ${usd(parent.costUsd ?? 0)} spent, the rest promised to children in flight). Report what has been achieved instead of shrinking the remaining work.`,
+      };
+    }
+    if (maxCost !== undefined && maxCost > remaining) {
+      return { refused: `the requested cap is ${usd(maxCost)} but only ${usd(remaining)} of the budget is left.` };
+    }
+    return { budgetUsd: maxCost ?? remaining };
+  }
+
+  /**
+   * A child settled — tell its parent. Nothing else fires this: there is no process-exit callback
+   * and no sub-agent-completion event, so a parent parked on `monitoring` waiting for children
+   * would sit there until a human typed something. Hung off `dropActive` (and off the paths that
+   * never reach it: the queued cancel, the restart settle).
+   *
+   * The report is PERSISTED first and always, then delivered down a ladder of four rungs — an
+   * open session, a still-queued prompt stack, the starting-up buffer, and finally a fresh
+   * continuation for a parent that has already finished.
+   */
+  private reportSettledChildToParent(runId: string): void {
+    try {
+      const child = this.store.getRun(runId);
+      const parentId = child?.dispatch?.parentRunId;
+      if (!child || !parentId) return;
+      if (!this.dispatchEnabled()) return;
+      if (!isTerminalStatus(child.status)) return;
+      const parent = this.store.getRun(parentId);
+      if (!parent?.dispatch) return;
+
+      const resumeNotes = handoffSectionExcerpt(readHandoff(this.dataDir, runId), '## Resume notes');
+      const { text, report } = childSettleReport(child, { resumeNotes });
+      const at = new Date().toISOString();
+      this.updateDispatch(parentId, (dispatch) =>
+        withPendingReport(dispatch, { fromRunId: child.id, title: child.title, report, at }),
+      );
+      const rootRunId = child.dispatch?.rootRunId ?? parent.dispatch.rootRunId;
+      try {
+        writeReport(this.dataDir, rootRunId, child.id, text, report);
+        const suggestions = [...report.suggestions];
+        const fromNotes = notesSuggestions(this.dataDir, rootRunId, child.id);
+        if (fromNotes) suggestions.push(fromNotes);
+        if (suggestions.length && child.id !== rootRunId) {
+          writeInboxMessage(this.dataDir, rootRunId, 'root', {
+            from: child.id,
+            subject: `Suggestions from task "${child.title}"`,
+            body: suggestions.map((line) => `- ${line}`).join('\n'),
+          });
+        }
+      } catch {
+        // written state, never required
+      }
+      appendLedger(this.dataDir, rootRunId, {
+        type: 'settle',
+        runId: child.id,
+        parentRunId: parentId,
+        status: child.status,
+        reportStatus: report.status,
+        ...(child.costUsd !== undefined ? { costUsd: child.costUsd } : {}),
+      });
+      this.notifyTreeInboxes(rootRunId, child.id);
+
+      // The delivery below is NOT user-authored, so it leaves no bubble in the parent's thread.
+      this.store.appendEvent(parentId, {
+        type: 'note',
+        message: `report received from task "${child.title}" (${child.id}) — status ${report.status}`,
+      });
+
+      // A CANCELLED child is persisted and nothing more: a cancel cascades children-first, so the
+      // parent is already cancelled — or about to be — and every live rung below would fight that.
+      if (child.status === 'cancelled') return;
+
+      const parentState = this.active.get(parentId);
+      if (parentState) parentState.monitoringWakeups = 0;
+      if (parent.monitoringWakeCapReached) {
+        this.store.updateRun(parentId, { monitoringWakeCapReached: undefined });
+      }
+
+      const blocks: PastedContent[] = [{ type: 'text', text }];
+      if (this.deliverMessage(parentId, blocks, false) || this.enqueueMessage(parentId, blocks)) {
+        this.ackPendingReport(parentId, child.id, at);
+        return;
+      }
+      if (this.deferMessage(parentId, blocks)) return;
+      // `cancelled` is deliberately NOT continuable from a child's report: nothing a child says may
+      // restart a task a human cancelled.
+      if (['done', 'failed', 'review'].includes(parent.status)) {
+        this.continueRun(parentId, { text }, true);
+      }
+    } catch {
+      // A terminal transition must never fail over its bookkeeping. The pending report is already
+      // on the record by the time anything below it can throw, so the parent still learns.
+    }
+  }
+
+  /**
+   * Cancel every descendant, deepest first: a cancelled parent whose children kept spending would
+   * be a cost brake that does not brake. `seen` bounds the walk to each run once.
+   */
+  private cancelDescendants(parentId: string, seen: Set<string>): void {
+    if (!this.dispatchEnabled()) return;
+    for (const child of childrenOf(this.store.listRuns(), parentId)) {
+      if (seen.has(child.id)) continue;
+      seen.add(child.id);
+      this.cancelDescendants(child.id, seen);
+      this.cancelOne(child.id);
+    }
   }
 
   // ---- usage-limit auto-resume (spec 2026-08-03-auto-resume-after-usage-limit) --------------
@@ -1622,15 +2353,94 @@ export class RunManager {
    * Returns false when the run was cancelled while waiting: the lease was
    * never granted and the caller must not touch the working tree.
    */
+  /**
+   * Give the exclusive working-tree lease back while an in-place run is parked. Only the run that
+   * holds one has anything to give (a worktree run never acquired it; `CEZ_DISABLE_REPO_LOCK=1`
+   * never granted it). The first live dispatch tree found the gap: a commander running in the
+   * repo working tree parked as a monitor for the whole life of its children — slot-exempt, so
+   * the queue looked free — while every other in-place task waited on a lease nobody was using.
+   *
+   * Scoped to runs in a DISPATCH TREE, deliberately. Handing the tree to another run mid-park is
+   * a real weakening of #438: the parked session stays live, and its context still describes the
+   * files as they were, so it can edit over work another task did while it sat. A dispatch tree
+   * has no alternative — its commander parks for as long as its children take, and that is the
+   * deadlock above — but an ordinary in-place run parking on `CEZ:ASK` does: keep the lease, as it
+   * always has. That is also what makes "a run with no dispatch is untouched" true of this path.
+   * `resumeRepoRoot` tells the resuming agent the tree may have moved.
+   */
+  private parkRepoRoot(runId: string, state: ActiveRun): void {
+    if (!this.dispatchOf(runId)) return;
+    if (state.cwd !== this.repoRoot || !state.releaseRepoRoot) return;
+    state.releaseRepoRoot();
+    state.releaseRepoRoot = undefined;
+    state.repoRootParked = true;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId: state.currentStepId,
+      message: 'parked — released the repository working tree so other in-place tasks can run; it is taken back before this task resumes',
+    });
+  }
+
+  /**
+   * The fast counterpart of `resumeRepoRoot`: a tree nobody holds or waits for is taken back on
+   * the spot, so the common wake-up (no other in-place task ran meanwhile) resumes the session
+   * synchronously — the #347 guarantee that a parked run's resume never queues behind anything.
+   */
+  private claimFreeRepoRoot(state: ActiveRun): boolean {
+    if (this.repoRootBusy > 0 || state.cancelled) return false;
+    state.releaseRepoRoot = this.chainRepoRoot().release;
+    state.repoRootParked = false;
+    return true;
+  }
+
+  /** Chain one more lease onto the tail. `previous` settles when every earlier lease is released;
+   *  `release` hands the tree on (idempotent — a lease dropped mid-wait releases exactly once). */
+  private chainRepoRoot(): { previous: Promise<void>; release: () => void } {
+    const previous = this.repoRootTail;
+    let resolve: () => void = () => undefined;
+    this.repoRootTail = new Promise<void>((r) => {
+      resolve = r;
+    });
+    this.repoRootBusy += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.repoRootBusy -= 1;
+      resolve();
+    };
+    return { previous, release };
+  }
+
+  /**
+   * The counterpart of `parkRepoRoot`: wait for the tree before the parked session resumes.
+   *
+   * Reaching here at all means somebody else holds or wants the tree, so it may have been edited
+   * while this run sat parked and this session's context predates that. Said twice — in the
+   * transcript below, and to the agent itself (`REPO_ROOT_RESUMED_NOTE`, delivered by
+   * `deliverMessage` ahead of the message the run woke for) — rather than left for it to discover
+   * by clobbering the other task's work.
+   */
+  private async resumeRepoRoot(runId: string, state: ActiveRun): Promise<boolean> {
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId: state.currentStepId,
+      message: 'resuming — waiting for exclusive access to the repository working tree',
+    });
+    try {
+      const acquired = await this.acquireRepoRoot(runId, state);
+      if (acquired) state.repoRootParked = false;
+      return acquired;
+    } finally {
+      state.repoRootResume = undefined;
+    }
+  }
+
   private async acquireRepoRoot(runId: string, state: ActiveRun): Promise<boolean> {
     // `cancel()` can land between the run going `running` and reaching here,
     // while `interrupt` is still the default no-op — never enter the chain.
     if (state.cancelled) return false;
-    const previous = this.repoRootTail;
-    let release: () => void = () => undefined;
-    this.repoRootTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { previous, release } = this.chainRepoRoot();
     // Until `previous` resolves this run does not own the tree yet, so a drop
     // during the wait must not hand the tree to the next waiter — chain our
     // release behind `previous` instead of resolving the tail early.
@@ -1659,7 +2469,21 @@ export class RunManager {
     return true;
   }
 
+  /**
+   * Cancel a run — and, when it commands any, its whole subtree first (spec
+   * 2026-09-10-dispatch §Engine, `cancelDescendants` — the third budget brake).
+   *
+   * Depth-first and children-before-parent: a parent cancelled while its children kept working
+   * would be a cost brake that stops the one run that was only supervising. The answer is still
+   * this run's own — a cascade that cancelled nothing must not make `cancel` claim it did.
+   */
   cancel(runId: string): boolean {
+    this.cancelDescendants(runId, new Set([runId]));
+    return this.cancelOne(runId);
+  }
+
+  /** One run's cancellation, with no regard for a hierarchy — what `cancel` has always done. */
+  private cancelOne(runId: string): boolean {
     // Still waiting in the queue: just drop it there.
     const queuedAt = this.queue.indexOf(runId);
     if (queuedAt >= 0) {
@@ -1668,6 +2492,10 @@ export class RunManager {
       this.pendingContinuations.delete(runId);
       this.store.updateRun(runId, { status: 'cancelled', finishedAt: new Date().toISOString() });
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'cancelled while queued' });
+      // A queued run never entered `active`, so it never reaches `dropActive` — the one terminal
+      // transition that misses the settle hook. Without this a parent waiting on a child the user
+      // cancelled from the queue would wait for a report nobody would ever send.
+      this.reportSettledChildToParent(runId);
       return true;
     }
     const state = this.active.get(runId);
@@ -2000,6 +2828,24 @@ export class RunManager {
   private deliverMessage(runId: string, content: PastedContent[], userAuthored: boolean): boolean {
     const state = this.active.get(runId);
     if (!state?.session?.open || state.cancelled) return false;
+    // A parked in-place run gave the working-tree lease back (`parkRepoRoot`). It must own the
+    // tree again before its session resumes, and the lease is asynchronous — so the message is
+    // ACCEPTED here (the caller's delivery ladder stops, as it would for a sent message) and
+    // delivered once the tree is ours. Every wake-up that lands meanwhile rides the same wait.
+    if (state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state))) {
+      const resume = (state.repoRootResume ??= this.resumeRepoRoot(runId, state));
+      void resume.then((acquired) => {
+        if (!acquired) return;
+        // Another in-place task held the tree while we waited, so this session's picture of it may
+        // be stale. Delivered as its own engine message, ahead of the one the run woke for, so a
+        // user-authored wake-up stays verbatim in the transcript.
+        this.deliverMessage(runId, [{ type: 'text', text: REPO_ROOT_RESUMED_NOTE }], false);
+        if (this.deliverMessage(runId, content, userAuthored)) return;
+        // The session closed while we waited: keep the message the way the ladder would.
+        if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
+      });
+      return true;
+    }
 
     const text = content
       .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
@@ -2031,10 +2877,11 @@ export class RunManager {
     const deliverable = persisted.length ? [...expanded, pastedAttachmentsNote(persisted)] : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
+      this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
-      this.monitoring.delete(runId);
+      this.leaveMonitoring(runId);
       // Clear any `monitoring` activity — the agent is actively working again
       // (spec 2026-07-18-subagent-monitoring-status, #490).
       this.store.updateRun(runId, { status: 'running', activity: undefined });
@@ -2296,6 +3143,11 @@ export class RunManager {
     // expanded against an empty registry and leaked `/om-...` verbatim to the backend, which
     // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
     state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
+    // The dispatch session snapshot — the SECOND of the two `ActiveRun` construction
+    // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
+    // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
+    // a run that quietly degrades into an ordinary task.
+    this.prepareDispatchSession(runId, state);
 
     this.store.updateRun(runId, {
       status: 'running',
@@ -2370,11 +3222,29 @@ export class RunManager {
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        // The dispatch facts of this turn (spec 2026-09-10-dispatch), through the ONE helper both
+        // turn-end handlers call. Inert for a run with no `dispatch`.
+        const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
+          state,
+          stepId,
+          done: Boolean(done),
+        });
         // `CEZ:ASK` → the user is genuinely blocked; wins over `CEZ:MONITORING`
-        // (a pending question is always attention), loses to `CEZ:DONE` (#473).
-        const { ask, notes: askNotes } = resolveAskTurn(turnText, Boolean(sessionOpen) && !done);
+        // (a pending question is always attention), loses to `CEZ:DONE` (#473)
+        // and to a turn that dispatched, which parks as a monitor.
+        const { ask, notes: askNotes } = resolveAskTurn(
+          turnText,
+          Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
+        );
+        // A spawn parks the parent exactly as `CEZ:MONITORING` does — it is waiting on its
+        // children, not on the user, and it has to surrender its slot to them. An over-budget run
+        // parks `waiting` instead, whatever it asked for (Q6 ii).
         const monitoring =
-          sessionOpen && !done && !ask && MONITORING_MARKER_RE.test(turnText.trimEnd());
+          sessionOpen &&
+          !done &&
+          !ask &&
+          !dispatchTurn.overBudget &&
+          (dispatchTurn.dispatched || MONITORING_MARKER_RE.test(turnText.trimEnd()));
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         if (done) {
@@ -2389,7 +3259,8 @@ export class RunManager {
         // with `runAgentStep`'s twin turn-end so the two cannot drift — including the shape:
         // hoisted out of the branch below because the heartbeat at the end of this handler
         // needs to know whether the turn parked.
-        const autoContinued = sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask) : false;
+        const autoContinued =
+          dispatchTurn.rePrompted || (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false);
         if (sessionOpen) {
           if (!autoContinued) {
             // `CEZ:ASK` → park `waiting` (attention) AND surface the structured
@@ -2397,19 +3268,22 @@ export class RunManager {
             // `running`/`activity:'monitoring'` (#490). Both share the waiting
             // lifecycle (free the slot, keep the idle timer); the autonomous
             // nudge above still wins over either.
-            if (ask) emitAskRequested(sink, ask);
+            if (ask) this.recordAsk(runId, sink, ask);
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
               this.store.updateStep(runId, stepId, { status: 'running' });
-              this.monitoring.add(runId);
+              // A park caused by this turn's own dispatch is slot-exempt outright — see
+              // `enterMonitoring` and `busySlots`.
+              this.enterMonitoring(runId, dispatchTurn.dispatched);
               this.clearIdleTimer(state);
               this.armMonitoringWakeTimer(runId, state);
             } else {
               this.store.updateRun(runId, { status: 'waiting', activity: undefined });
               this.store.updateStep(runId, stepId, { status: 'waiting' });
-              this.monitoring.delete(runId);
+              this.leaveMonitoring(runId);
               this.clearMonitoringWakeTimer(state, runId);
             }
+            this.parkRepoRoot(runId, state);
             this.waiting.add(runId);
             if (!monitoring) this.armIdleTimer(runId, state);
             this.releaseSlot();
@@ -2528,7 +3402,16 @@ export class RunManager {
     // through `deliverMessage`, so it needs the SAME delivery-only `/skill` rewrite the
     // live path applies (#811). Delivery-only: the `user-message` event above already
     // persisted the user's original text, and the transcript must keep showing that.
-    const openingPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
+    const expandedPrompt = expandRegistrySlashSkillText(prompt, state.skills ?? []);
+    // Reports that arrived while this run had no session (spec Q7) open the continuation, ahead
+    // of whatever prompted it — a commander resumed by its own children's reports has to be told
+    // what they said. Delivery-only, like the `/skill` rewrite above.
+    const treeReports = this.flushPendingReports(runId);
+    const treeInbox = this.flushInbox(runId);
+    const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
+    const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
+    // The previous runner's portable context (#954) opens the session first, then the tree
+    // blocks above, then the instruction that prompted this continuation.
     const contextualOpeningPrompt = portableContext
       ? `${portableContext}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
@@ -2536,8 +3419,10 @@ export class RunManager {
       {
         // The Continue step is a fresh agent session on the same run — the
         // run's extra system prompt (already resolved at execute time and
-        // echoed on the record) rides along with the handoff contract.
+        // echoed on the record) rides along with the handoff contract, and a
+        // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
         systemPrompt: composeSystemPrompt(
+          dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
           record?.systemPrompt,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
@@ -2763,6 +3648,10 @@ export class RunManager {
     // Every ActiveRun construction site must carry the registry — `runContinuation` builds
     // its own, and the one that skipped this leaked raw `/skill` text to the backend (#811).
     state.skills = skills;
+    // Same rule, same reason, for the dispatch session snapshot (the dispatch prompt; the child
+    // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
+    // twin is in `runContinuation`.
+    this.prepareDispatchSession(runId, state);
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
@@ -2969,6 +3858,13 @@ export class RunManager {
     // matches; a leading `/name` that is not a known skill passes through byte-for-byte.
     userPrompt = expandRegistrySlashSkillText(userPrompt, state.skills ?? []);
     if (chainNote) userPrompt = `${chainNote}\n\n---\n\n${userPrompt}`;
+    // A commander recovered after a restart opens its first session holding whatever its children
+    // reported while it was gone (spec Q7). Prepended and cleared here, after the slash expansion
+    // so a leading `/skill` still matched, and before the failure/attachment suffixes.
+    const treeReports = this.flushPendingReports(runId);
+    const treeInbox = this.flushInbox(runId);
+    const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
+    if (treeBlocks.length) userPrompt = `${treeBlocks.join('\n\n')}\n\n---\n\n${userPrompt}`;
     if (checkFailure) {
       userPrompt += `\n\nA verification command failed after the previous attempt. Fix the cause. Failing output:\n\n${checkFailure}`;
     }
@@ -3034,18 +3930,31 @@ export class RunManager {
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
+        // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
+        // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
+        // are the agent telling cezar what it did, and a chained workflow's non-final step that
+        // reported would otherwise be heard by nobody. The PARK below stays interactive-only,
+        // exactly as it always was.
+        const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
+          state,
+          stepId: step.id,
+          done: Boolean(done),
+        });
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
-        // `CEZ:DONE` (#473).
+        // `CEZ:DONE` (#473) and to a turn that dispatched.
         const { ask, notes: askNotes } = resolveAskTurn(
           turnText,
-          Boolean(interactive && sessionOpen) && !done,
+          Boolean(interactive && sessionOpen) && !done && !dispatchTurn.dispatched,
         );
+        // A spawn parks the commander like `CEZ:MONITORING` does — it waits on its children and
+        // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
         const monitoring =
           interactive &&
           sessionOpen &&
           !done &&
           !ask &&
-          MONITORING_MARKER_RE.test(turnText.trimEnd());
+          !dispatchTurn.overBudget &&
+          (dispatchTurn.dispatched || MONITORING_MARKER_RE.test(turnText.trimEnd()));
         turnText = '';
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
@@ -3063,7 +3972,8 @@ export class RunManager {
         // autonomous run's FIRST session parked like any other (the nudge only ever existed on
         // the continuation path). Gated on `waiting`: a non-interactive step's session belongs to
         // the workflow loop, which moves to the next step on its own.
-        const autoContinued = waiting ? this.tryAutonomousNudge(runId, state, step.id, ask) : false;
+        const autoContinued =
+          dispatchTurn.rePrompted || (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false);
         if (waiting && !autoContinued) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
@@ -3073,19 +3983,22 @@ export class RunManager {
           // instead of raising "needs you" (#490). Lifecycle is identical: the
           // run frees its slot and keeps the idle timer. The autonomous nudge
           // above still wins over either.
-          if (ask) emitAskRequested(sink, ask);
+          if (ask) this.recordAsk(runId, sink, ask);
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
-            this.monitoring.add(runId);
+            // The twin of `runContinuation`'s park: a spawn-caused park is slot-exempt outright
+            // (`enterMonitoring` / `busySlots`), a plain `CEZ:MONITORING` one is capped.
+            this.enterMonitoring(runId, dispatchTurn.dispatched);
             this.clearIdleTimer(state);
             this.armMonitoringWakeTimer(runId, state);
           } else {
             this.store.updateRun(runId, { status: 'waiting', activity: undefined });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
-            this.monitoring.delete(runId);
+            this.leaveMonitoring(runId);
             this.clearMonitoringWakeTimer(state, runId);
           }
+          this.parkRepoRoot(runId, state);
           this.waiting.add(runId);
           if (!monitoring) this.armIdleTimer(runId, state);
           this.releaseSlot(); // the freed slot can start a queued run right away — in any project
@@ -3153,10 +4066,13 @@ export class RunManager {
     try {
       session = runner.startSession(
         {
-          // Skill body, then the run's extra prompt (POST override or config
-          // default), then the handoff/todos contract — every agent step.
+          // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
+          // reports and asks), then the run's extra
+          // prompt (POST override or config default, which may amend either), then the
+          // handoff/todos contract — every agent step.
           systemPrompt: composeSystemPrompt(
             systemPrompt,
+            dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
             extraSystemPrompt,
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
@@ -3210,7 +4126,7 @@ export class RunManager {
     } finally {
       this.recordUsagePeaks(runId);
       this.clearIdleTimer(state);
-      this.monitoring.delete(runId);
+      this.leaveMonitoring(runId);
       this.waiting.delete(runId);
       this.clearMonitoringWakeTimer(state, runId);
       state.session = undefined;
@@ -3242,7 +4158,7 @@ export class RunManager {
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
-    this.monitoring.delete(runId);
+    this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
     this.waiting.add(runId);
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
@@ -3627,10 +4543,35 @@ export class RunManager {
     state: ActiveRun,
     stepId: string,
     ask: AskRequest | null,
+    dispatchTurn: DispatchTurnResult,
   ): boolean {
     if (!state.autonomous) return false;
+    // Three dispatch exceptions (spec 2026-09-10-dispatch), each closing a hole the nudge would
+    // otherwise punch through the feature's guarantees — and living HERE, in the one helper both
+    // turn-end handlers call, so neither site can drift from the other:
+    //  - a turn that SPAWNED is waiting on its children; nudging it would keep the commander
+    //    working while holding the slot its children need;
+    //  - the Guard: an autonomous dispatched run must not answer its own `CEZ:ASK` — that is the
+    //    whole point of asking before something irreversible. A NON-dispatch autonomous run keeps
+    //    the override below, pinned by its own test;
+    //  - the budget brake (Q6 ii): a run that has spent its ceiling stops spending.
+    if (dispatchTurn.dispatched || dispatchTurn.overBudget) return false;
+    if (dispatchTurn.hasDispatch && ask) return false;
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     if (state.cancelled) return false;
+    // A question repeated verbatim after a nudge is not a preference the agent can settle on
+    // its own — it is a blocker (the cockpit refused `cez task create`, a login is missing) that
+    // the nudge would merely make it work around, at full cost, until the cap. Park the run on
+    // the question instead, so the operator sees it now rather than after 40 more turns.
+    const askKey = ask ? ask.questions.map((question) => question.question).join(' | ') : undefined;
+    if (askKey !== undefined && askKey === state.lastOverriddenAsk) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — the same question was asked again after a nudge, so the run parks on it instead of continuing: ${askKey}`,
+      });
+      return false;
+    }
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
     state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
@@ -3644,12 +4585,11 @@ export class RunManager {
     // an agent actually asked leaves no trace anywhere in the transcript, so whoever opens the
     // run after it parks at the cap cannot see that one was ever asked.
     if (ask) {
+      state.lastOverriddenAsk = askKey;
       this.store.appendEvent(runId, {
         type: 'note',
         stepId,
-        message: `autonomous — question overridden by the auto-continue nudge: ${ask.questions
-          .map((question) => question.question)
-          .join(' | ')}`,
+        message: `autonomous — question overridden by the auto-continue nudge: ${askKey}`,
       });
     }
     return true;

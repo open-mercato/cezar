@@ -759,6 +759,7 @@ describe('workspace projects API', () => {
         followups: false,
         singleProject: false,
         automations: false,
+        dispatch: true,
         tokenMetrics: true,
         tokenUsageMetrics: true,
         costMetrics: true,

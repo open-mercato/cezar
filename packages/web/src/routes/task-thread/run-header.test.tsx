@@ -1338,3 +1338,67 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
   })
 })
+
+/**
+ * Provenance in the thread header (spec `.ai/specs/2026-09-10-dispatch.md`): a dispatched task
+ * links back to the task that ordered it, and a task that dispatched work names what it started.
+ * Both are read from the run list this page already holds, so neither costs a request.
+ */
+describe('dispatch lines', () => {
+  const parentLine = () => document.querySelector('[data-slot="dispatch-parent-line"]')
+  const parentLink = () => document.querySelector('[data-slot="dispatch-parent"]')
+  const childrenLine = () => document.querySelector('[data-slot="dispatch-children"]')
+  const childLinks = () => [...document.querySelectorAll('[data-slot="dispatch-child"]')]
+
+  it('says nothing at all for a plain task', async () => {
+    stubFetch()
+    renderHeader(run('done'))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    expect(parentLine()).toBeNull()
+    expect(childrenLine()).toBeNull()
+  })
+
+  it('links a child back to its parent, titled from the run list', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([run('done', { id: 'p1', title: 'Ship the release', titleSummary: 'Ship the release' })]),
+    })
+    renderHeader(run('running', { id: 'c1', dispatch: { rootRunId: 'p1', parentRunId: 'p1' } }))
+    // The title arrives with the run list; the link itself is painted from `run.dispatch` alone.
+    await waitFor(() => expect(parentLink()?.textContent).toContain('Ship the release'))
+    expect(parentLine()?.textContent).toContain('Dispatched by')
+    expect(parentLink()?.getAttribute('href')).toBe('/tasks/p1')
+  })
+
+  // A parent outside the list (another project, pruned) still gets its link: dropping the line
+  // would leave a thread that cannot say who ordered it.
+  it('falls back to the parent’s id when the list does not carry it', async () => {
+    stubFetch()
+    renderHeader(run('running', { id: 'c1', dispatch: { rootRunId: 'gone', parentRunId: 'gone' } }))
+    await waitFor(() => expect(parentLink()).not.toBeNull())
+    expect(parentLink()?.textContent).toContain('gone')
+  })
+
+  it('names the subtasks a parent dispatched, each linking into its own thread', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          run('done', { id: 'k1', titleSummary: 'Review PR #1', dispatch: { rootRunId: 'r1', parentRunId: 'r1' } }),
+          run('running', { id: 'k2', titleSummary: 'Review PR #2', dispatch: { rootRunId: 'r1', parentRunId: 'r1' } }),
+          run('done', { id: 'other', titleSummary: 'Unrelated' }),
+        ]),
+    })
+    renderHeader(run('running', { id: 'r1', dispatch: { rootRunId: 'r1' } }))
+    await waitFor(() => expect(childLinks()).toHaveLength(2))
+    expect(childrenLine()?.textContent).toContain('Subtasks')
+    expect(childLinks().map((a) => a.getAttribute('href'))).toEqual(['/tasks/k1', '/tasks/k2'])
+  })
+
+  // The role chip is gone with the ranks it named — nothing in the header may reintroduce it.
+  it('wears no rank chip', async () => {
+    stubFetch()
+    renderHeader(run('running', { dispatch: { rootRunId: 'r1' } }))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
+  })
+})

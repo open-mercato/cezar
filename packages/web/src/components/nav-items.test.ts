@@ -88,7 +88,8 @@ describe('NAV_ITEMS', () => {
 /** The gates: the GitHub item exists exactly while health reports the forge driver (R6 Step 1.1),
  *  the Inbox item exactly while it reports the opt-in `capabilities.followups` (#471), and the
  *  Automations item exactly while it reports a forge AND the opt-in `capabilities.automations`
- *  (#801). Each gate owns ONLY its own item, and all default to absent while health is unknown. */
+ *  (#801). Each gate owns ONLY its own items, and all default to absent while health is
+ *  unknown. */
 describe('visibleNavItems', () => {
   const labelsOf = (opts?: Parameters<typeof visibleNavItems>[0]) =>
     visibleNavItems(opts).map((item) => item.label)

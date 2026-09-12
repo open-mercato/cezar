@@ -53,6 +53,7 @@ import {
   type TaskColumnId,
 } from '@/lib/task-columns'
 import { listCounts, queuePositions, runTitle, sortRuns, type ListView } from '@/lib/task-groups'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import {
   compareGroups,
   filterRuns,
@@ -126,6 +127,11 @@ export function TasksOverview({
   const all = runs ?? []
   const counts = listCounts(all)
   const visible = sortRuns(filterRuns(all, query), view)
+  // Dispatched children nest under the task that ordered them, in that task's own place in the
+  // sort above (spec `.ai/specs/2026-09-10-dispatch.md`). One derivation, both layouts: the table
+  // and the cards are the same rows at two widths, and a tree that disagreed between them would
+  // be two trees.
+  const rows = taskTreeRows(visible)
   // Positions come from the full list, never the filtered one: a search must not renumber the
   // queue the engine is actually going to drain.
   const positions = queuePositions(all)
@@ -238,11 +244,15 @@ export function TasksOverview({
                     </tr>
                   </thead>
                   <tbody className="[&>tr:last-child>td]:border-b-0">
-                    {visible.map((run) => (
+                    {rows.map((node) => (
                       <TableRow
-                        key={run.id}
-                        run={run}
-                        queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
+                        key={node.run.id}
+                        run={node.run}
+                        depth={node.depth}
+                        childCount={node.childCount}
+                        queuePosition={
+                          node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
+                        }
                         onRename={onRename}
                         onTogglePin={pinToggle}
                         now={now}
@@ -257,11 +267,15 @@ export function TasksOverview({
 
             {/* <md: the same runs as stacked cards. */}
             <div data-slot="task-cards" className="flex flex-col gap-2.5 md:hidden">
-              {visible.map((run) => (
+              {rows.map((node) => (
                 <TaskCard
-                  key={run.id}
-                  run={run}
-                  queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
+                  key={node.run.id}
+                  run={node.run}
+                  depth={node.depth}
+                  childCount={node.childCount}
+                  queuePosition={
+                    node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
+                  }
                   now={now}
                   showTokens={showTokens}
                   showCost={showCost}
@@ -508,6 +522,8 @@ const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4
  */
 function TableRow({
   run,
+  depth,
+  childCount,
   queuePosition,
   onRename,
   onTogglePin,
@@ -516,6 +532,10 @@ function TableRow({
   expandedColumns,
 }: {
   run: RunRecord
+  /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
+  depth: number
+  /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
+  childCount: number
   queuePosition: number | null
   onRename: (id: string, title: string) => void
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
@@ -534,6 +554,9 @@ function TableRow({
     <tr
       data-slot="task-table-row"
       data-run-id={run.id}
+      // The nesting is carried on the ROW, not only in the Task cell's padding: a test (and a
+      // stylesheet) should be able to ask how deep a row sits without parsing an indent.
+      data-depth={depth}
       onClick={(event) => {
         if ((event.target as Element).closest('a, button, input')) return
         navigate(to)
@@ -568,6 +591,8 @@ function TableRow({
             column={column}
             expanded={isColumnExpanded(column.id, expandedColumns)}
             run={run}
+            depth={depth}
+            childCount={childCount}
             attention={attention}
             scheduled={scheduled}
             reference={reference}
@@ -587,6 +612,8 @@ function TaskTableCell({
   column,
   expanded,
   run,
+  depth,
+  childCount,
   attention,
   scheduled,
   reference,
@@ -599,6 +626,8 @@ function TaskTableCell({
   column: TaskColumnDefinition
   expanded: boolean
   run: RunRecord
+  depth: number
+  childCount: number
   attention: ReturnType<typeof deriveAttention>
   scheduled: ReturnType<typeof scheduledResume>
   reference: ReturnType<typeof taskReference>
@@ -625,7 +654,14 @@ function TaskTableCell({
     case 'task':
       return (
         <td data-column-id={column.id} className={cn(TD_BASE, 'min-w-[220px] max-w-0')}>
-          <TitleCell run={run} to={to} onRename={onRename} onTogglePin={onTogglePin} />
+          <TitleCell
+            run={run}
+            depth={depth}
+            childCount={childCount}
+            to={to}
+            onRename={onRename}
+            onTogglePin={onTogglePin}
+          />
         </td>
       )
     case 'workflow':
@@ -704,11 +740,15 @@ function FoldedTd({ column }: { column: TaskColumnId }) {
  */
 function TitleCell({
   run,
+  depth,
+  childCount,
   to,
   onRename,
   onTogglePin,
 }: {
   run: RunRecord
+  depth: number
+  childCount: number
   to: string
   onRename: (id: string, title: string) => void
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
@@ -720,12 +760,33 @@ function TitleCell({
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
 
+  const subtasks = subtaskLabel(childCount)
+  // The indent, as inline style rather than a class: depth is unbounded (a task may dispatch a
+  // task that dispatches a task), and Tailwind cannot generate a class per level. 14px a level is
+  // the sidebar's own nesting step, so the two lists read as one grammar.
+  const indent = depth > 0 ? { paddingLeft: `${depth * 14}px` } : undefined
+
   if (editor.editing) {
-    return <TitleEditInput editor={editor} className="text-[13px] font-medium" />
+    return (
+      <span className="flex min-w-0 items-center" style={indent}>
+        <TitleEditInput editor={editor} className="text-[13px] font-medium" />
+      </span>
+    )
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5">
+    <span className="flex min-w-0 items-center gap-1.5" style={indent}>
+      {/* The one mark that says this row was ORDERED by the row above it rather than by a
+          person. Padding alone reads as an accident at 13px; the tick reads as a branch. */}
+      {depth > 0 ? (
+        <span
+          aria-hidden="true"
+          data-slot="subtask-tick"
+          className="shrink-0 font-mono text-[11px] leading-none text-soft-foreground"
+        >
+          &#9492;
+        </span>
+      ) : null}
       <Link
         to={to}
         title={title}
@@ -736,6 +797,26 @@ function TitleCell({
       >
         {title}
       </Link>
+      {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
+          from a task a person typed without opening it. Null on every root. */}
+      {dispatchKindLabel(run) ? (
+        <span
+          data-slot="dispatch-kind"
+          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+        >
+          {dispatchKindLabel(run)}
+        </span>
+      ) : null}
+      {/* What this task dispatched, counted rather than listed: the children are the rows right
+          underneath, so the count is a label for them, not a second copy of them. */}
+      {subtasks ? (
+        <span
+          data-slot="subtask-count"
+          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+        >
+          {subtasks}
+        </span>
+      ) : null}
       {/* The unread marker — same trailing violet dot as the sidebar row. */}
       {unread ? (
         <StatusDot
@@ -820,6 +901,8 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
 /** One run, one card — the `<md` framing of the same row. */
 function TaskCard({
   run,
+  depth,
+  childCount,
   queuePosition,
   now,
   showTokens,
@@ -827,6 +910,9 @@ function TaskCard({
   onTogglePin,
 }: {
   run: RunRecord
+  /** Nesting level under the task that dispatched this one; 0 for a top-level card. */
+  depth: number
+  childCount: number
   queuePosition: number | null
   now: number
   showTokens: boolean
@@ -848,6 +934,11 @@ function TaskCard({
     <div
       data-slot="task-card"
       data-run-id={run.id}
+      data-depth={depth}
+      // The card stack's nesting: the child card is inset from the left edge and keeps the whole
+      // card width it had, rather than being squeezed — at phone width a shrinking card would
+      // cost the title the room the indent was supposed to explain.
+      style={depth > 0 ? { marginLeft: `${depth * 14}px` } : undefined}
       onClick={(event) => {
         // `button` as well as `a` since the card grew the pin (#935): a control inside the card
         // owns its own click, exactly as the desktop row has always had it.
@@ -870,6 +961,24 @@ function TaskCard({
         >
           {runTitle(run)}
         </Link>
+        {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
+        {dispatchKindLabel(run) ? (
+          <span
+            data-slot="dispatch-kind"
+            className="mt-px shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+          >
+            {dispatchKindLabel(run)}
+          </span>
+        ) : null}
+        {/* Same count as the table's Task cell — the dispatched children are the cards below. */}
+        {subtaskLabel(childCount) ? (
+          <span
+            data-slot="subtask-count"
+            className="mt-px shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+          >
+            {subtaskLabel(childCount)}
+          </span>
+        ) : null}
         {/* The unread marker — trailing violet dot, as on the desktop row. */}
         {unread ? (
           <StatusDot

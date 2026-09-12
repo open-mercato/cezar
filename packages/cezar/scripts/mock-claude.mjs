@@ -33,6 +33,7 @@ let turn = 0;
 // answers the nudge ends with CEZ:DONE — so a dry-run test can watch a nudged run complete
 // rather than time out.
 let autonomousArmed = false;
+let askRepeat = false;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -90,10 +91,20 @@ async function respond(userText, imageCount) {
   turn += 1;
   await sleep(250);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
-  // completion marker (#347), so the auto-close path is testable dry.
+  // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
+  // a unit that has reported is finished, and a report with no done marker would leave the child
+  // parked instead of settling into the report its parent is waiting for.
+  // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
+  // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
   if (userText.includes('mock:autonomous')) autonomousArmed = true;
+  // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
+  // the agent that is blocked on something no nudge can fix and keeps asking about it.
+  if (userText.includes('mock:ask-repeat')) askRepeat = true;
+  // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
+  // message reached the model, then settles.
   const doneMarker =
     userText.includes('mock:done') ||
+    userText.includes('## Tree inbox') ||
     (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
       ? '\n\nCEZ:DONE'
       : '';
@@ -134,7 +145,7 @@ async function respond(userText, imageCount) {
               },
             ],
           })
-      : userText.includes('mock:ask')
+      : userText.includes('mock:ask') || askRepeat
       ? '\n\nCEZ:ASK ' +
         JSON.stringify({
           questions: [
@@ -155,8 +166,10 @@ async function respond(userText, imageCount) {
     ? '\nCEZ:PR=4242\nCEZ:ISSUE=17\nCEZ:TITLE=implementing marker refs'
     : '';
 
-  // `mock:slow` → hold the turn for ~25 s so queue states are observable.
+  // `mock:slow` → hold the turn for ~25 s so queue states are observable. `mock:pause` → ~2 s,
+  // long enough for a test to drop a file into the run's inbox before its turn ends.
   if (userText.includes('mock:slow')) await sleep(25_000);
+  else if (userText.includes('mock:pause')) await sleep(2_000);
 
   // Mirrors the real Claude Code 2.1.148 revoked-token envelope: the CLI puts
   // the credential failure in an `is_error` result even though its subtype is

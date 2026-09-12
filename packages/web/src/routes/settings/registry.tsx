@@ -198,7 +198,7 @@ export const SETTINGS_SECTIONS: SettingsSection[] = [
  */
 export function visibleSettingsSections(
   scope: SettingsScope,
-  capabilities?: Pick<Capabilities, 'singleProject'>,
+  capabilities?: Partial<Pick<Capabilities, 'singleProject'>>,
 ): SettingsSection[] {
   return SETTINGS_SECTIONS.filter(
     (section) =>

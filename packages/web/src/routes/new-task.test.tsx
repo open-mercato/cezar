@@ -64,7 +64,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -469,7 +469,7 @@ describe('picker data flows', () => {
   it('drops a persisted model preset that belongs to another runner', async () => {
     writeDraft({
       text: '', source: null, runner: 'codex', agentProfile: null, model: 'claude-opus-4-8', variants: 1,
-      planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
+      planFirst: false, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
     })
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()
@@ -954,7 +954,7 @@ describe('submit', () => {
     // lands in its errored state immediately and the test stays deterministic.
     writeDraft({
       text: '', source: { source: 'skill', ref: 'om-fix' }, runner: null, agentProfile: null, model: null,
-      variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null,
+      variants: 1, planFirst: false, worktree: null, autonomous: null, generateFollowups: null, dispatch: null,
     })
     serve({ createRun: { id: 'run-9' }, uiStateStatus: 404 })
     renderNewTask()
@@ -1251,7 +1251,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -2251,5 +2251,202 @@ describe('the composer runner pill carries the account', () => {
     await startTask()
     // …and nothing account-shaped reaches the wire.
     expect(postedBody()).not.toHaveProperty('agentProfile')
+  })
+})
+
+// ---- the Dispatch toggle (spec 2026-09-10-dispatch) --------------------------------------------
+
+describe('the Dispatch toggle', () => {
+  const HEALTH_DISPATCH: HealthResponse = {
+    ...HEALTH,
+    capabilities: { ...HEALTH.capabilities, dispatch: true },
+  }
+  const dispatchToggle = () =>
+    document.querySelector('[data-slot="dispatch-toggle"]') as HTMLButtonElement | null
+  const worktreeToggle = () =>
+    document.querySelector('[data-slot="worktree-toggle"]') as HTMLButtonElement
+  const autonomousToggle = () =>
+    document.querySelector('[data-slot="autonomous-toggle"]') as HTMLButtonElement
+  const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
+  const hint = () => document.querySelector('[data-slot="dispatch-hint"]')
+  const settings = () => document.querySelector('[data-slot="dispatch-settings"]')
+  /** The desktop split pill's chevron — the settings route a mouse actually has. */
+  const settingsTrigger = () =>
+    document.querySelector('[data-slot="dispatch-settings-trigger"]') as HTMLButtonElement | null
+
+  /** Render with dispatch on the server and wait for the icon to be there. */
+  async function readyWithDispatch(overrides: Parameters<typeof serve>[0] = {}) {
+    serve({ health: HEALTH_DISPATCH, ...overrides })
+    renderNewTask()
+    await pillReady()
+    await waitFor(() => expect(dispatchToggle()).not.toBeNull())
+    return dispatchToggle()!
+  }
+
+  /** Hold the icon past the long-press delay. Fake timers only for the hold itself — the
+   *  rest of the harness (`waitFor`, react-query) runs on real ones. */
+  function longPress(target: HTMLElement) {
+    vi.useFakeTimers()
+    try {
+      fireEvent.pointerDown(target, { button: 0, clientX: 5, clientY: 5 })
+      act(() => vi.advanceTimersByTime(500))
+    } finally {
+      vi.useRealTimers()
+    }
+    // What the browser sends after the hold — the click must be swallowed, not toggle.
+    fireEvent.pointerUp(target)
+    fireEvent.click(target)
+  }
+
+  it('is hidden while the server has dispatch off, and sends nothing', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(dispatchToggle()).toBeNull()
+    fireEvent.change(textarea(), { target: { value: 'Plain run' } })
+    await startTask()
+    expect(postedBody()).not.toHaveProperty('dispatch')
+  })
+
+  it('renders off by default when the capability is on; off sends no dispatch key', async () => {
+    const toggle = await readyWithDispatch()
+    expect(toggle.getAttribute('role')).toBe('switch')
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(toggle.getAttribute('aria-label')).toBe('Dispatch')
+    expect(hint()).toBeNull()
+    fireEvent.change(textarea(), { target: { value: 'Still a plain run' } })
+    await startTask()
+    expect(postedBody()).not.toHaveProperty('dispatch')
+  })
+
+  it('a tap turns it on: hint, forced worktree, autonomous by default, and the bare `{}` on the wire', async () => {
+    const toggle = await readyWithDispatch()
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+
+    // The hint line under the composer, and the header's one-liner, both say what changed.
+    expect(hint()?.textContent).toContain('Dispatch is on.')
+    expect(hint()?.textContent).toContain('Long-press the icon for limits.')
+    expect(note()).toBe('Runs on its own and fans work out to subtasks — it will not pause for you.')
+
+    // Subtasks fork off this task's commits, so the worktree is no longer the user's call.
+    expect(worktreeToggle().disabled).toBe(true)
+    expect(worktreeToggle().getAttribute('aria-checked')).toBe('true')
+    expect(worktreeToggle().title).toBe("Dispatch forks this task's commits — subtasks need a worktree")
+    expect(autonomousToggle().getAttribute('aria-checked')).toBe('true')
+
+    fireEvent.change(textarea(), { target: { value: 'Review every open PR' } })
+    await startTask()
+    const body = postedBody() as Record<string, unknown>
+    expect(body.dispatch).toEqual({})
+    expect(body).not.toHaveProperty('worktree')
+    expect(body.autonomous).toBe(true)
+  })
+
+  it('an explicit Autonomous off survives dispatch, and the note says so', async () => {
+    const toggle = await readyWithDispatch()
+    fireEvent.click(toggle)
+    fireEvent.click(autonomousToggle())
+    expect(autonomousToggle().getAttribute('aria-checked')).toBe('false')
+    expect(note()).toBe('Fans work out to subtasks in isolated worktrees.')
+
+    // Off again: the ordinary note and an enabled worktree chip come back.
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(hint()).toBeNull()
+    expect(worktreeToggle().disabled).toBe(false)
+    expect(note()).toBe('Runs in an isolated worktree — review everything before it lands.')
+  })
+
+  it('on desktop the chevron opens the settings without toggling; limits set there turn it on and ride the body', async () => {
+    const toggle = await readyWithDispatch()
+    // A mouse has no natural hold: the split pill's chevron is the route to the settings.
+    fireEvent.click(settingsTrigger()!)
+    await waitFor(() => expect(settings()).not.toBeNull())
+    // The chevron is the secondary action — it did not flip the switch.
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+
+    fireEvent.change(screen.getByLabelText('Max subtasks'), { target: { value: '10' } })
+    fireEvent.change(screen.getByLabelText('In flight at once'), { target: { value: '2' } })
+    // A limit is a statement about a dispatch that will happen: setting one turns it on.
+    expect(toggle.getAttribute('aria-checked')).toBe('true')
+    expect(hint()).not.toBeNull()
+    expect(readDraft().dispatch).toEqual({ maxSubtasks: 10, inFlight: 2 })
+
+    fireEvent.change(textarea(), { target: { value: 'Fan out the review' } })
+    await startTask()
+    expect((postedBody() as Record<string, unknown>).dispatch).toEqual({ maxSubtasks: 10, inFlight: 2 })
+  })
+
+  it('the settings offer the host runners and the model presets of the chosen subtask runner', async () => {
+    const toggle = await readyWithDispatch({ health: { ...HEALTH_DISPATCH, checks: HEALTH_MULTI.checks }, providerStatus: PROVIDERS_MULTI })
+    fireEvent.click(settingsTrigger()!)
+    await waitFor(() => expect(settings()).not.toBeNull())
+
+    const runner = screen.getByLabelText('Subtask runner') as HTMLSelectElement
+    expect(Array.from(runner.options).map((o) => o.value)).toEqual(['', 'claude', 'codex'])
+    // "same as parent" resolves against the parent's (claude) catalog — the live one.
+    const model = () => screen.getByLabelText('Subtask model') as HTMLSelectElement
+    await waitFor(() => expect(Array.from(model().options).map((o) => o.value)).toEqual(['', 'opus', 'sonnet']))
+
+    // Picking a model, then another runner: the model pin is dropped with it (presets are
+    // per-runner), and codex's list here is its static presets — auto only, which the select
+    // folds into "same as parent" — because only the parent's runner gets the live catalog.
+    fireEvent.change(model(), { target: { value: 'sonnet' } })
+    expect(readDraft().dispatch).toEqual({ model: 'sonnet' })
+    fireEvent.change(runner, { target: { value: 'codex' } })
+    expect(readDraft().dispatch).toEqual({ runner: 'codex' })
+    expect(Array.from(model().options).map((o) => o.value)).toEqual([''])
+    fireEvent.change(screen.getByLabelText('Budget per subtask'), { target: { value: '2.5' } })
+    expect(readDraft().dispatch).toEqual({ runner: 'codex', budgetUsd: 2.5 })
+
+    // The header switch is the same on/off as the pill.
+    fireEvent.click(document.querySelector('[data-slot="dispatch-settings-switch"]')!)
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+    expect(readDraft().dispatch).toBeNull()
+  })
+
+  it('the keyboard reaches the settings with ArrowDown', async () => {
+    const toggle = await readyWithDispatch()
+    fireEvent.keyDown(toggle, { key: 'ArrowDown' })
+    await waitFor(() => expect(settings()).not.toBeNull())
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('on a phone the settings are a bottom sheet, not a popover', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: query !== '(min-width: 768px)',
+        media: query,
+        addEventListener() {},
+        removeEventListener() {},
+      })),
+    )
+    const toggle = await readyWithDispatch()
+    // No chevron on a phone — the hold is the route there, and the pill stays a single icon.
+    expect(settingsTrigger()).toBeNull()
+    longPress(toggle)
+    await waitFor(() => expect(settings()).not.toBeNull())
+    expect(settings()?.getAttribute('data-slot')).toBe('dispatch-settings')
+    expect(document.querySelector('[data-slot="sheet-overlay"]')).not.toBeNull()
+    expect(document.querySelector('[data-slot="popover-content"]')).toBeNull()
+  })
+
+  it('survives a remount through the draft, and is dropped when the server no longer offers it', async () => {
+    const first = await readyWithDispatch()
+    fireEvent.click(first)
+    expect(readDraft().dispatch).toEqual({})
+    cleanup()
+
+    // Same draft, dispatch turned off server-side: no icon, and the stored intent is not sent.
+    serve()
+    renderNewTask()
+    await pillReady()
+    expect(dispatchToggle()).toBeNull()
+    expect(worktreeToggle().disabled).toBe(false)
+    fireEvent.change(textarea(), { target: { value: 'Server says no' } })
+    await startTask()
+    expect(postedBody()).not.toHaveProperty('dispatch')
   })
 })

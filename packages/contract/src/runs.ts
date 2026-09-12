@@ -4,6 +4,10 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+// Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
+// one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
+// `contract-parity.runs.test.ts` cannot drift apart by construction.
+import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -180,6 +184,12 @@ export const runRecordSchema = z.object({
       githubUrl: z.string(),
     })
     .optional(),
+  /**
+   * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
+   * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
+   * always has.
+   */
+  dispatch: dispatchSchema.optional(),
   status: runStatusSchema,
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
@@ -337,6 +347,10 @@ export const runIndexEntrySchema = z.object({
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
+  /** The run's place in a dispatch tree (spec 2026-09-10-dispatch): the two keys the global
+   *  page needs to nest a child under its parent, and the child's `kind` so a row can say
+   *  `review` or `implement` next to its title. Absent on a plain task. */
+  dispatch: dispatchSchema.pick({ rootRunId: true, parentRunId: true, kind: true }).optional(),
   /** When the agent actually started, as opposed to when the task was created. The global page's
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),
@@ -734,6 +748,10 @@ export const createRunInputBaseSchema = z
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    /** The composer's Dispatch toggle (spec 2026-09-10-dispatch): start this task as the root of
+     *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
+     *  still created — on a server with `capabilities.dispatch` off. */
+    dispatch: dispatchIntentSchema.optional(),
   });
 
 /**

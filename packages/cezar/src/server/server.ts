@@ -41,6 +41,7 @@ import {
   openProjectInSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
+import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -427,6 +428,10 @@ const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 t
 /** 409 body for every automations route while GitHub automations are off (#801). */
 const AUTOMATIONS_OFF = 'GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them';
 
+/** 409 body for every dispatch route while task dispatch is off (spec 2026-09-10-dispatch). */
+const DISPATCH_OFF =
+  'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.';
+
 // ---- variant-compare response shapes (spec 010) ----------------------------
 // Named and exported so `api-types.test.ts` can drift-guard the cockpit's
 // hand-mirrored copies (`web/app/src/api/types.ts`) against the real thing.
@@ -604,6 +609,10 @@ const startRunSchema = z
     // audit trail survives the composer detour. Bounded like every other
     // string here; a todo id is a short generated key.
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    // The composer's Dispatch toggle (spec 2026-09-10-dispatch): this task is the root of a
+    // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
+    // off: the task itself is still perfectly valid as an ordinary run.
+    dispatch: dispatchIntentSchema.optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -3439,6 +3448,44 @@ export function createApp(deps: ServerDeps) {
       return check ? c.json(check) : c.json({ error: 'not found' }, 404);
     });
 
+  /**
+   * The dispatch gate (spec `.ai/specs/2026-09-10-dispatch.md`) — the automations gate, one flag
+   * over: with `CEZ_DISPATCH=0`, both routes answer 409 before touching the manager.
+   *
+   * Middleware on EXPLICIT paths, never `use('*')`, for the reason `requireAutomations` spells
+   * out above: this family is mounted with `.route('/', …)` alongside a dozen unrelated sub-apps,
+   * and `route()` re-registers a sub-app's middleware under the mount prefix.
+   */
+  const requireDispatch = async (c: Context, next: Next) => {
+    if (!capabilities().dispatch) return c.json({ error: DISPATCH_OFF }, 409);
+    await next();
+  };
+
+  // ---- chained family: dispatch (project-scoped) ----
+  // A task dispatching other tasks (spec 2026-09-10-dispatch). Both routes are what the `cez task`
+  // CLI calls from inside a running agent, with CEZ_API_URL / CEZ_PROJECT_ID / CEZ_TASK_ID from
+  // its environment; nothing stops a human or a script from calling them too.
+  const dispatchRoutes = new Hono<ProjectApiEnv>()
+    .use('/runs/:id/dispatch', requireDispatch)
+    .use('/runs/:id/report', requireDispatch)
+
+    /** Create ONE child of run `:id`. Refusals (cap, budget, settled parent) are 409 with the
+     *  reason — the same text the parent's transcript notes. */
+    .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), (c) => {
+      const { manager } = c.get('project');
+      const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'));
+      if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
+      return c.json(outcome, 201);
+    })
+
+    /** Record run `:id`'s own report. 404 when the run is not in a dispatch tree. */
+    .post('/runs/:id/report', jsonZodValidator(dispatchReportSchema), (c) => {
+      const { manager } = c.get('project');
+      const recorded = manager.recordReport(c.req.param('id'), c.req.valid('json'));
+      if (!recorded) return c.json({ error: 'run is not part of a dispatch tree' }, 404);
+      return c.json({ ok: true as const });
+    });
+
   // ---- runs ----------------------------------------------------------------
 
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
@@ -3578,6 +3625,7 @@ export function createApp(deps: ServerDeps) {
         // One decision here feeds the run record, the system prompt and
         // CEZ_TODOS_FILE alike (RunManager.agentEnv).
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
+        ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
       };
       const variants = parsed.data.variants ?? 1;
       if (variants > 1) {
@@ -5327,6 +5375,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', workflowsRoutes)
     .route('/', planRoutes)
     .route('/', automationsRoutes)
+    .route('/', dispatchRoutes)
     .route('/', runsRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
@@ -5388,6 +5437,15 @@ export function createApp(deps: ServerDeps) {
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
+    ...(run.dispatch !== undefined
+      ? {
+          dispatch: {
+            rootRunId: run.dispatch.rootRunId,
+            ...(run.dispatch.parentRunId !== undefined ? { parentRunId: run.dispatch.parentRunId } : {}),
+            ...(run.dispatch.kind !== undefined ? { kind: run.dispatch.kind } : {}),
+          },
+        }
+      : {}),
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
     // The tracker-reference inputs, verbatim — the cockpit's `taskReference()` owns the rule
     // that picks between them (see the schema's note).

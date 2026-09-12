@@ -715,3 +715,71 @@ describe('TaskQuickListContainer', () => {
     expect(row('a')).toBeNull()
   })
 })
+
+/**
+ * Task dispatch in the sidebar (spec `.ai/specs/2026-09-10-dispatch.md`): a dispatched child sits
+ * under the task that ordered it, indented, rather than as a second top-level row. Nesting is per
+ * BUCKET — a child asking for you in `Needs you` while its parent is still `Working` stays where
+ * someone is looking for it.
+ */
+describe('dispatched subtasks in the quick-list', () => {
+  const idsIn = (label: string) =>
+    [...bucket(label).querySelectorAll('[data-slot="task-row"]')].map((el) =>
+      el.getAttribute('data-run-id'),
+    )
+
+  it('nests a child under its parent, indented, in the parent’s own position', () => {
+    renderList({
+      runs: [
+        run({ id: 'newer', status: 'done', createdAt: ago(1_000) }),
+        run({ id: 'parent', status: 'done', createdAt: ago(50_000) }),
+        run({
+          id: 'child',
+          status: 'done',
+          createdAt: ago(10_000),
+          dispatch: { rootRunId: 'parent', parentRunId: 'parent' },
+        }),
+      ],
+    })
+    expect(idsIn('Recent')).toEqual(['newer', 'parent', 'child'])
+    expect(row('child')?.getAttribute('data-depth')).toBe('1')
+    expect(row('parent')?.getAttribute('data-depth')).toBe('0')
+    expect(row('parent')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('1')
+  })
+
+  // Buckets are the unit the sidebar renders: a child that needs you must not be filed under a
+  // parent sitting in a bucket nobody is watching.
+  it('keeps a child in its own bucket when the parent is in another one', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'running' }),
+        run({ id: 'c', status: 'waiting', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    expect(idsIn('Working')).toEqual(['p'])
+    expect(idsIn('Needs you')).toEqual(['c'])
+    expect(row('c')?.getAttribute('data-depth')).toBe('0')
+  })
+
+  it('shows a child whose parent is not in the list at all as a top-level row', () => {
+    renderList({ runs: [run({ id: 'orphan', dispatch: { rootRunId: 'gone', parentRunId: 'gone' } })] })
+    expect(idsIn('Recent')).toEqual(['orphan'])
+    expect(row('orphan')?.getAttribute('data-depth')).toBe('0')
+  })
+
+  // The kind chip tells a dispatched row from a typed one at a glance, and it is the one piece
+  // of metadata the sidebar keeps at every width. Never on the root.
+  it('labels a child with its kind, an absent kind as implement, and a root with nothing', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({ id: 'rev', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+        run({ id: 'imp', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    const kindOf = (id: string) => row(id)?.querySelector('[data-slot="dispatch-kind"]')?.textContent ?? null
+    expect(kindOf('rev')).toBe('review')
+    expect(kindOf('imp')).toBe('implement')
+    expect(kindOf('p')).toBeNull()
+  })
+})
