@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { DISPATCH_MAX_IN_FLIGHT } from '@open-mercato/cezar-api-client'
 import {
   autoApplyText,
   availablePromptTemplates,
@@ -346,7 +347,9 @@ describe('DEFAULT_PROMPT_TEMPLATES', () => {
     expect(template?.label).toBe('Review open PRs')
     expect(template?.text).toContain('gh pr list --state open')
     expect(template?.text).toContain('cez task create --kind review --review-of <headRefName>')
-    expect(template?.text).toContain('at most 4 at a time')
+    // The cap is the contract's, not a literal: the engine enforces it and DISPATCH_PROMPT states
+    // it, so a template that named its own number would be a fourth copy free to drift.
+    expect(template?.text).toContain(`at most ${DISPATCH_MAX_IN_FLIGHT} at a time`)
     expect(template?.text).toContain('CEZ:MONITORING')
   })
 

@@ -7,19 +7,24 @@
  * the timers. Both turn-end handlers route through ONE helper there, and it stays short because
  * the arithmetic and the prose live here, under test on their own.
  */
-import type {
-  DispatchInput,
-  DispatchPendingReport,
-  DispatchReport,
-  RunDispatch,
+import {
+  DISPATCH_MAX_IN_FLIGHT,
+  type DispatchInput,
+  type DispatchPendingReport,
+  type DispatchReport,
+  type RunDispatch,
 } from '@open-mercato/cezar-contract';
 import type { RunRecord } from '../runs/store.ts';
 
-/** Children in flight under ONE parent. `maxParallel` defaults to 2 and only two monitors are
- *  slot-exempt, so a wider fan-out would starve its own tree. */
-export const MAX_CHILDREN_IN_FLIGHT = 4;
+/**
+ * Children in flight under ONE parent — the CONTRACT's value, re-exported rather than restated.
+ * The schema bounds a user's `inFlight` by it (`dispatchIntentSchema`), `dispatch()` enforces it,
+ * and `DISPATCH_PROMPT` tells the agent what it is: three enforcement points for one brake, and a
+ * second literal `4` here is how they drift.
+ */
+export const MAX_CHILDREN_IN_FLIGHT = DISPATCH_MAX_IN_FLIGHT;
 
-/** How many settled-child reports a parent keeps waiting for its next session . A
+/** How many settled-child reports a parent keeps waiting for its next session. A
  *  bound, not a policy: the list is flushed into a PROMPT, and an unbounded one would grow into
  *  a context window no model can read. */
 export const MAX_PENDING_REPORTS = 20;
@@ -27,8 +32,8 @@ export const MAX_PENDING_REPORTS = 20;
 /** A child that still counts against the in-flight cap — anything that has not settled. */
 const IN_FLIGHT_STATUSES: readonly string[] = ['queued', 'running', 'waiting'];
 
-/** The four settled statuses. A child reaching any of them reports to its parent  — `cancelled` included, because a parent waiting on a child a user killed would
- *  otherwise wait forever. */
+/** The four settled statuses. A child reaching any of them reports to its parent — `cancelled`
+ *  included, because a parent waiting on a child a user killed would otherwise wait forever. */
 export const TERMINAL_STATUSES: readonly string[] = ['done', 'review', 'failed', 'cancelled'];
 
 export function isTerminalStatus(status: string): boolean {
@@ -127,9 +132,9 @@ export function handoffSectionExcerpt(text: string, header: string, maxLines = 4
   return lines.join('\n');
 }
 
-/** What a settled run's cezar status means as a REPORT status, for a child that never emitted a
- *  `CEZ:REPORT` of its own. `review` is work finished and waiting for a human, not a failure;
- *  `cancelled` is neither done nor failed — somebody stopped it, which is a block. */
+/** What a settled run's cezar status means as a REPORT status, for a child that never filed a
+ *  report of its own (`cez task report`). `review` is work finished and waiting for a human, not
+ *  a failure; `cancelled` is neither done nor failed — somebody stopped it, which is a block. */
 function statusToReportStatus(status: string): DispatchReport['status'] {
   if (status === 'done' || status === 'review') return 'done';
   if (status === 'failed') return 'failed';
@@ -142,7 +147,7 @@ function statusToReportStatus(status: string): DispatchReport['status'] {
  * one (persisted on the parent as a pending report, so a restart cannot lose it) and the PROSE
  * one (delivered into the parent's session, which reads text, not JSON).
  *
- * A child that emitted `CEZ:REPORT` reports what it said. One that did not — it crashed, was
+ * A child that called `cez task report` reports what it said. One that did not — it crashed, was
  * cancelled, or simply forgot — still reports: its status, its resume notes if it left any, and
  * its error. A silent settle would leave the parent monitoring a child that will never speak.
  */
@@ -172,7 +177,7 @@ export function childSettleReport(
           result:
             context.resumeNotes?.trim() ||
             child.error?.trim() ||
-            'no structured report — the run settled without emitting CEZ:REPORT',
+            'no structured report — the run settled without calling `cez task report`',
           evidence: [],
           side_effects: [],
           errors: child.error ? [child.error] : [],
@@ -204,8 +209,8 @@ export function withPendingReport(dispatch: RunDispatch, entry: DispatchPendingR
 }
 
 /**
- * The block prepended to a parent's prompt when its session opens holding pending reports
- * . Rendered as prose rather than JSON for the same reason the delivered message is:
+ * The block prepended to a parent's prompt when its session opens holding pending reports.
+ * Rendered as prose rather than JSON for the same reason the delivered message is:
  * a commander reads its children's reports, it does not parse them.
  */
 export function pendingReportsBlock(reports: readonly DispatchPendingReport[]): string | undefined {

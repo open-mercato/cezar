@@ -184,8 +184,8 @@ export const runRecordSchema = z.object({
       githubUrl: z.string().url(),
     })
     .optional(),
-  /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent,
-   *  parent, budget, its own report and the reports waiting for its next session.
+  /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
+   *  budget, its own report and the reports waiting for its next session.
    *
    *  The CONTRACT's own `dispatchSchema` rather than a hand-copied twin — the one shape in this file
    *  that is imported instead of restated, the way `workspace/migrations.ts` imports

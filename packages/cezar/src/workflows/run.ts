@@ -329,6 +329,16 @@ export const AUTONOMOUS_NUDGE =
   'Continue working autonomously until the task is fully complete. Do not ask me for confirmation or clarification — make reasonable assumptions and proceed. When everything is done, end the session with your done signal.';
 const MONITORING_WAKE_NUDGE =
   'Re-check the downstream work you were monitoring. Continue toward the task goal; emit CEZ:MONITORING again only if it is still pending.';
+/**
+ * Handed to a dispatch-tree run that ran IN the repository working tree, parked, gave the
+ * exclusive lease back (`parkRepoRoot`) and had to WAIT to get it again — meaning another in-place
+ * task held it meanwhile and may have edited the tree (spec 2026-09-10-dispatch).
+ *
+ * Not sent on the fast path (`claimFreeRepoRoot`): a tree nobody else held cannot have changed, and
+ * a warning on every wake-up is a warning nobody reads.
+ */
+const REPO_ROOT_RESUMED_NOTE =
+  'While you were parked, another task held this repository working tree and may have changed files in it. Re-read anything you are about to edit or reason about before you act on it — your earlier view of the tree may be out of date.';
 
 /**
  * Auto-resume after a provider usage limit (spec 2026-08-03-auto-resume-after-usage-limit).
@@ -695,7 +705,7 @@ export class RunManager {
   private readonly monitoring = new Set<string>();
   /**
    * The subset of `monitoring` parked because it SPAWNED children (spec
-   * 2026-09-08-units-hierarchy §Markers), rather than because an agent asked to watch its own
+   * 2026-09-10-dispatch A5), rather than because an agent asked to watch its own
    * downstream work.
    *
    * These are exempt from the slot count OUTRIGHT — `maxMonitoringSessions` does not bound them
@@ -896,7 +906,9 @@ export class RunManager {
    *  turning into empty command output inside a running agent. */
   private agentEnv(runId: string, generateFollowups = true): Record<string, string> {
     const dispatch = this.dispatchOf(runId);
-    const apiUrl = this.dispatchEnabled() ? process.env.CEZ_API_URL : undefined;
+    // The same ONE gate the dispatch prompt uses, so an agent is never told about a CLI whose
+    // address it was not given (and never given an address it was not told about).
+    const apiUrl = this.dispatchReachable() ? process.env.CEZ_API_URL : undefined;
     return {
       CEZ_HANDOFF_FILE: handoffPath(this.dataDir, runId),
       CEZ_TASK_ID: runId,
@@ -1059,7 +1071,7 @@ export class RunManager {
   private busySlots(): number {
     const ordinaryWaiting = this.waiting.size - this.monitoring.size;
     // A task parked on its own dispatch is exempt WITHOUT a cap (spec
-    // 2026-09-08-units-hierarchy). `maxMonitoringSessions` bounds how many agents may sit
+    // 2026-09-10-dispatch A5). `maxMonitoringSessions` bounds how many agents may sit
     // watching their own downstream work while the host still runs `maxParallel` real tasks —
     // but a spawned parent's children ARE those tasks, so bounding it makes the tree wait on
     // itself: three parents parked on their children is `busySlots === maxParallel` with no
@@ -1332,7 +1344,7 @@ export class RunManager {
         // non-autonomously and later wrongly park at `review`.
         autonomous: run.autonomous,
         // Re-thread the dispatch the same way and for the same reason (spec
-        // 2026-09-08-units-hierarchy): this is the one engine path that rebuilds a StartRunInput
+        // 2026-09-10-dispatch A11): this is the one engine path that rebuilds a StartRunInput
         // from the record instead of going through `startRun`, so a dispatched run recovered after
         // a restart would otherwise resume as an ordinary flat task — no tree, no
         // parent to report to.
@@ -1383,7 +1395,7 @@ export class RunManager {
         await this.settleSuccess(run.id);
         // A terminal transition that never passes through `dropActive`: this run was live in the
         // PREVIOUS process and is in none of this one's registries. A settled child still owes
-        // its parent a report (spec 2026-09-08-units-hierarchy Q7) — and a restart is precisely
+        // its parent a report (spec 2026-09-10-dispatch §Engine) — and a restart is precisely
         // the case the durable pending report exists for.
         this.reportSettledChildToParent(run.id);
         continue;
@@ -1476,8 +1488,8 @@ export class RunManager {
     // left a window — measured as exactly one extra task — where the queue saw a free slot and
     // an account that looked healthy, and started work that was already doomed.
     this.scheduleAutoResumeIfLimited(runId);
-    // A settled CHILD owes its parent a report (spec 2026-09-08-units-hierarchy §Reports and
-    // settle). Here for the same reason the two hooks above are: every terminal transition funnels
+    // A settled CHILD owes its parent a report (spec 2026-09-10-dispatch §Engine — the settle
+    // ladder). Here for the same reason the two hooks above are: every terminal transition funnels
     // through this one method, and a parent parked on `monitoring` has no other way to learn that
     // the run it is waiting for has ended. BEFORE `releaseSlot`, so a parent that has to be
     // resumed through the queue is already queued when the pump sweeps.
@@ -1504,6 +1516,22 @@ export class RunManager {
   }
 
   /**
+   * Can a task actually REACH the dispatch routes? The flag being on is not enough: `CEZ_API_URL`
+   * and `CEZ_BIN` are set by `serveCommand`, so a headless `cezar run` has neither — no cockpit to
+   * call, and no entrypoint to call it with.
+   *
+   * The gate for everything an agent is TOLD about dispatch (the prompt), as opposed to what the
+   * engine does with a `dispatch` record it already has. A headless run that was taught the CLI
+   * would take `cez task create`'s refusal as its instruction — "stop and report that dispatch is
+   * unavailable" — and abandon work it could have done itself. Same reason
+   * `availablePromptTemplates` hides the dispatching template when the capability is off: a
+   * capability an agent cannot use must not be described to it.
+   */
+  private dispatchReachable(): boolean {
+    return this.dispatchEnabled() && Boolean(process.env.CEZ_API_URL);
+  }
+
+  /**
    * THE gate for everything that needs a `dispatch` record: answers `undefined` when the feature
    * is off (`CEZ_DISPATCH=0`) or when this run has neither dispatched nor been dispatched.
    * Re-read from the store on every call rather than cached: the stored object is written DURING
@@ -1524,9 +1552,12 @@ export class RunManager {
   /**
    * Resolve what a session needs before it opens: the dispatch prompt (with the review addendum
    * for a review child). Called from BOTH `ActiveRun` construction sites.
+   *
+   * Gated on `dispatchReachable`, not on the flag alone — a headless run with no cockpit behind it
+   * gets no dispatch prompt and behaves exactly as it did before this feature existed.
    */
   private prepareDispatchSession(runId: string, state: ActiveRun): void {
-    if (!this.dispatchEnabled()) return;
+    if (!this.dispatchReachable()) return;
     const dispatch = this.store.getRun(runId)?.dispatch;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
     state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
@@ -1751,7 +1782,6 @@ export class RunManager {
     // The parent becomes a root on its first dispatch; a dispatched parent keeps its tree.
     const rootRunId = parent.dispatch?.rootRunId ?? parent.id;
     if (!parent.dispatch) this.store.updateRun(parentId, { dispatch: { rootRunId } });
-    const parentDispatch = this.store.getRun(parentId)?.dispatch ?? { rootRunId };
 
     const budget = this.carveChildBudget(this.store.getRun(parentId) ?? parent, runs, input.max_cost ?? intent?.budgetUsd);
     if ('refused' in budget) {
@@ -1827,7 +1857,6 @@ export class RunManager {
     // This turn parks as a monitor for the child when it ends (see `handleDispatchTurn`).
     const state = this.active.get(parentId);
     if (state) state.dispatchedThisTurn = true;
-    void parentDispatch;
     return { id: child.id, ...(child.branch ? { branch: child.branch } : {}) };
   }
 
@@ -2330,8 +2359,17 @@ export class RunManager {
    * never granted it). The first live dispatch tree found the gap: a commander running in the
    * repo working tree parked as a monitor for the whole life of its children — slot-exempt, so
    * the queue looked free — while every other in-place task waited on a lease nobody was using.
+   *
+   * Scoped to runs in a DISPATCH TREE, deliberately. Handing the tree to another run mid-park is
+   * a real weakening of #438: the parked session stays live, and its context still describes the
+   * files as they were, so it can edit over work another task did while it sat. A dispatch tree
+   * has no alternative — its commander parks for as long as its children take, and that is the
+   * deadlock above — but an ordinary in-place run parking on `CEZ:ASK` does: keep the lease, as it
+   * always has. That is also what makes "a run with no dispatch is untouched" true of this path.
+   * `resumeRepoRoot` tells the resuming agent the tree may have moved.
    */
   private parkRepoRoot(runId: string, state: ActiveRun): void {
+    if (!this.dispatchOf(runId)) return;
     if (state.cwd !== this.repoRoot || !state.releaseRepoRoot) return;
     state.releaseRepoRoot();
     state.releaseRepoRoot = undefined;
@@ -2374,7 +2412,15 @@ export class RunManager {
     return { previous, release };
   }
 
-  /** The counterpart of `parkRepoRoot`: wait for the tree before the parked session resumes. */
+  /**
+   * The counterpart of `parkRepoRoot`: wait for the tree before the parked session resumes.
+   *
+   * Reaching here at all means somebody else holds or wants the tree, so it may have been edited
+   * while this run sat parked and this session's context predates that. Said twice — in the
+   * transcript below, and to the agent itself (`REPO_ROOT_RESUMED_NOTE`, delivered by
+   * `deliverMessage` ahead of the message the run woke for) — rather than left for it to discover
+   * by clobbering the other task's work.
+   */
   private async resumeRepoRoot(runId: string, state: ActiveRun): Promise<boolean> {
     this.store.appendEvent(runId, {
       type: 'note',
@@ -2425,7 +2471,7 @@ export class RunManager {
 
   /**
    * Cancel a run — and, when it commands any, its whole subtree first (spec
-   * 2026-09-08-units-hierarchy Q6, the third budget brake).
+   * 2026-09-10-dispatch §Engine, `cancelDescendants` — the third budget brake).
    *
    * Depth-first and children-before-parent: a parent cancelled while its children kept working
    * would be a cost brake that stops the one run that was only supervising. The answer is still
@@ -2790,6 +2836,10 @@ export class RunManager {
       const resume = (state.repoRootResume ??= this.resumeRepoRoot(runId, state));
       void resume.then((acquired) => {
         if (!acquired) return;
+        // Another in-place task held the tree while we waited, so this session's picture of it may
+        // be stale. Delivered as its own engine message, ahead of the one the run woke for, so a
+        // user-authored wake-up stays verbatim in the transcript.
+        this.deliverMessage(runId, [{ type: 'text', text: REPO_ROOT_RESUMED_NOTE }], false);
         if (this.deliverMessage(runId, content, userAuthored)) return;
         // The session closed while we waited: keep the message the way the ladder would.
         if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
@@ -3094,7 +3144,7 @@ export class RunManager {
     // answered "Unknown skill" (#811). Best-effort — discovery must never break Continue.
     state.skills = await discoverSkills(this.repoRoot).catch(() => [] as Skill[]);
     // The dispatch session snapshot — the SECOND of the two `ActiveRun` construction
-    // sites (spec 2026-09-08-units-hierarchy; AGENTS.md § "every construction site"). A Continue
+    // sites (spec 2026-09-10-dispatch; AGENTS.md § "every construction site"). A Continue
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
@@ -3143,8 +3193,7 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const stripped = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
-        const text = stripped;
+        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -3382,8 +3431,6 @@ export class RunManager {
           : contextualOpeningPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
-                // the sub-agent tool on a resumed session too — a Continue that silently dropped it would
-        // leave the rank that does the work with no century (spec Q2).
         allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
         bashAllowlist: toolsStep?.bashAllowlist,
         additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
@@ -3854,8 +3901,7 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const stripped = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
-                const text = stripped;
+        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
@@ -3885,7 +3931,7 @@ export class RunManager {
         const sessionOpen = !state.cancelled && state.session?.open;
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
-        // 2026-09-08-units-hierarchy §Markers). Not gated on `interactive`: a report and a spawn
+        // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
         // are the agent telling cezar what it did, and a chained workflow's non-final step that
         // reported would otherwise be heard by nobody. The PARK below stays interactive-only,
         // exactly as it always was.

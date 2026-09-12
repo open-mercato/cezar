@@ -18,6 +18,12 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  * touching the tree, with the slots visibly free (the first live dispatch tree, 2026-09-11).
  * Now a park gives the lease back and `deliverMessage` takes it again before the session resumes.
  *
+ * Scoped to runs IN a dispatch tree (spec 2026-09-10-dispatch A10), and the last test is the
+ * counterweight: handing the tree to another task mid-park means a live session's view of the
+ * files can go stale, so only the case with no alternative pays that price — a commander parked
+ * for as long as its children take. An ordinary in-place run parking on a question keeps its
+ * lease, exactly as it always has.
+ *
  * Driven dry through `scripts/mock-claude.mjs`: `mock:monitoring` parks the first run as a
  * monitor, `mock:done` lets the second finish on its own.
  */
@@ -75,8 +81,18 @@ describe('a parked in-place run releases the working-tree lease', () => {
       .map((e) => String(e.message));
   };
 
+  /** An in-place run that became the ROOT of a dispatch tree — what `dispatch()` writes on a
+   *  parent's first `cez task create`, and the only in-place run that parks for its children.
+   *  Set the way `dispatch-engine.test.ts` does it; `mock:pause` keeps the turn open long enough
+   *  that the record carries the tree before the turn ends. */
+  const inPlaceRoot = (task: string): RunRecord => {
+    const record = manager.startRun(SINGLE_STEP, { task, worktree: false });
+    store.updateRun(record.id, { dispatch: { rootRunId: record.id } });
+    return record;
+  };
+
   it('lets another in-place task run while the first is parked, and waits for the tree before resuming', async () => {
-    const parked = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring watch my children', worktree: false });
+    const parked = inPlaceRoot('mock:pause mock:monitoring watch my children');
     await waitFor(parked.id, (r) => r?.activity === 'monitoring');
     expect(notes(parked.id).some((m) => m.startsWith('parked — released the repository working tree'))).toBe(true);
 
@@ -95,6 +111,10 @@ describe('a parked in-place run releases the working-tree lease', () => {
     // The resumed turn parks again (the mock answers plainly) and gives the lease back again.
     await waitFor(parked.id, (r) => r?.status === 'waiting');
     expect(notes(parked.id).filter((m) => m.startsWith('parked — released')).length).toBe(2);
+    // Somebody else held the tree meanwhile, so the session is told its view of it may be stale
+    // rather than left to clobber the other task's work.
+    expect(readFileSync(join(repoRoot, '.ai/cezar/runs', `${parked.id}.ndjson`), 'utf8'))
+      .toContain('another task held this repository working tree');
   }, 40_000);
 
   it('resumes synchronously when nobody holds the tree — the #347 guarantee is kept', async () => {
@@ -110,5 +130,14 @@ describe('a parked in-place run releases the working-tree lease', () => {
     const isolated = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring in a worktree' });
     await waitFor(isolated.id, (r) => r?.activity === 'monitoring');
     expect(notes(isolated.id).some((m) => m.startsWith('parked — released'))).toBe(false);
+  }, 30_000);
+
+  // The counterweight (A10): an in-place run with no dispatch keeps the lease across a park,
+  // exactly as before this feature existed. Weakening #438 for every in-place run — a live
+  // session's files changing under it — is a price only a dispatch tree has to pay.
+  it('keeps the lease for an in-place run that is not in a dispatch tree', async () => {
+    const parked = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring plain in-place work', worktree: false });
+    await waitFor(parked.id, (r) => r?.activity === 'monitoring');
+    expect(notes(parked.id).some((m) => m.startsWith('parked — released'))).toBe(false);
   }, 30_000);
 });

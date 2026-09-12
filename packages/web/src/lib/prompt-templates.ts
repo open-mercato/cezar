@@ -10,6 +10,7 @@
  * (`.passthrough()` schema, the #408 `skillUsage` pattern) — so "no key at all" and "the built-ins,
  * saved verbatim" are indistinguishable in effect but the former costs nothing to ship.
  */
+import { DISPATCH_MAX_IN_FLIGHT } from '@open-mercato/cezar-api-client'
 
 export interface PromptTemplate {
   id: string
@@ -74,7 +75,8 @@ export const DEFAULT_PROMPT_TEMPLATES: readonly PromptTemplate[] = [
       + 'and skip drafts and PRs already approved). For each one, dispatch a separate review task '
       + 'with `cez task create --kind review --review-of <headRefName> --title "Review PR '
       + '#<number>" "Review pull request #<number> (<title>) on branch <headRefName>: read the '
-      + 'diff, run the tests, and report a verdict with findings."`, at most 4 at a time. Then '
+      + 'diff, run the tests, and report a verdict with findings."`, at most '
+      + `${DISPATCH_MAX_IN_FLIGHT} at a time. Then `
       + 'end your turn with CEZ:MONITORING and, when their reports arrive, summarise every '
       + 'verdict in one message. If `cez task create` is refused or unavailable, stop and report '
       + 'that dispatch is disabled on this cockpit — do not review the PRs yourself and do not '

@@ -103,7 +103,7 @@ export const ASK_MARKER_RE = /CEZ:ASK[ \t]+(\{[\s\S]*\})\s*$/;
  * looser than the strict `*_MARKER_RE` shapes on purpose, so diagnostics can still distinguish a
  * malformed trailing marker from ordinary prose.
  */
-export function lastMarkerCandidate(turnText: string, keyword: string): string | null {
+function lastMarkerCandidate(turnText: string, keyword: string): string | null {
   const re = new RegExp(`${keyword}[ \\t]+`, 'g');
   let last: RegExpExecArray | null = null;
   for (const match of turnText.matchAll(re)) last = match;
@@ -113,11 +113,11 @@ export function lastMarkerCandidate(turnText: string, keyword: string): string |
 
 /**
  * Drop the control-marker lines a role prompt tells an agent to append AFTER its payload
- * (`CEZ:MONITORING` after a spawn, `CEZ:DONE` after a report). They are protocol, not JSON, and
+ * (`CEZ:MONITORING` after a dispatch, `CEZ:DONE` after a report). They are protocol, not JSON, and
  * a candidate that runs to end-of-text would otherwise carry them into `JSON.parse` — a failure
  * `closeUnbalancedJson` cannot repair, because nothing is unbalanced.
  */
-export function trimTrailingControlMarkers(candidate: string): string {
+function trimTrailingControlMarkers(candidate: string): string {
   return candidate.replace(/(?:\s*\n\s*CEZ:(?:MONITORING|DONE)\s*)+$/, '').trimEnd();
 }
 
@@ -126,7 +126,7 @@ export function trimTrailingControlMarkers(candidate: string): string {
  * payload, #936, may end short of the closers this module appended). The twin of
  * `lastMarkerCandidate`: an earlier prose mention of the keyword survives the strip.
  */
-export function stripLastMarker(text: string, keyword: string): string {
+function stripLastMarker(text: string, keyword: string): string {
   const re = new RegExp(`${keyword}[ \\t]+`, 'g');
   let last: RegExpExecArray | null = null;
   for (const match of text.matchAll(re)) last = match;
@@ -203,12 +203,8 @@ function normalizeAskRequest(value: unknown): unknown {
  * e.g. a trailing comma, and stays rejected). Only syntax is repaired: the
  * result goes through the unchanged `askRequestSchema`, so a repair that yields
  * fewer than 2 options or a bad header still degrades to plain text.
- *
- * Exported for `src/units/markers.ts`, which parses `CEZ:SPAWN` / `CEZ:REPORT` the same way and
- * must forgive the same slip on the same terms — the recovery rule is a property of how models
- * emit long one-line JSON, not of the ask card, and a second copy of it would drift.
  */
-export function closeUnbalancedJson(src: string): string | null {
+function closeUnbalancedJson(src: string): string | null {
   const text = src.trimEnd();
   if (!/[}\]]$/.test(text)) return null;
   const stack: string[] = [];

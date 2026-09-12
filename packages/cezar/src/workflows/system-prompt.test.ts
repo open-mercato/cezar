@@ -120,6 +120,8 @@ describe('systemPrompt end-to-end (dry run)', () => {
     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
     savedEnv.CEZ_AUTONAME = process.env.CEZ_AUTONAME;
     savedEnv.CEZ_DISPATCH = process.env.CEZ_DISPATCH;
+    // The two dispatch tests below set and clear this; restore whatever the outer process had.
+    savedEnv.CEZ_API_URL = process.env.CEZ_API_URL;
     process.env.CEZ_DRY_RUN = '1';
     // Dispatch is on by default (spec 2026-09-10-dispatch A2) and composes its own prompt part
     // ahead of everything asserted here. These goldens are about the BASE composition, so they
@@ -218,13 +220,33 @@ describe('systemPrompt end-to-end (dry run)', () => {
 
   it('dispatch on (the default): every task is taught the cez task CLI ahead of the base prompt', async () => {
     delete process.env.CEZ_DISPATCH;
+    // The flag alone is not enough — the prompt needs the TRANSPORT the cockpit publishes (spec
+    // 2026-09-10-dispatch A2). `serveCommand` sets this; these suites have no server.
+    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+    try {
+      await runToEnd({ task: 'do the thing mock:done' });
+    } finally {
+      process.env.CEZ_DISPATCH = '0';
+      delete process.env.CEZ_API_URL;
+    }
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain('cez task create');
+    expect(prompt).toContain(CONFIG_PROMPT);
+  });
+
+  // The headless hole: `cezar run` builds its own RunManager and never sets CEZ_API_URL/CEZ_BIN, so
+  // `cez task create` can only ever fail — and its refusal tells the agent to STOP and report
+  // rather than do the work itself. A run that cannot dispatch must not be taught to (A2).
+  it('dispatch on but unreachable (no cockpit, as in headless `cezar run`): no task is taught the CLI', async () => {
+    delete process.env.CEZ_DISPATCH;
+    delete process.env.CEZ_API_URL;
     try {
       await runToEnd({ task: 'do the thing mock:done' });
     } finally {
       process.env.CEZ_DISPATCH = '0';
     }
     const prompt = capturedSystemPrompt();
-    expect(prompt).toContain('cez task create');
+    expect(prompt).not.toContain('cez task create');
     expect(prompt).toContain(CONFIG_PROMPT);
   });
 

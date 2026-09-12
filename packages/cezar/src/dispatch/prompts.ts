@@ -9,7 +9,7 @@
  * The CLI contract below is the ONLY place an agent is told the `cez task` commands, so it
  * restates the flags of `dispatchInputSchema` and `dispatchReportSchema` key for key.
  */
-import type { DispatchIntent, DispatchKind } from '@open-mercato/cezar-contract';
+import { DISPATCH_MAX_IN_FLIGHT, type DispatchIntent, type DispatchKind } from '@open-mercato/cezar-contract';
 
 export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each with its own budget, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
 
@@ -21,7 +21,7 @@ To dispatch, run (from your shell) — always through the cockpit's own binary, 
 - Give every sibling a DISJOINT scope. Two tasks editing the same file is the one failure this design cannot recover from.
 - --budget is carved out of your own remaining budget and returned to you, unspent, when the child settles. A dispatch that asks for more than you have left is refused with the reason.
 - The command prints the child's run id and branch. COMMIT before dispatching: children fork your committed tip, not your working tree.
-- At most 4 children in flight under you; a fifth is refused. Wait for reports, then dispatch again.
+- At most ${DISPATCH_MAX_IN_FLIGHT} children in flight under you; one more is refused. Wait for reports, then dispatch again.
 - --runner and --model choose who runs the child; omitted, it inherits yours. If the user's instructions name a runner or model, use that. Otherwise choose deliberately: a narrow, well-specified assignment — a review, a mechanical change, a read-only investigation — is a good fit for a cheaper or faster model; keep your own model for work whose judgement you would not want to re-check.
 
 While children are working and you have nothing else to do, end your turn with a line containing exactly CEZ:MONITORING. cezar parks you, gives your slot to the children, and wakes you when a report arrives.
