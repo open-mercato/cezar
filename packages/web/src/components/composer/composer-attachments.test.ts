@@ -5,6 +5,7 @@ import {
   fileToPendingAttachment,
   MAX_ATTACHMENT_BYTES,
   screenFiles,
+  toAttachmentInput,
 } from './composer-attachments'
 
 /** screenFiles reads only `type`, `size`, `name` — a structural stand-in keeps the 5MB cases
@@ -124,8 +125,9 @@ describe('fileToPendingAttachment', () => {
     expect(image.preview).toBe(`data:image/png;base64,${image.data}`)
   })
 
-  /** A file has nothing to preview, and the chip shows its name instead — which is why the name
-   *  is kept locally and never sent: the server names the file from its media type. */
+  /** A file has nothing to preview, and the chip shows its name instead. Since #929 that name also
+   *  goes on the wire, so the attachment library can file the copy under it; the run folder still
+   *  names the file from its media type. */
   it('encodes a markdown file with no preview and keeps its name for the chip', async () => {
     const file = new File(['# hi'], 'brief.md', { type: 'text/markdown' })
     const attachment = await fileToPendingAttachment(file)
@@ -139,5 +141,52 @@ describe('fileToPendingAttachment', () => {
   it('takes a typeless .md on its extension, exactly as the screening did', async () => {
     const file = new File(['# hi'], 'brief.md', { type: '' })
     expect((await fileToPendingAttachment(file)).mediaType).toBe('text/markdown')
+  })
+})
+
+/**
+ * The single strip point between the composer's state and the request body (#929). Two things
+ * must hold: the preview never leaves (it is a second full copy of the bytes), and the filename
+ * leaves for files but not for images.
+ */
+describe('toAttachmentInput', () => {
+  it('drops the render-only fields, so a preview never doubles the request body', async () => {
+    const image = await fileToPendingAttachment(
+      new File([new Uint8Array([137, 80, 78, 71])], 'tiny.png', { type: 'image/png' }),
+    )
+    expect(image.preview).toBeDefined()
+    const wire = toAttachmentInput(image)
+    expect(Object.keys(wire).sort()).toEqual(['data', 'mediaType'])
+    expect(wire).toEqual({ mediaType: 'image/png', data: image.data })
+  })
+
+  it('sends a file’s own name, which is the only handle the agent gets on it', async () => {
+    const attachment = await fileToPendingAttachment(new File(['# hi'], 'brief.md', { type: 'text/markdown' }))
+    expect(toAttachmentInput(attachment)).toEqual({
+      mediaType: 'text/markdown',
+      data: btoa('# hi'),
+      name: 'brief.md',
+    })
+  })
+
+  /** A pasted screenshot has no filename — the chip falls back to a literal string, and sending
+   *  that would be noise the server has to ignore. Images are not filed in the library. */
+  it('never sends the placeholder name a pasted image falls back to', async () => {
+    const pasted = await fileToPendingAttachment(new File([new Uint8Array([137])], '', { type: 'image/png' }))
+    expect(pasted.name).toBe('pasted image')
+    expect(toAttachmentInput(pasted).name).toBeUndefined()
+  })
+
+  /**
+   * The same rule for a nameless FILE, which is the case that actually reaches the library. The
+   * chip needs a label so it falls back to `pasted.<ext>` — but filing THAT would give a library
+   * of `pasted.md`, `pasted-2.md`, `pasted-3.md`, which is the numbering the library was built to
+   * replace. A name the user did not choose is not a name.
+   */
+  it('never sends the placeholder name a nameless file falls back to either', async () => {
+    const nameless = await fileToPendingAttachment(new File(['# hi'], '', { type: 'text/markdown' }))
+    expect(nameless.name).toBe('pasted.md')
+    expect(nameless.originalName).toBeUndefined()
+    expect(toAttachmentInput(nameless)).toEqual({ mediaType: 'text/markdown', data: btoa('# hi') })
   })
 })

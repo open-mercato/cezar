@@ -163,11 +163,24 @@ describe('RunManager — task-scoped agent TMPDIR (#785)', () => {
  */
 describe('agentDirectories (#785)', () => {
   it('grants the run’s temp directory alongside the run-state folder', () => {
-    expect(agentDirectories('/data/runs', { TMPDIR: '/data/tmp/run-1' }))
+    expect(agentDirectories('/data/runs', undefined, { TMPDIR: '/data/tmp/run-1' }))
       .toEqual(['/data/runs', '/data/tmp/run-1']);
   });
 
   it('is exactly the pre-#785 list when the run has no temp directory', () => {
-    expect(agentDirectories('/data/runs', {})).toEqual(['/data/runs']);
+    expect(agentDirectories('/data/runs', undefined, {})).toEqual(['/data/runs']);
+  });
+
+  /**
+   * #929 — the note appended to a message NAMES the attachment library, and headless runs use
+   * `--permission-mode dontAsk`, so an agent told to look in a directory it was never granted
+   * gets a refusal rather than a prompt. The grant travels with the mention, exactly as #785's
+   * TMPDIR grant travels with the variable.
+   */
+  it('grants the attachment library the message note points the agent at', () => {
+    expect(agentDirectories('/data/runs', '/data/attachments', { TMPDIR: '/data/tmp/run-1' }))
+      .toEqual(['/data/runs', '/data/attachments', '/data/tmp/run-1']);
+    expect(agentDirectories('/data/runs', '/data/attachments', {}))
+      .toEqual(['/data/runs', '/data/attachments']);
   });
 });
