@@ -1292,6 +1292,7 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
       label={<span className="font-mono text-[11.5px]">base: {current}</span>}
       value={repo.baseBranch ?? ''}
       onPick={(value) => mutation.mutate(value === '' ? null : value)}
+      searchPlaceholder="Search branches…"
       options={[
         { value: '', label: `follow checked-out branch (${repo.info.branch})`, desc: 'New task worktrees fork from whatever branch is checked out' },
         ...repo.branches.map((branch) => ({ value: branch, label: branch })),

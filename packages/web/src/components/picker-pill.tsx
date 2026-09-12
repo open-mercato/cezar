@@ -1,5 +1,5 @@
-import { ChevronDownIcon } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { ChevronDownIcon, SearchIcon } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { DEFAULT_AGENT_ACCOUNT_ID, type Runner } from '@open-mercato/cezar-api-client'
 import {
@@ -39,6 +39,7 @@ export function PickerPill({
   hint,
   disabledHint,
   status,
+  searchPlaceholder,
 }: {
   slot: string
   ariaLabel: string
@@ -54,7 +55,22 @@ export function PickerPill({
   disabledHint?: string
   /** Quiet non-selectable catalog state, kept inside the menu's accessible reading order. */
   status?: string
+  /** Add a name filter above longer option catalogs. */
+  searchPlaceholder?: string
 }) {
+  const [open, setOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const searchRef = useRef<HTMLInputElement>(null)
+  const visibleOptions = searchPlaceholder
+    ? options.filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()))
+    : options
+
+  useEffect(() => {
+    if (!open || !searchPlaceholder) return
+    const timeout = window.setTimeout(() => searchRef.current?.focus())
+    return () => window.clearTimeout(timeout)
+  }, [open, searchPlaceholder])
+
   if (readOnly) {
     return (
       <span
@@ -91,11 +107,34 @@ export function PickerPill({
     )
   }
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setSearch('')
+      }}
+    >
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
       <DropdownMenuContent align="start" data-testid={`${slot}-menu`}>
+        {searchPlaceholder ? (
+          <div className="mb-1 flex h-9 items-center gap-2 border-b border-border px-2">
+            <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              ref={searchRef}
+              type="search"
+              aria-label={searchPlaceholder}
+              placeholder={searchPlaceholder}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== 'Escape') event.stopPropagation()
+              }}
+              className="h-full min-w-48 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+        ) : null}
         <DropdownMenuRadioGroup value={value} onValueChange={onPick}>
-          {options.map((option) => (
+          {visibleOptions.map((option) => (
             <DropdownMenuRadioItem key={option.value} value={option.value} className="gap-2.5">
               <span className="flex min-w-0 flex-col">
                 <span className="text-[12.5px] font-medium">{option.label}</span>
@@ -106,6 +145,9 @@ export function PickerPill({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
+        {searchPlaceholder && visibleOptions.length === 0 ? (
+          <p className="px-2 py-5 text-center text-xs text-muted-foreground">No branches found.</p>
+        ) : null}
         {status ? (
           <DropdownMenuItem disabled className="border-t border-border text-[11.5px] text-muted-foreground">
             {status}
