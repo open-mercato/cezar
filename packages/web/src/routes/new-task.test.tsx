@@ -2270,6 +2270,9 @@ describe('the Dispatch toggle', () => {
   const note = () => document.querySelector('[data-slot="run-mode-note"]')?.textContent
   const hint = () => document.querySelector('[data-slot="dispatch-hint"]')
   const settings = () => document.querySelector('[data-slot="dispatch-settings"]')
+  /** The desktop split pill's chevron — the settings route a mouse actually has. */
+  const settingsTrigger = () =>
+    document.querySelector('[data-slot="dispatch-settings-trigger"]') as HTMLButtonElement | null
 
   /** Render with dispatch on the server and wait for the icon to be there. */
   async function readyWithDispatch(overrides: Parameters<typeof serve>[0] = {}) {
@@ -2355,11 +2358,12 @@ describe('the Dispatch toggle', () => {
     expect(note()).toBe('Runs in an isolated worktree — review everything before it lands.')
   })
 
-  it('a long-press opens the settings without toggling; limits set there turn it on and ride the body', async () => {
+  it('on desktop the chevron opens the settings without toggling; limits set there turn it on and ride the body', async () => {
     const toggle = await readyWithDispatch()
-    longPress(toggle)
+    // A mouse has no natural hold: the split pill's chevron is the route to the settings.
+    fireEvent.click(settingsTrigger()!)
     await waitFor(() => expect(settings()).not.toBeNull())
-    // The hold is the secondary action — it did not flip the switch.
+    // The chevron is the secondary action — it did not flip the switch.
     expect(toggle.getAttribute('aria-checked')).toBe('false')
 
     fireEvent.change(screen.getByLabelText('Max subtasks'), { target: { value: '10' } })
@@ -2376,7 +2380,7 @@ describe('the Dispatch toggle', () => {
 
   it('the settings offer the host runners and the model presets of the chosen subtask runner', async () => {
     const toggle = await readyWithDispatch({ health: { ...HEALTH_DISPATCH, checks: HEALTH_MULTI.checks }, providerStatus: PROVIDERS_MULTI })
-    longPress(toggle)
+    fireEvent.click(settingsTrigger()!)
     await waitFor(() => expect(settings()).not.toBeNull())
 
     const runner = screen.getByLabelText('Subtask runner') as HTMLSelectElement
@@ -2420,6 +2424,8 @@ describe('the Dispatch toggle', () => {
       })),
     )
     const toggle = await readyWithDispatch()
+    // No chevron on a phone — the hold is the route there, and the pill stays a single icon.
+    expect(settingsTrigger()).toBeNull()
     longPress(toggle)
     await waitFor(() => expect(settings()).not.toBeNull())
     expect(settings()?.getAttribute('data-slot')).toBe('dispatch-settings')

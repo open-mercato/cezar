@@ -1,4 +1,4 @@
-import { SplitIcon } from 'lucide-react'
+import { ChevronDownIcon, SplitIcon } from 'lucide-react'
 import { useId, useRef, useState, type ReactNode } from 'react'
 
 import {
@@ -30,10 +30,13 @@ import { RUNNERS, type ModelPreset } from '@/routes/new-task-form'
  * Turning it off then on again restores the limits it had (kept here, not in the draft, so an
  * off draft stays an honest `null`).
  *
- * The settings surface is a Popover anchored to the button on md-and-up and a bottom Sheet
- * below it: a phone's thumb cannot land on a popover positioned off a 26px pill. Both render
- * the same `DispatchSettings` form. The button is a `PopoverAnchor`, never a `PopoverTrigger`
- * — Radix's trigger toggles on pointerdown, which is exactly the event the hold begins on.
+ * The settings surface is a Popover on md-and-up and a bottom Sheet below it: a phone's thumb
+ * cannot land on a popover positioned off a 26px pill. Both render the same `DispatchSettings`
+ * form. How it OPENS differs by pointer, not only by width: a mouse has no natural hold, so the
+ * desktop control is a split pill — the icon toggles, a chevron segment beside it opens the
+ * settings on a plain click (right-click and ArrowDown still work). A phone keeps the single
+ * icon with tap and hold. The anchor is a `PopoverAnchor`, never a `PopoverTrigger` — Radix's
+ * trigger toggles on pointerdown, which is exactly the event the hold begins on.
  *
  * Renders nothing unless `available` (`capabilities.dispatch` is on, in a git repo).
  */
@@ -85,9 +88,11 @@ export function DispatchToggle({
       data-state={on ? 'on' : 'off'}
       {...press}
       className={cn(
-        chipClass,
-        'w-[26px] justify-center px-0',
-        on && 'border-primary/60 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary',
+        desktop
+          ? // A segment of the split pill below: the ring belongs to the wrapper.
+            'inline-flex h-full w-[26px] items-center justify-center transition-colors hover:bg-muted'
+          : cn(chipClass, 'w-[26px] justify-center px-0'),
+        on && (desktop ? 'hover:bg-primary/15' : 'border-primary/60 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary'),
       )}
     >
       <SplitIcon
@@ -108,18 +113,54 @@ export function DispatchToggle({
     />
   )
 
-  const trigger = (
+  const tooltip = (
+    <TooltipContent side="top" sideOffset={6} className="max-w-[260px]">
+      <div className="font-medium">{on ? 'Dispatch — on' : 'Dispatch — off'}</div>
+      <div className="text-contrast-foreground/80">
+        {on
+          ? 'Splits this task into subtasks it runs as separate tasks'
+          : 'Let this task split into subtasks'}
+      </div>
+      {desktop ? <div className="mt-0.5 text-contrast-foreground/60">▾ limits and subtask defaults</div> : null}
+    </TooltipContent>
+  )
+
+  const trigger = desktop ? (
+    // The split pill: one ring, two segments — the icon (toggle) and the chevron (settings).
+    <span
+      data-slot="dispatch-control"
+      data-state={on ? 'on' : 'off'}
+      className={cn(
+        'inline-flex h-[26px] items-stretch overflow-hidden rounded-full border border-border bg-card text-muted-foreground transition-colors',
+        on && 'border-primary/60 bg-primary/10 text-primary',
+      )}
+    >
+      <TooltipProvider delayDuration={300}>
+        <Tooltip>
+          <TooltipTrigger asChild>{button}</TooltipTrigger>
+          {tooltip}
+        </Tooltip>
+      </TooltipProvider>
+      <button
+        type="button"
+        aria-label="Dispatch settings"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        data-slot="dispatch-settings-trigger"
+        onClick={() => setOpen(!open)}
+        className={cn(
+          'inline-flex w-[18px] items-center justify-center border-l border-border transition-colors hover:bg-muted',
+          on && 'border-primary/40 hover:bg-primary/15',
+        )}
+      >
+        <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
+      </button>
+    </span>
+  ) : (
     <TooltipProvider delayDuration={300}>
       <Tooltip>
         <TooltipTrigger asChild>{button}</TooltipTrigger>
-        <TooltipContent side="top" sideOffset={6} className="max-w-[260px]">
-          <div className="font-medium">{on ? 'Dispatch — on' : 'Dispatch — off'}</div>
-          <div className="text-contrast-foreground/80">
-            {on
-              ? 'Splits this task into subtasks it runs as separate tasks'
-              : 'Let this task split into subtasks'}
-          </div>
-        </TooltipContent>
+        {tooltip}
       </Tooltip>
     </TooltipProvider>
   )
