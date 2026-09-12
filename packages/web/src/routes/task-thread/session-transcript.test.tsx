@@ -97,6 +97,184 @@ describe('transcript adapters and row building', () => {
     ])
   })
 
+  /**
+   * Per-turn timestamps (#941): the adapters carry the stamps that already exist — the run
+   * record's `createdAt` for the initial prompt, a queued message's own `createdAt`, and the
+   * turn's event stamps — and the row builder turns the day changes and the turn completions
+   * into rows OF THEIR OWN, so no existing row changes height.
+   */
+  describe('per-turn timestamps (#941)', () => {
+    /** Built from local components so the local-day assertions hold in any timezone. */
+    const localIso = (year: number, month: number, day: number, hour = 12, minute = 0): string =>
+      new Date(year, month - 1, day, hour, minute).toISOString()
+
+    const turn = (id: string, stamps: { user?: string; startedAt?: string; completedAt?: string }) => ({
+      id,
+      items: [{ kind: 'message', id: `${id}-answer`, role: 'assistant', text: 'Done' }],
+      ...(stamps.user !== undefined
+        ? { userMessage: { text: 'Follow up', imageCount: 0, images: [], ts: stamps.user } }
+        : {}),
+      ...(stamps.startedAt !== undefined ? { startedAt: stamps.startedAt } : {}),
+      ...(stamps.completedAt !== undefined
+        ? { completed: { stopReason: 'end_turn' as const, ts: stamps.completedAt } }
+        : {}),
+    })
+
+    it('stamps the initial prompt, the queued messages and the turns from what is persisted', () => {
+      const sections = mainTranscriptSections(
+        run({
+          createdAt: '2026-07-31T08:00:00.000Z',
+          queuedMessages: [{ id: 'm1', text: 'Queued note', createdAt: '2026-07-31T08:00:30.000Z' }],
+        }),
+        {
+          turns: [
+            turn('turn-1', {
+              user: '2026-07-31T08:01:00.000Z',
+              startedAt: '2026-07-31T08:01:00.000Z',
+              completedAt: '2026-07-31T08:05:12.000Z',
+            }),
+          ],
+        } as ThreadState,
+      )
+      expect(sections[0]?.userMessage?.ts).toBe('2026-07-31T08:00:00.000Z')
+      // A queued message is stamped with when it was QUEUED — the turn's own ts takes over once sent.
+      expect(sections[1]?.userMessage?.ts).toBe('2026-07-31T08:00:30.000Z')
+      expect(sections[2]?.userMessage?.ts).toBe('2026-07-31T08:01:00.000Z')
+      expect(sections[2]?.startedAt).toBe('2026-07-31T08:01:00.000Z')
+      expect(sections[2]?.completedAt).toBe('2026-07-31T08:05:12.000Z')
+    })
+
+    it('leaves an unstamped turn and an attributed agent section without a clock', () => {
+      const sections = mainTranscriptSections(run({ task: '' }), {
+        turns: [{ id: 'turn-1', userMessage: { text: 'Follow up', imageCount: 0, images: [] }, items: [] }],
+      } as ThreadState)
+      expect(sections[0]?.userMessage?.ts).toBeUndefined()
+      expect(sections[0]?.startedAt).toBeUndefined()
+      expect(sections[0]?.completedAt).toBeUndefined()
+      expect(agentTranscriptSections('a1', [])[0]?.completedAt).toBeUndefined()
+    })
+
+    it('closes a completed turn with its own row, and leaves a live turn alone', () => {
+      const keys = (section: TranscriptSection) => buildTranscriptRows([section], 'r1').map((r) => r.key)
+      expect(keys(mainTranscriptSections(run({ task: '' }), {
+        turns: [turn('turn-1', { startedAt: localIso(2026, 7, 31, 9), completedAt: localIso(2026, 7, 31, 9, 4) })],
+      } as ThreadState)[0]!)).toEqual(['turn-1:turn-1-answer', 'turn-1:turn-time'])
+      // Still running: no completion stamp, and therefore no placeholder row to jump later.
+      expect(keys(mainTranscriptSections(run({ task: '' }), {
+        turns: [turn('turn-1', { startedAt: localIso(2026, 7, 31, 9) })],
+      } as ThreadState)[0]!)).toEqual(['turn-1:turn-1-answer'])
+    })
+
+    it('separates local days between turns, and only between them', () => {
+      const rows = (turns: object[]) =>
+        buildTranscriptRows(
+          mainTranscriptSections(run({ task: '' }), { turns } as ThreadState),
+          'r1',
+        ).map((r) => r.key)
+
+      // One day: no separator anywhere, not even above the first turn.
+      expect(
+        rows([
+          turn('turn-1', { user: localIso(2026, 7, 31, 9) }),
+          turn('turn-2', { user: localIso(2026, 7, 31, 17) }),
+        ]).filter((key) => key.endsWith(':day-separator')),
+      ).toEqual([])
+
+      // Resumed the next morning: exactly one separator, and it opens the later turn.
+      const multiDay = rows([
+        turn('turn-1', { user: localIso(2026, 7, 31, 23) }),
+        turn('turn-2', { user: localIso(2026, 8, 1, 9) }),
+        turn('turn-3', { user: localIso(2026, 8, 1, 10) }),
+      ])
+      expect(multiDay.filter((key) => key.endsWith(':day-separator'))).toEqual(['turn-2:day-separator'])
+      expect(multiDay.indexOf('turn-2:day-separator')).toBeLessThan(multiDay.indexOf('turn-2:user'))
+
+      // Partly missing stamps never break the run of dates — the undated turn is just skipped.
+      expect(
+        rows([
+          turn('turn-1', { user: localIso(2026, 7, 31, 9) }),
+          turn('turn-2', {}),
+          turn('turn-3', { user: localIso(2026, 7, 31, 18) }),
+        ]).filter((key) => key.endsWith(':day-separator')),
+      ).toEqual([])
+    })
+
+    /**
+     * The stack renders directly under the task bubble but is queued LAST: a message stacked onto
+     * a run that was continued days later is NEWER than the whole transcript beneath it. Letting
+     * it move the day cursor put an "Aug 1" rule over July turns and, because the cursor only ever
+     * advances, swallowed the genuine boundary inside the conversation — the one thing the
+     * separator exists to show.
+     */
+    it('keeps a message stacked after the turns out of the day sequence', () => {
+      const rows = buildTranscriptRows(
+        mainTranscriptSections(
+          run({
+            createdAt: localIso(2026, 7, 30, 9),
+            queuedMessages: [{ id: 'm1', text: 'Stacked later', createdAt: localIso(2026, 8, 1, 9) }],
+          }),
+          {
+            turns: [
+              turn('turn-1', { user: localIso(2026, 7, 30, 10) }),
+              turn('turn-2', { user: localIso(2026, 7, 31, 10) }),
+            ],
+          } as ThreadState,
+        ),
+        'r1',
+      ).map((r) => r.key)
+
+      // It still renders where it always did, above the turns it will be sent after…
+      expect(rows.indexOf('queued:m1')).toBeLessThan(rows.indexOf('turn-1:user'))
+      // …with no rule above it claiming the July transcript below happened on Aug 1…
+      expect(rows).not.toContain('queued:m1:day-separator')
+      // …and the real Jul 30 → Jul 31 boundary between the turns intact.
+      expect(rows.filter((key) => key.endsWith(':day-separator'))).toEqual(['turn-2:day-separator'])
+    })
+
+    it('draws the day rule as an announced separator through the real component tree', () => {
+      render(
+        <SessionTranscript
+          runId="r1"
+          viewId="main"
+          mode="document"
+          sections={mainTranscriptSections(run({ task: '' }), {
+            turns: [
+              turn('turn-1', { user: localIso(2026, 7, 31, 23) }),
+              turn('turn-2', { user: localIso(2026, 8, 1, 9) }),
+            ],
+          } as ThreadState)}
+        />,
+      )
+      const separator = document.querySelector('[data-slot="day-separator"]')!
+      expect(separator.getAttribute('role')).toBe('separator')
+      // Assistive tech gets the same anchor a sighted reader has, not just the two decorative rules.
+      expect(separator.getAttribute('aria-label')).toContain('2026')
+      expect(separator.querySelector('time')?.getAttribute('datetime')).toBe('2026-08-01')
+    })
+
+    it('renders the bubble time and the turn duration through the shared transcript', () => {
+      const startedAt = localIso(2026, 7, 31, 14, 32)
+      render(
+        <SessionTranscript
+          runId="r1"
+          viewId="main"
+          mode="document"
+          sections={mainTranscriptSections(run({ task: '' }), {
+            turns: [
+              turn('turn-1', {
+                user: startedAt,
+                startedAt,
+                completedAt: new Date(new Date(startedAt).getTime() + 252_000).toISOString(),
+              }),
+            ],
+          } as ThreadState)}
+        />,
+      )
+      expect(document.querySelector('[data-slot="user-bubble"] [data-slot="message-time"]')).not.toBeNull()
+      expect(document.querySelector('[data-slot="turn-time"]')?.textContent).toContain('· 4m 12s')
+    })
+  })
+
   it('groups the same normalized entries for an agent section', () => {
     const entries = [tool('read-1'), tool('read-2')]
     const rows = buildTranscriptRows(agentTranscriptSections('agent-1', entries), 'r1')
