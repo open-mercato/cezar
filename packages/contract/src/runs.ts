@@ -347,9 +347,10 @@ export const runIndexEntrySchema = z.object({
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
-  /** The run's place in a dispatch tree (spec 2026-09-10-dispatch), the two keys the global
-   *  page needs to nest a child under its parent. Absent on a plain task. */
-  dispatch: dispatchSchema.pick({ rootRunId: true, parentRunId: true }).optional(),
+  /** The run's place in a dispatch tree (spec 2026-09-10-dispatch): the two keys the global
+   *  page needs to nest a child under its parent, and the child's `kind` so a row can say
+   *  `review` or `implement` next to its title. Absent on a plain task. */
+  dispatch: dispatchSchema.pick({ rootRunId: true, parentRunId: true, kind: true }).optional(),
   /** When the agent actually started, as opposed to when the task was created. The global page's
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),

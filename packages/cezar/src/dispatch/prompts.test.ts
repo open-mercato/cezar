@@ -17,6 +17,12 @@ describe('the dispatch prompt', () => {
     expect(DISPATCH_PROMPT).toContain('--suggestions');
   });
 
+  it('tells the parent how to pick a runner and model for a child, and that omitted means inherited', () => {
+    expect(DISPATCH_PROMPT).toContain('--runner and --model choose who runs the child; omitted, it inherits yours');
+    expect(DISPATCH_PROMPT).toContain("If the user's instructions name a runner or model, use that");
+    expect(DISPATCH_PROMPT).toContain('cheaper or faster model');
+  });
+
   it('says when NOT to dispatch — the task-shape gate the evidence demands', () => {
     expect(DISPATCH_PROMPT).toMatch(/genuinely INDEPENDENT/);
     expect(DISPATCH_PROMPT).toMatch(/NOT for one tightly coupled change/);

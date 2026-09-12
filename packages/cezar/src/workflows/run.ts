@@ -296,6 +296,14 @@ interface ActiveRun {
    *  Worktree-backed runs never need it; root runs ordinarily do unless the
    *  explicit unsafe bypass is active. */
   releaseRepoRoot?: () => void;
+  /** An in-place run (`cwd === repoRoot`) that parked — on a question, or as a monitor waiting
+   *  for its dispatched children — gives the exclusive working-tree lease back while it sits
+   *  (`parkRepoRoot`), so other in-place tasks are not stuck behind a session that is not
+   *  touching the tree. `deliverMessage` takes it back before the session resumes. */
+  repoRootParked?: boolean;
+  /** The one in-flight re-acquire, so several wake-ups arriving while it waits share it instead
+   *  of each chaining a lease of its own behind the first (which would never be released). */
+  repoRootResume?: Promise<boolean>;
   /** Durable directional-usage accounting state for the current runner
    * invocation. Provider-local turn ids are unique only within this epoch. */
   usageInvocation?: {
@@ -725,6 +733,10 @@ export class RunManager {
    * (#438). `CEZ_DISABLE_REPO_LOCK=1` deliberately bypasses this safety lease.
    */
   private repoRootTail: Promise<void> = Promise.resolve();
+  /** Leases chained onto `repoRootTail` and not yet released — holders and waiters alike. Zero
+   *  means the tree is free right now, which is what lets a parked in-place run take it back
+   *  synchronously (`claimFreeRepoRoot`) instead of round-tripping through a promise. */
+  private repoRootBusy = 0;
 
   /** `.ai/cezar` — where the per-task handoff files and todos.json live. */
   private readonly dataDir: string;
@@ -1364,6 +1376,22 @@ export class RunManager {
         // its parent a report (spec 2026-09-08-units-hierarchy Q7) — and a restart is precisely
         // the case the durable pending report exists for.
         this.reportSettledChildToParent(run.id);
+        continue;
+      }
+      // `running` with no agent session anywhere on the record: the process died while the run
+      // was still on its way to one — queued behind the working-tree lease, or spawning. There
+      // is nothing to resume, so it goes back to the queue whole rather than failing on
+      // "no agent session to resume" with no way forward (the first live dispatch tree lost a
+      // task exactly there).
+      if (!run.steps.some((step) => step.sessionId)) {
+        for (const step of run.steps) {
+          if (step.status === 'running' || step.status === 'waiting') {
+            this.store.updateStep(run.id, step.id, { status: 'pending' });
+          }
+        }
+        this.store.updateRun(run.id, { status: 'queued', startedAt: undefined, currentStepId: undefined });
+        const requeued = this.store.getRun(run.id);
+        if (requeued) await this.reviveQueuedRun(requeued, 'cezar restarted — the task had not reached its agent session');
         continue;
       }
       // `running`: the process died mid-turn. Mark it interrupted (the state
@@ -2271,15 +2299,77 @@ export class RunManager {
    * Returns false when the run was cancelled while waiting: the lease was
    * never granted and the caller must not touch the working tree.
    */
+  /**
+   * Give the exclusive working-tree lease back while an in-place run is parked. Only the run that
+   * holds one has anything to give (a worktree run never acquired it; `CEZ_DISABLE_REPO_LOCK=1`
+   * never granted it). The first live dispatch tree found the gap: a commander running in the
+   * repo working tree parked as a monitor for the whole life of its children — slot-exempt, so
+   * the queue looked free — while every other in-place task waited on a lease nobody was using.
+   */
+  private parkRepoRoot(runId: string, state: ActiveRun): void {
+    if (state.cwd !== this.repoRoot || !state.releaseRepoRoot) return;
+    state.releaseRepoRoot();
+    state.releaseRepoRoot = undefined;
+    state.repoRootParked = true;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId: state.currentStepId,
+      message: 'parked — released the repository working tree so other in-place tasks can run; it is taken back before this task resumes',
+    });
+  }
+
+  /**
+   * The fast counterpart of `resumeRepoRoot`: a tree nobody holds or waits for is taken back on
+   * the spot, so the common wake-up (no other in-place task ran meanwhile) resumes the session
+   * synchronously — the #347 guarantee that a parked run's resume never queues behind anything.
+   */
+  private claimFreeRepoRoot(state: ActiveRun): boolean {
+    if (this.repoRootBusy > 0 || state.cancelled) return false;
+    state.releaseRepoRoot = this.chainRepoRoot().release;
+    state.repoRootParked = false;
+    return true;
+  }
+
+  /** Chain one more lease onto the tail. `previous` settles when every earlier lease is released;
+   *  `release` hands the tree on (idempotent — a lease dropped mid-wait releases exactly once). */
+  private chainRepoRoot(): { previous: Promise<void>; release: () => void } {
+    const previous = this.repoRootTail;
+    let resolve: () => void = () => undefined;
+    this.repoRootTail = new Promise<void>((r) => {
+      resolve = r;
+    });
+    this.repoRootBusy += 1;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.repoRootBusy -= 1;
+      resolve();
+    };
+    return { previous, release };
+  }
+
+  /** The counterpart of `parkRepoRoot`: wait for the tree before the parked session resumes. */
+  private async resumeRepoRoot(runId: string, state: ActiveRun): Promise<boolean> {
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId: state.currentStepId,
+      message: 'resuming — waiting for exclusive access to the repository working tree',
+    });
+    try {
+      const acquired = await this.acquireRepoRoot(runId, state);
+      if (acquired) state.repoRootParked = false;
+      return acquired;
+    } finally {
+      state.repoRootResume = undefined;
+    }
+  }
+
   private async acquireRepoRoot(runId: string, state: ActiveRun): Promise<boolean> {
     // `cancel()` can land between the run going `running` and reaching here,
     // while `interrupt` is still the default no-op — never enter the chain.
     if (state.cancelled) return false;
-    const previous = this.repoRootTail;
-    let release: () => void = () => undefined;
-    this.repoRootTail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { previous, release } = this.chainRepoRoot();
     // Until `previous` resolves this run does not own the tree yet, so a drop
     // during the wait must not hand the tree to the next waiter — chain our
     // release behind `previous` instead of resolving the tail early.
@@ -2667,6 +2757,20 @@ export class RunManager {
   private deliverMessage(runId: string, content: PastedContent[], userAuthored: boolean): boolean {
     const state = this.active.get(runId);
     if (!state?.session?.open || state.cancelled) return false;
+    // A parked in-place run gave the working-tree lease back (`parkRepoRoot`). It must own the
+    // tree again before its session resumes, and the lease is asynchronous — so the message is
+    // ACCEPTED here (the caller's delivery ladder stops, as it would for a sent message) and
+    // delivered once the tree is ours. Every wake-up that lands meanwhile rides the same wait.
+    if (state.repoRootParked && !(state.repoRootResume === undefined && this.claimFreeRepoRoot(state))) {
+      const resume = (state.repoRootResume ??= this.resumeRepoRoot(runId, state));
+      void resume.then((acquired) => {
+        if (!acquired) return;
+        if (this.deliverMessage(runId, content, userAuthored)) return;
+        // The session closed while we waited: keep the message the way the ladder would.
+        if (!this.enqueueMessage(runId, content)) this.deferMessage(runId, content);
+      });
+      return true;
+    }
 
     const text = content
       .filter((b): b is Extract<ContentBlock, { type: 'text' }> => b.type === 'text')
@@ -3099,6 +3203,7 @@ export class RunManager {
               this.leaveMonitoring(runId);
               this.clearMonitoringWakeTimer(state, runId);
             }
+            this.parkRepoRoot(runId, state);
             this.waiting.add(runId);
             if (!monitoring) this.armIdleTimer(runId, state);
             this.releaseSlot();
@@ -3811,6 +3916,7 @@ export class RunManager {
             this.leaveMonitoring(runId);
             this.clearMonitoringWakeTimer(state, runId);
           }
+          this.parkRepoRoot(runId, state);
           this.waiting.add(runId);
           if (!monitoring) this.armIdleTimer(runId, state);
           this.releaseSlot(); // the freed slot can start a queued run right away — in any project

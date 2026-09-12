@@ -53,7 +53,7 @@ import {
   type TaskColumnId,
 } from '@/lib/task-columns'
 import { listCounts, queuePositions, runTitle, sortRuns, type ListView } from '@/lib/task-groups'
-import { subtaskLabel, taskTreeRows } from '@/lib/task-tree'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import {
   compareGroups,
   filterRuns,
@@ -797,6 +797,16 @@ function TitleCell({
       >
         {title}
       </Link>
+      {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
+          from a task a person typed without opening it. Null on every root. */}
+      {dispatchKindLabel(run) ? (
+        <span
+          data-slot="dispatch-kind"
+          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+        >
+          {dispatchKindLabel(run)}
+        </span>
+      ) : null}
       {/* What this task dispatched, counted rather than listed: the children are the rows right
           underneath, so the count is a label for them, not a second copy of them. */}
       {subtasks ? (
@@ -951,6 +961,15 @@ function TaskCard({
         >
           {runTitle(run)}
         </Link>
+        {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
+        {dispatchKindLabel(run) ? (
+          <span
+            data-slot="dispatch-kind"
+            className="mt-px shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+          >
+            {dispatchKindLabel(run)}
+          </span>
+        ) : null}
         {/* Same count as the table's Task cell — the dispatched children are the cards below. */}
         {subtaskLabel(childCount) ? (
           <span

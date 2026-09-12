@@ -5437,6 +5437,7 @@ export function createApp(deps: ServerDeps) {
           dispatch: {
             rootRunId: run.dispatch.rootRunId,
             ...(run.dispatch.parentRunId !== undefined ? { parentRunId: run.dispatch.parentRunId } : {}),
+            ...(run.dispatch.kind !== undefined ? { kind: run.dispatch.kind } : {}),
           },
         }
       : {}),

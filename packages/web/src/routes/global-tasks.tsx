@@ -23,7 +23,7 @@ import {
   workspaceQueryKeys,
 } from '@/api/queries'
 import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
-import { subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
 import { useListView } from '@/components/list-view'
@@ -852,6 +852,15 @@ function TaskRow({
           >
             {runTitle(run)}
           </Link>
+          {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}
+          {dispatchKindLabel(run) ? (
+            <span
+              data-slot="dispatch-kind"
+              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+            >
+              {dispatchKindLabel(run)}
+            </span>
+          ) : null}
           {/* The dispatched children are the indented rows underneath — counted, not listed. */}
           {subtaskLabel(childCount) ? (
             <span

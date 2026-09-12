@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   buildTaskTree,
+  dispatchKindLabel,
   flattenTaskTree,
   subtaskLabel,
   taskTreeRows,
@@ -151,5 +152,25 @@ describe('subtaskLabel', () => {
   it('agrees with itself about the plural', () => {
     expect(subtaskLabel(1)).toBe('1 subtask')
     expect(subtaskLabel(3)).toBe('3 subtasks')
+  })
+})
+
+describe('dispatchKindLabel', () => {
+  it('is null for a task a person created — a root says nothing, even one that dispatched', () => {
+    expect(dispatchKindLabel(run('plain'))).toBeNull()
+    expect(dispatchKindLabel({ id: 'root', dispatch: { kind: 'review' } })).toBeNull()
+  })
+
+  it('names a child by its kind', () => {
+    expect(dispatchKindLabel({ id: 'c', dispatch: { parentRunId: 'p', kind: 'review' } })).toBe('review')
+    expect(dispatchKindLabel({ id: 'c', dispatch: { parentRunId: 'p', kind: 'implement' } })).toBe(
+      'implement',
+    )
+  })
+
+  // The contract's default, made visible: a child with no `kind` is an implement task, and the
+  // list says so rather than leaving one kind labelled and the other bare.
+  it('reads an absent kind as implement', () => {
+    expect(dispatchKindLabel(run('c', 'p'))).toBe('implement')
   })
 })

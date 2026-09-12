@@ -766,4 +766,20 @@ describe('dispatched subtasks in the quick-list', () => {
     expect(idsIn('Recent')).toEqual(['orphan'])
     expect(row('orphan')?.getAttribute('data-depth')).toBe('0')
   })
+
+  // The kind chip tells a dispatched row from a typed one at a glance, and it is the one piece
+  // of metadata the sidebar keeps at every width. Never on the root.
+  it('labels a child with its kind, an absent kind as implement, and a root with nothing', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({ id: 'rev', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+        run({ id: 'imp', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    const kindOf = (id: string) => row(id)?.querySelector('[data-slot="dispatch-kind"]')?.textContent ?? null
+    expect(kindOf('rev')).toBe('review')
+    expect(kindOf('imp')).toBe('implement')
+    expect(kindOf('p')).toBeNull()
+  })
 })

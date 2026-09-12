@@ -17,8 +17,11 @@
  * Re-sorting here would silently override the sort the caller chose.
  */
 
+/** What a dispatched task is for — the contract's `DispatchKind`, spelled structurally here. */
+export type DispatchKindLabel = 'implement' | 'review'
+
 /**
- * What this module needs of a run: its id, and who dispatched it.
+ * What this module needs of a run: its id, who dispatched it, and what for.
  *
  * Structural rather than `RunRecord`, for the same reason `RunTitleInput` is: the cross-project
  * page's rows are `RunIndexEntry`, a slim row, and the sidebar's are records. A row type that
@@ -27,7 +30,7 @@
  */
 export interface TaskTreeInput {
   id: string
-  dispatch?: { parentRunId?: string | undefined } | undefined
+  dispatch?: { parentRunId?: string | undefined; kind?: DispatchKindLabel | undefined } | undefined
 }
 
 /** One run in the tree, with everything a row needs to paint itself in place. */
@@ -135,4 +138,15 @@ export function taskTreeRows<T extends TaskTreeInput>(runs: readonly T[]): TaskT
 export function subtaskLabel(childCount: number): string | null {
   if (childCount <= 0) return null
   return `${childCount} subtask${childCount === 1 ? '' : 's'}`
+}
+
+/**
+ * `review` or `implement` — the chip a DISPATCHED row wears beside its title, or null for a task
+ * a person created. Keyed on `parentRunId`, not on `kind`: a root that dispatched reviews is
+ * still the user's own task and says nothing here, and a child whose kind is absent is an
+ * `implement` (the contract's default), spelled out so the two kinds read alike in a list.
+ */
+export function dispatchKindLabel(run: TaskTreeInput): DispatchKindLabel | null {
+  if (run.dispatch?.parentRunId === undefined) return null
+  return run.dispatch.kind ?? 'implement'
 }

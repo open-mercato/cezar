@@ -1220,4 +1220,24 @@ describe('dispatched subtasks nest under their parent', () => {
     expect(card('c')?.getAttribute('data-depth')).toBe('1')
     expect(card('p')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('1 subtask')
   })
+
+  // The chip that tells a dispatched row from a typed one: its kind, next to the title, in both
+  // layouts — and never on the root, which is the user's own task whatever it dispatched.
+  it('labels a child with its kind, an absent kind as implement, and a root with nothing', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'p' }),
+        run({ id: 'rev', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+        run({ id: 'imp', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    const kindOf = (el: Element | null | undefined) =>
+      el?.querySelector('[data-slot="dispatch-kind"]')?.textContent ?? null
+    expect(kindOf(tableRow('rev'))).toBe('review')
+    expect(kindOf(tableRow('imp'))).toBe('implement')
+    expect(kindOf(tableRow('p'))).toBeNull()
+    expect(kindOf(card('rev'))).toBe('review')
+    expect(kindOf(card('imp'))).toBe('implement')
+    expect(kindOf(card('p'))).toBeNull()
+  })
 })

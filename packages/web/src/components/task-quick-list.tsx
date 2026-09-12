@@ -24,7 +24,7 @@ import {
   type QuickListBucket,
   type QuickListRow,
 } from '@/lib/task-groups'
-import { subtaskLabel, taskTreeRows } from '@/lib/task-tree'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import { formatCost, taskReference } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
@@ -428,6 +428,7 @@ function RunRow({
       : shortAge(run.finishedAt ?? run.createdAt, now)
 
   const subtasks = subtaskLabel(childCount)
+  const dispatchKind = dispatchKindLabel(run)
 
   return (
     <div
@@ -488,6 +489,17 @@ function RunRow({
         >
           {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
         </span>
+        {/* What a DISPATCHED row is for — `review` or `implement`. NOT droppable metadata like
+            the pair below: it is the one thing that tells a child from a task a person typed, so
+            it stays at every width, in the sidebar's smaller chip size. Null on every root. */}
+        {dispatchKind ? (
+          <span
+            data-slot="dispatch-kind"
+            className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
+          >
+            {dispatchKind}
+          </span>
+        ) : null}
         {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
             sidebar row has no column to hold an em dash open for.
 

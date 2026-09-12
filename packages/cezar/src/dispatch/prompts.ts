@@ -22,6 +22,7 @@ To dispatch, run (from your shell) — always through the cockpit's own binary, 
 - --budget is carved out of your own remaining budget and returned to you, unspent, when the child settles. A dispatch that asks for more than you have left is refused with the reason.
 - The command prints the child's run id and branch. COMMIT before dispatching: children fork your committed tip, not your working tree.
 - At most 4 children in flight under you; a fifth is refused. Wait for reports, then dispatch again.
+- --runner and --model choose who runs the child; omitted, it inherits yours. If the user's instructions name a runner or model, use that. Otherwise choose deliberately: a narrow, well-specified assignment — a review, a mechanical change, a read-only investigation — is a good fit for a cheaper or faster model; keep your own model for work whose judgement you would not want to re-check.
 
 While children are working and you have nothing else to do, end your turn with a line containing exactly CEZ:MONITORING. cezar parks you, gives your slot to the children, and wakes you when a report arrives.
 
