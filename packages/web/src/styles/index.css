@@ -513,6 +513,12 @@
   padding-left: 0.9em;
   color: var(--muted-foreground);
 }
+.thread-markdown a[data-streamdown='link']:not([href]) {
+  cursor: text;
+  color: inherit;
+  font-weight: inherit;
+  text-decoration: none;
+}
 .thread-markdown [data-streamdown='inline-code'] {
   border-radius: 5px;
   background: var(--muted);

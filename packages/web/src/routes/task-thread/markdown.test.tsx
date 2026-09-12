@@ -245,6 +245,17 @@ describe('Markdown', () => {
       )
     })
 
+    it('does not offer to open local filesystem paths as browser links', () => {
+      const localPath = '/Users/maciejgren/Documents/AITL/git-konwencje-aitl.md'
+      const { container } = renderLink(`[lesson](${localPath})`)
+      const rendered = container.querySelector('[data-streamdown="link"]') as HTMLElement
+
+      fireEvent.click(rendered)
+
+      expect(document.querySelector('[data-slot="link-safety-dialog"]')).toBeNull()
+      expect(openMock).not.toHaveBeenCalled()
+    })
+
     it('cancelling closes the dialog and follows nothing', async () => {
       const { container } = renderLink()
       fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
