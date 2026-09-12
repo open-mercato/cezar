@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt } from './prompts.ts';
+import { DISPATCH_PROMPT, REVIEW_PROMPT, composeDispatchPrompt, dispatchIntentPrompt } from './prompts.ts';
 
 /** The prompt is the ONLY place an agent learns the CLI, so it must name every flag the
  *  contract accepts and the rules the engine enforces. */
@@ -54,5 +54,25 @@ describe('the dispatch prompt', () => {
     expect(review).toContain(REVIEW_PROMPT);
     expect(REVIEW_PROMPT).toMatch(/FALSIFY/);
     expect(REVIEW_PROMPT).toMatch(/The verdict is required/);
+  });
+
+  describe('the intent block (the composer’s Dispatch toggle)', () => {
+    it('is appended to the root’s prompt only when an intent is given', () => {
+      expect(composeDispatchPrompt(undefined)).not.toContain('Dispatch mode.');
+      const withIntent = composeDispatchPrompt(undefined, {});
+      expect(withIntent.startsWith(DISPATCH_PROMPT)).toBe(true);
+      expect(withIntent).toContain('Dispatch mode. The user started this task expecting it to be split.');
+      expect(withIntent).toContain('CEZ:MONITORING');
+    });
+
+    it('turns the user’s limits and child defaults into sentences the agent can plan by', () => {
+      const block = dispatchIntentPrompt({ maxSubtasks: 10, inFlight: 2, runner: 'claude', model: 'sonnet', budgetUsd: 2 });
+      expect(block).toContain('at most 10 subtasks in total and 2 in flight at once; a dispatch past them is refused');
+      expect(block).toContain('--runner claude --model sonnet --budget 2');
+      // The bare toggle names no limits and no defaults — and says nothing about either.
+      const bare = dispatchIntentPrompt({});
+      expect(bare).not.toContain('Limits set by the user');
+      expect(bare).not.toContain('Subtasks run with');
+    });
   });
 });

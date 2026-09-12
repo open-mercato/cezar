@@ -1,5 +1,10 @@
-import type { Runner } from '@open-mercato/cezar-api-client'
-import type { TaskSource } from './new-task-form'
+import {
+  DISPATCH_MAX_IN_FLIGHT,
+  DISPATCH_MAX_SUBTASKS,
+  type DispatchIntent,
+  type Runner,
+} from '@open-mercato/cezar-api-client'
+import { RUNNERS, type TaskSource } from './new-task-form'
 
 /**
  * The new-task draft store (spec: "Queued form state survives navigation (draft store)").
@@ -34,6 +39,10 @@ export interface NewTaskDraft {
   autonomous: boolean | null
   /** Follow-up generation is default-on. null → remembered value / on. */
   generateFollowups: boolean | null
+  /** The Dispatch toggle (spec 2026-09-10-dispatch): this task fans work out to subtasks.
+   *  `null` = off; `{}` = on with the engine's defaults; the keys are the limits the settings
+   *  surface (long-press) set. Sticky like the other pills — it is a way of working. */
+  dispatch: DispatchIntent | null
 }
 
 export interface ComposerRunModeInput {
@@ -46,6 +55,10 @@ export interface ComposerRunModeInput {
   configuredAutonomous: boolean | 'source-dependent'
   configuredWorktree: boolean
   source: TaskSource['source']
+  /** The Dispatch toggle is on. Forces a worktree (the server does too — subtasks fork off
+   *  the parent's committed branch) and defaults Autonomous ON: a task that parks on its
+   *  children must not also park on the user, unless they explicitly asked it to. */
+  dispatch?: boolean
 }
 
 /** Resolve run-mode values once, in precedence order: hard constraints, explicit draft
@@ -58,16 +71,20 @@ export function resolveComposerRunMode(input: ComposerRunModeInput): {
   autonomous: boolean
   worktree: boolean
 } {
+  const dispatch = input.dispatch === true
   const autonomousFallback = input.configuredAutonomous === 'source-dependent'
     ? input.source === 'skill'
     : input.configuredAutonomous
   const recommended = input.interactive === true ? false : undefined
+  // Dispatch sits between the explicit choice and the recommendation: only an explicit OFF
+  // beats it, because an interactive skill's advice is about the parent pausing for the user,
+  // and a dispatching parent is expected to keep going while its children work.
   const autonomous = input.planFirst
     ? false
-    : (input.explicitAutonomous ?? recommended ?? autonomousFallback)
+    : (input.explicitAutonomous ?? (dispatch ? true : undefined) ?? recommended ?? autonomousFallback)
   const worktree = !input.hasGit
     ? false
-    : input.variants > 1
+    : input.variants > 1 || dispatch
       ? true
       : (input.explicitWorktree ?? recommended ?? input.configuredWorktree)
   return { autonomous, worktree }
@@ -88,7 +105,19 @@ export function resolveComposerRunMode(input: ComposerRunModeInput): {
  * "opted out" from "there is no repository here", which is the difference between a warning
  * and an explanation.
  */
-export function composerRunModeNote(input: { worktree: boolean; hasGit: boolean }): string {
+export function composerRunModeNote(input: {
+  worktree: boolean
+  hasGit: boolean
+  /** The Dispatch toggle is on — the line says so, because fanning out is the bigger fact about
+   *  where the work happens than which tree the parent sits in. */
+  dispatch?: boolean
+  autonomous?: boolean
+}): string {
+  if (input.dispatch === true) {
+    return input.autonomous === true
+      ? 'Runs on its own and fans work out to subtasks — it will not pause for you.'
+      : 'Fans work out to subtasks in isolated worktrees.'
+  }
   if (input.worktree) return 'Runs in an isolated worktree — review everything before it lands.'
   if (input.hasGit) return 'Runs in the repo working tree — your checkout is modified directly.'
   return 'Runs in place — no git repository detected, so there is no worktree to isolate in.'
@@ -105,6 +134,7 @@ const EMPTY: NewTaskDraft = {
   worktree: null,
   autonomous: null,
   generateFollowups: null,
+  dispatch: null,
 }
 
 const STORAGE_KEY = 'cez-new-task-draft'
@@ -140,7 +170,43 @@ function normalize(raw: unknown): NewTaskDraft {
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
+    dispatch: normalizeDispatchIntent(obj.dispatch),
   }
+}
+
+/**
+ * Coerce a stored (or hand-edited) dispatch value into one `POST /runs` will accept: `null`
+ * unless it is a plain object, and then only the contract's keys within the contract's ranges
+ * (`dispatchIntentSchema` is strict). Out-of-range values are dropped, not clamped — a limit
+ * the user never set is the engine's default, which is the safe one.
+ */
+export function normalizeDispatchIntent(raw: unknown): DispatchIntent | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const obj = raw as Record<string, unknown>
+  const intent: DispatchIntent = {}
+  const int = (value: unknown, max: number): number | undefined =>
+    typeof value === 'number' && Number.isInteger(value) && value >= 1 && value <= max
+      ? value
+      : undefined
+  const maxSubtasks = int(obj.maxSubtasks, DISPATCH_MAX_SUBTASKS)
+  if (maxSubtasks !== undefined) intent.maxSubtasks = maxSubtasks
+  const inFlight = int(obj.inFlight, DISPATCH_MAX_IN_FLIGHT)
+  if (inFlight !== undefined) intent.inFlight = inFlight
+  if (typeof obj.runner === 'string' && RUNNERS.some((known) => known.id === obj.runner)) {
+    intent.runner = obj.runner as Runner
+  }
+  if (typeof obj.model === 'string' && obj.model !== '' && obj.model.length <= 120) {
+    intent.model = obj.model
+  }
+  if (
+    typeof obj.budgetUsd === 'number'
+    && Number.isFinite(obj.budgetUsd)
+    && obj.budgetUsd > 0
+    && obj.budgetUsd <= 10_000
+  ) {
+    intent.budgetUsd = obj.budgetUsd
+  }
+  return intent
 }
 
 function isSource(raw: unknown): raw is TaskSource {

@@ -46,6 +46,32 @@ export const dispatchPendingReportSchema = z.object({
 });
 export type DispatchPendingReport = z.infer<typeof dispatchPendingReportSchema>;
 
+/** The engine's own ceiling on children in flight per task; a user's `inFlight` may only lower it. */
+export const DISPATCH_MAX_IN_FLIGHT = 4;
+/** The most subtasks a user may ask a root for through the composer. */
+export const DISPATCH_MAX_SUBTASKS = 50;
+
+/**
+ * What the USER asked for when starting a task with the composer's Dispatch toggle: this task is
+ * the one that fans out, within these limits. Every field optional — the bare toggle is
+ * `{}`, and means "split it, engine defaults for everything". Sent on `POST /runs` as
+ * `dispatch`, persisted as `dispatch.intent` on the root, read by the prompt (the intent block)
+ * and by `dispatch()` (the caps and the child defaults).
+ */
+export const dispatchIntentSchema = z.strictObject({
+  /** Ceiling on children under this ROOT, in total, across the whole tree. */
+  maxSubtasks: z.number().int().min(1).max(DISPATCH_MAX_SUBTASKS).optional(),
+  /** Ceiling on children in flight per task — lowers the engine's own, never raises it. */
+  inFlight: z.number().int().min(1).max(DISPATCH_MAX_IN_FLIGHT).optional(),
+  /** Runner for children whose order names none. Absent = the parent's. */
+  runner: runnerSchema.optional(),
+  /** Model for children whose order names none. Absent = the parent's. */
+  model: z.string().max(120).optional(),
+  /** Budget in USD for children whose order names none. Absent = the parent's remainder. */
+  budgetUsd: z.number().positive().max(10_000).optional(),
+});
+export type DispatchIntent = z.infer<typeof dispatchIntentSchema>;
+
 /**
  * The `dispatch` object on a run record. Present on every run that dispatched or was dispatched;
  * absent on a plain task, which then behaves exactly as it always has.
@@ -53,6 +79,8 @@ export type DispatchPendingReport = z.infer<typeof dispatchPendingReportSchema>;
 export const dispatchSchema = z.object({
   /** The tree's root run id (the root names itself). */
   rootRunId: z.string(),
+  /** On a ROOT started with the composer's Dispatch toggle: what the user asked for. */
+  intent: dispatchIntentSchema.optional(),
   /** Absent on the root; present on every dispatched child. */
   parentRunId: z.string().optional(),
   /** What this task is for. Absent = `implement`. */

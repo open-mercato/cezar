@@ -41,7 +41,7 @@ import {
   openProjectInSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
-import { dispatchInputSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -609,6 +609,10 @@ const startRunSchema = z
     // audit trail survives the composer detour. Bounded like every other
     // string here; a todo id is a short generated key.
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    // The composer's Dispatch toggle (spec 2026-09-10-dispatch): this task is the root of a
+    // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
+    // off: the task itself is still perfectly valid as an ordinary run.
+    dispatch: dispatchIntentSchema.optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -3621,6 +3625,7 @@ export function createApp(deps: ServerDeps) {
         // One decision here feeds the run record, the system prompt and
         // CEZ_TODOS_FILE alike (RunManager.agentEnv).
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
+        ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
       };
       const variants = parsed.data.variants ?? 1;
       if (variants > 1) {

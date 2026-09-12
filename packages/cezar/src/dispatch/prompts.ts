@@ -9,7 +9,7 @@
  * The CLI contract below is the ONLY place an agent is told the `cez task` commands, so it
  * restates the flags of `dispatchInputSchema` and `dispatchReportSchema` key for key.
  */
-import type { DispatchKind } from '@open-mercato/cezar-contract';
+import type { DispatchIntent, DispatchKind } from '@open-mercato/cezar-contract';
 
 export const DISPATCH_PROMPT = `Dispatching tasks. cezar can run other cezar tasks for you, each in its own git worktree forked off YOUR branch as you last committed it, each with its own budget, each reporting back into this session when it settles. Use it for work that is genuinely INDEPENDENT of what you are doing — several unrelated fixes, a review of a branch by a fresh pair of eyes, a wide read-only investigation, work on disjoint parts of the repository — and NOT for one tightly coupled change: splitting coupled work across tasks makes it slower, more expensive and inconsistent, and the evidence on that is clear. When in doubt, do it yourself.
 
@@ -41,6 +41,31 @@ The Guard. Before anything irreversible, financial, or outside the scope you wer
 export const REVIEW_PROMPT = `Your KIND is review. You did not write the work you were given — you judge it. Read the diff of every branch or run named in your order's "Review of" line (git diff <fork point>..<branch>; the task's report.md and notes.md in the tree directory tell you what it claimed). Run the repository's tests and checks against that branch yourself and read the output. Judge the work against a checklist you try to FALSIFY: does the diff do what the order asked, does every claim in the report match the diff and the test output, does anything touch files outside the stated scope, is anything untested or destructive. Then report with --verdict: approve when the work does what its order asked and the evidence holds; changes with the exact findings (file and line) when it is close; reject when it is wrong or unsafe. You edit nothing on the reviewed branch and commit nothing of your own beyond your notes — a reviewer that fixes the code is no longer a reviewer. The verdict is required.`;
 
 /** The prompt part one task runs under: the dispatch instructions, plus the review addendum. */
-export function composeDispatchPrompt(kind: DispatchKind | undefined): string {
-  return kind === 'review' ? `${DISPATCH_PROMPT}\n\n${REVIEW_PROMPT}` : DISPATCH_PROMPT;
+export function composeDispatchPrompt(kind: DispatchKind | undefined, intent?: DispatchIntent): string {
+  const base = kind === 'review' ? `${DISPATCH_PROMPT}\n\n${REVIEW_PROMPT}` : DISPATCH_PROMPT;
+  return intent ? `${base}\n\n${dispatchIntentPrompt(intent)}` : base;
+}
+
+/**
+ * The INTENT block for a root the user started with the composer's Dispatch toggle. The general
+ * prompt above teaches the CLI and the rules; this one carries what only the user knew — that
+ * THIS task is the one that fans out, and within which limits. The limits are also enforced by
+ * `dispatch()`; the sentences here are so the agent plans within them instead of hitting them.
+ */
+export function dispatchIntentPrompt(intent: DispatchIntent): string {
+  const limits: string[] = [];
+  if (intent.maxSubtasks !== undefined) limits.push(`at most ${intent.maxSubtasks} subtask${intent.maxSubtasks === 1 ? '' : 's'} in total`);
+  if (intent.inFlight !== undefined) limits.push(`${intent.inFlight} in flight at once`);
+  const defaults: string[] = [];
+  if (intent.runner) defaults.push(`--runner ${intent.runner}`);
+  if (intent.model) defaults.push(`--model ${intent.model}`);
+  if (intent.budgetUsd !== undefined) defaults.push(`--budget ${intent.budgetUsd}`);
+  const lines = [
+    'Dispatch mode. The user started this task expecting it to be split. Plan first: name the independent parts, then dispatch each as its own cezar task with cez task create — disjoint scopes, a clear objective and success criteria each. While they work, end your turn with CEZ:MONITORING. Validate every report before merging it into your branch. Do the work yourself only for the parts too coupled to split, and say which those were.',
+  ];
+  if (limits.length) lines.push(`Limits set by the user: ${limits.join(' and ')}; a dispatch past them is refused.`);
+  if (defaults.length) {
+    lines.push(`Subtasks run with ${defaults.join(' ')} unless a part clearly needs something else — those are the defaults cezar applies when your order names none.`);
+  }
+  return lines.join('\n');
 }

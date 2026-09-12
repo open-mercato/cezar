@@ -52,7 +52,7 @@ import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/stor
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
 // takes byte-for-byte the path it took before this feature existed.
-import type { DispatchInput, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
+import type { DispatchInput, DispatchIntent, DispatchReport, RunDispatch } from '@open-mercato/cezar-contract';
 import { resolveCapabilities } from '../server/capabilities.ts';
 import { composeDispatchPrompt } from '../dispatch/prompts.ts';
 import {
@@ -465,6 +465,10 @@ export interface StartRunInput {
    *  budget. Persisted on the record at creation, because that is where every later consumer
    *  reads it — `execute()` runs from the RECORD, and so does restart recovery. */
   dispatch?: RunDispatch;
+  /** The composer's Dispatch toggle (spec 2026-09-10-dispatch): start this run as the ROOT of a
+   *  dispatch tree with the user's limits. Persisted as `dispatch.intent`; a worktree opt-out is
+   *  overridden, because children fork the root's commits and an in-place run has no branch. */
+  dispatchIntent?: DispatchIntent;
   /** Attachments from the queued prompt stack (#472), re-encoded from disk by
    *  `hydrateQueuedInput` at dequeue. Kept separate from `images` because those
    *  are persisted into `taskImages` by `startRun()` — folding
@@ -950,9 +954,13 @@ export class RunManager {
   ): RunRecord {
     // Sanitize at the manager boundary so CLI runs, workflows, variants, and
     // direct callers cannot bypass the HTTP policy.
-    const effectiveInput = agentModelsLocked(this.repoRoot)
-      ? { ...input, model: undefined }
-      : input;
+    const effectiveInput = {
+      ...(agentModelsLocked(this.repoRoot) ? { ...input, model: undefined } : input),
+      // A root started with the composer's Dispatch toggle always gets a worktree: children fork
+      // its commits, and an in-place run has no branch to fork. Overridden on the INPUT, which is
+      // what `execute()` reads, not only on the record.
+      ...(input.dispatchIntent && input.worktree === false ? { worktree: undefined } : {}),
+    };
     const run = this.store.createRun({
       title: makeRunTitle(input.task, workflow) + (group ? ` (${group.variant})` : ''),
       workflow: workflow.name,
@@ -973,7 +981,7 @@ export class RunManager {
       autonomous: input.autonomous === true,
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
-      worktree: !group && input.worktree === false ? false : undefined,
+      worktree: !group && !input.dispatchIntent && input.worktree === false ? false : undefined,
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) })),
@@ -988,6 +996,7 @@ export class RunManager {
     // turn-end handlers all read the RECORD, and a tree whose root lost its `dispatch` on a
     // restart would be a tree with no root.
     if (input.dispatch) this.store.updateRun(run.id, { dispatch: input.dispatch });
+    else if (input.dispatchIntent) this.store.updateRun(run.id, { dispatch: { rootRunId: run.id, intent: input.dispatchIntent } });
     // Initial pasted attachments must be visible while the run is still queued (#612),
     // and must survive a restart before a slot opens. Persist them before the job
     // enters `pendingJobs`; `hydrateQueuedInput` reconstructs their content blocks
@@ -1517,7 +1526,9 @@ export class RunManager {
    */
   private prepareDispatchSession(runId: string, state: ActiveRun): void {
     if (!this.dispatchEnabled()) return;
-    state.dispatchPrompt = composeDispatchPrompt(this.store.getRun(runId)?.dispatch?.kind);
+    const dispatch = this.store.getRun(runId)?.dispatch;
+    // The intent block belongs to the ROOT the user started; a child reads its order instead.
+    state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
   }
 
   /**
@@ -1716,11 +1727,24 @@ export class RunManager {
       this.store.appendEvent(parentId, { type: 'note', stepId: this.active.get(parentId)?.currentStepId, message, ...(tone ? { tone } : {}) });
 
     const runs = this.store.listRuns();
+    // The user's limits, when the root was started with the composer's Dispatch toggle: they may
+    // only tighten the engine's own caps, and the child defaults they name fill an order's gaps.
+    const intent = runs.find((r) => r.id === (parent.dispatch?.rootRunId ?? parent.id))?.dispatch?.intent;
+    const inFlightCap = Math.min(MAX_CHILDREN_IN_FLIGHT, intent?.inFlight ?? MAX_CHILDREN_IN_FLIGHT);
     const inFlight = inFlightChildren(runs, parentId).length;
-    if (inFlight + 1 > MAX_CHILDREN_IN_FLIGHT) {
-      const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${MAX_CHILDREN_IN_FLIGHT} per task. Wait for reports, then dispatch again.`;
+    if (inFlight + 1 > inFlightCap) {
+      const refused = `${inFlight} child run${inFlight === 1 ? '' : 's'} already in flight; the cap is ${inFlightCap} per task${intent?.inFlight !== undefined && intent.inFlight < MAX_CHILDREN_IN_FLIGHT ? ' (set by the user)' : ''}. Wait for reports, then dispatch again.`;
       note(`dispatch refused — ${refused}`, 'danger');
       return { refused };
+    }
+    if (intent?.maxSubtasks !== undefined) {
+      const rootId = parent.dispatch?.rootRunId ?? parent.id;
+      const total = runs.filter((r) => r.dispatch?.rootRunId === rootId && r.id !== rootId).length;
+      if (total + 1 > intent.maxSubtasks) {
+        const refused = `this tree already has ${total} subtask${total === 1 ? '' : 's'}; the user capped it at ${intent.maxSubtasks}. Finish with what exists and report.`;
+        note(`dispatch refused — ${refused}`, 'danger');
+        return { refused };
+      }
     }
 
     // The parent becomes a root on its first dispatch; a dispatched parent keeps its tree.
@@ -1728,7 +1752,7 @@ export class RunManager {
     if (!parent.dispatch) this.store.updateRun(parentId, { dispatch: { rootRunId } });
     const parentDispatch = this.store.getRun(parentId)?.dispatch ?? { rootRunId };
 
-    const budget = this.carveChildBudget(this.store.getRun(parentId) ?? parent, runs, input.max_cost);
+    const budget = this.carveChildBudget(this.store.getRun(parentId) ?? parent, runs, input.max_cost ?? intent?.budgetUsd);
     if ('refused' in budget) {
       note(`dispatch refused — ${budget.refused}`, 'danger');
       return { refused: budget.refused };
@@ -1754,8 +1778,8 @@ export class RunManager {
       // mints it, so the envelope is finished below once it exists.
       task: childTaskEnvelope(input, { id: parentId, branch: parent.branch }, ['{{TREE_PATHS}}']),
       systemPrompt: composeDispatchPrompt(input.kind),
-      runner: input.runner ?? parent.runner,
-      ...(input.model ?? parent.model ? { model: input.model ?? parent.model } : {}),
+      runner: input.runner ?? intent?.runner ?? parent.runner,
+      ...(input.model ?? intent?.model ?? parent.model ? { model: input.model ?? intent?.model ?? parent.model } : {}),
       autonomous: true,
       dispatch: {
         rootRunId,

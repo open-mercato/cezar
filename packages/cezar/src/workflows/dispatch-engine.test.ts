@@ -247,6 +247,48 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(store.getRun(second.id)?.dispatch?.budgetUsd).toBe(3);
     }, 60_000);
 
+    it('honours the user’s intent: a lower in-flight cap, a total cap, and child defaults', async () => {
+      reboot({ maxParallel: 1, maxMonitoringSessions: 0 });
+      const parent = await parkedRoot(20);
+      store.updateRun(parent.id, {
+        dispatch: { ...rootOf(parent.id, 20), intent: { maxSubtasks: 3, inFlight: 2, runner: 'codex', model: 'gpt-5', budgetUsd: 1.5 } },
+      });
+      // Two children in flight fill the USER's cap of 2, well under the engine's 4.
+      for (let i = 0; i < 2; i += 1) {
+        const child = store.createRun({ title: `in flight ${i}`, workflow: '(planned)', task: 't', steps: [] });
+        store.updateRun(child.id, { status: 'running', dispatch: childOf(parent.id) });
+      }
+      expect(refusal(parent.id, order('a third at once'))).toContain('the cap is 2 per task (set by the user)');
+      // With one settled, a third child fits in flight but is the tree's third and last.
+      const [first] = childrenOf(parent.id);
+      store.updateRun(first!.id, { status: 'done' });
+      const third = dispatchOk(parent.id, order('the last one'));
+      const record = store.getRun(third.id);
+      // Defaults from the intent fill what the order left out.
+      expect(record?.runner).toBe('codex');
+      expect(record?.model).toBe('gpt-5');
+      expect(record?.dispatch?.budgetUsd).toBe(1.5);
+      // A fourth breaks the total cap, whatever is in flight.
+      store.updateRun(third.id, { status: 'done' });
+      expect(refusal(parent.id, order('one too many'))).toContain('the user capped it at 3');
+      // An order that names its own runner, model and budget wins over the defaults.
+      store.updateRun(parent.id, { dispatch: { ...rootOf(parent.id, 20), intent: { runner: 'codex', model: 'gpt-5', budgetUsd: 1.5 } } });
+      const explicit = dispatchOk(parent.id, order('explicit', { runner: 'claude', model: 'opus', max_cost: 3 }));
+      expect(store.getRun(explicit.id)?.runner).toBe('claude');
+      expect(store.getRun(explicit.id)?.model).toBe('opus');
+      expect(store.getRun(explicit.id)?.dispatch?.budgetUsd).toBe(3);
+    }, 40_000);
+
+    it('a root started with an intent runs in a worktree even when the composer opted out, and its prompt carries the intent block', async () => {
+      const record = start('mock:monitoring the user asked for a fan-out', undefined, { worktree: false, dispatchIntent: { maxSubtasks: 5 } });
+      await waitFor(record.id, (r) => r?.activity === 'monitoring');
+      const stored = store.getRun(record.id);
+      expect(stored?.dispatch).toEqual({ rootRunId: record.id, intent: { maxSubtasks: 5 } });
+      expect(stored?.worktree).toBeUndefined();
+      expect(stored?.branch).toBeTruthy();
+      expect(notes(record.id).some((n) => n.startsWith('worktree on'))).toBe(true);
+    }, 40_000);
+
     it('refuses against a settled parent and while the feature is off', async () => {
       const parent = store.createRun({ title: 'done', workflow: 'quick-task', task: 't', steps: [] });
       store.updateRun(parent.id, { status: 'done', dispatch: rootOf(parent.id) });

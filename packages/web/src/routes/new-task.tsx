@@ -34,6 +34,7 @@ import {
 } from '@/api/queries'
 import type {
   AttachmentInput,
+  DispatchIntent,
   ProjectListEntry,
   RepoResponse,
   Runner,
@@ -42,6 +43,7 @@ import type {
 } from '@open-mercato/cezar-api-client'
 import { TwinkleBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
+import { DispatchToggle } from '@/components/dispatch-toggle'
 import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
@@ -274,7 +276,38 @@ export function NewTaskRoute() {
   // checkout. Parallel variants are the one hard constraint because each competing run needs
   // its own tree; a non-git repo already runs in place.
   const worktreeToggleShown = hasGit
-  const worktreeForced = variants > 1
+
+  // Dispatch (spec 2026-09-10-dispatch): this task may fan work out to subtasks. Offered only
+  // while the server has it on (`CEZ_DISPATCH=0` hides it — the routes 409 then) and in a git
+  // repo: a child forks off the parent's committed branch, so there is nothing to fork without
+  // one. A draft toggled on under a server that has since turned it off sends nothing.
+  const dispatchAvailable = health.data?.capabilities.dispatch === true && hasGit
+  const dispatch: DispatchIntent | null = dispatchAvailable ? draft.dispatch : null
+  const dispatchOn = dispatch !== null
+  // The hint line under the composer: up for 6 s after every change of the toggle or its
+  // settings, and the whole time the settings surface is open.
+  const [dispatchHintFlash, setDispatchHintFlash] = useState(false)
+  const [dispatchSettingsOpen, setDispatchSettingsOpen] = useState(false)
+  const dispatchHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const changeDispatch = (next: DispatchIntent | null) => {
+    update({ dispatch: next })
+    if (dispatchHintTimer.current !== null) clearTimeout(dispatchHintTimer.current)
+    dispatchHintTimer.current = null
+    setDispatchHintFlash(next !== null)
+    if (next !== null) {
+      dispatchHintTimer.current = setTimeout(() => setDispatchHintFlash(false), 6_000)
+    }
+  }
+  useEffect(
+    () => () => {
+      if (dispatchHintTimer.current !== null) clearTimeout(dispatchHintTimer.current)
+    },
+    [],
+  )
+
+  // Worktree is forced by parallel variants (one tree per competing run) and by dispatch (the
+  // server forces it too: subtasks fork off this task's commits).
+  const worktreeForced = variants > 1 || dispatchOn
 
   // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
   // wins; then an interactive skill recommends handing the ball back; otherwise the configured
@@ -299,6 +332,7 @@ export function NewTaskRoute() {
     // Nothing picked runs the plain built-in workflow, and the 'source-dependent' autonomy
     // default keys off exactly that: skills default autonomous, everything else does not.
     source: source?.source ?? 'workflow',
+    dispatch: dispatchOn,
   })
   const worktreeOn = runMode.worktree
   const autonomousOn = runMode.autonomous
@@ -462,6 +496,7 @@ export function NewTaskRoute() {
         // Deliberately not gated on generateFollowupsOn (#444): turning off follow-up
         // generation for THIS task must not stop the entry it came from being marked started.
         todoId: deepLink.todo,
+        dispatch,
       }),
     )
     // Remember what was actually run so the next visit preselects it (legacy
@@ -510,6 +545,7 @@ export function NewTaskRoute() {
           images: plan.images,
           generateFollowups: generateFollowupsOn,
           todoId: deepLink.todo, // #374: planning first must not lose the inbox entry
+          dispatch,
         }),
       )
       // Run-mode choices live in the current draft; stable defaults come from workspace policy.
@@ -568,7 +604,12 @@ export function NewTaskRoute() {
               unconditionally made this line false for every run the user opted out of — and
               for a non-git folder, where there is no worktree to opt into. */}
           <p data-slot="run-mode-note" className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
-            {composerRunModeNote({ worktree: worktreeOn, hasGit })}
+            {composerRunModeNote({
+              worktree: worktreeOn,
+              hasGit,
+              dispatch: dispatchOn,
+              autonomous: autonomousOn,
+            })}
           </p>
         </header>
 
@@ -614,13 +655,6 @@ export function NewTaskRoute() {
                 skillUsage={skillUsage}
                 workflows={workflowList}
                 onPick={(next) => update({ source: next })}
-              />
-              {/* Icon-only: this row already carries source/runner/model/variants/worktree/
-                  autonomous/branch, and templates is the least-used of them. */}
-              <PromptTemplateMenu
-                templates={templates}
-                iconOnly
-                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
               />
               {/* Shown when there is a choice to make: more than one runner, or more than one
                   login for one of them. A host with neither sees no pill, exactly as before. */}
@@ -675,11 +709,20 @@ export function NewTaskRoute() {
                   { value: '3', label: '×3 variants', desc: 'Three competing runs — pick the diff you keep' },
                 ]}
               />
+              {/* The row reads in clusters: WHAT runs (project, source, runner, model,
+                  variants) | HOW it runs (worktree, autonomous, follow-ups) | the icon
+                  extras (templates, dispatch) | WHERE it forks from. The dividers only
+                  exist on md-and-up; a phone wraps the row and a divider mid-wrap is noise. */}
+              <PillDivider />
               {worktreeToggleShown ? (
                 <WorktreeToggle
                   on={worktreeOn}
                   disabled={worktreeForced}
-                  disabledReason="Parallel variants always use isolated worktrees"
+                  disabledReason={
+                    dispatchOn
+                      ? "Dispatch forks this task's commits — subtasks need a worktree"
+                      : 'Parallel variants always use isolated worktrees'
+                  }
                   onChange={(on) => update({ worktree: on })}
                 />
               ) : null}
@@ -688,18 +731,39 @@ export function NewTaskRoute() {
                 disabled={draft.planFirst}
                 onChange={(on) => update({ autonomous: on })}
               />
-              {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
-                <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
-                  This skill recommends an interactive run in the current checkout. You can change either setting.
-                </p>
-              ) : null}
               {followupsToggleShown ? (
                 <GenerateFollowupsToggle
                   on={generateFollowupsOn}
                   onChange={(on) => update({ generateFollowups: on })}
                 />
               ) : null}
+              {templates.length > 0 || dispatchAvailable ? <PillDivider /> : null}
+              {/* Icon-only: this row already carries source/runner/model/variants/worktree/
+                  autonomous/branch, and templates is the least-used of them. */}
+              <PromptTemplateMenu
+                templates={templates}
+                iconOnly
+                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
+              />
+              <DispatchToggle
+                available={dispatchAvailable}
+                value={dispatch}
+                onChange={changeDispatch}
+                onSettingsOpenChange={setDispatchSettingsOpen}
+                runners={runners}
+                parentRunner={displayRunner}
+                // The parent's runner gets the composer's live catalog (one fetch, shared);
+                // any other runner its static presets — a second discovery per runner for a
+                // setting this rarely touched is not worth the request.
+                modelsFor={(id) => (id === displayRunner ? models : modelsForRunner(id))}
+              />
+              {repo.data?.info ? <PillDivider /> : null}
               {repo.data ? <BaseBranchPill repo={repo.data} /> : null}
+              {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
+                <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
+                  This skill recommends an interactive run in the current checkout. You can change either setting.
+                </p>
+              ) : null}
             </>
           }
           footerEnd={
@@ -726,6 +790,17 @@ export function NewTaskRoute() {
             </>
           }
         />
+
+        {dispatchOn && (dispatchSettingsOpen || dispatchHintFlash) ? (
+          <p
+            data-slot="dispatch-hint"
+            className="mt-2 rounded-md border border-primary/25 bg-primary/[0.07] px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            <strong className="font-semibold text-foreground">Dispatch is on.</strong> Splits this
+            task into subtasks it runs as separate tasks. Worktree stays on. Long-press the icon
+            for limits.
+          </p>
+        ) : null}
 
         <SuggestedChips onPick={(text) => update({ text })} />
       </div>
@@ -754,6 +829,11 @@ export function NewTaskRoute() {
       ) : null}
     </div>
   )
+}
+
+/** The thin seam between the footer's pill clusters. Hidden on phones, where the row wraps. */
+function PillDivider() {
+  return <span aria-hidden="true" className="mx-0.5 h-3.5 w-px shrink-0 bg-border max-md:hidden" />
 }
 
 /** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for ordinary runs.

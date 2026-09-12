@@ -7,7 +7,7 @@ import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 // Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
-import { dispatchSchema } from './dispatch.ts';
+import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -748,6 +748,10 @@ export const createRunInputBaseSchema = z
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    /** The composer's Dispatch toggle (spec 2026-09-10-dispatch): start this task as the root of
+     *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
+     *  still created — on a server with `capabilities.dispatch` off. */
+    dispatch: dispatchIntentSchema.optional(),
   });
 
 /**

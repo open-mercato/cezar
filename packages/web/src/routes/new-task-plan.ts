@@ -1,6 +1,7 @@
 import type {
   CreateRunInput,
   AttachmentInput,
+  DispatchIntent,
   PlanResponse,
   Runner,
   WorkflowStepDef,
@@ -82,8 +83,9 @@ export function planTaskLine(task: string, max = 120): string {
  * the same rules as `buildCreateRunBody`: `model`/`variants`/`images` only when they say
  * something, explicit/sticky `runner` choices always sent (untouched defaults may be omitted),
  * `generateFollowups`
- * only when off (#444), and `todoId` only when the composer was prefilled from an inbox entry (#374 —
- * planning the follow-up first still starts it, so the entry must still be marked started).
+ * only when off (#444), `todoId` only when the composer was prefilled from an inbox entry (#374 —
+ * planning the follow-up first still starts it, so the entry must still be marked started), and
+ * `dispatch` only when the toggle is on — planning first and fanning out are not exclusive.
  */
 export function buildPlannedRunBody(opts: {
   task: string
@@ -99,8 +101,9 @@ export function buildPlannedRunBody(opts: {
   images: readonly AttachmentInput[]
   generateFollowups?: boolean
   todoId?: string
+  dispatch?: DispatchIntent | null
 }): CreateRunInput {
-  const { task, steps, model, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId } =
+  const { task, steps, model, modelsLocked, runner, runnerExplicit, defaultRunner, variants, images, generateFollowups, todoId, dispatch } =
     opts
   return {
     task,
@@ -111,5 +114,6 @@ export function buildPlannedRunBody(opts: {
     images: images.length > 0 ? [...images] : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
+    dispatch: dispatch ?? undefined,
   }
 }
