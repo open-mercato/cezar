@@ -1,6 +1,6 @@
-import { useMemo, type ReactNode } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 
-import type { ApiRun } from '@open-mercato/cezar-api-client'
+import type { ApiRun, UiMessageItem, UiReasoningItem, UiToolItem } from '@open-mercato/cezar-api-client'
 
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import {
@@ -23,7 +23,14 @@ import {
   type ThreadRow,
   type ThreadScrollControls,
 } from './thread-scroller'
-import type { ThreadAsk, ThreadEntry, ThreadState } from './thread-state'
+import type {
+  ThreadAsk,
+  ThreadEntry,
+  ThreadImage,
+  ThreadNote,
+  ThreadProviderAuthRequired,
+  ThreadState,
+} from './thread-state'
 
 export interface TranscriptUserMessage {
   text: string
@@ -66,6 +73,8 @@ export interface SessionTranscriptProps {
   /** Main-document integration preserves the shell's existing dock-owned jump pill. */
   scrollControls?: ThreadScrollControls
   renderMode?: 'flat' | 'virtual'
+  /** Reuse rows already derived by the main view; panel callers can omit this. */
+  rowModels?: readonly TranscriptRowModel[]
 }
 
 /** The main run record plus reduced turns, without rendering or backend inspection. */
@@ -149,8 +158,12 @@ export function SessionTranscript({
   messageActions,
   scrollControls,
   renderMode,
+  rowModels: providedRowModels,
 }: SessionTranscriptProps) {
-  const rowModels = useMemo(() => buildTranscriptRows(sections, runId), [sections, runId])
+  const rowModels = useMemo(
+    () => providedRowModels ?? buildTranscriptRows(sections, runId),
+    [providedRowModels, sections, runId],
+  )
   const internalScroll = useThreadScroll(`${runId}:${viewId}`, { surface: mode })
   const controls = scrollControls ?? internalScroll
   const rows = useMemo<ThreadRow[]>(
@@ -224,7 +237,7 @@ function TranscriptUserBubble({
   )
 }
 
-function ThreadBlockRenderer({
+const ThreadBlockRenderer = memo(function ThreadBlockRenderer({
   block,
   scope,
   renderAsk,
@@ -260,7 +273,7 @@ function ThreadBlockRenderer({
     default:
       return assertNever(block)
   }
-}
+}, sameThreadBlockProps)
 
 function GroupedEntries({
   entries,
@@ -317,4 +330,155 @@ function ThreadEntryRenderer({
 
 function assertNever(value: never): never {
   throw new Error(`Unhandled transcript variant: ${JSON.stringify(value)}`)
+}
+
+function sameThreadBlockProps(
+  previous: { block: ThreadBlock; scope: string; renderAsk?: (ask: ThreadAsk) => ReactNode },
+  next: { block: ThreadBlock; scope: string; renderAsk?: (ask: ThreadAsk) => ReactNode },
+): boolean {
+  return (
+    previous.scope === next.scope &&
+    sameThreadBlock(previous.block, next.block) &&
+    (!containsAsk(next.block) || previous.renderAsk === next.renderAsk)
+  )
+}
+
+function containsAsk(block: ThreadBlock): boolean {
+  if (block.kind === 'entry') return block.entry.kind === 'ask'
+  if (block.kind === 'tool-card') return block.children.some((entry) => entry.kind === 'ask')
+  if (block.kind === 'context-group') return false
+  return block.blocks.some(containsAsk)
+}
+
+function sameThreadBlock(previous: ThreadBlock, next: ThreadBlock): boolean {
+  if (previous.kind !== next.kind || previous.id !== next.id) return false
+  switch (next.kind) {
+    case 'entry':
+      return sameThreadEntry(previous.kind === 'entry' ? previous.entry : undefined, next.entry)
+    case 'tool-card':
+      return (
+        previous.kind === 'tool-card' &&
+        sameToolItem(previous.item, next.item) &&
+        sameThreadEntries(previous.children, next.children)
+      )
+    case 'context-group':
+      return (
+        previous.kind === 'context-group' &&
+        previous.files === next.files &&
+        previous.searches === next.searches &&
+        previous.label === next.label &&
+        previous.tools.length === next.tools.length &&
+        previous.tools.every((item, index) => sameToolItem(item, next.tools[index]!))
+      )
+    case 'streak':
+      return (
+        previous.kind === 'streak' &&
+        previous.count === next.count &&
+        previous.blocks.length === next.blocks.length &&
+        previous.blocks.every((block, index) => sameThreadBlock(block, next.blocks[index]!))
+      )
+    default:
+      return false
+  }
+}
+
+function sameThreadEntries(previous: readonly ThreadEntry[], next: readonly ThreadEntry[]): boolean {
+  return previous.length === next.length && previous.every((entry, index) => sameThreadEntry(entry, next[index]!))
+}
+
+function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): boolean {
+  if (previous === undefined || previous.kind !== next.kind || previous.id !== next.id) return false
+  switch (next.kind) {
+    case 'message':
+      return previous.kind === 'message' && sameFields(previous, next, MESSAGE_COMPARE_FIELDS)
+    case 'reasoning':
+      return previous.kind === 'reasoning' && sameFields(previous, next, REASONING_COMPARE_FIELDS)
+    case 'tool':
+      return previous.kind === 'tool' && sameToolItem(previous, next)
+    case 'note':
+      return previous.kind === 'note' && sameFields(previous, next, NOTE_COMPARE_FIELDS)
+    case 'image':
+      return previous.kind === 'image' && sameFields(previous, next, IMAGE_COMPARE_FIELDS)
+    case 'ask':
+      return previous.kind === 'ask' && sameFields(previous, next, ASK_COMPARE_FIELDS)
+    case 'provider-auth-required':
+      return previous.kind === 'provider-auth-required' &&
+        sameFields(previous, next, PROVIDER_AUTH_COMPARE_FIELDS)
+    default:
+      return false
+  }
+}
+
+const MESSAGE_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  role: true,
+  text: true,
+  phase: true,
+  parentItemId: true,
+} satisfies Record<keyof UiMessageItem, true>
+
+const REASONING_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  text: true,
+  parentItemId: true,
+} satisfies Record<keyof UiReasoningItem, true>
+
+const NOTE_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  text: true,
+  tone: true,
+} satisfies Record<keyof ThreadNote, true>
+
+const IMAGE_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  url: true,
+  name: true,
+} satisfies Record<keyof ThreadImage, true>
+
+const ASK_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  questions: true,
+  resolved: true,
+  answer: true,
+} satisfies Record<keyof ThreadAsk, true>
+
+const PROVIDER_AUTH_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  provider: true,
+  authFailureId: true,
+} satisfies Record<keyof ThreadProviderAuthRequired, true>
+
+/** A new transcript item field must be added here before it can be ignored by memoization. */
+const TOOL_ITEM_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  name: true,
+  toolKind: true,
+  title: true,
+  status: true,
+  input: true,
+  output: true,
+  error: true,
+  diffs: true,
+  locations: true,
+  exitCode: true,
+  parentItemId: true,
+} satisfies Record<keyof UiToolItem, true>
+
+function sameFields<T extends object>(
+  previous: T,
+  next: T,
+  fields: Record<keyof T, true>,
+): boolean {
+  return (Object.keys(fields) as Array<keyof T>).every((key) => previous[key] === next[key])
+}
+
+function sameToolItem(previous: UiToolItem, next: UiToolItem): boolean {
+  return sameFields(previous, next, TOOL_ITEM_COMPARE_FIELDS)
 }

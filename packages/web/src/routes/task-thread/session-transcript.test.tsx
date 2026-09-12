@@ -136,6 +136,125 @@ describe('SessionTranscript', () => {
     },
   )
 
+  it('updates a memoized entry block when its text changes', () => {
+    const sections = (text: string): TranscriptSection[] => [{
+      id: 'shared',
+      entries: [{ kind: 'note', id: 'note-1', text, tone: 'dim' }],
+    }]
+    const { rerender } = render(
+      <SessionTranscript
+        runId="r1"
+        viewId="memo-entry"
+        sections={sections('Initial response')}
+        mode="document"
+        renderMode="flat"
+      />,
+    )
+
+    expect(document.querySelector('[data-slot="note-line"]')?.textContent).toContain('Initial response')
+    rerender(
+      <SessionTranscript
+        runId="r1"
+        viewId="memo-entry"
+        sections={sections('Updated response')}
+        mode="document"
+        renderMode="flat"
+      />,
+    )
+
+    const note = document.querySelector('[data-slot="note-line"]')
+    expect(note?.textContent).toContain('Updated response')
+    expect(note?.textContent).not.toContain('Initial response')
+  })
+
+  it('updates a memoized tool block when its live output and status change', () => {
+    const sections = (status: UiToolItem['status'], output: string): TranscriptSection[] => [{
+      id: 'shared',
+      entries: [tool('exec', {
+        name: 'Bash',
+        toolKind: 'execute',
+        title: 'Ran npm test',
+        status,
+        output,
+      })],
+    }]
+    const { rerender } = render(
+      <SessionTranscript
+        runId="r1"
+        viewId="memo-tool"
+        sections={sections('running', 'partial output')}
+        mode="document"
+        renderMode="flat"
+      />,
+    )
+
+    expect(document.querySelector('[data-slot="tool-card"]')?.getAttribute('data-status')).toBe('running')
+    expect(document.querySelector('[data-slot="tool-output"]')?.textContent).toContain('partial output')
+    rerender(
+      <SessionTranscript
+        runId="r1"
+        viewId="memo-tool"
+        sections={sections('running', 'complete output')}
+        mode="document"
+        renderMode="flat"
+      />,
+    )
+    expect(document.querySelector('[data-slot="tool-output"]')?.textContent).toContain('complete output')
+    expect(document.querySelector('[data-slot="tool-output"]')?.textContent).not.toContain('partial output')
+
+    rerender(
+      <SessionTranscript
+        runId="r1"
+        viewId="memo-tool"
+        sections={sections('completed', 'complete output')}
+        mode="document"
+        renderMode="flat"
+      />,
+    )
+    expect(document.querySelector('[data-slot="tool-card"]')?.getAttribute('data-status')).toBe('completed')
+  })
+
+  it('updates an ask block when the injected renderer changes', () => {
+    const sections: TranscriptSection[] = [{
+      id: 'shared',
+      entries: [{
+        kind: 'ask',
+        id: 'ask-1',
+        resolved: false,
+        questions: [{
+          id: 'q1',
+          header: 'Choice',
+          question: 'Continue?',
+          options: [{ label: 'Yes', description: 'Keep going' }],
+        }],
+      }],
+    }]
+    const { rerender } = render(
+      <SessionTranscript
+        runId="r1"
+        viewId="memo-ask"
+        sections={sections}
+        mode="document"
+        renderMode="flat"
+        renderAsk={() => <span data-slot="custom-ask">First renderer</span>}
+      />,
+    )
+
+    expect(document.querySelector('[data-slot="custom-ask"]')?.textContent).toBe('First renderer')
+    rerender(
+      <SessionTranscript
+        runId="r1"
+        viewId="memo-ask"
+        sections={sections}
+        mode="document"
+        renderMode="flat"
+        renderAsk={() => <span data-slot="custom-ask">Second renderer</span>}
+      />,
+    )
+
+    expect(document.querySelector('[data-slot="custom-ask"]')?.textContent).toBe('Second renderer')
+  })
+
   it('uses one recursive renderer for task-card children', () => {
     const parent = tool('task', {
       name: 'Task',

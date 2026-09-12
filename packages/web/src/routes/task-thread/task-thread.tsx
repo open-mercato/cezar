@@ -332,6 +332,7 @@ export function ThreadView({
           messageActions={messageActions}
           scrollControls={scroll}
           renderMode={mode}
+          rowModels={rows}
         />
 
         {thread.turns.length === 0 ? (

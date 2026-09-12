@@ -339,7 +339,7 @@ const ROW_PIN_CLASS =
   ' no-hover:mr-1 no-hover:size-7 no-hover:opacity-100' +
   ' data-[pinned=true]:mr-1 data-[pinned=true]:w-5 data-[pinned=true]:opacity-100'
 
-function RunRow({
+const RunRow = React.memo(function RunRow({
   run,
   queuePosition,
   currentRunId,
@@ -494,7 +494,7 @@ function RunRow({
       ) : null}
     </div>
   )
-}
+})
 
 /** A variant row's subtitle: what differs between A and B — the backend and what it has spent.
  *  `runner` is absent on records predating the choice; those are Claude by definition. */
@@ -515,7 +515,7 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
  */
 export function TaskQuickListContainer() {
   const runs = useRuns()
-  const pin = usePinRun()
+  const pinMutation = usePinRun()
   const health = useHealth()
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
@@ -523,6 +523,14 @@ export function TaskQuickListContainer() {
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
   const now = useNow(30_000)
+  const onTogglePin = React.useCallback(
+    (run: RunRecord, pinned: boolean) =>
+      pinMutation.mutate(
+        { id: run.id, pinned },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [pinMutation.mutate],
+  )
   // The sidebar's chips are the same chips as the tables', so they get their status the same way:
   // one batched request for the whole list, mounted here where the list is.
   const projectId = useReferenceProjectId()
@@ -554,12 +562,7 @@ export function TaskQuickListContainer() {
         showCost={visibility.cost}
         // This list is the ACTIVE project's, so the mutation needs no explicit project: the
         // scoped client already addresses the one the URL names.
-        onTogglePin={(run, pinned) =>
-          pin.mutate(
-            { id: run.id, pinned },
-            { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
-          )
-        }
+        onTogglePin={onTogglePin}
       />
     </ReferenceStatusProvider>
   )

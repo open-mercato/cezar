@@ -152,11 +152,15 @@ export function RunHeader({
   // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
   // whole queue, not of this record.
-  const runs = useRuns()
+  const queuePosition = useRuns(
+    useMemo(
+      () => (runs: ApiRun[]) =>
+        run.status === 'queued' ? queuePositions(runs).get(run.id) : undefined,
+      [run.id, run.status],
+    ),
+  ).data
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
-  const queuePosition =
-    run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
 
   return (
     <header
