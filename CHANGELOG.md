@@ -46,7 +46,7 @@ The cockpit gets easier to live in on a phone and harder to be wrong about. Pinn
 The cockpit stops being one-project-at-a-time: All tasks shows every registered repo's work in a single filterable table, grouped by tags you give your repositories, and every PR or issue chip in cezar now says where that PR or issue stands. Alongside that, agent accounts let one project run on your work login and another on your personal one, `pi` joins claude, codex and opencode as a runner, and a task killed by a provider usage limit resumes itself when the window reopens.
 
 ## ⚠️ Breaking
-- ⚠️ GitHub Automations are now opt-in via `CEZ_AUTOMATIONS=1` — off by default, every automations route answers `409` and `GET /api/v1/health` reports the new required `capabilities.automations` (fixes #801). (#802) *(@pat-lewczuk)*
+- ⚠️ GitHub Automations are now opt-in via `CEZ_AUTOMATIONS=1` — they used to run for any project with a GitHub remote with no way to switch them off, and are off by default now, so every automations route answers `409` and `GET /api/v1/health` reports the new required `capabilities.automations` (fixes #801). (#802) *(@pat-lewczuk)*
 
 ## ✨ Features
 - ✨ All tasks: one table for every project, grouped by the repository tags you give them. (#845) *(@patzick)*
@@ -85,7 +85,7 @@ The cockpit stops being one-project-at-a-time: All tasks shows every registered 
 - 🐛 `npm test` no longer opens a real Terminal window (fixes #824). (#825) *(@pat-lewczuk)*
 
 ## 🔧 Changed
-- Dropped the unused `KNOWN_PROVIDERS` export (fixes #548). (#831) *(@pat-lewczuk)*
+- 🔧 Dropped the unused `KNOWN_PROVIDERS` export (fixes #548). (#831) *(@pat-lewczuk)*
 
 ## 🚀 CI/CD & Infrastructure
 - 🚀 `npx cezar-cli@nightly` is always the trunk. (#876) *(@patzick)*
@@ -114,23 +114,23 @@ The cockpit stops being one-project-at-a-time: All tasks shows every registered 
 # 0.9.2 (2026-08-04)
 
 ## ⚠️ Breaking
-- ⚠️ The HTTP API moved to `/api/v1` (`/api/v1/p/<projectId>/…` when project-scoped, `/api/v1/ws` for the WebSocket bus) — the bundled cockpit ships in lockstep, so only a script calling the API directly needs the `/v1`.
+- ⚠️ The HTTP API moved to `/api/v1` (`/api/v1/p/<projectId>/…` when project-scoped, `/api/v1/ws` for the WebSocket bus) and the unversioned `/api/*` spelling is gone — the bundled cockpit ships in lockstep, so only a script calling the API directly needs the `/v1`.
 
 ## ✨ Features
 - ✨ The two mixed-format routes do real HTTP content negotiation — `GET /api/v1/repo/commit/:sha` and `GET /api/v1/runs/:id/files` honour `Accept` and answer `Vary: Accept`, additively, so every current caller's answer is byte-identical.
-- ✨ Finished tasks now carry a read/unread marker, with an unread count on the Tasks nav item and a "Mark all read" sweep (fixes #767).
+- ✨ Finished tasks now carry a read/unread marker, with an unread count on the Tasks nav item and a "Mark all read" sweep. (#767) *(@pat-lewczuk)*
 - ✨ ⌘K searches the whole workspace — every project and every project's tasks — backed by the new `GET /api/v1/workspace/runs-index`.
 
 ## 🔧 Changed
-- Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
-- Validation errors (`400 {error}`) are worded differently and now name the field; the `{ error: string }` shape and the 400 status are unchanged.
-- Every mutating route validates its body as route middleware rather than inside the handler, and 17 more routes validate their query and path params — behaviour unchanged by design.
+- 🔧 Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
+- 🔧 Validation errors (`400 {error}`) are worded differently and now name the field; the `{ error: string }` shape and the 400 status are unchanged.
+- 🔧 Every mutating route validates its body as route middleware rather than inside the handler, and 17 more routes validate their query and path params — behaviour unchanged by design.
 
 ## 🐛 Fixes
 - 🐛 Running the test suite no longer wipes your project registry.
 - 🐛 The registry survives a lost config file — a `config.json.bak` snapshot is restored when the config is missing, empty or corrupt.
-- 🐛 Structured questions render as a form, not raw JSON (fixes #757).
-- 🐛 Subagent sessions render like the main thread (fixes #756).
+- 🐛 Structured questions render as a form, not raw JSON (fixes #754). (#757) *(@pkarw)*
+- 🐛 Subagent sessions render like the main thread (fixes #557). (#756) *(@pkarw)*
 - 🐛 The task diff stat stops counting a repointed HEAD's branch (fixes #751).
 
 ## 👥 Contributors
@@ -152,12 +152,12 @@ A stabilization release that hardens single-project mode and sharpens the cockpi
 
 ## 🐛 Fixes
 - ⚡ Settings → Agent accounts opens instantly — logins are warmed once at boot instead of probed per listing (2.5s → 12ms), and a disconnected answer is still re-checked within seconds.
-- An added agent account can now be signed in from cezar — the row grows Connect and Check again, aimed at that account's own config dir.
-- A task now says which agent, account and model produced it (`claude · Klaudiusz · opus`), naming the account its step actually spawned under.
+- ✨ An added agent account can now be signed in from cezar — the row grows Connect and Check again, aimed at that account's own config dir.
+- ✨ A task now says which agent, account and model produced it (`claude · Klaudiusz · opus`), naming the account its step actually spawned under.
 - ✨ Settings → Agent accounts now sets the default agent, account and models once, not per repo — a project that has already chosen is never moved by it.
-- Settings → Agents picks the default agent and its account in one flat list — `claude · Default`, `claude · Klaudiusz`, `codex`.
-- The composer's runner pill now lists agents and logins as one flat list, so which subscription a task will bill is readable without opening anything.
-- `GET /api/v1/providers/status` no longer stalls for ~1–3s whenever its cache lapses — reads are stale-while-revalidate and the run gate re-checks a provider before refusing to start (817ms → 1–7ms).
+- ✨ Settings → Agents picks the default agent and its account in one flat list — `claude · Default`, `claude · Klaudiusz`, `codex`.
+- ✨ The composer's runner pill now lists agents and logins as one flat list, so which subscription a task will bill is readable without opening anything.
+- ⚡ `GET /api/v1/providers/status` no longer stalls for ~1–3s whenever its cache lapses — reads are stale-while-revalidate and the run gate re-checks a provider before refusing to start (817ms → 1–7ms).
 - 🐛 `CLAUDE_CONFIG_DIR` is honoured by the Agent config pane, and the MCP listing reads `~/.claude.json` from the right place under an override.
 - 🐛 `CEZ_CLAUDE_BIN` counts as "installed", so a host whose only Claude install is at a custom path is no longer reported as missing it.
 - ⚡ Virtualize the diff and the task commit list. (#599) *(@patzick)*
