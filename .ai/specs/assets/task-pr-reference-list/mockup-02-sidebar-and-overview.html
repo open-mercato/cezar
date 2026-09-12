@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mockup — sidebar row and Tasks overview Ref column</title>
+    <style>
+      :root {
+        --background: #0d0d0d;
+        --foreground: #ffffff;
+        --card: #171717;
+        --muted: #262626;
+        --muted-foreground: #a3a3a3;
+        --soft-foreground: #7b7b7b;
+        --border: #262626;
+        --violet: #8f86e8;
+        --success: #10b981;
+        --accent-lime: #a8f372;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 28px;
+        background: var(--background);
+        color: var(--foreground);
+        font-family: ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+        font-size: 13px;
+        display: flex;
+        gap: 28px;
+        align-items: flex-start;
+      }
+      .note {
+        color: var(--soft-foreground);
+        font-size: 11px;
+        margin: 0 0 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .sidebar {
+        width: 264px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 6px;
+      }
+      .task-row {
+        display: flex;
+        align-items: center;
+        border-radius: 4px;
+        padding: 7px 10px;
+        gap: 8px;
+      }
+      .task-row.active { background: var(--muted); }
+      .status-dot { width: 7px; height: 7px; border-radius: 999px; flex: none; background: var(--accent-lime); }
+      .status-dot.idle { background: var(--soft-foreground); }
+      .task-title {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 13px;
+        font-weight: 500;
+      }
+      .age { font-size: 11px; color: var(--soft-foreground); font-variant-numeric: tabular-nums; }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        border-radius: 999px;
+        border: 1px solid rgba(143, 134, 232, 0.35);
+        color: var(--violet);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-weight: 600;
+        text-decoration: none;
+        white-space: nowrap;
+      }
+      .chip.compact { font-size: 10.5px; padding: 1px 6px; }
+      .chip.table { font-size: 11px; height: 22px; padding: 0 8px; }
+      .chip.merged { border-color: rgba(16, 185, 129, 0.4); color: var(--success); }
+      .chip.closed { border-color: rgba(163, 163, 163, 0.28); color: var(--soft-foreground); opacity: 0.75; }
+      .chip.more { border-style: dashed; background: transparent; cursor: pointer; font-family: inherit; }
+      .count { color: var(--soft-foreground); font-weight: 500; }
+      .arrow { font-size: 9px; opacity: 0.85; }
+      table {
+        border-collapse: collapse;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        overflow: hidden;
+        min-width: 520px;
+      }
+      th {
+        text-align: left;
+        font-size: 10.5px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--soft-foreground);
+        font-weight: 600;
+        padding: 9px 12px;
+        border-bottom: 1px solid var(--border);
+      }
+      td { padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+      tr:last-child td { border-bottom: 0; }
+      .dash { color: var(--soft-foreground); }
+      .caption {
+        color: var(--soft-foreground);
+        font-size: 11px;
+        margin: 12px 0 0;
+        max-width: 520px;
+        line-height: 1.5;
+      }
+    </style>
+  </head>
+  <body>
+    <div>
+      <p class="note">Proposed — sidebar (task-quick-list.tsx)</p>
+      <div class="sidebar">
+        <div class="task-row active">
+          <span class="status-dot"></span>
+          <span class="task-title">779: task PR reference list</span>
+          <a class="chip compact" href="#">#812 <span class="arrow">↗</span><span class="count">·4</span></a>
+        </div>
+        <div class="task-row">
+          <span class="status-dot idle"></span>
+          <span class="task-title">824: monitoring status</span>
+          <a class="chip compact" href="#">#824 <span class="arrow">↗</span></a>
+        </div>
+        <div class="task-row">
+          <span class="status-dot idle"></span>
+          <span class="task-title">reviewing the changelog</span>
+          <span class="age">2h</span>
+        </div>
+      </div>
+      <p class="caption">
+        The 264 px column keeps one chip. The count says there is more; the tooltip and the
+        accessible name enumerate every PR ("4 pull requests: #812 (primary), #824, #831, #806").
+      </p>
+    </div>
+    <div>
+      <p class="note">Proposed — Tasks overview, Ref column (tasks-overview.tsx)</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Ref</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>779: task PR reference list</td>
+            <td>
+              <a class="chip table" href="#">#812 <span class="arrow">↗</span></a>
+              <button class="chip table more">+3</button>
+            </td>
+            <td>review</td>
+          </tr>
+          <tr>
+            <td>824: monitoring status</td>
+            <td><a class="chip table merged" href="#">#824 <span class="arrow">↗</span></a></td>
+            <td>done</td>
+          </tr>
+          <tr>
+            <td>reviewing the changelog</td>
+            <td><span class="dash">—</span></td>
+            <td>done</td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="caption">
+        The column keeps its width: the primary chip is unchanged and "+3" is two characters. It
+        opens the same popover as the task-thread header.
+      </p>
+    </div>
+  </body>
+</html>
