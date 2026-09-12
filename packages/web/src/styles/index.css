@@ -143,11 +143,11 @@
   --sans: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: 'JetBrains Mono Variable', 'JetBrains Mono', ui-monospace, 'SF Mono', 'Menlo', monospace;
 
-  /* reading measure — the max width of the task view's column (header, thread, changes,
-   * commits). The default is the shipped 820px reading column; Settings → Appearance → Reading
-   * width flips it to `wide` (see the `:root[data-width]` block). Consumed as
+  /* reading measure — the max width of the task view's column (header, thread, commits). The
+   * default is full-width (`none`) so the cockpit uses the available screen; Settings →
+   * Appearance → Reading width can pin it back to the old 820px reading column. Consumed as
    * `max-w-[var(--measure)]` so one token moves every column together. */
-  --measure: 820px;
+  --measure: none;
 
   /* shiki syntax highlighting (dark) */
   --syn-key: #c4b5fd;
@@ -247,11 +247,15 @@
   --spacing: 0.1875rem;
 }
 
-/* Wide reading width (Settings → Appearance → Reading width): open the task-view column from the
- * default 820px to 1180px so long transcripts, diffs and command output use more of the screen.
- * One token, same `:root[…]` (unlayered) lever as density; narrow is the absence of the attribute. */
+/* Narrow reading width (Settings → Appearance → Reading width): pin the task-view column to the
+ * old 820px reading measure. Full width is the absence of the attribute; `wide` is kept as a
+ * broad-mode alias for older mirrors that stamped it before the default changed. */
+:root[data-width='narrow'] {
+  --measure: 820px;
+}
+
 :root[data-width='wide'] {
-  --measure: 1180px;
+  --measure: none;
 }
 
 /* ---------- tokens: radius + shadow ----------
