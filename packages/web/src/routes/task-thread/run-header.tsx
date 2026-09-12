@@ -120,6 +120,7 @@ export function RunHeader({
   planTally,
   tab = 'session',
   onMarkedUnread,
+  continuationEngine,
 }: {
   run: ApiRun
   planTally?: { done: number; total: number }
@@ -128,6 +129,9 @@ export function RunHeader({
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
   onMarkedUnread?: () => void
+  /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
+   *  they share this header but do not own the continuation draft or its pending selection. */
+  continuationEngine?: ReactNode
 }) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
@@ -206,6 +210,7 @@ export function RunHeader({
         <div id={detailsId} data-slot="run-details" className={cn(detailsOpen ? 'block' : 'hidden', 'md:block')}>
           <MetaRow
             run={run}
+            continuationEngine={continuationEngine}
             showTokens={metricVisibility.tokens}
             showCost={metricVisibility.cost}
             // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
@@ -563,10 +568,12 @@ function MetaRow({
   showTokens,
   showCost,
   automationsAvailable,
+  continuationEngine,
 }: {
   run: ApiRun
   showTokens: boolean
   showCost: boolean
+  continuationEngine?: ReactNode
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
@@ -731,7 +738,7 @@ function MetaRow({
               {part}
             </Fragment>
           ))}
-          <AgentBadge run={run} />
+          <AgentBadge run={run} continuationEngine={continuationEngine} />
         </span>
       </div>
     </ReferenceStatusProvider>
@@ -782,7 +789,7 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
  *  something nobody can tell is load-bearing. The menu is the right home for it — it answers a
  *  question only a user debugging "which provider actually served this?" asks, so it belongs
  *  behind the same disclosure as the account rather than in the truncating summary line. */
-function AgentBadge({ run }: { run: ApiRun }) {
+function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
   // `runner` (`src/runs/store.ts`), while the run actually executes as
   // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
@@ -861,6 +868,24 @@ function AgentBadge({ run }: { run: ApiRun }) {
           >
             identity: {identity}
           </DropdownMenuLabel>
+        ) : null}
+        {continuationEngine ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="pb-1 text-[11px] font-normal text-muted-foreground">
+              Next continuation
+            </DropdownMenuLabel>
+            <div
+              data-slot="agent-badge-engine-picker"
+              className="px-2 pb-1"
+              // The controls open their own selection menus. Do not let a click inside this
+              // custom menu row dismiss the parent badge before the nested picker can open.
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {continuationEngine}
+            </div>
+          </>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
