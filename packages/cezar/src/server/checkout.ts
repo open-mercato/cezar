@@ -63,9 +63,14 @@ export type CheckoutResult = { ok: true; target: string; name: string } | Checko
 export interface RepoRef {
   owner: string;
   repo: string;
-  /** What `gh repo clone` is handed — always the normalized `owner/repo`, so a
-   *  URL spelling can never smuggle flags or a different host past `gh`. */
+  /** Normalized identity used in messages and dry-run output. */
   slug: string;
+  /** What `gh repo clone` is handed. Always reconstructed from validated
+   *  segments rather than preserving user input. Forcing HTTPS is load-bearing:
+   *  a machine configured with `gh config set git_protocol ssh` may have an
+   *  OAuth token authorized for an organization's SAML policy while its SSH key
+   *  is not. Passing only `owner/repo` silently selects that rejected key. */
+  cloneUrl: string;
 }
 
 /** `owner` and `repo` as GitHub itself allows them: alphanumerics, `-`, `_`,
@@ -103,7 +108,12 @@ export function parseRepoRef(input: string): RepoRef | null {
   if (parts.length !== 2) return null;
   const [owner, repo] = parts;
   if (!owner || !repo || !NAME_SEGMENT.test(owner) || !NAME_SEGMENT.test(repo)) return null;
-  return { owner, repo, slug: `${owner}/${repo}` };
+  return {
+    owner,
+    repo,
+    slug: `${owner}/${repo}`,
+    cloneUrl: `https://github.com/${owner}/${repo}.git`,
+  };
 }
 
 /**
@@ -170,8 +180,14 @@ export type CloneRunner = (
   signal: AbortSignal | undefined,
 ) => Promise<{ ok: true } | { ok: false; error: string; notFound?: boolean }>;
 
+/** Kept pure so the SAML-safe transport choice is pinned without spawning a
+ * real GitHub process in the unit suite. */
+export function ghCloneArgs(ref: RepoRef, dir: string): string[] {
+  return ['repo', 'clone', ref.cloneUrl, dir, '--', '--progress'];
+}
+
 /**
- * `gh repo clone <owner/repo> <dir> -- --progress`.
+ * `gh repo clone <validated HTTPS URL> <dir> -- --progress`.
  *
  * `spawn`, not `execFile`, because the whole point of this route is that the
  * dialog sees progress while it happens: `git clone --progress` writes its
@@ -181,7 +197,7 @@ export type CloneRunner = (
  */
 export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
   new Promise((resolvePromise) => {
-    const child = spawn('gh', ['repo', 'clone', ref.slug, dir, '--', '--progress'], {
+    const child = spawn('gh', ghCloneArgs(ref, dir), {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: CLONE_TIMEOUT_MS,
       // No inherited stdin and `GH_PROMPT_DISABLED`: an unauthenticated `gh`

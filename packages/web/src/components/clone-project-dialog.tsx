@@ -1,5 +1,5 @@
 import { SettingsIcon } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link as RouterLink, useNavigate } from 'react-router'
 
 import { onWorkspaceEvent } from '@/api/global-events'
@@ -16,6 +16,24 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+
+/**
+ * GitHub prints this URL when an otherwise-valid OAuth token still needs SAML
+ * authorization for the repository's organization. The failed `gh` process
+ * cannot resume after the browser flow, so the dialog turns the URL into a
+ * trusted link and makes the required retry explicit.
+ *
+ * Keep this deliberately narrower than "find a URL": clone errors include
+ * output influenced by the remote, and rendering arbitrary output as a link
+ * would make the local cockpit an excellent phishing surface.
+ */
+export function githubSsoUrl(error: unknown): string | null {
+  if (!(error instanceof Error)) return null
+  const match = error.message.match(
+    /https:\/\/github\.com\/orgs\/[A-Za-z0-9._-]+\/sso\?authorization_request=[A-Za-z0-9._~-]+/,
+  )
+  return match?.[0] ?? null
+}
 
 /**
  * "Add project → Clone from GitHub" (multi-project spec, "Add project" option B / step 4.3).
@@ -46,9 +64,12 @@ export function CloneProjectDialog({
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
   const [progress, setProgress] = useState<string | null>(null)
+  const [awaitingSso, setAwaitingSso] = useState(false)
+  const ssoRetryArmed = useRef(false)
   const projects = useProjects()
   const checkout = useCheckoutProject()
   const navigate = useNavigate()
+  const ssoUrl = githubSsoUrl(checkout.error)
 
   // One id per mounted dialog. The dialog is mounted only while open (AddProjectMenu), so a
   // second clone attempt in a second opening is a second id — which is the point: a stale
@@ -84,8 +105,10 @@ export function CloneProjectDialog({
   const projectsDir = projects.data?.projectsDir ?? ''
   const target = effectiveName === '' ? '' : `${projectsDir.replace(/\/+$/, '')}/${effectiveName}`
 
-  const clone = () => {
+  const clone = useCallback(() => {
     if (url.trim() === '' || checkout.isPending) return
+    ssoRetryArmed.current = false
+    setAwaitingSso(false)
     setProgress(null)
     checkout.mutate(
       { url: url.trim(), checkoutId, ...(name.trim() === '' ? {} : { name: name.trim() }) },
@@ -98,11 +121,38 @@ export function CloneProjectDialog({
         },
       },
     )
-  }
+  }, [checkout, checkoutId, name, navigate, onOpenChange, url])
+
+  // Authorizing an existing OAuth token changes GitHub's server-side token
+  // grant; it cannot wake the `gh repo clone` process that already exited.
+  // Returning to this tab is the only browser signal available to the local
+  // cockpit, so retry once on focus/visibility after the user follows the SSO
+  // link. The ref prevents browsers that emit both events from cloning twice.
+  useEffect(() => {
+    if (!awaitingSso) return
+    const retry = (): void => {
+      if (!ssoRetryArmed.current) return
+      ssoRetryArmed.current = false
+      setAwaitingSso(false)
+      clone()
+    }
+    const retryWhenVisible = (): void => {
+      if (document.visibilityState === 'visible') retry()
+    }
+    window.addEventListener('focus', retry)
+    document.addEventListener('visibilitychange', retryWhenVisible)
+    return () => {
+      window.removeEventListener('focus', retry)
+      document.removeEventListener('visibilitychange', retryWhenVisible)
+    }
+  }, [awaitingSso, clone])
 
   return (
     <Dialog open={open} onOpenChange={(next) => (checkout.isPending ? undefined : onOpenChange(next))}>
-      <DialogContent data-slot="clone-project-dialog" className="sm:max-w-lg">
+      <DialogContent
+        data-slot="clone-project-dialog"
+        className="min-w-0 max-h-[calc(100dvh-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-lg"
+      >
         <DialogHeader>
           <DialogTitle>Clone from GitHub</DialogTitle>
           <DialogDescription>
@@ -180,9 +230,35 @@ export function CloneProjectDialog({
         ) : null}
 
         {checkout.isError ? (
-          <p data-slot="clone-error" className="text-[13px] text-danger">
-            {checkout.error instanceof Error ? checkout.error.message : 'could not clone that repository'}
-          </p>
+          <div data-slot="clone-error" className="grid min-w-0 gap-1.5 text-[13px] text-danger">
+            {ssoUrl ? (
+              <>
+                <p>GitHub requires SAML authorization for this organization.</p>
+                <p>
+                  <a
+                    data-slot="clone-sso-link"
+                    className="font-medium underline underline-offset-2"
+                    href={ssoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={() => {
+                      ssoRetryArmed.current = true
+                      setAwaitingSso(true)
+                    }}
+                  >
+                    Authorize this GitHub organization
+                  </a>
+                  {awaitingSso
+                    ? ' — waiting for you to return; cezar will retry automatically.'
+                    : ' — cezar will retry when you return to this tab.'}
+                </p>
+              </>
+            ) : (
+              <p className="min-w-0 whitespace-pre-wrap break-all">
+                {checkout.error instanceof Error ? checkout.error.message : 'could not clone that repository'}
+              </p>
+            )}
+          </div>
         ) : null}
 
         <DialogFooter>
@@ -194,7 +270,7 @@ export function CloneProjectDialog({
             disabled={url.trim() === '' || effectiveName === '' || checkout.isPending}
             onClick={clone}
           >
-            {checkout.isPending ? 'Cloning…' : 'Clone'}
+            {checkout.isPending ? 'Cloning…' : checkout.isError ? 'Retry clone' : 'Clone'}
           </Button>
         </DialogFooter>
       </DialogContent>

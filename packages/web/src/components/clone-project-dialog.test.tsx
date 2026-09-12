@@ -190,6 +190,58 @@ describe('CloneProjectDialog', () => {
     expect(cloneButton().disabled).toBe(false)
   })
 
+  it('keeps GitHub SAML authorization compact and retries when the user returns', async () => {
+    const ssoUrl =
+      'https://github.com/orgs/Bug-Bounty-Switzerland/sso?authorization_request=AHBV4IUOPSOOJDNNTYUU4ALKUCFKNA5P'
+    let attempts = 0
+    serve(async () => {
+      attempts += 1
+      return attempts === 1
+        ? json(
+            {
+              error:
+                `GraphQL: Resource protected by organization SAML enforcement. ` +
+                `You must grant your OAuth token access to this organization. (repository) ` +
+                `Authorize in your web browser: ${ssoUrl}`,
+            },
+            500,
+          )
+        : json({ project: PROJECT })
+    })
+    const { onOpenChange } = renderDialog()
+    fireEvent.change(urlInput(), { target: { value: 'Bug-Bounty-Switzerland/private-repo' } })
+    fireEvent.click(cloneButton())
+
+    await waitFor(() => expect(slot('clone-sso-link')).toBeTruthy())
+    const link = slot('clone-sso-link') as HTMLAnchorElement
+    expect(link.textContent).toBe('Authorize this GitHub organization')
+    expect(link.href).toBe(ssoUrl)
+    expect(link.target).toBe('_blank')
+    expect(link.rel).toBe('noreferrer')
+    expect(slot('clone-error')?.textContent).toContain('cezar will retry when you return')
+    expect(slot('clone-error')?.textContent).not.toContain('authorization_request=')
+    expect(cloneButton().textContent).toBe('Retry clone')
+
+    fireEvent.click(link)
+    expect(slot('clone-error')?.textContent).toContain('waiting for you to return')
+    fireEvent.focus(window)
+
+    await waitFor(() => expect(posted).toHaveLength(2))
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+  })
+
+  it('does not turn an arbitrary URL in clone output into a link', async () => {
+    serve(async () => json({ error: 'remote: visit https://evil.example/authorize' }, 500))
+    renderDialog()
+    fireEvent.change(urlInput(), { target: { value: 'open-mercato/cezar' } })
+    fireEvent.click(cloneButton())
+
+    await waitFor(() => expect(slot('clone-error')?.textContent).toContain('evil.example'))
+    expect(slot('clone-sso-link')).toBeNull()
+    expect(slot('clone-error')?.querySelector('p')?.className).toContain('break-all')
+    expect(cloneButton().textContent).toBe('Retry clone')
+  })
+
   it('surfaces the existing-folder 409 as an error rather than navigating anywhere', async () => {
     serve(async () => json({ error: 'folder already exists: /home/me/cezar/projects/cezar' }, 409))
     renderDialog()

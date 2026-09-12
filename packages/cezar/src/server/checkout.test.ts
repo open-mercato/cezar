@@ -16,7 +16,14 @@ import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { clearProjectProbeCache, registerProject } from '../workspace/projects.ts';
-import { checkoutRepo, cleanupCheckout, isValidCheckoutName, parseRepoRef, type CloneRunner } from './checkout.ts';
+import {
+  checkoutRepo,
+  cleanupCheckout,
+  ghCloneArgs,
+  isValidCheckoutName,
+  parseRepoRef,
+  type CloneRunner,
+} from './checkout.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import {
   WorkspaceEventBus,
@@ -54,6 +61,7 @@ describe('checkout — repo reference parsing', () => {
         owner: 'open-mercato',
         repo: 'cezar',
         slug: 'open-mercato/cezar',
+        cloneUrl: 'https://github.com/open-mercato/cezar.git',
       });
     }
   });
@@ -82,6 +90,19 @@ describe('checkout — repo reference parsing', () => {
     for (const name of ['', '.', '..', '.ssh', 'a/b', 'a\\b', '../escape', '/abs', 'a'.repeat(200)]) {
       expect(isValidCheckoutName(name), name).toBe(false);
     }
+  });
+
+  it('forces the validated HTTPS URL so a global SSH preference cannot bypass the OAuth grant', () => {
+    const ref = parseRepoRef('git@github.com:open-mercato/cezar.git');
+    expect(ref).not.toBeNull();
+    expect(ghCloneArgs(ref!, '/checkouts/cezar')).toEqual([
+      'repo',
+      'clone',
+      'https://github.com/open-mercato/cezar.git',
+      '/checkouts/cezar',
+      '--',
+      '--progress',
+    ]);
   });
 });
 
