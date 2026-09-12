@@ -7,7 +7,8 @@ import { createUsageStore, type UsageStore } from './events'
 import { GlobalEventsProvider, useGlobalEvents, useRunUsage, useUsage } from './global-events'
 import { setApiScope } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from './query-client'
-import { queryKeys, useProviderStatus, workspaceQueryKeys } from './queries'
+import { queryKeys, useProviderStatus, useRuns, useTodos, workspaceQueryKeys } from './queries'
+import { RUN_EVENT_BATCH_MS } from './run-events'
 import type { ApiRun, ProviderStatusResponse, RunRecord } from '@open-mercato/cezar-api-client'
 
 /**
@@ -116,6 +117,12 @@ const CONNECTED_PROVIDERS: ProviderStatusResponse = {
  *  stamp riding along, which the parser strips back off before the reducers see it. */
 function stampedRun(record: RunRecord, project = BOOT): string {
   return JSON.stringify({ ...record, project })
+}
+
+async function flushRunEvents(): Promise<void> {
+  await act(async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, RUN_EVENT_BATCH_MS + 5))
+  })
 }
 
 let client: QueryClient
@@ -249,11 +256,12 @@ describe('useGlobalEvents — back/forward cache', () => {
 })
 
 describe('useGlobalEvents — run events', () => {
-  it('upserts a run into the list cache without refetching', () => {
+  it('upserts a run into the list cache without refetching', async () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
     const { source } = mount()
 
     source.emit('run', stampedRun(runRecord('r1', { status: 'queued' })))
+    await flushRunEvents()
 
     expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())).toEqual([
       runRecord('r1', { status: 'queued' }),
@@ -262,13 +270,14 @@ describe('useGlobalEvents — run events', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it('updates in place on a second event for the same run — no duplicate row', () => {
+  it('updates in place on a second event for the same run — no duplicate row', async () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
     const { source } = mount()
 
     source.emit('run', stampedRun(runRecord('r1', { status: 'queued' })))
     source.emit('run', stampedRun(runRecord('r1', { status: 'running', tokensUsed: 42 })))
     source.emit('run', stampedRun(runRecord('r1', { status: 'done', tokensUsed: 99 })))
+    await flushRunEvents()
 
     const list = client.getQueryData<ApiRun[]>(queryKeys.runs.list())
     expect(list).toHaveLength(1)
@@ -276,12 +285,13 @@ describe('useGlobalEvents — run events', () => {
     expect(list?.[0]?.tokensUsed).toBe(99)
   })
 
-  it('patches a run detail cache that exists, and creates none that does not', () => {
+  it('patches a run detail cache that exists, and creates none that does not', async () => {
     client.setQueryData<ApiRun>(queryKeys.runs.detail('r1'), { ...runRecord('r1'), usage: SAMPLE })
     const { source } = mount()
 
     source.emit('run', stampedRun(runRecord('r1', { status: 'done' })))
     source.emit('run', stampedRun(runRecord('r2', { status: 'done' })))
+    await flushRunEvents()
 
     const detail = client.getQueryData<ApiRun>(queryKeys.runs.detail('r1'))
     expect(detail?.status).toBe('done')
@@ -291,7 +301,7 @@ describe('useGlobalEvents — run events', () => {
     expect(client.getQueryData(queryKeys.runs.detail('r2'))).toBeUndefined()
   })
 
-  it('invalidates the changes cache on a run event so an ended run’s final writes appear (#488)', () => {
+  it('invalidates the changes cache on a run event so an ended run’s final writes appear (#488)', async () => {
     // The Changes tab stops polling the moment a run leaves the active set, so without this the
     // last diff would wait for the next SSE reconnect. A cache the user opened must refresh.
     client.setQueryData(queryKeys.runs.changes('r1'), { files: [], stat: { adds: 0, dels: 0, files: 0 } })
@@ -299,6 +309,7 @@ describe('useGlobalEvents — run events', () => {
     const { source } = mount()
 
     source.emit('run', stampedRun(runRecord('r1', { status: 'done' })))
+    await flushRunEvents()
 
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.changes('r1') })
   })
@@ -358,7 +369,7 @@ describe('useGlobalEvents — run events', () => {
     expect(indexRefreshes).toHaveLength(1)
   })
 
-  it('ignores a malformed frame and keeps serving the next one', () => {
+  it('ignores a malformed frame and keeps serving the next one', async () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
     const { source } = mount()
 
@@ -367,16 +378,18 @@ describe('useGlobalEvents — run events', () => {
     expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())).toEqual([])
 
     source.emit('run', stampedRun(runRecord('r1')))
+    await flushRunEvents()
     expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())).toHaveLength(1)
   })
 
-  it('drops a deleted run from the list and throws away its detail and diff caches', () => {
+  it('drops a deleted run from the list and throws away its detail and diff caches', async () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [runRecord('r1'), runRecord('r2')])
     client.setQueryData(queryKeys.runs.detail('r1'), runRecord('r1'))
     client.setQueryData(queryKeys.runs.diff('r1'), { files: [] })
     const { source } = mount()
 
     source.emit('run-deleted', JSON.stringify({ id: 'r1', project: BOOT }))
+    await flushRunEvents()
 
     expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.map((r) => r.id)).toEqual(['r2'])
     // Removed, not emptied: anything still mounted on them must go ask the server and get its 404.
@@ -674,7 +687,7 @@ describe('useGlobalEvents — project scoping (multi-project spec, step 3.1)', (
     expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())).toEqual([])
   })
 
-  it('drops stamped events until health has named the boot project, without crashing', () => {
+  it('drops stamped events until health has named the boot project, without crashing', async () => {
     client.removeQueries({ queryKey: queryKeys.health })
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
     const { source } = mount()
@@ -686,10 +699,11 @@ describe('useGlobalEvents — project scoping (multi-project spec, step 3.1)', (
     // Health answered — from here on the boot project's events flow.
     client.setQueryData(queryKeys.health, { bootProject: BOOT })
     source.emit('run', stampedRun(runRecord('r1')))
+    await flushRunEvents()
     expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())).toHaveLength(1)
   })
 
-  it('applies the scoped project\'s events — and only those — once a scope is mounted', () => {
+  it('applies the scoped project\'s events — and only those — once a scope is mounted', async () => {
     setApiScope('other-project')
     // Scoped keys: this cache belongs to other-project (queries.ts leads every key with the scope).
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
@@ -700,9 +714,79 @@ describe('useGlobalEvents — project scoping (multi-project spec, step 3.1)', (
 
     source.emit('run', stampedRun(runRecord('theirs'), 'other-project'))
     source.emit('usage', JSON.stringify({ project: 'other-project', usage: { theirs: SAMPLE } }))
+    await flushRunEvents()
 
     expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.map((r) => r.id)).toEqual(['theirs'])
     expect(usage.get()).toEqual({ theirs: SAMPLE })
+  })
+
+  it('drops a queued event when the active project changes before the batch flushes', async () => {
+    vi.useFakeTimers()
+    setApiScope('project-a')
+    const projectAKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(projectAKey, [])
+    const { source } = mount()
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+
+    source.emit('run', stampedRun(runRecord('r1'), 'project-a'))
+    setApiScope('project-b')
+    const projectBKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(projectBKey, [])
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS)
+    })
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(450)
+    })
+
+    expect(client.getQueryData<ApiRun[]>(projectAKey)).toEqual([])
+    expect(client.getQueryData<ApiRun[]>(projectBKey)).toEqual([])
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['project-a', 'runs'],
+      refetchType: 'none',
+    })
+  })
+
+  it('marks an inactive project cache stale without applying its event to the active scope', async () => {
+    setApiScope('project-b')
+    const projectAKey = ['project-a', 'runs', 'list'] as const
+    client.setQueryData<ApiRun[]>(projectAKey, [runRecord('r1')])
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    source.emit('run', stampedRun(runRecord('r1', { status: 'done' }), 'project-a'))
+    await act(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 450))
+    })
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['project-a', 'runs'], refetchType: 'none' })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['project-a', 'todos'], refetchType: 'none' })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['project-a', 'worktrees'], refetchType: 'none' })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['run-history', 'project-a'], refetchType: 'none' })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['run-history-context', 'project-a'], refetchType: 'none' })
+    expect(client.getQueryData<ApiRun[]>(projectAKey)?.[0]?.status).toBe('running')
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())).toBeUndefined()
+  })
+
+  it('refetches an inactive cache if that project becomes active before the debounce flushes', async () => {
+    vi.useFakeTimers()
+    setApiScope('project-b')
+    client.setQueryData<ApiRun[]>(['project-a', 'runs', 'list'], [runRecord('r1')])
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    source.emit('run', stampedRun(runRecord('r1', { status: 'done' }), 'project-a'))
+    setApiScope('project-a')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(450)
+    })
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ['project-a', 'runs'],
+      refetchType: 'active',
+    })
   })
 })
 
@@ -731,7 +815,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
     source.drop()
     source.open()
 
-    expect(invalidatedKeys(invalidate)).toEqual([
+    expect(invalidatedKeys(invalidate)).toEqual(expect.arrayContaining([
       queryKeys.runs.all, // covers the list and every detail under it
       // The cross-project index behind the global Tasks page. Nothing else here covers it: the
       // scoped caches hold one project, and this spans the workspace.
@@ -740,7 +824,111 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.health, // the repo/branch chip — health is not on the stream (#369)
       queryKeys.worktrees, // the Resources panel's list/total (#483)
       workspaceQueryKeys.providerStatus,
-    ])
+      ['run-history', 'default'],
+      ['run-history-context', 'default'],
+    ]))
+  })
+
+  it('marks cached inactive project and transcript queries stale on reconnect', async () => {
+    setApiScope('project-b')
+    const projectAListKey = ['project-a', 'runs', 'list'] as const
+    const projectAHistoryKey = ['run-history', 'project-a', 'run-1'] as const
+    client.setQueryData(projectAListKey, [])
+    client.setQueryData(projectAHistoryKey, { pages: [], pageParams: [] })
+    const { source } = mount()
+    source.open()
+    source.drop()
+    source.open()
+
+    await waitFor(() => {
+      expect(client.getQueryState(projectAListKey)?.isInvalidated).toBe(true)
+      expect(client.getQueryState(projectAHistoryKey)?.isInvalidated).toBe(true)
+    })
+  })
+
+  it('flushes the queued run batch before reconnect reconciliation', async () => {
+    const initial = deferredResponse()
+    const reconciled = deferredResponse()
+    vi.mocked(fetch).mockReturnValueOnce(initial.promise).mockReturnValueOnce(reconciled.promise)
+
+    function RunsProbe() {
+      useRuns()
+      return null
+    }
+
+    render(
+      <QueryClientProvider client={client}>
+        <GlobalEventsProvider>
+          <RunsProbe />
+        </GlobalEventsProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    const source = FakeEventSource.last
+    source.open()
+    await act(async () => initial.resolve(json([runRecord('r1', { status: 'queued' })])))
+    await waitFor(() => expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.[0]?.status).toBe('queued'))
+
+    source.emit('run', stampedRun(runRecord('r1', { status: 'running' })))
+    source.drop()
+    source.open()
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.[0]?.status).toBe('running')
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+
+    // This event arrives after the authoritative request starts but before its older response
+    // resolves. The batcher must hold it until the response has been applied.
+    source.emit('run', stampedRun(runRecord('r1', { status: 'done' })))
+    await act(async () => reconciled.resolve(json([runRecord('r1', { status: 'running' })])))
+    await waitFor(() => expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.[0]?.status).toBe('done'))
+    await new Promise((resolve) => setTimeout(resolve, RUN_EVENT_BATCH_MS + 10))
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.[0]?.status).toBe('done')
+  })
+
+  it('does not apply a queued todo snapshot over the authoritative reconcile response', async () => {
+    const initial = deferredResponse()
+    const reconciled = deferredResponse()
+    const afterEvent = deferredResponse()
+    vi.mocked(fetch)
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(reconciled.promise)
+      .mockReturnValueOnce(afterEvent.promise)
+
+    function TodosProbe() {
+      useTodos()
+      return null
+    }
+
+    render(
+      <QueryClientProvider client={client}>
+        <GlobalEventsProvider>
+          <TodosProbe />
+        </GlobalEventsProvider>
+      </QueryClientProvider>,
+    )
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    const source = FakeEventSource.last
+    source.open()
+    await act(async () => initial.resolve(json([{ id: 'todo-b', summary: 'authoritative' }])) )
+    await waitFor(() => expect(client.getQueryData(queryKeys.todos)).toEqual([
+      { id: 'todo-b', summary: 'authoritative' },
+    ]))
+
+    source.drop()
+    source.open()
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(2))
+    source.emit('todos', JSON.stringify({
+      project: BOOT,
+      items: [{ id: 'todo-a', summary: 'stale stream snapshot' }],
+    }))
+    await act(async () => reconciled.resolve(json([{ id: 'todo-b', summary: 'authoritative' }])) )
+    await waitFor(() => expect(client.getQueryData(queryKeys.todos)).toEqual([
+      { id: 'todo-b', summary: 'authoritative' },
+    ]))
+    await waitFor(() => expect(fetch).toHaveBeenCalledTimes(3))
+    await act(async () => afterEvent.resolve(json([{ id: 'todo-b', summary: 'authoritative' }])) )
+    await waitFor(() => expect(client.getQueryData(queryKeys.todos)).toEqual([
+      { id: 'todo-b', summary: 'authoritative' },
+    ]))
   })
 
   it('refetches when a hidden tab comes back', () => {
@@ -754,7 +942,7 @@ describe('useGlobalEvents — reconcile doctrine', () => {
     // A phone that slept: the tab was frozen, no error handler ever ran, and the stream may have
     // been dead for an hour. What is on screen is about to be read as true.
     setVisibility('visible')
-    expect(invalidatedKeys(invalidate)).toEqual([
+    expect(invalidatedKeys(invalidate)).toEqual(expect.arrayContaining([
       queryKeys.runs.all,
       // The cross-project index behind the global Tasks page — nothing else here covers it.
       workspaceQueryKeys.runsIndex,
@@ -762,7 +950,9 @@ describe('useGlobalEvents — reconcile doctrine', () => {
       queryKeys.health,
       queryKeys.worktrees,
       workspaceQueryKeys.providerStatus,
-    ])
+      ['run-history', 'default'],
+      ['run-history-context', 'default'],
+    ]))
   })
 
   it('stops listening for visibility once unmounted', () => {

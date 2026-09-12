@@ -3,7 +3,7 @@ import * as React from 'react'
 import { useLocation } from 'react-router'
 
 import { useHealth, usePinRun, useProjectRuns } from '@/api/queries'
-import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
+import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
 import { activeNavPath, visibleNavItems } from '@/components/nav-items'
@@ -188,7 +188,15 @@ function ProjectGroup({
   // Pinning (#935) from a group that may not be the scoped project: the request is addressed to
   // THIS project, and the cache invalidated is the one `useProjectRuns` above writes — which is
   // `'default'` for the boot project, whose list mounts unscoped.
-  const pin = usePinRun(project.id, boot ? 'default' : project.id)
+  const pinMutation = usePinRun(project.id, boot ? 'default' : project.id)
+  const onTogglePin = React.useCallback(
+    (run: RunRecord, pinned: boolean) =>
+      pinMutation.mutate(
+        { id: run.id, pinned },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [pinMutation.mutate],
+  )
 
   const waiting = runs.data ? listCounts(runs.data).waiting : 0
   const buckets = runs.data ? capBuckets(groupRuns(runs.data, view), RECENT_LIMIT) : []
@@ -365,11 +373,7 @@ function ProjectGroup({
                 // the same call `TaskQuickList` and the thread header make.
                 view === 'archived'
                   ? undefined
-                  : (run, pinned) =>
-                      pin.mutate(
-                        { id: run.id, pinned },
-                        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
-                      )
+                  : onTogglePin
               }
             />
           </ReferenceStatusProvider>

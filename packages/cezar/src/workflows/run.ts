@@ -100,6 +100,7 @@ import { WorkspaceSemaphore, type AccountHolds } from '../workspace/semaphore.ts
 import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
+import { freshContinuationContext } from './continuation-context.ts';
 
 const CHECK_OUTPUT_CAP = 20_000;
 
@@ -3034,6 +3035,12 @@ export class RunManager {
     // invisible to the enforcer forever. Best-effort; falls back to repoRoot.
     await rematerializeReclaimedWorktree(this.repoRoot, this.store, runId);
     const record = this.store.getRun(runId);
+    // A provider/account switch cannot resume the old provider-owned session. Reconstruct the
+    // portable context from Cezar's durable record + redacted event stream before this new turn's
+    // user-message is appended. This works even when the interrupted agent never wrote HANDOFF.md.
+    const portableContext = record && sessionId === undefined
+      ? freshContinuationContext(record, this.store.readEvents(runId))
+      : undefined;
     // The env is a live ceiling: a run created while the inbox was on must not keep writing
     // follow-ups after it is switched off.
     const generateFollowups = followupsEnabled() && record?.generateFollowups !== false;
@@ -3354,6 +3361,11 @@ export class RunManager {
     const treeInbox = this.flushInbox(runId);
     const treeBlocks = [treeReports, treeInbox].filter((block): block is string => Boolean(block));
     const openingPrompt = treeBlocks.length ? `${treeBlocks.join('\n\n')}\n\n---\n\n${expandedPrompt}` : expandedPrompt;
+    // The previous runner's portable context (#954) opens the session first, then the tree
+    // blocks above, then the instruction that prompted this continuation.
+    const contextualOpeningPrompt = portableContext
+      ? `${portableContext}\n\n---\n\n## New user instruction\n${openingPrompt}`
+      : openingPrompt;
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -3366,8 +3378,8 @@ export class RunManager {
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
         userPrompt: attachments.length
-          ? `${openingPrompt}\n\n${pastedAttachmentsText(attachments)}`
-          : openingPrompt,
+          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments)}`
+          : contextualOpeningPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
                 // the sub-agent tool on a resumed session too — a Continue that silently dropped it would

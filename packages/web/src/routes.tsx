@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react'
+import { lazy, memo, Suspense } from 'react'
 import {
   matchPath,
   Navigate,
@@ -302,7 +302,7 @@ export function pageTitleContext(pathname: string): PageTitleContext {
  *  `ProjectScopeRoute` layout above; the flat spellings below are relative to that prefix and
  *  stay stable — they are what teammates paste, and the legacy flat URLs redirect onto them.
  */
-export function AppRoutes() {
+export const AppRoutes = memo(function AppRoutes() {
   const capabilities = useHealth().data?.capabilities
   return (
     <Routes>
@@ -544,4 +544,4 @@ export function AppRoutes() {
       <Route path="*" element={<LegacyPathRedirect />} />
     </Routes>
   )
-}
+})

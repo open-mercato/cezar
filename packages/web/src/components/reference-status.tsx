@@ -116,12 +116,16 @@ export function ReferenceStatusProvider({
     .map((ref) => `${ref.projectId} ${ref.kind}#${ref.number}`)
     .sort()
     .join('|')
+  const publish = registry?.publish
+  const retract = registry?.retract
   useEffect(() => {
-    if (!registry) return
-    registry.publish(id, requests)
-    return () => registry.retract(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `signature` IS the content of `requests`
-  }, [registry, id, signature])
+    if (!publish || !retract) return
+    publish(id, requests)
+    return () => retract(id)
+    // `signature` is the content of `requests`; `publish`/`retract` are stable callbacks. The
+    // registry object also carries `lookup`, which changes when a status query answers and must
+    // not make every surface unregister/register just to keep its same request set alive.
+  }, [publish, retract, id, signature])
 
   // Only when there is no registry above us. Called unconditionally with an empty list otherwise:
   // hooks cannot be skipped, and an empty list fetches nothing.

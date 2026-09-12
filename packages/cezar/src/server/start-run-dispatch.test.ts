@@ -32,7 +32,7 @@ describe('POST /runs and the dispatch intent', () => {
     const manager = {
       startRun: (_workflow: WorkflowDef, input: StartRunInput) => {
         inputs.push(input);
-        return store.createRun({ title: 't', steps: [{ id: 'work', prompt: '{{task}}' }], task: input.task, steps: [] });
+        return store.createRun({ title: 't', workflow: 'quick-task', task: input.task, steps: [] });
       },
     } as unknown as RunManager;
     app = createApp({ repoRoot, store, manager, version: '0.0.0-test', providerAuth: connectedProviderAuth() });
