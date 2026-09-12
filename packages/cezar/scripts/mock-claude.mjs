@@ -26,6 +26,18 @@ emit({ type: 'system', subtype: 'init' });
 
 let turn = 0;
 
+// `mock:autonomous` → the autonomous auto-nudge fixture (#autonomous). Cezar's nudge text is
+// fixed and carries no `mock:` marker, so a marker-per-message mock could never end such a
+// session: the first turn would end plainly, every nudge would end plainly, and the run would
+// only stop at MAX_AUTO_CONTINUES. This one flag ARMS the session instead — the turn that
+// answers the nudge ends with CEZ:DONE — so a dry-run test can watch a nudged run complete
+// rather than time out.
+let autonomousArmed = false;
+// Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
+// and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
+// coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
+const AUTONOMOUS_NUDGE_PREFIX = 'Continue working autonomously';
+
 // A tiny generated PNG (320x200) standing in for a browser screenshot.
 const MOCK_SCREENSHOT_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAAUAAAADICAIAAAAWZq/8AAACMklEQVR42u3csQnAIBRFUQdJY+b4tfvP4AhCLKyyghAMMRw4Ezz/bU0RBdhUMgEIGBAwIGAQMCBgQMCAgEHAgIABAYOAAQEDAgYEDAIGBAwsCLhfDdiUgEHAgIABAYOAAQEDAgYEDAIGBAwIGAT8vlEr/ImAQcACBgELGAQsYAQsYBCwgEHAAgYBe3IELGAQsIBBwAJGwAIGAQsYBCxgELCAEbCAQcACBgELGAQMAhYwCFjAIGABI2D/QgMCBgEDAgYEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgIBBwCYAAQMCBgQMAgYEDAgYEDAIGBAwIGAQMCBgQMCAgEHAgIABAQMCBgEDAgYEDAIGBAwIGBAwCBgQMCBgQMAgYEDAgIBBwICAAQEDAgYBAwIGBAwCtgIIGBAwIGAQMCBgQMCAgEHAgIABAYOAeejMB/McjIAFLGABW0HAAhYwmhSwgAUsYAQsYAELGAELWMACRsACFrCAEbCABSxgBCxgAQtYwAhYwAIWMAIWsIAFjIAFLGABI2ABC1jACFjAAhYwAhawgAWMgAUsYAEjYAELWMACRsACFrCAEbCABSxgBCxgAQsYAQtYwAJGwAIWMCBgQMAgYEDAgIBBwICAAQEDAgYBAwIGBAwCBgQMCBgQMAgYEDAgYEDAIGBAwICAQcCAgAEBAwIGAQMCBgQMCBgEDAgYEDAIGBAwIGBAwCBgQMCAgAEBg4ABAQMCBgEDAgYEDAgYBAx8xQ1bxBr9kelHqgAAAABJRU5ErkJggg==';
@@ -79,7 +91,12 @@ async function respond(userText, imageCount) {
   await sleep(250);
   // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
   // completion marker (#347), so the auto-close path is testable dry.
-  const doneMarker = userText.includes('mock:done') ? '\n\nCEZ:DONE' : '';
+  if (userText.includes('mock:autonomous')) autonomousArmed = true;
+  const doneMarker =
+    userText.includes('mock:done') ||
+    (autonomousArmed && userText.includes(AUTONOMOUS_NUDGE_PREFIX))
+      ? '\n\nCEZ:DONE'
+      : '';
   // `mock:monitoring` → the reply ends with CEZ:MONITORING, the "still working
   // on downstream work" marker (#490), so the monitoring-status path is testable dry.
   const monitoringMarker = userText.includes('mock:monitoring') ? '\n\nCEZ:MONITORING' : '';
