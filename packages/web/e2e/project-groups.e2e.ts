@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 import { readSharedProjects, snapshotSharedHome, writeSharedProjects } from './workspace-registry'
@@ -70,9 +70,11 @@ function makeRepo(name: string): string {
   return root
 }
 
-async function workspaceUiState(): Promise<{ sidebar?: { collapsed?: Record<string, boolean> } }> {
+async function workspaceUiState(): Promise<{
+  sidebar?: { collapsed?: Record<string, boolean>; projectOrder?: string[] }
+}> {
   return (await (await fetch(`${baseUrl}/api/v1/workspace/ui-state`)).json()) as {
-    sidebar?: { collapsed?: Record<string, boolean> }
+    sidebar?: { collapsed?: Record<string, boolean>; projectOrder?: string[] }
   }
 }
 
@@ -157,6 +159,14 @@ const groupHeader = (projectId: string) =>
   `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-header"]`
 const groupBody = (projectId: string) =>
   `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-body"]`
+const groupGrip = (projectId: string) =>
+  `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-grip"]`
+
+/** The drawer's order as the DOM actually holds it. A comma-joined string rather than an array,
+ *  because `waitForFunction` compares a serialized expression. */
+const renderedOrderJs =
+  `[...document.querySelectorAll('[data-slot="project-group"]')].map((n) => n.dataset.project).join(',')`
+const renderedOrder = (): string[] => String(browser.evaluate(renderedOrderJs)).split(',')
 
 /**
  * Toggle a group to `expanded` and wait until it really is.
@@ -293,6 +303,135 @@ describe('the grouped multi-project sidebar', () => {
     // The whole point of the move: a second cockpit — a phone, another window — keeps its own
     // answer, which it cannot do if either toggle reached the shared workspace file.
     expect(JSON.stringify((await workspaceUiState()).sidebar ?? null)).toBe(workspaceSidebar)
+  })
+
+  /**
+   * Reordering by keyboard, end to end (#952) — and, unlike collapse above, straight INTO the
+   * shared workspace file, which is the whole point: the order is one considered choice, so the
+   * phone and the desktop must agree on it. The keyboard path is the one exercised here because
+   * it is the accessible path and the deterministic one; the pointer path rides the same dnd-kit
+   * sensors as the workflow builder's step list, which `workflows.e2e.ts` drives the same way.
+   */
+  it('drags a project to a new place and keeps it there, in the workspace file', async ({ skip }) => {
+    if (singleProject) skip()
+    const sidebarBefore = (await workspaceUiState()).sidebar ?? null
+    gotoGrouped(scoped(bootProject, '/'))
+
+    // Shut every group first: a lift measures the list, and three one-row groups make the move
+    // one unambiguous step rather than a scroll through the boot project's task list.
+    for (const id of [bootProject, ALPHA.id, BETA.id]) setGroupExpanded(id, false)
+    expect(renderedOrder()).toEqual([bootProject, ALPHA.id, BETA.id])
+
+    const grip = `document.querySelector('${groupGrip(ALPHA.id)}')`
+    browser.waitForFunction(`${grip} !== null && ${grip}.disabled === false`)
+    browser.evaluate(`${grip}.focus()`)
+    browser.waitForFunction(`document.activeElement === ${grip}`)
+    browser.press('Space')
+    browser.waitForFunction(`${grip}.getAttribute('aria-pressed') === 'true'`)
+
+    // Same discipline as the workflow builder's reorder spec: an arrow pressed before the lift's
+    // measuring pass settles is swallowed, so press, watch the live region for the settled
+    // announcement, and retry. The text is the cockpit's own — dnd-kit's default would read out
+    // the project SLUG and a droppable's coordinates.
+    const movedUp = () =>
+      String(
+        browser.evaluate(`[...document.querySelectorAll('[aria-live]')].map((n) => n.textContent).join(' ')`),
+      ).includes(`${ALPHA.name} moved to position 1 of 3`)
+    let moved = false
+    for (let press = 0; press < 5 && !moved; press++) {
+      browser.press('ArrowUp')
+      for (let poll = 0; poll < 10 && !moved; poll++) moved = movedUp()
+    }
+    expect(moved).toBe(true)
+    browser.press('Space')
+    browser.waitForFunction(`${renderedOrderJs} === '${[ALPHA.id, bootProject, BETA.id].join(',')}'`)
+
+    // The order is in the WORKSPACE file, whole — every visible id, so the next read has nothing
+    // left to guess and no project re-sorts itself back to the top.
+    await vi.waitFor(async () =>
+      expect((await workspaceUiState()).sidebar?.projectOrder).toEqual([
+        ALPHA.id,
+        bootProject,
+        BETA.id,
+      ]),
+    )
+
+    // A reload is a different page, a different cache and a different render — the same order.
+    // (A second device is the same read against the same file.)
+    gotoGrouped(scoped(bootProject, '/'))
+    expect(renderedOrder()).toEqual([ALPHA.id, bootProject, BETA.id])
+
+    // Put the shared home back for whatever runs next, rather than leaving a reordered drawer.
+    await fetch(`${baseUrl}/api/v1/workspace/ui-state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sidebar: { ...(sidebarBefore ?? {}), projectOrder: undefined } }),
+    })
+  })
+
+  /**
+   * The same reorder with a group left OPEN — the configuration the test above deliberately
+   * avoids, and the one that matters, because an expanded group is the drawer's default state.
+   *
+   * This exists because the first cut used `verticalListSortingStrategy`, which displaces every
+   * sibling by the DRAGGED item's height. With one 600px group and two 34px ones that threw the
+   * neighbours hundreds of pixels out of place for the whole drag. Collapsing everything first
+   * made the heights uniform, which is exactly the case where that strategy happens to be right —
+   * so the bug could not be seen. Keep a variable-height reorder covered here or the assumption
+   * comes back silently.
+   */
+  it('reorders correctly with a group expanded — no uniform-height assumption', async ({ skip }) => {
+    if (singleProject) skip()
+    const sidebarBefore = (await workspaceUiState()).sidebar ?? null
+    gotoGrouped(scoped(bootProject, '/'))
+
+    // The boot group open (its nav + task list), the other two shut: heights now differ by an
+    // order of magnitude, which is the drawer as a user actually meets it.
+    setGroupExpanded(bootProject, true)
+    for (const id of [ALPHA.id, BETA.id]) setGroupExpanded(id, false)
+    const heights = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="project-group"]')].map((n) => Math.round(n.getBoundingClientRect().height)).join(',')`,
+    )
+    const tallest = Math.max(...String(heights).split(',').map(Number))
+    const shortest = Math.min(...String(heights).split(',').map(Number))
+    // Guard the guard: if every group were the same height this spec would prove nothing.
+    expect(tallest).toBeGreaterThan(shortest * 2)
+
+    const grip = `document.querySelector('${groupGrip(BETA.id)}')`
+    browser.waitForFunction(`${grip} !== null && ${grip}.disabled === false`)
+    browser.evaluate(`${grip}.focus()`)
+    browser.press('Space')
+    browser.waitForFunction(`${grip}.getAttribute('aria-pressed') === 'true'`)
+
+    // BETA (last, collapsed) up over the tall expanded boot group.
+    const movedUp = () =>
+      String(
+        browser.evaluate(`[...document.querySelectorAll('[aria-live]')].map((n) => n.textContent).join(' ')`),
+      ).includes(`${BETA.name} moved to position 2 of 3`)
+    let moved = false
+    for (let press = 0; press < 5 && !moved; press++) {
+      browser.press('ArrowUp')
+      for (let poll = 0; poll < 10 && !moved; poll++) moved = movedUp()
+    }
+    expect(moved).toBe(true)
+    browser.press('Space')
+    browser.waitForFunction(`${renderedOrderJs} === '${[bootProject, BETA.id, ALPHA.id].join(',')}'`)
+
+    // Every group is back at rest: no leftover transform from the drag, and the tall group still
+    // has its own height rather than a scale borrowed from the one it swapped with.
+    const resting = browser.evaluate(
+      `[...document.querySelectorAll('[data-slot="project-group"]')].every((n) => {
+         const t = getComputedStyle(n).transform
+         return t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)'
+       })`,
+    )
+    expect(resting).toBe(true)
+
+    await fetch(`${baseUrl}/api/v1/workspace/ui-state`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sidebar: { ...(sidebarBefore ?? {}), projectOrder: undefined } }),
+    })
   })
 })
 

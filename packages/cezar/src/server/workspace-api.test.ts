@@ -377,6 +377,35 @@ describe('the workspace settings API (step 2.7)', () => {
     expect(await (await apiRequest(app, '/api/v1/ui-state')).json()).toEqual({});
   });
 
+  it('round-trips the sidebar project order beside the legacy collapse map', async () => {
+    // #952. Both sidebar keys share one object, and the merge is TOP-LEVEL only — so the
+    // cockpit sends the whole `sidebar`, and this proves the route stores exactly that.
+    const sidebar = { collapsed: { cezar: true }, projectOrder: ['shop', 'cezar', 'blog'] };
+    const res = await putUiState({ sidebar });
+
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sidebar });
+    expect(rawUiState()).toEqual({ sidebar });
+
+    // Reset is the key going away, which a whole-object write expresses by omitting it.
+    expect((await putUiState({ sidebar: { collapsed: { cezar: true } } })).status).toBe(200);
+    expect(rawUiState()).toEqual({ sidebar: { collapsed: { cezar: true } } });
+  });
+
+  it.each([
+    ['a non-string id', ['shop', 7]],
+    ['an empty id', ['shop', '']],
+    ['an overlong id', ['shop', 'x'.repeat(65)]],
+    ['more than 200 entries', Array.from({ length: 201 }, (_, index) => `p-${index}`)],
+    ['a value that is not a list', { shop: 1 }],
+  ])('rejects a project order with %s without writing state', async (_case, projectOrder) => {
+    const res = await putUiState({ sidebar: { projectOrder } });
+
+    expect(res.status).toBe(400);
+    expect((await res.json()) as { error: string }).toHaveProperty('error');
+    expect(() => readFileSync(workspaceUiStatePath(), 'utf8')).toThrow();
+  });
+
   it('round-trips task-table choices and preserves unknown nested siblings', async () => {
     const res = await putUiState({
       taskTable: {

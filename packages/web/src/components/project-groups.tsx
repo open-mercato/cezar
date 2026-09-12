@@ -1,4 +1,21 @@
-import { ChevronDownIcon } from 'lucide-react'
+import {
+  closestCenter,
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type Announcements,
+  type DragEndEvent,
+} from '@dnd-kit/core'
+import {
+  rectSortingStrategy,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+} from '@dnd-kit/sortable'
+import { CSS } from '@dnd-kit/utilities'
+import { ChevronDownIcon, GripVerticalIcon } from 'lucide-react'
 import * as React from 'react'
 import { useLocation } from 'react-router'
 
@@ -11,8 +28,10 @@ import { ReferenceStatusProvider } from '@/components/reference-status'
 import { QuickListBuckets } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
 import { Link, pathnameProjectId, scopeTo, stripProjectPrefix, useProjectMatch } from '@/lib/project-router'
+import { moveProjectId, orderProjects } from '@/lib/project-order'
 import { isProjectCollapsed, readStoredCollapsed, writeStoredCollapsed } from '@/lib/sidebar-collapse'
 import { capBuckets, groupRuns, listCounts, type ListView } from '@/lib/task-groups'
+import { useProjectOrder } from '@/lib/use-project-order'
 import { taskReference } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
@@ -110,36 +129,172 @@ export function ProjectGroups({
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
 
-  // Most-recently-opened first, per the spec. Sorted here rather than trusted from the wire so
-  // the order is a property of the sidebar, not of whichever route last touched the registry.
-  const ordered = React.useMemo(
-    () => [...projects].sort((a, b) => b.lastOpenedAt.localeCompare(a.lastOpenedAt)),
-    [projects],
+  // The user's hand-picked order when there is one, `lastOpenedAt` when there is not (#952).
+  // Applied here rather than trusted from the wire so the order is a property of the sidebar, not
+  // of whichever route last touched the registry — and shared with the ⌘K palette through
+  // `lib/project-order.ts`, so the same registry is never listed two ways.
+  const { order, canReorder, setOrder } = useProjectOrder()
+  const ordered = React.useMemo(() => orderProjects(projects, order), [projects, order])
+  const orderedIds = React.useMemo(() => ordered.map((project) => project.id), [ordered])
+
+  // dnd-kit, configured exactly as the workflow builder's step list (`routes/workflows`): the
+  // small pointer distance is what keeps a plain click on a group header a disclosure toggle
+  // rather than a drag, and the sortable coordinate getter is what makes Space/arrows/Space work.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   )
+  // One project cannot be reordered, and neither can any number of them before the authoritative
+  // ui-state GET lands — a write composed from an empty cache would drop the file's other keys.
+  const sortable = canReorder && ordered.length > 1
+
+  const handleDragEnd = React.useCallback(
+    (event: DragEndEvent) => {
+      const { active, over } = event
+      if (over === null || over.id === active.id) return
+      const from = orderedIds.indexOf(String(active.id))
+      const to = orderedIds.indexOf(String(over.id))
+      if (from === -1 || to === -1) return
+      // The WHOLE visible order is persisted, not just the moved id: after the first drag every
+      // registered project is placed, so nothing re-sorts itself back to the top on the next read.
+      setOrder(moveProjectId(orderedIds, from, to))
+    },
+    [orderedIds, setOrder],
+  )
+
+  // dnd-kit's defaults would read out the project SLUG and a droppable's coordinates. The name
+  // and the position are what a person actually needs to reorder a list without seeing it.
+  const announcements = React.useMemo<Announcements>(() => {
+    const describe = (id: string | number) => {
+      const index = orderedIds.indexOf(String(id))
+      const project = ordered[index]
+      return {
+        name: project?.name ?? String(id),
+        position: `position ${index + 1} of ${orderedIds.length}`,
+      }
+    }
+    return {
+      onDragStart: ({ active }) => {
+        const { name, position } = describe(active.id)
+        return `Picked up ${name}, ${position}.`
+      },
+      onDragOver: ({ active, over }) =>
+        over
+          ? `${describe(active.id).name} moved to ${describe(over.id).position}.`
+          : `${describe(active.id).name} is not over a drop position.`,
+      onDragEnd: ({ active, over }) =>
+        over
+          ? `${describe(active.id).name} dropped at ${describe(over.id).position}.`
+          : `${describe(active.id).name} dropped. The order is unchanged.`,
+      onDragCancel: ({ active }) =>
+        `Reordering cancelled. ${describe(active.id).name} returned to ${describe(active.id).position}.`,
+    }
+  }, [ordered, orderedIds])
+
+  const groups = ordered.map((project) => (
+    <ProjectGroup
+      key={project.id}
+      project={project}
+      boot={project.id === bootProjectId}
+      active={project.id === scopedProjectId}
+      collapsed={isProjectCollapsed(collapsed, project.id, collapseAnchorId)}
+      onToggle={toggle}
+      view={view}
+      activeTo={activeTo}
+      currentRunId={currentRunId}
+      now={now}
+      inboxAvailable={inboxAvailable}
+      automationsAvailable={automationsAvailable}
+      inboxCount={inboxCount}
+      skillsUpdateAvailable={skillsUpdateAvailable}
+      showTokens={metricVisibility.tokens}
+      showCost={metricVisibility.cost}
+      sortable={sortable}
+      position={orderedIds.indexOf(project.id) + 1}
+      total={orderedIds.length}
+    />
+  ))
 
   return (
     <div data-slot="project-group-list">
-      {ordered.map((project) => (
-        <ProjectGroup
-          key={project.id}
-          project={project}
-          boot={project.id === bootProjectId}
-          active={project.id === scopedProjectId}
-          collapsed={isProjectCollapsed(collapsed, project.id, collapseAnchorId)}
-          onToggle={toggle}
-          view={view}
-          activeTo={activeTo}
-          currentRunId={currentRunId}
-          now={now}
-          inboxAvailable={inboxAvailable}
-          automationsAvailable={automationsAvailable}
-          inboxCount={inboxCount}
-          skillsUpdateAvailable={skillsUpdateAvailable}
-          showTokens={metricVisibility.tokens}
-          showCost={metricVisibility.cost}
-        />
-      ))}
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        accessibility={{ announcements }}
+        onDragEnd={handleDragEnd}
+      >
+        {/* `rectSortingStrategy`, NOT the vertical one, and the difference is load-bearing here:
+            the vertical strategy displaces every sibling by the DRAGGED item's height
+            (`-activeNodeRect.height`), which is only correct when every row is the same size. A
+            project group is 34px collapsed and 300–600px expanded — and the active group starts
+            expanded — so the vertical strategy threw collapsed neighbours hundreds of pixels out
+            of place mid-drag. The rect strategy measures each item and moves it to where it will
+            actually land. */}
+        <SortableContext items={orderedIds} strategy={rectSortingStrategy}>
+          {groups}
+        </SortableContext>
+      </DndContext>
     </div>
+  )
+}
+
+/**
+ * The reorder handle (#952). `handleProps` carries dnd-kit's `attributes` (role, tabIndex, aria
+ * description) and `listeners` onto a real `<button>`, which is what makes Space-lift /
+ * arrows-move / Space-drop work without a pointer.
+ *
+ * It occupies its column at every breakpoint rather than appearing on hover: a handle that
+ * reserves no space reflows the whole drawer under the pointer the moment it appears, and on
+ * touch — where the drawer also lives — there is no hover to appear on.
+ *
+ * The ink is hover-led ONLY where hovering exists. On a hover-capable pointer the grip is
+ * invisible until the row is hovered or something in it has focus, so six project groups do not
+ * read as six grab handles. On a coarse pointer it is simply always visible: there is no hover,
+ * a tap does not fire `:focus-visible`, and the one remaining reveal would have been focusing the
+ * group header — whose job is toggling the disclosure. That left the mobile drawer with a drag
+ * affordance nobody could see, which is no affordance at all.
+ */
+function ProjectGrip({
+  name,
+  position,
+  total,
+  disabled,
+  handleProps,
+}: {
+  name: string
+  position: number
+  total: number
+  disabled: boolean
+  handleProps: Record<string, unknown>
+}) {
+  return (
+    <button
+      type="button"
+      data-slot="project-group-grip"
+      disabled={disabled}
+      aria-label={`Reorder ${name}, position ${position} of ${total}`}
+      className={cn(
+        // Full row height, so the touch target is the 44px the drawer's mobile rules ask for
+        // even though the column itself stays narrow — 24px of a 264px drawer, 16px on desktop
+        // where the pointer is precise.
+        'flex h-11 w-6 shrink-0 cursor-grab items-center justify-center rounded text-muted-foreground opacity-0 outline-none transition-opacity md:h-[34px] md:w-4',
+        // `touch-none` is load-bearing, not decorative: without it a drag inside the mobile sheet
+        // scrolls the sheet instead of lifting the group.
+        'touch-none focus-visible:opacity-100 focus-visible:ring-[3px] focus-visible:ring-ring/50',
+        'group-hover/row:opacity-100 group-focus-within/row:opacity-100',
+        // No hover to wait for — show it. Keyed off the INPUT (`hover: none`) rather than the
+        // viewport, because a touch laptop at desktop width has the same problem a phone does.
+        '[@media(hover:none)]:opacity-100',
+        // Nothing to grab: no ink, no grab cursor, and `disabled` keeps it out of the tab order.
+        // The coarse-pointer reveal has to be undone too, or a dead handle is the ONE grip a
+        // phone would show.
+        disabled &&
+          'cursor-default group-hover/row:opacity-0 group-focus-within/row:opacity-0 [@media(hover:none)]:opacity-0',
+      )}
+      {...handleProps}
+    >
+      <GripVerticalIcon aria-hidden="true" className="size-3.5" />
+    </button>
   )
 }
 
@@ -159,6 +314,9 @@ function ProjectGroup({
   skillsUpdateAvailable,
   showTokens,
   showCost,
+  sortable,
+  position,
+  total,
 }: {
   project: ProjectListEntry
   /** The boot project's runs cache lives under the `'default'` scope key (it mounts
@@ -178,8 +336,44 @@ function ProjectGroup({
   skillsUpdateAvailable: boolean
   showTokens: boolean
   showCost: boolean
+  /** The registry holds more than one project AND the ui-state cache is populated, so a drag has
+   *  somewhere to go and something safe to write. */
+  sortable: boolean
+  /** 1-based, for the grip's label — a screen-reader user needs to know where the row starts. */
+  position: number
+  total: number
 }) {
   const missing = project.status === 'missing'
+  // A missing project holds its place in the order but is not draggable: its row is deliberately
+  // inert (there is nothing behind the chevron either), and a folder that is gone is one to
+  // remove in Global settings → Projects, not one to arrange. It still moves when its neighbours
+  // do, and its id is still persisted, so removing it later leaves no hole.
+  const canDrag = sortable && !missing
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging,
+  } = useSortable({ id: project.id, disabled: !canDrag })
+  // The lifted group follows the pointer on its own transform (no DragOverlay): a project group
+  // is a whole nav plus a task list, and a detached copy of that is a second sidebar mid-flight.
+  //
+  // `Translate`, not `Transform`: the latter also emits the strategy's scaleX/scaleY, and
+  // `rectSortingStrategy` reports those as the ratio between the two swapped rects — swapping a
+  // 34px collapsed group with a 600px expanded one asks for `scaleY(17)`. Only the translation is
+  // wanted; the groups must keep their own size while they move.
+  const dragStyle = { transform: CSS.Translate.toString(transform), transition }
+  const grip = (
+    <ProjectGrip
+      name={project.name}
+      position={position}
+      total={total}
+      disabled={!canDrag}
+      handleProps={{ ...attributes, ...listeners }}
+    />
+  )
   // Collapsed (or missing) groups never fetch — a 40-project workspace costs one registry
   // request, not 40 run lists. A collapsed group still READS whatever is cached, which is what
   // keeps its attention badge alive after the user shuts it.
@@ -214,20 +408,32 @@ function ProjectGroup({
   // Global settings → Projects; the row says so instead of growing its own destructive button.
   if (missing) {
     return (
-      <div data-slot="project-group" data-project={project.id} data-status="missing" className="mb-1">
-        <div
-          data-slot="project-group-header"
-          title={`${project.root} is gone — remove it in Global settings → Projects`}
-          className="flex h-11 w-full items-center gap-[7px] rounded-lg px-2 text-[13px] font-semibold opacity-55 md:h-[34px]"
-        >
-          <span className="w-3 shrink-0" aria-hidden="true" />
-          <span className="truncate">{project.name}</span>
-          <span
-            data-slot="project-missing"
-            className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-[10px] font-medium text-danger"
+      <div
+        ref={setNodeRef}
+        style={dragStyle}
+        data-slot="project-group"
+        data-project={project.id}
+        data-status="missing"
+        className={cn('mb-1', isDragging && 'relative z-10 opacity-40')}
+      >
+        <div className="flex items-center">
+          {/* The grip's column, empty: the row stays inert (no control that does nothing) while
+              its name still lines up with every other project's. */}
+          <span aria-hidden="true" className="w-6 shrink-0 md:w-4" />
+          <div
+            data-slot="project-group-header"
+            title={`${project.root} is gone — remove it in Global settings → Projects`}
+            className="flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg px-2 text-[13px] font-semibold opacity-55 md:h-[34px]"
           >
-            folder not found
-          </span>
+            <span className="w-3 shrink-0" aria-hidden="true" />
+            <span className="truncate">{project.name}</span>
+            <span
+              data-slot="project-missing"
+              className="ml-auto shrink-0 rounded-full bg-danger/15 px-[7px] py-px text-[10px] font-medium text-danger"
+            >
+              folder not found
+            </span>
+          </div>
         </div>
       </div>
     )
@@ -237,56 +443,66 @@ function ProjectGroup({
 
   return (
     <div
+      ref={setNodeRef}
+      style={dragStyle}
       data-slot="project-group"
       data-project={project.id}
       data-status={project.status}
       data-collapsed={collapsed ? '' : undefined}
+      // Lifted, not gone: the row keeps its place in the flow (dnd-kit measures it) and fades,
+      // the way the workflow builder's step cards do.
+      data-dragging={isDragging ? '' : undefined}
       // "This is the project the URL names." Absent on the global pages, which name none — see
       // `scopedProjectId` above. An attribute rather than only a class because the highlight is
       // a fact about the group, and a `hover:bg-muted` in the class list makes the class an
       // unreliable way to ask.
       data-active={active ? '' : undefined}
-      className="mb-1"
+      className={cn('mb-1', isDragging && 'relative z-10 opacity-40')}
     >
-      <button
-        type="button"
-        onClick={() => onToggle(project.id)}
-        aria-expanded={!collapsed}
-        aria-controls={bodyId}
-        data-slot="project-group-header"
-        className={cn(
-          // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
-          // relaxation the flat nav makes.
-          'flex h-11 w-full items-center gap-[7px] rounded-lg px-2 text-left text-[13px] font-semibold transition-colors hover:bg-muted md:h-[34px]',
-          active && 'bg-muted',
-        )}
-      >
-        <ChevronDownIcon
+      {/* The grip is a SIBLING of the header, never a child: nesting a button inside a button is
+          invalid, and dnd-kit's keyboard path has to lift from a real focusable control. */}
+      <div className="group/row flex items-center">
+        {grip}
+        <button
+          type="button"
+          onClick={() => onToggle(project.id)}
+          aria-expanded={!collapsed}
+          aria-controls={bodyId}
+          data-slot="project-group-header"
           className={cn(
-            'size-3 shrink-0 text-muted-foreground transition-transform',
-            collapsed && '-rotate-90',
+            // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
+            // relaxation the flat nav makes.
+            'flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg px-2 text-left text-[13px] font-semibold transition-colors hover:bg-muted md:h-[34px]',
+            active && 'bg-muted',
           )}
-          aria-hidden="true"
-        />
-        <span className="truncate">{project.name}</span>
-        {waiting ? (
-          <span
-            data-slot="project-attention"
-            title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
-            className="shrink-0 rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
-          >
-            {waiting}
-          </span>
-        ) : null}
-        {project.branch ? (
-          <span
-            data-slot="project-branch"
-            className="ml-auto max-w-[92px] truncate font-mono text-[10.5px] font-medium text-soft-foreground"
-          >
-            {project.branch}
-          </span>
-        ) : null}
-      </button>
+        >
+          <ChevronDownIcon
+            className={cn(
+              'size-3 shrink-0 text-muted-foreground transition-transform',
+              collapsed && '-rotate-90',
+            )}
+            aria-hidden="true"
+          />
+          <span className="truncate">{project.name}</span>
+          {waiting ? (
+            <span
+              data-slot="project-attention"
+              title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
+              className="shrink-0 rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+            >
+              {waiting}
+            </span>
+          ) : null}
+          {project.branch ? (
+            <span
+              data-slot="project-branch"
+              className="ml-auto max-w-[92px] truncate font-mono text-[10.5px] font-medium text-soft-foreground"
+            >
+              {project.branch}
+            </span>
+          ) : null}
+        </button>
+      </div>
 
       {collapsed ? null : (
         <div
