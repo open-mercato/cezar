@@ -41,7 +41,7 @@ const DENSITY_OPTIONS: Array<{ value: Density; label: string }> = [
 
 const WIDTH_OPTIONS: Array<{ value: Width; label: string }> = [
   { value: 'narrow', label: 'Narrow' },
-  { value: 'wide', label: 'Wide' },
+  { value: 'wide', label: 'Full' },
 ]
 
 /** One segmented radio group — the shared chassis of all three controls. */
@@ -136,7 +136,7 @@ export function AppearanceSection() {
 
       <Field
         title="Reading width"
-        hint="Wide lets a task's session and commits use more of the screen. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
+        hint="Full uses the available task area. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
       >
         <Segmented slot="appearance-width" label="Reading width" value={width} options={WIDTH_OPTIONS} onChange={setWidth} />
       </Field>
