@@ -1,6 +1,6 @@
 import { memo, useMemo, type ReactNode } from 'react'
 
-import type { ApiRun, UiToolItem } from '@open-mercato/cezar-api-client'
+import type { ApiRun, UiMessageItem, UiReasoningItem, UiToolItem } from '@open-mercato/cezar-api-client'
 
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import {
@@ -23,7 +23,14 @@ import {
   type ThreadRow,
   type ThreadScrollControls,
 } from './thread-scroller'
-import type { ThreadAsk, ThreadEntry, ThreadState } from './thread-state'
+import type {
+  ThreadAsk,
+  ThreadEntry,
+  ThreadImage,
+  ThreadNote,
+  ThreadProviderAuthRequired,
+  ThreadState,
+} from './thread-state'
 
 export interface TranscriptUserMessage {
   text: string
@@ -383,38 +390,71 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
   if (previous === undefined || previous.kind !== next.kind || previous.id !== next.id) return false
   switch (next.kind) {
     case 'message':
-      return previous.kind === 'message' &&
-        previous.text === next.text &&
-        previous.role === next.role &&
-        previous.phase === next.phase &&
-        previous.parentItemId === next.parentItemId
+      return previous.kind === 'message' && sameFields(previous, next, MESSAGE_COMPARE_FIELDS)
     case 'reasoning':
-      return previous.kind === 'reasoning' &&
-        previous.text === next.text &&
-        previous.parentItemId === next.parentItemId
+      return previous.kind === 'reasoning' && sameFields(previous, next, REASONING_COMPARE_FIELDS)
     case 'tool':
       return previous.kind === 'tool' && sameToolItem(previous, next)
     case 'note':
-      return previous.kind === 'note' && previous.text === next.text && previous.tone === next.tone
+      return previous.kind === 'note' && sameFields(previous, next, NOTE_COMPARE_FIELDS)
     case 'image':
-      return previous.kind === 'image' && previous.url === next.url && previous.name === next.name
+      return previous.kind === 'image' && sameFields(previous, next, IMAGE_COMPARE_FIELDS)
     case 'ask':
-      return (
-        previous.kind === 'ask' &&
-        previous.resolved === next.resolved &&
-        previous.answer === next.answer &&
-        previous.questions === next.questions
-      )
+      return previous.kind === 'ask' && sameFields(previous, next, ASK_COMPARE_FIELDS)
     case 'provider-auth-required':
       return previous.kind === 'provider-auth-required' &&
-        previous.provider === next.provider &&
-        previous.authFailureId === next.authFailureId
+        sameFields(previous, next, PROVIDER_AUTH_COMPARE_FIELDS)
     default:
       return false
   }
 }
 
-/** A new UiToolItem field must be added here before it can be ignored by memoization. */
+const MESSAGE_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  role: true,
+  text: true,
+  phase: true,
+  parentItemId: true,
+} satisfies Record<keyof UiMessageItem, true>
+
+const REASONING_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  text: true,
+  parentItemId: true,
+} satisfies Record<keyof UiReasoningItem, true>
+
+const NOTE_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  text: true,
+  tone: true,
+} satisfies Record<keyof ThreadNote, true>
+
+const IMAGE_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  url: true,
+  name: true,
+} satisfies Record<keyof ThreadImage, true>
+
+const ASK_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  questions: true,
+  resolved: true,
+  answer: true,
+} satisfies Record<keyof ThreadAsk, true>
+
+const PROVIDER_AUTH_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  provider: true,
+  authFailureId: true,
+} satisfies Record<keyof ThreadProviderAuthRequired, true>
+
+/** A new transcript item field must be added here before it can be ignored by memoization. */
 const TOOL_ITEM_COMPARE_FIELDS = {
   kind: true,
   id: true,
@@ -431,8 +471,14 @@ const TOOL_ITEM_COMPARE_FIELDS = {
   parentItemId: true,
 } satisfies Record<keyof UiToolItem, true>
 
-const TOOL_ITEM_COMPARE_KEYS = Object.keys(TOOL_ITEM_COMPARE_FIELDS) as Array<keyof UiToolItem>
+function sameFields<T extends object>(
+  previous: T,
+  next: T,
+  fields: Record<keyof T, true>,
+): boolean {
+  return (Object.keys(fields) as Array<keyof T>).every((key) => previous[key] === next[key])
+}
 
 function sameToolItem(previous: UiToolItem, next: UiToolItem): boolean {
-  return TOOL_ITEM_COMPARE_KEYS.every((key) => previous[key] === next[key])
+  return sameFields(previous, next, TOOL_ITEM_COMPARE_FIELDS)
 }

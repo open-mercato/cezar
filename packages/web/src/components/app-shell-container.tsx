@@ -70,7 +70,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const skillsUpdateAvailable = skillsUpdateMarkerOf(skillsUpdate.data)
   // Unread done items (#unread-done-items) for the Tasks badge. Reads the same active-scope run
   // list the sidebar quick-list and Tasks table already hold — one cache entry, no extra fetch.
-  const runs = useRuns((list) => unreadDoneCount(list))
+  const unreadDoneCountSelector = useMemo(() => unreadDoneCount, [])
+  const runs = useRuns(unreadDoneCountSelector)
   const registry = useProjects().data
   const titleContext = pageTitleContext(pathname)
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null

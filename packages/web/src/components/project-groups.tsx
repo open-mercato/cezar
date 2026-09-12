@@ -373,7 +373,7 @@ function ProjectGroup({
                 // the same call `TaskQuickList` and the thread header make.
                 view === 'archived'
                   ? undefined
-                : onTogglePin
+                  : onTogglePin
               }
             />
           </ReferenceStatusProvider>
