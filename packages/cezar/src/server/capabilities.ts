@@ -125,6 +125,21 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
   return isLoopbackName(normalizeHostname(host));
 }
 
+/**
+ * Whether the agent-account store may cross the HTTP boundary.
+ *
+ * Local cockpits retain the zero-config behaviour. A remote cockpit can opt in when its operator
+ * has put the server behind an authenticated perimeter; the exact-value flag is deliberately
+ * separate from `localHandoff`, since opening a desktop app still makes no sense on a VPS.
+ */
+export function agentAccountsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  bindHost?: string,
+): boolean {
+  return (env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost))
+    || env.CEZ_REMOTE_AGENT_ACCOUNTS === '1';
+}
+
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
  *  `CEZ_FOLLOWUPS=1` ⇒ the follow-up inbox exists (#471).
  *  `CEZ_AUTOMATIONS=1` ⇒ GitHub automations exist (#801).

@@ -731,7 +731,7 @@ describe('the agent accounts section', () => {
 
     await waitFor(() =>
       expect(document.querySelector('[data-slot="accounts-hosted"]')?.textContent).toContain(
-        'hosted mode',
+        'CEZ_REMOTE_AGENT_ACCOUNTS=1',
       ),
     )
     expect(rows()).toHaveLength(0)
