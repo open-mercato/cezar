@@ -44,6 +44,10 @@ export interface TranscriptMessageActions {
   onRemove?: () => Promise<void>
   editLabel?: string
   removeLabel?: string
+  /** The draft surface this row's inline editor writes to (#939) — `task-prompt` for the initial
+   *  prompt, `message:<msgId>` for a queued message. Absent leaves the editor as it was: local
+   *  state that dies with the row. */
+  draftSurface?: string
 }
 
 export interface TranscriptRowModel {
@@ -160,6 +164,7 @@ export function SessionTranscript({
         node:
           row.content.kind === 'user-message' ? (
             <TranscriptUserBubble
+              runId={runId}
               message={row.content.message}
               actions={messageActions?.[row.key]}
             />
@@ -167,7 +172,7 @@ export function SessionTranscript({
             <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
           ),
       })),
-    [messageActions, renderAsk, rowModels],
+    [messageActions, renderAsk, rowModels, runId],
   )
   const rowMode = renderMode ?? threadRenderMode('', rows.length)
 
@@ -205,9 +210,11 @@ export function SessionTranscript({
 }
 
 function TranscriptUserBubble({
+  runId,
   message,
   actions,
 }: {
+  runId: string
   message: TranscriptUserMessage
   actions?: TranscriptMessageActions
 }) {
@@ -220,6 +227,8 @@ function TranscriptUserBubble({
       onRemove={actions?.onRemove}
       editLabel={actions?.editLabel}
       removeLabel={actions?.removeLabel}
+      draftRunId={actions?.draftSurface !== undefined ? runId : undefined}
+      draftSurface={actions?.draftSurface}
     />
   )
 }

@@ -216,6 +216,37 @@ describe('the review gate on the thread', () => {
     await waitFor(() => expect(notes.value).toBe(''))
   })
 
+  it('restores half-written review notes on return, and drops them once they go back (#939)', async () => {
+    const sent = stubFetch({
+      'GET /api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            'review-notes': {
+              text: 'the port handling is still wrong',
+              images: [],
+              updatedAt: '2026-08-30T00:00:00.000Z',
+            },
+          },
+        }),
+    })
+    renderWithProviders(<ReviewPanel run={run('review')} />)
+
+    const notes = screen.getByLabelText('Notes for the agent') as HTMLTextAreaElement
+    await waitFor(() => expect(notes.value).toBe('the port handling is still wrong'))
+
+    const sendBack = screen.getByRole<HTMLButtonElement>('button', { name: /Send back/ })
+    await waitFor(() => expect(sendBack.disabled).toBe(false))
+    fireEvent.click(sendBack)
+
+    // Cleared only once the notes really went back — an empty PUT is the delete.
+    await waitFor(() =>
+      expect(
+        sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/runs/r1/drafts/review-notes'),
+      ).toMatchObject({ body: { text: '', images: [] } }),
+    )
+    expect(notes.value).toBe('')
+  })
+
   it('⌘↵ in the notes box submits; plain Enter stays a newline', async () => {
     const sent = stubFetch()
     renderWithProviders(<ReviewPanel run={run('review')} />)

@@ -86,9 +86,24 @@ import {
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import {
+  countRunDraftImages,
+  deleteRunDraftImage,
+  deleteRunDraftSurface,
+  readRunDraftImage,
+  readRunDrafts,
+  writeRunDraftImage,
+  writeRunDraftSurface,
+} from '../runs/drafts.ts';
+import {
+  draftImageInputSchema,
+  draftImageParamSchema,
+  draftSurfaceParamSchema,
+  DRAFT_MAX_IMAGES,
   runEventsQuerySchema,
   runHistoryQuerySchema,
   runIdParamSchema,
+  setRunDraftInputSchema,
+  type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
@@ -4267,6 +4282,114 @@ export function createApp(deps: ServerDeps) {
       return store.deleteRun(id) ? c.json({ deleted: true }) : c.json({ error: 'not found' }, 404);
     });
 
+  // ---- chained family: in-task drafts (project-scoped) ----------------------
+  /**
+   * Unsent composer text and attachments, per run and per surface (#939, spec
+   * `.ai/specs/2026-08-30-thread-composer-draft-persistence.md`).
+   *
+   * Its own family and its own files (`.ai/cezar/drafts/`) rather than a key in `ui-state.json`:
+   * that PUT is capped at 128 KiB, merges shallowly, and is read whole on every cockpit load —
+   * none of which survives a 20 MB attachment draft. `runs/drafts.ts` owns the files; this owns
+   * the status codes. Every route 404s on an unknown run, so a draft can never outlive its task
+   * through this surface.
+   *
+   * The `:surface` param is validated as MIDDLEWARE (`draftSurfaceParamSchema`), not interpolated:
+   * it reaches the filesystem as a path segment.
+   */
+  const draftRoutes = new Hono<ProjectApiEnv>()
+    .get('/runs/:id/drafts', paramZodValidator(runIdParamSchema), (c) => {
+      const { dataDir, store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      return c.json(readRunDrafts(dataDir, run.id));
+    })
+
+    .put(
+      '/runs/:id/drafts/:surface',
+      paramZodValidator(draftSurfaceParamSchema),
+      jsonZodValidator(setRunDraftInputSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, surface } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const body = c.req.valid('json');
+        // An empty write DELETES — the "cleared when emptied" policy is the store's, so a
+        // non-cockpit client obeys it too.
+        const result = writeRunDraftSurface(dataDir, run.id, surface, body);
+        if (!result.ok) return c.json({ error: result.error }, 400);
+        return c.json(result.entry);
+      },
+    )
+
+    .delete('/runs/:id/drafts/:surface', paramZodValidator(draftSurfaceParamSchema), (c) => {
+      const { dataDir, store } = c.get('project');
+      const { id, surface } = c.req.valid('param');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      deleteRunDraftSurface(dataDir, run.id, surface);
+      const body: DeleteDraftResponse = { deleted: true };
+      return c.json(body);
+    })
+
+    // Attachments upload when they are ATTACHED, not when the message is sent (the Slack move) —
+    // which is what makes images-in-drafts cheap: the bytes cross the wire once, on paste, and
+    // the draft record only ever references them. Rides the global 32 MiB body limit like
+    // `POST /runs/:id/messages`; `UI_STATE_BODY_LIMIT` is deliberately not in this path.
+    .post(
+      '/runs/:id/drafts/:surface/images',
+      paramZodValidator(draftSurfaceParamSchema),
+      jsonZodValidator(draftImageInputSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, surface } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        // The composer screens this before it ever reaches here; the route re-checks so a client
+        // that is not the composer cannot bypass the cap.
+        const held = countRunDraftImages(dataDir, run.id, surface);
+        if (held >= DRAFT_MAX_IMAGES) {
+          return c.json({ error: `at most ${DRAFT_MAX_IMAGES} images per draft` }, 400);
+        }
+        const body = c.req.valid('json');
+        const result = writeRunDraftImage(dataDir, run.id, body);
+        if (!result.ok) return c.json({ error: result.error }, 400);
+        return c.json(result.image);
+      },
+    )
+
+    // `:surface` is validated (it is a path segment) but deliberately NOT used to scope the
+    // lookup on these two: a blob is minted before any draft record names it, so scoping by
+    // surface would 404 the thumbnail the user just pasted and orphan its bytes when they remove
+    // it again. The run id is what scopes an attachment; the surface is here for URL symmetry.
+    .get(
+      '/runs/:id/drafts/:surface/images/:imageId',
+      paramZodValidator(draftImageParamSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, imageId } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const image = readRunDraftImage(dataDir, run.id, imageId);
+        if (!image) return c.json({ error: 'not found' }, 404);
+        return c.json(image);
+      },
+    )
+
+    .delete(
+      '/runs/:id/drafts/:surface/images/:imageId',
+      paramZodValidator(draftImageParamSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, imageId } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        deleteRunDraftImage(dataDir, run.id, imageId);
+        const body: DeleteDraftResponse = { deleted: true };
+        return c.json(body);
+      },
+    );
+
   // ---- parallel variants (spec 010) -----------------------------------------
 
   const groupRuns = (store: RunStore, groupId: string): RunRecord[] =>
@@ -5328,6 +5451,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', planRoutes)
     .route('/', automationsRoutes)
     .route('/', runsRoutes)
+    .route('/', draftRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
     .route('/', worktreesRoutes)

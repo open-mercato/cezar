@@ -1,9 +1,12 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { QueryClientProvider } from '@tanstack/react-query'
+import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiToolItem } from '@open-mercato/cezar-api-client'
+import { createQueryClient } from '@/api/query-client'
 
 import bashAndScreenshot from '../../../../cezar/src/core/__fixtures__/claude/bash-and-screenshot.expected.json'
 import failedAndDenied from '../../../../cezar/src/core/__fixtures__/claude/failed-and-denied.expected.json'
@@ -313,8 +316,12 @@ describe('sub-agent nesting (golden subagent-task fixture, end to end through th
  * broken attachment, on the one screen that is supposed to show them their own message back.
  */
 describe('UserBubble attachments', () => {
+  const withQueries = (child: ReactNode) => (
+    <QueryClientProvider client={createQueryClient()}>{child}</QueryClientProvider>
+  )
+
   it('shows an image inline and a file as a download chip', () => {
-    render(
+    render(withQueries(
       <MemoryRouter>
         <UserBubble
           text="read the brief"
@@ -322,7 +329,7 @@ describe('UserBubble attachments', () => {
           images={['/api/v1/runs/r1/images/pasted-1.png', '/api/v1/runs/r1/images/pasted-2.pdf']}
         />
       </MemoryRouter>,
-    )
+    ))
     const img = screen.getByAltText('attached') as HTMLImageElement
     expect(img.getAttribute('src')).toBe('/api/v1/runs/r1/images/pasted-1.png')
     const chip = screen.getByText('pasted-2.pdf').closest('a') as HTMLAnchorElement
@@ -333,7 +340,7 @@ describe('UserBubble attachments', () => {
   })
 
   it('renders a .md and a .txt as chips too', () => {
-    render(
+    render(withQueries(
       <MemoryRouter>
         <UserBubble
           text="two briefs"
@@ -341,7 +348,7 @@ describe('UserBubble attachments', () => {
           images={['/api/v1/runs/r1/images/pasted-1.md', '/api/v1/runs/r1/images/pasted-2.txt']}
         />
       </MemoryRouter>,
-    )
+    ))
     expect(screen.queryAllByAltText('attached')).toHaveLength(0)
     expect(screen.getByText('pasted-1.md')).toBeTruthy()
     expect(screen.getByText('pasted-2.txt')).toBeTruthy()

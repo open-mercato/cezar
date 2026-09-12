@@ -47,12 +47,17 @@ export function attachmentMediaType(file: File): string | null {
 
 /** A pending attachment: the wire shape, plus what the composer's row needs to show it. */
 export interface PendingAttachment extends AttachmentInput {
+  /** Server-minted id when this attachment is backed by the in-task draft store. */
+  id?: string
   /** Data-URL for the thumbnail — images only; a file has nothing to preview. */
   preview?: string
   /** The user's own filename, shown on the chip. Never sent: the server names the file itself. */
   name: string
   isImage: boolean
 }
+
+/** Distinguishes a user's removal from the composer's optimistic clear before submit. */
+export type AttachmentsChangeReason = 'edit' | 'submit'
 
 /** File → base64 (chunked — `String.fromCharCode(...5MB)` would blow the arg limit). */
 export async function fileToPendingAttachment(file: File): Promise<PendingAttachment> {

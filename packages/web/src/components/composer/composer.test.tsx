@@ -7,7 +7,11 @@ import { createQueryClient } from '@/api/query-client'
 import type { Skill } from '@open-mercato/cezar-api-client'
 import { resetToasts, Toaster } from '@/components/ui/toaster'
 
-import { MAX_ATTACHMENT_BYTES } from './composer-attachments'
+import {
+  MAX_ATTACHMENT_BYTES,
+  type AttachmentsChangeReason,
+  type PendingAttachment,
+} from './composer-attachments'
 import { Composer, type ComposerProps } from './composer'
 
 beforeAll(() => {
@@ -278,6 +282,106 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     paste(textarea, [big])
     expect(await screen.findByText('huge.png is too large (max 5 MB)')).toBeTruthy()
     expect(screen.queryByLabelText('Remove huge.png')).toBeNull()
+  })
+})
+
+describe('the controlled-images seam (#939)', () => {
+  /**
+   * The one change in the draft-persistence diff that can break a surface nobody edited: `/new`
+   * keeps its images UNCONTROLLED (multi-MB base64 has no business in localStorage), so the new
+   * seam must behave exactly like the text one — pass both or neither.
+   */
+  it('stays uncontrolled when no images props are given — the /new case, pinned', async () => {
+    const { onSubmit, textarea } = renderComposer()
+    paste(textarea, [pngFile('local.png', [7])])
+    await screen.findByLabelText('Remove local.png')
+
+    fireEvent.click(screen.getByLabelText('Send'))
+    expect(onSubmit).toHaveBeenCalledWith('', [
+      { mediaType: 'image/png', data: btoa(String.fromCharCode(7)) },
+    ])
+  })
+
+  /** A host that really owns the array, the way the thread does — a spy that swallows the
+   *  callback would leave the composer reading a prop that never moves. */
+  function renderControlled(onSubmit: ComposerProps['onSubmit']) {
+    const seen: PendingAttachment[][] = []
+    const reasons: AttachmentsChangeReason[] = []
+    function Host() {
+      const [images, setImages] = React.useState<PendingAttachment[]>([HELD])
+      return (
+        <Composer
+          onSubmit={onSubmit}
+          images={images}
+          onImagesChange={(next, reason) => {
+            seen.push(next)
+            reasons.push(reason)
+            setImages(next)
+          }}
+        />
+      )
+    }
+    stubSkillsFetch()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <Host />
+        <Toaster />
+      </QueryClientProvider>,
+    )
+    return {
+      seen,
+      reasons,
+      textarea: screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement,
+    }
+  }
+
+  const HELD: PendingAttachment = {
+    mediaType: 'image/png',
+    data: 'AAA',
+    name: 'restored.png',
+    preview: 'data:image/png;base64,AAA',
+    isImage: true,
+    id: 'img1',
+  }
+
+  it('renders the host\'s images and routes every add and remove through the callback', async () => {
+    const { seen, reasons, textarea } = renderControlled(vi.fn(() => Promise.resolve({})))
+
+    // The host's array is what renders — a restored draft's thumbnail comes back with it.
+    expect(screen.getByLabelText('Remove restored.png')).toBeTruthy()
+
+    paste(textarea, [pngFile('new.png')])
+    await waitFor(() => expect(seen.length).toBeGreaterThan(0))
+    expect(seen.at(-1)).toEqual([HELD, expect.objectContaining({ name: 'new.png' })])
+
+    fireEvent.click(screen.getByLabelText('Remove restored.png'))
+    expect(seen.at(-1)).toEqual([expect.objectContaining({ name: 'new.png' })])
+    expect(reasons.every((reason) => reason === 'edit')).toBe(true)
+  })
+
+  it('carries the host\'s attachments into submit and clears them optimistically', async () => {
+    const onSubmit = vi.fn(() => Promise.resolve({}))
+    const { seen, reasons } = renderControlled(onSubmit)
+
+    fireEvent.click(screen.getByLabelText('Send'))
+    expect(onSubmit).toHaveBeenCalledWith('', [{ mediaType: 'image/png', data: 'AAA' }])
+    expect(seen.at(-1)).toEqual([])
+    // The clear is TAGGED, because the host cannot otherwise tell it from the user removing the
+    // last thumbnail — and the two differ: a message in flight keeps its bytes until it lands.
+    expect(reasons.at(-1)).toBe('submit')
+  })
+
+  it('restores the host\'s attachments when the send is rejected', async () => {
+    let reject!: (error: Error) => void
+    const onSubmit = vi.fn(() => new Promise((_resolve, r) => { reject = r }))
+    const { seen } = renderControlled(onSubmit)
+
+    fireEvent.click(screen.getByLabelText('Send'))
+    reject(new Error('session closed'))
+
+    // Back through the same seam, exactly once and with its id intact — so the host's draft
+    // still names bytes the server is holding.
+    await waitFor(() => expect(seen.at(-1)).toEqual([HELD]))
   })
 })
 
