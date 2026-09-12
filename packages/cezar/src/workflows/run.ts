@@ -1467,7 +1467,7 @@ export class RunManager {
 
   /**
    * THE gate for everything that needs a `dispatch` record: answers `undefined` when the feature
-   * is off (`CEZ_DISPATCH` unset) or when this run has neither dispatched nor been dispatched.
+   * is off (`CEZ_DISPATCH=0`) or when this run has neither dispatched nor been dispatched.
    * Re-read from the store on every call rather than cached: the stored object is written DURING
    * a turn (a report, a pending report from a settled child, the over-budget flag).
    */
@@ -1680,7 +1680,7 @@ export class RunManager {
    * autonomously — a child parked at `waiting` after every turn would need a human per rung.
    */
   dispatch(parentId: string, input: DispatchInput): { id: string; branch?: string } | { refused: string } {
-    if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled — set CEZ_DISPATCH=1 to enable it' };
+    if (!this.dispatchEnabled()) return { refused: 'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.' };
     const parent = this.store.getRun(parentId);
     if (!parent) return { refused: `no such run: ${parentId}` };
     if (isTerminalStatus(parent.status)) return { refused: `run ${parentId} has already settled (${parent.status})` };

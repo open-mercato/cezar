@@ -1,7 +1,7 @@
 /**
  * What every task is told about dispatching (spec `.ai/specs/2026-09-10-dispatch.md`).
  *
- * ONE prompt, composed into every task's system prompt while `CEZ_DISPATCH=1` — there are no
+ * ONE prompt, composed into every task's system prompt while dispatch is on (the default) — there are no
  * ranks. A task that never dispatches loses nothing but a few hundred tokens of instructions; a
  * task that does knows exactly how, and what it costs. The review addendum is composed onto a
  * child dispatched with `kind: "review"`.

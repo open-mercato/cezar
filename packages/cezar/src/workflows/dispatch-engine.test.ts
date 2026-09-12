@@ -19,7 +19,7 @@ const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
  * dry-run mock: a task that dispatches, refusals that are answers rather than crashes, the budget
  * brakes, the cancel cascade, the settle→parent report, the tree directory, and the Guard.
  *
- * Everything here is gated twice — `CEZ_DISPATCH=1` AND a `dispatch` on the record — so the last
+ * Everything here is gated twice — dispatch on (the default) AND a `dispatch` on the record — so the last
  * describe block is the counterweight: the same turns on a run with no `dispatch` must behave
  * exactly as they did before this feature existed.
  *
@@ -251,8 +251,8 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       const parent = store.createRun({ title: 'done', workflow: 'quick-task', task: 't', steps: [] });
       store.updateRun(parent.id, { status: 'done', dispatch: rootOf(parent.id) });
       expect(refusal(parent.id, order('late'))).toContain('already settled');
-      delete process.env.CEZ_DISPATCH;
-      expect(refusal(parent.id, order('off'))).toContain('CEZ_DISPATCH=1');
+      process.env.CEZ_DISPATCH = '0';
+      expect(refusal(parent.id, order('off'))).toContain('CEZ_DISPATCH=0');
     });
   });
 

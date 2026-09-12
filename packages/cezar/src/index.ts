@@ -42,7 +42,7 @@ const HELP = `cezar — local cockpit for AI agent tasks in your repo
 Usage:
   cezar                     start the cockpit (server + GUI) for the current repo
   cezar run "<task>"        run a task headless in the terminal
-  cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=1)
+  cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -283,7 +283,7 @@ async function serveCommand(
     );
   }
   // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
-  // Set before the first run can start, read by every manager's `agentEnv` while CEZ_DISPATCH=1.
+  // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
   process.env.CEZ_API_URL = `http://127.0.0.1:${port}`;
   process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
   startServer({

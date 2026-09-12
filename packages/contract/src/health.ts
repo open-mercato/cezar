@@ -49,10 +49,10 @@ export const capabilitiesSchema = z.object({
    */
   automations: z.boolean(),
   /**
-   * `true` means `CEZ_DISPATCH=1` opted this server into task dispatch (spec
+   * `true` means task dispatch is on — the default; `CEZ_DISPATCH=0` turns it off (spec
    * `.ai/specs/2026-09-10-dispatch.md`): every task learns the `cez task` CLI in its system
-   * prompt and the `/runs/:id/{dispatch,report}` routes answer. Off — the default — those routes
-   * answer 409 and no prompt mentions dispatching.
+   * prompt and the `/runs/:id/{dispatch,report}` routes answer. Off, those routes answer 409 and
+   * no prompt mentions dispatching.
    */
   dispatch: z.boolean(),
   /**

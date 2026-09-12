@@ -83,13 +83,13 @@ describe('the dispatch routes', () => {
     expect((await apiRequest(app, '/api/v1/runs/plain/report', json(report))).status).toBe(404);
   });
 
-  it('answers 409 on both routes while CEZ_DISPATCH is off, before touching the manager', async () => {
-    delete process.env.CEZ_DISPATCH;
+  it('answers 409 on both routes while CEZ_DISPATCH=0, before touching the manager', async () => {
+    process.env.CEZ_DISPATCH = '0';
     app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test', providerAuth: connectedProviderAuth() });
     for (const path of ['/api/v1/runs/p/dispatch', '/api/v1/runs/p/report']) {
       const res = await apiRequest(app, path, json({ objective: 'x', status: 'done', result: 'r' }));
       expect(res.status).toBe(409);
-      expect(((await res.json()) as { error: string }).error).toMatch(/^dispatch is disabled on this cockpit — .*CEZ_DISPATCH=1.*stop and report/);
+      expect(((await res.json()) as { error: string }).error).toMatch(/^dispatch is disabled on this cockpit \(CEZ_DISPATCH=0\).*stop and report/);
     }
   });
 });

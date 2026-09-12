@@ -3,7 +3,7 @@
  * (spec `.ai/specs/2026-09-10-dispatch.md`).
  *
  * It is a thin HTTP client over the dispatch family, addressed by three variables the engine puts
- * in every agent's environment while `CEZ_DISPATCH=1`: `CEZ_API_URL` (the cockpit), `CEZ_PROJECT_ID`
+ * in every agent's environment while dispatch is on (the default; `CEZ_DISPATCH=0` turns it off): `CEZ_API_URL` (the cockpit), `CEZ_PROJECT_ID`
  * (which project the run belongs to) and `CEZ_TASK_ID` (the run itself). A human at a shell can
  * set the same three and use it too. No server, no dispatch: the command says so and exits 2.
  */
@@ -21,7 +21,7 @@ export interface TaskCliIo {
   error: (line: string) => void;
 }
 
-const USAGE = `cez task — dispatch cezar tasks from inside a task (needs CEZ_DISPATCH=1 on the cockpit)
+const USAGE = `cez task — dispatch cezar tasks from inside a task (on by default; CEZ_DISPATCH=0 on the cockpit turns it off)
 
   cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch|run>]
                   [--scope "…"] [--budget <usd>] [--success "…"] [--evidence "…"] [--tools A,B]
@@ -68,7 +68,7 @@ export async function runTaskCommand(
   }
   const api = base(env);
   if (!api) {
-    io.error('cez task: CEZ_API_URL is not set — this command only works inside a task run by a cockpit started with CEZ_DISPATCH=1. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is unavailable.');
+    io.error('cez task: CEZ_API_URL is not set — this command only works inside a task run by a cockpit with dispatch on (it is on by default; CEZ_DISPATCH=0 turns it off). Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is unavailable.');
     return 2;
   }
 

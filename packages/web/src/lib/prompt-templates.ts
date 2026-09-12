@@ -85,7 +85,7 @@ export const DEFAULT_PROMPT_TEMPLATES: readonly PromptTemplate[] = [
 /**
  * Templates that only make sense when the server can dispatch (`capabilities.dispatch`): the
  * built-in "Review open PRs" tells the agent to run `cez task create`, and on a cockpit started
- * without `CEZ_DISPATCH=1` that call is refused. Offering the template there sends an autonomous
+ * with `CEZ_DISPATCH=0` that call is refused. Offering the template there sends an autonomous
  * run into a refusal it then works around at full cost — the live-session failure behind this
  * gate. Hidden from the composers while the capability is off or still unknown; Settings keeps
  * listing it so the text stays editable.

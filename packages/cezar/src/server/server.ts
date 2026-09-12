@@ -430,7 +430,7 @@ const AUTOMATIONS_OFF = 'GitHub automations are disabled — set CEZ_AUTOMATIONS
 
 /** 409 body for every dispatch route while task dispatch is off (spec 2026-09-10-dispatch). */
 const DISPATCH_OFF =
-  'dispatch is disabled on this cockpit — the operator must start it with CEZ_DISPATCH=1. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.';
+  'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.';
 
 // ---- variant-compare response shapes (spec 010) ----------------------------
 // Named and exported so `api-types.test.ts` can drift-guard the cockpit's
@@ -3446,7 +3446,7 @@ export function createApp(deps: ServerDeps) {
 
   /**
    * The dispatch gate (spec `.ai/specs/2026-09-10-dispatch.md`) — the automations gate, one flag
-   * over: with `CEZ_DISPATCH` unset, both routes answer 409 before touching the manager.
+   * over: with `CEZ_DISPATCH=0`, both routes answer 409 before touching the manager.
    *
    * Middleware on EXPLICIT paths, never `use('*')`, for the reason `requireAutomations` spells
    * out above: this family is mounted with `.route('/', …)` alongside a dozen unrelated sub-apps,
