@@ -17,6 +17,31 @@ import type { CacheSnapshot } from 'virtua'
  */
 export const VIRTUALIZE_THRESHOLD = 300
 
+/**
+ * …WITH ONE ENGINE CONDITION, and it is the reason phone scrolling jumped.
+ *
+ * `content-visibility: auto` does not merely skip painting: an off-screen row it has never
+ * measured is laid out at its `contain-intrinsic-block-size` estimate (3rem), and the moment the
+ * row comes near the viewport the browser replaces that guess with the real height. Rows above
+ * the reader therefore GROW as they are approached, and the scroller's content silently gets
+ * taller under a fixed `scrollTop`.
+ *
+ * Chrome absorbs that: native scroll anchoring re-points `scrollTop` at the same content, so the
+ * reader sees nothing. WebKit implements no scroll anchoring at all (no `overflow-anchor`), and
+ * that is every browser on iOS — so the same correction throws the reader down the page instead.
+ * Measured on a live 45-row thread at 390×844, anchoring disabled to emulate WebKit: the row the
+ * reader was on moved 2,012 px in 12 s (content 4,021 → 6,051 px) while `scrollTop` never
+ * changed. With `content-visibility` off, the same 12 s: 0 px.
+ *
+ * So the optimization is kept exactly where the platform can pay for it, and dropped where it
+ * cannot. What is lost on WebKit is render-work skipping, not the DOM bound: flat mode holds
+ * every row either way, and past {@link VIRTUALIZE_THRESHOLD} virtua bounds the DOM itself.
+ */
+export function threadRowClass(scrollAnchoring: boolean): string {
+  const base = 'flex w-full flex-col pb-2.5'
+  return scrollAnchoring ? `${base} [contain-intrinsic-block-size:auto_3rem] [content-visibility:auto]` : base
+}
+
 /** ~80px per the research: pin-to-bottom while streaming only when the reader is this close. */
 export const NEAR_BOTTOM_SLACK_PX = 80
 export const HISTORY_BOUNDARY_SLACK_PX = 600

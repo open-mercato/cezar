@@ -17,7 +17,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useId, useMemo, useReducer, useState, type ReactNode } from 'react'
+import { Fragment, memo, useId, useMemo, useReducer, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -115,12 +115,7 @@ export type RunTab = 'session' | 'changes' | 'commits' | 'files'
  *  into run B. Session-lifetime only; no server persistence invented for it. */
 const detailsOpenByRun = new Map<string, boolean>()
 
-export function RunHeader({
-  run,
-  planTally,
-  tab = 'session',
-  onMarkedUnread,
-}: {
+interface RunHeaderProps {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
@@ -128,7 +123,29 @@ export function RunHeader({
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
   onMarkedUnread?: () => void
-}) {
+}
+
+/**
+ * MEMOIZED, and the reason is the live thread below it: a running session re-renders its route
+ * on every coalesced frame (~25×/s), and this header was the single most expensive thing in that
+ * frame after the rows themselves — ~10 ms of React work per re-render in the jsdom harness. It
+ * reads NOTHING from the transcript, so all of it was spent re-painting the same pixels from
+ * props that had not moved. Everything live inside it (the runs list, health, mutations) comes
+ * from its own hooks, which re-render it on their own; the props are the record, and the record
+ * only moves when the record moves.
+ *
+ * `planTally` is compared by value because its owner rebuilds it from a freshly-reduced plan on
+ * every frame — the counts, not the object, are the fact.
+ */
+export const RunHeader = memo(RunHeaderView, (before, after) =>
+  before.run === after.run &&
+  before.tab === after.tab &&
+  before.onMarkedUnread === after.onMarkedUnread &&
+  before.planTally?.done === after.planTally?.done &&
+  before.planTally?.total === after.planTally?.total,
+)
+
+function RunHeaderView({ run, planTally, tab = 'session', onMarkedUnread }: RunHeaderProps) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)

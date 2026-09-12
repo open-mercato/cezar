@@ -1,6 +1,8 @@
-import { useMemo, type ReactNode } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 
 import type { ApiRun } from '@open-mercato/cezar-api-client'
+
+import { sameData } from '@/lib/same-data'
 
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import {
@@ -159,12 +161,12 @@ export function SessionTranscript({
         key: row.key,
         node:
           row.content.kind === 'user-message' ? (
-            <TranscriptUserBubble
+            <MemoizedUserBubble
               message={row.content.message}
               actions={messageActions?.[row.key]}
             />
           ) : (
-            <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
+            <MemoizedBlock block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
           ),
       })),
     [messageActions, renderAsk, rowModels],
@@ -203,6 +205,37 @@ export function SessionTranscript({
     </ThreadCardCache>
   )
 }
+
+/**
+ * THE LIVE-THREAD MEMO (the reason phone scrolling stutters while an agent works).
+ *
+ * `reduceThread` re-folds the whole event list on every live frame, so each row arrives as a
+ * structurally identical but referentially NEW model ~25×/s. Without a value comparator React
+ * re-renders every row of the thread on every delta: a 243-row transcript cost ~40 ms of React
+ * work per frame (desktop jsdom, no layout or paint) against a 40 ms frame budget — a main
+ * thread that never goes idle, which is what turns a phone's touch scroll into a stutter. With
+ * this memo (and the header's) the same frame costs ~15 ms.
+ *
+ * Comparing by value ({@link sameData}) costs one walk of unchanged-by-reference sub-trees and
+ * lets React skip every row but the one the agent is actually writing into. It is sound
+ * precisely BECAUSE the fold is pure: nothing mutates a tree it has already returned, so equal
+ * values here always mean equal output.
+ *
+ * The non-data props stay reference-compared on purpose: `actions`/`renderAsk` are memoized by
+ * their owners, and a fresh identity there legitimately means the row's behavior changed.
+ */
+const MemoizedUserBubble = memo(
+  TranscriptUserBubble,
+  (before, after) => before.actions === after.actions && sameData(before.message, after.message),
+)
+
+const MemoizedBlock = memo(
+  ThreadBlockRenderer,
+  (before, after) =>
+    before.scope === after.scope &&
+    before.renderAsk === after.renderAsk &&
+    sameData(before.block, after.block),
+)
 
 function TranscriptUserBubble({
   message,

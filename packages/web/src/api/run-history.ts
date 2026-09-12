@@ -3,10 +3,20 @@ import { useCallback, useMemo, useRef } from 'react'
 
 import type { RunEvent, RunHistoryPage } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
+import { useThrottledValue } from '@/lib/use-throttled-value'
 import { getRunHistory, getRunHistoryContext } from './client'
 import { useRunEvents } from './run-events'
 
 const MAX_HISTORY_PAGES = 5
+/**
+ * How often the LIVE tail is allowed to reach the renderer. The socket delivers a frame roughly
+ * every 40 ms while an agent writes (the server's own `item.delta` coalescing window), and every
+ * frame that reaches React re-folds the transcript and re-renders the thread — more work than a
+ * phone can do in 40 ms, so the main thread stays busy and touch scrolling stutters. Coalescing
+ * once more here keeps streaming text visibly live (~8 updates/s) at a third of the work, and
+ * the leading edge means a quiet stream still updates the instant something happens.
+ */
+const LIVE_FRAME_MS = 120
 const COMPACT_LIVE_AT_EVENTS = 200
 const MAX_LIVE_EVENTS = 5_000
 
@@ -61,7 +71,8 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
   })
 
   const fallback = history.isError || context.isError
-  const fallbackEvents = useRunEvents(fallback ? runId : undefined)
+  const fallbackFrames = useRunEvents(fallback ? runId : undefined)
+  const fallbackEvents = useThrottledValue(fallbackFrames, LIVE_FRAME_MS, runId)
   const pages = history.data?.pages ?? []
   const newestPage = pages.reduce<RunHistoryPage | undefined>(
     (latest, page) =>
@@ -111,13 +122,14 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
         compactingLive.current = false
       })
   }, [queryClient, runId, scope])
-  const liveEvents = useRunEvents(!fallback && newestPage ? runId : undefined, {
+  const liveFrames = useRunEvents(!fallback && newestPage ? runId : undefined, {
     cursor: newestPage?.liveCursor,
     afterSeq: newestPage?.asOfSeq,
     maxEvents: MAX_LIVE_EVENTS,
     compactAt: COMPACT_LIVE_AT_EVENTS,
     onCompact: compactLive,
   })
+  const liveEvents = useThrottledValue(liveFrames, LIVE_FRAME_MS, runId)
 
   const pagedEvents = useMemo(
     () => orderedUnique(...pages.map((page) => page.events as RunEvent[])),

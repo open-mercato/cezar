@@ -48,6 +48,23 @@ describe('ThreadRows — the threshold-switched renderer', () => {
     expect(rendered[0]!.className).toContain('w-full')
   })
 
+  it('drops the content-visibility hint on an engine with no scroll anchoring (iOS)', () => {
+    // WebKit answers `false` here and has no scroll anchoring to hide the row-height corrections
+    // content-visibility causes, so the rows must render plainly there. See threadRowClass.
+    // jsdom ships no `CSS` at all, which is why the probe's unknown answer has to be the
+    // shipped behavior — every other test in this file asserts the hint IS there.
+    const supports = vi.fn((property: string) => property !== 'overflow-anchor')
+    vi.stubGlobal('CSS', { supports })
+
+    render(<ThreadRows runId="r1" rows={rows(5)} mode="flat" controls={controls()} />)
+
+    const rendered = document.querySelectorAll('[data-slot="thread-row"]')
+    expect(rendered).toHaveLength(5)
+    expect(rendered[0]!.className).not.toContain('content-visibility')
+    expect(rendered[0]!.className).toContain('flex-col') // …and nothing else moved
+    expect(supports).toHaveBeenCalledWith('overflow-anchor', 'auto')
+  })
+
   it('virtual mode mounts the virtua container instead', () => {
     render(<ThreadRows runId="r1" rows={rows(400)} mode="virtual" controls={controls()} />)
     const region = document.querySelector('[data-slot="thread-rows"]')!
@@ -110,6 +127,179 @@ describe('useThreadScroll — outside a shell scroller (jsdom, tests, storybook-
       await Promise.resolve()
     })
     expect(onLoadOlder).toHaveBeenCalledTimes(2)
+  })
+})
+
+/**
+ * The phone case: a thread pinned to its tail keeps writing `scrollTop` as the agent's output
+ * grows. On a touch device that write lands in the middle of a gesture the browser is already
+ * animating, and the content jumps out from under the finger holding it — "scrolling the task
+ * conversation jumps while the agent is working". The pin is not wrong, only its timing is.
+ */
+describe('useThreadScroll — growth must not scroll under a finger', () => {
+  /** A ResizeObserver whose callback this test can fire — jsdom lays nothing out on its own. */
+  function stubGrowthObserver(): () => void {
+    let grow: (() => void) | undefined
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: () => void) {
+          grow = callback
+        }
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    )
+    return () => act(() => grow?.())
+  }
+
+  function PinnedHarness({ viewKey }: { viewKey: string }) {
+    const controls = useThreadScroll(viewKey)
+    return (
+      <main
+        ref={(element) => {
+          if (element) {
+            Object.defineProperties(element, {
+              scrollTop: { value: element.scrollTop, writable: true, configurable: true },
+              clientHeight: { value: 500, configurable: true },
+              scrollHeight: { value: 2_000, configurable: true },
+            })
+          }
+        }}
+        data-slot="main"
+      >
+        <div ref={controls.attachContent} />
+      </main>
+    )
+  }
+
+  it('holds the pin while a finger is on the scroller, then re-pins when it lifts', () => {
+    const grow = stubGrowthObserver()
+    render(<PinnedHarness viewKey="run-touch:main" />)
+    const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+    expect(scroller.scrollTop).toBe(1_500) // arrived at the live tail, pinned
+
+    fireEvent.touchStart(scroller, { touches: [{ clientY: 400 }] })
+    scroller.scrollTop = 900 // the drag itself — the browser's, not ours
+    grow() // …and the agent appends another line mid-gesture
+
+    expect(scroller.scrollTop).toBe(900) // the pin did NOT yank the content out from under it
+
+    fireEvent.touchEnd(scroller)
+    expect(scroller.scrollTop).toBe(1_500) // gesture over, still pinned: back to the tail
+  })
+
+  it('pins on growth as before when no finger is down', () => {
+    const grow = stubGrowthObserver()
+    render(<PinnedHarness viewKey="run-mouse:main" />)
+    const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+    scroller.scrollTop = 900
+
+    grow()
+
+    expect(scroller.scrollTop).toBe(1_500)
+  })
+
+  /**
+   * The anchoring polyfill. Rows above the reader change height while an agent works — a
+   * streaming tool box grows toward its cap, a finished one gains "Show all N lines", an image
+   * loads — and an engine without scroll anchoring pushes the reader down by exactly that much.
+   * Measured on a live thread at 390×844: 200 px of growth above the viewport = 200 px of drift.
+   */
+  describe('holding the reader’s row when content above it grows', () => {
+    /** A scroller whose rows have stated heights, so the anchor math has real geometry to read
+     *  (jsdom lays nothing out and reports every rect as zero). */
+    function layOut(scroller: HTMLElement, heights: number[]) {
+      let top = scroller.scrollTop === 0 ? 0 : -scroller.scrollTop
+      const rows = [...scroller.querySelectorAll<HTMLElement>('[data-slot="thread-row"]')]
+      rows.forEach((row, index) => {
+        const height = heights[index]!
+        const rect = { top, bottom: top + height, height }
+        row.getBoundingClientRect = () => rect as DOMRect
+        top += height
+      })
+      scroller.getBoundingClientRect = () => ({ top: 0, bottom: 500, height: 500 }) as DOMRect
+    }
+
+    function AnchorHarness({ rowCount }: { rowCount: number }) {
+      const controls = useThreadScroll('run-anchor:main')
+      return (
+        <main
+          ref={(element) => {
+            if (element) {
+              // `element.scrollTop`, not 0: a pill toggle re-renders this harness, React re-runs
+              // an inline ref, and re-defining the property would silently rewind the very
+              // position under test.
+              Object.defineProperties(element, {
+                scrollTop: { value: element.scrollTop, writable: true, configurable: true },
+                clientHeight: { value: 500, configurable: true },
+                scrollHeight: { value: 4_000, configurable: true },
+              })
+            }
+          }}
+          data-slot="main"
+        >
+          <ThreadRows runId="r1" rows={rows(rowCount)} mode="flat" controls={controls} />
+        </main>
+      )
+    }
+
+    it('gives back exactly what the growth above took, on an engine with no anchoring', () => {
+      vi.stubGlobal('CSS', { supports: (property: string) => property !== 'overflow-anchor' })
+      const grow = stubGrowthObserver()
+      render(<AnchorHarness rowCount={6} />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+
+      // The reader scrolls up (an upward touch drag is what unpins), landing on row 3.
+      fireEvent.touchStart(scroller, { touches: [{ clientY: 100 }] })
+      fireEvent.touchMove(scroller, { touches: [{ clientY: 200 }] })
+      scroller.scrollTop = 600
+      layOut(scroller, [200, 200, 200, 200, 200, 200])
+      act(() => fireEvent.scroll(scroller)) // captures the anchor for the frame
+
+      // …and a row ABOVE them grows by 120px, pushing everything below down.
+      layOut(scroller, [200, 320, 200, 200, 200, 200])
+      grow()
+
+      // Without the polyfill the reader would be 120px further down the page.
+      expect(scroller.scrollTop).toBe(720)
+    })
+
+    it('leaves the scroller alone where the engine anchors natively', () => {
+      vi.stubGlobal('CSS', { supports: () => true })
+      const grow = stubGrowthObserver()
+      render(<AnchorHarness rowCount={6} />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+
+      fireEvent.touchStart(scroller, { touches: [{ clientY: 100 }] })
+      fireEvent.touchMove(scroller, { touches: [{ clientY: 200 }] })
+      scroller.scrollTop = 600
+      layOut(scroller, [200, 200, 200, 200, 200, 200])
+      act(() => fireEvent.scroll(scroller))
+
+      layOut(scroller, [200, 320, 200, 200, 200, 200])
+      grow()
+
+      // The browser does this itself; a second corrector would only fight it.
+      expect(scroller.scrollTop).toBe(600)
+    })
+  })
+
+  it('a touch that ended away from the tail stays where the reader left it', () => {
+    const grow = stubGrowthObserver()
+    render(<PinnedHarness viewKey="run-away:main" />)
+    const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+
+    fireEvent.touchStart(scroller, { touches: [{ clientY: 200 }] })
+    // Finger moving DOWN pans the content up — the gesture that unpins.
+    fireEvent.touchMove(scroller, { touches: [{ clientY: 260 }] })
+    scroller.scrollTop = 400
+    fireEvent.touchEnd(scroller)
+
+    expect(scroller.scrollTop).toBe(400)
+    grow()
+    expect(scroller.scrollTop).toBe(400)
   })
 })
 

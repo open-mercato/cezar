@@ -15,6 +15,7 @@ import {
   saveThreadScroll,
   threadAnchorScrollTop,
   threadRenderMode,
+  threadRowClass,
 } from './thread-scroll'
 
 afterEach(() => clearThreadScrollCaches())
@@ -34,6 +35,31 @@ describe('isNearBottom — the shared stick rule', () => {
     [0, NEAR_BOTTOM_SLACK_PX, false],
   ])('scrollTop %d, slack %s → %s', (scrollTop, slack, expected) => {
     expect(isNearBottom(box(scrollTop), slack)).toBe(expected)
+  })
+})
+
+describe('threadRowClass — content-visibility only where scroll anchoring can pay for it', () => {
+  it('hints the browser to skip off-screen rows when the engine anchors scrolling', () => {
+    const className = threadRowClass(true)
+    expect(className).toContain('[content-visibility:auto]')
+    expect(className).toContain('[contain-intrinsic-block-size:auto_3rem]')
+  })
+
+  it('drops BOTH the skip and its size estimate on an engine without anchoring (WebKit/iOS)', () => {
+    // Keeping the estimate without the skip would be worse than useless — it is the correction
+    // of that estimate, uncompensated, that threw an iOS reader down the page mid-scroll.
+    const className = threadRowClass(false)
+    expect(className).not.toContain('content-visibility')
+    expect(className).not.toContain('contain-intrinsic')
+  })
+
+  it('keeps the layout identical either way — only the render hints differ', () => {
+    for (const className of [threadRowClass(true), threadRowClass(false)]) {
+      expect(className).toContain('flex')
+      expect(className).toContain('w-full')
+      expect(className).toContain('flex-col')
+      expect(className).toContain('pb-2.5')
+    }
   })
 })
 

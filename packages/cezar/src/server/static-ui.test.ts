@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ASSET_CACHE_CONTROL,
+  SHELL_CACHE_CONTROL,
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
@@ -133,5 +134,20 @@ describe('assetContentType', () => {
 describe('ASSET_CACHE_CONTROL', () => {
   it('marks hashed assets immutable for a year', () => {
     expect(ASSET_CACHE_CONTROL).toBe('public, max-age=31536000, immutable');
+  });
+});
+
+describe('SHELL_CACHE_CONTROL', () => {
+  it('makes the shell revalidate, so a rebuilt cockpit reaches a device that already loaded one', () => {
+    expect(SHELL_CACHE_CONTROL).toBe('no-cache');
+  });
+
+  it('is the counterpart of the immutable assets, never the same rule', () => {
+    // The pair is the whole point: fingerprinted bundles cached forever, and the one document
+    // that names them never reused without asking. Equal values here would mean either a
+    // cockpit that cannot update or assets refetched on every navigation.
+    expect(SHELL_CACHE_CONTROL).not.toBe(ASSET_CACHE_CONTROL);
+    expect(ASSET_CACHE_CONTROL).toContain('immutable');
+    expect(SHELL_CACHE_CONTROL).not.toContain('max-age');
   });
 });
