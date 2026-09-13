@@ -7,7 +7,7 @@ cezar is a published npm CLI (`@open-mercato/cezar`, currently 0.x — renamed f
 ## 1. CLI commands, flags and exit codes (`packages/cezar/src/index.ts`)
 
 - **Bins:** `cezar` and `cez` (both in `package.json` `bin`). Removing either alias is breaking.
-- **Commands:** bare invocation = `serve` (cockpit); `cezar run "<task>"`; `cezar init`.
+- **Commands:** bare invocation = `serve` (cockpit); `cezar run "<task>"`; `cezar init`; `cezar task <create|report|list|tree>` (spec `.ai/specs/2026-09-10-dispatch.md`) and `cezar automation <schema|create|update|check|list|show|enable|pause|delete>` (spec `.ai/specs/2026-09-13-automations-from-prompt.md`) — both thin clients of a running cockpit addressed by `CEZ_API_URL`/`CEZ_PROJECT_ID`, exit 2 without one, 1 on a refusal (the automations 409 under `CEZ_AUTOMATIONS` unset included), 0 otherwise.
 - **`cezar projects` subcommands:** `list` (the default), `add`, `remove`/`rm`, `tag`. `tag <id> [<tag>…]` replaces a project's grouping tags wholesale; naming none clears them.
 - **Flags:** `-p/--port` (default 4321, auto-picks the next free port), `--repo <dir>`, `--workflow <name>` (default `quick-task`), `--model <model>`, `--no-open`, `-h/--help`.
 - **Exit codes:** `run` exits 0 on `done` **and** `review` (spec 009 — headless runs must not hang on the review gate), 1 on `failed`/`cancelled`/unknown workflow. CI scripts depend on this.
@@ -263,6 +263,12 @@ instruction rather than silently.
 - **No deprecation alias**: the flag *is* the migration path — one env var restores the previous
   behavior wholesale, which is what the "keep the old spelling for a minor release" rule exists to
   provide.
+- **Additive since 2026-09-13** (spec `.ai/specs/2026-09-13-automations-from-prompt.md`): with
+  the flag on and a cockpit running, `GET /api/v1/skills` lists one more skill,
+  `create-cezar-automation`, with the new `source` value `builtin` (the enum gained a member;
+  every existing value is unchanged), every task's system prompt gains an automations part, and
+  the composers offer a `create-automation` template. With the flag off, none of the three appear
+  and the listed catalog is byte-identical to before.
 
 
 ## Automations — default-on, scheduled triggers, `automationTrigger` (spec 2026-09-14-automations-redesign)

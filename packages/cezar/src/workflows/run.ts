@@ -41,6 +41,8 @@ import {
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
+import { automationsReachable } from '../automations/builtin-skill.ts';
+import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
@@ -290,6 +292,13 @@ interface ActiveRun {
    * record instead, because the stored `dispatch` changes under us.
    */
   dispatchPrompt?: string;
+  /**
+   * The GitHub-automations prompt part this session runs under (spec
+   * 2026-09-13-automations-from-prompt), resolved by `prepareAutomationsSession` at the SAME two
+   * construction sites as `dispatchPrompt`, for the same reason. Present ⇔ automations are on and
+   * the cockpit is reachable — a task that could not run `cez automation` is never told about it.
+   */
+  automationsPrompt?: string;
   /** Set by `dispatch()` during a turn, read and cleared at that turn's end: the run parks as a
    *  monitor for the children it just created. */
   dispatchedThisTurn?: boolean;
@@ -1561,6 +1570,17 @@ export class RunManager {
     const dispatch = this.store.getRun(runId)?.dispatch;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
     state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+  }
+
+  /**
+   * The automations twin of `prepareDispatchSession` (spec 2026-09-13-automations-from-prompt):
+   * the short prompt part that lets a task recognise "whenever a PR is opened, do X" as an
+   * automation and create one with `cez automation`. Gated on `automationsReachable` — the flag
+   * AND the transport — so a headless run, or a cockpit with `CEZ_AUTOMATIONS` unset, composes
+   * nothing and behaves exactly as it did before the feature existed.
+   */
+  private prepareAutomationsSession(state: ActiveRun): void {
+    state.automationsPrompt = automationsReachable() ? AUTOMATIONS_PROMPT : undefined;
   }
 
   /**
@@ -3148,6 +3168,7 @@ export class RunManager {
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
+    this.prepareAutomationsSession(state);
 
     this.store.updateRun(runId, {
       status: 'running',
@@ -3423,6 +3444,7 @@ export class RunManager {
         // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
         systemPrompt: composeSystemPrompt(
           dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
+          state.automationsPrompt,
           record?.systemPrompt,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
@@ -3652,6 +3674,7 @@ export class RunManager {
     // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
     // twin is in `runContinuation`.
     this.prepareDispatchSession(runId, state);
+    this.prepareAutomationsSession(state);
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
@@ -4067,12 +4090,14 @@ export class RunManager {
       session = runner.startSession(
         {
           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
-          // reports and asks), then the run's extra
-          // prompt (POST override or config default, which may amend either), then the
+          // reports and asks), then the automations prompt (spec 2026-09-13-automations-from-prompt
+          // — how a task creates a GitHub automation), then the run's extra
+          // prompt (POST override or config default, which may amend any of them), then the
           // handoff/todos contract — every agent step.
           systemPrompt: composeSystemPrompt(
             systemPrompt,
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
+            state.automationsPrompt,
             extraSystemPrompt,
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS

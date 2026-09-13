@@ -36,6 +36,7 @@ import { registerProject, shouldRegisterProject } from './workspace/projects.ts'
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
+import { runAutomationCommand } from './automations/automation-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
@@ -43,6 +44,7 @@ Usage:
   cezar                     start the cockpit (server + GUI) for the current repo
   cezar run "<task>"        run a task headless in the terminal
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
+  cezar automation <create|check|list|…>  create and manage GitHub automations on a running cockpit (CEZ_AUTOMATIONS=1)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -84,6 +86,11 @@ async function main(): Promise<void> {
   // cockpit's parser can refuse them. It only talks to an already-running cockpit.
   if (process.argv[2] === 'task') {
     process.exitCode = await runTaskCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.
+  if (process.argv[2] === 'automation') {
+    process.exitCode = await runAutomationCommand(process.argv.slice(3));
     return;
   }
   const { values, positionals } = parseArgs({

@@ -27,7 +27,12 @@
  * GitHub — the flag removes the behavior, not only the UI. Activation is
  * strict, like the two capabilities above. Nothing on disk is touched:
  * definitions, receipts and high-watermarks survive the flag being off, so
- * unsetting it and restarting restores the feature wholesale.
+ * unsetting it and restarting restores the feature wholesale. On, and with a
+ * cockpit to reach (`CEZ_API_URL`), a task may also CREATE automations from a
+ * prompt (spec 2026-09-13-automations-from-prompt): the `cez automation` CLI,
+ * an automations part in every task's system prompt, the built-in
+ * `create-cezar-automation` skill and the composer's "Create an automation"
+ * template all hang off this one capability.
  *
  * `dispatch` (spec 2026-09-10-dispatch): a task dispatching other tasks through the `cez task`
  * CLI is **on by default** and `CEZ_DISPATCH=0` turns it off (the owner-approved exception to
