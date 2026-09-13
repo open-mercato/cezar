@@ -66,7 +66,8 @@ import {
  * Data doctrine: `useRun` is authoritative for the record; `useRunHistory` hydrates a bounded
  * visible transcript plus compact current-state context and falls back to `useRunEvents` when
  * the optimized route is unavailable. The rendered rows go through the threshold-switched scroller
- * (thread-scroller.tsx — flat + content-visibility below ~300 rows, virtua above).
+ * (thread-scroller.tsx — flat, with content-visibility where scroll anchoring is available,
+ * below ~300 rows; virtua above).
  */
 export function TaskThreadRoute() {
   const { id } = useParams<{ id: string }>()

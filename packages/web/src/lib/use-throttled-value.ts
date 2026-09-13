@@ -35,19 +35,26 @@ export function useThrottledValue<T>(value: T, windowMs: number, resetKey?: unkn
   latestKey.current = resetKey
   const publishedAt = useRef(0)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const hasCommittedPublication = useRef(false)
 
-  const publish = (next: T) => {
+  const stale = !Object.is(published.value, value)
+  if (published.key !== resetKey) setPublished({ key: resetKey, value })
+  else if (stale && timer.current === undefined && Date.now() - publishedAt.current >= windowMs) {
+    setPublished({ key: resetKey, value })
+  }
+
+  // State adjustment is the only render-phase write. Timer cancellation and clock mutation wait
+  // for a committed publication, so a discarded concurrent/StrictMode render changes no external
+  // scheduling state.
+  useEffect(() => {
+    if (!hasCommittedPublication.current) {
+      hasCommittedPublication.current = true
+      return
+    }
     clearTimeout(timer.current)
     timer.current = undefined
     publishedAt.current = Date.now()
-    setPublished({ key: latestKey.current, value: next })
-  }
-
-  const stale = !Object.is(published.value, value)
-  if (published.key !== resetKey) publish(value)
-  else if (stale && timer.current === undefined && Date.now() - publishedAt.current >= windowMs) {
-    publish(value)
-  }
+  }, [published])
 
   // The trailing edge: whatever the window swallowed lands as one update when it closes.
   useEffect(() => {

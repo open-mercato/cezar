@@ -24,6 +24,7 @@ afterEach(() => {
   vi.useRealTimers()
   cleanup()
   vi.unstubAllGlobals()
+  Reflect.deleteProperty(document, 'elementsFromPoint')
   clearThreadScrollCaches()
 })
 
@@ -213,13 +214,17 @@ describe('useThreadScroll — growth must not scroll under a finger', () => {
     function layOut(scroller: HTMLElement, heights: number[]) {
       let top = scroller.scrollTop === 0 ? 0 : -scroller.scrollTop
       const rows = [...scroller.querySelectorAll<HTMLElement>('[data-slot="thread-row"]')]
+      const reads: ReturnType<typeof vi.fn>[] = []
       rows.forEach((row, index) => {
         const height = heights[index]!
         const rect = { top, bottom: top + height, height }
-        row.getBoundingClientRect = () => rect as DOMRect
+        const read = vi.fn(() => rect as DOMRect)
+        reads.push(read)
+        row.getBoundingClientRect = read
         top += height
       })
       scroller.getBoundingClientRect = () => ({ top: 0, bottom: 500, height: 500 }) as DOMRect
+      return reads
     }
 
     function AnchorHarness({ rowCount }: { rowCount: number }) {
@@ -255,14 +260,40 @@ describe('useThreadScroll — growth must not scroll under a finger', () => {
       fireEvent.touchStart(scroller, { touches: [{ clientY: 100 }] })
       fireEvent.touchMove(scroller, { touches: [{ clientY: 200 }] })
       scroller.scrollTop = 600
-      layOut(scroller, [200, 200, 200, 200, 200, 200])
+      const reads = layOut(scroller, [200, 200, 200, 200, 200, 200])
+      const visibleRow = scroller.querySelectorAll<HTMLElement>('[data-slot="thread-row"]')[3]!
+      Object.defineProperty(document, 'elementsFromPoint', {
+        configurable: true,
+        value: vi.fn(() => [visibleRow]),
+      })
       act(() => fireEvent.scroll(scroller)) // captures the anchor for the frame
+      expect(reads.map((read) => read.mock.calls.length)).toEqual([0, 0, 0, 1, 0, 0])
 
       // …and a row ABOVE them grows by 120px, pushing everything below down.
       layOut(scroller, [200, 320, 200, 200, 200, 200])
       grow()
 
       // Without the polyfill the reader would be 120px further down the page.
+      expect(scroller.scrollTop).toBe(720)
+    })
+
+    it('seeds the anchor when a cached mid-thread restore settles without another scroll', () => {
+      vi.stubGlobal('CSS', { supports: (property: string) => property !== 'overflow-anchor' })
+      saveThreadScroll('run-anchor:main', { top: 600, atBottom: false })
+      const grow = stubGrowthObserver()
+      render(<AnchorHarness rowCount={6} />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      const visibleRow = scroller.querySelectorAll<HTMLElement>('[data-slot="thread-row"]')[3]!
+      Object.defineProperty(document, 'elementsFromPoint', {
+        configurable: true,
+        value: vi.fn(() => [visibleRow]),
+      })
+
+      layOut(scroller, [200, 200, 200, 200, 200, 200])
+      grow() // completes the cached restore and captures row 3 without a scroll event
+      layOut(scroller, [200, 320, 200, 200, 200, 200])
+      grow()
+
       expect(scroller.scrollTop).toBe(720)
     })
 
@@ -300,6 +331,16 @@ describe('useThreadScroll — growth must not scroll under a finger', () => {
     expect(scroller.scrollTop).toBe(400)
     grow()
     expect(scroller.scrollTop).toBe(400)
+  })
+
+  it('ignores a window touchend that did not start in the thread', () => {
+    render(<PinnedHarness viewKey="run-other-touch:main" />)
+    const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+    scroller.scrollTop = 900
+
+    fireEvent.touchEnd(window)
+
+    expect(scroller.scrollTop).toBe(900)
   })
 })
 

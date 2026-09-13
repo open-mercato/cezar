@@ -269,6 +269,31 @@ export function useThreadScroll(
     // resize put it back where it was. Flat mode only — past the virtualization threshold virtua
     // owns offset compensation, and a second corrector would fight it.
     const polyfillAnchoring = !hasScrollAnchoring()
+    const rowAtViewportTop = (current: HTMLElement): ThreadRowPosition | undefined => {
+      const viewport = current.getBoundingClientRect()
+      // The WebKit path this polyfill serves gets an O(1) hit-test and measures one row, not up
+      // to 300 row rects per scroll frame. `elementsFromPoint` sees through a child element to
+      // the owning row; the fallback exists for jsdom/older test hosts, not shipping browsers.
+      if (typeof document.elementsFromPoint === 'function') {
+        const hit = document.elementsFromPoint(viewport.left + viewport.width / 2, viewport.top + 1)
+          .map((element) => element.closest<HTMLElement>('[data-slot="thread-row"][data-row-key]'))
+          .find((row) => row !== null && current.contains(row))
+        if (hit) {
+          const rect = hit.getBoundingClientRect()
+          return { key: hit.dataset.rowKey!, top: rect.top, bottom: rect.bottom }
+        }
+      }
+      return measuredRows(current).find(({ bottom }) => bottom > viewport.top)
+    }
+    const anchoredRow = (current: HTMLElement, key: string): ThreadRowPosition | undefined => {
+      const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(key)
+        : key.replace(/["\\]/g, '\\$&')
+      const row = current.querySelector<HTMLElement>(`[data-slot="thread-row"][data-row-key="${escaped}"]`)
+      if (!row) return undefined
+      const rect = row.getBoundingClientRect()
+      return { key, top: rect.top, bottom: rect.bottom }
+    }
     const trackReadingAnchor = () => {
       // Pinned readers are handled by the pin itself, and a restore in flight owns the offset.
       if (!polyfillAnchoring || stuckRef.current || pendingRestoreRef.current !== null) return
@@ -277,23 +302,21 @@ export function useThreadScroll(
         anchorFrameRef.current = 0
         const current = scrollElRef.current
         if (!current || stuckRef.current) return
-        readingAnchorRef.current = firstVisibleThreadAnchor(
-          current.getBoundingClientRect().top,
-          measuredRows(current),
-        )
+        const viewportTop = current.getBoundingClientRect().top
+        const row = rowAtViewportTop(current)
+        readingAnchorRef.current = row === undefined
+          ? undefined
+          : { key: row.key, offset: row.top - viewportTop }
       })
     }
     const holdReadingAnchor = () => {
       const anchor = readingAnchorRef.current
       if (!polyfillAnchoring || anchor === undefined || virtualizerRef.current) return
       const viewportTop = scroller.getBoundingClientRect().top
-      const corrected = threadAnchorScrollTop(
-        scroller.scrollTop,
-        viewportTop,
-        anchor,
-        measuredRows(scroller),
-        scroller.scrollTop, // the row is gone (evicted): hold still rather than guess
-      )
+      const row = anchoredRow(scroller, anchor.key)
+      const corrected = row === undefined
+        ? scroller.scrollTop
+        : scroller.scrollTop + (row.top - viewportTop - anchor.offset)
       // Sub-pixel noise is not a jump; correcting it would fight momentum scrolling for nothing.
       if (Math.abs(corrected - scroller.scrollTop) >= 1) setOffset(corrected)
     }
@@ -351,6 +374,7 @@ export function useThreadScroll(
     // A finger on the glass owns the scroller. Growth-driven re-pinning resumes when it lifts —
     // if the gesture went upward at all, `unstick()` has already cancelled it.
     const onTouchEnd = () => {
+      if (!touchActiveRef.current) return
       touchActiveRef.current = false
       if (stuckRef.current && pendingRestoreRef.current === null) toBottom()
     }
@@ -418,7 +442,10 @@ export function useThreadScroll(
         if (pending !== null) {
           const maxTop = scroller.scrollHeight - scroller.clientHeight
           setOffset(Math.min(pending, maxTop))
-          if (maxTop >= pending) pendingRestoreRef.current = null // reached — restore done
+          if (maxTop >= pending) {
+            pendingRestoreRef.current = null // reached — restore done
+            trackReadingAnchor()
+          }
         } else if (stuckRef.current) {
           // …but NEVER while a finger is on the glass. A `scrollTop` write mid-drag moves the
           // content out from under the touch that is holding it — the "scrolling jumps while
@@ -434,6 +461,10 @@ export function useThreadScroll(
       })
       observer.observe(content)
     }
+
+    // Seed a restored mid-thread reader before the first later resize. A still reader emits no
+    // scroll event, so waiting solely for onScroll would leave the first growth uncompensated.
+    trackReadingAnchor()
 
     return () => {
       cancelAnimationFrame(anchorFrameRef.current)

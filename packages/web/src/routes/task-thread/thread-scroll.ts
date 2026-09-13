@@ -36,6 +36,10 @@ export const VIRTUALIZE_THRESHOLD = 300
  * So the optimization is kept exactly where the platform can pay for it, and dropped where it
  * cannot. What is lost on WebKit is render-work skipping, not the DOM bound: flat mode holds
  * every row either way, and past {@link VIRTUALIZE_THRESHOLD} virtua bounds the DOM itself.
+ * The resize polyfill cannot safely preserve this optimization: an unmeasured row may replace
+ * its intrinsic estimate before it is hit-testable as the reader's real anchor, so the polyfill
+ * cannot identify and compensate every estimate correction. The measured zero-drift path is to
+ * lay flat WebKit rows out normally.
  */
 export function threadRowClass(scrollAnchoring: boolean): string {
   const base = 'flex w-full flex-col pb-2.5'
