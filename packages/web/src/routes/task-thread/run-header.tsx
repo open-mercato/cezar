@@ -43,6 +43,7 @@ import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
+import { StatusDot } from '@/components/status-dot'
 import { TabLink } from '@/components/tab-link'
 import {
   AlertDialog,
@@ -119,33 +120,26 @@ interface RunHeaderProps {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
-  /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
-   *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
-   *  the three `task-git` tabs render this same header and run no such effect. */
   onMarkedUnread?: () => void
+  continuationEngine?: ReactNode
 }
 
-/**
- * MEMOIZED, and the reason is the live thread below it: a running session re-renders its route
- * on every coalesced frame (~25×/s), and this header was the single most expensive thing in that
- * frame after the rows themselves — ~10 ms of React work per re-render in the jsdom harness. It
- * reads NOTHING from the transcript, so all of it was spent re-painting the same pixels from
- * props that had not moved. Everything live inside it (the runs list, health, mutations) comes
- * from its own hooks, which re-render it on their own; the props are the record, and the record
- * only moves when the record moves.
- *
- * `planTally` is compared by value because its owner rebuilds it from a freshly-reduced plan on
- * every frame — the counts, not the object, are the fact.
- */
 export const RunHeader = memo(RunHeaderView, (before, after) =>
   before.run === after.run &&
   before.tab === after.tab &&
   before.onMarkedUnread === after.onMarkedUnread &&
+  before.continuationEngine === after.continuationEngine &&
   before.planTally?.done === after.planTally?.done &&
   before.planTally?.total === after.planTally?.total,
 )
 
-function RunHeaderView({ run, planTally, tab = 'session', onMarkedUnread }: RunHeaderProps) {
+function RunHeaderView({
+  run,
+  planTally,
+  tab = 'session',
+  onMarkedUnread,
+  continuationEngine,
+}: RunHeaderProps) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)
@@ -165,11 +159,15 @@ function RunHeaderView({ run, planTally, tab = 'session', onMarkedUnread }: RunH
   // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
   // whole queue, not of this record.
-  const runs = useRuns()
+  const queuePosition = useRuns(
+    useMemo(
+      () => (runs: ApiRun[]) =>
+        run.status === 'queued' ? queuePositions(runs).get(run.id) : undefined,
+      [run.id, run.status],
+    ),
+  ).data
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
-  const queuePosition =
-    run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
 
   return (
     <header
@@ -223,6 +221,7 @@ function RunHeaderView({ run, planTally, tab = 'session', onMarkedUnread }: RunH
         <div id={detailsId} data-slot="run-details" className={cn(detailsOpen ? 'block' : 'hidden', 'md:block')}>
           <MetaRow
             run={run}
+            continuationEngine={continuationEngine}
             showTokens={metricVisibility.tokens}
             showCost={metricVisibility.cost}
             // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
@@ -235,6 +234,10 @@ function RunHeaderView({ run, planTally, tab = 'session', onMarkedUnread }: RunH
         {/* Outside the disclosure on purpose: "this run wakes itself up at 14:20" is status, not
             metadata — it belongs with the pill above, not behind a tap with the diff stats. */}
         <MonitoringSchedule run={run} />
+        {/* Also outside it, for the same reason: who ordered this task, and what it dispatched,
+            are what the run IS doing right now, not metadata about how it started. */}
+        <DispatchParentLine run={run} />
+        <DispatchChildrenLine run={run} />
 
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
@@ -580,10 +583,12 @@ function MetaRow({
   showTokens,
   showCost,
   automationsAvailable,
+  continuationEngine,
 }: {
   run: ApiRun
   showTokens: boolean
   showCost: boolean
+  continuationEngine?: ReactNode
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
@@ -748,10 +753,90 @@ function MetaRow({
               {part}
             </Fragment>
           ))}
-          <AgentBadge run={run} />
+          <AgentBadge run={run} continuationEngine={continuationEngine} />
         </span>
       </div>
     </ReferenceStatusProvider>
+  )
+}
+
+/**
+ * "Dispatched by <parent>" — one row linking a dispatched task back to the task that ordered it
+ * (spec `.ai/specs/2026-09-10-dispatch.md`).
+ *
+ * Provenance, so it renders whether or not `capabilities.dispatch` is still on: a run created by
+ * a dispatch keeps its `dispatch.parentRunId` forever, and hiding the line on a server that later
+ * turned the flag off would leave a thread that cannot explain who ordered it. The parent's TITLE
+ * comes from the run list this page already holds; a parent outside that list (another project,
+ * or pruned) still gets its link, labelled by its id.
+ */
+function DispatchParentLine({ run }: { run: ApiRun }) {
+  const runs = useRuns()
+  const parentRunId = run.dispatch?.parentRunId
+  if (parentRunId === undefined) return null
+  const parent = (runs.data ?? []).find((candidate) => candidate.id === parentRunId)
+  const attention = parent ? deriveAttention(parent) : null
+  return (
+    <div
+      data-slot="dispatch-parent-line"
+      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+    >
+      <span className="shrink-0">Dispatched by</span>
+      <Link
+        to={`/tasks/${parentRunId}`}
+        data-slot="dispatch-parent"
+        data-run-id={parentRunId}
+        className="inline-flex min-w-0 items-center gap-1.5 truncate hover:text-foreground"
+      >
+        {attention ? <StatusDot tone={attention.tone} pulse={attention.pulse} /> : null}
+        <span className="truncate">{parent ? runTitle(parent) : parentRunId}</span>
+      </Link>
+    </div>
+  )
+}
+
+/**
+ * "Subtasks: <child> · <child> …" — one collapsed row naming the tasks this one dispatched.
+ *
+ * Derived from the run list this page already holds rather than fetched: a child's link is its
+ * id and its dot is its status, both of which `useRuns()` carries and keeps live over the run
+ * stream. Nothing renders for a run that dispatched nothing — which is every run on a server
+ * that never turned dispatch on.
+ *
+ * Deliberately ONE row, truncated: the full tree is the task list, and a header that grew a list
+ * would push the transcript off the screen exactly when a parent has the most children.
+ */
+function DispatchChildrenLine({ run }: { run: ApiRun }) {
+  const runs = useRuns()
+  const children = (runs.data ?? []).filter(
+    (candidate) => candidate.dispatch?.parentRunId === run.id,
+  )
+  if (children.length === 0) return null
+  return (
+    <div
+      data-slot="dispatch-children"
+      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+    >
+      <span className="shrink-0">Subtasks</span>
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden">
+        {children.map((child) => {
+          const attention = deriveAttention(child)
+          return (
+            <Link
+              key={child.id}
+              to={`/tasks/${child.id}`}
+              data-slot="dispatch-child"
+              data-run-id={child.id}
+              title={`${runTitle(child)} — ${attention.label}`}
+              className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"
+            >
+              <StatusDot tone={attention.tone} pulse={attention.pulse} />
+              <span className="truncate">{runTitle(child)}</span>
+            </Link>
+          )
+        })}
+      </span>
+    </div>
   )
 }
 
@@ -799,7 +884,7 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
  *  something nobody can tell is load-bearing. The menu is the right home for it — it answers a
  *  question only a user debugging "which provider actually served this?" asks, so it belongs
  *  behind the same disclosure as the account rather than in the truncating summary line. */
-function AgentBadge({ run }: { run: ApiRun }) {
+function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
   // `runner` (`src/runs/store.ts`), while the run actually executes as
   // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
@@ -878,6 +963,24 @@ function AgentBadge({ run }: { run: ApiRun }) {
           >
             identity: {identity}
           </DropdownMenuLabel>
+        ) : null}
+        {continuationEngine ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="pb-1 text-[11px] font-normal text-muted-foreground">
+              Next continuation
+            </DropdownMenuLabel>
+            <div
+              data-slot="agent-badge-engine-picker"
+              className="px-2 pb-1"
+              // The controls open their own selection menus. Do not let a click inside this
+              // custom menu row dismiss the parent badge before the nested picker can open.
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {continuationEngine}
+            </div>
+          </>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>

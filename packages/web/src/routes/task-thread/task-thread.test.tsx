@@ -380,6 +380,26 @@ describe('ThreadView', () => {
     expect((screen.getByLabelText('Continue') as HTMLButtonElement).disabled).toBe(false)
     // The engine pills ride along, so the prompt and the picked backend go in one request.
     expect(document.querySelector('[data-slot="follow-up-engine"]')).not.toBeNull()
+
+    // The header badge is now a second, discoverable entrance to that SAME picker. Exercise the
+    // real nested controls: a decorative test node would miss the Radix-menu interaction that
+    // matters here (opening the model catalog without dismissing the agent badge first).
+    fireEvent.pointerDown(screen.getByRole('button', { name: /^Agent:/ }))
+    const badgeMenu = await screen.findByRole('menu')
+    const headerModel = badgeMenu.querySelector(
+      '[data-slot="agent-badge-engine-picker"] [data-slot="follow-up-model-pill"]',
+    ) as HTMLElement
+    expect(headerModel).not.toBeNull()
+    fireEvent.pointerDown(headerModel)
+    let opus: HTMLElement | undefined
+    await waitFor(() => {
+      opus = screen.getAllByRole('menuitemradio').find((option) => option.textContent?.includes('opus'))
+      expect(opus).toBeDefined()
+    })
+    fireEvent.click(opus as HTMLElement)
+    // Both entrances are renderings of one hook state. Once the menus close, the dock's model
+    // pill reflects the header pick, which is therefore what its eventual /continue POST sends.
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Model' }).textContent).toContain('opus'))
   })
 
   /** #472 — stacked messages render as their own bubbles, after the task. */

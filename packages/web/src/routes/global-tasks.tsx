@@ -23,6 +23,7 @@ import {
   workspaceQueryKeys,
 } from '@/api/queries'
 import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
 import { useListView } from '@/components/list-view'
@@ -650,6 +651,18 @@ function FilterBar({
   )
 }
 
+/**
+ * Who dispatched this row's task, when the wire says (spec `.ai/specs/2026-09-10-dispatch.md`).
+ *
+ * Read through a cast because `RunIndexEntry` — the deliberately SLIM cross-project row — does
+ * not carry `dispatch` today, so this page currently nests nothing and every row is a root, which
+ * is the honest rendering of a wire that does not say otherwise. The read is here rather than
+ * absent so that the day the index grows the field, this list nests exactly like the per-project
+ * table without a second nesting rule being written for it.
+ */
+const dispatchOf = (run: RunIndexEntry): TaskTreeInput['dispatch'] =>
+  (run as { dispatch?: TaskTreeInput['dispatch'] }).dispatch
+
 /** The rows. One table per group, so a group heading owns its own header row rather than
  *  floating above a shared one that would scroll away from it. */
 function TaskTable({
@@ -698,10 +711,22 @@ function TaskTable({
             </tr>
           </thead>
           <tbody className="[&>tr:last-child>td]:border-b-0">
-            {tasks.map((task) => (
+            {/* Dispatched children nest under the task that ordered them, in that task's own
+                place in the ordering. Per TABLE, which is per group: a child grouped away from
+                its parent (a different tag, a different project) stands on its own rather than
+                being filed where nobody is looking for it. */}
+            {taskTreeRows(
+              tasks.map((task) => ({
+                id: task.run.id,
+                dispatch: dispatchOf(task.run),
+                task,
+              })),
+            ).map((node) => (
               <TaskRow
-                key={`${task.run.projectId}/${task.run.id}`}
-                task={task}
+                key={`${node.run.task.run.projectId}/${node.run.task.run.id}`}
+                task={node.run.task}
+                depth={node.depth}
+                childCount={node.childCount}
                 now={now}
                 showProject={showProject}
                 onArchive={onArchive}
@@ -742,6 +767,8 @@ const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4
  */
 function TaskRow({
   task,
+  depth,
+  childCount,
   now,
   showProject,
   onArchive,
@@ -750,6 +777,10 @@ function TaskRow({
   showCost,
 }: {
   task: GlobalTask
+  /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
+  depth: number
+  /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
+  childCount: number
   now: number
   showProject: boolean
   onArchive: (task: GlobalTask, archived: boolean) => void
@@ -777,7 +808,13 @@ function TaskRow({
   const usage = usageCells(run, run.usage)
 
   return (
-    <tr data-slot="global-task-row" data-run-id={run.id} data-project={run.projectId} className="hover:bg-muted">
+    <tr
+      data-slot="global-task-row"
+      data-run-id={run.id}
+      data-project={run.projectId}
+      data-depth={depth}
+      className="hover:bg-muted"
+    >
       <td className={TD_BASE}>
         <Pill dot={attention.tone} pulse={attention.pulse}>
           {attention.label}
@@ -786,7 +823,21 @@ function TaskRow({
       {/* The one column with no fixed width, so every pixel the others give up lands here — and
           dropping Branch gave up 140 of them. A cross-project list is read by TITLE. */}
       <td className={cn(TD_BASE, 'min-w-[320px] max-w-0')}>
-        <span className="flex min-w-0 items-center gap-1.5">
+        {/* Inline padding, not a class: depth is unbounded, and Tailwind cannot generate a class
+            per level. 14px a level — the same step the per-project table and the sidebar use. */}
+        <span
+          className="flex min-w-0 items-center gap-1.5"
+          style={depth > 0 ? { paddingLeft: `${depth * 14}px` } : undefined}
+        >
+          {depth > 0 ? (
+            <span
+              aria-hidden="true"
+              data-slot="subtask-tick"
+              className="shrink-0 font-mono text-[11px] leading-none text-soft-foreground"
+            >
+              &#9492;
+            </span>
+          ) : null}
           <Link
             to={to}
             title={runTitle(run)}
@@ -801,6 +852,24 @@ function TaskRow({
           >
             {runTitle(run)}
           </Link>
+          {/* What a DISPATCHED row is for — `review` or `implement`. Null on every root. */}
+          {dispatchKindLabel(run) ? (
+            <span
+              data-slot="dispatch-kind"
+              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+            >
+              {dispatchKindLabel(run)}
+            </span>
+          ) : null}
+          {/* The dispatched children are the indented rows underneath — counted, not listed. */}
+          {subtaskLabel(childCount) ? (
+            <span
+              data-slot="subtask-count"
+              className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+            >
+              {subtaskLabel(childCount)}
+            </span>
+          ) : null}
           {unread ? (
             <StatusDot
               tone="violet"

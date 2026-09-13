@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   clearStartedDraft,
   composerRunModeNote,
+  normalizeDispatchIntent,
   readDraft,
   resetDraft,
   resolveComposerRunMode,
@@ -59,6 +60,38 @@ describe('resolveComposerRunMode', () => {
   })
 })
 
+describe('resolveComposerRunMode with dispatch (spec 2026-09-10-dispatch)', () => {
+  const base = {
+    hasGit: true,
+    variants: 1,
+    planFirst: false,
+    explicitAutonomous: null,
+    explicitWorktree: null,
+    configuredAutonomous: 'source-dependent' as const,
+    configuredWorktree: true,
+    source: 'workflow' as const,
+    dispatch: true,
+  }
+
+  it('forces the worktree on and defaults autonomous on', () => {
+    expect(resolveComposerRunMode(base)).toEqual({ autonomous: true, worktree: true })
+    // An explicit worktree opt-out and a workspace policy are both overruled — subtasks fork
+    // off the parent's commits, which needs a tree of its own.
+    expect(resolveComposerRunMode({ ...base, explicitWorktree: false, configuredWorktree: false }))
+      .toEqual({ autonomous: true, worktree: true })
+    // An interactive skill's recommendation is about the parent pausing for the user; a
+    // dispatching parent keeps going while its children work.
+    expect(resolveComposerRunMode({ ...base, interactive: true, source: 'skill' }).autonomous).toBe(true)
+  })
+
+  it('yields to an explicit Autonomous off, to plan-first, and to a missing repo', () => {
+    expect(resolveComposerRunMode({ ...base, explicitAutonomous: false }))
+      .toEqual({ autonomous: false, worktree: true })
+    expect(resolveComposerRunMode({ ...base, planFirst: true }).autonomous).toBe(false)
+    expect(resolveComposerRunMode({ ...base, hasGit: false }).worktree).toBe(false)
+  })
+})
+
 describe('the new-task draft store', () => {
   it('starts empty with the never-chosen sentinels', () => {
     expect(readDraft()).toEqual({
@@ -72,6 +105,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      dispatch: null,
     })
   })
 
@@ -87,6 +121,7 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      dispatch: null,
     })
     const first = readDraft()
     expect(first.text).toBe('fix it')
@@ -108,6 +143,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      dispatch: null,
     })
     clearStartedDraft()
     expect(readDraft()).toEqual({
@@ -123,6 +159,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      dispatch: null,
     })
   })
 
@@ -138,6 +175,7 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      dispatch: null,
     })
     // A fresh page has no in-memory cache but keeps localStorage: resetDraft removes storage, so
     // instead drop only the cache by round-tripping through a raw storage read.
@@ -148,6 +186,7 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      dispatch: null,
       planFirst: true,
     })
   })
@@ -167,6 +206,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      dispatch: null,
     })
 
     resetDraft()
@@ -182,9 +222,46 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      dispatch: null,
     })
   })
 })
+
+describe('normalizeDispatchIntent', () => {
+  it('keeps only the contract keys, within the contract ranges', () => {
+    expect(normalizeDispatchIntent({
+      maxSubtasks: 10, inFlight: 9, runner: 'nope', model: '', budgetUsd: -1, extra: 1,
+    })).toEqual({ maxSubtasks: 10 })
+    expect(normalizeDispatchIntent({
+      maxSubtasks: 51, inFlight: 2, runner: 'codex', model: 'gpt-future', budgetUsd: 2.5,
+    })).toEqual({ inFlight: 2, runner: 'codex', model: 'gpt-future', budgetUsd: 2.5 })
+    expect(normalizeDispatchIntent({ maxSubtasks: 1.5, budgetUsd: 10_001 })).toEqual({})
+  })
+
+  it('answers null for anything but a plain object — the toggle is off', () => {
+    for (const raw of [null, undefined, 'on', true, 1, [], [1]]) {
+      expect(normalizeDispatchIntent(raw)).toBeNull()
+    }
+    // The bare toggle: on, engine defaults.
+    expect(normalizeDispatchIntent({})).toEqual({})
+  })
+
+  it('round-trips through the store', () => {
+    writeDraft({ ...readDraft(), dispatch: { maxSubtasks: 10, inFlight: 2 } })
+    resetDraftCacheOnly()
+    expect(readDraft().dispatch).toEqual({ maxSubtasks: 10, inFlight: 2 })
+    localStorage.setItem('cez-new-task-draft', '{"dispatch":"yes please"}')
+    resetDraftCacheOnly()
+    expect(readDraft().dispatch).toBeNull()
+  })
+})
+
+/** Drop the in-memory cache but keep localStorage — a reload, not a reset. */
+function resetDraftCacheOnly() {
+  const stored = localStorage.getItem('cez-new-task-draft')
+  resetDraft()
+  if (stored !== null) localStorage.setItem('cez-new-task-draft', stored)
+}
 
 describe('composerRunModeNote (#793)', () => {
   // One line per place the run can land. The header used to print the first one unconditionally,
@@ -212,6 +289,16 @@ describe('composerRunModeNote (#793)', () => {
       expect(composerRunModeNote({ worktree, hasGit })).toBe(expected)
     })
   }
+
+  it('names the fan-out when dispatch is on, in both autonomy states', () => {
+    expect(composerRunModeNote({ worktree: true, hasGit: true, dispatch: true, autonomous: true }))
+      .toBe('Runs on its own and fans work out to subtasks — it will not pause for you.')
+    expect(composerRunModeNote({ worktree: true, hasGit: true, dispatch: true, autonomous: false }))
+      .toBe('Fans work out to subtasks in isolated worktrees.')
+    // Off, the existing three states are untouched.
+    expect(composerRunModeNote({ worktree: true, hasGit: true, dispatch: false }))
+      .toBe('Runs in an isolated worktree — review everything before it lands.')
+  })
 
   it('never promises isolation without a worktree', () => {
     // The invariant the header actually owes the user, independent of the exact copy: the word

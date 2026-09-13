@@ -176,8 +176,6 @@ export function ThreadView({
   onMarkedUnread?: (runId: string) => void
 }) {
   const footer = threadFooter(run.status, run.error)
-  // A stable callback so the memoized header actually memoizes (an inline arrow would hand it a
-  // fresh prop on every live frame and re-render the most expensive component on the route).
   const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
@@ -303,7 +301,15 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
-      <RunHeader run={run} planTally={planTally} onMarkedUnread={markedUnread} />
+      <RunHeader
+        run={run}
+        planTally={planTally}
+        onMarkedUnread={markedUnread}
+        // The badge the user already opens to inspect runner/account/model now edits the SAME
+        // continuation choice as the dock. One hook owns both renderings, so a header pick is
+        // exactly what the next composer submission sends — no second, drifting engine state.
+        continuationEngine={continuable ? continueAction.pills : undefined}
+      />
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
@@ -327,6 +333,7 @@ export function ThreadView({
           messageActions={messageActions}
           scrollControls={scroll}
           renderMode={mode}
+          rowModels={rows}
         />
 
         {thread.turns.length === 0 ? (
