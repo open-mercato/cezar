@@ -123,6 +123,11 @@ describe('buildPlannedRunBody — the POST /api/v1/runs wire contract for approv
     })
   })
 
+  it('carries the Dispatch intent when the toggle is on, nothing otherwise', () => {
+    expect(buildPlannedRunBody({ ...base, dispatch: { maxSubtasks: 5 } }).dispatch).toEqual({ maxSubtasks: 5 })
+    expect(JSON.parse(JSON.stringify(buildPlannedRunBody({ ...base, dispatch: null })))).not.toHaveProperty('dispatch')
+  })
+
   it('never sends a workflow name — an edited plan may match no saved chain', () => {
     expect('workflow' in buildPlannedRunBody(base)).toBe(false)
   })

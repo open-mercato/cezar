@@ -362,6 +362,23 @@ describe('buildCreateRunBody — the exact POST /api/v1/runs payloads legacy sen
     expect(buildCreateRunBody(base).generateFollowups).toBeUndefined()
   })
 
+  it('dispatch rides only when the toggle is on — the bare `{}` included (spec 2026-09-10-dispatch)', () => {
+    const base = {
+      task: 't', source: null, model: '',
+      runner: 'claude' as const, defaultRunner: 'claude' as const, variants: 1, images: [],
+    }
+    // Off / never touched: no key at all — its PRESENCE is what the server keys the dispatch
+    // prompt and the forced worktree off.
+    expect(JSON.parse(JSON.stringify(buildCreateRunBody(base)))).not.toHaveProperty('dispatch')
+    expect(JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, dispatch: null })))).not.toHaveProperty('dispatch')
+    // The bare toggle.
+    expect(buildCreateRunBody({ ...base, dispatch: {} }).dispatch).toEqual({})
+    expect(JSON.parse(JSON.stringify(buildCreateRunBody({ ...base, dispatch: {} })))).toHaveProperty('dispatch', {})
+    // The limits from its settings, verbatim.
+    expect(buildCreateRunBody({ ...base, dispatch: { maxSubtasks: 10, inFlight: 2, runner: 'codex', budgetUsd: 2.5 } }).dispatch)
+      .toEqual({ maxSubtasks: 10, inFlight: 2, runner: 'codex', budgetUsd: 2.5 })
+  })
+
   it('variants > 1 and images ride along; ×1 and no images are omitted', () => {
     const body = buildCreateRunBody({
       task: 't', source: { source: 'workflow', ref: 'quick-task' }, model: '',

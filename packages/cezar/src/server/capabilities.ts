@@ -29,6 +29,14 @@
  * definitions, receipts and high-watermarks survive the flag being off, so
  * unsetting it and restarting restores the feature wholesale.
  *
+ * `dispatch` (spec 2026-09-10-dispatch): a task dispatching other tasks through the `cez task`
+ * CLI is **on by default** and `CEZ_DISPATCH=0` turns it off (the owner-approved exception to
+ * AGENTS.md § Zero config, recorded there: the brakes live in the engine — four children in
+ * flight, a child's budget carved out of its parent's — and a default-off dispatch left the
+ * agent fanning out through its own sub-agents instead, unbudgeted and invisible). Off, the
+ * `/runs/:id/{dispatch,report}` routes answer 409 and no task's system prompt mentions
+ * dispatching; the `dispatch` field on existing run records survives the flag being off.
+ *
  * Usage presentation: token counts and monetary cost stay visible by default.
  * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
  * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
@@ -128,6 +136,7 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
  *  `CEZ_FOLLOWUPS=1` ⇒ the follow-up inbox exists (#471).
  *  `CEZ_AUTOMATIONS=1` ⇒ GitHub automations exist (#801).
+ *  `CEZ_DISPATCH=0` ⇒ task dispatch is OFF (spec 2026-09-10-dispatch); on otherwise.
  *
  *  Read per request — cheap, and tests/ops can flip `CEZ_REMOTE` live. `followups` is honest
  *  per request too, but flipping it ON at runtime is only half a switch: the per-dataDir
@@ -137,7 +146,11 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *
  *  `automations` carries the same caveat and for the same reason: the workspace scheduler is
  *  started once, on the server's `listening` event, so flipping the flag on afterwards gates
- *  the routes open without ever starting the poller. Boot-time flag, same wording. */
+ *  the routes open without ever starting the poller. Boot-time flag, same wording.
+ *
+ *  `dispatch` is boot-time for a third reason: the dispatch prompt is composed into a run's system
+ *  prompt when the run STARTS, so flipping the flag mid-flight would open (or close) the routes
+ *  while every run already in the tree kept its prompt. Set it and restart. */
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
@@ -149,6 +162,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS === '1',
+    dispatch: env.CEZ_DISPATCH !== '0',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,
     costMetrics,

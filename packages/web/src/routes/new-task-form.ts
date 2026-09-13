@@ -7,6 +7,7 @@ import type {
   CreateRunInput,
   CreateRunResponse,
   AttachmentInput,
+  DispatchIntent,
   ModelDiscoveryRunner,
   Runner,
   RunnerModelCatalogResponse,
@@ -328,6 +329,11 @@ export function buildCreateRunBody(opts: {
    *  Independent of `generateFollowups`: starting a task FROM a follow-up still marks that
    *  entry started, even when the new task itself won't generate follow-ups of its own. */
   todoId?: string
+  /** The Dispatch toggle (spec 2026-09-10-dispatch): `{}` is the bare toggle — split it, engine
+   *  defaults — and the keys are the limits from its settings. `null`/absent = off, and the key
+   *  stays off the wire: its PRESENCE is what makes the server compose the dispatch-mode prompt
+   *  and force the worktree. */
+  dispatch?: DispatchIntent | null
 }): CreateRunInput {
   const {
     task,
@@ -344,6 +350,7 @@ export function buildCreateRunBody(opts: {
     autonomous,
     generateFollowups,
     todoId,
+    dispatch,
   } = opts
   return {
     task,
@@ -362,6 +369,7 @@ export function buildCreateRunBody(opts: {
     autonomous: autonomous === true ? true : undefined,
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
+    dispatch: dispatch ?? undefined,
   }
 }
 
