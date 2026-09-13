@@ -2,12 +2,14 @@ import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ReactNode } from 'react'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { RunHeader } from './run-header'
+import { resolveConflictsPrompt } from './run-actions'
 
 afterEach(() => {
   act(() => resetToasts())
@@ -82,12 +84,27 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
-function renderHeader(record: ApiRun, onMarkedUnread?: () => void) {
+function renderHeader(
+  record: ApiRun,
+  onMarkedUnread?: () => void,
+  planTally?: { done: number; total: number },
+  continuationEngine?: ReactNode,
+) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
       <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
         <Routes>
-          <Route path="/tasks/:id" element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} />} />
+          <Route
+            path="/tasks/:id"
+            element={
+              <RunHeader
+                run={record}
+                onMarkedUnread={onMarkedUnread}
+                planTally={planTally}
+                continuationEngine={continuationEngine}
+              />
+            }
+          />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
         <Toaster />
@@ -185,15 +202,17 @@ describe('editable title (#389)', () => {
 })
 
 describe('action bar visibility per status (the legacy rules, rendered)', () => {
+  // Pin (#935) is in every row: unlike every other action here it asks nothing of the engine,
+  // so it is offered whatever the run is doing — only archiving takes it away.
   const matrix: Array<{ status: RunStatus; visible: string[] }> = [
-    { status: 'queued', visible: ['Notes', 'Cancel'] },
-    { status: 'running', visible: ['Notes', 'Cancel'] },
-    { status: 'waiting', visible: ['Finish', 'Notes', 'Cancel'] },
+    { status: 'queued', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'running', visible: ['Notes', 'Pin', 'Cancel'] },
+    { status: 'waiting', visible: ['Finish', 'Notes', 'Pin', 'Cancel'] },
     // Terminal folded into the Open in… menu — it shows whenever the session can be resumed.
-    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
-    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Archive', 'Delete'] },
+    { status: 'review', visible: ['Finish', 'Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'done', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'failed', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
+    { status: 'cancelled', visible: ['Continue', 'Open in…', 'Notes', 'Pin', 'Archive', 'Delete'] },
   ]
 
   it.each(matrix)('$status → $visible', ({ status, visible }) => {
@@ -238,7 +257,7 @@ describe('Mark unread (#775)', () => {
     const names = actionBar()
       .getAllByRole('button')
       .map((el) => el.textContent?.trim())
-    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Archive', 'Delete'])
+    expect(names).toEqual(['Continue', 'Open in…', 'Notes', 'Mark unread', 'Pin', 'Archive', 'Delete'])
   })
 
   it.each([
@@ -395,6 +414,38 @@ describe('actions hit their endpoints', () => {
     await waitFor(() => {
       expect(sent.find((r) => r.path === '/api/v1/runs/r1/archive')?.body).toEqual({ archived: false })
     })
+  })
+
+  it('Pin → POST /pin with the flipped flag, and reads Unpin once pinned (#935)', async () => {
+    const sent = stubFetch()
+    renderHeader(run('done'))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Pin' }))
+    await waitFor(() => {
+      expect(sent.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: true })
+    })
+
+    cleanup()
+    const unpinning = stubFetch()
+    renderHeader(run('done', { pinned: true, pinnedAt: '2026-08-29T10:00:00.000Z' }))
+    fireEvent.click(actionBar().getByRole('button', { name: 'Unpin' }))
+    await waitFor(() => {
+      expect(unpinning.find((r) => r.path === '/api/v1/runs/r1/pin')?.body).toEqual({ pinned: false })
+    })
+  })
+
+  it('an archived run offers no pin at all — archiving retires it (#935)', () => {
+    stubFetch()
+    renderHeader(run('done', { archived: true }))
+    expect(actionBar().queryByRole('button', { name: 'Pin' })).toBeNull()
+    expect(actionBar().queryByRole('button', { name: 'Unpin' })).toBeNull()
+  })
+
+  it('Pin is in the mobile kebab too', async () => {
+    stubFetch()
+    renderHeader(run('running'))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Run actions' }))
+    const menu = within(await screen.findByRole('menu'))
+    expect(menu.getByRole('menuitem', { name: 'Pin' })).not.toBeNull()
   })
 
   it('Cancel asks first — the POST fires only after the confirm dialog', async () => {
@@ -670,7 +721,131 @@ describe('notes panel', () => {
   })
 })
 
+/** A run id no other test has touched. The expand memory is a module-level map keyed by run id
+ *  (the same shape `WorkflowSteps` keeps), so a test that toggles it must not poison the shared
+ *  `r1` fixture every other test in this file renders. */
+let detailsRunSeq = 0
+const freshRunId = () => `details-r${++detailsRunSeq}`
+
+describe('dense run details (#765)', () => {
+  it('collapses the meta row at phone width, and leaves the desktop header as it was', () => {
+    stubFetch()
+    renderHeader(
+      run('done', {
+        id: freshRunId(),
+        branch: 'cez/r1',
+        diffStat: { adds: 42, dels: 7, files: 3 },
+        costUsd: 0.04,
+      }),
+    )
+
+    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
+    const toggle = screen.getByRole('button', { name: 'Show run details' })
+    expect(details.className).toContain('hidden')
+    // The point of the fix: `md:block` means a desktop reader still sees branch, diff, tokens and
+    // cost at a glance, and the control that would ask them to click for it is `md:hidden`.
+    expect(details.className).toContain('md:block')
+    expect(toggle.className).toContain('md:hidden')
+    // A real disclosure relationship, not a visual-only one.
+    expect(details.id).not.toBe('')
+    expect(toggle.getAttribute('aria-controls')).toBe(details.id)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(toggle)
+
+    expect(details.className).not.toContain('hidden')
+    expect(screen.getByRole('button', { name: 'Hide run details' }).getAttribute('aria-expanded')).toBe('true')
+    expect(details.textContent).toContain('cez/r1')
+    expect(details.textContent).toContain('IN 24.6k · OUT 2.4k')
+  })
+
+  it('remembers the expand for that run across a tab switch, and does not leak it to another run', () => {
+    stubFetch()
+    const id = freshRunId()
+    const first = renderHeader(run('done', { id }))
+    fireEvent.click(screen.getByRole('button', { name: 'Show run details' }))
+    first.unmount()
+
+    // Same run, remounted by another task route's header: still expanded, because re-opening it on
+    // every Session → Changes hop is the chore this map exists to avoid.
+    const second = renderHeader(run('done', { id }))
+    expect(screen.queryByRole('button', { name: 'Hide run details' })).not.toBeNull()
+    second.unmount()
+
+    renderHeader(run('done', { id: freshRunId() }))
+    expect(screen.queryByRole('button', { name: 'Show run details' })).not.toBeNull()
+  })
+
+  it('keeps the monitoring schedule out of the disclosure — a self-resuming run is status', () => {
+    stubFetch()
+    renderHeader(
+      run('running', {
+        id: freshRunId(),
+        activity: 'monitoring',
+        monitoringWakeAt: '2026-07-25T10:15:00.000Z',
+      }),
+    )
+
+    const schedule = document.querySelector('[data-slot="monitoring-schedule"]')
+    const details = document.querySelector('[data-slot="run-details"]') as HTMLElement
+    expect(schedule).not.toBeNull()
+    expect(details.contains(schedule)).toBe(false)
+  })
+
+  it('drops the plan mirror at phone width — the dock it mirrors is already on screen there', () => {
+    stubFetch()
+    renderHeader(run('running', { id: freshRunId() }), undefined, { done: 1, total: 3 })
+
+    const mirror = document.querySelector('[data-slot="plan-mirror"]') as HTMLElement
+    expect(mirror.textContent).toBe('Plan 1/3')
+    expect(mirror.className).toContain('hidden')
+    expect(mirror.className).toContain('md:inline')
+  })
+})
+
 describe('meta line, tabs, pill and resume hint', () => {
+  it('scrolls the run header on phones but restores sticky context on desktop', () => {
+    stubFetch()
+    renderHeader(run('done'))
+
+    const header = document.querySelector('[data-slot="run-header"]') as HTMLElement
+    const classes = header.className.split(/\s+/)
+    expect(classes).toContain('relative')
+    expect(classes).not.toContain('sticky')
+    expect(classes).not.toContain('top-0')
+    expect(classes).toContain('md:sticky')
+    expect(classes).toContain('md:top-0')
+    expect(classes).toContain('px-3')
+    expect(classes).toContain('md:px-6')
+  })
+
+  // The plan mirror hides on phones so the title row keeps its space for the status pill and
+  // the kebab. It switches at `md`, the same breakpoint as the sticky header, the tabs, the
+  // composer and the dock — an `sm:` here would reveal it between 640-768px in a header that
+  // is still not sticky, a state the responsive pass never designed for.
+  it('hides the plan mirror on phones and reveals it at the same md breakpoint as the rest of the header', () => {
+    stubFetch()
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/tasks/r1']}>
+          <Routes>
+            <Route
+              path="/tasks/:id"
+              element={<RunHeader run={run('running')} planTally={{ done: 2, total: 5 }} />}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+
+    const mirror = document.querySelector('[data-slot="plan-mirror"]') as HTMLElement
+    expect(mirror.textContent).toContain('Plan 2/5')
+    const classes = mirror.className.split(/\s+/)
+    expect(classes).toContain('hidden')
+    expect(classes).toContain('md:inline')
+    expect(classes).not.toContain('sm:inline')
+  })
+
   it('meta shows workflow · branch chip · ± · input/output · cost, with the agent summary in the badge', () => {
     stubFetch()
     renderHeader(
@@ -820,6 +995,123 @@ describe('meta line, tabs, pill and resume hint', () => {
     }
   })
 
+  // The conflict chip's one-click prompt, end to end: the forge says a PR will not merge, the
+  // chip goes orange, and the panel it opens can send the agent the fix — into the very
+  // conversation under this header, which is what makes the button unambiguous here and nowhere
+  // else in the cockpit.
+  it('sends the resolve-conflicts prompt into this task’s own conversation', async () => {
+    const sent = stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'acme' }),
+      '/api/v1/p/acme/github/ref-status?prs=534': () =>
+        jsonResponse({ available: true, prs: { 534: 'ready' }, issues: {}, conflicts: [534], recheckAfterMs: null }),
+    })
+    renderHeader(
+      run('running', {
+        branch: 'cez/r1',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/534',
+      }),
+    )
+
+    const chip = await waitFor(() => {
+      const found = document.querySelector('[data-slot="pr-chip"][data-conflicting="true"]')
+      if (!found) throw new Error('the chip has not learned about the conflict yet')
+      return found as HTMLElement
+    })
+    fireEvent.focus(chip)
+    fireEvent.click(await waitFor(() => screen.getByRole('button', { name: 'Resolve conflicts' })))
+
+    const message = await waitFor(() => {
+      const found = sent.find((request) => request.method === 'POST' && request.path.endsWith('/messages'))
+      if (!found) throw new Error('nothing was sent')
+      return found
+    })
+    expect(message.body).toMatchObject({ text: resolveConflictsPrompt(534) })
+  })
+
+  // A task opened on someone else's PR that pushes a follow-up of its own is about BOTH,
+  // and its own page is the last place that should have to pick one. Order is `taskReferences`
+  // order — the PR it created, then the PR it is about — the same order the global Tasks table
+  // paints.
+  it('shows every PR the task points at, not only the strongest one', () => {
+    stubFetch()
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/5366',
+        referencedPullRequestUrl: 'https://github.com/open-mercato/cezar/pull/4326',
+        markerRefs: { pr: 5366 },
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips.map((chip) => chip.getAttribute('href'))).toEqual([
+      'https://github.com/open-mercato/cezar/pull/5366',
+      'https://github.com/open-mercato/cezar/pull/4326',
+    ])
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      expect.stringContaining('#5366'),
+      expect.stringContaining('#4326'),
+    ])
+  })
+
+  // The registry knows every project's own repo, so a number-only chip is a real link here just
+  // as it is on All tasks — the two pages must not disagree about the same reference.
+  it('links a PR known only by number, using the project registry repo', async () => {
+    stubFetch({
+      '/api/v1/health': () => jsonResponse({ bootProject: 'boot-id', repo: {} }),
+      '/api/v1/projects': () =>
+        jsonResponse({
+          projects: [
+            { id: 'boot-id', name: 'cezar', root: '/home/me/cezar', repoUrl: 'https://github.com/open-mercato/cezar' },
+          ],
+        }),
+    })
+    renderHeader(run('done', { branch: 'cez/r1', prNumber: 901, markerRefs: { pr: 901 } }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    await waitFor(() => {
+      const chip = meta.querySelector('[data-slot="pr-chip"]')
+      expect(chip?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar/pull/901')
+    })
+  })
+
+  // A PR URL whose last segment is not a number never becomes a `taskReferences` entry, so it is
+  // painted from `taskPrUrl` — and must still be painted when a number-only chip exists beside it
+  // (#847: a forge whose PR URLs are not `…/pull/N`).
+  it('keeps a non-numeric PR link beside a chip known only by number', () => {
+    stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://forge.example.com/o/r/merge_requests/spec-fix',
+        prNumber: 42,
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips).toHaveLength(2)
+    expect(chips.map((chip) => chip.getAttribute('href'))).toContain(
+      'https://forge.example.com/o/r/merge_requests/spec-fix',
+    )
+  })
+
+  it('shows a PR known only by number, with no repository to link it to', () => {
+    stubFetch({ '/api/v1/health': () => jsonResponse({ repo: {} }) })
+    renderHeader(
+      run('done', {
+        branch: 'cez/r1',
+        pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/5366',
+        prNumber: 901,
+      }),
+    )
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    const chips = [...meta.querySelectorAll('[data-slot="pr-chip"]')]
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      expect.stringContaining('#5366'),
+      expect.stringContaining('#901'),
+    ])
+    expect(chips[1]?.tagName).toBe('SPAN') // inert: nothing to link to
+  })
+
   it('the agent badge reveals runner and model on click, reading "auto" when the model is unset', async () => {
     stubFetch()
     renderHeader(run('done', { runner: 'opencode' }))
@@ -828,6 +1120,31 @@ describe('meta line, tabs, pill and resume hint', () => {
     const menu = await screen.findByRole('menu')
     expect(within(menu).getByText('runner: opencode')).not.toBeNull()
     expect(within(menu).getByText('model: auto')).not.toBeNull()
+  })
+
+  it('offers the next-continuation engine picker inside the existing agent badge', async () => {
+    stubFetch()
+    renderHeader(
+      run('done', { runner: 'claude', model: 'sonnet' }),
+      undefined,
+      undefined,
+      <button type="button" aria-label="Model">sonnet</button>,
+    )
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getByText('Next continuation')).not.toBeNull()
+    expect(within(menu).getByRole('button', { name: 'Model' }).textContent).toBe('sonnet')
+  })
+
+  it('keeps the historical badge read-only when no continuation picker is owned by the view', async () => {
+    stubFetch()
+    renderHeader(run('running', { runner: 'claude', model: 'sonnet' }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).queryByText('Next continuation')).toBeNull()
   })
 
   // #416: the record persists only the runner the caller ASKED for (`src/runs/store.ts`), while
@@ -917,6 +1234,57 @@ describe('meta line, tabs, pill and resume hint', () => {
     })
   })
 
+  describe('the canonical model identity (#546)', () => {
+    /** Opens the agent badge's menu — `DropdownMenuContent` is not in the DOM until it does. */
+    const openAgentMenu = async () => {
+      const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+      const badge = within(meta).getByRole('button', { name: /^Agent:/ })
+      fireEvent.pointerDown(badge, { button: 0, ctrlKey: false, pointerType: 'mouse' })
+      await waitFor(() => expect(document.querySelector('[role="menu"]')).not.toBeNull())
+      return document.querySelector('[role="menu"]') as HTMLElement
+    }
+
+    it('shows the provider/model the run actually resolved to', async () => {
+      // The reader `modelIdentity` was missing (#546): #405 persisted it for cost attribution and
+      // replay and nothing read it, so the field could rot without anyone noticing.
+      stubFetch()
+      renderHeader(run('done', {
+        runner: 'claude',
+        model: 'opus',
+        modelIdentity: 'anthropic/claude-opus-4-8',
+      }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')?.textContent)
+        .toBe('identity: anthropic/claude-opus-4-8')
+      // It ADDS to the asked-for model rather than replacing it — `model` is still the free-text
+      // the caller typed, and losing that would make the badge answer a different question.
+      expect(menu.textContent).toContain('model: opus')
+    })
+
+    it('says nothing for a run from before the identity was recorded', async () => {
+      // Same omitted-not-guessed rule as the account line: resolving it now would attribute a
+      // provider to a run that never wrote one down.
+      stubFetch()
+      renderHeader(run('done', { runner: 'claude', model: 'opus' }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
+    })
+
+    it('omits the line when it would only repeat the model', async () => {
+      // A gateway id is already in provider/model form, so echoing it would be noise in a menu
+      // whose whole value is that every line answers something.
+      stubFetch()
+      renderHeader(run('done', {
+        runner: 'claude',
+        model: 'anthropic/claude-opus-4-8',
+        modelIdentity: 'anthropic/claude-opus-4-8',
+      }))
+      const menu = await openAgentMenu()
+      expect(menu.querySelector('[data-slot="agent-badge-identity"]')).toBeNull()
+      expect(menu.textContent).toContain('model: anthropic/claude-opus-4-8')
+    })
+  })
+
   it('a claude run still gets an agent badge — Claude is the default, not a hidden runner', () => {
     stubFetch()
     renderHeader(run('done', { runner: 'claude' }))
@@ -968,5 +1336,69 @@ describe('meta line, tabs, pill and resume hint', () => {
     stubFetch()
     renderHeader(run('running'))
     expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
+  })
+})
+
+/**
+ * Provenance in the thread header (spec `.ai/specs/2026-09-10-dispatch.md`): a dispatched task
+ * links back to the task that ordered it, and a task that dispatched work names what it started.
+ * Both are read from the run list this page already holds, so neither costs a request.
+ */
+describe('dispatch lines', () => {
+  const parentLine = () => document.querySelector('[data-slot="dispatch-parent-line"]')
+  const parentLink = () => document.querySelector('[data-slot="dispatch-parent"]')
+  const childrenLine = () => document.querySelector('[data-slot="dispatch-children"]')
+  const childLinks = () => [...document.querySelectorAll('[data-slot="dispatch-child"]')]
+
+  it('says nothing at all for a plain task', async () => {
+    stubFetch()
+    renderHeader(run('done'))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    expect(parentLine()).toBeNull()
+    expect(childrenLine()).toBeNull()
+  })
+
+  it('links a child back to its parent, titled from the run list', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([run('done', { id: 'p1', title: 'Ship the release', titleSummary: 'Ship the release' })]),
+    })
+    renderHeader(run('running', { id: 'c1', dispatch: { rootRunId: 'p1', parentRunId: 'p1' } }))
+    // The title arrives with the run list; the link itself is painted from `run.dispatch` alone.
+    await waitFor(() => expect(parentLink()?.textContent).toContain('Ship the release'))
+    expect(parentLine()?.textContent).toContain('Dispatched by')
+    expect(parentLink()?.getAttribute('href')).toBe('/tasks/p1')
+  })
+
+  // A parent outside the list (another project, pruned) still gets its link: dropping the line
+  // would leave a thread that cannot say who ordered it.
+  it('falls back to the parent’s id when the list does not carry it', async () => {
+    stubFetch()
+    renderHeader(run('running', { id: 'c1', dispatch: { rootRunId: 'gone', parentRunId: 'gone' } }))
+    await waitFor(() => expect(parentLink()).not.toBeNull())
+    expect(parentLink()?.textContent).toContain('gone')
+  })
+
+  it('names the subtasks a parent dispatched, each linking into its own thread', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          run('done', { id: 'k1', titleSummary: 'Review PR #1', dispatch: { rootRunId: 'r1', parentRunId: 'r1' } }),
+          run('running', { id: 'k2', titleSummary: 'Review PR #2', dispatch: { rootRunId: 'r1', parentRunId: 'r1' } }),
+          run('done', { id: 'other', titleSummary: 'Unrelated' }),
+        ]),
+    })
+    renderHeader(run('running', { id: 'r1', dispatch: { rootRunId: 'r1' } }))
+    await waitFor(() => expect(childLinks()).toHaveLength(2))
+    expect(childrenLine()?.textContent).toContain('Subtasks')
+    expect(childLinks().map((a) => a.getAttribute('href'))).toEqual(['/tasks/k1', '/tasks/k2'])
+  })
+
+  // The role chip is gone with the ranks it named — nothing in the header may reintroduce it.
+  it('wears no rank chip', async () => {
+    stubFetch()
+    renderHeader(run('running', { dispatch: { rootRunId: 'r1' } }))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
   })
 })

@@ -1,5 +1,7 @@
 import type { ExtractSchema } from 'hono/types';
 import { describe, expect, it } from 'vitest';
+import { setWorkspaceUiStateInputSchema } from '@open-mercato/cezar-contract';
+import type { z } from 'zod';
 import type { AppType } from './app-type.ts';
 
 /**
@@ -27,6 +29,7 @@ describe('every mutating route carries a typed body into AppType', () => {
     : false;
 
   type Assert<T extends true> = T;
+  type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
   // Project-scoped routes are asserted on their unscoped spelling; the `/api/v1/p/:projectId`
   // mount is the same sub-app, so it stands or falls with this one.
@@ -36,6 +39,8 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/automations', '$post'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id', '$put'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id/check', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/dispatch', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/report', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/checkout', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/:projectId', '$patch'>>,
@@ -56,6 +61,7 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/config', '$put'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id', '$patch'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/archive', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/pin', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/continue', '$post'>>,
     Assert<HasTypedBody<'/api/v1/todos/:id/start', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/messages', '$post'>>,
@@ -68,6 +74,11 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/check', '$post'>>,
     Assert<HasTypedBody<'/api/v1/workspace/skills-update/apply', '$post'>>,
   ];
+
+  type WorkspaceUiStatePutBody = Schema['/api/v1/workspace/ui-state']['$put']['input']['json'];
+  type _WorkspaceUiStateInputCheck = Assert<
+    Mutual<z.infer<typeof setWorkspaceUiStateInputSchema>, WorkspaceUiStatePutBody>
+  >;
 
   /** Same idea for the routes that validate a path param or the query string. */
   type HasTypedInput<
@@ -99,6 +110,8 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedInput<'/api/v1/github/prs/:number/changes', '$get', 'param'>>,
     Assert<HasTypedInput<'/api/v1/repo/commit/:sha', '$get', 'query'>>,
     Assert<HasTypedInput<'/api/v1/automation-log', '$get', 'query'>>,
+    // The role enum is validated as a PATH PARAM, so an unknown role is a 400 from middleware
+    // rather than an `undefined` index into the defaults inside the handler.
   ];
 
   it('is enforced by tsc, not at runtime', () => {

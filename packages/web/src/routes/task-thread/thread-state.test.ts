@@ -131,6 +131,27 @@ describe('reduceThread — item ids across workflow steps', () => {
   })
 })
 
+describe('reduceThread — stable source identities under history prepend', () => {
+  it('keeps an existing turn key when an older page is prepended', () => {
+    const tail = [
+      line(100, 'turn.started', { turnId: 'tail' }),
+      line(101, 'item.completed', {
+        item: { kind: 'message', id: 'm-tail', role: 'assistant', text: 'tail' },
+      }),
+    ]
+    const tailId = reduceThread(tail).turns[0]!.id
+    const withOlder = reduceThread([
+      line(10, 'turn.started', { turnId: 'older' }),
+      line(11, 'item.completed', {
+        item: { kind: 'message', id: 'm-old', role: 'assistant', text: 'old' },
+      }),
+      ...tail,
+    ])
+    expect(tailId).toBe('turn-seq-100')
+    expect(withOlder.turns[1]!.id).toBe(tailId)
+  })
+})
+
 describe('reduceThread — v1-only fallback (pre-v2 transcripts)', () => {
   it('hides Codex collaboration bookkeeping that protocol v2 renders as grouped agents', () => {
     const { turns } = reduceThread([
@@ -671,6 +692,22 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
     expect(items).toEqual([
       { kind: 'note', id: 'v1:1', text: 'worktree ready', tone: 'dim' },
       { kind: 'note', id: 'v1:2', text: 'run started', tone: 'dim' },
+    ])
+  })
+
+  // #936 — a note that reports something the user LOST (a discarded CEZ:ASK
+  // question) opts into `tone: 'danger'` so it is not the dimmest line in the
+  // thread. Anything else — including every note written before the field
+  // existed — stays dim.
+  it('note with tone: danger → a danger line; an unknown tone stays dim', () => {
+    expect(
+      allItems([
+        line(1, 'note', { message: 'structured question ignored', tone: 'danger' }),
+        line(2, 'note', { message: 'worktree ready', tone: 'loud' }),
+      ]),
+    ).toEqual([
+      { kind: 'note', id: 'v1:1', text: 'structured question ignored', tone: 'danger' },
+      { kind: 'note', id: 'v1:2', text: 'worktree ready', tone: 'dim' },
     ])
   })
 

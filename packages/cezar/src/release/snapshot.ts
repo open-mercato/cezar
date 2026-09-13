@@ -16,11 +16,22 @@ import { stampManifestSet, type ReleaseManifests as ReleaseManifestSet } from '.
 
 /** The CI facts the decision needs, straight from GitHub Actions' env/event. */
 export interface SnapshotContext {
-  /** `GITHUB_EVENT_NAME` — only `pull_request` and `push` ever publish. */
+  /** `GITHUB_EVENT_NAME` — `pull_request` and `push` publish previews; `schedule`
+   *  and `workflow_dispatch` publish only the explicitly requested nightly. */
   eventName: string;
   /** `GITHUB_REF_NAME` for push events — only `develop` publishes a snapshot;
-   *  `main` is reserved for owner-driven stable releases (see stable.ts). */
+   *  `main` is reserved for owner-driven stable releases (see stable.ts) and for
+   *  the nightly channel below, which never moves `latest` either. */
   refName: string;
+  /** `CEZ_RELEASE_CHANNEL` — a channel asked for by name rather than derived from
+   *  the event. Only `.github/workflows/nightly.yml` sets it (to `nightly`); every
+   *  other caller leaves it empty and gets the event-derived channel. Opt-in by
+   *  name is what keeps a `workflow_dispatch` of ci.yml from cutting a nightly by
+   *  accident — the event alone is not enough. */
+  requestedChannel?: string;
+  /** `YYYYMMDD` (UTC) of the day a nightly is cut — the nightly version is named
+   *  after its date. Required for the nightly channel, ignored by every other. */
+  nightlyDate?: string;
   /** PR number for pull_request events; absent/invalid → no publish. */
   prNumber?: number;
   /** `owner/name` of the PR head repo — fork PRs (≠ `repo`) never publish. */
@@ -51,14 +62,34 @@ export function computeSnapshot(ctx: SnapshotContext): SnapshotPlan | null {
   const attempt = ctx.runAttempt !== undefined && Number.isInteger(ctx.runAttempt) && ctx.runAttempt > 1
     ? `.${ctx.runAttempt}`
     : '';
+  // A nightly is named after the day it was cut — `0.1.5-nightly.20260813.126` —
+  // so `npm view cezar-cli versions` reads as a calendar and a user can tell at a
+  // glance how old their build is. The run number still trails the date, because a
+  // manual re-cut on the same day must not collide with the scheduled one. Both are
+  // plain numeric semver identifiers, so the ordering stays chronological.
+  const nightly = channel.channel === 'nightly';
+  if (nightly && !/^\d{8}$/.test(ctx.nightlyDate ?? '')) return null;
+  const stamp = nightly ? `${ctx.nightlyDate}.${ctx.runNumber}` : `${ctx.runNumber}`;
   return {
     channel: channel.channel,
-    version: `${ctx.baseVersion}-${channel.channel}.${ctx.runNumber}${attempt}`,
+    version: `${ctx.baseVersion}-${channel.channel}.${stamp}${attempt}`,
     distTag: channel.distTag,
   };
 }
 
 function resolveChannel(ctx: SnapshotContext): { channel: string; distTag: string } | null {
+  // A named channel wins over the event-derived ones, and is the ONLY way to reach
+  // nightly — asked for explicitly by nightly.yml, never inferred from an event.
+  // An unrecognised name publishes nothing rather than silently falling back: a
+  // typo in a workflow should be a no-op, not a publish under the wrong tag.
+  if (ctx.requestedChannel) {
+    if (ctx.requestedChannel !== 'nightly') return null;
+    // Nightly cuts main's tip — on the schedule, or on demand from the Actions tab
+    // when someone needs a fresh build before the next night.
+    if (ctx.eventName !== 'schedule' && ctx.eventName !== 'workflow_dispatch') return null;
+    if (ctx.refName !== 'main') return null;
+    return { channel: 'nightly', distTag: 'nightly' };
+  }
   if (ctx.eventName === 'pull_request') {
     const n = ctx.prNumber;
     if (n === undefined || !Number.isInteger(n) || n <= 0) return null;

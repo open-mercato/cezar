@@ -35,9 +35,31 @@ export const projectListEntrySchema = z.object({
   /** Which forge this project's remote belongs to (#698) — classified server-side from the
    *  remote URL alone. Gates the project group's GitHub nav item; omitted = no forge remote. */
   forge: z.literal('github').optional(),
+  /**
+   * The remote's web root, `https://github.com/owner/repo`. Rebuilt server-side from the parsed
+   * remote rather than passed through, so a remote carrying credentials cannot leak into the
+   * cockpit. Omitted when the project has no forge remote.
+   *
+   * It exists for the cross-project surfaces: a run often knows a PR or issue only by NUMBER, and
+   * the global Tasks page has one row per project, so it cannot use any single repo's base the
+   * way a project-scoped view can. With this, every reference it shows is a link.
+   */
+  repoUrl: z.string().optional(),
   /** Per-project cap on concurrently running tasks (spec 2026-07-22). Omitted = inherit the
    *  workspace `resources.maxParallel`; a number pins this project. */
   maxParallel: z.number().optional(),
+  /**
+   * Free-form labels grouping CONNECTED repositories — a `storefront` tag on the API, the web
+   * app and the design system says those three are one piece of work spread over three repos.
+   * The global Tasks page (`/tasks`) filters and groups by them.
+   *
+   * Omitted rather than `[]` when a project has none, exactly like `maxParallel`: the registry
+   * stores nothing for a project nobody has tagged, and an empty array on the wire would make
+   * "never tagged" indistinguishable from "tagged, then emptied" for no gain. Normalized
+   * server-side (trimmed, deduped case-insensitively, sorted), so a consumer may compare them
+   * directly.
+   */
+  tags: z.array(z.string()).optional(),
 });
 export type ProjectListEntry = z.infer<typeof projectListEntrySchema>;
 
@@ -82,18 +104,45 @@ export const updateProjectResponseSchema = z.object({
 });
 export type UpdateProjectResponse = z.infer<typeof updateProjectResponseSchema>;
 
+/** Bounds for one tag and for a project's tag list. Named because three places must agree: this
+ *  schema, the registry schema that must never `.catch` away a value this accepts
+ *  (`workspaceProjectSchema` in the service), and the settings editor that refuses input early. */
+export const PROJECT_TAG_MAX_LENGTH = 32;
+export const PROJECT_TAGS_MAX = 20;
+
 /**
- * `PATCH /api/v1/projects/:projectId` body (spec 2026-07-22-per-project-concurrency) — set or
- * clear a project's per-project concurrency ceiling. `null` clears the override back to "inherit
- * the workspace cap"; an integer `1..16` pins it. The bounds mirror `workspaceProjectSchema`
- * exactly, so a value this schema accepts can never be degraded away by the next load's `.catch`.
+ * `PATCH /api/v1/projects/:projectId` body — the two per-project registry fields the cockpit
+ * edits. Each key is optional and a body may carry either or both: a PATCH names the fields it
+ * changes, and an absent key must stay distinguishable from one set to `null` (which CLEARS). A
+ * `{ maxParallel }`-only body — every pre-tags client sends exactly that — therefore still means
+ * what it always did. An EMPTY body is still refused, as it was before tags existed: a request
+ * that names no field is a mistake, and answering 200 to it would report a change that never
+ * happened (and cost a full config rewrite to do nothing).
+ *
+ * - `maxParallel` (spec 2026-07-22-per-project-concurrency): `null` clears the override back to
+ *   "inherit the workspace cap"; an integer `1..16` pins it. The bounds mirror
+ *   `workspaceProjectSchema` exactly, so a value this schema accepts can never be degraded away
+ *   by the next load's `.catch`.
+ * - `tags`: the whole list, replaced wholesale — there is no add-one/remove-one spelling,
+ *   because the editor always knows the full set and a merge protocol would only add a way for
+ *   two tabs to disagree. `null` and `[]` both clear it; the server normalizes before storing.
  *
  * Deliberately NOT where the agent-account selection lives — that is
  * `PUT /api/v1/workspace/agent-profiles/selection`, stored beside the accounts it names.
  */
-export const updateProjectInputSchema = z.object({
-  maxParallel: z.number().int().min(1).max(16).nullable(),
-});
+export const updateProjectInputSchema = z
+  .object({
+    maxParallel: z.number().int().min(1).max(16).nullable().optional(),
+    tags: z
+      .array(z.string().trim().min(1).max(PROJECT_TAG_MAX_LENGTH))
+      .max(PROJECT_TAGS_MAX)
+      .nullable()
+      .optional(),
+  })
+  .refine(
+    (body) => body.maxParallel !== undefined || body.tags !== undefined,
+    'specify maxParallel or tags',
+  );
 export type UpdateProjectInput = z.infer<typeof updateProjectInputSchema>;
 
 /**

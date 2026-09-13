@@ -1,4 +1,5 @@
 import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
+import { runItemKey } from '@/api/run-events'
 import {
   toolDisplay,
   type PlanEntry,
@@ -69,16 +70,15 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'opencode'
+  provider: 'claude' | 'codex' | 'opencode' | 'pi'
   authFailureId: string
 }
 
 export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk | ThreadProviderAuthRequired
 
 export interface ThreadTurn {
-  /** Stable render key, assigned in arrival order (`turn-1`, `turn-2`, …). Not the protocol
-   *  turnId: a v1-opened turn gets its v2 id later, and a key that changes mid-stream would
-   *  remount everything under it. */
+  /** Stable source-derived render key. The opening event sequence survives prepended pages;
+   *  ordinal fallback exists only for malformed legacy content with no boundary event. */
   id: string
   /** The protocol-v2 turnId, once known. */
   turnId?: string
@@ -193,8 +193,13 @@ function str(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return value === 'claude' || value === 'codex' || value === 'opencode' ? value : undefined
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'pi'
+    ? value
+    : undefined
 }
+
+const isAskQuestion = (value: unknown): value is UiAskQuestion =>
+  isRecord(value) && typeof value.header === 'string' && Array.isArray(value.options)
 
 /** The engine's turn-end markers (`CEZ:DONE`, `CEZ:MONITORING` from #490) plus the in-band
  *  task-reference marker lines (`CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`, spec
@@ -324,17 +329,20 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
    *  parks `waiting` until the user answers). */
   let pendingAsk: ThreadAsk | undefined
 
-  const newTurn = (): DraftTurn => {
+  const newTurn = (sourceSeq?: number): DraftTurn => {
     turnSeq += 1
-    const turn: DraftTurn = { id: `turn-${turnSeq}`, entries: [], v2Items: false }
+    const turn: DraftTurn = {
+      id: sourceSeq === undefined ? `turn-fallback-${turnSeq}` : `turn-seq-${sourceSeq}`,
+      entries: [],
+      v2Items: false,
+    }
     turns.push(turn)
     return turn
   }
   const currentTurn = (): DraftTurn => turns.at(-1) ?? newTurn()
 
   const itemKey = (event: RunEvent, itemId: string) => {
-    const stepId = str(event.stepId)
-    return stepId === undefined ? itemId : `${stepId}:${itemId}`
+    return runItemKey(event.stepId, itemId)
   }
 
   const upsertV2 = (turn: DraftTurn, raw: UiItem, key: string) => {
@@ -380,7 +388,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
           if (text !== '') pendingAsk.answer = text
           pendingAsk = undefined
         }
-        const turn = newTurn()
+        const turn = newTurn(event.seq)
         turn.userMessage = {
           text,
           imageCount: typeof event.imageCount === 'number' ? event.imageCount : 0,
@@ -397,7 +405,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         if (current && current.turnId === undefined && !current.v2Items) {
           current.turnId = turnId
         } else {
-          newTurn().turnId = turnId
+          newTurn(event.seq).turnId = turnId
         }
         break
       }
@@ -513,9 +521,14 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       case 'lifecycle': {
         const text = str(event.message) ?? ''
         if (text === '') break
+        // Notes are dim by default — they are commentary. A note may opt into
+        // `tone: 'danger'` when it reports something the user actually lost, so
+        // it does not render as the dimmest line in the thread (#936). Events
+        // written before that field exists carry no `tone` and stay dim.
+        const tone = event.tone === 'danger' ? 'danger' : 'dim'
         currentTurn().entries.push({
           origin: 'meta',
-          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone: 'dim' },
+          entry: { kind: 'note', id: `v1:${event.seq}`, text, tone },
         })
         break
       }
@@ -611,10 +624,12 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         // turn. Guard the payload (a bad line costs one event, never a throw).
         const requestId = str(event.requestId)
         if (requestId === undefined || !Array.isArray(event.questions)) break
-        const questions = (event.questions as unknown[]).filter(
-          (q): q is UiAskQuestion =>
-            isRecord(q) && typeof q.header === 'string' && Array.isArray(q.options),
-        )
+        const rawQuestions = event.questions as unknown[]
+        // Keep the wire array for the normal valid case. `reduceThread` runs again for every live
+        // batch, and a fresh filtered array would defeat the transcript row comparator.
+        const questions = rawQuestions.every(isAskQuestion)
+          ? rawQuestions as UiAskQuestion[]
+          : rawQuestions.filter(isAskQuestion)
         if (questions.length === 0) break
         const ask: ThreadAsk = { kind: 'ask', id: requestId, questions, resolved: false }
         currentTurn().entries.push({ origin: 'meta', entry: ask })

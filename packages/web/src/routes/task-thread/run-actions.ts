@@ -91,6 +91,12 @@ export interface RunActionFlags {
   notes: boolean
   /** Archive when live, unarchive when archived — the record itself says which. */
   archive: boolean
+  /** Pin to the top of this project's task list, or unpin (#935) — the record says which.
+   *  Offered for every status, because a pin is about what YOU are working on rather than what
+   *  the engine is doing: a queued task you are waiting for is as pin-worthy as a running one.
+   *  Not for an archived run: archiving retires the pin server-side and the archived view is one
+   *  flat bucket, so the button would be an action with nowhere to show its result. */
+  pin: boolean
   /** Put a read, finished task back into the unread list (#775). Offered only where it would
    *  MEAN something: the run must be eligible to wear the unread marker at all
    *  (`canBeUnread` — done/failed, actually finished, not archived) and must currently be
@@ -112,10 +118,31 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
     terminal: !active && hasSession,
     notes: true,
     archive: !active,
+    pin: !run.archived,
     markUnread: canBeUnread(run) && !isUnread(run),
     cancel: active,
     deleteRun: !active,
   }
+}
+
+/**
+ * The prompt behind the conflict chip's "Resolve conflicts" — the words the agent receives.
+ *
+ * It NAMES the pull request, and that is the load-bearing part: a task can point at several (the
+ * PR it opened and the PR it is about, #901), each gets its own chip, and each chip's button sends
+ * this. Without the number the agent would be told to resolve conflicts with no way to tell which
+ * of them — and would pick, at even odds, the one the user was not looking at.
+ *
+ * Here rather than inline in the header for the reason every rule in this module is: it is text a
+ * user will read in their own conversation, indistinguishable from something they typed — because
+ * that is exactly what it is — and a test can pin it.
+ */
+export function resolveConflictsPrompt(prNumber?: number): string {
+  // No number is what a PR known only by URL looks like (`taskPrUrl`'s tolerance for a forge whose
+  // links do not end in one). "this pull request" is then the honest deixis: the conversation is
+  // the task's own, and it has exactly one such PR.
+  const where = prNumber ? `PR number ${prNumber}` : 'this pull request'
+  return `Merge head branch and resolve conflicts in ${where}`
 }
 
 /** The Finish button's tooltip — review-gate accept reads differently from closing a session. */

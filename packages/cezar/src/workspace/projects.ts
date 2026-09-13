@@ -1,7 +1,8 @@
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import { forgeKindOfRemote, type ForgeKind } from '../server/forge/index.ts';
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import { forgeKindOfRemote, forgeWebRoot, type ForgeKind } from '../server/forge/index.ts';
 import { getRepoInfo } from '../server/git.ts';
 import {
   mergeWriteWorkspaceConfig,
@@ -151,6 +152,34 @@ export async function registerProject(
   return entry;
 }
 
+/**
+ * The ONE spelling rule for project tags — applied on every write, never on read.
+ *
+ * Trimmed, empties dropped, over-long ones truncated, deduped CASE-INSENSITIVELY (the first
+ * spelling wins, so `Storefront` typed before `storefront` keeps its capital), capped at
+ * `PROJECT_TAGS_MAX`, and sorted so two projects tagged with the same set store and render the
+ * same list. Case-insensitive dedupe is what makes tags usable as a grouping key: `API` and `api`
+ * grouping into two columns of the same thing is the whole failure this prevents.
+ *
+ * Returns `undefined` — never `[]` — for an empty result, because the registry stores nothing for
+ * an untagged project and `delete entry.tags` is what the writers then do.
+ */
+export function normalizeProjectTags(tags: readonly string[] | null | undefined): string[] | undefined {
+  if (!tags) return undefined;
+  const bySpelling = new Map<string, string>();
+  for (const raw of tags) {
+    const tag = raw.trim().slice(0, PROJECT_TAG_MAX_LENGTH);
+    if (!tag) continue;
+    const key = tag.toLowerCase();
+    if (!bySpelling.has(key)) bySpelling.set(key, tag);
+    if (bySpelling.size >= PROJECT_TAGS_MAX) break;
+  }
+  const normalized = [...bySpelling.values()].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: 'base' }),
+  );
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 export type ProjectStatus = 'ok' | 'missing' | 'not-git';
 
 export interface ProjectListEntry extends WorkspaceProject {
@@ -163,12 +192,18 @@ export interface ProjectListEntry extends WorkspaceProject {
    *  The sidebar gates each project group's GitHub tab on this, instead of on
    *  the boot folder's health-level forge answer. */
   forge?: ForgeKind;
+  /** The remote's web root (`https://github.com/owner/repo`), rebuilt from the
+   *  parsed remote so it can never carry credentials. What lets a cross-project
+   *  surface link a reference the run knows only by NUMBER — the global Tasks
+   *  page has one row per project and so cannot use any single repo's base. */
+  repoUrl?: string;
 }
 
 interface RootProbe {
   status: ProjectStatus;
   branch?: string;
   forge?: ForgeKind;
+  repoUrl?: string;
 }
 
 /** Probe TTL — long enough to coalesce a burst of sidebar renders, short
@@ -198,10 +233,13 @@ async function computeProbe(root: string): Promise<RootProbe> {
   // on e.g. an unborn HEAD), and a repo without either is still status ok.
   const info = await getRepoInfo(root);
   const forge = forgeKindOfRemote(info?.remote);
+  // Free: `getRepoInfo` already ran for the branch, and the remote is already parsed for `forge`.
+  const repoUrl = forgeWebRoot(info?.remote);
   return {
     status: 'ok',
     ...(info?.branch ? { branch: info.branch } : {}),
     ...(forge ? { forge } : {}),
+    ...(repoUrl ? { repoUrl } : {}),
   };
 }
 
@@ -222,7 +260,7 @@ async function probeRoot(root: string): Promise<RootProbe> {
  */
 export async function probeProjectStatus(
   root: string,
-): Promise<Pick<ProjectListEntry, 'status' | 'branch' | 'forge'>> {
+): Promise<Pick<ProjectListEntry, 'status' | 'branch' | 'forge' | 'repoUrl'>> {
   return probeRoot(root);
 }
 

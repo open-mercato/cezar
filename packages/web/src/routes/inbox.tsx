@@ -15,7 +15,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
-import { insertTemplate, normalizePromptTemplates } from '@/lib/prompt-templates'
+import { availablePromptTemplates, insertTemplate, normalizePromptTemplates } from '@/lib/prompt-templates'
 import { isHttpUrl } from '@/lib/utils'
 
 /**
@@ -158,7 +158,9 @@ function TodoCard({
 
   // Per card, not per route (#401): each card starts its OWN run, so "run this one on codex"
   // must not silently re-aim the card below it. Reset is free — a started card leaves the list.
-  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null })
+  // `account` stays null here: this card posts to `POST /todos/:id/start`, which has no
+  // `agentProfile` field, so `EnginePills` is mounted without `accounts` and never sets one.
+  const [engine, setEngine] = useState<EnginePick>({ runner: null, model: null, account: null })
   const resolved = useResolvedEngine(engine)
 
   // "Add instructions" (#413): collapsed by default, local to the card (see the doc block
@@ -166,7 +168,11 @@ function TodoCard({
   const [notesOpen, setNotesOpen] = useState(false)
   const [notes, setNotes] = useState('')
   const notesRef = useRef<HTMLTextAreaElement>(null)
-  const templates = normalizePromptTemplates(uiState.data?.promptTemplates)
+  const health = useHealth()
+  const templates = availablePromptTemplates(
+    normalizePromptTemplates(uiState.data?.promptTemplates),
+    health.data?.capabilities,
+  )
   const insertNotesTemplate = (snippet: string) => {
     const el = notesRef.current
     const caret = el?.selectionStart ?? notes.length

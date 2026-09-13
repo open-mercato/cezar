@@ -2,14 +2,18 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { CacheSnapshot } from 'virtua'
 
 import {
+  HISTORY_BOUNDARY_SLACK_PX,
   NEAR_BOTTOM_SLACK_PX,
   VIRTUALIZE_THRESHOLD,
   clearThreadScrollCaches,
+  firstVisibleThreadAnchor,
   isNearBottom,
+  isNearHistoryStart,
   readThreadMeasurements,
   readThreadScroll,
   saveThreadMeasurements,
   saveThreadScroll,
+  threadAnchorScrollTop,
   threadRenderMode,
 } from './thread-scroll'
 
@@ -30,6 +34,39 @@ describe('isNearBottom — the shared stick rule', () => {
     [0, NEAR_BOTTOM_SLACK_PX, false],
   ])('scrollTop %d, slack %s → %s', (scrollTop, slack, expected) => {
     expect(isNearBottom(box(scrollTop), slack)).toBe(expected)
+  })
+})
+
+describe('isNearHistoryStart — intent is consumed only near the retained boundary', () => {
+  it('uses the larger of one viewport and the fixed history slack', () => {
+    expect(isNearHistoryStart({ scrollTop: HISTORY_BOUNDARY_SLACK_PX - 1, clientHeight: 400 })).toBe(true)
+    expect(isNearHistoryStart({ scrollTop: HISTORY_BOUNDARY_SLACK_PX, clientHeight: 400 })).toBe(false)
+    expect(isNearHistoryStart({ scrollTop: 899, clientHeight: 900 })).toBe(true)
+    expect(isNearHistoryStart({ scrollTop: 900, clientHeight: 900 })).toBe(false)
+  })
+})
+
+describe('stable history anchors', () => {
+  const before = [
+    { key: 'row-a', top: 80, bottom: 120 },
+    { key: 'row-b', top: 120, bottom: 180 },
+  ]
+
+  it('captures the first partially visible row and its pixel offset', () => {
+    expect(firstVisibleThreadAnchor(100, before)).toEqual({ key: 'row-a', offset: -20 })
+  })
+
+  it('restores row identity when tail eviction cancels the total-height delta', () => {
+    const anchor = firstVisibleThreadAnchor(100, before)
+    const after = [
+      { key: 'new-row', top: 60, bottom: 120 },
+      { key: 'row-a', top: 200, bottom: 240 },
+    ]
+    expect(threadAnchorScrollTop(500, 100, anchor, after, 500)).toBe(620)
+  })
+
+  it('falls back to height-delta restoration when the anchor row was evicted', () => {
+    expect(threadAnchorScrollTop(500, 100, { key: 'gone', offset: 0 }, before, 740)).toBe(740)
   })
 })
 

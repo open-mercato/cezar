@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createAutoUi } from './ui.ts';
-import { generatePassword, sudoStep, StepAborted, StepSkipped, verifyCommand } from './steps.ts';
+import { depCheckStep, generatePassword, sudoStep, StepAborted, StepSkipped, verifyCommand } from './steps.ts';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+import type { BackendCheck } from '../core/backend-detect.ts';
 import type { CommandResult, InstallContext, Runner, Ui } from './types.ts';
 
 function makeCtx(over: {
@@ -198,5 +200,41 @@ describe('sudoStep secret channel (stdin, never argv)', () => {
     const displayed = shown.find((m) => m.startsWith('sudo bash -lc'));
     expect(displayed).toBeDefined();
     expect(displayed).not.toContain('secret-hash');
+  });
+});
+
+/**
+ * The "at least one agent CLI" gate (#387 review). `BackendCheck['name']` mixes agent CLIs with
+ * the non-agent tools (`gh`, `git`), so the gate must filter — and the literal `['claude',
+ * 'codex', 'opencode']` it used to filter with was a runtime string array typecheck could not
+ * guard, so a pi-only host reported "no agent CLI" while pi sat right there in the checks.
+ * These cases pin the gate to RUNNER_IDS: every runner satisfies it alone, no non-runner does.
+ */
+describe('depCheckStep — the agent-CLI gate', () => {
+  const check = (name: BackendCheck['name'], available: boolean): BackendCheck => ({ name, available });
+
+  const runGate = (checks: BackendCheck[]) =>
+    depCheckStep({ detect: async () => checks }).check!(makeCtx({}));
+
+  it.each(RUNNER_IDS)('is satisfied by %s alone — no runner is second-class', async (runner) => {
+    await expect(runGate([check(runner, true), check('gh', false), check('git', true)])).resolves.toBe(true);
+  });
+
+  it('is NOT satisfied when every agent CLI is missing, however many other tools are present', async () => {
+    const checks: BackendCheck[] = [
+      ...RUNNER_IDS.map((r) => check(r, false)),
+      check('gh', true),
+      check('git', true),
+    ];
+    await expect(runGate(checks)).resolves.toBe(false);
+  });
+
+  it('never counts a non-agent tool as an agent CLI', async () => {
+    await expect(runGate([check('gh', true), check('git', true)])).resolves.toBe(false);
+  });
+
+  it('stays unsatisfied in dry-run — the step must still be offered', async () => {
+    const step = depCheckStep({ detect: async () => [check('claude', true)] });
+    await expect(step.check!(makeCtx({ dryRun: true }))).resolves.toBe(false);
   });
 });

@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 const exec = promisify(execFile);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'gh' | 'git';
+  name: 'claude' | 'codex' | 'opencode' | 'pi' | 'gh' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -12,13 +12,20 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` alternatives), `gh` (GitHub auth for PR
- * creation) and `git`. Nothing is required except at least one agent CLI — the
- * GUI degrades gracefully, only offers the runners that are present, and shows
- * the hints for the rest.
+ * the optional `codex` / `opencode` / `pi` alternatives), `gh` (GitHub auth for
+ * PR creation) and `git`. Nothing is required except at least one agent CLI —
+ * the GUI degrades gracefully, only offers the runners that are present, and
+ * shows the hints for the rest.
  */
 export async function detectEnvironment(): Promise<BackendCheck[]> {
-  return Promise.all([probeClaude(), probeCodex(), probeOpencode(), probeGh(), probeGit()]);
+  return Promise.all([
+    probeClaude(),
+    probeCodex(),
+    probeOpencode(),
+    probePi(),
+    probeGh(),
+    probeGit(),
+  ]);
 }
 
 async function probeClaude(): Promise<BackendCheck> {
@@ -91,6 +98,31 @@ async function probeOpencode(): Promise<BackendCheck> {
       name: 'opencode',
       available: false,
       hint: 'optional: install OpenCode (https://opencode.ai) and configure a provider to use the OpenCode runner',
+    };
+  }
+}
+
+async function probePi(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the shared mock, so report it present.
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'pi', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_PI_BIN ?? 'pi';
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'pi',
+      available: true,
+      version: stdout.trim(),
+      hint: 'if not authenticated, run `pi` once and log in',
+    };
+  } catch {
+    // A missing `pi` CLI is never a boot failure — the runner just isn't
+    // offered, exactly like an absent codex/opencode.
+    return {
+      name: 'pi',
+      available: false,
+      hint: 'optional: install the pi CLI and log in to use the pi runner',
     };
   }
 }

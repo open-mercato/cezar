@@ -4,8 +4,17 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { join } from 'node:path';
 import { z } from 'zod';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
+import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
 import { workflowDefSchema } from '../workflows/types.ts';
+// A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
+// `dispatch` object and its wire half are literally the same schema, so they cannot drift.
+import { dispatchSchema } from '@open-mercato/cezar-contract';
+
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
+import type { RunnerId } from '../core/agent-runner.ts';
 
 export type RunStatus = 'queued' | 'running' | 'waiting' | 'review' | 'done' | 'failed' | 'cancelled';
 /**
@@ -28,6 +37,30 @@ export type StepStatus =
 
 const usageCounterSchema = z.number().finite().nonnegative();
 
+/**
+ * A runner id as it may appear in a PERSISTED record, normalized to the three
+ * ids the rest of cezar speaks (#547).
+ *
+ * `claude-cli` is the legacy spelling of `claude` — still a member of
+ * `AgentBackend` and still accepted by `createRunner`, and named by
+ * `BACKWARD_COMPATIBILITY.md` §3 as an id `runs.json` keeps parseable. The enum
+ * here did not accept it, so that promise was false: the loader `safeParse`s the
+ * WHOLE array, so one record carrying it would have dropped every run in the
+ * file — the exact failure mode §3 exists to warn about.
+ *
+ * Parse-and-fold rather than widen: the legacy id is accepted on the way in and
+ * collapsed to `claude`, so no consumer, wire type or contract schema ever sees
+ * a fourth runner. The narrowing is one-way and permanent (the index is
+ * re-serialized from the parsed records), which is what "old run records
+ * normalise identically to `claude`" in `core/model-identity.ts` has always
+ * claimed. Use ONLY for read-back of stored state — request bodies, settings and
+ * workflow step defs stay the three selectable ids (`RunnerId`), because nothing
+ * should be able to ASK for the legacy spelling.
+ */
+const storedRunnerSchema = z
+  .enum([...RUNNER_IDS, 'claude-cli'])
+  .transform((id) => (id === 'claude-cli' ? ('claude' as const) : id));
+
 const stepStateSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -47,8 +80,9 @@ const stepStateSchema = z.object({
   error: z.string().optional(),
   /** Latest backend-owned session id, used for same-backend Continue. */
   sessionId: z.string().optional(),
-  /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse. */
-  backend: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Backend that owns `sessionId`. Optional so pre-affinity runs.json files still parse;
+   *  `storedRunnerSchema` so a legacy `claude-cli` folds to `claude` instead of failing (#547). */
+  backend: storedRunnerSchema.optional(),
   /** Reasoning level selected when this agent step began; absent retains the native default. */
   reasoningEffort: z.string().trim().min(1).max(64).optional(),
   /** Agent profile (account) this step actually spawned under — `default`, or a stored profile
@@ -115,10 +149,15 @@ export const runRecordSchema = z.object({
    *  (e.g. `anthropic/claude-opus-4-8`) the run actually used, resolved from the
    *  free-text `model` against the chosen runner. Additive and optional: pre-#405
    *  records carry only `model`, and it stays the human/hand-edit surface; this
-   *  is the parseable identity cost attribution and reproducible replay key off. */
+   *  is the parseable identity cost attribution and reproducible replay key off.
+   *
+   *  Read in production by the session header's agent badge (#546), which shows it
+   *  whenever it says something `model` does not — so this is no longer a
+   *  write-only field whose next reader has to guess whether it is load-bearing. */
   modelIdentity: z.string().optional(),
-  /** Agent backend this run used — drives "open in CLI" resume command. */
-  runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+  /** Agent backend this run used — drives "open in CLI" resume command. `storedRunnerSchema`
+   *  so a legacy `claude-cli` record folds to `claude` instead of failing the whole index (#547). */
+  runner: storedRunnerSchema.optional(),
   /** Per-task agent-account override from the composer (spec 2026-07-29-agent-profiles), applying
    *  to steps that run on `runner`. Steps on a DIFFERENT backend still resolve from the project's
    *  own selection — an override for Claude says nothing about which Codex account a mixed
@@ -149,6 +188,20 @@ export const runRecordSchema = z.object({
       githubUrl: z.string().url(),
     })
     .optional(),
+  /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
+   *  budget, its own report and the reports waiting for its next session.
+   *
+   *  The CONTRACT's own `dispatchSchema` rather than a hand-copied twin — the one shape in this file
+   *  that is imported instead of restated, the way `workspace/migrations.ts` imports
+   *  `workspaceUiStateSchema`. Copying it would mean maintaining a nine-key nested object in two
+   *  places whose only guard is a compile-time parity test; importing it makes them the same
+   *  object. (`scripts/inline-contract.mjs` already folds the contract into `dist/` for exactly
+   *  this reason, so no packaging follows from it.)
+   *
+   *  `.catch(undefined)` like `workflowDef` below: `runs.json` is plain, hand-editable JSON, and
+   *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
+   *  as an ordinary flat task — degraded, but running. */
+  dispatch: dispatchSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.
@@ -239,6 +292,13 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean().default(false),
   archivedAt: z.string().optional(),
+  /** Pinned to the top of this project's task list (#935): plain per-task state, the
+   *  same class as `archived` and `seenAt`. Optional with NO default, unlike `archived`:
+   *  absent is what every runs.json written before this carries and it already means
+   *  "not pinned", so nothing needs filling in on parse and an unpin can simply delete
+   *  the key rather than persist a `false` older cezars never wrote. */
+  pinned: z.boolean().optional(),
+  pinnedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): the ISO time the cockpit last opened this
    *  run's thread. A finished run reads as "unread" until it has been seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
@@ -299,6 +359,48 @@ const CREATED_PR_RE =
  *  this many distinct PRs the conversation is a survey, not a subject. */
 const MAX_PR_CANDIDATES = 8;
 
+/** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
+ *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
+export type RepoHandle = { owner: string; name: string };
+
+/** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
+ *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
+function refUrlRepo(url: string): string | undefined {
+  const parts = url.split('/');
+  const owner = parts[parts.length - 4];
+  const name = parts[parts.length - 3];
+  return owner && name ? `${owner}/${name}`.toLowerCase() : undefined;
+}
+
+/**
+ * May the referenced tier ADOPT this URL as the task's subject? (#945)
+ *
+ * The tier was text-scoped but never repo-scoped: `PR_URL_RE` matches any
+ * `github.com/<owner>/<repo>/pull/N`, so a research task that cites one upstream PR handed the
+ * resolver exactly one candidate and it became the task's identity — an `oko` task wearing
+ * `supabase/cli#6056`. Nothing compared the URL's repository with the project's own.
+ *
+ * A foreign URL is adoptable only when the TASK PROMPT corroborates it: the prompt names that
+ * `owner/repo`, which a pasted URL does inherently. That is the trust boundary this module already
+ * uses elsewhere — the prompt and the agent's own turn text are trusted, scraped tool output is
+ * not — and it is what keeps the legitimate cross-repo case working (#819:
+ * `om-auto-fix-pr https://github.com/open-mercato/open-mercato/pull/1977` started from cezar).
+ *
+ * Unknown handle → today's behavior exactly (`AGENTS.md` zero config: degrade, never fail). An
+ * unparseable URL is left alone for the same reason — the guard only ever removes an association
+ * it can PROVE is foreign.
+ *
+ * Note what this does not touch: `referenced*Candidates` keep recording every URL as evidence.
+ * The fix changes what is *promoted*, never what is *collected* (the #526 rule).
+ */
+function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null): boolean {
+  if (!handle) return true;
+  const repo = refUrlRepo(url);
+  if (!repo) return true;
+  if (repo === `${handle.owner}/${handle.name}`.toLowerCase()) return true;
+  return task.toLowerCase().includes(repo);
+}
+
 /**
  * Every scannable string of one persisted event: the v1 top-level fields plus
  * the protocol-v2 `item.*` content (nested — the reason v2 streams were
@@ -317,6 +419,22 @@ const MAX_PR_CANDIDATES = 8;
 function clearPendingAutoResume(run: RunRecord): void {
   run.autoResumeAt = undefined;
   run.autoResumeAttempts = undefined;
+}
+
+/**
+ * Archiving is resigning from a task, so it retires the pin too (#935) — a pin on a task the
+ * user has filed away is stale by definition, and the archived view collapses into one bucket
+ * anyway, so a surviving pin would be invisible state waiting to surprise whoever unarchives.
+ *
+ * Here rather than in the pin route for the same reason `clearPendingAutoResume` is here: the
+ * bulk "Archive finished" sweep never goes through a route, and it has to obey the rule too.
+ *
+ * Deleted, not set to `false`: absent is what every reader treats as unpinned, and it is the
+ * shape a cezar that has never heard of pins already writes.
+ */
+function clearPin(run: RunRecord): void {
+  delete run.pinned;
+  delete run.pinnedAt;
 }
 
 function eventTextFragments(event: Record<string, unknown>): string[] {
@@ -341,6 +459,42 @@ function eventTextFragments(event: Record<string, unknown>): string[] {
         // circular input — skip it
       }
     }
+  }
+  return fragments;
+}
+
+/**
+ * Where a CREATION CLAIM may come from — the trust boundary the created tier was missing.
+ *
+ * `CREATED_PR_RE` used to be matched against everything an event carried, tool OUTPUT included,
+ * so a transcript that merely QUOTES a `gh pr create` line handed the run a PR it never opened.
+ * Not hypothetical: the task that fixed the reference chips printed another run's stored events
+ * while investigating them, and cezar read `"title": "Ran gh pr create --repo …"` out of that
+ * dump and adopted a PR from a DIFFERENT repository as its own — permanently, because the first
+ * created URL wins and the real `gh pr create` that followed was never looked at.
+ *
+ * So the claim must come from the agent's own words, or from the tool title cezar itself renders
+ * from the command it saw run. Tool output and tool input are the transcript of the world, not a
+ * statement about this run. The URL is still read from the whole event — `gh` prints it in the
+ * output — because it is the CLAIM that needs a trustworthy source, not the link.
+ */
+function eventCreationClaimFragments(event: Record<string, unknown>): string[] {
+  const fragments: string[] = [];
+  // A `tool-result` event's `result` IS raw command output; on every other event the top-level
+  // text is the agent's own.
+  if (event.type !== 'tool-result') {
+    for (const key of ['text', 'result', 'message'] as const) {
+      const value = event[key];
+      if (typeof value === 'string') fragments.push(value);
+    }
+  }
+  const item = event.item;
+  if (item && typeof item === 'object') {
+    const it = item as Record<string, unknown>;
+    if (it.kind === 'message' && it.role === 'assistant' && typeof it.text === 'string') {
+      fragments.push(it.text);
+    }
+    if (it.kind === 'tool' && typeof it.title === 'string') fragments.push(it.title);
   }
   return fragments;
 }
@@ -372,8 +526,27 @@ function eventAgentTextFragments(event: Record<string, unknown>): string[] {
  * the subject; among several, the one whose number the task prompt names (and
  * only when exactly one matches); otherwise ambiguous — no chip beats a wrong
  * chip.
+ *
+ * Whatever that produces is then repo-scoped (#945): a winner from another repository that the
+ * prompt does not corroborate is vetoed — see `isRepoScopedRef`. The veto is applied to the
+ * RESULT rather than to the candidate list on purpose, so the guard stays strictly subtractive:
+ * filtering first would let a project-local candidate win a two-candidate race today's rule calls
+ * ambiguous, which is a wider behavior change than the defect warrants. As written this function
+ * can only ever lose a value, never gain one.
  */
-function resolveReferencedRef(candidates: string[], task: string, declared?: number): string | undefined {
+function resolveReferencedRef(
+  candidates: string[],
+  task: string,
+  declared?: number,
+  handle?: RepoHandle | null,
+): string | undefined {
+  const resolved = resolveCandidate(candidates, task, declared);
+  if (resolved === undefined) return undefined;
+  return isRepoScopedRef(resolved, task, handle) ? resolved : undefined;
+}
+
+/** The pre-#945 resolution rule, unchanged — see `resolveReferencedRef` for the contract. */
+function resolveCandidate(candidates: string[], task: string, declared?: number): string | undefined {
   if (declared !== undefined) return candidates.find((url) => url.endsWith(`/${declared}`));
   if (candidates.length === 1) return candidates[0];
   const named = candidates.filter((url) => {
@@ -383,6 +556,35 @@ function resolveReferencedRef(candidates: string[], task: string, declared?: num
     return num !== '' && new RegExp(`(?<!\\d)#?${num}(?!\\d)`).test(task);
   });
   return named.length === 1 ? named[0] : undefined;
+}
+
+/** The number a forge URL's last segment names (`…/pull/402` → 402), or undefined. */
+function refUrlNumber(url: string | undefined): number | undefined {
+  if (!url) return undefined;
+  const n = Number(url.split('/').pop());
+  return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
+}
+
+/**
+ * The PR declaration the REFERENCED tier is allowed to act on.
+ *
+ * `CEZ:PR=N` means one of two things depending on when the agent writes it: on the way in it
+ * names the PR the task is ABOUT, and once the task has opened a PR of its own the marker
+ * contract asks it to re-declare with the new number ("Re-emit with the new number if the subject
+ * changes (e.g. you open a PR later in the task)"). A declaration naming the PR this run CREATED
+ * is therefore a statement about the CREATED tier, which `pullRequestUrl` already carries — and
+ * feeding it to the referenced tier ERASES the about-PR, because `resolveReferencedRef` clears
+ * the chip when no candidate matches the declared number (a task on #4326 that opened
+ * #5366 dropped from two chips to one the moment it declared #5366).
+ *
+ * Both tiers stay true instead: the created PR is the created PR, and the reference resolves as
+ * if that declaration had not been made — which is exactly what it was before the task opened
+ * anything.
+ */
+function referencedPrDeclaration(run: RunRecord): number | undefined {
+  const declared = run.markerRefs?.pr;
+  if (declared === undefined) return undefined;
+  return declared === refUrlNumber(run.pullRequestUrl) ? undefined : declared;
 }
 
 /**
@@ -446,6 +648,32 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
+  // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
+  // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
+  // could match the created number. The evidence is all still on the record — only the
+  // conclusion drawn from it was wrong — so re-resolve without that declaration instead of
+  // asking for a migration. Deliberately one-directional: it only runs on a record that HAS no
+  // referenced PR, so it can never take one away from a record written by an older cezar whose
+  // candidate list no longer explains it. `prNumber` is not recoverable this way (the
+  // declaration overwrote it) and is left alone — the restored URL is what paints the chip.
+  if (
+    run.referencedPullRequestUrl === undefined &&
+    run.markerRefs?.pr !== undefined &&
+    referencedPrDeclaration(run) === undefined
+  ) {
+    run.referencedPullRequestUrl = resolveReferencedRef(
+      run.referencedPrCandidates ?? [],
+      run.task,
+      undefined,
+    );
+  }
+  // Deliberately UNSCOPED by repo (#945), unlike every other `resolveReferencedRef` call. Neither
+  // caller has a handle to pass: `RunStore.open` is synchronous and the handle costs a `gh` spawn
+  // (which is why it is armed afterwards, by `setRepoHandle`), and the read-only index reader
+  // (`./run-index.ts`) has no repo root at all. Passing `undefined` here is not a gap — it is the
+  // no-handle path the guard is specified to take. The foreign-URL heal runs in `setRepoHandle`'s
+  // sweep the moment the handle lands, and the index reader picks the healed values up from
+  // `runs.json` on its next read.
   return run;
 }
 
@@ -458,6 +686,10 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
   private saveTimer: NodeJS.Timeout | null = null;
+  /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
+   *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
+   *  exactly the pre-#945 behavior. */
+  private repoHandle: RepoHandle | null | undefined;
 
   private constructor(private readonly dataDir: string) {
     super();
@@ -485,6 +717,65 @@ export class RunStore extends EventEmitter {
     return store;
   }
 
+  /**
+   * Tell the store which repository this project IS (#945), so the referenced tier stops adopting
+   * another repo's PR/issue as the task's subject. See `isRepoScopedRef` for the rule.
+   *
+   * A setter rather than an `open()` option because `open()` is synchronous and the handle costs a
+   * `gh` spawn: callers arm this in the background so boot never waits on the network. `null` is a
+   * first-class answer meaning "cannot be known" (no `gh`, no remote, a non-git root) and leaves
+   * the store in exactly its pre-#945 behavior.
+   *
+   * Arming also HEALS records already poisoned by the un-scoped rule, on the `reconcileLoadedRun`
+   * precedent: the evidence is all still on the record (`referenced*Candidates`), only the
+   * conclusion drawn from it was wrong, so re-deciding beats asking for a migration. It rewrites
+   * values, never the format, and is one-directional by construction — see `rescopeRun`.
+   */
+  setRepoHandle(handle: RepoHandle | null): void {
+    this.repoHandle = handle;
+    if (!handle) return; // nothing to prove foreign against
+    // `touch` per healed run: the cockpit is already live when the handle lands, so a corrected
+    // chip has to reach the open page over SSE, not just the next `runs.json` write.
+    for (const run of this.runs.values()) {
+      if (this.rescopeRun(run)) this.touch(run);
+    }
+  }
+
+  /**
+   * Drop this run's referenced PR/issue if the project's handle proves it foreign and the prompt
+   * does not corroborate it (#945). Returns whether anything changed.
+   *
+   * One-directional by construction: it only ever clears fields, so a record written by an older
+   * cezar — or read by one after this ran — is never worse off, and a downgrade sees a record whose
+   * format is untouched and whose cleared fields were already optional.
+   */
+  private rescopeRun(run: RunRecord): boolean {
+    let changed = false;
+    if (
+      run.referencedPullRequestUrl &&
+      !isRepoScopedRef(run.referencedPullRequestUrl, run.task, this.repoHandle)
+    ) {
+      run.referencedPullRequestUrl = undefined;
+      changed = true;
+    }
+    if (
+      run.referencedIssueUrl &&
+      !isRepoScopedRef(run.referencedIssueUrl, run.task, this.repoHandle)
+    ) {
+      run.referencedIssueUrl = undefined;
+      changed = true;
+      // Take back the number this janitor seeded from that very URL — the same revoke
+      // `trackReferencedIssues` performs when ambiguity clears a resolution. A `prNumber`-style
+      // number the prompt, namer or a marker owns is NOT ours to touch, which is exactly what
+      // `referencedIssueNumberSeeded` records.
+      if (run.referencedIssueNumberSeeded) {
+        run.issueNumber = undefined;
+        run.referencedIssueNumberSeeded = undefined;
+      }
+    }
+    return changed;
+  }
+
   listRuns(): RunRecord[] {
     return [...this.runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
@@ -499,7 +790,7 @@ export class RunStore extends EventEmitter {
     task: string;
     model?: string;
     reasoningEffort?: string;
-    runner?: 'claude' | 'codex' | 'opencode';
+    runner?: RunnerId;
     /** Composer's per-task agent account (spec 2026-07-29-agent-profiles). */
     agentProfile?: string;
     generateFollowups?: boolean;
@@ -660,7 +951,30 @@ export class RunStore extends EventEmitter {
     if (!run) return undefined;
     run.archived = archived;
     run.archivedAt = archived ? new Date().toISOString() : undefined;
-    if (archived) clearPendingAutoResume(run);
+    if (archived) {
+      clearPendingAutoResume(run);
+      clearPin(run);
+    }
+    this.touch(run);
+    return run;
+  }
+
+  /** Pin one run to the top of this project's task list, or unpin it (#935). Mirrors
+   *  `setArchived`: sets the fields, then persists + broadcasts via `touch`, so the updated
+   *  record rides the existing `run` SSE with no new event. Idempotent — re-pinning a pinned
+   *  run just re-stamps `pinnedAt`.
+   *
+   *  Unconditional by design, like `setUnread`: pinning is legal for every status, and WHICH
+   *  runs are worth offering the action on is UI policy (`runActionFlags` in the cockpit). */
+  setPinned(id: string, pinned: boolean): RunRecord | undefined {
+    const run = this.runs.get(id);
+    if (!run) return undefined;
+    if (pinned) {
+      run.pinned = true;
+      run.pinnedAt = new Date().toISOString();
+    } else {
+      clearPin(run);
+    }
     this.touch(run);
     return run;
   }
@@ -673,6 +987,7 @@ export class RunStore extends EventEmitter {
         run.archived = true;
         run.archivedAt = new Date().toISOString();
         clearPendingAutoResume(run);
+        clearPin(run);
         this.touch(run);
         count++;
       }
@@ -715,11 +1030,28 @@ export class RunStore extends EventEmitter {
 
   /** Bulk mark-read: stamp every currently-unread finished run; returns the count.
    *  "Unread" here is the same rule the cockpit paints (`isUnread` in read-state.ts),
-   *  clause for clause: a `done` or `failed` run that finished and has not been seen
-   *  since. Cancelled runs are never unread — you stopped them yourself — and archived
-   *  ones never are either, since archiving is a stronger "done with this" than reading;
-   *  both are skipped, as are runs already read. Keeping the two rules identical is what
-   *  makes the returned count the number the cockpit's unread badge was showing. */
+   *  clause for clause:
+   *   - a `done` or `failed` run that finished and has not been seen since;
+   *   - cancelled runs are never unread — you stopped them yourself;
+   *   - archived ones never are either, since archiving is a stronger "done with this"
+   *     than reading;
+   *   - and a `failed` run with a pending `autoResumeAt` is not a done item AT ALL
+   *     (`isScheduledResume`, spec 2026-08-03-auto-resume-after-usage-limit): it has an
+   *     appointment to pick the work back up, so there is no outcome to have missed.
+   *
+   *  Keeping the two rules identical is what makes the returned count the number the
+   *  cockpit's unread badge was showing. The `autoResumeAt` clause is the one that drifted
+   *  (#803): `isUnread` gained it with auto-resume and this sweep did not, so a task waiting
+   *  out a usage limit was uncounted by the badge but stamped read by the sweep — and this
+   *  comment asserted an invariant the code no longer held.
+   *
+   *  This rule lives in two languages of the same repo, which is why it has now drifted
+   *  once. The cockpit cannot import it (`packages/web` does not depend on the service, and
+   *  should not), so a single definition would have to move to `packages/contract` — the one
+   *  package both sides already import. Worth doing; deliberately not done here, because
+   *  widening the contract package's remit from "shapes" to "behavior" is a design change
+   *  that deserves its own review rather than riding along in a bug fix. Until then: EDIT
+   *  BOTH, and the case-table tests on either side are what catch you if you don't. */
   markAllRead(): number {
     const now = new Date().toISOString();
     let count = 0;
@@ -727,6 +1059,7 @@ export class RunStore extends EventEmitter {
       const unread =
         !run.archived &&
         (run.status === 'done' || run.status === 'failed') &&
+        !(run.status === 'failed' && run.autoResumeAt !== undefined) &&
         run.finishedAt !== undefined &&
         (run.seenAt === undefined || run.seenAt < run.finishedAt);
       if (!unread) continue;
@@ -753,15 +1086,35 @@ export class RunStore extends EventEmitter {
     // The janitor trick: agents print the PR URL after `gh pr create` — the
     // first one spotted in the transcript becomes the run's PR link. Scans v1
     // fields AND nested v2 `item.*` content (#407). A URL without the created
-    // phrasing still feeds the referenced tier (the PR the task is about).
+    // phrasing still feeds the referenced tier (the PR the task is about) —
+    // and the phrasing itself is only believed from a source that can speak
+    // FOR this run (`eventCreationClaimFragments`), never from quoted output.
     const haystack = eventTextFragments(full).join(' ');
     const agentHaystack = eventAgentTextFragments(full).join(' ');
+    // The creation CLAIM is read from a narrower source than the URL is
+    // (`eventCreationClaimFragments`), which is why the two are searched
+    // together rather than the haystack alone: the phrase must land in the
+    // trusted prefix, and the link may come from anywhere after it.
+    const claim = eventCreationClaimFragments(full).join(' ');
     if (haystack.length > 0) {
       let changed = false;
       if (!run.pullRequestUrl) {
-        const created = createdPrUrl(haystack);
+        const created = CREATED_PR_RE.test(claim) ? createdPrUrl(`${claim} ${haystack}`) : undefined;
         if (created) {
           this.updateRun(runId, { pullRequestUrl: created });
+          // Adopting the created tier can RELEASE a declaration the referenced tier was holding
+          // (see `referencedPrDeclaration`), so re-resolve here too: the about-PR must come back
+          // whether the marker arrived before the creation evidence or after it.
+          const resolved = resolveReferencedRef(
+            run.referencedPrCandidates ?? [],
+            run.task,
+            referencedPrDeclaration(run),
+            this.repoHandle,
+          );
+          if (resolved !== run.referencedPullRequestUrl) {
+            run.referencedPullRequestUrl = resolved;
+            changed = true;
+          }
         } else if (PR_URL_RE.test(haystack) && this.trackReferencedPrs(run, haystack)) {
           changed = true;
         }
@@ -798,7 +1151,8 @@ export class RunStore extends EventEmitter {
     run.referencedPullRequestUrl = resolveReferencedRef(
       run.referencedPrCandidates,
       run.task,
-      run.markerRefs?.pr,
+      referencedPrDeclaration(run),
+      this.repoHandle,
     );
     return true;
   }
@@ -828,6 +1182,7 @@ export class RunStore extends EventEmitter {
       run.referencedIssueCandidates ?? [],
       run.task,
       run.markerRefs?.issue,
+      this.repoHandle,
     );
     let numberChanged = false;
     if (run.markerRefs?.issue === undefined && ISSUE_URL_RE.test(seedHaystack)) {
@@ -856,6 +1211,10 @@ export class RunStore extends EventEmitter {
    * against the candidate working set — including down to `undefined` when no
    * candidate matches (a wrong chip is worse than no chip). The created tier
    * (`pullRequestUrl`) is deliberately untouched.
+   *
+   * One declaration is NOT a statement about the referenced tier: the number of the PR this run
+   * itself created. See `referencedPrDeclaration` — the marker contract asks the agent to
+   * re-declare after it opens a PR, and taking that literally cost the task the PR it was about.
    */
   applyMarkerRefs(runId: string, refs: { pr?: number; issue?: number }): RunRecord | undefined {
     const run = this.runs.get(runId);
@@ -865,7 +1224,12 @@ export class RunStore extends EventEmitter {
       ...(refs.pr !== undefined ? { pr: refs.pr } : {}),
       ...(refs.issue !== undefined ? { issue: refs.issue } : {}),
     };
-    if (refs.pr !== undefined) run.prNumber = refs.pr;
+    // `prNumber` is the about-PR as well (it is what paints a numeric-only chip), so a
+    // re-declaration naming the created PR only FILLS it — it never overwrites the number the
+    // task came in with, which is still the PR this task is about.
+    if (refs.pr !== undefined && (run.prNumber === undefined || refs.pr !== refUrlNumber(run.pullRequestUrl))) {
+      run.prNumber = refs.pr;
+    }
     if (refs.issue !== undefined) {
       run.issueNumber = refs.issue;
       delete run.referencedIssueNumberSeeded;
@@ -874,7 +1238,8 @@ export class RunStore extends EventEmitter {
       run.referencedPullRequestUrl = resolveReferencedRef(
         run.referencedPrCandidates ?? [],
         run.task,
-        run.markerRefs.pr,
+        referencedPrDeclaration(run),
+        this.repoHandle,
       );
     }
     if (run.markerRefs.issue !== undefined) {
@@ -882,6 +1247,7 @@ export class RunStore extends EventEmitter {
         run.referencedIssueCandidates ?? [],
         run.task,
         run.markerRefs.issue,
+        this.repoHandle,
       );
     }
     this.touch(run);

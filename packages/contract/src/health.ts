@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
-/** The three agent backends a run can be dispatched to. */
-export const runnerSchema = z.enum(['claude', 'codex', 'opencode']);
+/** The agent backends a run can be dispatched to. */
+export const runnerSchema = z.enum(['claude', 'codex', 'opencode', 'pi']);
 export type Runner = z.infer<typeof runnerSchema>;
 
 /** Git facts about the project root, or `null` when it is not a repository. */
@@ -14,7 +14,7 @@ export type RepoInfo = z.infer<typeof repoInfoSchema>;
 
 /** One probed CLI behind the Tools menu. */
 export const backendCheckSchema = z.object({
-  name: z.enum(['claude', 'codex', 'opencode', 'gh', 'git']),
+  name: z.enum(['claude', 'codex', 'opencode', 'pi', 'gh', 'git']),
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),
@@ -48,6 +48,13 @@ export const capabilitiesSchema = z.object({
    * REQUIRED for the same reason as `tokenMetrics` below: this server always sends it.
    */
   automations: z.boolean(),
+  /**
+   * `true` means task dispatch is on — the default; `CEZ_DISPATCH=0` turns it off (spec
+   * `.ai/specs/2026-09-10-dispatch.md`): every task learns the `cez task` CLI in its system
+   * prompt and the `/runs/:id/{dispatch,report}` routes answer. Off, those routes answer 409 and
+   * no prompt mentions dispatching.
+   */
+  dispatch: z.boolean(),
   /**
    * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
    * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation

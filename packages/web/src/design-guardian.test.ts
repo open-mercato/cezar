@@ -58,8 +58,11 @@ const RULES: Rule[] = [
   },
   {
     name: 'no-amber-text',
-    why: 'amber/pending is a dot & spinner color only, never a text color (token sheet rule)',
-    pattern: /\btext-(?:pending|amber(?:-\d+)?)\b/g,
+    why: 'amber ink goes through --pending-strong, the per-theme readable token; --pending itself is a dot & spinner FILL and fails contrast as text on the light theme (token sheet rule)',
+    // `text-pending-strong` is excluded by the lookahead — it is the sanctioned spelling, and it
+    // is a different token, not a loophole: `--pending` is amber-400 in both themes, while
+    // `--pending-strong` darkens to amber-700 on light. Everything else amber stays banned.
+    pattern: /\btext-(?:pending(?!-strong)|amber(?:-\d+)?)\b/g,
     applies: styleSources,
   },
   {

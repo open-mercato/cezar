@@ -2,7 +2,11 @@ import type { InferResponseType } from 'hono/client';
 import { hc } from 'hono/client';
 import { describe, expect, it } from 'vitest';
 import type { z } from 'zod';
-import type { healthResponseSchema } from '@open-mercato/cezar-contract';
+import type {
+  healthResponseSchema,
+  runHistoryContextSchema,
+  runHistoryPageSchema,
+} from '@open-mercato/cezar-contract';
 import type { AppType } from './app-type.ts';
 
 /**
@@ -34,8 +38,14 @@ describe('src/contract schemas match the routes exactly', () => {
   type Assert<T extends true> = T;
 
   type Health200 = InferResponseType<typeof client.api.v1.health.$get, 200>;
+  type History200 = InferResponseType<(typeof client.api.v1.runs)[':id']['history']['$get'], 200>;
+  type HistoryContext200 = InferResponseType<(typeof client.api.v1.runs)[':id']['history-context']['$get'], 200>;
 
-  type _Checks = [Assert<Exact<z.infer<typeof healthResponseSchema>, Health200>>];
+  type _Checks = [
+    Assert<Exact<z.infer<typeof healthResponseSchema>, Health200>>,
+    Assert<Exact<z.infer<typeof runHistoryPageSchema>, History200>>,
+    Assert<Exact<z.infer<typeof runHistoryContextSchema>, HistoryContext200>>,
+  ];
 
   it('is enforced by tsc, not at runtime', () => {
     // Pins the comparator itself: a `Mutual` that degenerated to `true` would make every

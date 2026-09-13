@@ -239,6 +239,53 @@ describe('cezar projects CLI', () => {
 
   it('documents the single-project mutation restriction in usage output', async () => {
     expect(await run('frobnicate')).toBe(1);
-    expect(io.err.join('\n')).toContain('add/remove are unavailable when CEZ_SINGLE_PROJECT=1');
+    expect(io.err.join('\n')).toContain('add/remove/tag are unavailable when CEZ_SINGLE_PROJECT=1');
+  });
+
+  /** The terminal twin of Settings -> Projects' Tags cell. */
+  describe('tag', () => {
+    it('sets normalized tags, replacing the whole list', async () => {
+      await run('add', makeRepo('api'));
+      const id = (await loadWorkspaceConfig()).projects[0]!.id;
+
+      expect(await run('tag', id, ' Storefront ', 'api', 'STOREFRONT')).toBe(0);
+      expect((await loadWorkspaceConfig()).projects[0]!.tags).toEqual(['api', 'Storefront']);
+      expect(io.out.join('\n')).toContain('[api Storefront]');
+
+      // Replaced wholesale, never merged.
+      expect(await run('tag', id, 'infra')).toBe(0);
+      expect((await loadWorkspaceConfig()).projects[0]!.tags).toEqual(['infra']);
+    });
+
+    it('clears the tags when given none, storing no key at all', async () => {
+      await run('add', makeRepo('api'));
+      const id = (await loadWorkspaceConfig()).projects[0]!.id;
+      await run('tag', id, 'infra');
+
+      expect(await run('tag', id)).toBe(0);
+      const stored = (await loadWorkspaceConfig()).projects.find((p) => p.id === id)!;
+      expect(Object.keys(stored)).not.toContain('tags');
+      expect(io.out.join('\n')).toContain('no tags');
+    });
+
+    it('lists the tags beside the path', async () => {
+      await run('add', makeRepo('api'));
+      const id = (await loadWorkspaceConfig()).projects[0]!.id;
+      await run('tag', id, 'storefront');
+      io.out.length = 0;
+
+      expect(await run('list')).toBe(0);
+      expect(io.out.join('\n')).toContain('[storefront]');
+    });
+
+    it('refuses an unknown id and says so', async () => {
+      expect(await run('tag', 'nope', 'x')).toBe(1);
+      expect(io.err.join('\n')).toContain('unknown project: nope');
+    });
+
+    it('needs an id', async () => {
+      expect(await run('tag')).toBe(1);
+      expect(io.err.join('\n')).toContain('cezar projects [list]');
+    });
   });
 });

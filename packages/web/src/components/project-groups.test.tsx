@@ -291,6 +291,49 @@ describe('ProjectGroups', () => {
     expect(taskLinks('shop')).toHaveLength(0)
   })
 
+  it('keeps pinned rows past the 10-row cap, and spends the budget on the rest (#935)', async () => {
+    const runs = [
+      ...Array.from({ length: 15 }, () => run()),
+      run({ id: 'kept-a', pinned: true }),
+      run({ id: 'kept-b', pinned: true }),
+    ]
+    serve({ '/api/v1/p/cezar/runs': runs })
+    renderGroups([project()])
+
+    await waitFor(() => expect(taskLinks('cezar').length).toBeGreaterThan(0))
+    // Twelve: both pins, plus the ten the ordinary buckets are still allowed.
+    expect(taskLinks('cezar')).toHaveLength(12)
+    const pinnedBucket = group('cezar').querySelector('[data-bucket="Pinned"]')
+    expect(pinnedBucket?.querySelectorAll('[data-slot="task-row"]')).toHaveLength(2)
+  })
+
+  it("pins through the row's OWN project, not the one the URL names (#935)", async () => {
+    // The failure this pins: `queryScope()` would address whichever project the page is standing
+    // in, so a pin on another group's row would 404 — or, with a colliding run id, pin the wrong
+    // task in the wrong repo.
+    const posts: string[] = []
+    fetchMock.mockImplementation(async (input, init: RequestInit = {}) => {
+      const path = String(input)
+      if (init.method === 'POST') {
+        posts.push(path)
+        return json({})
+      }
+      if (path === '/api/v1/p/cezar/runs') return json([run({ id: 'other-project-task' })])
+      if (path === '/api/v1/p/shop/runs') return json([])
+      return json({ error: 'not found' }, 404)
+    })
+    // Standing in `shop`, with the boot project's group open beside it.
+    storeCollapsed({ cezar: false })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/',
+    )
+
+    await waitFor(() => expect(taskLinks('cezar')).toHaveLength(1))
+    fireEvent.click(within(group('cezar')).getByRole('button', { name: 'Pin task' }))
+    await waitFor(() => expect(posts).toEqual(['/api/v1/p/cezar/runs/other-project-task/pin']))
+  })
+
   it('renders a missing project greyed and inert, with no nav behind it', async () => {
     serve({ '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'gone', name: 'old-spike', status: 'missing', lastOpenedAt: '2026-07-01T00:00:00.000Z' })])
@@ -304,5 +347,43 @@ describe('ProjectGroups', () => {
     expect(within(group('gone')).queryByRole('button')).toBeNull()
     expect(within(group('gone')).queryAllByRole('link')).toHaveLength(0)
     expect(fetchMock.mock.calls.map((call) => String(call[0]))).not.toContain('/api/v1/p/gone/runs')
+  })
+
+  /**
+   * A `/p/` prefix is the ONLY thing that makes a project the one you are standing in. On the
+   * global pages — `/tasks` and `/settings/global` — there is no such prefix and no selected
+   * project, so nothing may be painted as selected: highlighting the boot project while the
+   * user reads an all-projects table says the page is about that project when it is not.
+   */
+  it('marks no project as selected on a page that belongs to none', async () => {
+    serve({ '/api/v1/p/cezar/runs': [] })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/tasks',
+    )
+
+    await waitFor(() => expect(group('cezar')).not.toBeNull())
+    for (const id of ['cezar', 'shop']) {
+      expect(group(id).hasAttribute('data-active')).toBe(false)
+      expect(group(id).querySelector('[aria-current="page"]')).toBeNull()
+    }
+    // The boot group still OPENS by default: landing on a global page must not fold the whole
+    // sidebar shut — that is a different question from which one is selected.
+    expect(header('cezar').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('still marks the scoped project on a project page', async () => {
+    serve({ '/api/v1/p/shop/runs': [] })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/git',
+    )
+
+    await waitFor(() => expect(group('shop')).not.toBeNull())
+    expect(group('shop').hasAttribute('data-active')).toBe(true)
+    expect(group('cezar').hasAttribute('data-active')).toBe(false)
+    // …and the nav row for the URL's own area is the current page inside that group only.
+    expect(group('shop').querySelector('[aria-current="page"]')?.textContent).toBe('Git')
+    expect(group('cezar').querySelector('[aria-current="page"]')).toBeNull()
   })
 })

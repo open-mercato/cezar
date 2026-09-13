@@ -23,6 +23,7 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
     '●  Anthropic oauth',
     '└  1 credential',
   ].join('\n'),
+  pi: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -32,10 +33,11 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
     '┌  Credentials ~/.local/share/opencode/auth.json',
     '└  0 credentials',
   ].join('\n'),
+  pi: 'No models available. Use /login to authenticate.',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi') return executable;
   throw new Error(`unexpected executable: ${executable}`);
 };
 
@@ -161,6 +163,7 @@ describe('workspace provider API', () => {
           hint: 'Install OpenCode, then run `opencode auth login`.',
           enabled: true,
         },
+        { provider: 'pi', status: 'connected', enabled: true },
       ],
     });
   });
@@ -168,7 +171,7 @@ describe('workspace provider API', () => {
   it('GET /api/v1/providers/status skips probes and provider preferences under the explicit model lock', async () => {
     process.env.CEZ_AGENT_MODELS_LOCKED = '1';
     const runCommand = vi.fn<RunProviderCommand>();
-    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode']);
+    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'pi']);
     const response = await apiRequest(app({
       providerAuth: service({}, runCommand),
       workspaceConfig,
@@ -180,6 +183,7 @@ describe('workspace provider API', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+        { provider: 'pi', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -282,7 +286,7 @@ describe('workspace provider API', () => {
     await apiRequest(server, '/api/v1/providers/status');
     await apiRequest(server, '/api/v1/providers/status?refresh=1');
 
-    expect(runCommand).toHaveBeenCalledTimes(6);
+    expect(runCommand).toHaveBeenCalledTimes(8);
   });
 
   it('GET without refresh reuses the completed provider cache', async () => {
@@ -296,7 +300,7 @@ describe('workspace provider API', () => {
     await apiRequest(server, '/api/v1/providers/status');
     await apiRequest(server, '/api/v1/providers/status');
 
-    expect(runCommand).toHaveBeenCalledTimes(3);
+    expect(runCommand).toHaveBeenCalledTimes(4);
   });
 
   it('POST /api/v1/providers/:provider/retry clears only the current incident without enabling a disabled provider', async () => {
@@ -481,7 +485,7 @@ describe('workspace provider API', () => {
     const openTerminal = vi.fn(async () => true);
     const pending = connect(app({ providerAuth, openTerminal }), 'claude');
 
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(4));
     providerAuth.reportRuntimeAuthFailure('claude');
     release();
 
@@ -681,7 +685,7 @@ describe('workspace provider API', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, or opencode' });
+    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, or pi' });
   });
 
   it('never places request-controlled text in the opened command', async () => {

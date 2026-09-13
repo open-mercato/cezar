@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { workflowStepSchema } from '../workflows/types.ts';
 
 export const automationEventSchema = z.enum([
@@ -29,7 +30,7 @@ export const automationTaskSchema = z
     prompt: z.string().min(1).max(100_000),
     workflow: z.string().trim().min(1).max(200).optional(),
     steps: z.array(workflowStepSchema).min(1).max(100).optional(),
-    runner: z.enum(['claude', 'codex', 'opencode']).optional(),
+    runner: z.enum(RUNNER_IDS).optional(),
     model: z.string().trim().min(1).max(200).optional(),
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     worktree: z.boolean().optional(),

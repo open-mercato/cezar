@@ -82,7 +82,12 @@ export function RepoChangesSection() {
         />
       ) : (
         <div className="flex min-h-0 flex-1 items-start gap-5 px-4 py-4 [--diff-sticky-top:7rem] md:px-6">
-          <aside className="sticky top-28 hidden w-60 shrink-0 md:block lg:w-72">
+          {/* Same deal as the task Changes tab: sticky AND its own scroller, so a long file list
+              never has to drag the diff to the bottom to show its last row. */}
+          <aside
+            data-slot="changes-tree-pane"
+            className="sticky top-28 hidden max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)] w-60 shrink-0 overflow-y-auto overscroll-contain md:block lg:w-72"
+          >
             <ChangesTree root={tree} selected={selected} onSelect={selectFile} />
           </aside>
           <Diff files={files} viewRef={diffRef} mode={effectiveMode} wrap={effectiveWrap} className="min-w-0 flex-1" />
