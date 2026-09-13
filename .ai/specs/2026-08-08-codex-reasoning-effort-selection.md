@@ -95,11 +95,11 @@ Resolve the effective runner before effort. Per agent step:
 | Explicit Codex step in a mixed workflow whose task runner is non-Codex | No run-level inheritance; YAML may provide a step value. |
 | Claude/OpenCode step | No effort is passed; a step-level value is a validation error. |
 
-Therefore `workflow step.reasoningEffort > run.reasoningEffort > Codex native default`. A run-level value is rejected when it targets a non-Codex task runner or no agent step could inherit it. Mixed workflows may use effort only on Codex steps.
+Therefore `workflow step.reasoningEffort > run.reasoningEffort > Codex native default`. A run-level value is rejected when it targets a non-Codex task runner. It is **not** rejected merely because no step ends up reading it: a run whose Codex steps each pin their own effort is a legal configuration — being overridable is what a default is — and the validator cannot distinguish a *shadowed* run-level value from an *inapplicable* one. Failing the run for a redundant value is strictly worse than ignoring it, so the redundant case proceeds and the steps' own values apply. Mixed workflows may use effort only on Codex steps.
 
 Entry points preflight and reject an explicit non-Codex effort where possible; `RunManager` repeats the validation before execution to protect queued, recovered, programmatic, and mixed-workflow paths. `modelsLocked` is enforced at entry and manager boundaries, strips both model and effort before persistence/spawn, and returns a policy error describing model and reasoning settings.
 
-Continue on the same Codex runner inherits the latest resolved step value, then the run value, unless overridden/reset. Changing runner clears inherited effort; switching to a non-Codex runner with explicit effort rejects. The runtime records resolved effort before session start so recovery and later Continue remain reproducible.
+Continue on the same Codex runner inherits the latest resolved step value, then the run value, unless overridden/reset. Changing runner clears inherited effort; switching to a non-Codex runner with explicit effort rejects. Changing only the **model** keeps the inherited effort: the server treats an explicit `model` as an engine change and would reset the stored effort, so a client that sends a model while displaying a carried effort must re-send that effort — resolved against the newly selected model, so a value the new model does not advertise degrades to the reset token instead of reaching the wire. The runtime records resolved effort before session start so recovery and later Continue remain reproducible.
 
 ## 📝 Codex App Server Mapping
 
@@ -134,7 +134,7 @@ Update `NewTaskDraft`, draft normalization, `new-task-form`, `new-task-plan`, an
 - Catalog failures degrade like current model discovery; Cezar sends no override.
 - A later App Server rejection of explicit API/YAML/CLI input remains the actionable session error.
 - Old state parses as absent and resumes using native defaults.
-- Non-Codex workflow steps never inherit a Codex setting; invalid step values fail visibly before a spawn.
+- Non-Codex workflow steps never inherit a Codex setting; invalid step values fail visibly before a spawn. A merely redundant run-level value never fails a run.
 - Locked native settings retain historic fields for audit but suppress them at execution.
 - Rollback leaves optional JSON/YAML values harmless and needs no cleanup migration.
 
