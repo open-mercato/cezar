@@ -61,6 +61,7 @@ export function PickerPill({
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const visibleOptions = searchPlaceholder
     ? options.filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()))
     : options
@@ -115,7 +116,7 @@ export function PickerPill({
       }}
     >
       <DropdownMenuTrigger asChild>{trigger}</DropdownMenuTrigger>
-      <DropdownMenuContent align="start" data-testid={`${slot}-menu`}>
+      <DropdownMenuContent ref={contentRef} align="start" data-testid={`${slot}-menu`}>
         {searchPlaceholder ? (
           <div className="mb-1 flex h-9 items-center gap-2 border-b border-border px-2">
             <SearchIcon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
@@ -127,7 +128,19 @@ export function PickerPill({
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key !== 'Escape') event.stopPropagation()
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  const options = contentRef.current?.querySelectorAll<HTMLElement>(
+                    '[role="menuitemradio"]:not([data-disabled])',
+                  )
+                  const next = event.key === 'ArrowDown' ? options?.[0] : options?.[options.length - 1]
+                  next?.focus()
+                } else if (event.key !== 'Escape') {
+                  // Keep printable keys out of Radix's typeahead. Once an arrow moves focus into
+                  // the menu, Radix owns the usual ArrowUp/ArrowDown/Enter interaction again.
+                  event.stopPropagation()
+                }
               }}
               className="h-full min-w-48 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
             />
