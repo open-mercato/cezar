@@ -320,6 +320,10 @@ const hostedProfileRefusal = {
   error: 'agent accounts are disabled in hosted mode; set CEZ_REMOTE_AGENT_ACCOUNTS=1 only behind an authenticated perimeter',
 };
 
+const hostedProfileOpenRefusal = {
+  error: 'opening account files is disabled in hosted mode; open them directly on the machine hosting cezar',
+};
+
 /**
  * Allocate a profile id from the label (or, with no label, the folder name).
  *
@@ -1766,9 +1770,9 @@ export function createApp(deps: ServerDeps) {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
-      // A NAMED account is refused in hosted mode unless the operator opted in, before anything is
-      // resolved, exactly like every
-      // sibling route in the agent-profiles family. Checking later would already have read
+      // A NAMED account is refused in hosted mode unless the operator opted in. This happens
+      // before resolution, exactly like every sibling route in the agent-profiles family;
+      // checking later would already have read
       // `~/.cezar/agent-accounts.json`, built a command carrying the account's absolute path (which
       // both the success body and the hosted 409 echo), and — for a stored account — spawned a
       // probe. It would also answer `unknown account: <id>` for a wrong id, which is an enumeration
@@ -1923,7 +1927,7 @@ export function createApp(deps: ServerDeps) {
   };
 
   /** Validate a client-supplied config dir. Returns the error text, or null when it is usable. */
-  const checkProfileDir = (configDir: string): string | null => {
+  const checkProfileDir = async (configDir: string): Promise<string | null> => {
     if (CONTROL_CHARS_RE.test(configDir)) return 'folder must not contain control characters';
     const expanded = expandTilde(configDir);
     // Absolute after expansion: a relative dir would resolve against whatever cwd the agent
@@ -1931,6 +1935,15 @@ export function createApp(deps: ServerDeps) {
     // `isAbsoluteConfigDir`, never a leading-`/` test — see its note: a string test refuses every
     // real Windows path, and this is the only gate the Add-account dialog has.
     if (!isAbsoluteConfigDir(expanded)) return `folder must be an absolute path: ${configDir}`;
+    // A remote caller may only name paths inside the same root exposed by the folder browser.
+    // Check lexically, before probing the candidate, so an outside path gets the same answer
+    // whether it exists or not and cannot become an existence oracle.
+    if (!capabilities().localHandoff) {
+      const root = resolveBrowseRoot(await workspaceBrowseRoot());
+      if (!(await isLexicallyInsideBrowseRoot(root, expanded))) {
+        return `folder must be inside the browsable root: ${root}`;
+      }
+    }
     return null;
   };
 
@@ -1996,7 +2009,7 @@ export function createApp(deps: ServerDeps) {
       if (!supportsProfiles(provider)) {
         return c.json({ error: `${provider} cannot carry more than one account` }, 400);
       }
-      const dirError = checkProfileDir(configDir);
+      const dirError = await checkProfileDir(configDir);
       if (dirError) return c.json({ error: dirError }, 400);
 
       // Read-first, exactly like `POST /projects`: the duplicate check needs `realpath`, and the
@@ -2051,7 +2064,7 @@ export function createApp(deps: ServerDeps) {
         const id = c.req.param('id');
         const { label, configDir } = c.req.valid('json');
         if (configDir !== undefined) {
-          const dirError = checkProfileDir(configDir);
+          const dirError = await checkProfileDir(configDir);
           if (dirError) return c.json({ error: dirError }, 400);
         }
 
@@ -2169,7 +2182,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(z.object({ id: z.string() })),
       jsonZodValidator(() => openAgentAccountFileSchema),
       async (c) => {
-        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        if (!capabilities().localHandoff) return c.json(hostedProfileOpenRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         const { file, target } = c.req.valid('json');

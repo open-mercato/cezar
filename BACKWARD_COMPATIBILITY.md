@@ -262,6 +262,26 @@ instruction rather than silently.
   behavior wholesale, which is what the "keep the old spelling for a minor release" rule exists to
   provide.
 
+## Remote agent accounts — explicit trusted-host opt-in, 2026-09-13
+
+`CEZ_REMOTE_AGENT_ACCOUNTS=1` lets an authenticated remote/self-hosted cockpit manage the machine's
+extra Claude and Codex account folders. Activation is strict: only the exact string `1` enables it;
+unset or any other value preserves the hosted-mode refusal.
+
+- **Conditionally widened under the flag**: `GET/POST /api/v1/workspace/agent-profiles`,
+  `PATCH/DELETE /api/v1/workspace/agent-profiles/:id`, the `status` and `details` reads, account
+  selection, and named-account Connect may read or mutate the host account store. The listing
+  exposes absolute paths and the on-demand details read may expose account identity.
+- **Confinement**: a remotely posted account folder must be inside `CEZ_BROWSE_ROOT`; an outside
+  path is rejected before its existence is probed. The discovered default accounts may remain
+  outside that root because the client did not choose their paths.
+- **Still local-only**: opening account files/folders in desktop apps and opening a terminal remain
+  gated by `capabilities.localHandoff`. Connect instead returns the exact command to run on the
+  hosting machine.
+- **Unchanged by default and non-destructive rollback**: without the flag, hosted responses remain
+  withheld/refused exactly as before. Unsetting it and restarting hides the store again without
+  deleting accounts or project selections; local cockpit behavior is unchanged.
+
 ## When in doubt
 
 If a change might break any surface above, say so in the PR description, label the PR `risk-high`, and route it through the review + QA gates in `SDLC.md`. A silent break found in review is a blocker per `CODE_REVIEW.md`.

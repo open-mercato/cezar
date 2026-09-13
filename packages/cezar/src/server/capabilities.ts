@@ -29,6 +29,10 @@
  * definitions, receipts and high-watermarks survive the flag being off, so
  * unsetting it and restarting restores the feature wholesale.
  *
+ * `agentAccountsEnabled` keeps account folders local by default. An operator may explicitly set
+ * `CEZ_REMOTE_AGENT_ACCOUNTS=1` for an authenticated remote deployment; this does not change
+ * `localHandoff`, so desktop-only actions remain unavailable.
+ *
  * Usage presentation: token counts and monetary cost stay visible by default.
  * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
  * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
@@ -136,8 +140,12 @@ export function agentAccountsEnabled(
   env: NodeJS.ProcessEnv = process.env,
   bindHost?: string,
 ): boolean {
-  return (env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost))
-    || env.CEZ_REMOTE_AGENT_ACCOUNTS === '1';
+  return localHandoffEnabled(env, bindHost) || env.CEZ_REMOTE_AGENT_ACCOUNTS === '1';
+}
+
+/** One spelling of the local-machine boundary, shared by every capability derived from it. */
+function localHandoffEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
 }
 
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
@@ -158,7 +166,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   return {
-    localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
+    localHandoff: localHandoffEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),

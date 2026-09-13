@@ -149,7 +149,7 @@ function serve(
   )
 }
 
-function renderAccounts() {
+function renderAccounts(localHandoff = true) {
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } })
   client.setQueryData(queryKeys.health, {
@@ -161,6 +161,7 @@ function renderAccounts() {
       { name: 'claude', available: true, version: '2.1.220' },
       { name: 'codex', available: false, hint: 'optional: install the Codex CLI' },
     ],
+    capabilities: { localHandoff },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: [],
@@ -736,6 +737,21 @@ describe('the agent accounts section', () => {
     )
     expect(rows()).toHaveLength(0)
     expect(document.querySelector('[data-action="accounts-add"]')).toBeNull()
+  })
+
+  it('keeps account management but hides desktop-open actions in opted-in hosted mode', async () => {
+    const work = profile({
+      id: 'work',
+      files: [{ id: 'settings', label: 'settings.json', path: '/home/u/.claude-work/settings.json', exists: true }],
+    })
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
+      defaults: {}, selections: {}, profiles: [DEFAULTS[0]!, work] })
+    renderAccounts(false)
+
+    await openDetails(work.id)
+    expect(document.querySelector('[data-slot="account-open-file"]')).toBeNull()
+    expect(document.querySelector('[data-slot="account-open-folder"]')).toBeNull()
+    expect(document.querySelector('[data-slot="account-manage"]')).not.toBeNull()
   })
 
   it('gives every agent a tab, including one that cannot carry a second account', async () => {

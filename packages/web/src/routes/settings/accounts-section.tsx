@@ -591,12 +591,16 @@ function AccountDetails({
   routeId: string
   onRemove: () => void
 }) {
+  const health = useHealth()
   const details = useAgentAccountDetails(routeId, true)
   const open = useOpenAgentAccountFile()
   const targets = useOpenTargets()
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(account.label)
   const rename = useUpdateAgentProfile()
+  // Missing means an older server response; retain its established local behavior. An explicit
+  // false is hosted mode, where no desktop app on the viewer's machine can open a host path.
+  const localHandoff = health.data?.capabilities?.localHandoff !== false
 
   // Which detected apps can actually act on each thing — the same rule the route enforces, so the
   // menu never offers something that would come back a 400. A `cli:<runner>` handoff opens a task
@@ -645,46 +649,48 @@ function AccountDetails({
         </p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
-        <span className="mr-1 text-xs text-muted-foreground">Config files</span>
-        {account.files.map((file) => (
+      {localHandoff ? (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
+          <span className="mr-1 text-xs text-muted-foreground">Config files</span>
+          {account.files.map((file) => (
+            <OpenInMenu
+              key={file.id}
+              slot="account-open-file"
+              label={file.label}
+              triggerVariant="outline"
+              disabled={open.isPending}
+              // A file the agent has not written yet is offered but says so, because "Connect then
+              // it appears" is the normal path and a hidden button would look like a missing feature.
+              title={file.exists ? file.path : `${file.path} — not created yet`}
+              choices={fileChoices}
+              onPick={(target) => openPath(file.id, file.label, target)}
+              leading={
+                <DropdownMenuItem
+                  data-target="system"
+                  onSelect={() => openPath(file.id, file.label)}
+                >
+                  <ExternalLinkIcon aria-hidden="true" />
+                  System default
+                </DropdownMenuItem>
+              }
+            />
+          ))}
           <OpenInMenu
-            key={file.id}
-            slot="account-open-file"
-            label={file.label}
-            triggerVariant="outline"
+            slot="account-open-folder"
+            label="Folder"
             disabled={open.isPending}
-            // A file the agent has not written yet is offered but says so, because "Connect then
-            // it appears" is the normal path and a hidden button would look like a missing feature.
-            title={file.exists ? file.path : `${file.path} — not created yet`}
-            choices={fileChoices}
-            onPick={(target) => openPath(file.id, file.label, target)}
+            title={account.path}
+            choices={folderChoices}
+            onPick={(target) => openPath('folder', 'folder', target)}
             leading={
-              <DropdownMenuItem
-                data-target="system"
-                onSelect={() => openPath(file.id, file.label)}
-              >
+              <DropdownMenuItem data-target="system" onSelect={() => openPath('folder', 'folder')}>
                 <ExternalLinkIcon aria-hidden="true" />
                 System default
               </DropdownMenuItem>
             }
           />
-        ))}
-        <OpenInMenu
-          slot="account-open-folder"
-          label="Folder"
-          disabled={open.isPending}
-          title={account.path}
-          choices={folderChoices}
-          onPick={(target) => openPath('folder', 'folder', target)}
-          leading={
-            <DropdownMenuItem data-target="system" onSelect={() => openPath('folder', 'folder')}>
-              <ExternalLinkIcon aria-hidden="true" />
-              System default
-            </DropdownMenuItem>
-          }
-        />
-      </div>
+        </div>
+      ) : null}
 
       {/* The discovered account carries no Rename/Remove at all — it is what cezar found, so either
           would imply a setting that does not exist. Nothing is rendered for it, not a disabled
