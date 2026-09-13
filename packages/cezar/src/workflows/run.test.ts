@@ -727,15 +727,8 @@ describe('reasoning effort resolution', () => {
     expect(resolveStepReasoningEffort({ runner: 'claude' }, 'codex', 'medium')).toBeUndefined();
   });
 
-  it('rejects non-Codex values and run-level settings with no inheriting Codex step', () => {
+  it('rejects only the values no step could ever apply — a non-Codex task, or a non-Codex step', () => {
     expect(reasoningEffortIssue(workflow, 'claude', 'high')).toBe('reasoning effort is only supported by the Codex runner');
-    expect(
-      reasoningEffortIssue(
-        { steps: [{ id: 'claude', prompt: '{{task}}', runner: 'claude' }] },
-        'codex',
-        'high',
-      ),
-    ).toBe('reasoning effort has no Codex agent step to apply to');
     expect(
       reasoningEffortIssue(
         { steps: [{ id: 'claude', prompt: '{{task}}', reasoningEffort: 'high' }] },
@@ -743,6 +736,37 @@ describe('reasoning effort resolution', () => {
         undefined,
       ),
     ).toBe('step "claude": reasoning effort is only supported by the Codex runner');
+  });
+
+  /**
+   * A run-level effort that no step ends up reading is redundant, not invalid, and the two are
+   * indistinguishable from here: `inheritsRunEffort` used to fail the whole run for either, which
+   * killed legal configurations before any agent spawned. Being overridable is what a default IS.
+   */
+  it('accepts a run-level effort every Codex step shadows, and one no step inherits', () => {
+    // Every agent step pins its own valid Codex effort — the run-level `high` is simply the
+    // default they each override. This used to be a terminal `failed`.
+    expect(
+      reasoningEffortIssue(
+        {
+          steps: [
+            { id: 'a', prompt: '{{task}}', runner: 'codex', reasoningEffort: 'low' },
+            { id: 'b', prompt: '{{task}}', runner: 'codex', reasoningEffort: 'medium' },
+          ],
+        },
+        'codex',
+        'high',
+      ),
+    ).toBeUndefined();
+    // A Codex task whose only agent step delegates to Claude: the effort applies to nothing, but
+    // nothing about it is unsafe either, so the run proceeds at the step's native default.
+    expect(
+      reasoningEffortIssue(
+        { steps: [{ id: 'claude', prompt: '{{task}}', runner: 'claude' }] },
+        'codex',
+        'high',
+      ),
+    ).toBeUndefined();
   });
 });
 

@@ -145,10 +145,13 @@ export function reasoningEffortIssue(
   }
   if (runReasoningEffort === undefined) return undefined;
   if (taskBackend !== 'codex') return REASONING_EFFORT_UNSUPPORTED_ERROR;
-  const inheritsRunEffort = agentSteps.some(
-    (step) => (step.runner ?? taskBackend) === 'codex' && step.reasoningEffort === undefined,
-  );
-  return inheritsRunEffort ? undefined : 'reasoning effort has no Codex agent step to apply to';
+  // A run-level effort that every Codex step happens to override is NOT an error: being
+  // overridable is what a default IS, and the documented precedence (step effort, then run
+  // effort, then Codex's own default) says exactly that. An earlier revision failed the run
+  // here, which killed a workflow whose steps each pinned their own valid effort — a legal
+  // configuration — before a single agent spawned. The two cases worth refusing are already
+  // above: a step whose backend cannot take an effort, and a non-Codex task backend.
+  return undefined;
 }
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
