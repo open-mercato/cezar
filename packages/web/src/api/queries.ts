@@ -85,6 +85,7 @@ import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
   CreateAgentProfileInput,
+  ApiRun,
   HealthResponse,
   MessageInput,
   Runner,
@@ -764,10 +765,11 @@ export function useOpenTargets() {
 }
 
 /** The authoritative run list. */
-export function useRuns() {
+export function useRuns<TData = ApiRun[]>(select?: (runs: ApiRun[]) => TData) {
   return useQuery({
     queryKey: queryKeys.runs.list(),
     queryFn: ({ signal }) => getRuns({ signal }),
+    select,
   })
 }
 
@@ -823,11 +825,17 @@ export function useRunsIndex(enabled = true, refetchIntervalMs?: number) {
  * still goes to `/api/p/<bootId>/runs`, which the server answers byte-identically (the
  * route-parity contract).
  */
-export function useProjectRuns(projectId: string, enabled = true, boot = false) {
+export function useProjectRuns<TData = ApiRun[]>(
+  projectId: string,
+  enabled = true,
+  boot = false,
+  select?: (runs: ApiRun[]) => TData,
+) {
   return useQuery({
     queryKey: [boot ? 'default' : projectId, 'runs', 'list'] as const,
     queryFn: ({ signal }) => getProjectRuns(projectId, { signal }),
     enabled,
+    select,
   })
 }
 

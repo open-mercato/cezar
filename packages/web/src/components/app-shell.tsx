@@ -114,6 +114,24 @@ export type AppShellProps = {
  */
 const SidebarNavigateContext = React.createContext<(() => void) | undefined>(undefined)
 
+const AppShellMain = React.memo(function AppShellMain({
+  children,
+  mainRef,
+}: {
+  children: ReactNode
+  mainRef: React.RefObject<HTMLElement | null>
+}) {
+  return (
+    <main
+      ref={mainRef}
+      data-slot="main"
+      className="row-start-3 min-h-0 overflow-y-auto overscroll-contain"
+    >
+      {children}
+    </main>
+  )
+})
+
 export function useSidebarNavigate(): (() => void) | undefined {
   return React.useContext(SidebarNavigateContext)
 }
@@ -144,7 +162,7 @@ export function routeOwnsScrollArrival(pathname: string): boolean {
  *  - Below `md` the sidebar is gone and its content moves, unchanged, into an overlay drawer
  *    (`MobileNavDrawer`). Same components, only the framing changes.
  */
-export function AppShell({
+export const AppShell = React.memo(function AppShell({
   children,
   repo = null,
   inboxCount = null,
@@ -168,6 +186,7 @@ export function AppShell({
   const activeTo = activeNavPath(areaPathname)
   const current = activeNavItem(areaPathname)
   const [menuOpen, setMenuOpen] = React.useState(false)
+  const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const mainRef = React.useRef<HTMLElement>(null)
   const routeOwnsArrival = routeOwnsScrollArrival(pathname)
   // The desktop column's width (#788). Read once, lazily, from `localStorage` — it is a
@@ -214,9 +233,14 @@ export function AppShell({
     return () => query.removeEventListener('change', onChange)
   }, [])
 
+  const items = React.useMemo(
+    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable }),
+    [forgeAvailable, inboxAvailable, automationsAvailable],
+  )
+
   const nav = {
     activeTo,
-    items: visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable }),
+    items,
     repo,
     // The badge belongs to the Inbox item — with the item gone there is nothing to badge.
     inboxCount: inboxAvailable ? inboxCount : null,
@@ -231,46 +255,39 @@ export function AppShell({
   }
 
   return (
-    // The Sheet root renders no DOM of its own — it is the context that lets the top bar's menu
-    // button be a real SheetTrigger while the open state stays ours to close on navigation.
-    <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
-      <div
-        data-slot="app-shell"
-        className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
-      >
-        <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} />
-        {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
-            there is no second column to trade width with and no pointer to drag a border. */}
-        <MobileNavDrawer {...nav} onNavigate={() => setMenuOpen(false)} />
-
-        <div className="grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden">
+    <div
+      data-slot="app-shell"
+      className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
+    >
+      <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} />
+      <div className="grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden">
+        {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
+            context so a sidebar update cannot propagate through the routed view. */}
+        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
           <MobileTopBar title={current?.label ?? 'cezar'} />
+          {/* The drawer keeps its fixed 264px: it is a full-height overlay on a phone, where
+              there is no second column to trade width with and no pointer to drag a border. */}
+          <MobileNavDrawer {...nav} onNavigate={closeMenu} />
+        </Sheet>
 
-          {banner ? (
-            <div data-slot="banner-slot" className="row-start-2">
-              {banner}
-            </div>
-          ) : null}
+        {banner ? (
+          <div data-slot="banner-slot" className="row-start-2">
+            {banner}
+          </div>
+        ) : null}
 
-          <main
-            ref={mainRef}
-            data-slot="main"
-            className="row-start-3 min-h-0 overflow-y-auto overscroll-contain"
-          >
-            {children}
-          </main>
+        <AppShellMain mainRef={mainRef}>{children}</AppShellMain>
 
-          {/* Row 4: the composer dock (thread reply, Step R3). Empty today, but it still carries
-              the bottom safe-area gutter so the scroller never runs under the home indicator. */}
-          <div
-            data-slot="composer"
-            className="row-start-4 pb-[env(safe-area-inset-bottom)]"
-          />
-        </div>
+        {/* Row 4: the composer dock (thread reply, Step R3). Empty today, but it still carries
+            the bottom safe-area gutter so the scroller never runs under the home indicator. */}
+        <div
+          data-slot="composer"
+          className="row-start-4 pb-[env(safe-area-inset-bottom)]"
+        />
       </div>
-    </Sheet>
+    </div>
   )
-}
+})
 
 type NavProps = {
   activeTo: string | null
@@ -299,7 +316,7 @@ type NavProps = {
  * the class is left off entirely below `md`, where `hidden` takes the element out of flow and the
  * drawer (a fixed 264px) is the sidebar instead.
  */
-function Sidebar({ width, onWidthChange, ...props }: NavProps & SidebarResize) {
+const Sidebar = React.memo(function Sidebar({ width, onWidthChange, ...props }: NavProps & SidebarResize) {
   return (
     <aside
       data-slot="sidebar"
@@ -310,7 +327,7 @@ function Sidebar({ width, onWidthChange, ...props }: NavProps & SidebarResize) {
       <SidebarResizeHandle width={width} onWidthChange={onWidthChange} />
     </aside>
   )
-}
+})
 
 type SidebarResize = {
   width: number
@@ -417,7 +434,7 @@ function SidebarResizeHandle({ width, onWidthChange }: SidebarResize) {
  * dismiss-on-tap, and `aria-hidden` on everything outside the portal — which is how it delivers
  * modality (it does not set `aria-modal`; `hideOthers` is the stronger guarantee).
  */
-function MobileNavDrawer({ onNavigate, ...props }: NavProps & { onNavigate: () => void }) {
+const MobileNavDrawer = React.memo(function MobileNavDrawer({ onNavigate, ...props }: NavProps & { onNavigate: () => void }) {
   return (
     <SheetContent
       side="left"
@@ -445,7 +462,7 @@ function MobileNavDrawer({ onNavigate, ...props }: NavProps & { onNavigate: () =
       />
     </SheetContent>
   )
-}
+})
 
 /**
  * Everything inside the sidebar: brand lockup, New task CTA, nav, quick-list, footer. Framed by
