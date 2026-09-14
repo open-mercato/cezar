@@ -321,7 +321,7 @@ describe('useRunHistory', () => {
 
     resolveOlder(page(1))
     await act(async () => loadingOlder)
-    expect(result.current.visibleEvents.map(({ seq }) => seq).at(0)).toBe(1)
+    await waitFor(() => expect(result.current.visibleEvents.map(({ seq }) => seq).at(0)).toBe(1))
     expect(result.current.visibleEvents.at(-1)?.seq).toBe(300)
     vi.unstubAllGlobals()
   })
@@ -496,7 +496,7 @@ describe('useRunHistory', () => {
       client.getQueryData<{ pages: RunHistoryPage[] }>(['run-history', 'default', 'run-1'])?.pages.at(-1)?.asOfSeq,
     ).toBe(250))
     expect(client.getQueryData<{ pages: RunHistoryPage[] }>(['run-history', 'default', 'run-1'])?.pages[0]?.asOfSeq).toBe(500)
-    expect(result.current.visibleEvents.some(({ seq }) => seq === 250)).toBe(true)
+    await waitFor(() => expect(result.current.visibleEvents.some(({ seq }) => seq === 250)).toBe(true))
     vi.unstubAllGlobals()
   })
 
@@ -532,7 +532,7 @@ describe('useRunHistory', () => {
     resolveStale(page(250))
     await waitFor(() => expect(result.current.retainedPages).toBe(1))
     expect(client.getQueryData<{ pages: RunHistoryPage[] }>(['run-history', 'default', 'run-1'])?.pages[0]?.asOfSeq).toBe(400)
-    expect(result.current.visibleEvents.some(({ seq }) => seq === 250)).toBe(true)
+    await waitFor(() => expect(result.current.visibleEvents.some(({ seq }) => seq === 250)).toBe(true))
     vi.unstubAllGlobals()
   })
 

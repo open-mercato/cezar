@@ -277,6 +277,26 @@ describe('useThreadScroll — growth must not scroll under a finger', () => {
       expect(scroller.scrollTop).toBe(720)
     })
 
+    it('does not measure rows when the browser hit test misses the thread', () => {
+      vi.stubGlobal('CSS', { supports: (property: string) => property !== 'overflow-anchor' })
+      render(<AnchorHarness rowCount={6} />)
+      const scroller = document.querySelector('[data-slot="main"]') as HTMLElement
+      fireEvent.touchStart(scroller, { touches: [{ clientY: 100 }] })
+      fireEvent.touchMove(scroller, { touches: [{ clientY: 200 }] })
+      scroller.scrollTop = 600
+      const reads = layOut(scroller, [200, 200, 200, 200, 200, 200])
+      const viewportRead = vi.spyOn(scroller, 'getBoundingClientRect')
+      Object.defineProperty(document, 'elementsFromPoint', {
+        configurable: true,
+        value: vi.fn(() => []),
+      })
+
+      act(() => fireEvent.scroll(scroller))
+
+      expect(reads.map((read) => read.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0])
+      expect(viewportRead).toHaveBeenCalledTimes(1)
+    })
+
     it('seeds the anchor when a cached mid-thread restore settles without another scroll', () => {
       vi.stubGlobal('CSS', { supports: (property: string) => property !== 'overflow-anchor' })
       saveThreadScroll('run-anchor:main', { top: 600, atBottom: false })

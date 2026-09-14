@@ -121,19 +121,28 @@ interface RunHeaderProps {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
-  /** Fired before the mutation so the Session tab can suppress its auto-mark-read effect. */
+  /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
+   *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
+   *  the three `task-git` tabs render this same header and run no such effect. */
   onMarkedUnread?: () => void
-  /** Session-tab picker for the next continuation; Git tabs do not own this selection. */
+  /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
+   *  they share this header but do not own the continuation draft or its pending selection. */
   continuationEngine?: ReactNode
 }
 
+// Every prop must participate: adding one without a comparator is a compile error.
+const headerPropComparators = {
+  run: (before, after) => before.run === after.run,
+  tab: (before, after) => before.tab === after.tab,
+  onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
+  continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
+  planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
+    before.planTally?.total === after.planTally?.total,
+} satisfies Record<keyof RunHeaderProps, (before: RunHeaderProps, after: RunHeaderProps) => boolean>
+const compareHeaderProps = Object.values(headerPropComparators)
+
 export const RunHeader = memo(RunHeaderView, (before, after) =>
-  before.run === after.run &&
-  before.tab === after.tab &&
-  before.onMarkedUnread === after.onMarkedUnread &&
-  before.continuationEngine === after.continuationEngine &&
-  before.planTally?.done === after.planTally?.done &&
-  before.planTally?.total === after.planTally?.total,
+  compareHeaderProps.every((compare) => compare(before, after)),
 )
 
 function RunHeaderView({

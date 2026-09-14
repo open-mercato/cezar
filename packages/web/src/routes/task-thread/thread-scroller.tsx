@@ -269,8 +269,7 @@ export function useThreadScroll(
     // resize put it back where it was. Flat mode only — past the virtualization threshold virtua
     // owns offset compensation, and a second corrector would fight it.
     const polyfillAnchoring = !hasScrollAnchoring()
-    const rowAtViewportTop = (current: HTMLElement): ThreadRowPosition | undefined => {
-      const viewport = current.getBoundingClientRect()
+    const rowAtViewportTop = (current: HTMLElement, viewport: DOMRect): ThreadRowPosition | undefined => {
       // The WebKit path this polyfill serves gets an O(1) hit-test and measures one row, not up
       // to 300 row rects per scroll frame. `elementsFromPoint` sees through a child element to
       // the owning row; the fallback exists for jsdom/older test hosts, not shipping browsers.
@@ -282,6 +281,9 @@ export function useThreadScroll(
           const rect = hit.getBoundingClientRect()
           return { key: hit.dataset.rowKey!, top: rect.top, bottom: rect.bottom }
         }
+        // The probe can land on the header, a gutter or an overlay. A browser miss must not
+        // reinstate the full row scan this hit test replaces (PR #965).
+        return undefined
       }
       return measuredRows(current).find(({ bottom }) => bottom > viewport.top)
     }
@@ -302,11 +304,11 @@ export function useThreadScroll(
         anchorFrameRef.current = 0
         const current = scrollElRef.current
         if (!current || stuckRef.current) return
-        const viewportTop = current.getBoundingClientRect().top
-        const row = rowAtViewportTop(current)
+        const viewport = current.getBoundingClientRect()
+        const row = rowAtViewportTop(current, viewport)
         readingAnchorRef.current = row === undefined
           ? undefined
-          : { key: row.key, offset: row.top - viewportTop }
+          : { key: row.key, offset: row.top - viewport.top }
       })
     }
     const holdReadingAnchor = () => {
