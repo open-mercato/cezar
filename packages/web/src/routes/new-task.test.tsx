@@ -577,6 +577,32 @@ describe('picker data flows', () => {
     })
   })
 
+  it('filters base branches by name', async () => {
+    serve({ repo: { ...REPO, branches: ['main', 'develop', 'feature/searchable-base'] } })
+    renderNewTask()
+    await pillReady()
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="base-pill"]') as HTMLElement)
+    const search = await screen.findByRole('searchbox', { name: 'Search branches…' })
+    fireEvent.change(search, { target: { value: 'searchable' } })
+
+    expect(screen.getAllByRole('menuitemradio').map((option) => option.textContent)).toEqual([
+      expect.stringContaining('feature/searchable-base'),
+    ])
+    expect(screen.queryByText('develop')).toBeNull()
+
+    fireEvent.change(search, { target: { value: 'missing' } })
+    expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0)
+    expect(screen.getByText('No branches found.')).not.toBeNull()
+
+    fireEvent.keyDown(search, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('searchbox', { name: 'Search branches…' })).toBeNull())
+    fireEvent.pointerDown(document.querySelector('[data-slot="base-pill"]') as HTMLElement)
+    const reopenedSearch = await screen.findByRole('searchbox', { name: 'Search branches…' })
+    expect((reopenedSearch as HTMLInputElement).value).toBe('')
+    expect(screen.getAllByRole('menuitemradio')).toHaveLength(4)
+  })
+
   it('opens with NOTHING picked, whatever the last run used', async () => {
     // The report this fixes: a skill picked once sat in the pill for every task afterwards,
     // and the composer offered no way to take it out. `lastTask` is still recorded — it just
