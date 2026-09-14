@@ -9,6 +9,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command'
+import { Segmented } from '@/components/segmented'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
@@ -197,18 +198,11 @@ export function ToggleChip({
 }
 
 /**
- * A segmented control — one row of mutually exclusive toggles, the same grammar the Tasks
- * table's Active/Archived tabs use. For "group by", where there are four short options and the
- * current one should be readable without opening anything.
- *
- * Two deliberate properties, both of which the "group by" caller depends on:
- *
- *  - **`value` is a plain string, not one of the option values.** A value matching no option
- *    means NOTHING is pressed, which is a real and common state — "not grouped" is not a fifth
- *    grouping, it is the absence of one, so it needs no button of its own.
- *  - **Clicking the pressed option still fires `onChange`.** The component reports the click and
- *    lets the caller decide what a re-click means; "group by" reads it as "release this", which
- *    is why it needs no `None`. A caller wanting strict radio behaviour simply ignores it.
+ * The Tasks "group by" control: the shared `Segmented` (spec 2026-09-14-automations-redesign
+ * § Primitives) with release-on-reclick, because "not grouped" is the absence of a choice, not a
+ * fifth option — clicking the pressed option fires `onChange` and the caller reads it as
+ * "release this". `value` is a plain string for the same reason: a value matching no option
+ * means nothing is pressed.
  */
 export function SegmentedControl<T extends string>({
   slot,
@@ -224,33 +218,5 @@ export function SegmentedControl<T extends string>({
   options: readonly { value: T; label: string }[]
   onChange: (value: T) => void
 }) {
-  return (
-    <div
-      data-slot={slot}
-      role="group"
-      aria-label={label}
-      className="inline-flex gap-0.5 rounded-md bg-muted p-[3px]"
-    >
-      {options.map((option) => {
-        const isActive = option.value === value
-        return (
-          <button
-            key={option.value}
-            type="button"
-            data-value={option.value}
-            // Like the list tabs: these re-slice one list in place, they do not switch panels.
-            // `aria-pressed` is also the honest reading of a toggle that can be released.
-            aria-pressed={isActive}
-            onClick={() => onChange(option.value)}
-            className={cn(
-              'flex h-6 items-center justify-center rounded-[6px] px-2.5 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground',
-              isActive && 'bg-card font-semibold text-foreground shadow-xs',
-            )}
-          >
-            {option.label}
-          </button>
-        )
-      })}
-    </div>
-  )
+  return <Segmented slot={slot} label={label} value={value} options={options} onChange={onChange} allowRelease />
 }
