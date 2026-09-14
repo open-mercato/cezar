@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
-import { CloneProjectDialog } from '@/components/clone-project-dialog'
+import { CloneProjectDialog, githubSsoUrl } from '@/components/clone-project-dialog'
 
 /**
  * The clone-from-GitHub dialog (multi-project spec, "Add project" option B / step 4.3).
@@ -35,6 +35,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   cleanup()
   fetchMock.mockReset()
   emitWorkspaceEvent = null
@@ -190,6 +191,71 @@ describe('CloneProjectDialog', () => {
     expect(cloneButton().disabled).toBe(false)
   })
 
+  it.each(['focus', 'visibility', 'manual'])('keeps SAML details and retries once via %s', async (mode) => {
+    const ssoUrl =
+      'https://github.com/orgs/Bug-Bounty-Switzerland/sso?authorization_request=AHBV4IUOPSOOJDNNTYUU4ALKUCFKNA5P'
+    let attempts = 0
+    serve(async () => {
+      attempts += 1
+      return attempts === 1
+        ? json(
+            {
+              error:
+                `GraphQL: Resource protected by organization SAML enforcement. ` +
+                `You must grant your OAuth token access to this organization. (repository) ` +
+                `Authorize in your web browser: ${ssoUrl}`,
+            },
+            500,
+          )
+        : json({ project: PROJECT })
+    })
+    const { onOpenChange } = renderDialog()
+    fireEvent.change(urlInput(), { target: { value: 'Bug-Bounty-Switzerland/private-repo' } })
+    fireEvent.click(cloneButton())
+
+    await waitFor(() => expect(slot('clone-sso-link')).toBeTruthy())
+    const link = slot('clone-sso-link') as HTMLAnchorElement
+    expect(link.textContent).toBe('Authorize this GitHub organization')
+    expect(link.href).toBe(ssoUrl)
+    expect(link.target).toBe('_blank')
+    expect(link.rel).toBe('noreferrer')
+    expect(slot('clone-error')?.textContent).toContain('return to this tab to retry')
+    expect(slot('clone-error')?.querySelector('details')?.textContent).toContain(ssoUrl)
+    expect(slot('clone-error')?.querySelector('details')?.open).toBe(false)
+    expect(cloneButton().textContent).toBe('Retry clone')
+
+    fireEvent.click(link, { ctrlKey: mode === 'manual' })
+    expect(slot('clone-error')?.textContent).toContain('or choose Retry clone')
+    if (mode === 'visibility') {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      fireEvent(document, new Event('visibilitychange'))
+      expect(posted).toHaveLength(1)
+      visibility.mockReturnValue('visible')
+      fireEvent(document, new Event('visibilitychange'))
+      fireEvent.focus(window)
+    } else if (mode === 'manual') {
+      expect(posted).toHaveLength(1)
+      fireEvent.click(cloneButton())
+    } else {
+      fireEvent.focus(window)
+    }
+
+    await waitFor(() => expect(posted).toHaveLength(2))
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+  })
+
+  it('does not turn an arbitrary URL in clone output into a link', async () => {
+    serve(async () => json({ error: 'remote: visit https://evil.example/authorize' }, 500))
+    renderDialog()
+    fireEvent.change(urlInput(), { target: { value: 'open-mercato/cezar' } })
+    fireEvent.click(cloneButton())
+
+    await waitFor(() => expect(slot('clone-error')?.textContent).toContain('evil.example'))
+    expect(slot('clone-sso-link')).toBeNull()
+    expect(slot('clone-error')?.querySelector('p')?.className).toContain('break-all')
+    expect(cloneButton().textContent).toBe('Retry clone')
+  })
+
   it('surfaces the existing-folder 409 as an error rather than navigating anywhere', async () => {
     serve(async () => json({ error: 'folder already exists: /home/me/cezar/projects/cezar' }, 409))
     renderDialog()
@@ -207,5 +273,19 @@ describe('CloneProjectDialog', () => {
     expect(cloneButton().disabled).toBe(true)
     fireEvent.change(urlInput(), { target: { value: 'open-mercato/cezar' } })
     await waitFor(() => expect(cloneButton().disabled).toBe(false))
+  })
+})
+
+
+describe('githubSsoUrl', () => {
+  const url = 'https://github.com/orgs/Acme/sso?authorization_request=ABC'
+  it.each(['==', '%2FDEF', '&extra=1', ')'])('rejects a partial token before %s', (suffix) => {
+    expect(githubSsoUrl(new Error(url + suffix))).toBeNull()
+  })
+  it.each(['', '\nnext line', '"', "'"])('accepts a complete URL before %s', (suffix) => {
+    expect(githubSsoUrl(new Error(url + suffix))).toBe(url)
+  })
+  it.each(['https://github.com.evil.example', 'http://github.com', 'https://evil.example@github.com'])('rejects %s', (host) => {
+    expect(githubSsoUrl(new Error(url.replace('https://github.com', host)))).toBeNull()
   })
 })

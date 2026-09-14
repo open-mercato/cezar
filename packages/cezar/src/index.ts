@@ -11,6 +11,7 @@ import {
   providerAuthChecksDisabled,
 } from './core/provider-auth.ts';
 import { applyProviderEnablement } from './core/provider-availability.ts';
+import { ensureDataGitignore } from './data-gitignore.ts';
 import { pruneOrphans } from './git-worktree.ts';
 import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
@@ -674,50 +675,6 @@ function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
   armRepoHandle(store, repoRoot);
   ensureDataGitignore(repoRoot);
   return store;
-}
-
-/** Keep run data out of the user's repo history; workflows/skills stay committable. */
-function ensureDataGitignore(repoRoot: string): void {
-  const path = join(repoRoot, '.ai/cezar', '.gitignore');
-  const wanted = [
-    'runs.json',
-    'runs.json.tmp',
-    'runs/',
-    'dispatch/', // filesystem channel for dispatched task trees
-    // The per-project attachment library (#929): every named file a user attaches to any task is
-    // copied here. It is USER content — a production log, an internal PDF, a brief — so it must
-    // never surface in their `git status`, let alone ride a `git add -A` into a public repo. This
-    // list is a per-entry allowlist rather than a blanket `*` on purpose (`workflows/` and
-    // `skills/` alongside it are meant to be committable), which means a new state directory that
-    // is not named here is covered by nothing at all. `data-gitignore.test.ts` guards that rule.
-    'attachments/',
-    'worktrees/',
-    'tmp/', // per-run agent temp directories (#785)
-    'todos.json',
-    'todos.json.tmp',
-    'launch-key',
-    'automations.json',
-    'automations.json.tmp',
-    'automation-state.json',
-    'automation-state.json.tmp',
-    'automation-receipts.ndjson',
-    'automation-receipts.ndjson.tmp',
-    'automation-log.ndjson',
-    'automation-log.ndjson.tmp',
-    'automation-poll.lock',
-  ];
-  try {
-    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
-    const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
-    const lines = current.split('\n');
-    const missing = wanted.filter((w) => !lines.includes(w));
-    if (missing.length > 0) {
-      const glue = current && !current.endsWith('\n') ? '\n' : '';
-      writeFileSync(path, `${current}${glue}${missing.join('\n')}\n`, 'utf8');
-    }
-  } catch {
-    // non-fatal
-  }
 }
 
 /** Own package name — for the npm-registry update check (#368). */
