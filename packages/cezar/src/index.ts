@@ -683,6 +683,7 @@ function ensureDataGitignore(repoRoot: string): void {
     'runs.json',
     'runs.json.tmp',
     'runs/',
+    'dispatch/', // filesystem channel for dispatched task trees
     // The per-project attachment library (#929): every named file a user attaches to any task is
     // copied here. It is USER content — a production log, an internal PDF, a brief — so it must
     // never surface in their `git status`, let alone ride a `git add -A` into a public repo. This
