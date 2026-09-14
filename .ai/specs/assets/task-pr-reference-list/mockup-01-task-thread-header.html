@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Mockup — task-thread header with a PR reference list</title>
+    <style>
+      :root {
+        --background: #0d0d0d;
+        --foreground: #ffffff;
+        --card: #171717;
+        --muted: #262626;
+        --muted-foreground: #a3a3a3;
+        --soft-foreground: #7b7b7b;
+        --border: #262626;
+        --violet: #8f86e8;
+        --success: #10b981;
+        --pending: #fbbf24;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 28px;
+        background: var(--background);
+        color: var(--foreground);
+        font-family: ui-sans-serif, -apple-system, "Segoe UI", system-ui, sans-serif;
+        font-size: 13px;
+      }
+      .note {
+        color: var(--soft-foreground);
+        font-size: 11px;
+        margin: 0 0 8px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 14px 16px;
+        max-width: 860px;
+      }
+      .title { font-size: 15px; font-weight: 600; margin: 0 0 2px; }
+      .meta {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 4px 8px;
+        margin-top: 6px;
+        color: var(--muted-foreground);
+        font-size: 12px;
+      }
+      .sep { color: var(--border); }
+      .branch {
+        border: 1px solid var(--border);
+        background: #1c1c1c;
+        border-radius: 3px;
+        padding: 1px 6px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        font-weight: 500;
+      }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        height: 22px;
+        padding: 0 8px;
+        border-radius: 999px;
+        border: 1px solid rgba(143, 134, 232, 0.35);
+        color: var(--violet);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11px;
+        font-weight: 600;
+        text-decoration: none;
+      }
+      .chip.merged { border-color: rgba(16, 185, 129, 0.4); color: var(--success); }
+      .chip.closed { border-color: rgba(163, 163, 163, 0.28); color: var(--soft-foreground); opacity: 0.75; }
+      .chip.more { border-style: dashed; background: transparent; cursor: pointer; font-family: inherit; }
+      .arrow { font-size: 9px; opacity: 0.85; }
+      .popover {
+        margin-top: 10px;
+        width: 320px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        padding: 8px;
+      }
+      .popover h4 {
+        margin: 2px 6px 8px;
+        font-size: 10.5px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--soft-foreground);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px;
+        border-radius: 6px;
+      }
+      .row:hover { background: var(--muted); }
+      .dot { width: 7px; height: 7px; border-radius: 999px; flex: none; }
+      .dot.open { background: var(--violet); }
+      .dot.merged { background: var(--success); }
+      .dot.closed { background: var(--soft-foreground); }
+      .num {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: var(--foreground);
+      }
+      .why { color: var(--soft-foreground); font-size: 11px; margin-left: auto; }
+      .tag {
+        font-size: 9.5px;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--violet);
+        border: 1px solid rgba(143, 134, 232, 0.35);
+        border-radius: 999px;
+        padding: 0 5px;
+      }
+      .caption { color: var(--soft-foreground); font-size: 11px; margin: 18px 0 6px; max-width: 860px; line-height: 1.5; }
+    </style>
+  </head>
+  <body>
+    <p class="note">Proposed — task-thread header (packages/web/src/routes/task-thread/run-header.tsx)</p>
+    <div class="panel">
+      <p class="title">779: designing the task PR reference list</p>
+      <div class="meta">
+        <span>quick-task</span>
+        <span class="sep">·</span>
+        <span class="branch">cez/8932b8b4</span>
+        <span class="sep">·</span>
+        <a class="chip" href="#">#812 <span class="arrow">↗</span></a>
+        <a class="chip merged" href="#">#824 <span class="arrow">↗</span></a>
+        <button class="chip more">+2</button>
+        <span class="sep">·</span>
+        <a class="chip" href="#">Issue #779 <span class="arrow">↗</span></a>
+        <span class="sep">·</span>
+        <span style="color: #10b981">+248</span>
+        <span style="color: #ef4444">−12</span>
+      </div>
+      <div class="popover">
+        <h4>Pull requests for this task</h4>
+        <div class="row">
+          <span class="dot open"></span>
+          <span class="num">#812</span>
+          <span class="tag">primary</span>
+          <span class="why">opened by this task</span>
+        </div>
+        <div class="row">
+          <span class="dot merged"></span>
+          <span class="num">#824</span>
+          <span class="why">declared · merged</span>
+        </div>
+        <div class="row">
+          <span class="dot open"></span>
+          <span class="num">#831</span>
+          <span class="why">declared · open</span>
+        </div>
+        <div class="row">
+          <span class="dot closed"></span>
+          <span class="num">#806</span>
+          <span class="why">declared · closed</span>
+        </div>
+      </div>
+    </div>
+    <p class="caption">
+      Every PR the task has been associated with stays reachable. The first/primary PR keeps its
+      slot and its position; later declarations append. State tinting (Phase 2) dims a closed,
+      unmerged PR and sorts it last — it never removes it.
+    </p>
+  </body>
+</html>

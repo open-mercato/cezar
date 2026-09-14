@@ -1,7 +1,8 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { ReactNode } from 'react'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
@@ -10,9 +11,22 @@ import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { RunHeader } from './run-header'
 import { resolveConflictsPrompt } from './run-actions'
 
+beforeEach(() => {
+  // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+})
+
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -87,6 +101,7 @@ function renderHeader(
   record: ApiRun,
   onMarkedUnread?: () => void,
   planTally?: { done: number; total: number },
+  continuationEngine?: ReactNode,
 ) {
   return render(
     <QueryClientProvider client={createQueryClient()}>
@@ -94,7 +109,14 @@ function renderHeader(
         <Routes>
           <Route
             path="/tasks/:id"
-            element={<RunHeader run={record} onMarkedUnread={onMarkedUnread} planTally={planTally} />}
+            element={
+              <RunHeader
+                run={record}
+                onMarkedUnread={onMarkedUnread}
+                planTally={planTally}
+                continuationEngine={continuationEngine}
+              />
+            }
           />
           <Route path="/" element={<div data-slot="home-probe" />} />
         </Routes>
@@ -1113,6 +1135,31 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(within(menu).getByText('model: auto')).not.toBeNull()
   })
 
+  it('offers the next-continuation engine picker inside the existing agent badge', async () => {
+    stubFetch()
+    renderHeader(
+      run('done', { runner: 'claude', model: 'sonnet' }),
+      undefined,
+      undefined,
+      <button type="button" aria-label="Model">sonnet</button>,
+    )
+
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).getByText('Next continuation')).not.toBeNull()
+    expect(within(menu).getByRole('button', { name: 'Model' }).textContent).toBe('sonnet')
+  })
+
+  it('keeps the historical badge read-only when no continuation picker is owned by the view', async () => {
+    stubFetch()
+    renderHeader(run('running', { runner: 'claude', model: 'sonnet' }))
+    const meta = document.querySelector('[data-slot="run-meta"]') as HTMLElement
+    fireEvent.pointerDown(within(meta).getByRole('button', { name: /Agent: claude/ }))
+    const menu = await screen.findByRole('menu')
+    expect(within(menu).queryByText('Next continuation')).toBeNull()
+  })
+
   // #416: the record persists only the runner the caller ASKED for (`src/runs/store.ts`), while
   // the run executes as `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). So a
   // record without a runner must name the repo's DEFAULT agent — hardcoding 'claude' here would
@@ -1270,6 +1317,70 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
   })
 
+  it('copies the branch name from its header chip and confirms it in the tooltip', async () => {
+    stubFetch()
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('cez/feature-branch')
+      expect(screen.getAllByText('Copied').length).toBeGreaterThan(0)
+      expect(screen.getByRole('status').textContent).toBe('Branch name copied')
+    })
+  })
+
+  it('keeps the full confirmation window after a rapid second copy', async () => {
+    vi.useFakeTimers()
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+    const chip = screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' })
+
+    fireEvent.click(chip)
+    await act(async () => {})
+    act(() => vi.advanceTimersByTime(1_000))
+    fireEvent.click(chip)
+    await act(async () => {})
+    act(() => vi.advanceTimersByTime(500))
+
+    expect(writeText).toHaveBeenCalledTimes(2)
+    expect(screen.getAllByText('Copied').length).toBeGreaterThan(0)
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['has no Clipboard API', {}],
+    ['is denied clipboard access', { clipboard: { writeText: () => Promise.reject(new Error('denied')) } }],
+  ])('shows the branch itself when the browser %s', async (_case, navigatorStub) => {
+    stubFetch()
+    vi.stubGlobal('navigator', navigatorStub)
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+
+    expect(await screen.findByText('Branch: cez/feature-branch')).not.toBeNull()
+  })
+
+  it('clears the pending copy confirmation when the header unmounts', async () => {
+    vi.useFakeTimers()
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: () => Promise.resolve() } })
+    const view = renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+    await act(async () => {})
+    const dismissCall = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1_500)
+    expect(dismissCall).toBeGreaterThanOrEqual(0)
+    const dismissTimer = setTimeoutSpy.mock.results[dismissCall]?.value
+    view.unmount()
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(dismissTimer)
+    vi.useRealTimers()
+  })
+
   it('a queued run shows its position in the pill, from the shared runs list', async () => {
     stubFetch({
       '/api/v1/runs': () =>
@@ -1302,5 +1413,69 @@ describe('meta line, tabs, pill and resume hint', () => {
     stubFetch()
     renderHeader(run('running'))
     expect(document.querySelector('[data-slot="resume-hint"]')).toBeNull()
+  })
+})
+
+/**
+ * Provenance in the thread header (spec `.ai/specs/2026-09-10-dispatch.md`): a dispatched task
+ * links back to the task that ordered it, and a task that dispatched work names what it started.
+ * Both are read from the run list this page already holds, so neither costs a request.
+ */
+describe('dispatch lines', () => {
+  const parentLine = () => document.querySelector('[data-slot="dispatch-parent-line"]')
+  const parentLink = () => document.querySelector('[data-slot="dispatch-parent"]')
+  const childrenLine = () => document.querySelector('[data-slot="dispatch-children"]')
+  const childLinks = () => [...document.querySelectorAll('[data-slot="dispatch-child"]')]
+
+  it('says nothing at all for a plain task', async () => {
+    stubFetch()
+    renderHeader(run('done'))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    expect(parentLine()).toBeNull()
+    expect(childrenLine()).toBeNull()
+  })
+
+  it('links a child back to its parent, titled from the run list', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([run('done', { id: 'p1', title: 'Ship the release', titleSummary: 'Ship the release' })]),
+    })
+    renderHeader(run('running', { id: 'c1', dispatch: { rootRunId: 'p1', parentRunId: 'p1' } }))
+    // The title arrives with the run list; the link itself is painted from `run.dispatch` alone.
+    await waitFor(() => expect(parentLink()?.textContent).toContain('Ship the release'))
+    expect(parentLine()?.textContent).toContain('Dispatched by')
+    expect(parentLink()?.getAttribute('href')).toBe('/tasks/p1')
+  })
+
+  // A parent outside the list (another project, pruned) still gets its link: dropping the line
+  // would leave a thread that cannot say who ordered it.
+  it('falls back to the parent’s id when the list does not carry it', async () => {
+    stubFetch()
+    renderHeader(run('running', { id: 'c1', dispatch: { rootRunId: 'gone', parentRunId: 'gone' } }))
+    await waitFor(() => expect(parentLink()).not.toBeNull())
+    expect(parentLink()?.textContent).toContain('gone')
+  })
+
+  it('names the subtasks a parent dispatched, each linking into its own thread', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          run('done', { id: 'k1', titleSummary: 'Review PR #1', dispatch: { rootRunId: 'r1', parentRunId: 'r1' } }),
+          run('running', { id: 'k2', titleSummary: 'Review PR #2', dispatch: { rootRunId: 'r1', parentRunId: 'r1' } }),
+          run('done', { id: 'other', titleSummary: 'Unrelated' }),
+        ]),
+    })
+    renderHeader(run('running', { id: 'r1', dispatch: { rootRunId: 'r1' } }))
+    await waitFor(() => expect(childLinks()).toHaveLength(2))
+    expect(childrenLine()?.textContent).toContain('Subtasks')
+    expect(childLinks().map((a) => a.getAttribute('href'))).toEqual(['/tasks/k1', '/tasks/k2'])
+  })
+
+  // The role chip is gone with the ranks it named — nothing in the header may reintroduce it.
+  it('wears no rank chip', async () => {
+    stubFetch()
+    renderHeader(run('running', { dispatch: { rootRunId: 'r1' } }))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
   })
 })
