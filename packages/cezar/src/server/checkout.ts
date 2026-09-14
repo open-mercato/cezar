@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { lstat, mkdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
@@ -69,7 +69,9 @@ export interface RepoRef {
    *  segments rather than preserving user input. Forcing HTTPS is load-bearing:
    *  a machine configured with `gh config set git_protocol ssh` may have an
    *  OAuth token authorized for an organization's SAML policy while its SSH key
-   *  is not. Passing only `owner/repo` silently selects that rejected key. */
+   *  is not. Passing only `owner/repo` silently selects that rejected key.
+   *  The resulting HTTPS `origin` needs a credential path of its own after the
+   *  clone — see `persistGhCredentialHelper`. */
   cloneUrl: string;
 }
 
@@ -186,6 +188,41 @@ export function ghCloneArgs(ref: RepoRef, dir: string): string[] {
   return ['repo', 'clone', ref.cloneUrl, dir, '--', '--progress'];
 }
 
+/** How long the post-clone config write may take. It is a local file edit; a
+ *  `git` that has not answered in ten seconds is not going to. */
+const CONFIG_TIMEOUT_MS = 10_000;
+
+/**
+ * The second half of forcing HTTPS — and the half that is easy to miss.
+ *
+ * `gh repo clone` authenticates by injecting its credential helper *for the
+ * clone command only* (`git -c credential.https://github.com.helper=… clone …`);
+ * it does not persist into the repository it leaves behind. So a clone that
+ * `ghCloneArgs` pinned to HTTPS lands a checkout with a bare HTTPS `origin` and
+ * no credential path of its own, falling back on a GLOBAL helper that a user
+ * who answered `gh auth login` with SSH never had installed. cezar pushes task
+ * branches with raw `git` (`forge/github.ts`), so that user's first "Create PR"
+ * would block on a credential prompt until the push timeout — the SAML users
+ * this flow exists for are exactly that population.
+ *
+ * Writing the helper into the new repo's LOCAL config persists what the clone
+ * borrowed. It is the same line `gh auth setup-git` writes globally for HTTPS
+ * users, scoped to the one repository we just created.
+ */
+export function ghCredentialArgs(dir: string): string[] {
+  return ['-C', dir, 'config', '--local', 'credential.https://github.com.helper', '!gh auth git-credential'];
+}
+
+/** Best effort by design: the clone already succeeded and the repository is on
+ *  disk, so a failed config write is reported nowhere and fails nothing. The
+ *  worst case is the pre-existing behaviour (git falls back on the global
+ *  helper), never a lost checkout. */
+export function persistGhCredentialHelper(dir: string): Promise<boolean> {
+  return new Promise((resolvePromise) => {
+    execFile('git', ghCredentialArgs(dir), { timeout: CONFIG_TIMEOUT_MS }, (err) => resolvePromise(!err));
+  });
+}
+
 /**
  * `gh repo clone <validated HTTPS URL> <dir> -- --progress`.
  *
@@ -253,7 +290,13 @@ export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
     });
     child.on('close', (code) => {
       signal?.removeEventListener('abort', onAbort);
-      if (code === 0) return finish({ ok: true });
+      // A successful clone is not done until the checkout can authenticate on
+      // its own — see `persistGhCredentialHelper`. It never fails the clone, so
+      // the result is the same either way.
+      if (code === 0) {
+        void persistGhCredentialHelper(dir).then(() => finish({ ok: true }));
+        return;
+      }
       // The tail of gh/git's own output IS the error message — `gh` writes
       // "could not find repository", "authentication required" and the network
       // errors itself, and paraphrasing them would only lose detail.

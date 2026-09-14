@@ -26,13 +26,30 @@ import { Label } from '@/components/ui/label'
  * Keep this deliberately narrower than "find a URL": clone errors include
  * output influenced by the remote, and rendering arbitrary output as a link
  * would make the local cockpit an excellent phishing surface.
+ *
+ * Anchored at the END too, which matters as much as the `https://github.com/orgs/`
+ * prefix: the token charset cannot spell `%2F` or `=` padding, and an unanchored
+ * match would silently CUT such a token short and hand back a link
+ * indistinguishable from a good one. Refusing is the better failure — the caller
+ * then shows the raw error, which still contains the real URL to open by hand.
  */
 export function githubSsoUrl(error: unknown): string | null {
   if (!(error instanceof Error)) return null
   const match = error.message.match(
-    /https:\/\/github\.com\/orgs\/[A-Za-z0-9._-]+\/sso\?authorization_request=[A-Za-z0-9._~-]+/,
+    /https:\/\/github\.com\/orgs\/[A-Za-z0-9._-]+\/sso\?authorization_request=[A-Za-z0-9._~-]+(?![^\s'"<>])/,
   )
-  return match?.[0] ?? null
+  // `.` is in the charset (it has to be — hostnames above, tokens below), so a
+  // URL ending a sentence swallows the full stop. GitHub's nonce never ends in
+  // one, so trailing dots are punctuation, not payload.
+  return match ? match[0].replace(/\.+$/, '') : null
+}
+
+/** The raw `gh` text, minus the one part of it that is a credential-shaped
+ *  nonce. Shown alongside the SSO link so the message a user pastes into a bug
+ *  report is never lost, without putting `authorization_request=` in the DOM as
+ *  anything but the link's own `href`. */
+export function redactSsoToken(message: string): string {
+  return message.replace(/(authorization_request=)[A-Za-z0-9._~-]+/g, '$1…')
 }
 
 /**
