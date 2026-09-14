@@ -38,6 +38,32 @@
   unchanged for now: their entries are one uninterrupted stream with no turn boundaries to hang a
   clock on. Issue: #941.
 
+## 🐛 Fixes
+
+- 🐛 **A reply typed into a task that looks finished, but is running, now lands.** The thread reads
+  from two feeds — the run record for what the task *is*, the event stream for what it *said* — and
+  the record can go quietly out of date: a half-open workspace socket (TCP dead, `readyState` still
+  OPEN, so no error ever fires) stops delivering record updates while the transcript, which has had
+  its own liveness watchdog since #424, keeps flowing. Nothing else asked: the cockpit does not poll,
+  records stay fresh for five minutes, and window focus is deliberately not a refetch trigger — so
+  navigating to Tasks and back showed the same cached lie, and only a full page reload fixed it. A
+  task that had been continued or auto-resumed therefore sat there reading as done while it worked,
+  and the composer, aimed by that record at `POST /continue`, got "run is still active" back: the
+  prompt bounced into the draft with a toast, and re-sending it bounced again. Three changes, each
+  closing the hole at a different depth. The workspace stream gets the same watchdog the transcript
+  has — a silence spanning both data and the server's 15 s keep-alive is a dead socket, so it is
+  rebuilt and the reconnect reconciles everything missed. The thread's stale-record healer, which
+  already refetched a record still claiming `running` over a settled transcript, now works in the
+  other direction too: a session that has *opened* and not ended, under a record calling the run
+  done, refetches after the same two-second grace. And the composer no longer treats a 409 as the
+  end — it refetches the record authoritatively and, when the truth names the other endpoint,
+  delivers there instead, so the reply reaches the live session rather than the draft. A 409 the
+  fresh record agrees with (a disconnected provider, a session with nothing to resume) is still
+  reported as the server worded it, and an empty submit — the one-click Continue — is never turned
+  into an empty message. The run header's actions follow the same rule: a refused Continue or Cancel
+  refetches the record it was drawn from, so the bar redraws to the truth instead of offering the
+  same refusal.
+
 # 0.10.1 (2026-09-04)
 
 ## Highlights
