@@ -43,7 +43,11 @@ describe('reduceThread — golden v2 fixtures', () => {
     const message = turns[0]!.items[0] as UiMessageItem
     expect(message.role).toBe('assistant')
     expect(message.text).toBe("I'll fix the bug.")
-    expect(turns[0]!.completed).toEqual({ stopReason: 'end_turn', costUsd: 0.0021 })
+    expect(turns[0]!.completed).toEqual({
+      stopReason: 'end_turn',
+      costUsd: 0.0021,
+      ts: '2026-07-14T12:00:00.000Z',
+    })
     expect(turns[0]!.userMessage).toBeUndefined() // the initial prompt is the run's task, not an event
     expect(sessionEnded).toBeUndefined()
   })
@@ -194,7 +198,12 @@ describe('reduceThread — v1-only fallback (pre-v2 transcripts)', () => {
     expect(tool.output).toContain('# cezar ⚡')
 
     // Turn 2: opened by the user-message, then the reply and the danger line.
-    expect(turns[1]!.userMessage).toEqual({ text: 'Now summarize it.', imageCount: 0, images: [] })
+    expect(turns[1]!.userMessage).toEqual({
+      text: 'Now summarize it.',
+      imageCount: 0,
+      images: [],
+      ts: '2026-07-14T12:00:00.000Z',
+    })
     expect(kinds(turns[1]!.items)).toEqual(['message', 'note'])
     expect(turns[1]!.items[1]).toMatchObject({ tone: 'danger', text: 'claude exited with code 1' })
   })
@@ -720,7 +729,12 @@ describe('the v1 vocabulary sweep (cezar-code-map §3.2) — every persisted typ
   it('user-message → opens a turn with the bubble', () => {
     const { turns } = reduceThread([line(1, 'user-message', { text: 'do it', imageCount: 1 })])
     expect(turns).toHaveLength(1)
-    expect(turns[0]!.userMessage).toEqual({ text: 'do it', imageCount: 1, images: [] })
+    expect(turns[0]!.userMessage).toEqual({
+      text: 'do it',
+      imageCount: 1,
+      images: [],
+      ts: '2026-07-14T12:00:00.000Z',
+    })
   })
 
   it('user-message carries attached image URLs for the bubble (#image-display)', () => {
@@ -891,5 +905,85 @@ describe('reduceThread — AskUser cards (#473)', () => {
     ])
     const msg = turns.at(-1)!.items.find((i) => i.kind === 'message') as { text: string } | undefined
     expect(msg?.text).toBe(raw)
+  })
+})
+
+/**
+ * Per-turn timestamps (#941). The reducer only THREADS the stamps that were already on the
+ * wire — no new persisted field, no new API — so what these pin is that it threads exactly the
+ * three (`userMessage.ts`, `startedAt`, `completed.ts`), and that a transcript with no usable
+ * stamps still folds into the same turns it always did.
+ */
+describe('reduceThread — turn timestamps (#941)', () => {
+  /** A line with an explicit (or deliberately broken) `ts`, bypassing `line`'s default stamp. */
+  const at = (seq: number, type: string, ts: unknown, rest: Record<string, unknown> = {}): RunEvent =>
+    ({ seq, ts, type, ...rest }) as RunEvent
+
+  it('keeps ONE coherent start when the v1 line and the v2 event open the same turn', () => {
+    // The observed wire order: `user-message` is persisted first, `turn.started` a beat later.
+    // The user's own send time is the honest start, and the turn must not carry two.
+    const { turns } = reduceThread([
+      at(1, 'user-message', '2026-07-14T12:00:00.000Z', { text: 'Now summarize it.' }),
+      at(2, 'turn.started', '2026-07-14T12:00:00.400Z', { turnId: 'turn_2' }),
+      at(3, 'turn.completed', '2026-07-14T12:04:12.000Z', { turnId: 'turn_2', stopReason: 'end_turn' }),
+    ])
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.turnId).toBe('turn_2')
+    expect(turns[0]!.userMessage?.ts).toBe('2026-07-14T12:00:00.000Z')
+    expect(turns[0]!.startedAt).toBe('2026-07-14T12:00:00.000Z')
+    expect(turns[0]!.completed?.ts).toBe('2026-07-14T12:04:12.000Z')
+  })
+
+  it('starts an agent-opened turn from turn.started, with no user message', () => {
+    const { turns } = reduceThread([
+      at(1, 'turn.started', '2026-07-14T12:00:00.000Z', { turnId: 'turn_1' }),
+      at(2, 'turn.completed', '2026-07-14T12:00:12.000Z', { turnId: 'turn_1', stopReason: 'end_turn' }),
+    ])
+    expect(turns[0]!.userMessage).toBeUndefined()
+    expect(turns[0]!.startedAt).toBe('2026-07-14T12:00:00.000Z')
+    expect(turns[0]!.completed?.ts).toBe('2026-07-14T12:00:12.000Z')
+  })
+
+  it('stamps the completion on the turn it names, not on the newest one', () => {
+    const { turns } = reduceThread([
+      at(1, 'turn.started', '2026-07-14T12:00:00.000Z', { turnId: 'turn_1' }),
+      at(2, 'user-message', '2026-07-14T12:01:00.000Z', { text: 'more' }),
+      at(3, 'turn.started', '2026-07-14T12:01:00.100Z', { turnId: 'turn_2' }),
+      at(4, 'turn.completed', '2026-07-14T12:02:00.000Z', { turnId: 'turn_1', stopReason: 'end_turn' }),
+    ])
+    expect(turns).toHaveLength(2)
+    expect(turns[0]!.completed?.ts).toBe('2026-07-14T12:02:00.000Z')
+    expect(turns[1]!.completed).toBeUndefined()
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['empty', ''],
+    ['unparseable', 'yesterday-ish'],
+    ['not a string', 1_752_494_400_000],
+  ])('folds a %s ts into no timestamp at all, never a throw', (_label, ts) => {
+    const { turns } = reduceThread([
+      at(1, 'user-message', ts, { text: 'do it' }),
+      at(2, 'turn.started', ts, { turnId: 'turn_1' }),
+      at(3, 'item.completed', ts, { item: { kind: 'message', id: 'm1', role: 'assistant', text: 'ok' } }),
+      at(4, 'turn.completed', ts, { turnId: 'turn_1', stopReason: 'end_turn' }),
+    ])
+    // The turn itself is untouched — only its clock is missing.
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.userMessage?.text).toBe('do it')
+    expect(kinds(turns[0]!.items)).toEqual(['message'])
+    expect(turns[0]!.completed?.stopReason).toBe('end_turn')
+    expect(turns[0]!.userMessage?.ts).toBeUndefined()
+    expect(turns[0]!.startedAt).toBeUndefined()
+    expect(turns[0]!.completed?.ts).toBeUndefined()
+  })
+
+  it('recovers the start from turn.started when the user-message line has none', () => {
+    const { turns } = reduceThread([
+      at(1, 'user-message', 'garbage', { text: 'go' }),
+      at(2, 'turn.started', '2026-07-14T12:00:00.400Z', { turnId: 'turn_1' }),
+    ])
+    expect(turns[0]!.userMessage?.ts).toBeUndefined()
+    expect(turns[0]!.startedAt).toBe('2026-07-14T12:00:00.400Z')
   })
 })

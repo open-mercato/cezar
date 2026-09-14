@@ -205,13 +205,26 @@ export const workspaceLastLocationSchema = z.strictObject({
 export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
 
 export const workspaceUiStateSchema = z.looseObject({
-  /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
-   *  round-tripped so an older cockpit sharing this home keeps working, but the current cockpit
-   *  neither reads nor writes it: which groups are shut describes the WINDOW, not the workspace,
-   *  so it lives in that browser's localStorage (`packages/web/src/lib/sidebar-collapse.ts`).
-   *  One shared answer meant a phone collapsing a group collapsed it on the desktop too. */
   sidebar: z
-    .looseObject({ collapsed: z.record(z.string(), z.boolean()).optional() })
+    .looseObject({
+      /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
+       *  round-tripped so an older cockpit sharing this home keeps working, but the current
+       *  cockpit neither reads nor writes it: which groups are shut describes the WINDOW, not the
+       *  workspace, so it lives in that browser's localStorage
+       *  (`packages/web/src/lib/sidebar-collapse.ts`). One shared answer meant a phone collapsing
+       *  a group collapsed it on the desktop too. */
+      collapsed: z.record(z.string(), z.boolean()).optional(),
+      /** The user's hand-picked project-group order (#952), most-wanted first — WORKSPACE state
+       *  on purpose, unlike `collapsed` above. Which order your repos sit in is a considered
+       *  choice made once, so redoing it on the phone is the annoyance; which groups are shut
+       *  changes many times an hour and belongs to the window.
+       *
+       *  Absent (or `[]`) means "never reordered" and the sidebar keeps its `lastOpenedAt` sort.
+       *  Ids that are no longer registered are ignored on read; registered projects missing from
+       *  the list are not dropped — they sort in by `lastOpenedAt` ahead of the picked ones
+       *  (`packages/web/src/lib/project-order.ts`). */
+      projectOrder: z.array(z.string()).optional(),
+    })
     .optional(),
   /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until the
    *  provider reports a different incident, so this stays workspace-global with the browser
@@ -262,6 +275,13 @@ export const setWorkspaceUiStateInputSchema = z
           .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
             message: `sidebar.collapsed must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
           })
+          .optional(),
+        // Project ids, so the same 64-char bound the registry's slug rule and `collapsed`'s keys
+        // already use. Duplicates are not rejected — the cockpit dedupes on read, and a 400 on a
+        // sidebar drag would be a worse answer than a self-healing one.
+        projectOrder: z
+          .array(z.string().min(1).max(64))
+          .max(WORKSPACE_UI_STATE_MAX_KEYS)
           .optional(),
       })
       .optional(),

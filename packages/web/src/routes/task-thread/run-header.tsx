@@ -17,16 +17,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import {
-  Fragment,
-  useEffect,
-  useId,
-  useMemo,
-  useReducer,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react'
+import { Fragment, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -75,6 +66,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
@@ -93,9 +85,9 @@ import { cn, isHttpUrl } from '@/lib/utils'
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
-import { useDraft } from './thread-draft'
 import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
+import { useDraft } from './thread-draft'
 
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
@@ -552,10 +544,6 @@ async function copyToClipboard(text: string, doneMessage: string): Promise<void>
 function EditableTitle({ run }: { run: ApiRun }) {
   const patch = usePatchRun(run.id)
   const title = runTitle(run)
-  // A rename in progress is authored content like any other (#939), and this editor is
-  // uniquely easy to walk away from: it commits on blur, but a route change unmounts it without
-  // one. Only the THREAD's rename is drafted — the Tasks table's rename is not inside a task, so
-  // it keeps today's behavior.
   const draft = useDraft(run.id, 'title')
   const editor = useTitleEditor(title, (next) =>
     patch.mutate({ title: next }, { onError: (error) => toast(error.message, { tone: 'danger' }) }),
@@ -566,8 +554,6 @@ function EditableTitle({ run }: { run: ApiRun }) {
       editor.setDraft(value)
       draft.setText(value)
     },
-    // Both exits end the rename, so both end the draft — a stored title with no editor open would
-    // re-open one on the next visit for an edit the user already resolved.
     commit: () => {
       editor.commit()
       draft.clear()
@@ -578,13 +564,6 @@ function EditableTitle({ run }: { run: ApiRun }) {
     },
   }
 
-  // Re-open on what was left unsaved. `hasDraft` goes false the moment it is committed, cancelled
-  // or typed empty, so this cannot re-fire against the user. `begin` rides a ref because the
-  // editor object is rebuilt every render and would otherwise re-run this on each one.
-  //
-  // `beginWith` (not `begin`) also opens it WITHOUT blur-commit until the user types: an editor
-  // that reappeared on its own must not turn the next stray click in the thread into a rename the
-  // user walked away from an hour ago. Enter and Escape still mean what they always meant.
   const begin = useRef(editor.beginWith)
   begin.current = editor.beginWith
   const editing = editor.editing
@@ -611,6 +590,67 @@ function EditableTitle({ run }: { run: ApiRun }) {
         <PencilIcon className="size-3.5" aria-hidden="true" />
       </button>
     </span>
+  )
+}
+
+/** Copyable task branch with confirmation kept local so hovering it does not re-render MetaRow. */
+function CopyBranchChip({ branch }: { branch: string }) {
+  const [copied, setCopied] = useState(false)
+  const [tooltipOpen, setTooltipOpen] = useState(false)
+  const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (dismissTimer.current !== null) clearTimeout(dismissTimer.current)
+    },
+    [],
+  )
+
+  const copy = () => {
+    if (!navigator.clipboard) {
+      toast(`Branch: ${branch}`)
+      return
+    }
+    void navigator.clipboard
+      .writeText(branch)
+      .then(() => {
+        setCopied(true)
+        setTooltipOpen(true)
+        if (dismissTimer.current !== null) clearTimeout(dismissTimer.current)
+        dismissTimer.current = setTimeout(() => {
+          dismissTimer.current = null
+          setTooltipOpen(false)
+        }, 1_500)
+      })
+      .catch(() => toast(`Branch: ${branch}`))
+  }
+
+  return (
+    <TooltipProvider>
+      <Tooltip
+          open={tooltipOpen}
+          onOpenChange={(open) => {
+            if (open && dismissTimer.current === null) setCopied(false)
+            setTooltipOpen(open)
+          }}
+        >
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              data-slot="branch-chip"
+              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              aria-label={`Copy branch name ${branch}`}
+              onClick={copy}
+            >
+              {branch}
+              <span className="sr-only" role="status">
+                {copied ? 'Branch name copied' : ''}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{copied ? 'Copied' : 'Copy branch name'}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
@@ -657,16 +697,9 @@ function MetaRow({
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
-  if (run.branch) {
-    parts.push(
-      <span
-        key="branch"
-        data-slot="branch-chip"
-        className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium"
-      >
-        {run.branch}
-      </span>,
-    )
+  const branch = run.branch
+  if (branch) {
+    parts.push(<CopyBranchChip key="branch" branch={branch} />)
   }
   // EVERY PR the task points at, in `taskReferences` order — the same order, and the same
   // statuses, the global Tasks table paints. A task opened on someone else's PR that pushes a
