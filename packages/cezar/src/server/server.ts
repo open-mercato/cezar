@@ -13,7 +13,7 @@ import {
   type AutomationDefinition,
 } from '../automations/types.ts';
 import type { IncomingMessage } from 'node:http';
-import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
+import { access, constants as fsConstants, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -324,6 +324,17 @@ const hostedProfileRefusal = {
 const hostedProfileOpenRefusal = {
   error: 'opening account files is disabled in hosted mode; open them directly on the machine hosting cezar',
 };
+
+/** Is there an entry at `path` — `lstat`, so a symlink counts even when its target is gone. Used
+ *  by the browse-root confinement, which must treat a live and a dead escape identically. */
+async function isPresent(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Allocate a profile id from the label (or, with no label, the folder name).
@@ -1780,13 +1791,13 @@ export function createApp(deps: ServerDeps) {
 
       const provider = body.data.provider as ProviderId;
       // A NAMED account is refused in hosted mode unless the operator opted in. This happens
-      // before resolution, exactly like every sibling route in the agent-profiles family;
-      // checking later would already have read
-      // `~/.cezar/agent-accounts.json`, built a command carrying the account's absolute path (which
-      // both the success body and the hosted 409 echo), and — for a stored account — spawned a
-      // probe. It would also answer `unknown account: <id>` for a wrong id, which is an enumeration
-      // oracle for the very ids the hosted listing withholds. The bare-provider spelling keeps its
-      // existing behaviour: it names no host path and is how the Providers card has always worked.
+      // before resolution, exactly like every sibling route in the agent-profiles family; checking
+      // later would already have read `~/.cezar/agent-accounts.json`, built a command carrying the
+      // account's absolute path (which both the success body and the hosted 409 echo), and — for a
+      // stored account — spawned a probe. It would also answer `unknown account: <id>` for a wrong
+      // id, which is an enumeration oracle for the very ids the hosted listing withholds. The
+      // bare-provider spelling keeps its existing behaviour: it names no host path and is how the
+      // Providers card has always worked.
       if (body.data.profileId !== undefined
         && body.data.profileId !== DEFAULT_AGENT_ACCOUNT_ID
         && !agentAccountsEnabled(process.env, bindHost)) {
@@ -1945,12 +1956,29 @@ export function createApp(deps: ServerDeps) {
     // real Windows path, and this is the only gate the Add-account dialog has.
     if (!isAbsoluteConfigDir(expanded)) return `folder must be an absolute path: ${configDir}`;
     // A remote caller may only name paths inside the same root exposed by the folder browser.
-    // Check lexically, before probing the candidate, so an outside path gets the same answer
-    // whether it exists or not and cannot become an existence oracle.
+    // Containment is asked in two halves, exactly as `POST /api/projects` asks it, and the order
+    // is the security property.
     if (!capabilities().localHandoff) {
       const root = resolveBrowseRoot(await workspaceBrowseRoot());
-      if (!(await isLexicallyInsideBrowseRoot(root, expanded))) {
-        return `folder must be inside the browsable root: ${root}`;
+      // No resolved path in the message (fs-browse's rule, and the same string both halves
+      // return): saying where the root is would hand a remote viewer the layout the narrowing
+      // hides, and two distinguishable rejections would be a shape to probe with.
+      const outside = 'folder is outside the browsable root';
+      // The LEXICAL half, before the candidate is touched: an out-of-root SPELLING is refused
+      // whether or not it is there, so the route never becomes an existence oracle. Lexical
+      // rather than realpath, because an account folder is allowed not to exist yet — Connect is
+      // what creates it — and a realpath check would tell someone who typo'd a folder under
+      // their own home that it is "outside the browsable root".
+      if (!(await isLexicallyInsideBrowseRoot(root, expanded))) return outside;
+      // The REALPATH half, now that the candidate is known to be THERE: a symlink inside the
+      // root pointing out of it spells as contained and is not. `lstat`, not `stat`, so a
+      // symlink whose target is missing counts as there too — otherwise a live escape (refused)
+      // and a dead one (accepted, and later reported `exists: false`) would answer differently,
+      // which is the oracle again, and the dead one would still be persisted as the account's
+      // path for a run to write through. A path that is simply absent has no link chain to
+      // follow and passes on the lexical half alone.
+      if (await isPresent(expanded)) {
+        if (!(await isInsideBrowseRoot(root, expanded))) return outside;
       }
     }
     return null;
