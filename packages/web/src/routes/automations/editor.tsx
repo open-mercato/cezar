@@ -184,7 +184,10 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
             {showTemplates && !automation ? (
               <TemplatePalette
                 onPick={(template) => {
-                  setDraft((current) => applyTemplate(current, template))
+                  // A template from another project may name a workflow this repo does not
+                  // have; only a workflow the cockpit lists survives, else the default applies.
+                  const workflow = template.workflow && workflowNames.includes(template.workflow) ? template.workflow : undefined
+                  setDraft((current) => applyTemplate(current, { ...template, workflow }))
                   setShowTemplates(false)
                 }}
               />

@@ -214,7 +214,8 @@ describe('AutomationEditor — new', () => {
     expect(document.querySelector('[data-slot="editor-cron"]')?.textContent).toBe('0 2 * * 2')
     expect(screen.getByRole('switch', { name: 'Dispatch' }).getAttribute('aria-checked')).toBe('true')
     expect(document.querySelector('[data-slot="editor-dispatch-hint"]')?.textContent).toBe('≤ 9 agents')
-    expect(screen.getByLabelText('Workflow').textContent).toContain('fix-and-verify')
+    // Built-in templates name no workflow, so the cockpit default stays.
+    expect(screen.getByLabelText('Workflow').textContent).toContain('quick-task')
     expect((saveButton() as HTMLButtonElement).disabled).toBe(false)
   })
 
