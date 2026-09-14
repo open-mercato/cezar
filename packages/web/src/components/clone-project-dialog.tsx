@@ -38,18 +38,7 @@ export function githubSsoUrl(error: unknown): string | null {
   const match = error.message.match(
     /https:\/\/github\.com\/orgs\/[A-Za-z0-9._-]+\/sso\?authorization_request=[A-Za-z0-9._~-]+(?![^\s'"<>])/,
   )
-  // `.` is in the charset (it has to be — hostnames above, tokens below), so a
-  // URL ending a sentence swallows the full stop. GitHub's nonce never ends in
-  // one, so trailing dots are punctuation, not payload.
-  return match ? match[0].replace(/\.+$/, '') : null
-}
-
-/** The raw `gh` text, minus the one part of it that is a credential-shaped
- *  nonce. Shown alongside the SSO link so the message a user pastes into a bug
- *  report is never lost, without putting `authorization_request=` in the DOM as
- *  anything but the link's own `href`. */
-export function redactSsoToken(message: string): string {
-  return message.replace(/(authorization_request=)[A-Za-z0-9._~-]+/g, '$1…')
+  return match?.[0] ?? null
 }
 
 /**
@@ -69,7 +58,8 @@ export function redactSsoToken(message: string): string {
  * Errors are shown verbatim (`{ error }`): a clone fails for reasons — `gh` missing, not
  * authenticated, no such repo, target folder exists, DNS down — that only the server can name,
  * and paraphrasing them into "could not clone" is exactly the silent-spinner failure this
- * dialog exists to avoid.
+ * dialog exists to avoid. SAML errors add an authorization link and keep the original
+ * message available under Error details.
  */
 export function CloneProjectDialog({
   open,
@@ -85,6 +75,7 @@ export function CloneProjectDialog({
   const ssoRetryArmed = useRef(false)
   const projects = useProjects()
   const checkout = useCheckoutProject()
+  const { mutate, isPending } = checkout
   const navigate = useNavigate()
   const ssoUrl = githubSsoUrl(checkout.error)
 
@@ -123,11 +114,11 @@ export function CloneProjectDialog({
   const target = effectiveName === '' ? '' : `${projectsDir.replace(/\/+$/, '')}/${effectiveName}`
 
   const clone = useCallback(() => {
-    if (url.trim() === '' || checkout.isPending) return
+    if (url.trim() === '' || isPending) return
     ssoRetryArmed.current = false
     setAwaitingSso(false)
     setProgress(null)
-    checkout.mutate(
+    mutate(
       { url: url.trim(), checkoutId, ...(name.trim() === '' ? {} : { name: name.trim() }) },
       {
         onSuccess: ({ project }) => {
@@ -138,7 +129,7 @@ export function CloneProjectDialog({
         },
       },
     )
-  }, [checkout, checkoutId, name, navigate, onOpenChange, url])
+  }, [mutate, isPending, checkoutId, name, navigate, onOpenChange, url])
 
   // Authorizing an existing OAuth token changes GitHub's server-side token
   // grant; it cannot wake the `gh repo clone` process that already exited.
@@ -266,9 +257,15 @@ export function CloneProjectDialog({
                     Authorize this GitHub organization
                   </a>
                   {awaitingSso
-                    ? ' — waiting for you to return; cezar will retry automatically.'
-                    : ' — cezar will retry when you return to this tab.'}
+                    ? ' — return here after authorizing, or choose Retry clone.'
+                    : ' — return to this tab to retry, or choose Retry clone.'}
                 </p>
+                <details className="min-w-0">
+                  <summary>Error details</summary>
+                  <p className="whitespace-pre-wrap break-all">
+                    {checkout.error instanceof Error ? checkout.error.message : null}
+                  </p>
+                </details>
               </>
             ) : (
               <p className="min-w-0 whitespace-pre-wrap break-all">

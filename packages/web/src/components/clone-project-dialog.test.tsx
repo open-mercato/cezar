@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
-import { CloneProjectDialog } from '@/components/clone-project-dialog'
+import { CloneProjectDialog, githubSsoUrl } from '@/components/clone-project-dialog'
 
 /**
  * The clone-from-GitHub dialog (multi-project spec, "Add project" option B / step 4.3).
@@ -35,6 +35,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.restoreAllMocks()
   cleanup()
   fetchMock.mockReset()
   emitWorkspaceEvent = null
@@ -190,7 +191,7 @@ describe('CloneProjectDialog', () => {
     expect(cloneButton().disabled).toBe(false)
   })
 
-  it('keeps GitHub SAML authorization compact and retries when the user returns', async () => {
+  it.each(['focus', 'visibility', 'manual'])('keeps SAML details and retries once via %s', async (mode) => {
     const ssoUrl =
       'https://github.com/orgs/Bug-Bounty-Switzerland/sso?authorization_request=AHBV4IUOPSOOJDNNTYUU4ALKUCFKNA5P'
     let attempts = 0
@@ -218,13 +219,26 @@ describe('CloneProjectDialog', () => {
     expect(link.href).toBe(ssoUrl)
     expect(link.target).toBe('_blank')
     expect(link.rel).toBe('noreferrer')
-    expect(slot('clone-error')?.textContent).toContain('cezar will retry when you return')
-    expect(slot('clone-error')?.textContent).not.toContain('authorization_request=')
+    expect(slot('clone-error')?.textContent).toContain('return to this tab to retry')
+    expect(slot('clone-error')?.querySelector('details')?.textContent).toContain(ssoUrl)
+    expect(slot('clone-error')?.querySelector('details')?.open).toBe(false)
     expect(cloneButton().textContent).toBe('Retry clone')
 
-    fireEvent.click(link)
-    expect(slot('clone-error')?.textContent).toContain('waiting for you to return')
-    fireEvent.focus(window)
+    fireEvent.click(link, { ctrlKey: mode === 'manual' })
+    expect(slot('clone-error')?.textContent).toContain('or choose Retry clone')
+    if (mode === 'visibility') {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      fireEvent(document, new Event('visibilitychange'))
+      expect(posted).toHaveLength(1)
+      visibility.mockReturnValue('visible')
+      fireEvent(document, new Event('visibilitychange'))
+      fireEvent.focus(window)
+    } else if (mode === 'manual') {
+      expect(posted).toHaveLength(1)
+      fireEvent.click(cloneButton())
+    } else {
+      fireEvent.focus(window)
+    }
 
     await waitFor(() => expect(posted).toHaveLength(2))
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
@@ -259,5 +273,19 @@ describe('CloneProjectDialog', () => {
     expect(cloneButton().disabled).toBe(true)
     fireEvent.change(urlInput(), { target: { value: 'open-mercato/cezar' } })
     await waitFor(() => expect(cloneButton().disabled).toBe(false))
+  })
+})
+
+
+describe('githubSsoUrl', () => {
+  const url = 'https://github.com/orgs/Acme/sso?authorization_request=ABC'
+  it.each(['==', '%2FDEF', '&extra=1', ')'])('rejects a partial token before %s', (suffix) => {
+    expect(githubSsoUrl(new Error(url + suffix))).toBeNull()
+  })
+  it.each(['', '\nnext line', '"', "'"])('accepts a complete URL before %s', (suffix) => {
+    expect(githubSsoUrl(new Error(url + suffix))).toBe(url)
+  })
+  it.each(['https://github.com.evil.example', 'http://github.com', 'https://evil.example@github.com'])('rejects %s', (host) => {
+    expect(githubSsoUrl(new Error(url.replace('https://github.com', host)))).toBeNull()
   })
 })
