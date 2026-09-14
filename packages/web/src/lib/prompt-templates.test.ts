@@ -387,7 +387,7 @@ describe('availablePromptTemplates', () => {
     const template = DEFAULT_PROMPT_TEMPLATES.find((t) => t.id === 'create-automation')
     expect(template?.skills).toEqual(['create-cezar-automation'])
     expect(template?.text).toContain('Trigger:')
-    expect(template?.text).toContain('Task for each match:')
+    expect(template?.text).toContain('Task for each run:')
     expect(template?.text).toContain('Leave it paused')
   })
 })

@@ -276,19 +276,17 @@ describe('systemPrompt end-to-end (dry run)', () => {
     expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS));
   });
 
-  it('automations on but unreachable (headless), or off: no task is taught the CLI', async () => {
-    process.env.CEZ_AUTOMATIONS = '1';
+  it('automations on but unreachable (headless), or opted out: no task is taught the CLI', async () => {
+    delete process.env.CEZ_AUTOMATIONS;
     delete process.env.CEZ_API_URL;
-    try {
-      await runToEnd({ task: 'do the thing mock:done' });
-    } finally {
-      delete process.env.CEZ_AUTOMATIONS;
-    }
+    await runToEnd({ task: 'do the thing mock:done' });
     expect(capturedSystemPrompt()).not.toContain('cez automation');
+    process.env.CEZ_AUTOMATIONS = '0';
     process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
     try {
       await runToEnd({ task: 'do the thing mock:done' });
     } finally {
+      delete process.env.CEZ_AUTOMATIONS;
       delete process.env.CEZ_API_URL;
     }
     expect(capturedSystemPrompt()).not.toContain('cez automation');

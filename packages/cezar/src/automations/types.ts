@@ -68,7 +68,8 @@ const fillGithubDefaults = (raw: unknown): unknown => {
   };
 };
 
-export const automationDefinitionSchema = z.preprocess(fillGithubDefaults, z
+/** The definition's object shape, before the poll-default preprocess — what a key inventory reads. */
+export const automationDefinitionObjectSchema = z
   .object({
     id: z.string().min(1).max(100),
     revision: z.number().int().positive(),
@@ -113,7 +114,9 @@ export const automationDefinitionSchema = z.preprocess(fillGithubDefaults, z
         message: 'changedLabels is required for issue label events',
       });
     }
-  }));
+  });
+
+export const automationDefinitionSchema = z.preprocess(fillGithubDefaults, automationDefinitionObjectSchema);
 
 export const automationDefinitionsFileSchema = z
   .object({

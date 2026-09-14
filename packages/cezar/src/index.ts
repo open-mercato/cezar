@@ -44,7 +44,7 @@ Usage:
   cezar                     start the cockpit (server + GUI) for the current repo
   cezar run "<task>"        run a task headless in the terminal
   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
-  cezar automation <create|check|list|…>  create and manage GitHub automations on a running cockpit (CEZ_AUTOMATIONS=1)
+  cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)

@@ -93,10 +93,10 @@ export const DEFAULT_PROMPT_TEMPLATES: readonly PromptTemplate[] = [
     label: 'Create an automation',
     skills: ['create-cezar-automation'],
     text:
-      'Create a GitHub automation for this repository.\n'
-      + 'Trigger: <when — e.g. every new pull request; every issue labelled `needs-agent`; issues opened by `octocat`>.\n'
-      + 'Task for each match: <what the launched task must do — e.g. review the diff, run the tests and post findings as a review comment>.\n'
-      + 'Leave it paused and preview its matches so I can check the filter before enabling it.',
+      'Create an automation for this repository.\n'
+      + 'Trigger: <when — e.g. every new pull request; every issue labelled `needs-agent`; every day at 04:00; weekdays at 07:30; every 6 hours>.\n'
+      + 'Task for each run: <what the launched task must do — e.g. review the diff, run the tests and post findings as a review comment>.\n'
+      + 'Leave it paused and, for a GitHub trigger, preview its matches so I can check the filter before enabling it.',
   },
 ]
 

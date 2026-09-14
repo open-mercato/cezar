@@ -184,19 +184,19 @@ describe('the built-in create-cezar-automation skill', () => {
     return repoRoot;
   }
 
-  it('is absent with automations off, and absent with the flag on but no cockpit to reach', async () => {
+  it('is absent with automations opted out, and absent by default with no cockpit to reach', async () => {
     const repoRoot = await emptyRepo();
-    delete process.env.CEZ_AUTOMATIONS;
+    process.env.CEZ_AUTOMATIONS = '0';
     process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
     expect((await discoverSkills(repoRoot)).some((s) => s.name === 'create-cezar-automation')).toBe(false);
-    process.env.CEZ_AUTOMATIONS = '1';
+    delete process.env.CEZ_AUTOMATIONS;
     delete process.env.CEZ_API_URL;
     expect((await discoverSkills(repoRoot)).some((s) => s.name === 'create-cezar-automation')).toBe(false);
   });
 
-  it('lists as a builtin, interactive skill when automations are on and reachable', async () => {
+  it('lists as a builtin, interactive skill when automations are on (the default) and reachable', async () => {
     const repoRoot = await emptyRepo();
-    process.env.CEZ_AUTOMATIONS = '1';
+    delete process.env.CEZ_AUTOMATIONS;
     process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
     const skill = (await discoverSkills(repoRoot)).find((s) => s.name === 'create-cezar-automation');
     expect(skill).toMatchObject({ source: 'builtin', interactive: true, path: 'builtin:create-cezar-automation' });

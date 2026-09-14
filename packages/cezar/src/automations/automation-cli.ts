@@ -15,6 +15,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
+import { SCHEDULE_TYPES, parseCron, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
 
 export interface AutomationCliEnv {
@@ -34,16 +35,25 @@ export interface AutomationCliIo {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const USAGE = `cez automation — create and manage GitHub automations on a running cockpit (CEZ_AUTOMATIONS=1)
+const USAGE = `cez automation — create and manage automations (GitHub polls and schedules) on a running cockpit
 
   cez automation schema                         print the definition shape, bounds and prompt placeholders
   cez automation create [--file <def.json> | --json '<json>'] [--enable]
                                                 create one from a JSON definition (stdin when neither flag is given);
                                                 paused unless --enable
-  cez automation update <id> [--file | --json]  replace the definition's editable keys (name, description, events,
-                                                intervalSeconds, filters, task); keys you omit keep their value
-  cez automation check <id> [--execute]         run the filter now — preview counts matches and launches nothing,
-                                                --execute launches a task per match exactly as a scheduled poll would
+  cez automation add --name <name> (--cron "<M H * * *>" | --on <event>[,<event>] --every <5m|1h>)
+                     [--prompt <text> | --prompt-file <path>] [--workflow <w>] [--runner claude|codex|opencode]
+                     [--model <m>] [--autonomous | --no-autonomous] [--dispatch [--max-subtasks N] [--review-child]]
+                     [--label <l>]... [--author <a>]... [--enable]
+                                                the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"
+                                                (weekdays), "M H * * D" (one weekday, 0 or 7 = Sunday) or "0 */N * * *"
+                                                (every N hours, N in 1,2,3,4,6,8,12); anything else needs the JSON form
+  cez automation update <id> [--file | --json]  replace the definition's editable keys (name, description, kind,
+                                                events, intervalSeconds, filters, schedule, task); keys you omit keep
+                                                their value
+  cez automation check <id> [--execute]         GitHub poll: run the filter now — preview counts matches and launches
+                                                nothing, --execute launches a task per match exactly as a poll would
+  cez automation run <id>                       schedule: launch it once, now, by hand (paused or not)
   cez automation list                           every automation of this project, with state and counts
   cez automation show <id>                      one definition with its runtime state, as JSON
   cez automation enable <id>                    enable it from a current-time baseline (the backlog is never launched)
@@ -54,7 +64,7 @@ const CHECK_POLL_MS = 500;
 const CHECK_TIMEOUT_MS = 120_000;
 
 /** The keys `PUT /automations/:id` accepts besides `enabled` and `expectedRevision`. */
-const EDITABLE_KEYS = ['name', 'description', 'events', 'intervalSeconds', 'filters', 'task'] as const;
+const EDITABLE_KEYS = ['name', 'description', 'kind', 'events', 'intervalSeconds', 'filters', 'schedule', 'task'] as const;
 
 function base(env: AutomationCliEnv): { url: string; scope: string; projectId?: string } | null {
   const url = env.CEZ_API_URL?.replace(/\/+$/, '');
@@ -115,6 +125,60 @@ async function readStdinText(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
+/** `5m`, `1h`, `300s` or a bare number of seconds. */
+export function parseEvery(value: string): number {
+  const match = /^(\d+)\s*([smh]?)$/.exec(value.trim());
+  if (!match) throw new Error(`--every wants a duration like 5m, 1h or 300s, not "${value}"`);
+  const n = Number(match[1]);
+  const unit = match[2] || 's';
+  return unit === 'h' ? n * 3_600 : unit === 'm' ? n * 60 : n;
+}
+
+/** The `add` flags as the `create` body they stand for. Exported so the tests pin the mapping. */
+export function bodyFromAddFlags(values: {
+  name?: string; cron?: string; on?: string; every?: string; prompt?: string;
+  workflow?: string; runner?: string; model?: string; autonomous?: boolean; 'no-autonomous'?: boolean;
+  dispatch?: boolean; 'max-subtasks'?: string; 'review-child'?: boolean; label?: string[]; author?: string[]; enable?: boolean;
+}, prompt: string): Record<string, unknown> {
+  if (!values.name?.trim()) throw new Error('--name is required');
+  if (!prompt.trim()) throw new Error('--prompt (or --prompt-file) is required');
+  if (values.cron && values.on) throw new Error('give --cron (a schedule) OR --on (a GitHub poll), not both');
+  if (!values.cron && !values.on) throw new Error('give --cron "<M H * * *>" for a schedule or --on <event> for a GitHub poll');
+  const task: Record<string, unknown> = { prompt, worktree: true, autonomous: values['no-autonomous'] ? false : true };
+  if (values.workflow) task.workflow = values.workflow;
+  if (values.runner) task.runner = values.runner;
+  if (values.model) task.model = values.model;
+  if (values.dispatch || values['max-subtasks'] !== undefined || values['review-child']) {
+    const dispatch: Record<string, unknown> = {};
+    if (values['max-subtasks'] !== undefined) {
+      const n = Number(values['max-subtasks']);
+      if (!Number.isInteger(n) || n < 1) throw new Error('--max-subtasks wants a positive integer');
+      dispatch.maxSubtasks = n;
+    }
+    if (values['review-child']) dispatch.reviewChild = true;
+    task.dispatch = dispatch;
+  }
+  const body: Record<string, unknown> = { name: values.name.trim(), task };
+  if (values.cron) {
+    const schedule: AutomationSchedule | null = parseCron(values.cron);
+    if (!schedule) {
+      throw new Error(`--cron "${values.cron}" is not one of the shapes a schedule can take (${SCHEDULE_TYPES.join(', ')}): "M H * * *", "M H * * 1-5", "M H * * D" (0 or 7 = Sunday) or "0 */N * * *" (N in 1,2,3,4,6,8,12). For anything else use the JSON form: cez automation schema`);
+    }
+    body.kind = 'schedule';
+    body.schedule = schedule;
+  } else {
+    body.kind = 'github';
+    body.events = values.on!.split(',').map((event) => event.trim()).filter(Boolean);
+    body.intervalSeconds = values.every ? parseEvery(values.every) : 300;
+    const filters: Record<string, unknown> = { lookbackDays: 7, maxRecords: 25 };
+    if (values.label?.length) filters.anyLabels = values.label;
+    if (values.author?.length) filters.authors = values.author;
+    body.filters = filters;
+  }
+  if (values.enable) body.enable = true;
+  return body;
+}
+
 function shortEvents(events: unknown): string {
   return Array.isArray(events) ? events.map(String).join(',') : '';
 }
@@ -140,12 +204,27 @@ export async function runAutomationCommand(
   }
   const api = base(env);
   if (!api) {
-    io.error('cez automation: CEZ_API_URL is not set — this command only works inside a task run by a cockpit with automations on (CEZ_AUTOMATIONS=1). Do not substitute a cron job, a GitHub Action or a polling script: stop and report that automations are unavailable.');
+    io.error('cez automation: CEZ_API_URL is not set — this command only works inside a task run by a cockpit with automations on. Do not substitute a cron job, a GitHub Action or a polling script: stop and report that automations are unavailable.');
     return 2;
   }
   const json = async (url: string, init?: RequestInit): Promise<Response> =>
     io.fetch(url, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
   const sleep = io.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  /** `create` and `add` share one POST and one report; the flags only differ in how the body is built. */
+  const createFrom = async (body: Record<string, unknown>): Promise<number> => {
+    const response = await json(`${api.scope}/automations`, { method: 'POST', body: JSON.stringify(body) });
+    if (!response.ok) throw new Error(`create refused — ${await readError(response)}`);
+    const { automation } = (await response.json()) as { automation: { id: string; name: string; enabled: boolean; kind?: string; schedule?: AutomationSchedule } };
+    const schedule = automation.kind === 'schedule' && automation.schedule ? ` — ${scheduleLabel(automation.schedule)}, in the cockpit's time zone` : '';
+    io.log(`created automation ${automation.id} "${automation.name}" — ${automation.enabled ? (automation.kind === 'schedule' ? 'ENABLED, next occurrence armed' : 'ENABLED from a current-time baseline') : 'paused'}${schedule}`);
+    io.log(`cockpit: ${pageUrl(api, automation.id)}`);
+    if (!automation.enabled) {
+      io.log(automation.kind === 'schedule'
+        ? `Launch it once now with: cez automation run ${automation.id} — enable it with: cez automation enable ${automation.id}`
+        : `Preview its matches with: cez automation check ${automation.id} — then enable it with: cez automation enable ${automation.id}`);
+    }
+    return 0;
+  };
 
   try {
     switch (command) {
@@ -161,15 +240,48 @@ export async function runAutomationCommand(
         // (copied from `show`) would be refused, so it is lifted into the flag's slot.
         const { enabled, ...body } = definition;
         const enable = values.enable || enabled === true;
-        const response = await json(`${api.scope}/automations`, {
-          method: 'POST',
-          body: JSON.stringify({ ...body, ...(enable ? { enable: true } : {}) }),
+        return await createFrom({ ...body, ...(enable ? { enable: true } : {}) });
+      }
+      case 'add': {
+        const { values } = parseArgs({
+          args: rest,
+          allowPositionals: false,
+          options: {
+            name: { type: 'string' }, cron: { type: 'string' }, on: { type: 'string' }, every: { type: 'string' },
+            prompt: { type: 'string' }, 'prompt-file': { type: 'string' },
+            workflow: { type: 'string' }, runner: { type: 'string' }, model: { type: 'string' },
+            autonomous: { type: 'boolean', default: false }, 'no-autonomous': { type: 'boolean', default: false },
+            dispatch: { type: 'boolean', default: false }, 'max-subtasks': { type: 'string' }, 'review-child': { type: 'boolean', default: false },
+            label: { type: 'string', multiple: true }, author: { type: 'string', multiple: true },
+            enable: { type: 'boolean', default: false },
+          },
         });
-        if (!response.ok) throw new Error(`create refused — ${await readError(response)}`);
-        const { automation } = (await response.json()) as { automation: { id: string; name: string; enabled: boolean } };
-        io.log(`created automation ${automation.id} "${automation.name}" — ${automation.enabled ? 'ENABLED from a current-time baseline' : 'paused'}`);
-        io.log(`cockpit: ${pageUrl(api, automation.id)}`);
-        if (!automation.enabled) io.log(`Preview its matches with: cez automation check ${automation.id} — then enable it with: cez automation enable ${automation.id}`);
+        if (values.prompt && values['prompt-file']) {
+          io.error('cez automation: give the prompt as --prompt OR --prompt-file, not both');
+          return 2;
+        }
+        const prompt = values['prompt-file']
+          ? await (io.readFile ?? ((path) => readFile(path, 'utf8')))(values['prompt-file'])
+          : (values.prompt ?? '');
+        let body: Record<string, unknown>;
+        try {
+          body = bodyFromAddFlags(values, prompt);
+        } catch (error) {
+          // A flag the command cannot express is a usage error (exit 2), not a refusal (exit 1):
+          // the agent should reach for the JSON form, not stop and report.
+          io.error(`cez automation: ${error instanceof Error ? error.message : String(error)}`);
+          return 2;
+        }
+        return await createFrom(body);
+      }
+      case 'run': {
+        const id = rest[0];
+        if (!id) throw new Error('an automation id is required: cez automation run <id>');
+        const response = await json(`${api.scope}/automations/${encodeURIComponent(id)}/run`, { method: 'POST' });
+        if (!response.ok) throw new Error(`run refused — ${await readError(response)}`);
+        const { runId } = (await response.json()) as { runId: string };
+        io.log(`started automation ${id} by hand — task ${runId} is queued; the definition's schedule and enabled state are unchanged`);
+        io.log(`cockpit: ${pageUrl(api, id)}`);
         return 0;
       }
       case 'update': {
@@ -241,19 +353,24 @@ export async function runAutomationCommand(
           available: boolean;
           reason?: string;
           automations: Array<{
-            id: string; name: string; enabled: boolean; events: string[]; intervalSeconds: number;
+            id: string; name: string; enabled: boolean; kind?: string; events?: string[]; intervalSeconds?: number; schedule?: AutomationSchedule;
             counts: { launched: number; duplicates: number; errors: number };
+            nextRunAt?: string;
             state?: { nextCheckAt?: string; lastSuccessAt?: string };
           }>;
         };
-        if (!data.available) io.log(`GitHub is not available to this cockpit${data.reason ? ` — ${data.reason}` : ''}; automations will not poll until it is.`);
+        if (!data.available) io.log(`GitHub is not available to this cockpit${data.reason ? ` — ${data.reason}` : ''}; GitHub polls will not run until it is (schedules still do).`);
         if (data.automations.length === 0) {
           io.log('no automations in this project');
           return 0;
         }
         for (const item of data.automations) {
-          const next = item.enabled && item.state?.nextCheckAt ? `  next ${item.state.nextCheckAt}` : '';
-          io.log(`${item.id}  ${item.enabled ? 'enabled' : 'paused '}  every ${item.intervalSeconds}s  ${shortEvents(item.events)}  launched ${item.counts.launched}, duplicates ${item.counts.duplicates}, errors ${item.counts.errors}${next}  ${item.name}`);
+          const nextAt = item.nextRunAt ?? item.state?.nextCheckAt;
+          const next = item.enabled && nextAt ? `  next ${nextAt}` : '';
+          const trigger = item.kind === 'schedule' && item.schedule
+            ? scheduleLabel(item.schedule)
+            : `every ${item.intervalSeconds ?? 300}s  ${shortEvents(item.events)}`;
+          io.log(`${item.id}  ${item.enabled ? 'enabled' : 'paused '}  ${trigger}  launched ${item.counts.launched}, duplicates ${item.counts.duplicates}, errors ${item.counts.errors}${next}  ${item.name}`);
         }
         return 0;
       }

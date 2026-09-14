@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runAutomationCommand, type AutomationCliIo } from './automation-cli.ts';
+import { bodyFromAddFlags, parseEvery, runAutomationCommand, type AutomationCliIo } from './automation-cli.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
 
 /** The `cez automation` CLI is a thin client: what is pinned is the request it builds from the
@@ -212,5 +212,80 @@ describe('cez automation', () => {
     expect(unknown.err[0]).toContain('unknown command "frobnicate"');
     const bare = harness([]);
     expect(await runAutomationCommand([], env, bare.io)).toBe(2);
+  });
+});
+
+describe('cez automation add / run (spec 2026-09-14)', () => {
+  const env = { CEZ_API_URL: 'http://127.0.0.1:4321', CEZ_PROJECT_ID: 'proj' };
+  const harness = (replies: Array<{ status: number; body?: unknown }>) => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const out: string[] = [];
+    const err: string[] = [];
+    const io: AutomationCliIo = {
+      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+        calls.push({ url: String(url), init });
+        const reply = replies.shift() ?? { status: 500, body: { error: 'unexpected call' } };
+        return new Response(reply.body === undefined ? null : JSON.stringify(reply.body), { status: reply.status, headers: { 'content-type': 'application/json' } });
+      }) as typeof fetch,
+      log: (line) => out.push(line),
+      error: (line) => err.push(line),
+      readFile: async (path) => (path === '/tmp/prompt.md' ? 'Bump deps on {{date}}' : Promise.reject(new Error('ENOENT'))),
+      sleep: async () => {},
+    };
+    return { calls, out, err, io };
+  };
+
+  it('add --cron posts a schedule built from the flags and prints its label', async () => {
+    const h = harness([{ status: 201, body: { automation: { id: 's1', name: 'Nightly', enabled: false, kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 } } } }]);
+    const code = await runAutomationCommand(['add', '--name', 'Nightly', '--cron', '0 4 * * *', '--prompt-file', '/tmp/prompt.md', '--workflow', 'fix-and-verify', '--runner', 'claude', '--model', 'sonnet', '--dispatch', '--max-subtasks', '4', '--review-child'], env, h.io);
+    expect(code).toBe(0);
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({
+      name: 'Nightly', kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 },
+      task: { prompt: 'Bump deps on {{date}}', worktree: true, autonomous: true, workflow: 'fix-and-verify', runner: 'claude', model: 'sonnet', dispatch: { maxSubtasks: 4, reviewChild: true } },
+    });
+    expect(h.out[0]).toContain('paused — every day at 04:00');
+    expect(h.out[2]).toContain('cez automation run s1');
+  });
+
+  it('add --on posts a GitHub poll with labels, authors and the interval; --enable rides along', async () => {
+    const h = harness([{ status: 201, body: { automation: { id: 'g1', name: 'Triage', enabled: true, kind: 'github' } } }]);
+    const code = await runAutomationCommand(['add', '--name', 'Triage', '--on', 'issue.opened,issue.labeled', '--every', '1h', '--label', 'bug', '--label', 'regression', '--author', 'alice', '--no-autonomous', '--enable', '--prompt', 'Read {{github.url}}'], env, h.io);
+    expect(code).toBe(0);
+    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({
+      name: 'Triage', kind: 'github', events: ['issue.opened', 'issue.labeled'], intervalSeconds: 3600,
+      filters: { lookbackDays: 7, maxRecords: 25, anyLabels: ['bug', 'regression'], authors: ['alice'] },
+      task: { prompt: 'Read {{github.url}}', worktree: true, autonomous: false }, enable: true,
+    });
+    expect(h.out[0]).toContain('ENABLED from a current-time baseline');
+  });
+
+  it('add refuses a cron shape it cannot express, and missing flags, as usage errors before any request', async () => {
+    const h = harness([]);
+    expect(await runAutomationCommand(['add', '--name', 'x', '--cron', '*/15 * * * *', '--prompt', 'p'], env, h.io)).toBe(2);
+    expect(h.err[0]).toContain('not one of the shapes');
+    expect(h.err[0]).toContain('cez automation schema');
+    expect(await runAutomationCommand(['add', '--name', 'x', '--prompt', 'p'], env, h.io)).toBe(2);
+    expect(await runAutomationCommand(['add', '--cron', '0 4 * * *', '--prompt', 'p'], env, h.io)).toBe(2);
+    expect(await runAutomationCommand(['add', '--name', 'x', '--cron', '0 4 * * *', '--on', 'issue.opened', '--prompt', 'p'], env, h.io)).toBe(2);
+    expect(h.calls).toEqual([]);
+  });
+
+  it('run posts to the run route and reports the queued task', async () => {
+    const h = harness([{ status: 202, body: { runId: 'run-9' } }]);
+    expect(await runAutomationCommand(['run', 's1'], env, h.io)).toBe(0);
+    expect(h.calls[0]).toMatchObject({ url: 'http://127.0.0.1:4321/api/v1/p/proj/automations/s1/run', init: { method: 'POST' } });
+    expect(h.out[0]).toContain('task run-9 is queued');
+    const refused = harness([{ status: 409, body: { error: 'a GitHub automation is run through check with mode execute' } }]);
+    expect(await runAutomationCommand(['run', 'g1'], env, refused.io)).toBe(1);
+    expect(refused.err[0]).toContain('run refused — a GitHub automation is run through check');
+  });
+
+  it('parses --every and maps flags to a body', () => {
+    expect(parseEvery('5m')).toBe(300);
+    expect(parseEvery('2h')).toBe(7200);
+    expect(parseEvery('90s')).toBe(90);
+    expect(parseEvery('45')).toBe(45);
+    expect(() => parseEvery('soon')).toThrow('--every');
+    expect(bodyFromAddFlags({ name: 'w', cron: '30 7 * * 1-5' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } });
   });
 });
