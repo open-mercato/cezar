@@ -69,8 +69,9 @@ import { AddAccountDialog } from './add-account-dialog'
  * identity, and raw CLI output never cross this boundary" — so it is built to stay narrow: the data
  * is NOT a field on the accounts listing, it comes from its own on-demand route
  * (`useAgentAccountDetails`, `enabled` only once the row is expanded), and it is refused in hosted
- * mode. Nothing fetches it until a person asks, which is what makes "hidden by default" mean the
- * data is absent from the page rather than merely unrendered.
+ * mode unless remote account management is explicitly enabled. Nothing fetches it until a person
+ * asks, which is what makes "hidden by default" mean the data is absent from the page rather than
+ * merely unrendered.
  *
  * Rename and Remove live in that same panel rather than on the collapsed row. A row is a reading
  * surface — which account, where, signed in or not — and Remove sitting on it put a destructive
@@ -154,8 +155,8 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
       >
         <h2 className="text-sm font-semibold text-foreground">Agent accounts</h2>
         <p data-slot="accounts-hosted" className="text-[13px] text-soft-foreground">
-          Agent accounts are managed from the machine that owns the checkout — this cockpit runs in
-          hosted mode.
+          Agent accounts are disabled for remote access. On a trusted, authenticated self-hosted
+          deployment, set CEZ_REMOTE_AGENT_ACCOUNTS=1 and restart cezar.
         </p>
       </div>
     )
@@ -590,12 +591,16 @@ function AccountDetails({
   routeId: string
   onRemove: () => void
 }) {
+  const health = useHealth()
   const details = useAgentAccountDetails(routeId, true)
   const open = useOpenAgentAccountFile()
   const targets = useOpenTargets()
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(account.label)
   const rename = useUpdateAgentProfile()
+  // Wait for health before offering desktop actions. Once loaded, preserve the older-server
+  // fallback for responses that predate capabilities.
+  const localHandoff = health.data ? (health.data.capabilities?.localHandoff ?? true) : false
 
   // Which detected apps can actually act on each thing — the same rule the route enforces, so the
   // menu never offers something that would come back a 400. A `cli:<runner>` handoff opens a task
@@ -644,46 +649,48 @@ function AccountDetails({
         </p>
       )}
 
-      <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
-        <span className="mr-1 text-xs text-muted-foreground">Config files</span>
-        {account.files.map((file) => (
+      {localHandoff ? (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
+          <span className="mr-1 text-xs text-muted-foreground">Config files</span>
+          {account.files.map((file) => (
+            <OpenInMenu
+              key={file.id}
+              slot="account-open-file"
+              label={file.label}
+              triggerVariant="outline"
+              disabled={open.isPending}
+              // A file the agent has not written yet is offered but says so, because "Connect then
+              // it appears" is the normal path and a hidden button would look like a missing feature.
+              title={file.exists ? file.path : `${file.path} — not created yet`}
+              choices={fileChoices}
+              onPick={(target) => openPath(file.id, file.label, target)}
+              leading={
+                <DropdownMenuItem
+                  data-target="system"
+                  onSelect={() => openPath(file.id, file.label)}
+                >
+                  <ExternalLinkIcon aria-hidden="true" />
+                  System default
+                </DropdownMenuItem>
+              }
+            />
+          ))}
           <OpenInMenu
-            key={file.id}
-            slot="account-open-file"
-            label={file.label}
-            triggerVariant="outline"
+            slot="account-open-folder"
+            label="Folder"
             disabled={open.isPending}
-            // A file the agent has not written yet is offered but says so, because "Connect then
-            // it appears" is the normal path and a hidden button would look like a missing feature.
-            title={file.exists ? file.path : `${file.path} — not created yet`}
-            choices={fileChoices}
-            onPick={(target) => openPath(file.id, file.label, target)}
+            title={account.path}
+            choices={folderChoices}
+            onPick={(target) => openPath('folder', 'folder', target)}
             leading={
-              <DropdownMenuItem
-                data-target="system"
-                onSelect={() => openPath(file.id, file.label)}
-              >
+              <DropdownMenuItem data-target="system" onSelect={() => openPath('folder', 'folder')}>
                 <ExternalLinkIcon aria-hidden="true" />
                 System default
               </DropdownMenuItem>
             }
           />
-        ))}
-        <OpenInMenu
-          slot="account-open-folder"
-          label="Folder"
-          disabled={open.isPending}
-          title={account.path}
-          choices={folderChoices}
-          onPick={(target) => openPath('folder', 'folder', target)}
-          leading={
-            <DropdownMenuItem data-target="system" onSelect={() => openPath('folder', 'folder')}>
-              <ExternalLinkIcon aria-hidden="true" />
-              System default
-            </DropdownMenuItem>
-          }
-        />
-      </div>
+        </div>
+      ) : null}
 
       {/* The discovered account carries no Rename/Remove at all — it is what cezar found, so either
           would imply a setting that does not exist. Nothing is rendered for it, not a disabled

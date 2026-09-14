@@ -13,7 +13,7 @@ import {
   type AutomationDefinition,
 } from '../automations/types.ts';
 import type { IncomingMessage } from 'node:http';
-import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
+import { access, constants as fsConstants, lstat, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -161,7 +161,7 @@ import { ProjectContextError, ProjectContexts, type ProjectContext } from './pro
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, expandTilde } from '../paths.ts';
-import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { agentAccountsEnabled, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
@@ -318,7 +318,11 @@ const selectAgentProfileSchema = z.object({
 
 /** The hosted-mode refusal, worded like the agent-config one it mirrors. */
 const hostedProfileRefusal = {
-  error: 'agent accounts are managed from the machine that owns the checkout (this cockpit runs in hosted mode)',
+  error: 'agent accounts are disabled in hosted mode; set CEZ_REMOTE_AGENT_ACCOUNTS=1 only behind an authenticated perimeter',
+};
+
+const hostedProfileOpenRefusal = {
+  error: 'opening account files is disabled in hosted mode; open them directly on the machine hosting cezar',
 };
 
 /**
@@ -1623,12 +1627,12 @@ export function createApp(deps: ServerDeps) {
    * with several accounts would otherwise fan out a spawn storm at exactly the moment the browser is
    * fetching the bundle; nothing is waiting on this, so sequential costs nothing that matters.
    *
-   * Hosted mode warms only the defaults: the agent-profiles family is refused there, so there are
-   * no accounts to learn about.
+   * Hosted mode warms only the defaults unless its operator explicitly enabled remote account
+   * management; otherwise the agent-profiles family is refused there.
    */
   const warmAgentKnowledge = async (): Promise<void> => {
     await providerAuth.status().catch(() => {});
-    if (!capabilities().localHandoff) return;
+    if (!agentAccountsEnabled(process.env, bindHost)) return;
     const store = await loadAgentAccounts().catch(() => defaultAgentAccountStore());
     for (const account of listAgentProfiles(store, PROVIDER_IDS)) {
       if (account.isDefault) continue; // covered by `status()` above
@@ -1775,16 +1779,17 @@ export function createApp(deps: ServerDeps) {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
-      // A NAMED account is refused in hosted mode before anything is resolved, exactly like every
-      // sibling route in the agent-profiles family. Checking later would already have read
-      // `~/.cezar/agent-accounts.json`, built a command carrying the account's absolute path (which
-      // both the success body and the hosted 409 echo), and — for a stored account — spawned a
-      // probe. It would also answer `unknown account: <id>` for a wrong id, which is an enumeration
-      // oracle for the very ids the hosted listing withholds. The bare-provider spelling keeps its
-      // existing behaviour: it names no host path and is how the Providers card has always worked.
+      // A NAMED account is refused in hosted mode unless the operator opted in. This happens
+      // before resolution, exactly like every sibling route in the agent-profiles family; checking
+      // later would already have read `~/.cezar/agent-accounts.json`, built a command carrying the
+      // account's absolute path (which both the success body and the hosted 409 echo), and — for a
+      // stored account — spawned a probe. It would also answer `unknown account: <id>` for a wrong
+      // id, which is an enumeration oracle for the very ids the hosted listing withholds. The
+      // bare-provider spelling keeps its existing behaviour: it names no host path and is how the
+      // Providers card has always worked.
       if (body.data.profileId !== undefined
         && body.data.profileId !== DEFAULT_AGENT_ACCOUNT_ID
-        && !capabilities().localHandoff) {
+        && !agentAccountsEnabled(process.env, bindHost)) {
         return c.json(hostedProfileRefusal, 409);
       }
       // Resolve the account BEFORE anything else: both the command and the status probe below
@@ -1850,9 +1855,10 @@ export function createApp(deps: ServerDeps) {
   // surface to protect with no consumer. Which account a project uses is a field on
   // `PATCH /api/v1/projects/:projectId` instead.
   //
-  // Writing is a LOCAL-MACHINE capability, exactly like `PUT /api/v1/agent-config/:id`: a profile
-  // points an agent at a directory on the host, and the listing echoes absolute paths carrying
-  // the username — the same disclosure `/api/v1/health` trims in hosted mode (#431).
+  // Remote access is explicitly opt-in: a profile points an agent at a directory on the host, and
+  // the listing echoes absolute paths carrying the username. `CEZ_REMOTE_AGENT_ACCOUNTS=1` says
+  // the operator has placed the remote cockpit behind an authenticated perimeter. Desktop-open
+  // actions remain local-only regardless of that flag.
 
   /**
    * This agent's own USER-scope config files, resolved inside ONE account's folder.
@@ -1930,7 +1936,7 @@ export function createApp(deps: ServerDeps) {
   };
 
   /** Validate a client-supplied config dir. Returns the error text, or null when it is usable. */
-  const checkProfileDir = (configDir: string): string | null => {
+  const checkProfileDir = async (configDir: string): Promise<string | null> => {
     if (CONTROL_CHARS_RE.test(configDir)) return 'folder must not contain control characters';
     const expanded = expandTilde(configDir);
     // Absolute after expansion: a relative dir would resolve against whatever cwd the agent
@@ -1938,6 +1944,38 @@ export function createApp(deps: ServerDeps) {
     // `isAbsoluteConfigDir`, never a leading-`/` test — see its note: a string test refuses every
     // real Windows path, and this is the only gate the Add-account dialog has.
     if (!isAbsoluteConfigDir(expanded)) return `folder must be an absolute path: ${configDir}`;
+    // A remote caller may only name paths inside the same root exposed by the folder browser.
+    // Containment is asked in two halves, exactly as `POST /api/projects` asks it, and the order
+    // is the security property.
+    if (!capabilities().localHandoff) {
+      const root = resolveBrowseRoot(await workspaceBrowseRoot());
+      // No resolved path in the message (fs-browse's rule, and the same string both halves
+      // return): saying where the root is would hand a remote viewer the layout the narrowing
+      // hides, and two distinguishable rejections would be a shape to probe with.
+      const outside = 'folder is outside the browsable root';
+      // The LEXICAL half, before the candidate is touched: an out-of-root SPELLING is refused
+      // whether or not it is there, so the route never becomes an existence oracle. Lexical
+      // rather than realpath, because an account folder is allowed not to exist yet — Connect is
+      // what creates it — and a realpath check would tell someone who typo'd a folder under
+      // their own home that it is "outside the browsable root".
+      if (!(await isLexicallyInsideBrowseRoot(root, expanded))) return outside;
+      // Resolve the nearest existing entry, including dangling symlinks. Checking only the
+      // leaf would let a new folder beneath an escaping symlink pass. Only ENOENT permits
+      // walking upwards; unreadable paths fail closed, with the same refusal.
+      let ancestor = expanded;
+      for (;;) {
+        try {
+          await lstat(ancestor);
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return outside;
+          const parent = dirname(ancestor);
+          if (parent === ancestor) return outside;
+          ancestor = parent;
+        }
+      }
+      if (!(await isInsideBrowseRoot(root, ancestor))) return outside;
+    }
     return null;
   };
 
@@ -1964,9 +2002,10 @@ export function createApp(deps: ServerDeps) {
 
   const agentProfilesRoutes = new Hono<ProjectApiEnv>()
     .get('/workspace/agent-profiles', async (c) => {
-      const editable = capabilities().localHandoff;
-      // Hosted mode withholds the listing entirely rather than serving it read-only: the paths
-      // are the host disclosure, so an empty list is the only honest hosted answer.
+      const editable = agentAccountsEnabled(process.env, bindHost);
+      // Hosted mode without the explicit permission withholds the listing entirely rather than
+      // serving it read-only: the paths are the host disclosure, so an empty list is the only
+      // honest answer.
       //
       // ONE body object, never a hosted `return` and a local `return`: two returns let hono
       // narrow `editable` to the literal `false`/`true` of each branch, and the contract's
@@ -1997,12 +2036,12 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/workspace/agent-profiles', jsonZodValidator(() => createAgentProfileSchema), async (c) => {
-      if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+      if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
       const { provider, configDir, label } = c.req.valid('json');
       if (!supportsProfiles(provider)) {
         return c.json({ error: `${provider} cannot carry more than one account` }, 400);
       }
-      const dirError = checkProfileDir(configDir);
+      const dirError = await checkProfileDir(configDir);
       if (dirError) return c.json({ error: dirError }, 400);
 
       // Read-first, exactly like `POST /projects`: the duplicate check needs `realpath`, and the
@@ -2053,11 +2092,11 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(z.object({ id: z.string() })),
       jsonZodValidator(() => updateAgentProfileSchema),
       async (c) => {
-        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
         const id = c.req.param('id');
         const { label, configDir } = c.req.valid('json');
         if (configDir !== undefined) {
-          const dirError = checkProfileDir(configDir);
+          const dirError = await checkProfileDir(configDir);
           if (dirError) return c.json({ error: dirError }, 400);
         }
 
@@ -2119,7 +2158,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(z.object({ id: z.string() })),
       queryZodValidator(z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') }), { message: 'refresh must be 1 when provided' }),
       async (c) => {
-        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         const refresh = c.req.valid('query').refresh === '1';
@@ -2155,7 +2194,7 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/:id/details',
       paramZodValidator(z.object({ id: z.string() })),
       async (c) => {
-        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         return c.json(await readAccountIdentity(account.provider, account.path));
@@ -2175,7 +2214,7 @@ export function createApp(deps: ServerDeps) {
       paramZodValidator(z.object({ id: z.string() })),
       jsonZodValidator(() => openAgentAccountFileSchema),
       async (c) => {
-        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        if (!capabilities().localHandoff) return c.json(hostedProfileOpenRefusal, 409);
         const account = await accountById(c.req.param('id'));
         if (!account) return c.json({ error: `unknown account: ${c.req.param('id')}` }, 404);
         const { file, target } = c.req.valid('json');
@@ -2226,7 +2265,7 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/selection',
       jsonZodValidator(() => selectAgentProfileSchema),
       async (c) => {
-        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
         const { projectId, provider, profileId } = c.req.valid('json');
         // `null` writes the MACHINE-WIDE default instead of one repo's selection: the account any
         // repo that has chosen nothing uses, so a second login is set up once rather than per
@@ -2279,7 +2318,7 @@ export function createApp(deps: ServerDeps) {
       '/workspace/agent-profiles/:id',
       paramZodValidator(z.object({ id: z.string() })),
       async (c) => {
-        if (!capabilities().localHandoff) return c.json(hostedProfileRefusal, 409);
+        if (!agentAccountsEnabled(process.env, bindHost)) return c.json(hostedProfileRefusal, 409);
         const id = c.req.param('id');
         let removed = false;
         // Captured inside the mutator, because after the write there is nothing left to ask which

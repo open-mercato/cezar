@@ -29,6 +29,10 @@
  * definitions, receipts and high-watermarks survive the flag being off, so
  * unsetting it and restarting restores the feature wholesale.
  *
+ * `agentAccountsEnabled` keeps account folders local by default. An operator may explicitly set
+ * `CEZ_REMOTE_AGENT_ACCOUNTS=1` for an authenticated remote deployment; this does not change
+ * `localHandoff`, so desktop-only actions remain unavailable.
+ *
  * `dispatch` (spec 2026-09-10-dispatch): a task dispatching other tasks through the `cez task`
  * CLI is **on by default** and `CEZ_DISPATCH=0` turns it off (the owner-approved exception to
  * AGENTS.md § Zero config, recorded there: the brakes live in the engine — four children in
@@ -133,6 +137,25 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
   return isLoopbackName(normalizeHostname(host));
 }
 
+/**
+ * Whether the agent-account store may cross the HTTP boundary.
+ *
+ * Local cockpits retain the zero-config behaviour. A remote cockpit can opt in when its operator
+ * has put the server behind an authenticated perimeter; the exact-value flag is deliberately
+ * separate from `localHandoff`, since opening a desktop app still makes no sense on a VPS.
+ */
+export function agentAccountsEnabled(
+  env: NodeJS.ProcessEnv = process.env,
+  bindHost?: string,
+): boolean {
+  return localHandoffEnabled(env, bindHost) || env.CEZ_REMOTE_AGENT_ACCOUNTS === '1';
+}
+
+/** One spelling of the local-machine boundary, shared by every capability derived from it. */
+function localHandoffEnabled(env: NodeJS.ProcessEnv, bindHost?: string): boolean {
+  return env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost);
+}
+
 /** `CEZ_REMOTE=1` or a non-loopback bind host ⇒ hosted mode (no local handoff).
  *  `CEZ_FOLLOWUPS=1` ⇒ the follow-up inbox exists (#471).
  *  `CEZ_AUTOMATIONS=1` ⇒ GitHub automations exist (#801).
@@ -156,7 +179,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
   const costMetrics = !hideAllUsage && env.CEZ_HIDE_COST !== '1';
   return {
-    localHandoff: env.CEZ_REMOTE !== '1' && isLoopbackHost(bindHost),
+    localHandoff: localHandoffEnabled(env, bindHost),
     // Deliberately not re-derived here: RunManager enforces the same predicate,
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),

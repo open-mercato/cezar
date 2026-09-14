@@ -149,10 +149,10 @@ function serve(
   )
 }
 
-function renderAccounts() {
+function renderAccounts(localHandoff: boolean | null = true) {
   const client = createQueryClient()
   client.setDefaultOptions({ queries: { ...client.getDefaultOptions().queries, retry: false } })
-  client.setQueryData(queryKeys.health, {
+  if (localHandoff !== null) client.setQueryData(queryKeys.health, {
     bootProject: 'boot',
     // The install/version rows come from the health probe — the one place a version can honestly
     // come from. Codex is present but UNAVAILABLE, which is "not installed"; an agent missing
@@ -161,6 +161,7 @@ function renderAccounts() {
       { name: 'claude', available: true, version: '2.1.220' },
       { name: 'codex', available: false, hint: 'optional: install the Codex CLI' },
     ],
+    capabilities: { localHandoff },
   })
   client.setQueryData(workspaceQueryKeys.projects, {
     projects: [],
@@ -731,11 +732,26 @@ describe('the agent accounts section', () => {
 
     await waitFor(() =>
       expect(document.querySelector('[data-slot="accounts-hosted"]')?.textContent).toContain(
-        'hosted mode',
+        'CEZ_REMOTE_AGENT_ACCOUNTS=1',
       ),
     )
     expect(rows()).toHaveLength(0)
     expect(document.querySelector('[data-action="accounts-add"]')).toBeNull()
+  })
+
+  it.each([false, null])('hides desktop-open actions with localHandoff=%s', async (localHandoff) => {
+    const work = profile({
+      id: 'work',
+      files: [{ id: 'settings', label: 'settings.json', path: '/home/u/.claude-work/settings.json', exists: true }],
+    })
+    serve({ editable: true, profileCapableProviders: ['claude', 'codex'],
+      defaults: {}, selections: {}, profiles: [DEFAULTS[0]!, work] })
+    renderAccounts(localHandoff)
+
+    await openDetails(work.id)
+    expect(document.querySelector('[data-slot="account-open-file"]')).toBeNull()
+    expect(document.querySelector('[data-slot="account-open-folder"]')).toBeNull()
+    expect(document.querySelector('[data-slot="account-manage"]')).not.toBeNull()
   })
 
   it('gives every agent a tab, including one that cannot carry a second account', async () => {
