@@ -3,10 +3,12 @@ import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 import type { RunEvent, RunHistoryPage } from '@open-mercato/cezar-api-client'
 import { queryScope } from '@open-mercato/cezar-api-client'
+import { useThrottledValue } from '@/lib/use-throttled-value'
 import { getRunHistory, getRunHistoryContext } from './client'
 import { liveItemKey, useRunEvents, type RunEventCompaction } from './run-events'
 
 const MAX_HISTORY_PAGES = 5
+const LIVE_FRAME_MS = 120
 const COMPACT_LIVE_AT_EVENTS = 200
 const LIVE_COMPACTION_SIZE_TRIGGER = 5_000
 const COMPACTION_TIMEOUT_MS = 15_000
@@ -271,14 +273,16 @@ export function useRunHistory(runId: string | undefined): RunHistoryState {
       if (compactingOwnerRef.current === ownerKey) compactingOwnerRef.current = undefined
     }
   }, [historyKey, ownerKey, queryClient, runId, tailKey])
-  const liveEvents = useRunEvents(newestPage && !fallback ? runId : undefined, newestPage ? {
+  const liveFrames = useRunEvents(newestPage && !fallback ? runId : undefined, newestPage ? {
     cursor: newestPage.liveCursor,
     afterSeq: newestPage.asOfSeq,
     compactWhenOver: LIVE_COMPACTION_SIZE_TRIGGER,
     compactAt: COMPACT_LIVE_AT_EVENTS,
     onCompact: compactLive,
   } : {})
-  const fallbackEvents = useRunEvents(fallback ? runId : undefined)
+  const fallbackFrames = useRunEvents(fallback ? runId : undefined)
+  const liveEvents = useThrottledValue(liveFrames, LIVE_FRAME_MS, runId)
+  const fallbackEvents = useThrottledValue(fallbackFrames, LIVE_FRAME_MS, runId)
   const fallbackTailRef = useRef<{ runId: string | undefined; scope: string; events: RunEvent[] }>({
     runId: undefined,
     scope,
