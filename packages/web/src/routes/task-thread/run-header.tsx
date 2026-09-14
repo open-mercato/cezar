@@ -441,7 +441,15 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   const [confirming, setConfirming] = useState<'cancel' | 'delete' | null>(null)
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
-  const onError = (error: Error) => toast(error.message, { tone: 'danger' })
+  const onError = (error: Error) => {
+    // Every 409 here says the same thing: the record these buttons were drawn from is not the run
+    // the server has (Continue on a run that is running again, Cancel on one that just finished).
+    // Refetch it, so the bar redraws to the truth instead of offering the same refused action —
+    // the composer's rule (deliver-prompt.ts) and the thread's healer (run-reconcile.ts), applied
+    // to the actions. `useSendMessage` in queries.ts has always done exactly this.
+    if (error instanceof ApiError && error.status === 409) void invalidate()
+    toast(error.message, { tone: 'danger' })
+  }
 
   // Shared with the review panel's ✓ Accept (use-finish-run.ts) — the review-accept semantics
   // must be ONE implementation, not two buttons that happen to agree today.

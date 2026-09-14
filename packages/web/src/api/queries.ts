@@ -839,11 +839,23 @@ export function useProjectRuns<TData = ApiRun[]>(
   })
 }
 
+/**
+ * The authoritative single-run read, as options rather than a hook — so a caller that needs the
+ * record RIGHT NOW (`queryClient.fetchQuery`, with its own `staleTime: 0`) asks the same question
+ * at the same cache key as the thread's own `useRun`, and the answer lands in the cache every
+ * mounted view already reads. Spelling it twice would mean a refetch that heals nothing.
+ */
+export function runQueryOptions(id: string) {
+  return {
+    queryKey: queryKeys.runs.detail(id),
+    queryFn: ({ signal }: { signal: AbortSignal }) => getRun(id, { signal }),
+  }
+}
+
 /** One run, authoritative. `id` may be absent while a route param is still unresolved. */
 export function useRun(id: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.runs.detail(id ?? ''),
-    queryFn: ({ signal }) => getRun(id as string, { signal }),
+    ...runQueryOptions(id ?? ''),
     enabled: Boolean(id),
   })
 }

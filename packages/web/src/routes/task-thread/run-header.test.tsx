@@ -352,6 +352,28 @@ describe('actions hit their endpoints', () => {
     })
   })
 
+  it('a refused Continue refetches the record it was drawn from', async () => {
+    // The drift case: the record says `done`, the run is running again (a lost workspace-stream
+    // frame — run-reconcile.ts). Nothing else refetches a run record here, so without this the bar
+    // would keep offering a Continue the server keeps refusing.
+    const sent = stubFetch({
+      '/api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
+    })
+    renderHeader(run('done'))
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    const listReadsBefore = sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length
+
+    fireEvent.click(button)
+
+    await waitFor(() => expect(screen.getByText('run is still active')).not.toBeNull())
+    await waitFor(() =>
+      expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length).toBeGreaterThan(
+        listReadsBefore,
+      ),
+    )
+  })
+
   it('disables desktop Continue and its mutation guard blocks a forced click without a provider', async () => {
     const sent = stubFetch({
       '/api/v1/providers/status': () =>

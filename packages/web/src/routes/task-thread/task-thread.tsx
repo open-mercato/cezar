@@ -13,7 +13,6 @@ import {
   useRun,
   useProjectRepoBase,
   useRuns,
-  useSendMessage,
 } from '@/api/queries'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
@@ -28,6 +27,7 @@ import { cn, isHttpUrl } from '@/lib/utils'
 
 import { AutoResumeHint } from './auto-resume-hint'
 import { WorkingIndicator } from './thread-items'
+import { useDeliverPrompt } from './deliver-prompt'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
@@ -235,7 +235,11 @@ export function ThreadView({
     () => (openAgentId === undefined ? [] : subagentChildren(currentThread.turns, openAgentId)),
     [currentThread.turns, openAgentId],
   )
-  const sendMessage = useSendMessage(run.id)
+  // One delivery path for both modes, because the record that picks between them can be stale:
+  // a 409 refetches it and, when the truth names the other endpoint, delivers there instead
+  // (deliver-prompt.ts). Without that, a lost record update meant every send bounced until the
+  // page was reloaded.
+  const deliverPrompt = useDeliverPrompt(run, continueAction)
   const activeProvider = useActiveProviderAvailability(run)
   // A queued send only amends the persisted prompt; it invokes no provider and therefore
   // remains available even when provider discovery cannot authorize a live session. Once the
@@ -458,11 +462,7 @@ export function ThreadView({
           ) : null}
 
           <Composer
-            onSubmit={
-              continuable
-                ? (text, images) => continueAction.continueWith(text, images)
-                : (text, images) => sendMessage.mutateAsync({ text, images })
-            }
+            onSubmit={deliverPrompt}
             disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
             // Only reachable now by a closed run with NO session to resume — which is exactly
             // the one case where Continue is not on offer either. Left honest rather than
