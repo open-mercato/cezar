@@ -1,20 +1,25 @@
 import { MonitorIcon, MoonIcon, SunIcon } from 'lucide-react'
 import type { ComponentType, ReactNode, SVGProps } from 'react'
 
+import { useProjects } from '@/api/queries'
 import { useAppearance } from '@/components/appearance-provider'
 import { useTheme } from '@/components/theme-provider'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { Accent, Density, Width } from '@/lib/appearance'
 import type { Theme } from '@/lib/theme'
+import { useProjectOrder } from '@/lib/use-project-order'
 
 /**
  * Settings → Appearance (R6 Step 1.3, spec §"Settings").
  *
- * Three knobs, each honest about where it persists:
+ * Each knob is honest about where it persists:
  *  - THEME rides the existing theme system (localStorage `cez-theme`, shared with the legacy
  *    cockpit and the pre-paint script) — per-browser by design, like every OS theme choice;
  *  - ACCENT + DENSITY persist in `ui-state.json` through the AppearanceProvider (additive
- *    `appearance` key), mirrored to localStorage for pre-paint.
+ *    `appearance` key), mirrored to localStorage for pre-paint;
+ *  - PROJECT ORDER (#952) lives in the same workspace file under `sidebar.projectOrder`, so this
+ *    section only offers the reset — the order itself is set by dragging the drawer.
  *
  * Every control is a real one: accent swaps the `--primary` token family, density shrinks
  * the Tailwind spacing token (see index.css). No dead knobs.
@@ -110,6 +115,39 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
   )
 }
 
+/**
+ * The undo for a drawer reordered by hand (#952) — the drag itself lives in the sidebar, where
+ * it belongs, but "put it back" needs a home that is not a gesture.
+ *
+ * Absent entirely until there is both more than one project and an order to forget: a reset
+ * button for state the user has never created is a control that can only do nothing.
+ */
+function ProjectOrderField() {
+  const projects = useProjects()
+  const { order, canReorder, reset } = useProjectOrder()
+  const multiProject = (projects.data?.projects.length ?? 0) > 1
+  if (!multiProject || order.length === 0) return null
+
+  return (
+    <Field
+      title="Project order"
+      hint="The sidebar is in the order you dragged it into. Reset puts it back to most-recently-opened first. Shared with every browser signed in to this cezar."
+    >
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        data-slot="appearance-project-order-reset"
+        disabled={!canReorder}
+        onClick={reset}
+        className="w-fit"
+      >
+        Reset order
+      </Button>
+    </Field>
+  )
+}
+
 export function AppearanceSection() {
   const { theme, setTheme } = useTheme()
   const { accent, density, width, setAccent, setDensity, setWidth } = useAppearance()
@@ -140,6 +178,8 @@ export function AppearanceSection() {
       >
         <Segmented slot="appearance-width" label="Reading width" value={width} options={WIDTH_OPTIONS} onChange={setWidth} />
       </Field>
+
+      <ProjectOrderField />
     </div>
   )
 }

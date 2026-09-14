@@ -1,7 +1,6 @@
 import { memo, useMemo, type ReactNode } from 'react'
 
 import type { ApiRun, UiMessageItem, UiReasoningItem, UiToolItem } from '@open-mercato/cezar-api-client'
-
 import { sameData } from '@/lib/same-data'
 
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
@@ -18,6 +17,7 @@ import {
 } from './thread-items'
 import { ThreadCardCache } from './thread-open-cards'
 import { threadRenderMode } from './thread-scroll'
+import { DaySeparator, TurnTime, localDayKey } from './thread-time'
 import {
   JumpToLatestPill,
   ThreadRows,
@@ -38,6 +38,8 @@ export interface TranscriptUserMessage {
   text: string
   imageCount?: number
   images?: readonly string[]
+  /** When this message was sent — or, for a still-queued one, when it was queued (#941). */
+  ts?: string
 }
 
 export interface TranscriptSection {
@@ -46,6 +48,14 @@ export interface TranscriptSection {
   /** Keeps the main renderer's established keys while allowing generic section ids. */
   userMessageKey?: string
   entries: readonly ThreadEntry[]
+  /** The turn's own clock (#941): when it opened, and when the agent finished it. Absent on the
+   *  initial-prompt, queued and attributed-agent sections, which have no turn boundaries. */
+  startedAt?: string
+  completedAt?: string
+  /** Whether this section's stamp may move the thread's day cursor (#941). Default true; false
+   *  for a section rendered OUT of chronological order, whose date says nothing about where the
+   *  conversation below it sits in time. See `buildTranscriptRows`. */
+  inDaySequence?: boolean
 }
 
 export interface TranscriptMessageActions {
@@ -61,6 +71,8 @@ export interface TranscriptRowModel {
   content:
     | { kind: 'user-message'; message: TranscriptUserMessage }
     | { kind: 'block'; block: ThreadBlock }
+    | { kind: 'day-separator'; ts: string }
+    | { kind: 'turn-time'; completedAt: string; startedAt?: string }
 }
 
 export interface SessionTranscriptProps {
@@ -86,7 +98,8 @@ export function mainTranscriptSections(run: ApiRun, thread: ThreadState): Transc
     sections.push({
       id: 'task',
       userMessageKey: 'task',
-      userMessage: { text: run.task, images: run.taskImages ?? [] },
+      // The initial prompt is not an event — the run record is where its clock lives (#941).
+      userMessage: { text: run.task, images: run.taskImages ?? [], ts: run.createdAt },
       entries: [],
     })
   }
@@ -94,7 +107,13 @@ export function mainTranscriptSections(run: ApiRun, thread: ThreadState): Transc
     sections.push({
       id: `queued:${message.id}`,
       userMessageKey: `queued:${message.id}`,
-      userMessage: { text: message.text, images: message.images ?? [] },
+      // Stamped with when it was QUEUED. Once it is sent, this section is gone and the turn's own
+      // event `ts` takes over — the two differ, and that is the honest reading of both.
+      userMessage: { text: message.text, images: message.images ?? [], ts: message.createdAt },
+      // The stack renders here, above every turn, but is queued LAST: a message stacked onto a
+      // run continued the next day is newer than the whole transcript beneath it. Its own stamp
+      // stays on its bubble; it must not date the older turns below it (#941).
+      inDaySequence: false,
       entries: [],
     })
   }
@@ -108,9 +127,12 @@ export function mainTranscriptSections(run: ApiRun, thread: ThreadState): Transc
               text: turn.userMessage.text,
               imageCount: turn.userMessage.imageCount,
               images: turn.userMessage.images,
+              ...(turn.userMessage.ts !== undefined ? { ts: turn.userMessage.ts } : {}),
             },
           }
         : {}),
+      ...(turn.startedAt !== undefined ? { startedAt: turn.startedAt } : {}),
+      ...(turn.completed?.ts !== undefined ? { completedAt: turn.completed.ts } : {}),
       entries: turn.items,
     })
   }
@@ -125,13 +147,50 @@ export function agentTranscriptSections(
   return [{ id: `agent:${agentId}`, entries }]
 }
 
-/** Pure flattening and grouping shared by document and panel surfaces. */
+/** When a section happened, for the day-separator comparison: the turn opens with the user's
+ *  message when there is one, otherwise with the agent's own boundary stamps. Sections held out
+ *  of the day sequence report nothing, so they neither draw a rule nor move the cursor. */
+function sectionStamp(section: TranscriptSection): string | undefined {
+  if (section.inDaySequence === false) return undefined
+  return section.userMessage?.ts ?? section.startedAt ?? section.completedAt
+}
+
+/**
+ * Pure flattening and grouping shared by document and panel surfaces.
+ *
+ * Day separators and the turn's closing time are ROWS of their own (#941), never content folded
+ * into a neighbour: both render modes measure rows, and a stamp injected into an existing row
+ * would change its height between virtua's measure and its paint.
+ */
 export function buildTranscriptRows(
   sections: readonly TranscriptSection[],
   _runId: string,
 ): TranscriptRowModel[] {
   const rows: TranscriptRowModel[] = []
+  /** The latest local day the thread has shown, as a sortable `YYYY-MM-DD`. Sections with no
+   *  stamp at all (attributed agent streams, old recordings) leave it alone rather than breaking
+   *  the run of dates, as do sections held out of the sequence — the stack renders above the
+   *  turns but is queued after them, and letting it set the cursor would both date the older
+   *  turns wrongly and swallow the real boundary below. A separator is drawn only when the day
+   *  moves FORWARD: the initial prompt is stamped from the run record while the turns below it
+   *  are stamped from events, so a section that reads as older than what is already on screen is
+   *  disorder, not a new day, and a "Yesterday" rule under today's turns would state something
+   *  false. */
+  let lastDay: string | undefined
   for (const section of sections) {
+    const stamp = sectionStamp(section)
+    const day = localDayKey(stamp)
+    if (day !== undefined && stamp !== undefined && (lastDay === undefined || day > lastDay)) {
+      // Only BETWEEN days: the first dated section needs no separator above it.
+      if (lastDay !== undefined) {
+        rows.push({
+          key: `${section.id}:day-separator`,
+          scope: section.id,
+          content: { kind: 'day-separator', ts: stamp },
+        })
+      }
+      lastDay = day
+    }
     if (section.userMessage !== undefined) {
       rows.push({
         key: section.userMessageKey ?? `${section.id}:user`,
@@ -144,6 +203,17 @@ export function buildTranscriptRows(
         key: `${section.id}:${block.id}`,
         scope: section.id,
         content: { kind: 'block', block },
+      })
+    }
+    if (section.completedAt !== undefined) {
+      rows.push({
+        key: `${section.id}:turn-time`,
+        scope: section.id,
+        content: {
+          kind: 'turn-time',
+          completedAt: section.completedAt,
+          ...(section.startedAt !== undefined ? { startedAt: section.startedAt } : {}),
+        },
       })
     }
   }
@@ -172,15 +242,13 @@ export function SessionTranscript({
     () =>
       rowModels.map((row) => ({
         key: row.key,
-        node:
-          row.content.kind === 'user-message' ? (
-            <MemoizedUserBubble
-              message={row.content.message}
-              actions={messageActions?.[row.key]}
-            />
-          ) : (
-            <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
-          ),
+        node: (
+          <MemoizedRow
+            row={row}
+            actions={messageActions?.[row.key]}
+            renderAsk={renderAsk}
+          />
+        ),
       })),
     [messageActions, renderAsk, rowModels],
   )
@@ -219,28 +287,49 @@ export function SessionTranscript({
   )
 }
 
-/**
- * THE LIVE-THREAD MEMO (the reason phone scrolling stutters while an agent works).
- *
- * `reduceThread` re-folds the whole event list on every live frame, so each row arrives as a
- * structurally identical but referentially NEW model ~25×/s. Without a value comparator React
- * re-renders every row of the thread on every delta: a 243-row transcript cost ~40 ms of React
- * work per frame (desktop jsdom, no layout or paint) against a 40 ms frame budget — a main
- * thread that never goes idle, which is what turns a phone's touch scroll into a stutter. With
- * this memo (and the header's) the same frame costs ~15 ms.
- *
- * Comparing by value ({@link sameData}) costs one walk of unchanged-by-reference sub-trees and
- * lets React skip every row but the one the agent is actually writing into. It is sound
- * precisely BECAUSE the fold is pure: nothing mutates a tree it has already returned, so equal
- * values here always mean equal output.
- *
- * The non-data props stay reference-compared on purpose: `actions`/`renderAsk` are memoized by
- * their owners, and a fresh identity there legitimately means the row's behavior changed.
- */
-const MemoizedUserBubble = memo(
-  TranscriptUserBubble,
-  (before, after) => before.actions === after.actions && sameData(before.message, after.message),
+function TranscriptRow({
+  row,
+  actions,
+  renderAsk,
+}: {
+  row: TranscriptRowModel
+  actions?: TranscriptMessageActions
+  renderAsk?: (ask: ThreadAsk) => ReactNode
+}) {
+  return renderRowContent(row, actions, renderAsk)
+}
+
+const MemoizedRow = memo(
+  TranscriptRow,
+  (before, after) =>
+    before.actions === after.actions &&
+    before.renderAsk === after.renderAsk &&
+    sameData(before.row, after.row),
 )
+
+function renderRowContent(
+  row: TranscriptRowModel,
+  actions: TranscriptMessageActions | undefined,
+  renderAsk: ((ask: ThreadAsk) => ReactNode) | undefined,
+): ReactNode {
+  switch (row.content.kind) {
+    case 'user-message':
+      return <TranscriptUserBubble message={row.content.message} actions={actions} />
+    case 'day-separator':
+      return <DaySeparator ts={row.content.ts} />
+    case 'turn-time':
+      return (
+        <TurnTime
+          completedAt={row.content.completedAt}
+          {...(row.content.startedAt !== undefined ? { startedAt: row.content.startedAt } : {})}
+        />
+      )
+    case 'block':
+      return <ThreadBlockRenderer block={row.content.block} scope={row.scope} renderAsk={renderAsk} />
+    default:
+      return assertNever(row.content)
+  }
+}
 
 function TranscriptUserBubble({
   message,
@@ -254,6 +343,7 @@ function TranscriptUserBubble({
       text={message.text}
       imageCount={message.imageCount}
       images={message.images}
+      {...(message.ts !== undefined ? { ts: message.ts } : {})}
       onEdit={actions?.onEdit}
       onRemove={actions?.onRemove}
       editLabel={actions?.editLabel}
@@ -425,7 +515,7 @@ function sameThreadEntry(previous: ThreadEntry | undefined, next: ThreadEntry): 
     case 'image':
       return previous.kind === 'image' && sameFields(previous, next, IMAGE_COMPARE_FIELDS)
     case 'ask':
-      return previous.kind === 'ask' && sameData(previous, next)
+      return previous.kind === 'ask' && sameFields(previous, next, ASK_COMPARE_FIELDS)
     case 'provider-auth-required':
       return previous.kind === 'provider-auth-required' &&
         sameFields(previous, next, PROVIDER_AUTH_COMPARE_FIELDS)
@@ -463,6 +553,14 @@ const IMAGE_COMPARE_FIELDS = {
   url: true,
   name: true,
 } satisfies Record<keyof ThreadImage, true>
+
+const ASK_COMPARE_FIELDS = {
+  kind: true,
+  id: true,
+  questions: true,
+  resolved: true,
+  answer: true,
+} satisfies Record<keyof ThreadAsk, true>
 
 const PROVIDER_AUTH_COMPARE_FIELDS = {
   kind: true,
