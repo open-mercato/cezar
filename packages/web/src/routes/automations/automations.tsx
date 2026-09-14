@@ -114,7 +114,7 @@ export function AutomationsRoute({ mode = 'list' }: { mode?: 'list' | 'new' | 'e
               {data.automations.map((automation) => (
                 <article key={automation.id} className="rounded-xl border bg-card p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div><h2 className="font-semibold">{automation.name}</h2><p className="mt-1 text-sm text-muted-foreground">{automation.events.join(', ')} · every {Math.round(automation.intervalSeconds / 60)} min</p></div>
+                    <div><h2 className="font-semibold">{automation.name}</h2><p className="mt-1 text-sm text-muted-foreground">{(automation.events ?? []).join(', ')} · every {Math.round((automation.intervalSeconds ?? 300) / 60)} min</p></div>
                     <span className="rounded-full border px-2 py-1 text-xs">{automation.enabled ? 'Enabled' : 'Paused'}</span>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">

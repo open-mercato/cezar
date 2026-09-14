@@ -161,7 +161,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     // and two spellings of "is the inbox on" would eventually disagree.
     followups: followupsEnabled(env),
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
-    automations: env.CEZ_AUTOMATIONS === '1',
+    automations: env.CEZ_AUTOMATIONS !== '0',
     dispatch: env.CEZ_DISPATCH !== '0',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,

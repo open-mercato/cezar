@@ -10,10 +10,10 @@ import { createApp, startServer, type ServerDeps } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * GitHub automations are opt-in (#801): `CEZ_AUTOMATIONS=1` turns them on, off is the default.
- * Off, every route of the family answers `409` naming the flag — defense in depth behind the
- * cockpit's nav gate, so a bookmarked deep link or a script cannot drive a feature the operator
- * switched off.
+ * Automations are on by default and `CEZ_AUTOMATIONS=0` opts out (spec 2026-09-14, which flipped
+ * the #801 opt-in). Opted out, every route of the family answers `409` naming the flag — defense
+ * in depth behind the cockpit's nav gate, so a bookmarked deep link or a script cannot drive a
+ * feature the operator switched off.
  *
  * The twin of `inbox-gate.test.ts`, with one deliberate difference. The inbox READER degrades to
  * `200 []` because an inbox that is off is honestly empty; an automations reader cannot say the
@@ -32,7 +32,7 @@ const DEFINITION = {
   task: { prompt: 'Review {{github.url}}' },
 };
 
-describe('automations gate (#801)', () => {
+describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
   let repoRoot: string;
   let dataDir: string;
   let store: RunStore;
@@ -75,7 +75,10 @@ describe('automations gate (#801)', () => {
     body: JSON.stringify(body),
   });
 
-  describe('off (the default)', () => {
+  describe('off (CEZ_AUTOMATIONS=0)', () => {
+    beforeEach(() => {
+      process.env.CEZ_AUTOMATIONS = '0';
+    });
     /** Every route of the feature, in the spelling BACKWARD_COMPATIBILITY.md §2 inventories. */
     const routes = (id: string): Array<[label: string, path: string, init?: RequestInit]> => [
       ['GET /automations', '/api/v1/automations'],
@@ -122,7 +125,7 @@ describe('automations gate (#801)', () => {
     it('hides definitions without destroying them — flipping the flag brings them back', async () => {
       await apiRequest(app(), '/api/v1/automations');
       await apiRequest(app(), `/api/v1/automations/${automationId}`, { method: 'DELETE' });
-      process.env.CEZ_AUTOMATIONS = '1';
+      delete process.env.CEZ_AUTOMATIONS;
       const res = await apiRequest(app(), '/api/v1/automations');
       expect(res.status).toBe(200);
       const body = (await res.json()) as { automations: Array<{ id: string; name: string }> };
@@ -137,10 +140,7 @@ describe('automations gate (#801)', () => {
     });
   });
 
-  describe('on (CEZ_AUTOMATIONS=1)', () => {
-    beforeEach(() => {
-      process.env.CEZ_AUTOMATIONS = '1';
-    });
+  describe('on (the default)', () => {
 
     it('serves the real definitions', async () => {
       const res = await apiRequest(app(), '/api/v1/automations');
@@ -210,15 +210,15 @@ describe('automations gate (#801)', () => {
       } finally {
         server.close();
       }
-      expect(started).toHaveBeenCalledTimes(process.env.CEZ_AUTOMATIONS === '1' ? 1 : 0);
+      expect(started).toHaveBeenCalledTimes(process.env.CEZ_AUTOMATIONS === '0' ? 0 : 1);
     };
 
-    it('never starts polling while the flag is off', async () => {
+    it('never starts polling while opted out', async () => {
+      process.env.CEZ_AUTOMATIONS = '0';
       await boot();
     });
 
-    it('starts once the flag is on, so the gate is the only thing holding it back', async () => {
-      process.env.CEZ_AUTOMATIONS = '1';
+    it('starts by default, so the opt-out is the only thing holding it back', async () => {
       await boot();
     });
   });

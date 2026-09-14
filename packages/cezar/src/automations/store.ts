@@ -125,8 +125,15 @@ export class AutomationStore {
     return this.stateFile.states[id];
   }
 
+  /**
+   * Read-modify-write (spec 2026-09-14 § Edge cases): two cockpits on one project each hold their
+   * own in-memory copy of the state file, and a write from memory alone would clobber the other's
+   * cursor or `nextRunAt`. Re-reading first merges this ONE id over whatever is on disk, so the
+   * two converge — the `mergeWriteWorkspaceConfig` pattern.
+   */
   setState(id: string, state: AutomationRuntimeState): void {
-    this.stateFile.states = { ...this.stateFile.states, [id]: state };
+    const onDisk = this.readJson(STATE, automationStateFileSchema, { version: 1, states: {} });
+    this.stateFile = { ...onDisk, states: { ...onDisk.states, [id]: state } };
     this.atomicJson(STATE, this.stateFile);
   }
 
@@ -149,6 +156,8 @@ export class AutomationStore {
     revision: number;
     eventId: string;
     candidate?: GithubCandidate;
+    /** schedule kind: the occurrence being reserved. */
+    occurrenceAt?: string;
   }): AutomationReceipt | undefined {
     const receiptKey = `${input.automationId}:${input.eventId}`;
     if (this.latestReceipts().has(receiptKey)) return undefined;

@@ -758,7 +758,7 @@ describe('workspace projects API', () => {
         localHandoff: true,
         followups: false,
         singleProject: false,
-        automations: false,
+        automations: true,
         dispatch: true,
         tokenMetrics: true,
         tokenUsageMetrics: true,

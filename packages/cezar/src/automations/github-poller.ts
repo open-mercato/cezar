@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import type { AutomationDefinition, AutomationEvent } from './types.ts';
+import type { GithubAutomationDefinition, AutomationEvent } from './types.ts';
 
 const execFileAsync = promisify(execFile);
 const HARD_CANDIDATE_CAP = 100;
@@ -75,7 +75,7 @@ export class GithubPoller {
   async poll(
     owner: string,
     repo: string,
-    definition: AutomationDefinition,
+    definition: GithubAutomationDefinition,
     options: GithubPollOptions = {},
   ): Promise<GithubPollResult> {
     const openedEvents = definition.events.filter(
@@ -209,7 +209,7 @@ export class GithubPoller {
 export function buildSearchQuery(
   owner: string,
   repo: string,
-  definition: AutomationDefinition,
+  definition: GithubAutomationDefinition,
   family: 'issues' | 'prs' | 'mixed' = 'mixed',
   activity: 'created' | 'updated' = 'created',
   since?: string,
@@ -278,7 +278,7 @@ export function reconstructLabelEvents(
   return rows.sort((a, b) => a.timestamp.localeCompare(b.timestamp) || a.tieBreaker.localeCompare(b.tieBreaker));
 }
 
-export function matchesFilters(candidate: GithubCandidate, definition: AutomationDefinition): boolean {
+export function matchesFilters(candidate: GithubCandidate, definition: GithubAutomationDefinition): boolean {
   const lower = (values: readonly string[]) => new Set(values.map((value) => value.toLowerCase()));
   const labels = lower(candidate.labels);
   const filters = definition.filters;

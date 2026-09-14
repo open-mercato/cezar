@@ -184,6 +184,17 @@ export const runRecordSchema = z.object({
       githubUrl: z.string().url(),
     })
     .optional(),
+  /** Provenance for a task a scheduled automation launched (spec 2026-09-14). Its own key so a
+   *  pre-schedule cezar strips it instead of failing the whole index on a missing `githubUrl`. */
+  automationTrigger: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number().int().positive(),
+      receiptId: z.string(),
+      trigger: z.enum(['schedule', 'catch-up', 'manual']),
+      occurrenceAt: z.string(),
+    })
+    .optional(),
   /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
    *  budget, its own report and the reports waiting for its next session.
    *

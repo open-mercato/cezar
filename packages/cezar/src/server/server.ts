@@ -3,15 +3,21 @@ import { randomUUID } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
 import { GithubPoller } from '../automations/github-poller.ts';
-import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
-import { launchAutomationRun, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
+import { ProjectAutomationScheduler, WorkspaceAutomationScheduler, type ProjectAutomationHandle } from '../automations/scheduler.ts';
+import { ScheduleRunner } from '../automations/schedule-runner.ts';
+import { automationStats } from '../automations/stats.ts';
+import { automationTemplatesOf } from '../automations/templates.ts';
+import { launchAutomationRun, launchScheduledRun, rebaselineIdleAutomations, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
 import {
   automationEventSchema,
   automationFiltersSchema,
   automationLogResultSchema,
   automationTaskSchema,
+  isGithubAutomation,
+  isScheduleAutomation,
   type AutomationDefinition,
 } from '../automations/types.ts';
+import { automationScheduleSchema, localTimeZone, nextOccurrence } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -345,12 +351,34 @@ const automationEditableSchema = z
     name: z.string().trim().min(1).max(200),
     description: z.string().max(2_000).optional(),
     enabled: z.boolean().optional(),
-    events: z.array(automationEventSchema).min(1).max(4),
-    intervalSeconds: z.number().int().min(60).max(86_400),
-    filters: automationFiltersSchema,
+    /** Omitted on create = `github`; omitted on update = the stored kind (spec 2026-09-14). */
+    kind: z.enum(['github', 'schedule']).optional(),
+    events: z.array(automationEventSchema).min(1).max(4).optional(),
+    intervalSeconds: z.number().int().min(60).max(86_400).optional(),
+    filters: automationFiltersSchema.optional(),
+    schedule: automationScheduleSchema.optional(),
     task: automationTaskSchema,
   })
   .strict();
+type AutomationEditableBody = z.infer<typeof automationEditableSchema>;
+
+/**
+ * The kind rules the storage schema also enforces, answered as a 400 message rather than a zod
+ * issue path (spec 2026-09-14 § Data Model): a poll needs its three keys; a schedule needs its
+ * schedule and carries no GitHub filter.
+ */
+function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'schedule'): string | null {
+  if (kind === 'schedule') {
+    if (!body.schedule) return 'a scheduled automation needs a schedule';
+    if (body.events || body.filters || body.intervalSeconds !== undefined) return 'a scheduled automation has no GitHub filter';
+    return null;
+  }
+  if (!body.events?.length) return 'a GitHub automation needs at least one event';
+  if (body.intervalSeconds === undefined) return 'a GitHub automation needs a poll interval';
+  if (!body.filters) return 'a GitHub automation needs its bounded filter';
+  if (body.schedule) return 'a GitHub automation has no schedule';
+  return null;
+}
 const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
 const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
 const automationCheckRequestSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
@@ -373,9 +401,11 @@ function editableAutomation(definition: AutomationDefinition) {
     name: definition.name,
     description: definition.description,
     enabled: definition.enabled,
+    kind: definition.kind,
     events: definition.events,
     intervalSeconds: definition.intervalSeconds,
     filters: definition.filters,
+    schedule: definition.schedule,
     task: definition.task,
   };
 }
@@ -426,7 +456,7 @@ export function projectRouteManifest(app: Hono): ProjectRouteInfo[] {
 const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 to enable it';
 
 /** 409 body for every automations route while GitHub automations are off (#801). */
-const AUTOMATIONS_OFF = 'GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them';
+const AUTOMATIONS_OFF = 'Automations are off — this cockpit was started with CEZ_AUTOMATIONS=0';
 
 /** 409 body for every dispatch route while task dispatch is off (spec 2026-09-10-dispatch). */
 const DISPATCH_OFF =
@@ -3214,6 +3244,71 @@ export function createApp(deps: ServerDeps) {
    * including `/health`. The two-line pairing (`/automations` and `/automations/*`) is what makes
    * a path match both the collection and everything under it.
    */
+  /**
+   * Enabling arms the kind (spec 2026-09-14): a poll establishes its current-time baseline
+   * (existing records never launch); a schedule gets its next occurrence. Shared by create-with-
+   * enable and the enable route.
+   */
+  const armAutomation = (store: AutomationStore, automation: AutomationDefinition): void => {
+    const now = Date.now();
+    if (isScheduleAutomation(automation)) {
+      const next = nextOccurrence(automation.schedule, now, localTimeZone());
+      store.setState(automation.id, {
+        ...store.state(automation.id),
+        revision: automation.revision,
+        ...(next !== null ? { nextRunAt: new Date(next).toISOString() } : {}),
+      });
+      return;
+    }
+    const baselineAt = new Date(now).toISOString();
+    store.setState(automation.id, {
+      ...store.state(automation.id),
+      revision: automation.revision,
+      baselineAt,
+      cursor: { timestamp: baselineAt },
+      nextCheckAt: new Date(now + (automation.intervalSeconds ?? 300) * 1_000).toISOString(),
+    });
+    store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+  };
+
+  /** The schedule runner's view of a project: the store, the zone, and a launcher onto its RunManager. */
+  const scheduleHandle = (project: Parameters<typeof emitAutomationChange>[0]) => ({
+    projectId: project.id,
+    store: project.automationStore,
+    timeZone: localTimeZone(),
+    launch: (definition: Parameters<typeof launchScheduledRun>[0]['definition'], occurrence: Parameters<typeof launchScheduledRun>[0]['occurrence'], receiptId: string) =>
+      launchScheduledRun({ root: project.root, manager: project.manager, store: project.store, definition, occurrence, receiptId, projectName: basename(project.root), timeZone: localTimeZone(), dispatchEnabled: capabilities().dispatch }),
+    onChange: (automationId: string, revision: number) => emitAutomationChange(project, automationId, revision),
+  });
+
+  /** The runs the log rows name, with their dispatch children (spec 2026-09-14 § API). */
+  const logRunsOf = (runStore: RunStore, records: ReadonlyArray<{ runId?: string }>) => {
+    const runs: Record<string, { title: string; status: RunRecord['status']; costUsd?: number; children: Array<{ runId: string; kind?: NonNullable<RunRecord['dispatch']>['kind']; title: string; status: RunRecord['status']; costUsd?: number }> }> = {};
+    const wanted = new Set(records.map((row) => row.runId).filter((id): id is string => typeof id === 'string'));
+    if (!wanted.size) return runs;
+    const all = runStore.listRuns();
+    const showCost = capabilities().costMetrics;
+    for (const run of all) {
+      if (!wanted.has(run.id)) continue;
+      const children = all
+        .filter((child) => child.id !== run.id && child.dispatch?.rootRunId === run.id)
+        .map((child) => ({
+          runId: child.id,
+          ...(child.dispatch?.kind ? { kind: child.dispatch.kind } : {}),
+          title: child.title,
+          status: child.status,
+          ...(showCost && typeof child.costUsd === 'number' ? { costUsd: child.costUsd } : {}),
+        }));
+      runs[run.id] = {
+        title: run.title,
+        status: run.status,
+        ...(showCost && typeof run.costUsd === 'number' ? { costUsd: run.costUsd } : {}),
+        children,
+      };
+    }
+    return runs;
+  };
+
   const requireAutomations = async (c: Context, next: Next) => {
     if (!capabilities().automations) return c.json({ error: AUTOMATIONS_OFF }, 409);
     await next();
@@ -3239,10 +3334,24 @@ export function createApp(deps: ServerDeps) {
         available: false,
         reason: forge ? 'GitHub availability is still being checked' : 'No GitHub remote is configured',
       };
-      const automations = automationStore.list().map((automation) => {
-        const logs = automationStore.logs({ automationId: automation.id, limit: 100 });
+      const definitions = automationStore.list();
+      const logsById = new Map(definitions.map((definition) => [definition.id, automationStore.logs({ automationId: definition.id, limit: 100 })] as const));
+      const timeZone = localTimeZone();
+      // Derived, never stored (spec 2026-09-14 § Proposed Solution 4).
+      const stats = automationStats({
+        definitions,
+        logs: [...logsById.values()].flat(),
+        runs: c.get('project').store.listRuns(),
+        now: Date.now(),
+        timeZone,
+        costMetrics: capabilities().costMetrics,
+      });
+      const automations = definitions.map((automation) => {
+        const logs = logsById.get(automation.id) ?? [];
         const state = automationStore.state(automation.id);
         const latestLog = logs[0];
+        const row = stats.rows.get(automation.id);
+        const nextRunAt = automation.enabled ? (automation.kind === 'schedule' ? state?.nextRunAt : state?.nextCheckAt) : undefined;
         return {
           ...automation,
           // Spread conditionally, never `state: maybeUndefined`: the latter types the key as
@@ -3252,13 +3361,17 @@ export function createApp(deps: ServerDeps) {
           ...(latestLog ? { latestLog } : {}),
           counts: {
             matches: logs.filter((row) => row.result === 'launched' || row.result === 'duplicate').length,
-            launched: logs.filter((row) => row.result === 'launched').length,
+            launched: logs.filter((row) => row.result === 'launched' || row.result === 'manual' || row.result === 'catch-up').length,
             duplicates: logs.filter((row) => row.result === 'duplicate').length,
-            errors: logs.filter((row) => row.result === 'error' || row.result === 'rate-limited').length,
+            errors: logs.filter((row) => row.result === 'error' || row.result === 'rate-limited' || row.result === 'failed').length,
           },
+          ...(nextRunAt ? { nextRunAt } : {}),
+          ...(row?.lastRun ? { lastRun: row.lastRun } : {}),
+          runs7d: row?.runs7d ?? 0,
+          ...(row?.costUsd7d !== undefined ? { costUsd7d: row.costUsd7d } : {}),
         };
       });
-      const nextDue = automations.map((item) => item.state?.nextCheckAt).filter(Boolean).sort()[0];
+      const nextDue = automations.map((item) => item.nextRunAt).filter(Boolean).sort()[0];
       return c.json({
         ...availability,
         scheduler: {
@@ -3267,6 +3380,8 @@ export function createApp(deps: ServerDeps) {
           state: automations.some((item) => item.enabled) ? ('scheduled' as const) : ('idle' as const),
           ...(nextDue ? { nextDue } : {}),
         },
+        timeZone,
+        stats: stats.week,
         automations,
       });
     })
@@ -3274,20 +3389,15 @@ export function createApp(deps: ServerDeps) {
     .post('/automations', jsonZodValidator(() => automationCreateSchema), async (c) => {
       const { automationStore } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+      const kind = parsed.data.kind ?? 'github';
+      const kindIssue = automationKindIssue(parsed.data, kind);
+      if (kindIssue) return c.json({ error: kindIssue }, 400);
+      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
       const { enable, ...input } = parsed.data;
       try {
-        const automation = automationStore.create({ ...input, enabled: enable === true });
-        if (enable) {
-          const baselineAt = new Date().toISOString();
-          automationStore.setState(automation.id, {
-            revision: automation.revision,
-            baselineAt,
-            cursor: { timestamp: baselineAt },
-            nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
-          });
-        }
+        const automation = automationStore.create({ ...input, kind, enabled: enable === true });
+        if (enable) armAutomation(automationStore, automation);
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation }, 201);
@@ -3312,12 +3422,25 @@ export function createApp(deps: ServerDeps) {
     .put('/automations/:id', jsonZodValidator(() => automationUpdateSchema), async (c) => {
       const { automationStore } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+      const current = automationStore.get(c.req.param('id'));
+      if (!current) return c.json({ error: 'not found' }, 404);
+      // The stored kind unless the body names one; a switch is refused — receipts and cursors
+      // are kind-specific, and a silent swap would orphan them (spec 2026-09-14 § Edge cases).
+      const kind = parsed.data.kind ?? current.kind;
+      if (kind !== current.kind) return c.json({ error: 'change the kind by creating a new automation' }, 409);
+      const kindIssue = automationKindIssue(parsed.data, kind);
+      if (kindIssue) return c.json({ error: kindIssue }, 400);
+      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
       const { expectedRevision, ...input } = parsed.data;
-      if (!automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
       try {
-        const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, enabled: input.enabled ?? false });
+        const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, kind, enabled: input.enabled ?? false });
+        // An edited schedule recomputes its next occurrence; `store.update` carried the old
+        // `nextRunAt` forward, so clear it and let the timer's `dueAt` persist the new one.
+        if (kind === 'schedule' && JSON.stringify(current.schedule) !== JSON.stringify(automation.schedule)) {
+          const state = automationStore.state(automation.id);
+          if (state?.nextRunAt) automationStore.setState(automation.id, { ...state, nextRunAt: undefined });
+        }
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation });
@@ -3342,15 +3465,7 @@ export function createApp(deps: ServerDeps) {
       const current = store.get(c.req.param('id'));
       if (!current) return c.json({ error: 'not found' }, 404);
       const automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: true });
-      const baselineAt = new Date().toISOString();
-      store.setState(automation.id, {
-        ...store.state(automation.id),
-        revision: automation.revision,
-        baselineAt,
-        cursor: { timestamp: baselineAt },
-        nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
-      });
-      store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+      armAutomation(store, automation);
       emitAutomationChange(c.get('project'), automation.id, automation.revision);
       automationsChanged();
       return c.json({ automation });
@@ -3374,6 +3489,7 @@ export function createApp(deps: ServerDeps) {
       const store = project.automationStore;
       const automation = store.get(c.req.param('id'));
       if (!automation) return c.json({ error: 'not found' }, 404);
+      if (!isGithubAutomation(automation)) return c.json({ error: 'a schedule has nothing to preview; use run' }, 409);
       const parsed = { data: c.req.valid('json') };
       // `string`, not `randomUUID`'s template-literal type: the wire carries an opaque id, and
       // leaking `${string}-${string}-…` into the route type would make the contract describe the
@@ -3389,12 +3505,11 @@ export function createApp(deps: ServerDeps) {
           if (!remote || remote.host !== 'github.com') throw new Error('No GitHub remote is configured');
           const scheduler = new ProjectAutomationScheduler({
             projectId: project.id,
-            owner: remote.owner,
-            repo: remote.repo,
+            timeZone: localTimeZone(),
             store,
-            poller: new GithubPoller(),
+            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller() },
             launch: parsed.data.mode === 'execute'
-              ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId })
+              ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch })
               : undefined,
             onChange: (automationId, revision) => emitAutomationChange(project, automationId, revision),
           });
@@ -3407,8 +3522,27 @@ export function createApp(deps: ServerDeps) {
       return c.json({ checkId: id }, 202);
     })
 
+    // A scheduled automation fired NOW, by hand (spec 2026-09-14 Q10): paused or not, the
+    // definition's `enabled` and `nextRunAt` are untouched — this is a launch, not an arm.
+    .post('/automations/:id/run', async (c) => {
+      const project = c.get('project');
+      const store = project.automationStore;
+      const automation = store.get(c.req.param('id'));
+      if (!automation) return c.json({ error: 'not found' }, 404);
+      if (!isScheduleAutomation(automation)) return c.json({ error: 'a GitHub automation is run through check with mode execute' }, 409);
+      const runner = new ScheduleRunner(scheduleHandle(project));
+      const outcome = await runner.runNow(automation);
+      if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
+      if (outcome.result === 'duplicate') return c.json({ error: 'this instant was already launched' }, 409);
+      if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+      automationsChanged();
+      return c.json({ runId: outcome.runId }, 202);
+    })
+
     .get('/automation-log', queryZodValidator(automationLogQuerySchema), (c) => {
-      return c.json({ records: c.get('project').automationStore.logs(c.req.valid('query')) });
+      const project = c.get('project');
+      const records = project.automationStore.logs(c.req.valid('query'));
+      return c.json({ records, runs: logRunsOf(project.store, records) });
     })
 
     .post('/automation-log/:receiptId/retry', async (c) => {
@@ -3417,15 +3551,24 @@ export function createApp(deps: ServerDeps) {
       const receipt = [...store.latestReceipts().values()].find((row) => row.receiptId === c.req.param('receiptId'));
       if (!receipt) return c.json({ error: 'not found' }, 404);
       if (receipt.status !== 'launch-error' || receipt.runId) return c.json({ error: 'receipt is not retryable' }, 409);
-      if (!receipt.candidate) return c.json({ error: 'receipt predates retry context and cannot be retried safely' }, 409);
       const definition = store.get(receipt.automationId);
       if (!definition) return c.json({ error: 'automation not found' }, 404);
+      // A schedule receipt retries as a by-hand launch of the same occurrence, under the same
+      // receipt (spec 2026-09-14 § API).
+      if (isScheduleAutomation(definition)) {
+        const outcome = await new ScheduleRunner(scheduleHandle(project)).retry(definition, receipt);
+        if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
+        if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+        return c.json({ receiptId: receipt.receiptId, runId: outcome.runId }, 202);
+      }
+      if (!isGithubAutomation(definition)) return c.json({ error: 'automation kind cannot be retried' }, 409);
+      if (!receipt.candidate) return c.json({ error: 'receipt predates retry context and cannot be retried safely' }, 409);
       const lease = store.acquireLease();
       if (!lease) return c.json({ error: 'automation polling lease is held by another process' }, 409);
       const reserved = { ...receipt, status: 'reserved' as const, error: undefined, updatedAt: new Date().toISOString() };
       store.appendReceipt(reserved);
       try {
-        const launched = await launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate: receipt.candidate, receiptId: receipt.receiptId });
+        const launched = await launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate: receipt.candidate, receiptId: receipt.receiptId, dispatchEnabled: capabilities().dispatch });
         store.appendReceipt({ ...reserved, status: 'launched', runId: launched.runId, updatedAt: new Date().toISOString() });
         emitAutomationChange(project, definition.id, definition.revision);
         return c.json({ receiptId: receipt.receiptId, runId: launched.runId }, 202);
@@ -3443,6 +3586,16 @@ export function createApp(deps: ServerDeps) {
   // `/api/v1/p/:projectId` too would be a second spelling of a lookup that consults no project.
   const automationChecksRoutes = new Hono()
     .use('/automation-checks/*', requireAutomations)
+    .use('/workspace/automation-templates', requireAutomations)
+    // The editor's "From your other projects" palette (spec 2026-09-14 Q7): every OTHER
+    // registered project's definitions, read-only, from their own stores. Workspace-level
+    // because it reads the registry, not the calling project.
+    .get('/workspace/automation-templates', queryZodValidator(z.object({ exclude: z.string().optional() })), async (c) => {
+      const exclude = c.req.valid('query').exclude;
+      // The registry, not the calling project; an unreadable workspace answers an empty palette.
+      const projects = await listProjects().catch(() => []);
+      return c.json({ templates: automationTemplatesOf(projects, exclude) });
+    })
     .get('/automation-checks/:checkId', (c) => {
       const check = manualChecks.get(c.req.param('checkId'));
       return check ? c.json(check) : c.json({ error: 'not found' }, 404);
@@ -5622,33 +5775,39 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   });
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
-  const automationProjects = new Map<string, { root: string; owner: string; repo: string }>();
+  // Every registered project gets a handle (spec 2026-09-14): `github` only when the remote is
+  // on github.com — a project without one still fires its scheduled automations.
+  const automationProjects = new Map<string, { root: string; github?: { owner: string; repo: string } }>();
+  const registerAutomationProject = async (id: string, root: string): Promise<void> => {
+    const parsed = parseRemote((await getRepoInfo(root))?.remote ?? '');
+    automationProjects.set(id, { root, ...(parsed?.host === 'github.com' ? { github: { owner: parsed.owner, repo: parsed.repo } } : {}) });
+  };
   const automationScheduler = new WorkspaceAutomationScheduler({
     coordinator: automationCoordinator,
-    handle: (projectId, store) => {
+    handle: (projectId, store): ProjectAutomationHandle | undefined => {
       const project = automationProjects.get(projectId);
       if (!project) return undefined;
+      const contextOf = async () => {
+        const bootId = deps.bootProjectId ?? 'default';
+        return projectId === bootId
+          ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
+          : await sharedContexts.context(projectId);
+      };
+      const dispatchEnabled = resolveCapabilities(process.env, deps.bindHost).dispatch;
       return {
         projectId,
-        owner: project.owner,
-        repo: project.repo,
         store,
-        poller: new GithubPoller(),
+        timeZone: localTimeZone(),
+        ...(project.github ? { github: { ...project.github, poller: new GithubPoller() } } : {}),
         onChange: (automationId, revision) =>
           workspaceEvents.emit('automation-change', { project: projectId, automationId, revision }),
         launch: async (definition, candidate, receiptId) => {
-          const bootId = deps.bootProjectId ?? 'default';
-          const context = projectId === bootId
-            ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
-            : await sharedContexts.context(projectId);
-          return launchAutomationRun({
-            root: context.root,
-            manager: context.manager,
-            store: context.store,
-            definition,
-            candidate,
-            receiptId,
-          });
+          const context = await contextOf();
+          return launchAutomationRun({ root: context.root, manager: context.manager, store: context.store, definition, candidate, receiptId, dispatchEnabled });
+        },
+        launchSchedule: async (definition, occurrence, receiptId) => {
+          const context = await contextOf();
+          return launchScheduledRun({ root: context.root, manager: context.manager, store: context.store, definition, occurrence, receiptId, projectName: basename(context.root), timeZone: localTimeZone(), dispatchEnabled });
         },
       };
     },
@@ -5665,11 +5824,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
       if (project && typeof project.id === 'string' && typeof project.root === 'string' && project.status !== 'missing') {
         coordinator.add(project.id, project.root);
-        void getRepoInfo(project.root).then((info) => {
-          const parsed = parseRemote(info?.remote ?? '');
-          if (parsed?.host === 'github.com') automationProjects.set(project.id as string, { root: project.root as string, owner: parsed.owner, repo: parsed.repo });
-          return rescheduleAutomations();
-        });
+        void registerAutomationProject(project.id, project.root).then(() => rescheduleAutomations());
       }
     } else if (event === 'project-removed') {
       const id = (data as { id?: unknown }).id;
@@ -5691,13 +5846,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       // a separate feature and starts either way.
       if (!automationsEnabled()) return;
       void Promise.all(all.map(async (project) => {
-        const parsed = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
-        if (parsed?.host === 'github.com') automationProjects.set(project.id, { root: project.root, owner: parsed.owner, repo: parsed.repo });
+        await registerAutomationProject(project.id, project.root);
         const automationStore = automationCoordinator.store(project.id, project.root);
         const runStore = project.id === (deps.bootProjectId ?? 'default')
           ? deps.store
           : sharedContexts.peek(project.id)?.store;
         if (automationStore && runStore) reconcileAutomationReceipts(automationStore, runStore);
+        if (automationStore) rebaselineIdleAutomations(automationStore, (automationId, revision) => workspaceEvents.emit('automation-change', { project: project.id, automationId, revision }));
       })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });

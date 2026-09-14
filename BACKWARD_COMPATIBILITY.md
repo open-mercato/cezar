@@ -41,7 +41,7 @@ What is protected now: **the shape of each route under `/api/v1`**, the three-wa
 - `GET /api/v1/workspace/runs-index` — the cross-project task finder behind ⌘K, workspace-level and never mirrored under `/api/v1/p/`. Answers `{runs, perProjectLimit, truncated, referenceStatuses}` where each run is the deliberately SLIM `{projectId, id, title, titleSummary?, titleOrigin?, status, activity?, createdAt, finishedAt?, seenAt?, archived, autoResumeAt?}` — not `RunRecord`, whose `steps[]` multiplied by the registry is what this shape exists to avoid; adding a field is additive, swapping in the fat record is not. Archived runs are included — the project-scoped `GET /runs` has always carried them, and dropping them here would make a task findable only while you stand in its project — and each project contributes at most `perProjectLimit` of its newest, with `truncated` naming the projects that hit the cap so a consumer never has to present a capped list as a complete one. Reading it is **side-effect free by contract**: a project this process does not already own is read straight off `runs.json`, never through a built context, because building one prunes worktrees and resumes interrupted runs — a search box must not restart agents. Live-looking rows from a crashed process therefore read as interrupted here exactly as they would once the project were opened (both readers share `reconcileLoadedRun`). An unreadable workspace or a corrupt per-project index degrades to fewer rows, never a 500. `referenceStatuses` is additive and free: a `{projectId: {prs, issues}}` map of what the server ALREADY had cached for the references its rows carry, read from cache only so the route never touches `gh` and never slows down. A project with nothing warm is absent rather than present-and-empty — absent means "nothing is known", the same rule as `/github/ref-status`, and `GET /github/ref-status` remains the route that actually goes and looks. Breaking: mirroring it under `/api/v1/p/`, removing a run field, letting the read build project contexts, or letting it fetch from the forge.
 - Skills: `GET /api/v1/skills`, `GET /api/v1/skills/importable`, `POST /api/v1/skills/refresh`
 - Workflows: `GET/POST /api/v1/workflows`, `DELETE /api/v1/workflows/:name`, `POST /api/v1/workflows/parse`, `POST /api/v1/plan`
-- Automations: `GET/POST /api/v1/automations`, `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check}`, `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log`, `POST /api/v1/automation-log/:receiptId/retry` — present always, but **gated** on `CEZ_AUTOMATIONS=1` (#801, off by default): every route above answers `409` naming the flag, reads included. Unlike the inbox's `200 []` degradation, an off automations read refuses rather than answering empty — `{automations: []}` would read as "you have configured none", and a client would then offer to create one against a `409`ing POST. The routes themselves must keep existing and must behave exactly as before once the flag is on.
+- Automations: `GET/POST /api/v1/automations`, `GET/PUT/DELETE /api/v1/automations/:id`, `POST /api/v1/automations/:id/{enable,pause,check,run}`, `GET /api/v1/automation-checks/:checkId`, `GET /api/v1/automation-log`, `POST /api/v1/automation-log/:receiptId/retry`, `GET /api/v1/workspace/automation-templates` — present always, **on by default** since spec `2026-09-14-automations-redesign` and gated OFF by `CEZ_AUTOMATIONS=0` (the #801 opt-in flipped; see the entry below): opted out, every route above answers `409` naming the flag, reads included. Unlike the inbox's `200 []` degradation, an off automations read refuses rather than answering empty — `{automations: []}` would read as "you have configured none", and a client would then offer to create one against a `409`ing POST. The routes themselves must keep existing and must behave exactly as before once the flag is on.
 - Dispatch: `POST /api/v1/runs/:id/dispatch`, `POST /api/v1/runs/:id/report` — present always, on by default and **gated** off by `CEZ_DISPATCH=0` (spec `.ai/specs/2026-09-10-dispatch.md`): off, both answer `409` naming the flag, on the same reasoning as the automations bullet. `dispatch` creates ONE child run of `:id` (its own worktree forked off the parent's branch, a budget carved out of the parent's) and answers `{id, branch?}` with `201`, or `409 {error}` with the refusal (cap, budget, settled parent); `report` records the run's own report and answers `{ok: true}`, or `404` for a run outside any dispatch tree. Both are what the `cez task` CLI calls from inside an agent.
 - Runs: `GET/POST /api/v1/runs`, `GET /api/v1/runs/:id`, `PATCH /api/v1/runs/:id`, `PATCH/DELETE /api/v1/runs/:id/queued-messages/:msgId`, `POST /api/v1/runs/:id/{cancel,messages,finish,continue,open-in-cli,open-in,pr,archive,pin,read,unread,remove-worktree,git/commit,git/push}`, `POST /api/v1/runs/{archive-finished,read-all}`, `DELETE /api/v1/runs/:id`, `DELETE /api/v1/runs/:id/auto-resume`, `GET /api/v1/runs/:id/{handoff,diff,changes,files,commits,events}`, `GET /api/v1/runs/:id/commit/:sha`, `GET /api/v1/runs/:id/images/:file`
   - **Attachments widened, not renamed (#950).** The `images` key on `POST /runs`, `POST /runs/:id/messages`, `PATCH /runs/:id/queued-messages/:msgId` and `POST /runs/:id/continue` still carries `{mediaType, data}` entries, and every `image/*` type it ever accepted is still accepted — the element schema only ADDS `application/pdf`, `text/plain`, `text/markdown` and `text/x-markdown`. A client that sends what it always sent sees no change; one that sends a PDF to an older cezar gets the 400 it always would. Two refusal STRINGS widened with it (`too many queued images` → `too many queued attachments`, `… at least one image` → `… at least one attachment`); the statuses and the `{error}` shape are unchanged. `GET /api/v1/runs/:id/images/:file` keeps its path and answers an image byte-identically, headers included; a non-image attachment is the additive case and leaves with its own content type plus `X-Content-Type-Options: nosniff` and `Content-Disposition: attachment`, because it is user-supplied bytes coming back from the cockpit's own origin.
@@ -264,6 +264,37 @@ instruction rather than silently.
   behavior wholesale, which is what the "keep the old spelling for a minor release" rule exists to
   provide.
 
+
+## Automations — default-on, scheduled triggers, `automationTrigger` (spec 2026-09-14-automations-redesign)
+
+The automations redesign flips the #801 gate: `capabilities.automations` is now `CEZ_AUTOMATIONS !== '0'`
+— **on by default**, off only for an exact `0`. `CEZ_AUTOMATIONS=1` is accepted and changes
+nothing. Owner-approved on 2026-09-14 (spec § Resolved decisions, Q8); the AGENTS.md § Zero
+config exception names it.
+
+- **Broken**: the *default* answers of every route in section 2's Automations bullet — `409`
+  before, real answers now — under every scope spelling; `capabilities.automations` on
+  `/api/v1/health` reads `true` on a cockpit that sets nothing; the Automations nav item is present
+  by default and no longer requires a GitHub remote (a repo without one gets the schedule kind only).
+  The workspace scheduler starts at boot by default, but arms a timer only for an automation the
+  user enabled. A poll left `enabled: true` from the opt-in days that has not succeeded within its
+  own `lookbackDays` is **re-baselined** at boot (a `baseline` log row says so) rather than resumed
+  from its stale cursor, so the flip cannot launch a backlog.
+- **Additive**: the definition gains `kind` (`github` | `schedule`; a stored definition without it
+  is `github`), `schedule`, `task.dispatch`; `events`/`intervalSeconds`/`filters` are absent on a
+  schedule; runtime state gains `nextRunAt`/`lastRunAt`; the log gains the results `manual`,
+  `catch-up`, `skipped`, `failed`; `GET /automations` gains `timeZone`, `stats` and per-row
+  `nextRunAt`/`lastRun`/`runs7d`/`costUsd7d`; `GET /automation-log` gains `runs`;
+  `POST /automations/:id/run` and `GET /workspace/automation-templates` are new. `POST /automations`
+  without `kind` is a poll, as before; `PUT` without `kind` keeps the stored kind; a `check` on a
+  schedule and a `run` on a poll answer `409`.
+- **Run records**: a scheduled launch writes the new OPTIONAL `automationTrigger` key
+  (`{automationId, automationRevision, receiptId, trigger, occurrenceAt}`) and no `automation`
+  key. `automation` is unchanged — its `githubUrl` stays required — because `runs.json` is parsed
+  as one array (section 3), so a downgraded cezar strips the unknown key and keeps every run.
+- **Rollback**: `CEZ_AUTOMATIONS=0` restores the opted-out surface without touching any file; a
+  pre-redesign cezar ignores `kind: 'schedule'` definitions as invalid (one warning, the rest of
+  the file intact) and never fires them.
 ## When in doubt
 
 If a change might break any surface above, say so in the PR description, label the PR `risk-high`, and route it through the review + QA gates in `SDLC.md`. A silent break found in review is a blocker per `CODE_REVIEW.md`.

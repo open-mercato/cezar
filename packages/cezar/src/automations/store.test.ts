@@ -94,3 +94,19 @@ describe('AutomationStore', () => {
     chmodSync(dir, 0o700);
   });
 });
+
+describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => {
+  it('lets two stores on one directory interleave writes without clobbering each other', async () => {
+    const dir = await directory();
+    const one = AutomationStore.open(dir);
+    const two = AutomationStore.open(dir);
+    one.setState('a', { nextRunAt: '2026-09-15T02:00:00.000Z' });
+    two.setState('b', { cursor: { timestamp: '2026-09-14T00:00:00.000Z' } });
+    one.setState('a', { nextRunAt: '2026-09-16T02:00:00.000Z' });
+    const fresh = AutomationStore.open(dir);
+    expect(fresh.state('a')).toEqual({ nextRunAt: '2026-09-16T02:00:00.000Z' });
+    expect(fresh.state('b')).toEqual({ cursor: { timestamp: '2026-09-14T00:00:00.000Z' } });
+    // Each in-memory copy also sees the other's id after its own next write.
+    expect(one.state('b')).toEqual({ cursor: { timestamp: '2026-09-14T00:00:00.000Z' } });
+  });
+});

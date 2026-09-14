@@ -185,6 +185,22 @@ export const runRecordSchema = z.object({
     })
     .optional(),
   /**
+   * Provenance for a task a SCHEDULED automation launched (spec 2026-09-14-automations-redesign
+   * § Data Model). A separate optional key rather than a loosened `automation`: `runs.json` is
+   * parsed as one array, so a downgraded cezar meeting a record without `githubUrl` would drop
+   * every run — whereas an unknown key it simply strips.
+   */
+  automationTrigger: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number(),
+      receiptId: z.string(),
+      trigger: z.enum(['schedule', 'catch-up', 'manual']),
+      /** The scheduled wall-time instant (UTC ISO); for `manual`, the launch time. */
+      occurrenceAt: z.string(),
+    })
+    .optional(),
+  /**
    * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
    * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
    * always has.
