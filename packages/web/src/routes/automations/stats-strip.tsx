@@ -3,7 +3,7 @@ import type { AutomationStats } from '@open-mercato/cezar-api-client'
 
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
-import { agentTime, timeOnly, usd } from '@/lib/automation-format'
+import { agentTime, timeOnly, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
 import { cn } from '@/lib/utils'
 
 import type { NextRun } from './next-runs-rail'
@@ -34,7 +34,7 @@ export function StatsStrip({
     <div data-slot="stats-strip" className="flex flex-wrap items-center gap-4 text-[12.5px] text-muted-foreground">
       <span className="text-[11px] font-semibold tracking-[.05em] text-soft-foreground uppercase">This week</span>
       <Stat label="runs" value={String(stats.runs)} />
-      {stats.costUsd !== undefined ? <Stat label="spent" value={usd(stats.costUsd)} /> : null}
+      {AUTOMATION_COST_VISIBLE && stats.costUsd !== undefined ? <Stat label="spent" value={usd(stats.costUsd)} /> : null}
       <Stat label="failed" value={String(stats.failed)} danger={stats.failed > 0} />
       <Stat label="agent time" value={agentTime(stats.agentSeconds)} />
       <span data-slot="stats-polls" className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap">

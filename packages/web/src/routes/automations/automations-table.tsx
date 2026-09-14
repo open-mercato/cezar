@@ -6,7 +6,7 @@ import { GithubIcon } from '@/components/icons'
 import { Pill } from '@/components/pill'
 import { StatusDot } from '@/components/status-dot'
 import { Card } from '@/components/ui/card'
-import { dayTime, statusLabel, statusTone, triggerLabel, usd } from '@/lib/automation-format'
+import { dayTime, statusLabel, statusTone, triggerLabel, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
 import { shortAge } from '@/lib/format'
 import { Link, useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
@@ -35,7 +35,7 @@ export function AutomationsTable({
   actions: AutomationActions
   now?: number
 }) {
-  const showCost = data.stats.costUsd !== undefined || data.automations.some((automation) => automation.costUsd7d !== undefined)
+  const showCost = AUTOMATION_COST_VISIBLE && (data.stats.costUsd !== undefined || data.automations.some((automation) => automation.costUsd7d !== undefined))
   return (
     <Card flush data-slot="automations-table" className="min-w-0 overflow-x-auto">
       <table className="w-full border-collapse [&_tbody_tr:last-child>td]:border-b-0">

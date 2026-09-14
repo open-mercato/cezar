@@ -1,3 +1,4 @@
+import { GithubIcon } from '@/components/icons'
 import {
   occurrencesBetween,
   zonedParts,
@@ -7,7 +8,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import { StatusDot } from '@/components/status-dot'
-import { hm } from '@/lib/automation-format'
+import { hm, triggerLabel } from '@/lib/automation-format'
 import { useNavigate } from '@/lib/project-router'
 import { cn } from '@/lib/utils'
 
@@ -166,5 +167,38 @@ export function HourLines() {
         <div key={hour} aria-hidden="true" className="absolute inset-x-0 h-px bg-border" style={{ top: hour * HOUR_H }} />
       ))}
     </>
+  )
+}
+
+/**
+ * The continuous GitHub polls, as a band above the hour grid (spec 2026-09-14 § UI/UX 2, and
+ * on the Day view too — a poll has no hour to sit at, but it IS running that day). One row per
+ * ENABLED poll; nothing at all when there is none.
+ */
+export function PollBand({ automations }: { automations: readonly AutomationListEntry[] }) {
+  const polls = automations.filter((automation) => automation.kind === 'github' && automation.enabled)
+  if (!polls.length) return null
+  return (
+    <div data-slot="poll-band" className="grid grid-cols-[48px_minmax(0,1fr)] border-b border-border">
+      <div className="py-2 pr-2 text-right font-mono text-[10.5px] text-soft-foreground">poll</div>
+      <div className="flex flex-col gap-1 border-l border-border px-2 py-1.5">
+        {polls.map((automation) => (
+          <div
+            key={automation.id}
+            data-slot="poll-row"
+            className="flex h-[22px] min-w-0 items-center gap-2 overflow-hidden rounded-[6px] border border-violet/25 bg-violet/8 px-2 text-[11.5px] font-medium"
+          >
+            <GithubIcon className="size-3 shrink-0 text-violet" />
+            <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
+            <span className="overflow-hidden font-mono text-[10.5px] font-normal text-ellipsis whitespace-nowrap text-muted-foreground">
+              {triggerLabel(automation)}
+            </span>
+            <span className="ml-auto shrink-0 font-mono text-[10.5px] font-normal whitespace-nowrap text-soft-foreground">
+              {automation.runs7d} runs
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }

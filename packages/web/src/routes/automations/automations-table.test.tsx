@@ -45,10 +45,10 @@ const cells = (id: string) => Array.from(row(id).querySelectorAll('td'))
 const headers = () => Array.from(document.querySelectorAll('th')).map((th) => th.textContent)
 
 describe('AutomationsTable', () => {
-  it('lays out the nine columns in the design order', () => {
+  it('lays out the design columns in order — Cost 7d hidden for now (AUTOMATION_COST_VISIBLE)', () => {
     renderTable()
 
-    expect(headers()).toEqual(['State', 'Automation', 'Trigger', 'Runs as', 'Next run', 'Last run', 'Runs 7d', 'Cost 7d', ''])
+    expect(headers()).toEqual(['State', 'Automation', 'Trigger', 'Runs as', 'Next run', 'Last run', 'Runs 7d', ''])
     expect(document.querySelectorAll('[data-slot="automation-row"]')).toHaveLength(AUTOMATIONS.length)
   })
 
@@ -141,12 +141,12 @@ describe('AutomationsTable', () => {
     expect(cells(NIGHTLY.id)[5]?.textContent).toBe('—')
   })
 
-  it('prints runs and cost over seven days', () => {
+  it('prints runs over seven days and no cost column while AUTOMATION_COST_VISIBLE is off', () => {
     renderTable()
 
     expect(cells(NIGHTLY.id)[6]?.textContent).toBe('7')
-    expect(cells(NIGHTLY.id)[7]?.textContent).toBe('$2.41')
-    expect(cells(FLAKY.id)[7]?.textContent).toBe('—')
+    expect(headers()).not.toContain('Cost 7d')
+    expect(cells(NIGHTLY.id)).toHaveLength(8)
   })
 
   it('drops the cost column when the server reports no costs at all', () => {

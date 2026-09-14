@@ -211,16 +211,13 @@ describe('AutomationLog', () => {
     expect(cell(first!, 0)).toBe('Wed 04:00')
   })
 
-  it('shows the run cost from runs[runId], and — when there is none', async () => {
+  it('shows no cost cell while AUTOMATION_COST_VISIBLE is off', async () => {
     stubFetch()
     renderLog()
-    const [first, second, skipped, failed, old] = await awaitRows(5)
-    expect(cell(first!, 3)).toBe('$0.33')
-    expect(cell(second!, 3)).toBe('$0.29')
-    expect(cell(skipped!, 3)).toBe('—')
-    expect(cell(failed!, 3)).toBe('$0.04')
-    // A run the server knows but without costMetrics on.
-    expect(cell(old!, 3)).toBe('—')
+    const [first, , skipped] = await awaitRows(5)
+    expect(first!.textContent).not.toContain('$0.33')
+    expect(cell(first!, 3)).toContain('Open task')
+    expect(cell(skipped!, 3) ?? '').not.toBe('—')
   })
 
   it('links "Open task" to /tasks/<runId> on rows with a run, and leaves an empty cell otherwise', async () => {
@@ -231,10 +228,10 @@ describe('AutomationLog', () => {
     expect(link.getAttribute('href')).toBe('/tasks/t15')
     expect(within(skipped!).queryByRole('link')).toBeNull()
     expect(within(skipped!).queryByRole('button')).toBeNull()
-    expect(skipped!.children).toHaveLength(5)
+    expect(skipped!.children).toHaveLength(4)
   })
 
-  it('lists dispatch children under their row: kind pill, status dot, title, cost and Open', async () => {
+  it('lists dispatch children under their row: kind pill, status dot, title and Open (cost hidden for now)', async () => {
     stubFetch()
     renderLog()
     const [first, second] = await awaitRows(5)
@@ -248,15 +245,14 @@ describe('AutomationLog', () => {
     expect(cell(vite!, 1)).toBe('implement')
     expect(vite!.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
     expect(cell(vite!, 2)).toBe('Bump vite 8.1.4 → 8.2.0')
-    expect(cell(vite!, 3)).toBe('$0.11')
+    expect(vite!.textContent).not.toContain('$0.11')
     expect(within(vite!).getByRole('link', { name: /Open/ }).getAttribute('href')).toBe('/tasks/t10')
 
-    // A child without a kind reads as implement; a running one pulses pending; no cost → —.
+    // A child without a kind reads as implement; a running one pulses pending.
     expect(cell(vitest!, 1)).toBe('implement')
     expect(vitest!.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('pending')
     expect(cell(judge!, 1)).toBe('review')
     expect(judge!.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
-    expect(cell(judge!, 3)).toBe('—')
     expect(within(judge!).getByRole('link', { name: /Open/ }).getAttribute('href')).toBe('/tasks/t12')
   })
 

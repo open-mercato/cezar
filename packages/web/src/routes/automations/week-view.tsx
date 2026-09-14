@@ -1,12 +1,10 @@
 import { zonedParts, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 
-import { GithubIcon } from '@/components/icons'
 import { Card } from '@/components/ui/card'
-import { triggerLabel } from '@/lib/automation-format'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
-import { EventBlock, HOUR_H, HourGutter, HourLines, NowLine, dayStart, minuteOf, occurrencesIn, stacked } from './calendar-parts'
+import { EventBlock, HOUR_H, HourGutter, HourLines, NowLine, PollBand, dayStart, minuteOf, occurrencesIn, stacked } from './calendar-parts'
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
 
@@ -38,7 +36,6 @@ export function WeekView({ data }: { data: AutomationsResponse }) {
   }
 
   const todayColumn = today.weekday - 1
-  const polls = data.automations.filter((automation) => automation.kind === 'github' && automation.enabled)
   const occurrences = occurrencesIn(data.automations, weekStart, weekEnd, timeZone)
   const columns = DAYS.map((label, index) => {
     const start = bounds[index]
@@ -78,29 +75,7 @@ export function WeekView({ data }: { data: AutomationsResponse }) {
             </div>
           ))}
         </div>
-        {polls.length ? (
-          <div data-slot="poll-band" className="grid grid-cols-[48px_minmax(0,1fr)] border-b border-border">
-            <div className="py-2 pr-2 text-right font-mono text-[10.5px] text-soft-foreground">poll</div>
-            <div className="flex flex-col gap-1 border-l border-border px-2 py-1.5">
-              {polls.map((automation) => (
-                <div
-                  key={automation.id}
-                  data-slot="poll-row"
-                  className="flex h-[22px] min-w-0 items-center gap-2 overflow-hidden rounded-[6px] border border-violet/25 bg-violet/8 px-2 text-[11.5px] font-medium"
-                >
-                  <GithubIcon className="size-3 shrink-0 text-violet" />
-                  <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
-                  <span className="overflow-hidden font-mono text-[10.5px] font-normal text-ellipsis whitespace-nowrap text-muted-foreground">
-                    {triggerLabel(automation)}
-                  </span>
-                  <span className="ml-auto shrink-0 font-mono text-[10.5px] font-normal whitespace-nowrap text-soft-foreground">
-                    {automation.runs7d} runs
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        <PollBand automations={data.automations} />
         <div className="flex max-h-[560px] overflow-y-auto">
           <HourGutter />
           {columns.map((column) => (

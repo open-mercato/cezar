@@ -8,7 +8,7 @@ afterEach(cleanup)
 const NOW = Date.parse('2026-09-14T10:00:00.000Z')
 
 describe('LastRunCard', () => {
-  it('shows the status dot, label, age and cost, and wires the two buttons', () => {
+  it('shows the status dot, label and age — cost hidden for now — and wires the two buttons', () => {
     const onRunNow = vi.fn()
     const onLog = vi.fn()
     const { container } = render(
@@ -18,7 +18,7 @@ describe('LastRunCard', () => {
     expect(container.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
     expect(screen.getByText('done')).not.toBeNull()
     expect(screen.getByText('6h')).not.toBeNull()
-    expect(screen.getByText('$0.33')).not.toBeNull()
+    expect(screen.queryByText('$0.33')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Run now' }))
     fireEvent.click(screen.getByRole('button', { name: 'View log' }))
     expect(onRunNow).toHaveBeenCalledTimes(1)

@@ -31,11 +31,11 @@ function renderStrip(overrides: Partial<Parameters<typeof StatsStrip>[0]> = {}) 
 }
 
 describe('StatsStrip', () => {
-  it('shows the four figures of the week in the design spellings', () => {
+  it('shows the figures of the week in the design spellings — cost hidden for now (AUTOMATION_COST_VISIBLE)', () => {
     renderStrip()
 
     expect(stat('runs')?.textContent).toBe('66runs')
-    expect(stat('spent')?.textContent).toBe('$13.4spent')
+    expect(stat('spent')).toBeNull()
     expect(stat('failed')?.textContent).toBe('2failed')
     expect(stat('agent time')?.textContent).toBe('4h 12magent time')
   })

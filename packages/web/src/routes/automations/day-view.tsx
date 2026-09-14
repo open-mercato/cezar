@@ -2,16 +2,17 @@ import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
 import { useState } from 'react'
 import { zonedParts, type AutomationsResponse } from '@open-mercato/cezar-api-client'
 
+import { GithubIcon } from '@/components/icons'
 import { Pill } from '@/components/pill'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { dayName, hm, statusTone } from '@/lib/automation-format'
+import { dayName, hm, statusTone, triggerLabel } from '@/lib/automation-format'
 import { useNavigate } from '@/lib/project-router'
 import { useNow } from '@/lib/use-now'
 import { cn } from '@/lib/utils'
 
-import { EventBlock, HOUR_H, HourGutter, HourLines, NowLine, dayStart, minuteOf, occurrencesIn, stacked } from './calendar-parts'
+import { EventBlock, HOUR_H, HourGutter, HourLines, NowLine, PollBand, dayStart, minuteOf, occurrencesIn, stacked } from './calendar-parts'
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const
 
@@ -43,6 +44,7 @@ export function DayView({ data }: { data: AutomationsResponse }) {
 
   const isToday = offset === 0
   const events = stacked(occurrencesIn(data.automations, start, end, timeZone))
+  const polls = data.automations.filter((automation) => automation.kind === 'github' && automation.enabled)
   const title = `${dayName(parts.weekday)} ${parts.day} ${MONTHS[parts.month - 1] ?? ''}`
 
   return (
@@ -57,8 +59,11 @@ export function DayView({ data }: { data: AutomationsResponse }) {
           </Button>
           <span data-slot="day-title" className="text-sm font-semibold whitespace-nowrap">{title}</span>
           {isToday ? <Pill dot="success">today</Pill> : null}
-          <span className="ml-auto text-xs whitespace-nowrap text-muted-foreground">{events.length} scheduled runs</span>
+          <span className="ml-auto text-xs whitespace-nowrap text-muted-foreground">
+            {events.length} scheduled runs{polls.length ? ` · ${polls.length} GitHub poll${polls.length === 1 ? '' : 's'}` : ''}
+          </span>
         </div>
+        <PollBand automations={data.automations} />
         <div className="flex max-h-[600px] overflow-y-auto">
           <HourGutter />
           <div data-slot="day-column" data-today={isToday ? 'true' : undefined} className="relative flex-1 border-l border-border" style={{ height: 24 * HOUR_H }}>
@@ -78,6 +83,26 @@ export function DayView({ data }: { data: AutomationsResponse }) {
       </Card>
       <Card flush data-slot="agenda" className="py-3">
         <div className="px-3.5 pb-2 text-[11px] font-semibold tracking-[.05em] text-soft-foreground uppercase">Agenda</div>
+        {polls.map((automation) => (
+          <button
+            key={automation.id}
+            type="button"
+            data-slot="agenda-poll"
+            onClick={() => navigate(`/automations/${encodeURIComponent(automation.id)}`)}
+            className="grid w-full cursor-pointer grid-cols-[48px_1fr] gap-2.5 px-3.5 py-2 text-left hover:bg-muted"
+          >
+            <span className="font-mono text-[10.5px] font-medium text-soft-foreground">poll</span>
+            <span className="min-w-0">
+              <span className="flex items-center gap-2 text-[13px] font-medium">
+                <GithubIcon className="size-3 shrink-0 text-violet" />
+                <span className="overflow-hidden text-ellipsis whitespace-nowrap">{automation.name}</span>
+              </span>
+              <span className="mt-0.5 block overflow-hidden font-mono text-[11.5px] leading-[1.4] text-ellipsis whitespace-nowrap text-soft-foreground">
+                {triggerLabel(automation)} · continuous
+              </span>
+            </span>
+          </button>
+        ))}
         {events.map(({ occurrence }) => {
           const past = occurrence.at < now
           const { automation } = occurrence
@@ -106,7 +131,9 @@ export function DayView({ data }: { data: AutomationsResponse }) {
           )
         })}
         {events.length === 0 ? (
-          <p className="px-3.5 py-2 text-[12.5px] text-soft-foreground">Nothing scheduled — GitHub polls still run.</p>
+          <p className="px-3.5 py-2 text-[12.5px] text-soft-foreground">
+            {polls.length ? 'Nothing scheduled — the GitHub polls above still run.' : 'Nothing scheduled.'}
+          </p>
         ) : null}
       </Card>
     </div>

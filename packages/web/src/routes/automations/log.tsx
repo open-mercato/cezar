@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toaster'
-import { logTime, resultTone, statusTone, usd } from '@/lib/automation-format'
+import { logTime, resultTone, statusTone, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
 import { Link, useNavigate } from '@/lib/project-router'
 import {
   queryScope,
@@ -162,14 +162,14 @@ function LogRow({ record, run, last, timeZone, retrying, onRetry }: {
     <div
       data-slot="log-row"
       data-result={record.result}
-      className={`grid grid-cols-[90px_110px_1fr_auto_auto] items-center gap-x-3 gap-y-2 px-4 py-3 text-[13px] ${last ? '' : 'border-b border-border'}`}
+      className={`grid ${AUTOMATION_COST_VISIBLE ? 'grid-cols-[90px_110px_1fr_auto_auto]' : 'grid-cols-[90px_110px_1fr_auto]'} items-center gap-x-3 gap-y-2 px-4 py-3 text-[13px] ${last ? '' : 'border-b border-border'}`}
     >
       <span className="font-mono text-xs font-medium text-muted-foreground tabular-nums">{logTime(record.ts, timeZone)}</span>
       <Pill dot={tone} className="w-fit">{record.result}</Pill>
       <span className={`overflow-hidden text-ellipsis whitespace-nowrap ${tone === 'danger' ? 'text-danger' : 'text-muted-foreground'}`} title={record.reason}>
         {record.reason ?? ''}
       </span>
-      <span className="font-mono text-xs text-soft-foreground">{run?.costUsd === undefined ? '—' : usd(run.costUsd)}</span>
+      {AUTOMATION_COST_VISIBLE ? <span className="font-mono text-xs text-soft-foreground">{run?.costUsd === undefined ? '—' : usd(run.costUsd)}</span> : null}
       {record.runId !== undefined ? (
         <Button variant="ghost" size="sm" asChild>
           <Link to={`/tasks/${encodeURIComponent(record.runId)}`}>
@@ -188,14 +188,14 @@ function LogRow({ record, run, last, timeZone, retrying, onRetry }: {
       {children.length > 0 ? (
         <div className="col-span-full flex flex-col gap-1 pl-3.5">
           {children.map((child) => (
-            <div key={child.runId} data-slot="log-child" className="grid grid-cols-[14px_70px_1fr_auto_auto] items-center gap-2.5 text-[12.5px]">
+            <div key={child.runId} data-slot="log-child" className={`grid ${AUTOMATION_COST_VISIBLE ? 'grid-cols-[14px_70px_1fr_auto_auto]' : 'grid-cols-[14px_70px_1fr_auto]'} items-center gap-2.5 text-[12.5px]`}>
               <span className="font-mono text-[11px] text-soft-foreground">└</span>
               <span className="w-fit rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground">{child.kind ?? 'implement'}</span>
               <span className="flex min-w-0 items-center gap-2">
                 <StatusDot tone={statusTone(child.status)} />
                 <span className="overflow-hidden text-ellipsis whitespace-nowrap">{child.title}</span>
               </span>
-              <span className="font-mono text-[11.5px] text-soft-foreground">{child.costUsd === undefined ? '—' : usd(child.costUsd)}</span>
+              {AUTOMATION_COST_VISIBLE ? <span className="font-mono text-[11.5px] text-soft-foreground">{child.costUsd === undefined ? '—' : usd(child.costUsd)}</span> : null}
               <Button variant="ghost" size="sm" className="h-6" asChild>
                 <Link to={`/tasks/${encodeURIComponent(child.runId)}`}>
                   Open

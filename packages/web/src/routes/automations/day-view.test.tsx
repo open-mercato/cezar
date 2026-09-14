@@ -38,7 +38,7 @@ describe('DayView', () => {
 
     expect(title()).toBe('Wed 16 Sep')
     expect(screen.getByText('today').closest('[data-slot="pill"]')).not.toBeNull()
-    expect(screen.getByText('6 scheduled runs')).toBeTruthy()
+    expect(screen.getByText('6 scheduled runs · 2 GitHub polls')).toBeTruthy()
     expect(document.querySelector('[data-slot="day-column"]')?.getAttribute('data-today')).toBe('true')
   })
 
@@ -109,11 +109,29 @@ describe('DayView', () => {
     expect(screen.getByTestId('location').textContent).toBe('/automations/a1')
   })
 
-  it('says nothing is scheduled while polls still run', () => {
+  it('says nothing is scheduled while polls still run, and shows those polls as a band and agenda rows', () => {
     renderDay(response({ automations: [TRIAGE, REVIEW_PRS] }))
 
-    expect(screen.getByText('Nothing scheduled — GitHub polls still run.')).toBeTruthy()
-    expect(screen.getByText('0 scheduled runs')).toBeTruthy()
+    expect(screen.getByText('Nothing scheduled — the GitHub polls above still run.')).toBeTruthy()
+    expect(screen.getByText('0 scheduled runs · 2 GitHub polls')).toBeTruthy()
     expect(blocks()).toHaveLength(0)
+    const band = Array.from(document.querySelectorAll<HTMLElement>('[data-slot="poll-row"]'))
+    expect(band.map((row) => row.textContent)).toEqual([
+      `${TRIAGE.name}on issue.opened · every 5 min${TRIAGE.runs7d} runs`,
+      `${REVIEW_PRS.name}on pull_request.opened · every 10 min${REVIEW_PRS.runs7d} runs`,
+    ])
+    const polls = Array.from(document.querySelectorAll<HTMLElement>('[data-slot="agenda-poll"]'))
+    expect(polls).toHaveLength(2)
+    expect(polls[0]?.textContent).toContain('continuous')
+    fireEvent.click(polls[0] as HTMLElement)
+    expect(screen.getByTestId('location').textContent).toBe(`/automations/${TRIAGE.id}`)
+  })
+
+  it('shows no poll band and the plain empty line when no poll is enabled', () => {
+    renderDay(response({ automations: [{ ...TRIAGE, enabled: false }] }))
+
+    expect(document.querySelector('[data-slot="poll-band"]')).toBeNull()
+    expect(document.querySelectorAll('[data-slot="agenda-poll"]')).toHaveLength(0)
+    expect(screen.getByText('Nothing scheduled.')).toBeTruthy()
   })
 })

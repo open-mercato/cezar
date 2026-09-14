@@ -4,7 +4,7 @@ import type { AutomationLastRun } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import { statusLabel, statusTone, usd } from '@/lib/automation-format'
+import { statusLabel, statusTone, usd, AUTOMATION_COST_VISIBLE } from '@/lib/automation-format'
 import { shortAge } from '@/lib/format'
 
 /**
@@ -31,7 +31,7 @@ export function LastRunCard({
         <StatusDot tone={statusTone(lastRun.status)} />
         {statusLabel(lastRun.status)}
         <span className="text-[11.5px] text-soft-foreground">{shortAge(lastRun.ts, now)}</span>
-        {lastRun.costUsd !== undefined ? (
+        {AUTOMATION_COST_VISIBLE && lastRun.costUsd !== undefined ? (
           <span className="ml-auto font-mono text-xs text-muted-foreground">{usd(lastRun.costUsd)}</span>
         ) : null}
       </div>

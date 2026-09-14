@@ -18,6 +18,14 @@ import type { StatusDotTone } from '@/components/status-dot'
 
 export { hm }
 
+/**
+ * Whether the Automations screens show dollar figures at all (owner decision, 2026-09-15:
+ * hidden for now). The server keeps answering `costUsd` / `costUsd7d` / `stats.costUsd` under
+ * `capabilities.costMetrics`; flipping this back to `true` restores the spent figure, the
+ * Cost 7d column, and the cost cells of the log and the last-run card.
+ */
+export const AUTOMATION_COST_VISIBLE = false
+
 /** `Mon` … `Sun` for an ISO weekday (Monday = 1). */
 export function dayName(weekday: number): string {
   return WEEKDAY_NAMES[((weekday - 1) % 7 + 7) % 7] ?? ''
