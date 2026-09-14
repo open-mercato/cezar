@@ -7,7 +7,24 @@ describe('automation-cli', () => {
     expect(cliOf({
       name: 'Nightly dependency bump', kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 },
       task: { prompt: 'Bump deps', workflow: 'fix-and-verify', runner: 'claude', model: 'sonnet', autonomous: true, dispatch: { maxSubtasks: 4, reviewChild: true } },
-    })).toBe('cez automation add --name "Nightly dependency bump" --cron "0 4 * * *" --workflow fix-and-verify --runner claude --model sonnet --autonomous --dispatch --max-subtasks 4 --review-child --prompt "Bump deps"')
+    })).toBe('cez automation add --name "Nightly dependency bump" --cron "0 4 * * *" --workflow "fix-and-verify" --runner "claude" --model "sonnet" --autonomous --dispatch --max-subtasks 4 --review-child --prompt "Bump deps"')
+  })
+
+  it('quotes --workflow/--runner/--model so a shell metacharacter in either cannot escape the flag (a cross-project template or an "automation from a prompt" run can name either)', () => {
+    expect(cliFlagsOf({
+      name: 'x', kind: 'schedule', schedule: { type: 'hours', every: 1 },
+      task: { prompt: 'p', workflow: '`touch pwned`', runner: 'a; rm -rf /', model: '$(whoami)' },
+    })).toBe('cez automation add --name "x" --cron "0 */1 * * *" --workflow "\\`touch pwned\\`" --runner "a; rm -rf /" --model "\\$(whoami)" --prompt "p"')
+  })
+
+  it('emits --no-autonomous when a saved automation was explicitly set non-autonomous, so Copy as CLI round-trips it instead of defaulting back to autonomous', () => {
+    expect(cliFlagsOf({ name: 'x', kind: 'schedule', schedule: { type: 'daily' }, task: { prompt: 'p', autonomous: false } }))
+      .toBe('cez automation add --name "x" --cron "0 4 * * *" --no-autonomous --prompt "p"')
+    // autonomous: true and autonomous: undefined keep their prior behavior.
+    expect(cliFlagsOf({ name: 'x', kind: 'schedule', schedule: { type: 'daily' }, task: { prompt: 'p', autonomous: true } }))
+      .toContain('--autonomous')
+    expect(cliFlagsOf({ name: 'x', kind: 'schedule', schedule: { type: 'daily' }, task: { prompt: 'p' } }))
+      .not.toContain('autonomous')
   })
 
   it('prints a simple poll as flags and an untitled one as "untitled"', () => {

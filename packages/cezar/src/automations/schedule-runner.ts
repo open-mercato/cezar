@@ -69,7 +69,7 @@ export class ScheduleRunner {
     if (state.nextRunAt) return Date.parse(state.nextRunAt);
     const next = nextOccurrence(definition.schedule, this.now(), this.handle.timeZone);
     if (next === null) return null;
-    this.handle.store.setState(definition.id, { ...state, revision: definition.revision, nextRunAt: new Date(next).toISOString() });
+    this.handle.store.setState(definition.id, (current) => ({ ...current, revision: definition.revision, nextRunAt: new Date(next).toISOString() }));
     return next;
   }
 
@@ -168,14 +168,13 @@ export class ScheduleRunner {
         reason: reasonFor(occurrence, this.handle.timeZone),
         receiptId: receipt.receiptId, runId: launched.runId, durationMs: Date.now() - started,
       });
-      const state = store.state(definition.id) ?? {};
-      store.setState(definition.id, {
-        ...state,
+      store.setState(definition.id, (current) => ({
+        ...current,
         revision: definition.revision,
         ...(options.advance ? { nextRunAt: nextIso(definition, Math.max(Date.parse(occurrence.at), now), this.handle.timeZone), lastRunAt: occurrence.at } : {}),
         lastSuccessAt: new Date(this.now()).toISOString(),
         consecutiveFailures: 0,
-      });
+      }));
       this.handle.onChange?.(definition.id, definition.revision);
       return { result, runId: launched.runId, occurrenceAt: occurrence.at };
     } catch (error) {
@@ -189,13 +188,15 @@ export class ScheduleRunner {
 
   private recordFailure(definition: ScheduleAutomationDefinition, occurrence: ScheduleOccurrence, now: number, advance: boolean): void {
     const { store } = this.handle;
-    const state = store.state(definition.id) ?? {};
-    const failures = (state.consecutiveFailures ?? 0) + 1;
-    store.setState(definition.id, {
-      ...state,
-      revision: definition.revision,
-      consecutiveFailures: failures,
-      ...(advance ? { nextRunAt: nextIso(definition, Math.max(Date.parse(occurrence.at), now), this.handle.timeZone) } : {}),
+    let failures = 0;
+    store.setState(definition.id, (current) => {
+      failures = (current.consecutiveFailures ?? 0) + 1;
+      return {
+        ...current,
+        revision: definition.revision,
+        consecutiveFailures: failures,
+        ...(advance ? { nextRunAt: nextIso(definition, Math.max(Date.parse(occurrence.at), now), this.handle.timeZone) } : {}),
+      };
     });
     if (failures >= SCHEDULE_AUTO_PAUSE_AFTER && definition.enabled) {
       const { id, revision, createdAt: _c, updatedAt: _u, ...editable } = definition;
@@ -208,12 +209,11 @@ export class ScheduleRunner {
   }
 
   private advance(definition: ScheduleAutomationDefinition, fromMs: number, now: number): void {
-    const state = this.handle.store.state(definition.id) ?? {};
-    this.handle.store.setState(definition.id, {
-      ...state,
+    this.handle.store.setState(definition.id, (current) => ({
+      ...current,
       revision: definition.revision,
       nextRunAt: nextIso(definition, Math.max(fromMs, now), this.handle.timeZone),
-    });
+    }));
     this.handle.onChange?.(definition.id, definition.revision);
   }
 

@@ -125,10 +125,11 @@ describe('GitHub automation API', () => {
     expect(coordinator.store('default')?.get(created.id)?.enabled).toBe(true);
     expect(scheduler.hasTimer()).toBe(true);
 
-    coordinator.store('default')?.setState(created.id, {
+    coordinator.store('default')?.setState(created.id, (current) => ({
+      ...current,
       revision: 2,
       lastSuccessAt: '2026-07-27T00:00:00.000Z',
-    });
+    }));
     const detail = await apiRequest(server, `/api/v1/automations/${created.id}`);
     expect(((await detail.json()) as any).state.lastSuccessAt).toBe('2026-07-27T00:00:00.000Z');
     scheduler.stop();

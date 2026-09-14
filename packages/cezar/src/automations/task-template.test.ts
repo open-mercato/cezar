@@ -127,10 +127,10 @@ describe('scheduled automation task templates (spec 2026-09-14)', () => {
       const automationStore = AutomationStore.open(join(root, '.ai/cezar'));
       const now = Date.parse('2026-09-14T10:00:00Z');
       const stale = automationStore.create({ name: 'Stale', enabled: true, kind: 'github', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'x' } }, 'stale');
-      automationStore.setState('stale', { cursor: { timestamp: '2026-07-01T00:00:00.000Z' }, lastSuccessAt: '2026-07-01T00:00:00.000Z', backlogAfter: { timestamp: '2026-07-01T00:00:00.000Z', tieBreaker: 'x' } });
+      automationStore.setState('stale', (current) => ({ ...current, cursor: { timestamp: '2026-07-01T00:00:00.000Z' }, lastSuccessAt: '2026-07-01T00:00:00.000Z', backlogAfter: { timestamp: '2026-07-01T00:00:00.000Z', tieBreaker: 'x' } }));
       automationStore.create({ name: 'Never', enabled: true, kind: 'github', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'x' } }, 'never');
       automationStore.create({ name: 'Fresh', enabled: true, kind: 'github', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'x' } }, 'fresh');
-      automationStore.setState('fresh', { cursor: { timestamp: '2026-09-14T09:00:00.000Z' }, lastSuccessAt: '2026-09-14T09:00:00.000Z' });
+      automationStore.setState('fresh', (current) => ({ ...current, cursor: { timestamp: '2026-09-14T09:00:00.000Z' }, lastSuccessAt: '2026-09-14T09:00:00.000Z' }));
       automationStore.create({ name: 'Paused', enabled: false, kind: 'github', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'x' } }, 'paused');
       automationStore.create({ name: 'Sched', enabled: true, kind: 'schedule', schedule: { type: 'daily' }, task: { prompt: 'x' } }, 'sched');
       const changed: string[] = [];

@@ -21,7 +21,7 @@ describe('CopyAsCliCard', () => {
         <Toaster />
       </>,
     )
-    const line = 'cez automation add --name "Nightly" --cron "0 4 * * *" --workflow quick-task --autonomous --prompt "Bump"'
+    const line = 'cez automation add --name "Nightly" --cron "0 4 * * *" --workflow "quick-task" --autonomous --prompt "Bump"'
     expect(screen.getByText(line)).not.toBeNull()
     expect(screen.getByText(/cez automation schema/)).not.toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }))

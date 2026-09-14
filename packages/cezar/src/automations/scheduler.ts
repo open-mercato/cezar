@@ -79,25 +79,27 @@ export class ProjectAutomationScheduler {
       }
       if (mode === 'execute') {
         const now = new Date().toISOString();
-        const cursor = laterCursor(state.cursor, result.cursor);
-        store.setState(definition.id, {
-          ...state,
-          revision: definition.revision,
-          cursor,
-          frozenHighWatermark: result.truncated && cursor?.tieBreaker
-            ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
-            : undefined,
-          lastSuccessAt: now,
-          nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
-          consecutiveFailures: 0,
-          backoffUntil: undefined,
+        store.setState(definition.id, (current) => {
+          const cursor = laterCursor(current.cursor, result.cursor);
+          return {
+            ...current,
+            revision: definition.revision,
+            cursor,
+            frozenHighWatermark: result.truncated && cursor?.tieBreaker
+              ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
+              : undefined,
+            lastSuccessAt: now,
+            nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
+            consecutiveFailures: 0,
+            backoffUntil: undefined,
+          };
         });
       } else if (detectionOnly) {
-        store.setState(definition.id, {
-          ...state,
+        store.setState(definition.id, (current) => ({
+          ...current,
           revision: definition.revision,
           nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
-        });
+        }));
       }
       this.handle.onChange?.(definition.id, definition.revision);
       completion = mode === 'preview'
@@ -132,14 +134,15 @@ export class ProjectAutomationScheduler {
   }
 
   private recordFailure(definition: GithubAutomationDefinition, error: unknown): void {
-    const state = this.handle.store.state(definition.id) ?? {};
-    const failures = (state.consecutiveFailures ?? 0) + 1;
-    const delay = Math.min(6 * 60 * 60_000, 60_000 * 2 ** (failures - 1));
-    this.handle.store.setState(definition.id, {
-      ...state,
-      consecutiveFailures: failures,
-      backoffUntil: new Date(Date.now() + delay).toISOString(),
-      nextCheckAt: new Date(Date.now() + delay).toISOString(),
+    this.handle.store.setState(definition.id, (current) => {
+      const failures = (current.consecutiveFailures ?? 0) + 1;
+      const delay = Math.min(6 * 60 * 60_000, 60_000 * 2 ** (failures - 1));
+      return {
+        ...current,
+        consecutiveFailures: failures,
+        backoffUntil: new Date(Date.now() + delay).toISOString(),
+        nextCheckAt: new Date(Date.now() + delay).toISOString(),
+      };
     });
     this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason: error instanceof Error ? error.message : String(error) });
     this.handle.onChange?.(definition.id, definition.revision);

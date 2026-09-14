@@ -24,6 +24,7 @@ describe('scheduleLabel / cronOf / parseCron', () => {
     [{ type: 'daily', hour: 4, minute: 0 }, 'every day at 04:00', '0 4 * * *'],
     [{ type: 'weekdays', hour: 7, minute: 30 }, 'weekdays at 07:30', '30 7 * * 1-5'],
     [{ type: 'hours', every: 6 }, 'every 6 hours', '0 */6 * * *'],
+    [{ type: 'hours', every: 1 }, 'every hour', '0 */1 * * *'],
     [{ type: 'weekly', day: 5, hour: 16, minute: 0 }, 'Fridays at 16:00', '0 16 * * 5'],
     [{ type: 'weekly', day: 7, hour: 2, minute: 0 }, 'Sundays at 02:00', '0 2 * * 0'],
     [{ type: 'daily' }, 'every day at 04:00', '0 4 * * *'],

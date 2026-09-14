@@ -43,7 +43,7 @@ describe('ProjectAutomationScheduler', () => {
 
   it('does not advance the cursor on failure and applies bounded backoff', async () => {
     const { store, definition } = await setup();
-    store.setState(definition.id, { cursor: { timestamp: '2026-07-26T01:00:00.000Z' } });
+    store.setState(definition.id, (current) => ({ ...current, cursor: { timestamp: '2026-07-26T01:00:00.000Z' } }));
     const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll: async () => { throw new Error('rate limited'); } } as never }, launch: async () => ({ runId: 'unused' }) });
     await expect(scheduler.check(definition)).rejects.toThrow('rate limited');
     expect(store.state(definition.id)?.cursor?.timestamp).toBe('2026-07-26T01:00:00.000Z');
@@ -52,9 +52,10 @@ describe('ProjectAutomationScheduler', () => {
 
   it('starts provider discovery from the durable cursor overlap', async () => {
     const { store, definition } = await setup();
-    store.setState(definition.id, {
+    store.setState(definition.id, (current) => ({
+      ...current,
       cursor: { timestamp: '2026-07-26T01:00:00.000Z' },
-    });
+    }));
     const poll = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1 }));
     const scheduler = new ProjectAutomationScheduler({
       projectId: 'p',
@@ -71,9 +72,10 @@ describe('ProjectAutomationScheduler', () => {
 
   it('advances through scanned non-matches without moving a cursor backwards', async () => {
     const { store, definition } = await setup();
-    store.setState(definition.id, {
+    store.setState(definition.id, (current) => ({
+      ...current,
       cursor: { timestamp: '2026-07-26T01:00:00.000Z', tieBreaker: 'current' },
-    });
+    }));
     const scheduler = new ProjectAutomationScheduler({
       projectId: 'p',
       timeZone: 'UTC',
@@ -161,7 +163,7 @@ describe('WorkspaceAutomationScheduler — both kinds (spec 2026-09-14)', () => 
     const store = AutomationStore.open(dir);
     store.create({ name: 'Nightly', enabled: true, kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'Bump' } }, 'nightly');
     store.create({ name: 'Issues', enabled: true, events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'Review' } }, 'issues');
-    store.setState('issues', { nextCheckAt: new Date(T0 + 30 * 60_000).toISOString() });
+    store.setState('issues', (current) => ({ ...current, nextCheckAt: new Date(T0 + 30 * 60_000).toISOString() }));
     const launchSchedule = vi.fn(async () => ({ runId: 'sched-run' }));
     const poll = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1 }));
     let now = T0;

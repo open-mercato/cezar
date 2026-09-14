@@ -222,4 +222,62 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       await boot();
     });
   });
+
+  /**
+   * The default-on flip's own brake (spec 2026-09-14 § Lifecycle, "Default-on re-baseline"):
+   * `rebaselineIdleAutomations` is unit-tested in isolation (`task-template.test.ts`), but the
+   * wiring that matters is that it actually RUNS, through the real boot sequence, before the
+   * scheduler arms any timer — otherwise every installation upgrading with a poll left
+   * `enabled: true` would resume from a stale cursor and could launch a backlog nobody asked for.
+   * This boots the real server (same pattern as "background scheduler" above) against a project
+   * carrying exactly that shape: an enabled poll that has never succeeded.
+   */
+  describe('default-on re-baseline (boot path)', () => {
+    const savedHome = process.env.CEZ_HOME;
+    const savedDryRun = process.env.CEZ_DRY_RUN;
+    let home: string;
+    let staleId: string;
+
+    beforeEach(() => {
+      home = mkdtempSync(join(tmpdir(), 'cez-automations-gate-rebaseline-home-'));
+      process.env.CEZ_HOME = home;
+      process.env.CEZ_DRY_RUN = '1';
+      const seed = AutomationStore.open(dataDir);
+      staleId = seed.create({ ...DEFINITION, name: 'Stale poll', enabled: true }).id;
+    });
+
+    afterEach(() => {
+      rmSync(home, { recursive: true, force: true });
+      if (savedHome === undefined) delete process.env.CEZ_HOME;
+      else process.env.CEZ_HOME = savedHome;
+      if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = savedDryRun;
+    });
+
+    it('re-baselines a stale enabled poll before the scheduler starts, so upgrading never launches a backlog', async () => {
+      const server = startServer(
+        { repoRoot, store, manager: { isActive: () => false } as unknown as RunManager, version: '0.0.0-test' },
+        0,
+      );
+      try {
+        await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+        // Same warm-up wait as "background scheduler" above: the re-baseline runs inside the
+        // `listProjects().then(...)` chain, strictly before `automationScheduler.start()`.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } finally {
+        server.close();
+      }
+      const fresh = AutomationStore.open(dataDir);
+      const state = fresh.state(staleId);
+      expect(state?.baselineAt).toBeTruthy();
+      expect(state?.cursor?.timestamp).toBe(state?.baselineAt);
+      expect(state?.consecutiveFailures).toBe(0);
+      // Zero launches: the backlog this poll would otherwise have resumed was forgotten, not
+      // processed. No receipt exists for this automation.
+      expect([...fresh.latestReceipts().values()].filter((r) => r.automationId === staleId)).toHaveLength(0);
+      const baselineLogs = fresh.logs({ automationId: staleId, result: 'baseline' });
+      expect(baselineLogs).toHaveLength(1);
+      expect(baselineLogs[0]?.reason).toContain('never polled successfully');
+    });
+  });
 });

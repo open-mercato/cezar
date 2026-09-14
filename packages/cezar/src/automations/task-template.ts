@@ -216,8 +216,8 @@ export function rebaselineIdleAutomations(
     if (Number.isFinite(lastSuccess) && now - lastSuccess <= lookbackMs) continue;
     const idleDays = Number.isFinite(lastSuccess) ? Math.round((now - lastSuccess) / 86_400_000) : undefined;
     const baselineAt = new Date(now).toISOString();
-    automationStore.setState(definition.id, {
-      ...state,
+    automationStore.setState(definition.id, (current) => ({
+      ...current,
       revision: definition.revision,
       baselineAt,
       cursor: { timestamp: baselineAt },
@@ -226,7 +226,7 @@ export function rebaselineIdleAutomations(
       nextCheckAt: new Date(now + (definition.intervalSeconds ?? 300) * 1_000).toISOString(),
       backoffUntil: undefined,
       consecutiveFailures: 0,
-    });
+    }));
     automationStore.appendLog({
       automationId: definition.id,
       revision: definition.revision,

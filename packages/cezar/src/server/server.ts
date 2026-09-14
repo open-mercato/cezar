@@ -3253,21 +3253,21 @@ export function createApp(deps: ServerDeps) {
     const now = Date.now();
     if (isScheduleAutomation(automation)) {
       const next = nextOccurrence(automation.schedule, now, localTimeZone());
-      store.setState(automation.id, {
-        ...store.state(automation.id),
+      store.setState(automation.id, (current) => ({
+        ...current,
         revision: automation.revision,
         ...(next !== null ? { nextRunAt: new Date(next).toISOString() } : {}),
-      });
+      }));
       return;
     }
     const baselineAt = new Date(now).toISOString();
-    store.setState(automation.id, {
-      ...store.state(automation.id),
+    store.setState(automation.id, (current) => ({
+      ...current,
       revision: automation.revision,
       baselineAt,
       cursor: { timestamp: baselineAt },
       nextCheckAt: new Date(now + (automation.intervalSeconds ?? 300) * 1_000).toISOString(),
-    });
+    }));
     store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
   };
 
@@ -3438,8 +3438,9 @@ export function createApp(deps: ServerDeps) {
         // An edited schedule recomputes its next occurrence; `store.update` carried the old
         // `nextRunAt` forward, so clear it and let the timer's `dueAt` persist the new one.
         if (kind === 'schedule' && JSON.stringify(current.schedule) !== JSON.stringify(automation.schedule)) {
-          const state = automationStore.state(automation.id);
-          if (state?.nextRunAt) automationStore.setState(automation.id, { ...state, nextRunAt: undefined });
+          if (automationStore.state(automation.id)?.nextRunAt) {
+            automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
+          }
         }
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();

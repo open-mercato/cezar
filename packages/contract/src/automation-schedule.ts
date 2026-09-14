@@ -69,7 +69,7 @@ export function scheduleLabel(schedule: AutomationSchedule): string {
   switch (s.type) {
     case 'daily': return `every day at ${hm(s.hour, s.minute)}`;
     case 'weekdays': return `weekdays at ${hm(s.hour, s.minute)}`;
-    case 'hours': return `every ${s.every} hours`;
+    case 'hours': return s.every === 1 ? 'every hour' : `every ${s.every} hours`;
     case 'weekly': return `${WEEKDAY_LONG[s.day - 1]}s at ${hm(s.hour, s.minute)}`;
   }
 }

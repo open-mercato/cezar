@@ -105,8 +105,7 @@ export class AutomationStore {
       updatedAt: this.now().toISOString(),
     });
     this.definitions.set(id, definition);
-    const state = this.state(id);
-    if (state) this.setState(id, { ...state, revision: definition.revision });
+    if (this.state(id)) this.setState(id, (current) => ({ ...current, revision: definition.revision }));
     this.persistDefinitions();
     return definition;
   }
@@ -130,11 +129,21 @@ export class AutomationStore {
    * own in-memory copy of the state file, and a write from memory alone would clobber the other's
    * cursor or `nextRunAt`. Re-reading first merges this ONE id over whatever is on disk, so the
    * two converge — the `mergeWriteWorkspaceConfig` pattern.
+   *
+   * The convergence promise only holds if the write for THIS id is also computed from a fresh
+   * disk read, not from the caller's own possibly-stale in-memory snapshot — two processes racing
+   * on the SAME automation id (e.g. one holds the poll/schedule lease and launches while the
+   * other, having failed to acquire it, still advances its own `nextRunAt`) would otherwise have
+   * the loser's write silently revert the winner's `lastRunAt`/`consecutiveFailures`. `update`
+   * therefore takes the CURRENT on-disk record (or `{}` when none exists yet) and must return the
+   * full next record from it — never close over an outer `state` read from before this call.
    */
-  setState(id: string, state: AutomationRuntimeState): void {
+  setState(id: string, update: (current: AutomationRuntimeState) => AutomationRuntimeState): AutomationRuntimeState {
     const onDisk = this.readJson(STATE, automationStateFileSchema, { version: 1, states: {} });
-    this.stateFile = { ...onDisk, states: { ...onDisk.states, [id]: state } };
+    const next = update(onDisk.states[id] ?? {});
+    this.stateFile = { ...onDisk, states: { ...onDisk.states, [id]: next } };
     this.atomicJson(STATE, this.stateFile);
+    return next;
   }
 
   receipts(): AutomationReceipt[] {

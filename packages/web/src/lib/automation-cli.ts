@@ -28,7 +28,7 @@ export interface CliDefinition {
   enable?: boolean
 }
 
-const shellQuote = (value: string): string => `"${value.replace(/(["\\$`])/g, '\\$1')}"`
+const shellQuote = (value: string): string => `"${value.replace(/(["\\$`!])/g, '\\$1')}"`
 
 /** `5m` / `1h` / `6h` / `24h` for the `--every` flag; falls back to seconds when uneven. */
 export function everyFlag(seconds: number): string {
@@ -60,10 +60,11 @@ export function cliFlagsOf(definition: CliDefinition): string {
     for (const author of definition.filters?.authors ?? []) parts.push(`--author ${shellQuote(author)}`)
   }
   const { task } = definition
-  if (task.workflow) parts.push(`--workflow ${task.workflow}`)
-  if (task.runner) parts.push(`--runner ${task.runner}`)
-  if (task.model) parts.push(`--model ${task.model}`)
-  if (task.autonomous) parts.push('--autonomous')
+  if (task.workflow) parts.push(`--workflow ${shellQuote(task.workflow)}`)
+  if (task.runner) parts.push(`--runner ${shellQuote(task.runner)}`)
+  if (task.model) parts.push(`--model ${shellQuote(task.model)}`)
+  if (task.autonomous === false) parts.push('--no-autonomous')
+  else if (task.autonomous) parts.push('--autonomous')
   if (task.dispatch) {
     parts.push('--dispatch')
     if (task.dispatch.maxSubtasks !== undefined) parts.push(`--max-subtasks ${task.dispatch.maxSubtasks}`)

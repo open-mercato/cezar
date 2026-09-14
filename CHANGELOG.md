@@ -1,5 +1,19 @@
 # Unreleased
 
+## ⚠️ Breaking
+
+- ⚠️ **Automations are on by default.** `capabilities.automations` flips from opt-in
+  (`CEZ_AUTOMATIONS=1`, #801) to on by default — off only for the exact value
+  `CEZ_AUTOMATIONS=0`; `=1` is still accepted and changes nothing. A boot-time re-baseline
+  protects the flip: any GitHub-poll automation left enabled and idle past its own lookback is
+  re-baselined to `now` rather than replayed, so no existing installation launches a backlog of
+  missed polls on upgrade. Ships alongside a second trigger kind — schedules (daily, weekdays,
+  weekly, every N hours; DST-safe; in the cockpit's own time zone) — and a redesigned Automations
+  surface. Set `CEZ_AUTOMATIONS=0` to opt back out; every route keeps existing and answers `409`
+  naming the flag, exactly as under the old opt-in default (spec
+  `.ai/specs/2026-09-14-automations-redesign.md`, owner-approved 2026-09-14). (#985)
+  *(@pat-lewczuk)*
+
 ## ✨ Features
 
 - ✨ **Drag the projects in the left drawer into the order you want.** The sidebar sorted its

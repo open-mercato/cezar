@@ -267,7 +267,7 @@ describe('AutomationEditor — new', () => {
     fillRequired()
     fireEvent.click(screen.getByRole('button', { name: 'Copy' }))
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(
-      'cez automation add --name "Nightly bump" --cron "0 4 * * *" --workflow quick-task --autonomous --prompt "Bump the deps."',
+      'cez automation add --name "Nightly bump" --cron "0 4 * * *" --workflow "quick-task" --autonomous --prompt "Bump the deps."',
     ))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(onBack).toHaveBeenCalledTimes(1)
