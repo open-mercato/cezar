@@ -1,77 +1,43 @@
-# Unreleased
+# 0.11.0 (2026-09-15)
+
+## Highlights
+The cockpit learns to delegate: a running task may now dispatch other tasks with `cez task` and they report back into its session, which replaces the missions experiment. Automations come on by default in the same release, with a schedule as a second trigger kind beside the GitHub poll and a rebuilt surface to run them from. Around that, what you attach and what you type stop being disposable — every attachment lands in a per-project library under its own name, an unsent reply survives leaving the task, and the conversation finally carries a clock. The left drawer takes the order you drag it into and keeps it across browsers, a task can switch runner, model or account mid-thread without a handoff file, and a question from a mid-workflow step now pauses the workflow instead of being ignored. The phone gets a smooth transcript while an agent works, the task view stops burning CPU while one streams, and cloning a repository behind organization SAML walks you through authorization instead of printing a raw token.
 
 ## ⚠️ Breaking
-
-- ⚠️ **Automations are on by default.** `capabilities.automations` flips from opt-in
-  (`CEZ_AUTOMATIONS=1`, #801) to on by default — off only for the exact value
-  `CEZ_AUTOMATIONS=0`; `=1` is still accepted and changes nothing. A boot-time re-baseline
-  protects the flip: any GitHub-poll automation left enabled and idle past its own lookback is
-  re-baselined to `now` rather than replayed, so no existing installation launches a backlog of
-  missed polls on upgrade. Ships alongside a second trigger kind — schedules (daily, weekdays,
-  weekly, every N hours; DST-safe; in the cockpit's own time zone) — and a redesigned Automations
-  surface. Set `CEZ_AUTOMATIONS=0` to opt back out; every route keeps existing and answers `409`
-  naming the flag, exactly as under the old opt-in default (spec
-  `.ai/specs/2026-09-14-automations-redesign.md`, owner-approved 2026-09-14). (#985)
-  *(@pat-lewczuk)*
+- ⚠️ Automations are on by default, reversing the `CEZ_AUTOMATIONS=1` opt-in from #802 — only the exact value `CEZ_AUTOMATIONS=0` turns them off, and a GitHub poll left enabled and idle past its own lookback is re-baselined at boot rather than replayed, so an upgrade never launches a backlog of missed polls. (#985) *(@pat-lewczuk)*
 
 ## ✨ Features
-
-- ✨ **Drag the projects in the left drawer into the order you want.** The sidebar sorted its
-  project groups by `lastOpenedAt`, a timestamp bumped only when a project is registered or when
-  cezar boots in that folder — so the order was really "the sequence the servers booted in", and
-  the repo you live in all day could sit below three you touch once a month with no way to move
-  it. Each group now carries a grip: drag it, or focus it and press Space, arrows, Space. The
-  order is stored on the server, in `~/.cezar/ui-state.json` under the new optional
-  `sidebar.projectOrder`, so it is the same order in every browser you open the cockpit in — the
-  phone and the desktop agree — and it survives reloads and restarts. That is deliberately the
-  opposite call from `sidebar.collapsed`, which moved to per-browser storage: which groups are
-  *shut* describes the window you are looking through, while what order your repos are *in* is a
-  considered choice made once, and redoing it on every device is the annoyance. The ⌘K palette
-  reads the same order — one registry, never listed two ways. A project registered after your
-  last drag floats to the top by recency rather than hiding under the list, an id that is no
-  longer registered is ignored instead of leaving a hole, and Settings → Appearance grows a
-  "Reset order" that appears only once there is something to undo. A missing project keeps its
-  place but has no grip: that row is inert by design.
-- ✨ **The task conversation has a clock.** Every other surface gave you a temporal anchor — the
-  tasks table shows relative times, the auto-resume hint an absolute one — while the thread, where
-  the actual work is, showed none: coming back to a task, nothing on screen said whether the last
-  agent message landed thirty seconds ago or last Tuesday, and a forty-message transcript spanning
-  two days read as one undifferentiated scroll. Each conversation turn now carries the two stamps
-  it always had on disk: a short local time at the foot of the user bubble that opened it, and the
-  agent's finishing time with how long the turn took (`14:36 · 4m 12s`) where it ended. Turns that
-  fall on different local days are parted by a dated rule — *Today*, *Yesterday*, or the date — so
-  a task resumed after a usage limit or a night reads as the two sittings it was. Times are
-  absolute and never tick: the exact instant is one hover away in the tooltip, and no row re-renders
-  on a timer or changes height under the virtualizer. Nothing new is persisted and no API changed —
-  every event has carried a required `ts` and every queued message a `createdAt` since the
-  beginning; the thread simply stopped throwing them away. A turn still running shows no completion
-  stamp rather than a placeholder that would jump when it fills in, and a transcript whose stamps
-  are missing or unreadable — an old recording, a hand-edited NDJSON — renders exactly as it did
-  before rather than printing `Invalid Date`. A message you stacked onto a running task keeps its
-  own queued-at time but never dates the older conversation it sits above. Sub-agent panels are
-  unchanged for now: their entries are one uninterrupted stream with no turn boundaries to hang a
-  clock on. Issue: #941.
+- ✨ A running task may dispatch other tasks with `cez task` and they report back into its session, replacing the missions experiment. (#972) *(@pat-lewczuk)*
+- ✨ An automation can run on a schedule as well as a GitHub poll — daily, weekdays, one weekday or every N hours, DST-safe in the cockpit's own zone — on a rebuilt Automations surface with week and day calendars, a template palette and creation from a prompt. (#985) *(@pat-lewczuk)*
+- ✨ Every file you attach to a task lands in a per-project attachment library, under its own name (carries forward @Damian-Szczepanski's #929). (#957) *(@pat-lewczuk)*
+- ✨ Drag the projects in the left drawer into the order you want, stored on the server so every browser agrees (fixes #952). (#953) *(@piotrchabros)*
+- ✨ Switch a task's runner, model or account from the header badge, with its conversation carried over instead of a handoff file. (#954) *(@piotrchabros)*
+- ✨ The task conversation has a clock: a stamp on each turn, how long the turn took, and a dated rule between days (fixes #941). (#942) *(@piotrchabros)*
+- ✨ What you typed into a task is still there when you come back, across navigation and restarts (fixes #939). (#940) *(@piotrchabros)*
+- ✨ The new-task base branch picker filters by name. (#973) *(@piotrchabros)*
+- ✨ Copy a task's branch name straight from the thread header. (#956) *(@piotrchabros)*
 
 ## 🐛 Fixes
-- 🐛 **A question from a mid-workflow step now pauses the workflow instead of being ignored.** An
-  agent that ended an implementation or review step with a structured `CEZ:ASK` was asking nobody:
-  cezar only read the marker on the last step of a workflow, so an intermediate one was dropped and
-  the run marched straight into the next check — which then failed, and the whole task was recorded
-  as failed while the question was still unanswered on screen. Every agent step's ask is now read,
-  and one from a non-final step holds the workflow at that step: the task shows as waiting with the
-  question as clickable chips, and answering it resumes the very same session and carries on
-  through the remaining steps. The pause has a complete set of exits, which is the part worth
-  spelling out: Cancel settles it as cancelled, Finish ends it the way Finish always does, and a
-  session that closes with the question never answered — the fifteen-minute idle timeout, a
-  restart — settles as failed with a Continue button that reopens the session, rather than leaving
-  the task stuck at waiting and quietly holding one of the workspace's parallel slots forever. A
-  restart no longer reports such a task as a *successful* run either; its unrun steps stay visibly
-  unrun. A malformed `CEZ:ASK` from an intermediate step deliberately does not pause anything: no
-  card can be rendered for it, so the workflow carries on and the parse failure is noted in the
-  transcript, exactly as before. An **autonomous** run is the one exception to the pause: it has
-  nobody to answer, so the auto-continue nudge outranks a mid-workflow question exactly as it
-  already outranks a final one, and the run parks only if the agent asks the same thing again
-  after being nudged. (#917)
+- 🐛 A question from a mid-workflow step now pauses the workflow instead of being ignored (supersedes #917). (#984) *(@piotrchabros, via @pat-lewczuk)*
+- 🐛 The autonomous auto-continue nudge is reachable again, so an `#autonomous` run stops parking after its first turn. (#967) *(@pat-lewczuk)*
+- 🐛 Opening a task, or watching one stream, no longer burns CPU and drops frames. (#966) *(@Igloczek)*
+- 🐛 Cloning a repository behind GitHub organization SAML walks you through authorization and retries, instead of printing a raw token. (#968) *(@piotrchabros)*
+- 🐛 The task conversation scrolls smoothly on a phone while the agent is working. (#965) *(@piotrchabros)*
+- 🐛 Folded CPU and Mem columns stay folded while tasks sit in the queue (fixes #821). (#861) *(@wojciechszyjka)*
+- 🐛 The composer's `/` skill menu scrolls to follow arrow-key navigation. (#809) *(@zawoj)*
+
+## 📝 Specs & Documentation
+- 📝 A task remembers every PR it has been associated with. (#839) *(@wojciechszyjka)*
+- 📝 Every release entry is one line again, in 0.9.0's format. (#963) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @piotrchabros
+- @Igloczek
+- @wojciechszyjka
+- @zawoj
+- @Damian-Szczepanski
 
 # 0.10.1 (2026-09-04)
 
@@ -79,7 +45,6 @@
 The cockpit gets easier to live in on a phone and harder to be wrong about. Pinned tasks keep the two or three you're actively working on at the top of the list, a follow-up can be sent to a different Claude login than the one that started it, and the composer now takes PDF, TXT and MD files the same way it's always taken a screenshot. The Claude model picker reads from your own CLI instead of a hand-written list, and a run's reference chips get several correctness passes: a conflicting PR now says so, a task can no longer borrow another repository's pull request as its own, and a stale review request or an "Update branch" click can no longer paint over a real rejection.
 
 ## ✨ Features
-- ✨ What you typed into a task is still there when you come back, across navigation and restarts. (#939) *(@piotrchabros)*
 - ✨ Pin the two or three tasks you are actually living in — a per-project Pinned group above `Needs you` (fixes #935). (#938) *(@piotrchabros)*
 - ✨ Continue a task on another agent account, not just another agent. (#924) *(@patzick)*
 - ✨ The composer takes a PDF, TXT or MD file the same way it already takes a screenshot (fixes #950). (#951) *(@pat-lewczuk)*
@@ -267,7 +232,7 @@ A stabilization release that hardens single-project mode and sharpens the cockpi
 # 0.9.0 (2026-07-21)
 
 ## Highlights
-<!-- TODO: Highlights — auto-update-changelog leaves this blank for the human author to fill in. -->
+The cockpit learns to delegate: a running task may now dispatch other tasks with `cez task` and they report back into its session, which replaces the missions experiment. Around that, what you attach and what you type stop being disposable — every attachment lands in a per-project library under its own name, an unsent reply survives leaving the task, and the conversation finally carries a clock. The left drawer takes the order you drag it into and keeps it across browsers, a task can switch runner, model or account mid-thread without a handoff file, and a question from a mid-workflow step now pauses the workflow instead of being ignored. The phone gets a smooth transcript while an agent works, the task view stops burning CPU while one streams, and cloning a repository behind organization SAML walks you through authorization instead of printing a raw token.
 
 ## ✨ Features
 - ✨ Edit the coding agents' own config files (global vs local, raw + highlighted). (#418) *(@pkarw)*
