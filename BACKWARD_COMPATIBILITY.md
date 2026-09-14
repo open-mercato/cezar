@@ -275,8 +275,10 @@ unset or any other value preserves the hosted-mode refusal.
   selection, and named-account Connect may read or mutate the host account store. The listing
   exposes absolute paths and the on-demand details read may expose account identity.
 - **Confinement**: a remotely posted account folder must be inside `CEZ_BROWSE_ROOT`; an outside
-  path is rejected before its existence is probed. The discovered default accounts may remain
-  outside that root because the client did not choose their paths.
+  spelling is rejected before its existence is probed; symlinks and existing ancestors of new
+  folders must also resolve inside that root. Live and dangling symlink escapes receive the same
+  refusal. The root defaults to the host user’s whole home directory when unset. The discovered
+  default accounts may remain outside that root because the client did not choose their paths.
 - **Still local-only**: opening account files/folders in desktop apps and opening a terminal remain
   gated by `capabilities.localHandoff`. Connect instead returns the exact command to run on the
   hosting machine.

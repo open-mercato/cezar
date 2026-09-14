@@ -598,9 +598,9 @@ function AccountDetails({
   const [renaming, setRenaming] = useState(false)
   const [draft, setDraft] = useState(account.label)
   const rename = useUpdateAgentProfile()
-  // Missing means an older server response; retain its established local behavior. An explicit
-  // false is hosted mode, where no desktop app on the viewer's machine can open a host path.
-  const localHandoff = health.data?.capabilities?.localHandoff !== false
+  // Wait for health before offering desktop actions. Once loaded, preserve the older-server
+  // fallback for responses that predate capabilities.
+  const localHandoff = health.data ? (health.data.capabilities?.localHandoff ?? true) : false
 
   // Which detected apps can actually act on each thing — the same rule the route enforces, so the
   // menu never offers something that would come back a 400. A `cli:<runner>` handoff opens a task

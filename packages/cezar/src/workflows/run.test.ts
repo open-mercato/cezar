@@ -75,6 +75,7 @@ describe('RunManager directional usage accounting', () => {
   });
 
   afterEach(() => {
+    manager.dispose();
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });
@@ -267,6 +268,7 @@ describe('RunManager.recordTurnEnd', () => {
   });
 
   afterAll(() => {
+    manager.dispose();
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
   });

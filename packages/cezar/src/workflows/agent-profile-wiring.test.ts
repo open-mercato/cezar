@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { agentAccountsPath } from '../paths.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
@@ -42,6 +42,7 @@ describe('RunManager agent-profile resolution', () => {
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     store.flush();
     for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
     if (savedHome === undefined) delete process.env.CEZ_HOME;
@@ -73,13 +74,17 @@ describe('RunManager agent-profile resolution', () => {
       steps: [{ id: 'work', name: 'work', kind: 'agent' }],
     });
 
-  it('adds NOTHING for the default account — the zero-config env is untouched', async () => {
+  it.each([false, true])('adds no account variables for the default account (dispatch=%s)', async (dispatch) => {
+    vi.stubEnv('CEZ_DISPATCH', dispatch ? '1' : '0');
+    vi.stubEnv('CEZ_API_URL', 'http://127.0.0.1:3456');
+    vi.stubEnv('CEZ_BIN', '/fixture/cezar/dist/index.js');
     const run = newRun();
     const { env, profileId } = await seam().agentEnvForStep(run.id, 'claude');
     expect(profileId).toBe('default');
     // The base run env only: the handoff contract (spec 007) plus the task-scoped
-    // temp directory (#785). No ACCOUNT variable, which is this test's subject.
+    // temp directory (#785) and dispatch (#972). No ACCOUNT variable, which is this test's subject.
     expect(Object.keys(env).sort()).toEqual([
+      ...(dispatch ? ['CEZ_API_URL', 'CEZ_BIN'] : []),
       'CEZ_HANDOFF_FILE',
       'CEZ_TASK_ID',
       'CEZ_TODOS_FILE',

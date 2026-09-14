@@ -325,17 +325,6 @@ const hostedProfileOpenRefusal = {
   error: 'opening account files is disabled in hosted mode; open them directly on the machine hosting cezar',
 };
 
-/** Is there an entry at `path` — `lstat`, so a symlink counts even when its target is gone. Used
- *  by the browse-root confinement, which must treat a live and a dead escape identically. */
-async function isPresent(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Allocate a profile id from the label (or, with no label, the folder name).
  *
@@ -1970,16 +1959,22 @@ export function createApp(deps: ServerDeps) {
       // what creates it — and a realpath check would tell someone who typo'd a folder under
       // their own home that it is "outside the browsable root".
       if (!(await isLexicallyInsideBrowseRoot(root, expanded))) return outside;
-      // The REALPATH half, now that the candidate is known to be THERE: a symlink inside the
-      // root pointing out of it spells as contained and is not. `lstat`, not `stat`, so a
-      // symlink whose target is missing counts as there too — otherwise a live escape (refused)
-      // and a dead one (accepted, and later reported `exists: false`) would answer differently,
-      // which is the oracle again, and the dead one would still be persisted as the account's
-      // path for a run to write through. A path that is simply absent has no link chain to
-      // follow and passes on the lexical half alone.
-      if (await isPresent(expanded)) {
-        if (!(await isInsideBrowseRoot(root, expanded))) return outside;
+      // Resolve the nearest existing entry, including dangling symlinks. Checking only the
+      // leaf would let a new folder beneath an escaping symlink pass. Only ENOENT permits
+      // walking upwards; unreadable paths fail closed, with the same refusal.
+      let ancestor = expanded;
+      for (;;) {
+        try {
+          await lstat(ancestor);
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return outside;
+          const parent = dirname(ancestor);
+          if (parent === ancestor) return outside;
+          ancestor = parent;
+        }
       }
+      if (!(await isInsideBrowseRoot(root, ancestor))) return outside;
     }
     return null;
   };

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -786,6 +786,41 @@ describe('agent profiles API', () => {
         `/api/v1/workspace/agent-profiles/${body.profile.id}/details`,
       );
       expect(details.status).toBe(200);
+    });
+
+    it.each(['POST', 'PATCH'])('rejects live, dead and ancestor symlink escapes through %s', async (method) => {
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const created = await send('POST', '/api/v1/workspace/agent-profiles', {
+        provider: 'claude', configDir: claudeDir('safe'),
+      });
+      expect(created.status).toBe(201);
+      const before = await loadAgentAccounts();
+      const live = join(home, 'live');
+      const dead = join(home, 'dead');
+      symlinkSync(repoRoot, live, 'dir');
+      symlinkSync(join(repoRoot, 'absent'), dead, 'dir');
+      for (const configDir of [live, dead, join(live, 'new', 'account'), join(dead, 'new')]) {
+        const result = await send(method, method === 'POST'
+          ? '/api/v1/workspace/agent-profiles'
+          : `/api/v1/workspace/agent-profiles/${created.body.profile.id}`, {
+          ...(method === 'POST' ? { provider: 'claude' } : {}), configDir,
+        });
+        expect(result).toEqual({ status: 400, body: { error: 'folder is outside the browsable root' } });
+      }
+      expect(await loadAgentAccounts()).toEqual(before);
+    });
+
+    it('allows new remote folders and symlinks whose existing ancestor stays inside the root', async () => {
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const safe = claudeDir('safe-target');
+      const link = join(home, 'safe-link');
+      symlinkSync(safe, link, 'dir');
+      for (const configDir of [join(home, 'new', 'account'), join(link, 'new', 'account')]) {
+        const result = await send('POST', '/api/v1/workspace/agent-profiles', {
+          provider: 'claude', configDir,
+        });
+        expect(result.status).toBe(201);
+      }
     });
 
     it('confines remotely supplied folders to CEZ_BROWSE_ROOT without probing outside paths', async () => {
