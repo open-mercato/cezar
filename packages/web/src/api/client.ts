@@ -16,6 +16,8 @@ import type {
   AutomationCheckQueuedResponse,
   AutomationLogResponse,
   AutomationResponse,
+  AutomationRunResponse,
+  AutomationTemplatesResponse,
   CreateAutomationInput,
   UpdateAutomationInput,
   AgentConfigListing,
@@ -1685,6 +1687,37 @@ export async function getAutomationLog(
       init(opts),
     ),
     `/automation-log?automationId=${encodeURIComponent(id)}`,
+  )
+}
+
+/** Fire a SCHEDULED automation now, by hand (spec 2026-09-14 Q10) — paused or not; neither
+ *  `enabled` nor the timer changes. A GitHub automation answers 409: it runs through `check`. */
+export async function runAutomationNow(id: string): Promise<AutomationRunResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].run.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    `/automations/${encodeURIComponent(id)}/run`,
+  )
+}
+
+/** Delete a definition. Its runs, receipts and log rows stay; the id is tombstoned. */
+export async function deleteAutomation(id: string): Promise<void> {
+  const res = await cez.api.v1.p[':projectId'].automations[':id'].$delete({
+    param: { projectId: queryScope(), id: encodeURIComponent(id) },
+  })
+  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+}
+
+/** The other registered projects' automations, as the editor's template palette lists them
+ *  (spec 2026-09-14 Q7). Workspace-level; `exclude` keeps the calling project out. */
+export async function getAutomationTemplates(exclude: string | null, opts?: ReadOptions): Promise<AutomationTemplatesResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['automation-templates'].$get(
+      { query: exclude ? { exclude } : {} },
+      init(opts),
+    ),
+    '/workspace/automation-templates',
   )
 }
 

@@ -32,7 +32,7 @@ import {
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 import { GlobalTasksRoute } from './routes/global-tasks'
-import { AutomationsRoute } from './routes/automations/automations'
+import { AutomationsRoute } from './routes/automations/automations-route'
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
  *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
