@@ -463,6 +463,13 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
 
 // ---- host model catalog (`GET /api/v1/models`) -----------------------------------------------
 
+/** One reasoning-effort value the selected model accepts, discovered from its native catalog. */
+export const reasoningEffortOptionSchema = z.object({
+  id: z.string(),
+  description: z.string(),
+});
+export type ReasoningEffortOption = z.infer<typeof reasoningEffortOptionSchema>;
+
 /**
  * The runners whose model list is discovered from the host rather than hard-coded: Codex through
  * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
@@ -484,6 +491,10 @@ export const runnerModelOptionSchema = z.object({
   id: z.string(),
   label: z.string(),
   description: z.string(),
+  /** Absent when a runner/model does not expose reasoning-effort capabilities. */
+  reasoningEfforts: z.array(reasoningEffortOptionSchema).optional(),
+  /** The runner's suggested value. Informational only: cezar never sends it implicitly. */
+  defaultReasoningEffort: z.string().optional(),
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 

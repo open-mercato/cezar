@@ -99,7 +99,30 @@ function serve(
       requests.push({ method, url, body })
       if (url === '/api/v1/health') return json(health)
       if (url === '/api/v1/providers/status') return json(providerStatus, providerStatusCode)
-      if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=codex') {
+        return json({
+          runner: 'codex',
+          models: [
+            {
+              id: 'gpt-future',
+              label: 'gpt-future',
+              description: 'Newest',
+              reasoningEfforts: [{ id: 'high', description: 'More thorough' }],
+            },
+            // A SECOND codex model, so a model-only change within one runner is expressible —
+            // that is the case where the server's engine-change reset and the effort pill can
+            // disagree. It advertises `high` too, so the carried effort stays valid across it.
+            {
+              id: 'gpt-future-mini',
+              label: 'gpt-future-mini',
+              description: 'Smaller',
+              reasoningEfforts: [{ id: 'high', description: 'More thorough' }],
+            },
+          ],
+          source: 'live',
+          stale: false,
+        })
+      }
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (url === '/api/v1/config' && method === 'GET')
         return json({
@@ -202,7 +225,7 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     expect(continueBody()).toEqual({ text: 'now also update the changelog' })
   })
 
-  it('sends the chosen runner + model through to /continue', async () => {
+  it('sends the chosen runner, model, and effort through to /continue', async () => {
     serve()
     renderAction(makeRun())
 
@@ -220,9 +243,53 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     })
     fireEvent.click(discovered as HTMLElement)
 
+    fireEvent.pointerDown(await screen.findByRole('button', { name: 'Effort' }))
+    options = await screen.findAllByRole('menuitemradio')
+    fireEvent.click(options.find((o) => o.textContent?.includes('high')) as HTMLElement)
+
     fireEvent.click(screen.getByRole('button', { name: /continue/i }))
     await waitFor(() => expect(continueBody()).toBeDefined())
-    expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future' })
+    expect(continueBody()).toEqual({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' })
+  })
+
+  it('shows the persisted Codex effort without overriding it until the user picks a new value', async () => {
+    serve()
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
+
+    expect((await screen.findByLabelText('Effort')).textContent).toContain('high')
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({})
+  })
+
+  /**
+   * The server treats ANY explicit `model` as an engine change and resets the stored effort to
+   * Codex's native default. The pill, meanwhile, carries the run's effort forward across a model
+   * change. Sending the model without the effort therefore made the displayed engine and the
+   * executed engine disagree, silently, in the direction of less reasoning than the user asked
+   * for — so a model-only pick re-sends the resolved effort to hold it.
+   */
+  it('re-sends the carried effort when a model-only pick would otherwise reset it', async () => {
+    serve()
+    renderAction(makeRun({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }))
+
+    // Untouched: the pill shows the run's own effort.
+    expect((await screen.findByLabelText('Effort')).textContent).toContain('high')
+
+    // Change ONLY the model, to another codex model — the runner and effort pills are untouched.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Model' }))
+    let picked: HTMLElement | undefined
+    await waitFor(() => {
+      picked = screen.getAllByRole('menuitemradio').find((o) => o.textContent?.includes('gpt-future-mini'))
+      expect(picked).toBeDefined()
+    })
+    fireEvent.click(picked as HTMLElement)
+    // The pill still reads `high`, so the request must too.
+    expect(screen.getByLabelText('Effort').textContent).toContain('high')
+
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+    await waitFor(() => expect(continueBody()).toBeDefined())
+    expect(continueBody()).toEqual({ model: 'gpt-future-mini', reasoningEffort: 'high' })
   })
 
   it('shows a read-only native model while locked and still permits switching runners', async () => {

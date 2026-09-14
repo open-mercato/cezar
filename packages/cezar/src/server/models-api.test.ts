@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import type { ModelOption } from '../core/runner-model-catalog.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -22,7 +23,7 @@ describe('workspace model catalog API', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  type Discover = () => Promise<Array<{ id: string; label: string; description: string }>>;
+  type Discover = () => Promise<ModelOption[]>;
 
   /** Claude and Codex share one adapter here — the route contract is what is under test, and each
    *  adapter's own wire handling lives in its `*-model-catalog.test.ts`. OpenCode takes its own so
@@ -62,6 +63,29 @@ describe('workspace model catalog API', () => {
       });
     }
     expect(calls).toBe(1);
+  });
+
+  /** The route is a pass-through for the capability metadata the adapter discovered: a model's
+   *  `reasoningEfforts` / `defaultReasoningEffort` must survive to the cockpit unchanged, because
+   *  the Effort picker renders exactly the set the selected model advertised. */
+  it('passes a model\'s discovered reasoning-effort capabilities through to the client', async () => {
+    const server = app(async () => [{
+      id: 'gpt-future',
+      label: 'GPT Future',
+      description: 'Newly available',
+      defaultReasoningEffort: 'medium',
+      reasoningEfforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+    }]);
+    const response = await apiRequest(server, '/api/v1/models?runner=codex');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runner: 'codex',
+      models: [{
+        id: 'gpt-future',
+        defaultReasoningEffort: 'medium',
+        reasoningEfforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+      }],
+    });
   });
 
   it('caches each runner separately', async () => {
