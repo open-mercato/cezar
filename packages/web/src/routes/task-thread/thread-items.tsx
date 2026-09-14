@@ -94,6 +94,21 @@ export function UserBubble({
     enabled: onEdit !== undefined && draftRunId !== undefined && draftSurface !== undefined,
   })
 
+  // The bubble's OWN editor state needs the same per-(run, surface) reset `useDraft` does
+  // internally, and for the same reason: the transcript keys the task-prompt row by the constant
+  // `'task'`, so walking to another task swaps this component's props instead of unmounting it.
+  // Without this, a restored draft stayed open over the NEXT task's prompt and the first keystroke
+  // filed task A's sentence under task B — exactly the leak `thread-draft.ts` exists to prevent.
+  // Adjusted during render, not in an effect, so no frame ever paints the outgoing text.
+  const draftKey = `${draftRunId ?? ''} ${draftSurface ?? ''}`
+  const [renderedDraftKey, setRenderedDraftKey] = useState(draftKey)
+  if (renderedDraftKey !== draftKey) {
+    setRenderedDraftKey(draftKey)
+    setEditing(false)
+    setDraft(text)
+    setActionError(undefined)
+  }
+
   // Re-open with what was left unsaved. Runs once per stored draft: opening does not clear it, and
   // typing the box empty (or saving, or cancelling) makes `hasDraft` false so it cannot re-fire.
   useEffect(() => {

@@ -33,6 +33,10 @@ describe('run draft store', () => {
 
   const png = 'iVBORw0KGgoAAAANSUhEUg==';
 
+  /** A clock past `ORPHAN_GRACE_MS` (10 min), for the paths that only delete blobs nothing can
+   *  still be about to name. */
+  const pastGrace = () => new Date(Date.now() + 11 * 60 * 1000);
+
   it('round-trips one surface', () => {
     const written = writeRunDraftSurface(dataDir, 'run-1', 'composer', {
       text: 'half a sentence',
@@ -69,9 +73,28 @@ describe('run draft store', () => {
       images: [image.ok ? image.image.id : ''],
     });
 
-    writeRunDraftSurface(dataDir, 'run-1', 'composer', { text: '', images: [] });
+    // Past the orphan grace window, so the blob is genuinely unwanted rather than in flight.
+    writeRunDraftSurface(dataDir, 'run-1', 'composer', { text: '', images: [] }, pastGrace);
 
     expect(existsSync(join(draftsRoot(dataDir), 'run-1'))).toBe(false);
+  });
+
+  it('emptying the last surface SPARES a blob uploaded moments ago', () => {
+    // The two-client case: another browser sent the message and emptied the run's only surface,
+    // while this one has just pasted a screenshot whose naming PUT has not fired yet. Deleting the
+    // directory here would take that attachment with it.
+    writeRunDraftSurface(dataDir, 'run-1', 'composer', { text: 'typed here', images: [] });
+    const image = writeRunDraftImage(dataDir, 'run-1', { mediaType: 'image/png', name: 'shot.png', data: png });
+    expect(image.ok).toBe(true);
+    const fresh = image.ok ? image.image.id : '';
+
+    writeRunDraftSurface(dataDir, 'run-1', 'composer', { text: '', images: [] });
+
+    expect(existsSync(join(draftsRoot(dataDir), 'run-1'))).toBe(true);
+    // Still nameable, which is the whole point — the composer can finish its debounced write.
+    const named = writeRunDraftSurface(dataDir, 'run-1', 'composer', { text: 'and this', images: [fresh] });
+    expect(named.ok).toBe(true);
+    expect(readRunDrafts(dataDir, 'run-1').surfaces.composer?.images.map((i) => i.id)).toEqual([fresh]);
   });
 
   it('refuses an unknown surface id rather than reaching the filesystem with it', () => {
@@ -80,9 +103,31 @@ describe('run draft store', () => {
     expect(existsSync(draftsRoot(dataDir))).toBe(false);
   });
 
-  it('refuses a PUT naming an image the store has never seen', () => {
+  it('drops an image id the store has never seen and keeps the text', () => {
+    // A blob can vanish under a live composer (another client emptied the run), and the cockpit
+    // swallows draft-write failures — so refusing the whole write would lose the user's sentence
+    // silently, and re-lose it on every keystroke afterwards.
     const result = writeRunDraftSurface(dataDir, 'run-1', 'composer', { text: 'x', images: ['nope'] });
-    expect(result).toEqual({ ok: false, error: 'unknown image: nope' });
+
+    expect(result).toEqual({
+      ok: true,
+      entry: { text: 'x', images: [], updatedAt: expect.any(String) },
+    });
+    expect(readRunDrafts(dataDir, 'run-1').surfaces.composer?.text).toBe('x');
+  });
+
+  it('keeps the live attachments of a PUT that also names a vanished one', () => {
+    const image = writeRunDraftImage(dataDir, 'run-1', { mediaType: 'image/png', name: 'shot.png', data: png });
+    expect(image.ok).toBe(true);
+    const live = image.ok ? image.image.id : '';
+
+    const result = writeRunDraftSurface(dataDir, 'run-1', 'composer', {
+      text: 'both of these',
+      images: [live, 'a1b2c3d4e5f6a1b2c3d4e5f6'],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(readRunDrafts(dataDir, 'run-1').surfaces.composer?.images.map((i) => i.id)).toEqual([live]);
   });
 
   it('reads a corrupt draft.json as absent instead of throwing', () => {
@@ -275,6 +320,25 @@ describe('run draft store', () => {
       expect(stored.ok).toBe(true);
       expect(readdirSync(draftsRoot(dataDir))).not.toContain('old-run');
       expect(warn).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses an attachment when eviction cannot get the store under the ceiling', () => {
+      // The excess lives in the run being written, and `keepRunId` is never evicted — so there is
+      // no way down. Writing anyway is how a client that uploads blobs and never names them (the
+      // per-surface cap counts only images in `draft.json`) grows the store until the disk goes.
+      fatDraft('run-1', '2026-08-01T00:00:00.000Z', DRAFT_STORE_MAX_BYTES - 1024 * 1024);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const stored = writeRunDraftImage(dataDir, 'run-1', {
+        mediaType: 'image/png',
+        name: 'big.png',
+        data: 'A'.repeat(4 * 1024 * 1024),
+      });
+
+      expect(stored).toEqual({ ok: false, error: 'draft store is full' });
+      // Refused, not half-written: no blob was left behind.
+      expect(existsSync(join(draftsRoot(dataDir), 'run-1', 'images'))).toBe(false);
+      void warn;
     });
 
     it('leaves a store that fits entirely alone — no expiry, no count sweep', () => {

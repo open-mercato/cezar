@@ -187,10 +187,13 @@ describe('/api/v1/runs/:id/drafts', () => {
       expect(await blob.json()).toEqual({ ...stored, data: png });
     });
 
-    it('refuses a PUT naming an image the server never stored', async () => {
+    it('drops an image id the server never stored, and keeps the text', async () => {
+      // Not a 400: draft writes fail silently by design, so refusing the write would lose the
+      // user's sentence without telling them — and the client re-sends the same dead id on every
+      // keystroke afterwards, so the surface would never persist again.
       const res = await put('composer', { text: 'x', images: ['deadbeef'] });
-      expect(res.status).toBe(400);
-      expect((await res.json() as { error: string }).error).toContain('unknown image');
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ text: 'x', images: [] });
     });
 
     it('re-validates the per-surface cap, so a non-cockpit client cannot exceed it', async () => {

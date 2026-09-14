@@ -28,11 +28,14 @@ let calls: Call[]
 let stored: Record<string, RunDraftsResponse>
 /** When set, the draft GET waits on it — the "slow fetch, user typed first" case. */
 let holdGet: Promise<void> | null
+/** When set, every draft WRITE rejects — the silent-failure case the hook promises to survive. */
+let failWrites: boolean
 
 beforeEach(() => {
   calls = []
   stored = {}
   holdGet = null
+  failWrites = false
   fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     const method = init?.method ?? 'GET'
@@ -50,6 +53,7 @@ beforeEach(() => {
       return json({ id: 'img1', mediaType: 'image/png', name: 'shot.png', bytes: 12, data: 'AAA' })
     }
     // Every other route is a draft write; the real one echoes the entry it stored.
+    if (failWrites) throw new Error('write refused')
     const written = (body ?? {}) as { text?: string; images?: string[] }
     return json({
       text: written.text ?? '',
@@ -181,6 +185,38 @@ describe('useDraft', () => {
     const second = renderHook(() => useDraft('r1', 'composer'), { wrapper: shared })
     await act(() => vi.advanceTimersByTimeAsync(0))
     expect(second.result.current.text).toBe('what the user typed')
+  })
+
+  it('a GET that lands after a clear() does not re-seed the surface the user just resolved', async () => {
+    // Cancelling a restored editor the moment it arrives: `clear()` resolves the surface, but the
+    // initial GET is still in flight and React Query replaces the cache wholesale when it settles.
+    // Without `clear()` claiming the seed, the seeding effect fires against that superseded
+    // listing and puts the text back into an editor the user just dismissed.
+    stored.r1 = { surfaces: { composer: entry('what the server remembered') } }
+    // The clear's own empty PUT fails, which the hook is explicitly built to tolerate (a read-only
+    // repo, a full disk) — so its response cannot be what corrects the cache. Only the seed claim
+    // stands between the in-flight GET and the text coming back.
+    failWrites = true
+    let release!: () => void
+    holdGet = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { result } = renderHook(() => useDraft('r1', 'composer'), { wrapper: wrapper() })
+
+    act(() => result.current.clear())
+    await act(async () => {
+      release()
+      await holdGet
+    })
+
+    await waitFor(() => expect(result.current.ready).toBe(true))
+    // The seeding effect runs after the render that made the answer available, so asserting
+    // straight off `ready` would read the state one render too early and pass either way.
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(result.current.text).toBe('')
+    expect(result.current.hasDraft).toBe(false)
   })
 
   it('flushes the pending write on unmount — a route change must not drop the last edit', async () => {

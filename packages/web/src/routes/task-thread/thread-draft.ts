@@ -300,11 +300,16 @@ export function useDraft(runId: string, surface: string, { enabled = true }: Dra
     setImagesState([])
     latest.current = { ...latest.current, text: '', images: [] }
     dirty.current = false
+    // A clear RESOLVES this surface, so the seed it was waiting for is stale by definition.
+    // `dirty` alone would not hold the line: it is false again after this, and React Query replaces
+    // the cache wholesale when an in-flight initial `GET` settles, so the seeding effect would fire
+    // against a listing this clear already superseded and put the text back.
+    seeded.current = key
     cache(runId, surface, null)
     // An empty PUT is the delete — one path for "the user emptied it" and "the message went",
     // and the store drops the surface's blobs with it.
     write(runId, surface, { text: '', images: [] })
-  }, [cache, cancelPending, runId, surface, write])
+  }, [cache, cancelPending, key, runId, surface, write])
 
   const submit = useCallback(
     async <T,>(action: () => Promise<T>): Promise<T> => {

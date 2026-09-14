@@ -301,15 +301,20 @@ function writeChecked(
   input: { text: string; images: string[] },
   now: () => Date,
 ): DraftWriteResult {
-  for (const id of input.images) {
-    if (!imageExists(dataDir, runId, id)) return { ok: false, error: `unknown image: ${id}` };
-  }
+  // An id this store does not hold is DROPPED, not a refusal of the whole write — the same thing
+  // `resolve()` does to a listing whose blob vanished. A blob can legitimately disappear under a
+  // live composer (a second browser sends the message and the run's draft directory goes with it),
+  // and refusing the write there would throw away the user's SENTENCE along with the dead
+  // attachment — silently, since draft writes never surface their failure, and permanently, since
+  // the client re-sends the same dead id on every keystroke. Nothing unknown is stored either way,
+  // so the strictness that matters — a client cannot invent an id — is unchanged.
+  const images = input.images.filter((id) => imageExists(dataDir, runId, id));
 
   const stamp = now().toISOString();
   const stored = readStored(dataDir, runId);
-  const emptied = input.text === '' && input.images.length === 0;
+  const emptied = input.text === '' && images.length === 0;
   if (emptied) delete stored.surfaces[surface];
-  else stored.surfaces[surface] = { text: input.text, images: [...input.images], updatedAt: stamp };
+  else stored.surfaces[surface] = { text: input.text, images: [...images], updatedAt: stamp };
 
   if (Object.keys(stored.surfaces).length > DRAFT_MAX_SURFACES) {
     // Oldest first, so the surface just written is never the one dropped.
@@ -322,9 +327,15 @@ function writeChecked(
   }
 
   if (Object.keys(stored.surfaces).length === 0) {
-    // Nothing left to keep — the whole run directory goes, blobs included.
-    deleteRunDrafts(dataDir, runId);
-    return { ok: true, entry: { text: '', images: [], updatedAt: stamp } };
+    // Nothing left to keep — the whole run directory goes, blobs included. Unless a blob younger
+    // than the grace window is sitting in it: that is an attachment uploaded seconds ago whose
+    // naming `PUT` has not fired yet, and `rm -rf`ing the directory here would delete it out from
+    // under a composer that is still holding it. Leave an empty record instead and let the sweep
+    // reclaim the bytes once the window closes.
+    if (!hasFreshBlob(dataDir, runId, now())) {
+      deleteRunDrafts(dataDir, runId);
+      return { ok: true, entry: { text: '', images: [], updatedAt: stamp } };
+    }
   }
 
   try {
@@ -348,7 +359,9 @@ export function deleteRunDraftSurface(dataDir: string, runId: string, surface: s
   const stored = readStored(dataDir, runId);
   if (stored.surfaces[surface] === undefined) return;
   delete stored.surfaces[surface];
-  if (Object.keys(stored.surfaces).length === 0) {
+  const at = new Date();
+  // Same grace check as `writeChecked` — see the note there.
+  if (Object.keys(stored.surfaces).length === 0 && !hasFreshBlob(dataDir, runId, at)) {
     deleteRunDrafts(dataDir, runId);
     return;
   }
@@ -357,7 +370,7 @@ export function deleteRunDraftSurface(dataDir: string, runId: string, surface: s
   } catch {
     return; // unwritable repo — the draft simply stays; a failed cleanup is never louder than this
   }
-  sweepOrphanImages(dataDir, runId, stored, new Date());
+  sweepOrphanImages(dataDir, runId, stored, at);
 }
 
 /** Every draft this run holds, gone — called when the run itself is deleted or pruned. A draft
@@ -390,7 +403,13 @@ export function writeRunDraftImage(
   const { data: _data, ...meta } = record;
   try {
     // `data` dominates the record; the envelope around it is noise at this scale.
-    enforceStoreBudget(dataDir, runId, image.data.length);
+    // Eviction cannot touch the run being written, so a store whose excess lives in THIS run has
+    // no way down — refuse rather than write past the ceiling. Without this the per-surface cap is
+    // the only bound, and it counts images named in `draft.json` alone, so a client that uploads
+    // blobs and never references them would grow the store until the disk ran out.
+    if (!enforceStoreBudget(dataDir, runId, image.data.length)) {
+      return { ok: false, error: 'draft store is full' };
+    }
     // Blob first, sidecar second: if the process dies between them the attachment is simply not
     // listed (`imageMeta` needs the sidecar) and the orphan sweep reclaims the bytes. The other
     // order would advertise an attachment whose bytes are not there yet.
@@ -480,6 +499,30 @@ function sweepOrphanImages(dataDir: string, runId: string, stored: StoredDraft, 
   }
 }
 
+/** Does this run's `images/` hold anything still inside {@link ORPHAN_GRACE_MS}? The guard on the
+ *  whole-directory deletes: a freshly uploaded blob has no draft record naming it yet, so "no
+ *  surfaces left" does NOT mean "nothing here is wanted". Best effort — an unreadable directory
+ *  reads as nothing fresh, which restores the plain delete. */
+function hasFreshBlob(dataDir: string, runId: string, now: Date): boolean {
+  let files: string[];
+  try {
+    files = readdirSync(imagesDir(dataDir, runId));
+  } catch {
+    return false;
+  }
+  for (const file of files) {
+    if (!file.endsWith('.json')) continue;
+    try {
+      if (now.getTime() - statSync(join(imagesDir(dataDir, runId), file)).mtimeMs < ORPHAN_GRACE_MS) {
+        return true;
+      }
+    } catch {
+      // vanished mid-walk — nothing to protect
+    }
+  }
+  return false;
+}
+
 /** Recursive byte total of one directory. Best effort — an unreadable entry counts as 0. */
 function dirBytes(path: string): number {
   let total = 0;
@@ -543,28 +586,34 @@ const storeBytesEstimate = new Map<string, number>();
  * to be written, counted BEFORE the write so the store cannot overshoot its own ceiling by a whole
  * attachment. One log line per sweep, because a silent deletion of the user's own unsent text
  * would be the wrong kind of quiet.
+ *
+ * Returns whether the store is under the ceiling now. `keepRunId` is never evicted, so the answer
+ * can be `false` — the excess is all in the run being written. Callers decide what that means: an
+ * attachment upload refuses (the caller still has the bytes, and they are the reason for the
+ * excess), a draft RECORD proceeds regardless, because refusing it would drop the user's text over
+ * a few hundred bytes of JSON.
  */
-function enforceStoreBudget(dataDir: string, keepRunId: string, incomingBytes: number): void {
+function enforceStoreBudget(dataDir: string, keepRunId: string, incomingBytes: number): boolean {
   const root = draftsRoot(dataDir);
   if (!existsSync(root)) {
     storeBytesEstimate.set(dataDir, incomingBytes);
-    return;
+    return incomingBytes <= DRAFT_STORE_MAX_BYTES;
   }
   const estimate = storeBytesEstimate.get(dataDir);
   if (estimate !== undefined && estimate + incomingBytes <= BUDGET_RECHECK_BYTES) {
     storeBytesEstimate.set(dataDir, estimate + incomingBytes);
-    return;
+    return true;
   }
   let total = dirBytes(root);
   storeBytesEstimate.set(dataDir, total + incomingBytes);
-  if (total + incomingBytes <= DRAFT_STORE_MAX_BYTES) return;
+  if (total + incomingBytes <= DRAFT_STORE_MAX_BYTES) return true;
   let runIds: string[];
   try {
     runIds = readdirSync(root, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && entry.name !== keepRunId)
       .map((entry) => entry.name);
   } catch {
-    return;
+    return false;
   }
   const ordered = runIds
     .map((id) => ({ id, touched: lastTouched(dataDir, id) }))
@@ -583,4 +632,5 @@ function enforceStoreBudget(dataDir: string, keepRunId: string, incomingBytes: n
         `evicted ${evicted.length} least-recently-touched draft(s)`,
     );
   }
+  return total + incomingBytes <= DRAFT_STORE_MAX_BYTES;
 }

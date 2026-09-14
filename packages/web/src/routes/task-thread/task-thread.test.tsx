@@ -608,6 +608,73 @@ describe('ThreadView', () => {
       // The other message's bubble stays closed and untouched.
       expect(screen.getByText('second')).toBeTruthy()
     })
+
+    it('does not carry a restored prompt draft into the next task', async () => {
+      // The transcript keys the prompt row by the constant 'task', so walking from one task to
+      // another swaps `UserBubble`'s props instead of unmounting it. Before the reset in
+      // `thread-items.tsx`, task A's restored editor stayed open over task B's prompt and the
+      // first keystroke filed A's text under B — the leak `thread-draft.ts` promises against.
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        const body =
+          path === '/api/v1/runs/r1/drafts'
+            ? {
+                surfaces: {
+                  'task-prompt': {
+                    text: 'DRAFT OF TASK ONE',
+                    images: [],
+                    updatedAt: '2026-08-30T00:00:00.000Z',
+                  },
+                },
+              }
+            : path === '/api/v1/runs/r2/drafts'
+              ? { surfaces: {} }
+              : path === '/api/v1/providers/status'
+                ? { providers: [{ provider: 'claude', status: 'connected', enabled: true }] }
+                : []
+        void init
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const view = (id: string) => (
+        <ThreadView run={run('queued', { id })} thread={reduceThread([])} />
+      )
+      const queryClient = createQueryClient()
+      const { rerender } = render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>{view('r1')}</MemoryRouter>
+        </QueryClientProvider>,
+      )
+
+      // Task one's prompt editor opens by itself holding the stored draft — the feature working.
+      const opened = await screen.findAllByLabelText('Edit the message')
+      expect((opened[0] as HTMLTextAreaElement).value).toBe('DRAFT OF TASK ONE')
+
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>{view('r2')}</MemoryRouter>
+        </QueryClientProvider>,
+      )
+
+      await waitFor(() =>
+        expect(queryClient.getQueryData(queryKeys.runs.drafts('r2'))).toBeDefined(),
+      )
+      // Task two has no draft, so nothing should be open and nothing should be written to it.
+      expect(screen.queryAllByLabelText('Edit the message')).toHaveLength(0)
+      expect(
+        fetchMock.mock.calls.filter(
+          ([input, init]) =>
+            String(input).startsWith('/api/v1/runs/r2/drafts/') &&
+            (init as RequestInit | undefined)?.method === 'PUT',
+        ),
+      ).toHaveLength(0)
+    })
   })
 
   /** #472 — the edit/remove affordances exist only while the run is queued. */
