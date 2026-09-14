@@ -108,7 +108,7 @@ function health(forgeAvailable: boolean, automations = false): HealthResponse {
     checks: [],
     defaultRunner: 'claude',
     forge: forgeAvailable ? { kind: 'github', available: true } : null,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations, dispatch: false },
   }
 }
 
@@ -964,5 +964,24 @@ describe('the pure ordering helpers', () => {
     // Unscoped (global settings) nothing is active, so it is pure recency.
     expect(orderProjects(input, null).map((entry) => entry.id)).toEqual(['here', 'recent', 'old'])
     expect(input.map((entry) => entry.id)).toEqual(['old', 'here', 'recent'])
+  })
+
+  it('orderProjects follows the sidebar’s hand-picked order, still sinking the active one', () => {
+    // #952: the drawer's order reaches the palette, because a registry listed two ways in one
+    // cockpit reads as a glitch. Only the active-last rule is the palette's own.
+    const input = [
+      project({ id: 'old', lastOpenedAt: '2026-07-10T00:00:00Z' }),
+      project({ id: 'here', lastOpenedAt: '2026-07-14T00:00:00Z' }),
+      project({ id: 'recent', lastOpenedAt: '2026-07-12T00:00:00Z' }),
+    ]
+    const dragged = ['old', 'here', 'recent']
+    expect(orderProjects(input, null, dragged).map((entry) => entry.id)).toEqual(dragged)
+    // The picked order survives being split around the active project — `old` still precedes
+    // `recent`, which recency alone would have reversed.
+    expect(orderProjects(input, 'here', dragged).map((entry) => entry.id)).toEqual([
+      'old',
+      'recent',
+      'here',
+    ])
   })
 })

@@ -505,6 +505,72 @@ describe('TaskQuickList', () => {
     })
   })
 
+  describe('the pin (#935)', () => {
+    it('renders pinned runs under a Pinned header at the top, once', () => {
+      renderList({
+        runs: [
+          run({ id: 'waiting', title: 'Wants you', status: 'waiting' }),
+          run({ id: 'kept', title: 'The one I live in', status: 'done', pinned: true }),
+        ],
+        onTogglePin: vi.fn(),
+      })
+      const headers = [...document.querySelectorAll('[data-slot="quick-list-bucket"] h2')].map((h) => h.textContent)
+      expect(headers).toEqual(['Pinned', 'Needs you'])
+      expect(rowsIn('Pinned')).toHaveLength(1)
+      expect(bucket('Pinned').querySelector('[data-run-id="kept"]')).not.toBeNull()
+      expect(bucket('Needs you').querySelector('[data-run-id="kept"]')).toBeNull()
+    })
+
+    it('offers Pin on an ordinary row and Unpin on a pinned one, reporting the state asked for', () => {
+      const onTogglePin = vi.fn()
+      renderList({
+        runs: [run({ id: 'plain', status: 'done' }), run({ id: 'kept', status: 'done', pinned: true })],
+        onTogglePin,
+      })
+
+      fireEvent.click(within(row('plain') as HTMLElement).getByRole('button', { name: 'Pin task' }))
+      expect(onTogglePin.mock.calls[0]?.[1]).toBe(true)
+
+      fireEvent.click(within(row('kept') as HTMLElement).getByRole('button', { name: 'Unpin task' }))
+      expect(onTogglePin.mock.calls[1]?.[1]).toBe(false)
+      expect(onTogglePin.mock.calls[1]?.[0]).toMatchObject({ id: 'kept' })
+    })
+
+    it('stays reachable on a device that cannot hover — the drawer has no pointer', () => {
+      // The bug this pins: the control was revealed by `group-hover` and focus alone, so on a
+      // phone (where this same list IS the drawer) there was no way to reach it at all. The
+      // honest axis is the pointer, not the viewport — the drawer keeps the sidebar's fixed
+      // 264px, so a `md:` rule would have been wrong in both directions.
+      renderList({ runs: [run({ id: 'plain', status: 'done' })], onTogglePin: vi.fn() })
+      const pin = document.querySelector('[data-slot="pin-toggle"]') as HTMLElement
+      expect(pin.className).toContain('no-hover:opacity-100')
+      // …and big enough for a thumb there, where 20px is not a target.
+      expect(pin.className).toContain('no-hover:size-7')
+      // The quiet default survives for pointer devices: still zero-width until hovered.
+      expect(pin.className).toContain('w-0')
+      expect(pin.className).toContain('group-hover/task-row:w-5')
+    })
+
+    it('paints no pin control at all when no container wired one', () => {
+      renderList({ runs: [run({ id: 'plain', status: 'done' })] })
+      expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
+    })
+
+    it('paints none in the archived view either — `groupRuns` never reads the pin there', () => {
+      renderList({
+        view: 'archived',
+        runs: [run({ id: 'gone', status: 'done', archived: true })],
+        onTogglePin: vi.fn(),
+      })
+      expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
+    })
+
+    it('keeps the status dot on a pinned row — Pinned says where it is, not how it is', () => {
+      renderList({ runs: [run({ id: 'kept', status: 'waiting', pinned: true })], onTogglePin: vi.fn() })
+      expect(dotOf('kept')?.getAttribute('data-tone')).toBe('pending')
+    })
+  })
+
   describe('the Active/Archived tabs', () => {
     const runs = () => [
       run({ id: 'a', status: 'running' }),
@@ -613,6 +679,33 @@ describe('TaskQuickListContainer', () => {
     )
   })
 
+  it('pins a row through POST /pin, in the active project scope (#935)', async () => {
+    const sent: Array<{ path: string; body: unknown }> = []
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+      const path = String(input)
+      if (init.method === 'POST') {
+        sent.push({ path, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+        return new Response('{}', { status: 200 })
+      }
+      return new Response(JSON.stringify([run({ id: 'live', title: 'A real run', status: 'running' })]), {
+        status: 200,
+      })
+    })
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={createQueryClient()}>
+        <MemoryRouter initialEntries={['/']}>
+          <ListViewProvider>{children}</ListViewProvider>
+        </MemoryRouter>
+      </QueryClientProvider>
+    )
+    render(<TaskQuickListContainer />, { wrapper })
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Pin task' }))
+    await waitFor(() =>
+      expect(sent).toEqual([{ path: '/api/v1/runs/live/pin', body: { pinned: true } }]),
+    )
+  })
+
   it('drives the shared Active/Archived view', async () => {
     renderContainer([run({ id: 'a', status: 'running' }), run({ id: 'b', status: 'done', archived: true })])
 
@@ -620,5 +713,73 @@ describe('TaskQuickListContainer', () => {
 
     await waitFor(() => expect(row('b')).not.toBeNull())
     expect(row('a')).toBeNull()
+  })
+})
+
+/**
+ * Task dispatch in the sidebar (spec `.ai/specs/2026-09-10-dispatch.md`): a dispatched child sits
+ * under the task that ordered it, indented, rather than as a second top-level row. Nesting is per
+ * BUCKET — a child asking for you in `Needs you` while its parent is still `Working` stays where
+ * someone is looking for it.
+ */
+describe('dispatched subtasks in the quick-list', () => {
+  const idsIn = (label: string) =>
+    [...bucket(label).querySelectorAll('[data-slot="task-row"]')].map((el) =>
+      el.getAttribute('data-run-id'),
+    )
+
+  it('nests a child under its parent, indented, in the parent’s own position', () => {
+    renderList({
+      runs: [
+        run({ id: 'newer', status: 'done', createdAt: ago(1_000) }),
+        run({ id: 'parent', status: 'done', createdAt: ago(50_000) }),
+        run({
+          id: 'child',
+          status: 'done',
+          createdAt: ago(10_000),
+          dispatch: { rootRunId: 'parent', parentRunId: 'parent' },
+        }),
+      ],
+    })
+    expect(idsIn('Recent')).toEqual(['newer', 'parent', 'child'])
+    expect(row('child')?.getAttribute('data-depth')).toBe('1')
+    expect(row('parent')?.getAttribute('data-depth')).toBe('0')
+    expect(row('parent')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('1')
+  })
+
+  // Buckets are the unit the sidebar renders: a child that needs you must not be filed under a
+  // parent sitting in a bucket nobody is watching.
+  it('keeps a child in its own bucket when the parent is in another one', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'running' }),
+        run({ id: 'c', status: 'waiting', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    expect(idsIn('Working')).toEqual(['p'])
+    expect(idsIn('Needs you')).toEqual(['c'])
+    expect(row('c')?.getAttribute('data-depth')).toBe('0')
+  })
+
+  it('shows a child whose parent is not in the list at all as a top-level row', () => {
+    renderList({ runs: [run({ id: 'orphan', dispatch: { rootRunId: 'gone', parentRunId: 'gone' } })] })
+    expect(idsIn('Recent')).toEqual(['orphan'])
+    expect(row('orphan')?.getAttribute('data-depth')).toBe('0')
+  })
+
+  // The kind chip tells a dispatched row from a typed one at a glance, and it is the one piece
+  // of metadata the sidebar keeps at every width. Never on the root.
+  it('labels a child with its kind, an absent kind as implement, and a root with nothing', () => {
+    renderList({
+      runs: [
+        run({ id: 'p', status: 'done' }),
+        run({ id: 'rev', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+        run({ id: 'imp', status: 'done', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    const kindOf = (id: string) => row(id)?.querySelector('[data-slot="dispatch-kind"]')?.textContent ?? null
+    expect(kindOf('rev')).toBe('review')
+    expect(kindOf('imp')).toBe('implement')
+    expect(kindOf('p')).toBeNull()
   })
 })

@@ -208,7 +208,7 @@ describe('queued prompt stack routes (#472)', () => {
       ],
     });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain('8 image limit');
+    expect(((await res.json()) as { error: string }).error).toContain('8 attachment limit');
   });
 
   /**
@@ -250,7 +250,7 @@ describe('queued prompt stack routes (#472)', () => {
   it('rejects a whitespace-only message with no images', async () => {
     const res = await post({ text: '   ' });
     expect(res.status).toBe(400);
-    expect(((await res.json()) as { error: string }).error).toContain('needs text or at least one image');
+    expect(((await res.json()) as { error: string }).error).toContain('needs text or at least one attachment');
   });
 
   // ---- PATCH / DELETE a stacked message -------------------------------------

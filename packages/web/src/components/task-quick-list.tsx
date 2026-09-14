@@ -1,13 +1,15 @@
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
+import { useHealth, usePinRun, useReferenceProjectId, useRuns } from '@/api/queries'
 import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
+import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
+import { toast } from '@/components/ui/toaster'
 import { deriveAttention } from '@/lib/attention'
 import { shortAge } from '@/lib/format'
 import { isReadDoneItem, isUnread } from '@/lib/read-state'
@@ -22,6 +24,7 @@ import {
   type QuickListBucket,
   type QuickListRow,
 } from '@/lib/task-groups'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import { formatCost, taskReference } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
 import { useNow } from '@/lib/use-now'
@@ -43,6 +46,7 @@ export function TaskQuickList({
   now = Date.now(),
   showTokens = true,
   showCost = true,
+  onTogglePin,
 }: {
   runs: RunRecord[]
   view: ListView
@@ -54,9 +58,15 @@ export function TaskQuickList({
   /** Presentation capability; defaults visible for older health responses and direct renders. */
   showTokens?: boolean
   showCost?: boolean
+  /** Pin/unpin one row (#935). The container owns the mutation, because WHICH project a row
+   *  belongs to is a container's question — this list is painted for other projects too. */
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const counts = listCounts(runs)
   const buckets = groupRuns(runs, view)
+  // Withheld in the archived view, where `groupRuns` answers one `Archived` bucket and never
+  // reads `run.pinned` — the same call the thread header makes on an archived run.
+  const pinToggle = view === 'archived' ? undefined : onTogglePin
 
   return (
     <div data-slot="quick-list">
@@ -88,6 +98,7 @@ export function TaskQuickList({
           now={now}
           showTokens={showTokens}
           showCost={showCost}
+          onTogglePin={pinToggle}
         />
       )}
     </div>
@@ -108,6 +119,7 @@ export function QuickListBuckets({
   scope = null,
   showTokens = true,
   showCost = true,
+  onTogglePin,
 }: {
   buckets: QuickListBucket[]
   currentRunId?: string | null
@@ -115,6 +127,7 @@ export function QuickListBuckets({
   scope?: string | null
   showTokens?: boolean
   showCost?: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   // Which variant groups are open. Local: it is view state about this list, nothing else reads it.
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set())
@@ -132,22 +145,48 @@ export function QuickListBuckets({
           <h2 className="px-3 pt-2.5 pb-1 text-[11px] font-semibold tracking-[0.04em] text-soft-foreground uppercase">
             {bucket.label}
           </h2>
-          {bucket.rows.map((row) => (
+          {nestRows(bucket.rows).map((node) => (
             <Row
-              key={row.kind === 'group' ? row.groupId : row.run.id}
-              row={row}
+              key={node.run.id}
+              row={node.run.row}
+              depth={node.depth}
+              childCount={node.childCount}
               currentRunId={currentRunId}
               now={now}
               scope={scope}
               showTokens={showTokens}
               showCost={showCost}
-              expanded={row.kind === 'group' && expanded.has(row.groupId)}
+              expanded={node.run.row.kind === 'group' && expanded.has(node.run.row.groupId)}
               onToggle={toggleGroup}
+              onTogglePin={onTogglePin}
             />
           ))}
         </div>
       ))}
     </>
+  )
+}
+
+/**
+ * One bucket's rows, with dispatched children nested under the task that ordered them (spec
+ * `.ai/specs/2026-09-10-dispatch.md`).
+ *
+ * Per BUCKET rather than across the whole list, because the bucket is the unit the sidebar
+ * actually renders: a child that sits in `Needs you` while its parent is still `Working` is
+ * asking for you in its own right, and moving it under a parent in another bucket would file it
+ * where nobody is looking. `buildTaskTree`'s "parent not in this list is a root" rule is what
+ * makes that fall out — the same rule that covers a search or an Active/Archived filter.
+ *
+ * A collapsed variant TILE is always a root: it stands for two or three runs at once, so nothing
+ * can hang beneath it. Its members keep riding the tile's own expansion.
+ */
+function nestRows(rows: readonly QuickListRow[]) {
+  return taskTreeRows(
+    rows.map((row) =>
+      row.kind === 'group'
+        ? { id: `group:${row.groupId}`, row }
+        : { id: row.run.id, dispatch: row.run.dispatch, row },
+    ),
   )
 }
 
@@ -188,6 +227,8 @@ function ViewTab({
 
 function Row({
   row,
+  depth,
+  childCount,
   currentRunId,
   now,
   scope,
@@ -195,8 +236,13 @@ function Row({
   onToggle,
   showTokens,
   showCost,
+  onTogglePin,
 }: {
   row: QuickListRow
+  /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
+  depth: number
+  /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
+  childCount: number
   currentRunId: string | null
   now: number
   scope: string | null
@@ -204,17 +250,21 @@ function Row({
   onToggle: (groupId: string) => void
   showTokens: boolean
   showCost: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   if (row.kind === 'run') {
     return (
       <RunRow
         run={row.run}
+        depth={depth}
+        childCount={childCount}
         queuePosition={row.queuePosition}
         currentRunId={currentRunId}
         now={now}
         scope={scope}
         showTokens={showTokens}
         showCost={showCost}
+        onTogglePin={onTogglePin}
       />
     )
   }
@@ -252,6 +302,9 @@ function Row({
           <ScaleIcon className="size-3.5" aria-hidden="true" />
         </Link>
       </div>
+      {/* No pin on the TILE (#935): a pin is per task, and the tile is a stand-in for two or
+          three of them. Expanding it pins the variant you mean, and the tile rises to `Pinned`
+          with it — the same best-ranked-member rule that already moves it between buckets. */}
       {expanded
         ? row.members.map((member) => (
             <RunRow
@@ -264,6 +317,7 @@ function Row({
               variant
               showTokens={showTokens}
               showCost={showCost}
+              onTogglePin={onTogglePin}
             />
           ))
         : null}
@@ -294,8 +348,35 @@ function Row({
  * Before this rule the title was the sole compressible item in a row of `shrink-0` metadata, so
  * it absorbed 100% of any deficit — which is how `775: i…` happened.
  */
-function RunRow({
+/**
+ * When the row's pin is visible, and what it costs when it is not (#935).
+ *
+ * Zero-width rather than `opacity-0` alone, because of the width-priority rule above: a
+ * permanently reserved 20px slot is 20px the title never gets back, on every row, forever. A
+ * zero-width button is still focusable and still in the tab order, which `hidden` would not be.
+ *
+ * Four things reveal it, and each answers a different way of reaching the row:
+ *  - `group-hover` — the pointer.
+ *  - `group-focus-within` — the keyboard, on the row's own link.
+ *  - `no-hover` — a device that CANNOT hover, where the first two never fire and a
+ *    hover-revealed control is simply unreachable. This is the phone and tablet case; the
+ *    drawer keeps the sidebar's fixed 264px, so the width rule applies there too and the pin
+ *    still cannot be permanent — it is bigger instead (`size-7`), because a 20px target under a
+ *    thumb is not a target. See the variant's definition in `styles/index.css`.
+ *  - `data-[pinned=true]` — an already-pinned row, where the pin is a fact about the row rather
+ *    than an offer, and hiding it would leave `Pinned` unexplained.
+ */
+const ROW_PIN_CLASS =
+  'w-0 overflow-hidden opacity-0' +
+  ' group-hover/task-row:mr-1 group-hover/task-row:w-5 group-hover/task-row:opacity-100' +
+  ' group-focus-within/task-row:mr-1 group-focus-within/task-row:w-5 group-focus-within/task-row:opacity-100' +
+  ' no-hover:mr-1 no-hover:size-7 no-hover:opacity-100' +
+  ' data-[pinned=true]:mr-1 data-[pinned=true]:w-5 data-[pinned=true]:opacity-100'
+
+const RunRow = React.memo(function RunRow({
   run,
+  depth = 0,
+  childCount = 0,
   queuePosition,
   currentRunId,
   now,
@@ -303,8 +384,14 @@ function RunRow({
   variant = false,
   showTokens,
   showCost,
+  onTogglePin,
 }: {
   run: RunRecord
+  /** Nesting level under the task that dispatched this one; 0 for a top-level row. A member row
+   *  under an expanded variant tile leaves it at 0 and wears `variant` instead. */
+  depth?: number
+  /** How many tasks THIS one dispatched. */
+  childCount?: number
   queuePosition: number | null
   currentRunId: string | null
   now: number
@@ -315,6 +402,7 @@ function RunRow({
   variant?: boolean
   showTokens: boolean
   showCost: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const attention = deriveAttention(run)
   const isActive = run.id === currentRunId
@@ -339,6 +427,9 @@ function RunRow({
       ? `#${queuePosition}`
       : shortAge(run.finishedAt ?? run.createdAt, now)
 
+  const subtasks = subtaskLabel(childCount)
+  const dispatchKind = dispatchKindLabel(run)
+
   return (
     <div
       data-slot="task-row"
@@ -347,8 +438,13 @@ function RunRow({
       // Link), so the active state has to be readable here rather than only from the Link's
       // `aria-current`.
       data-active={isActive ? 'true' : undefined}
+      data-depth={depth}
+      // Inline, not a class: depth is unbounded (a dispatched task may dispatch its own), and
+      // Tailwind cannot generate a class per level. 10px is the row's own `pl-2.5`, plus 14px a
+      // level — the same step the Tasks table indents by, so the two lists read as one grammar.
+      style={depth > 0 ? { paddingLeft: `${10 + depth * 14}px` } : undefined}
       className={cn(
-        'flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
+        'group/task-row flex items-center gap-2 rounded-sm pl-2.5 hover:bg-muted',
         isActive && 'bg-muted',
         // The indent a member row wears under an expanded group tile. One padding declaration,
         // not two: `cn` is tailwind-merge, so this REPLACES the `pl-2.5` above rather than losing
@@ -393,6 +489,17 @@ function RunRow({
         >
           {variant ? variantLabel(run, showTokens, showCost) : displayTitle}
         </span>
+        {/* What a DISPATCHED row is for — `review` or `implement`. NOT droppable metadata like
+            the pair below: it is the one thing that tells a child from a task a person typed, so
+            it stays at every width, in the sidebar's smaller chip size. Null on every root. */}
+        {dispatchKind ? (
+          <span
+            data-slot="dispatch-kind"
+            className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground"
+          >
+            {dispatchKind}
+          </span>
+        ) : null}
         {/* The diff numbers, once a turn has produced any (R2 #389). Nothing before that — a
             sidebar row has no column to hold an em dash open for.
 
@@ -410,6 +517,18 @@ function RunRow({
             stat={run.diffStat}
             className="hidden shrink-0 text-[10.5px] @min-[23rem]/sidebar:inline"
           />
+        ) : null}
+        {/* What this task dispatched, counted rather than listed — the children are the indented
+            rows right underneath. Droppable metadata like the diff pair, per the width-priority
+            rule above; the rows themselves are what carry the information. */}
+        {subtasks ? (
+          <span
+            data-slot="subtask-count"
+            title={subtasks}
+            className="hidden shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground @min-[19rem]/sidebar:inline"
+          >
+            {childCount}
+          </span>
         ) : null}
         {/* The reference chip takes the AGE's slot when there is one — same as the mockup, and
             the same trade as before: a row that knows its PR or issue number is identified by
@@ -435,9 +554,19 @@ function RunRow({
           />
         ) : null}
       </Link>
+      {/* The pin (#935), a SIBLING of the Link for the same reason the status dot and the
+          reference chip are: a button inside an anchor is invalid, and this one has its own
+          target. Reveal rules in `ROW_PIN_CLASS`. */}
+      {onTogglePin ? (
+        <PinToggle
+          pinned={Boolean(run.pinned)}
+          onToggle={(pinned) => onTogglePin(run, pinned)}
+          className={ROW_PIN_CLASS}
+        />
+      ) : null}
     </div>
   )
-}
+})
 
 /** A variant row's subtitle: what differs between A and B — the backend and what it has spent.
  *  `runner` is absent on records predating the choice; those are Claude by definition. */
@@ -458,6 +587,7 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
  */
 export function TaskQuickListContainer() {
   const runs = useRuns()
+  const pinMutation = usePinRun()
   const health = useHealth()
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
@@ -465,6 +595,14 @@ export function TaskQuickListContainer() {
   const match = useProjectMatch('/tasks/:id/*')
   const exact = useProjectMatch('/tasks/:id')
   const now = useNow(30_000)
+  const onTogglePin = React.useCallback(
+    (run: RunRecord, pinned: boolean) =>
+      pinMutation.mutate(
+        { id: run.id, pinned },
+        { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+      ),
+    [pinMutation.mutate],
+  )
   // The sidebar's chips are the same chips as the tables', so they get their status the same way:
   // one batched request for the whole list, mounted here where the list is.
   const projectId = useReferenceProjectId()
@@ -494,6 +632,9 @@ export function TaskQuickListContainer() {
         now={now}
         showTokens={visibility.tokens}
         showCost={visibility.cost}
+        // This list is the ACTIVE project's, so the mutation needs no explicit project: the
+        // scoped client already addresses the one the URL names.
+        onTogglePin={onTogglePin}
       />
     </ReferenceStatusProvider>
   )

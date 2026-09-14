@@ -1167,7 +1167,11 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(parked?.activity).toBeUndefined();
     const events = readEvents(record.id);
     expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
-    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('not valid JSON'))).toHaveLength(1);
+    const rejections = events.filter((e) => e.type === 'note' && String(e.message).includes('not valid JSON'));
+    expect(rejections).toHaveLength(1);
+    // The question was lost outright — the note must not render as the dimmest
+    // line in the thread (#936). Nothing else pins this field on the wire.
+    expect(rejections[0]!.tone).toBe('danger');
   }, 30_000);
 
   // Regression (blank-question bug): valid JSON that fails the ask schema used
@@ -1181,18 +1185,76 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     await waitFor(record.id, (r) => r?.status === 'waiting');
     const events = readEvents(record.id);
     expect(events.some((e) => e.type === 'ask.requested')).toBe(false);
-    expect(events.filter((e) => e.type === 'note' && String(e.message).includes('failed validation'))).toHaveLength(1);
+    const rejections = events.filter((e) => e.type === 'note' && String(e.message).includes('failed validation'));
+    expect(rejections).toHaveLength(1);
+    expect(rejections[0]!.tone).toBe('danger'); // see the malformed case above
     const assistantText = events.filter((e) => e.type === 'text');
     expect(assistantText.some((e) => String(e.text).includes('CEZ:ASK {"questions":[]}'))).toBe(true);
   }, 30_000);
+
+  // #936 — a payload one closing brace short used to die at `JSON.parse` and
+  // throw away a fully-formed card: no chips, the raw JSON left in the
+  // transcript, and a dim note where the question should have been. The closer
+  // repair recovers the card; the recovery is audited with its own note, and
+  // the raw marker (which ends on `]`) is stripped along with it.
+  it('a CEZ:ASK missing its final brace still renders one card, notes the recovery, and strips the marker', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:ask-truncated choose', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(store.getRun(record.id)?.status).toBe('waiting');
+    const events = readEvents(record.id);
+    const asks = events.filter((e) => e.type === 'ask.requested');
+    expect(asks).toHaveLength(1);
+    const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
+    expect(questions[0]!.header).toBe('Lint scope');
+    expect(questions[0]!.options).toHaveLength(3);
+    const recoveries = events.filter(
+      (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
+    );
+    expect(recoveries).toHaveLength(1);
+    // The raw payload is stripped along with the card, so this note is the only
+    // trace of the repair — it must not whisper (#936).
+    expect(recoveries[0]!.tone).toBe('danger');
+    expect(events.some((e) => e.type === 'note' && String(e.message).includes('ignored'))).toBe(false);
+    expect(events.filter((e) => e.type === 'text').some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
+  }, 30_000);
+
+  // The same recovery on the OTHER turn-end handler. `runContinuation`'s is
+  // hand-duplicated from `runAgentStep`'s — AGENTS.md's standing warning that a
+  // lifecycle change applied to one of them ships half a fix. Both now route
+  // through `resolveAskTurn`; this pins that they stay indistinguishable.
+  it('recovers a truncated CEZ:ASK on a continuation turn identically', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'do the first thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+    expect(manager.finish(record.id)).toBe(true); // continueRun only accepts a terminal run
+    await waitFor(record.id, (r) => ['done', 'review'].includes(r?.status ?? ''));
+    expect(manager.continueRun(record.id, { text: 'mock:ask-truncated choose' })).toEqual({ ok: true });
+    await waitFor(record.id, (r) => r?.status === 'waiting');
+
+    const events = readEvents(record.id);
+    const asks = events.filter((e) => e.type === 'ask.requested');
+    expect(asks).toHaveLength(1); // the first turn carried no marker
+    const questions = asks[0]!.questions as Array<{ header: string; options: unknown[] }>;
+    expect(questions[0]!.header).toBe('Lint scope');
+    expect(questions[0]!.options).toHaveLength(3);
+    const recoveries = events.filter(
+      (e) => e.type === 'note' && String(e.message).includes('recovered from an unbalanced'),
+    );
+    expect(recoveries).toHaveLength(1);
+    expect(recoveries[0]!.tone).toBe('danger');
+    expect(String(recoveries[0]!.stepId)).toMatch(/^continue-/); // the continuation handler, not the step one
+    expect(events.some((e) => e.type === 'note' && String(e.message).includes('ignored'))).toBe(false);
+    expect(events.filter((e) => e.type === 'text').some((e) => String(e.text).includes('CEZ:ASK'))).toBe(false);
+  }, 40_000);
 });
 
 /**
- * #472 — `persistImage` must work with no `ActiveRun`, because a queued run has
+ * #472 — `persistAttachment` must work with no `ActiveRun`, because a queued run has
  * none. The counter moved to `RunManager.queuedImageSeq`, seeded from the highest
  * numeric suffix on disk rather than the file count.
  */
-describe('RunManager.persistImage without a session (#472)', () => {
+describe('RunManager.persistAttachment without a session (#472)', () => {
   let repoRoot: string;
   let store: RunStore;
   let manager: RunManager;
@@ -1205,7 +1267,7 @@ describe('RunManager.persistImage without a session (#472)', () => {
     namePrefix?: string,
   ) => { name: string; url: string; path: string } | null;
   const persist = (id: string, prefix?: string) =>
-    (manager as unknown as { persistImage: PersistFn }).persistImage(id, 'image/png', PNG, prefix);
+    (manager as unknown as { persistAttachment: PersistFn }).persistAttachment(id, 'image/png', PNG, prefix);
   const imagesDir = (id: string) => join(repoRoot, '.ai/cezar', 'runs', `${id}-images`);
 
   beforeEach(() => {
@@ -1683,6 +1745,31 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     ]);
   });
 
+  /**
+   * #950 — the re-read branches on the NAME, not on the list. A `.pdf` sitting in the same
+   * `images` list as a screenshot must come back as a path only: re-encoding it into a base64
+   * image block would compose a message no backend can accept, and would put the whole document
+   * into the prompt on the one path (restart) where nobody is watching.
+   */
+  it('never re-encodes a non-image attachment into an image block on restart', () => {
+    const r = store.createRun({ title: 't', workflow: 'w', task: 'read the brief', steps: [] });
+    const dir = join(repoRoot, '.ai/cezar', 'runs', `${r.id}-images`);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'pasted-1.png'), 'the-task-bytes');
+    writeFileSync(join(dir, 'pasted-2.pdf'), '%PDF-1.4 the-document-bytes');
+    store.updateRun(r.id, {
+      taskImages: [
+        `/api/v1/runs/${r.id}/images/pasted-1.png`,
+        `/api/v1/runs/${r.id}/images/pasted-2.pdf`,
+      ],
+    });
+
+    const images = hydrate(r.id, r.task).images;
+    expect(images).toHaveLength(1);
+    expect(images?.[0]).toMatchObject({ type: 'image', source: { media_type: 'image/png' } });
+    expect(JSON.stringify(images)).not.toContain(Buffer.from('%PDF-1.4 the-document-bytes').toString('base64'));
+  });
+
   /** Degrade, never fail the boot (AGENTS.md). */
   it('skips an unreadable attachment, notes it, and still starts', () => {
     const r = store.createRun({ title: 't', workflow: 'w', task: 'look at this', steps: [] });
@@ -1692,6 +1779,17 @@ describe('RunManager.hydrateQueuedInput (#472)', () => {
     expect(hydrated.task).toBe('look at this\n\nsee the mock');
     expect(hydrated.stackedImages).toBeUndefined();
     expect(store.readEvents(r.id).some((e) => e.type === 'note' && String(e.message).includes('gone-1.png'))).toBe(true);
+  });
+
+  /** A file has no bytes to fail on — it is only ever `stat`ed — so it needs its own case: a
+   *  deleted `.md` must be dropped and noted, not handed to the agent as a path to nothing. */
+  it('notes a non-image attachment whose file is gone instead of naming a dead path', () => {
+    const r = store.createRun({ title: 't', workflow: 'w', task: 'read the brief', steps: [] });
+    stack(r.id, { text: 'see the brief', images: [`/api/v1/runs/${r.id}/images/pasted-7.md`] });
+
+    const hydrated = hydrate(r.id, r.task);
+    expect(hydrated.stackedImages).toBeUndefined();
+    expect(store.readEvents(r.id).some((e) => e.type === 'note' && String(e.message).includes('pasted-7.md'))).toBe(true);
   });
 });
 
@@ -2003,6 +2101,113 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     );
     const echoed = eventsOf(id).find(
       (e) => e.stepId === 'continue-1' && e.type === 'text' && e.text?.includes('looking into'),
+    );
+    expect(echoed?.text).toContain('/compact please');
+  }, 40_000);
+});
+
+/**
+ * #278 — registry `/skill` expansion on a FRESH run's OPENING prompt.
+ *
+ * A task STARTED with `/om-...` as its first message is delivered straight to
+ * `startSession` inside `execute`, never through `deliverMessage`, and #811 only
+ * patched the continuation seam. So the opening prompt leaked the raw slash to the
+ * backend, which answered "Unknown command" even though Cezar lists the skill.
+ *
+ * The mock CLI echoes the prompt it received (`Okay — looking into: …`), so the
+ * transcript is a faithful witness of what actually reached the backend.
+ */
+describe("registry /skill expansion on a fresh run's opening prompt (#278)", () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let runId: string | undefined;
+  let savedDryRun: string | undefined;
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-278-'));
+    savedDryRun = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    mkdirSync(join(repoRoot, '.ai/cezar/skills'), { recursive: true });
+    writeFileSync(
+      join(repoRoot, '.ai/cezar/skills/demo-review.md'),
+      '---\nname: demo-review\ndescription: Review a diff.\n---\n\nRun the demo review playbook.\n',
+    );
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    runId = undefined;
+  });
+
+  afterEach(() => {
+    if (runId) manager.cancel(runId);
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  // Tolerant of the pre-first-event window: the run's ndjson does not exist until
+  // the engine writes its first event, and this describe polls events directly
+  // (no store-status gate first), so a missing file is simply "no events yet".
+  const eventsOf = (id: string) => {
+    let raw: string;
+    try {
+      raw = readFileSync(join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`), 'utf8').trim();
+    } catch {
+      return [] as { type: string; text?: string; stepId?: string }[];
+    }
+    if (!raw) return [] as { type: string; text?: string; stepId?: string }[];
+    return raw.split('\n').map((line) => JSON.parse(line) as { type: string; text?: string; stepId?: string });
+  };
+
+  const waitFor = async (predicate: () => boolean, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  it('expands the opening prompt before it reaches the backend', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: '/demo-review look at the diff',
+      worktree: false,
+    });
+    runId = record.id;
+    await waitFor(() =>
+      eventsOf(record.id).some(
+        (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+      ),
+    );
+
+    const echoed = eventsOf(record.id).find(
+      (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+    );
+    // The backend saw the expanded skill prompt, NOT the bare slash command it would
+    // reject as an unknown command.
+    expect(echoed?.text).toContain('Selected skill: /demo-review');
+    expect(echoed?.text).not.toContain('/demo-review look at the diff');
+  }, 40_000);
+
+  it('leaves an unknown slash command untouched so backend-native commands still work', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: '/compact please', worktree: false });
+    runId = record.id;
+    await waitFor(() =>
+      eventsOf(record.id).some(
+        (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
+      ),
+    );
+    const echoed = eventsOf(record.id).find(
+      (e) => e.stepId === 'task' && e.type === 'text' && e.text?.includes('looking into'),
     );
     expect(echoed?.text).toContain('/compact please');
   }, 40_000);

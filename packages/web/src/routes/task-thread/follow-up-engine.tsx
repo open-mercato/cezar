@@ -5,7 +5,7 @@ import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import { continueRun } from '@/api/client'
 import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
-import type { ApiRun, ContinueResponse, ImageInput, Runner } from '@open-mercato/cezar-api-client'
+import type { ApiRun, ContinueResponse, AttachmentInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
 import {
   modelsForRunner,
@@ -34,7 +34,7 @@ export interface ContinueAction {
    * rather than toasting itself, so the composer can restore the draft it optimistically
    * cleared — nothing the user typed is lost to a 409.
    */
-  continueWith: (text: string, images: ImageInput[]) => Promise<ContinueResponse>
+  continueWith: (text: string, images: AttachmentInput[]) => Promise<ContinueResponse>
 }
 
 /**
@@ -100,7 +100,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     : null
 
   const mutation = useMutation({
-    mutationFn: ({ text, images }: { text: string; images: ImageInput[] }) => {
+    mutationFn: ({ text, images }: { text: string; images: AttachmentInput[] }) => {
       if (!canContinue) {
         return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
       }

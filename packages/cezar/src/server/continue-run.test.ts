@@ -133,11 +133,21 @@ describe('POST /api/v1/runs/:id/continue override', () => {
     ]);
   });
 
-  it('rejects a non-image media type, and more images than a message may carry', async () => {
-    expect((await post({ images: [{ mediaType: 'text/plain', data: 'AAAA' }] })).status).toBe(400);
+  it('rejects a media type outside the allowlist, and more attachments than a message may carry', async () => {
+    // Since #950 the follow-up composer takes PDF/TXT/MD too — the refusal is what is left
+    // outside that allowlist, not "anything that is not an image".
+    expect((await post({ images: [{ mediaType: 'application/zip', data: 'AAAA' }] })).status).toBe(400);
     const five = Array.from({ length: 5 }, () => ({ mediaType: 'image/png', data: 'AAAA' }));
     expect((await post({ images: five })).status).toBe(400);
     expect(captured).toBeUndefined();
+  });
+
+  /** #950 — a brief pasted into the follow-up composer must reach the reopened session as a file
+   *  block, which the engine turns into a path; the composer is a full composer either way. */
+  it('takes a PDF or a markdown file and hands the manager a file block', async () => {
+    const res = await post({ text: 'read this', images: [{ mediaType: 'application/pdf', data: 'AAAA' }] });
+    expect(res.status).toBe(200);
+    expect(captured?.opts.images).toEqual([{ type: 'file', mediaType: 'application/pdf', data: 'AAAA' }]);
   });
 
   it('rejects an unknown runner with a 400 and never reaches the manager', async () => {

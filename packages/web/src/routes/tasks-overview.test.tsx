@@ -317,7 +317,8 @@ describe('TasksOverview — the table', () => {
 
     expect(logicalRowIds('aligned')).toEqual(headerIds)
     expect(logicalRowIds('aligned-queue')).toEqual(headerIds)
-    expect(tableRow('aligned-queue')?.querySelector('[data-slot="queue-note"]')?.getAttribute('colspan')).toBe('2')
+    // Both live columns folded, so the queued row folds with everyone else — no spanning note.
+    expect(tableRow('aligned-queue')?.querySelector('[data-slot="queue-note"]')).toBeNull()
     expect(document.querySelector('th[data-column-id="cpu"]')?.getAttribute('data-folded')).toBe('true')
     expect(document.querySelector('th[data-column-id="memory"]')?.getAttribute('data-folded')).toBe('true')
   })
@@ -465,6 +466,31 @@ describe('TasksOverview — the table', () => {
     expect(tableRow('q1')?.querySelector('[data-slot="queue-note"]')?.textContent).toBe('#1 in queue')
   })
 
+  it('lets the fold win over the queue note when both live columns are folded', () => {
+    renderOverview({
+      expandedColumns: { cpu: false, memory: false },
+      runs: [run({ id: 'q1', status: 'queued' })],
+    })
+
+    const row = tableRow('q1') as HTMLElement
+    // The note's nowrap text would prise both 42px columns back open on an auto-layout table.
+    expect(row.querySelector('[data-slot="queue-note"]')).toBeNull()
+    expect(row.querySelector('td[data-column-id="cpu"]')?.getAttribute('data-folded')).toBe('true')
+    expect(row.querySelector('td[data-column-id="memory"]')?.getAttribute('data-folded')).toBe('true')
+    expect(row.textContent).not.toContain('in queue')
+  })
+
+  it.each([
+    ['CPU', { cpu: true, memory: false }],
+    ['Mem', { cpu: false, memory: true }],
+  ])('still shows the queue note while %s is expanded to carry it', (_label, expandedColumns) => {
+    renderOverview({ expandedColumns, runs: [run({ id: 'q1', status: 'queued' })] })
+
+    const note = tableRow('q1')?.querySelector('[data-slot="queue-note"]')
+    expect(note?.textContent).toBe('#1 in queue')
+    expect(note?.getAttribute('colspan')).toBe('2')
+  })
+
   it('keeps queue numbers stable under search — the engine does not care what you typed', () => {
     renderOverview({
       runs: [
@@ -544,6 +570,76 @@ describe('TasksOverview — inline rename from the table (spec step 15)', () => 
   it('offers no rename affordance on the mobile cards — hover pencils do not exist on touch', () => {
     renderOverview({ runs: [run({ id: 'e6' })] })
     expect(within(card('e6') as HTMLElement).queryByRole('button', { name: 'Rename task' })).toBeNull()
+  })
+})
+
+describe('TasksOverview — pinned tasks (#935)', () => {
+  it('sorts pinned rows to the top, whatever their status says', () => {
+    const onTogglePin = vi.fn()
+    renderOverview({
+      runs: [
+        run({ id: 'waiting', status: 'waiting' }),
+        run({ id: 'kept', status: 'done', pinned: true }),
+        run({ id: 'running', status: 'running' }),
+      ],
+      onTogglePin,
+    })
+    const order = [...document.querySelectorAll('[data-slot="task-table-row"]')].map((el) =>
+      el.getAttribute('data-run-id'),
+    )
+    expect(order).toEqual(['kept', 'waiting', 'running'])
+  })
+
+  it('toggles from the row and from the card, reporting the state asked for', () => {
+    const onTogglePin = vi.fn()
+    renderOverview({ runs: [run({ id: 'kept', status: 'done', pinned: true })], onTogglePin })
+
+    fireEvent.click(within(tableRow('kept') as HTMLElement).getByRole('button', { name: 'Unpin task' }))
+    expect(onTogglePin.mock.calls[0]?.[1]).toBe(false)
+    expect(onTogglePin.mock.calls[0]?.[0]).toMatchObject({ id: 'kept' })
+
+    fireEvent.click(within(card('kept') as HTMLElement).getByRole('button', { name: 'Unpin task' }))
+    expect(onTogglePin).toHaveBeenCalledTimes(2)
+  })
+
+  it('the row pin stays reachable without a pointer (a tablet is >=md and cannot hover)', () => {
+    renderOverview({ runs: [run({ id: 'plain', status: 'done' })], onTogglePin: vi.fn() })
+    const pin = tableRow('plain')?.querySelector('[data-slot="pin-toggle"]') as HTMLElement
+    expect(pin.className).toContain('no-hover:opacity-100')
+    expect(pin.className).toContain('opacity-0')
+  })
+
+  it('a pin click does not also open the task — the control owns its click', () => {
+    renderOverview({ runs: [run({ id: 'kept', status: 'done' })], onTogglePin: vi.fn() })
+    fireEvent.click(within(card('kept') as HTMLElement).getByRole('button', { name: 'Pin task' }))
+    expect(location()).toBe('/')
+  })
+
+  it('the archived view ignores pins — that list is history, in its own order', () => {
+    renderOverview({
+      view: 'archived',
+      runs: [
+        run({ id: 'newer', archived: true, createdAt: ago(10_000) }),
+        run({ id: 'older-pinned', archived: true, pinned: true, createdAt: ago(90_000) }),
+      ],
+      onTogglePin: vi.fn(),
+    })
+    const order = [...document.querySelectorAll('[data-slot="task-table-row"]')].map((el) =>
+      el.getAttribute('data-run-id'),
+    )
+    expect(order).toEqual(['newer', 'older-pinned'])
+  })
+
+  it('paints no pin control in the archived view — it would have nowhere to show its result', () => {
+    // The thread header already withholds the action on an archived run (`runActionFlags`).
+    // Offered here it would be worse than inert: the pin sticks, so un-archiving would drop the
+    // task at the top of the active list by a click that looked like it did nothing.
+    renderOverview({
+      view: 'archived',
+      runs: [run({ id: 'gone', archived: true })],
+      onTogglePin: vi.fn(),
+    })
+    expect(document.querySelector('[data-slot="pin-toggle"]')).toBeNull()
   })
 })
 
@@ -1082,5 +1178,92 @@ describe('TasksOverviewRoute — wired to the app', () => {
       const listFetches = fetchMock.mock.calls.filter(([path]) => String(path) === '/api/v1/runs')
       expect(listFetches.length).toBeGreaterThan(1)
     })
+  })
+})
+
+/**
+ * Task dispatch in the list (spec `.ai/specs/2026-09-10-dispatch.md`): a child task renders
+ * NESTED under the task that dispatched it, in that task's own place in the ordering — never as
+ * a second top-level row. The nesting rule itself is table-tested in `lib/task-tree.test.ts`;
+ * what is worth a DOM test is that both layouts of this page actually paint it.
+ */
+describe('dispatched subtasks nest under their parent', () => {
+  const rowIds = () =>
+    [...document.querySelectorAll('[data-slot="task-table-row"]')].map((row) =>
+      row.getAttribute('data-run-id'),
+    )
+  const depthOf = (id: string) => tableRow(id)?.getAttribute('data-depth')
+
+  it('puts a child directly under its parent, indented, wherever the parent sorted', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'newer', createdAt: ago(1_000) }),
+        run({ id: 'parent', createdAt: ago(50_000) }),
+        run({ id: 'child', createdAt: ago(10_000), dispatch: { rootRunId: 'parent', parentRunId: 'parent' } }),
+      ],
+    })
+    // `child` is newer than `parent` and would sort above it on its own — it follows its parent.
+    expect(rowIds()).toEqual(['newer', 'parent', 'child'])
+    expect(depthOf('parent')).toBe('0')
+    expect(depthOf('child')).toBe('1')
+  })
+
+  it('counts the subtasks on the parent row and nothing on a childless one', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'p' }),
+        run({ id: 'c1', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+        run({ id: 'c2', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+        run({ id: 'alone' }),
+      ],
+    })
+    expect(tableRow('p')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('2 subtasks')
+    expect(tableRow('alone')?.querySelector('[data-slot="subtask-count"]')).toBeNull()
+    expect(tableRow('c1')?.querySelector('[data-slot="subtask-count"]')).toBeNull()
+  })
+
+  // The rule that keeps a filtered list honest — a row must never vanish because the search
+  // removed the task that ordered it.
+  it('shows a child whose parent is not in the list as a top-level row', () => {
+    renderOverview({
+      runs: [run({ id: 'orphan', dispatch: { rootRunId: 'gone', parentRunId: 'gone' } })],
+    })
+    expect(rowIds()).toEqual(['orphan'])
+    expect(depthOf('orphan')).toBe('0')
+  })
+
+  it('nests the card view identically — the two layouts are one list at two widths', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'p' }),
+        run({ id: 'c', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    const ids = [...document.querySelectorAll('[data-slot="task-card"]')].map((el) =>
+      el.getAttribute('data-run-id'),
+    )
+    expect(ids).toEqual(['p', 'c'])
+    expect(card('c')?.getAttribute('data-depth')).toBe('1')
+    expect(card('p')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('1 subtask')
+  })
+
+  // The chip that tells a dispatched row from a typed one: its kind, next to the title, in both
+  // layouts — and never on the root, which is the user's own task whatever it dispatched.
+  it('labels a child with its kind, an absent kind as implement, and a root with nothing', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'p' }),
+        run({ id: 'rev', dispatch: { rootRunId: 'p', parentRunId: 'p', kind: 'review' } }),
+        run({ id: 'imp', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    const kindOf = (el: Element | null | undefined) =>
+      el?.querySelector('[data-slot="dispatch-kind"]')?.textContent ?? null
+    expect(kindOf(tableRow('rev'))).toBe('review')
+    expect(kindOf(tableRow('imp'))).toBe('implement')
+    expect(kindOf(tableRow('p'))).toBeNull()
+    expect(kindOf(card('rev'))).toBe('review')
+    expect(kindOf(card('imp'))).toBe('implement')
+    expect(kindOf(card('p'))).toBeNull()
   })
 })

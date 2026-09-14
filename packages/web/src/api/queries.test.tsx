@@ -122,24 +122,24 @@ class FakeHealthSocket {
 }
 
 describe('useRunnerModels', () => {
-  it('loads the workspace Codex catalog', async () => {
-    fetchMock.mockResolvedValue(json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false }))
-    const { result } = renderHook(() => useRunnerModels('codex'), { wrapper: wrapper() })
+  // One cache entry per runner (#794 for OpenCode, #784 for Claude): every runner cezar ships is
+  // read from its own host catalog, so the fetch must follow the pick rather than name one CLI.
+  it.each([
+    ['codex', 'gpt-future'],
+    ['claude', 'opus[1m]'],
+    ['opencode', 'openai/gpt-5.4'],
+  ] as const)('loads the workspace %s catalog from its own cache entry', async (runner, id) => {
+    fetchMock.mockResolvedValue(json({ runner, models: [{ id, label: 'Future', description: '' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels(runner), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.models[0]?.id).toBe('gpt-future')
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=codex')
+    expect(result.current.data?.models[0]?.id).toBe(id)
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(`/api/v1/models?runner=${runner}`)
   })
 
-  it('loads the OpenCode catalog from its own cache entry (#794)', async () => {
-    fetchMock.mockResolvedValue(json({ runner: 'opencode', models: [{ id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' }], source: 'live', stale: false }))
-    const { result } = renderHook(() => useRunnerModels('opencode'), { wrapper: wrapper() })
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.models[0]?.id).toBe('openai/gpt-5.4')
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=opencode')
-  })
-
-  it('never asks the server about claude, which has no host catalog', async () => {
-    const { result } = renderHook(() => useRunnerModels('claude'), { wrapper: wrapper() })
+  // The other half of the `enabled` guard: a caller that only MIGHT render the pills (the
+  // thread's Continue) must not fetch a catalog it will never show.
+  it('never fetches while disabled', async () => {
+    const { result } = renderHook(() => useRunnerModels('claude', false), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.fetchStatus).toBe('idle'))
     expect(result.current.data).toBeUndefined()
     expect(fetchMock).not.toHaveBeenCalled()

@@ -461,6 +461,9 @@ describe('AppShell', () => {
       const bar = document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement
       expect(bar).not.toBeNull()
       expect(bar.className).toContain('md:hidden')
+      // The row is exactly the 44px touch baseline; its menu button keeps that same target.
+      expect(bar.firstElementChild?.className).toContain('h-11')
+      expect(within(bar).getByRole('button', { name: 'Open menu' }).className).toContain('size-11')
     })
 
     it('titles the mobile bar from the active route', () => {

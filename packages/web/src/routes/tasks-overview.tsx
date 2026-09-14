@@ -25,7 +25,7 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
-import { queryKeys, useHealth, useReferenceProjectId, useRuns } from '@/api/queries'
+import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRuns } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
@@ -33,6 +33,7 @@ import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
 import { Pill } from '@/components/pill'
+import { PinToggle } from '@/components/pin-toggle'
 import { TaskReferenceChip } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { StatusDot } from '@/components/status-dot'
@@ -52,6 +53,7 @@ import {
   type TaskColumnId,
 } from '@/lib/task-columns'
 import { listCounts, queuePositions, runTitle, sortRuns, type ListView } from '@/lib/task-groups'
+import { dispatchKindLabel, subtaskLabel, taskTreeRows } from '@/lib/task-tree'
 import {
   compareGroups,
   filterRuns,
@@ -87,6 +89,7 @@ export function TasksOverview({
   onArchiveFinished,
   onMarkAllRead,
   onRename,
+  onTogglePin,
   now = Date.now(),
   showTokens = true,
   showCost = true,
@@ -105,6 +108,10 @@ export function TasksOverview({
   /** Inline rename from the table's Task cell (spec step 15) — the route wires this to
    *  `PATCH /api/runs/:id`, the same flow as the run header's pencil. */
   onRename: (id: string, title: string) => void
+  /** Pin/unpin one task (#935). Pinned rows sort to the top of the table — `sortRuns` does that
+   *  for every surface at once — so the row's own control is also the only thing on this page
+   *  that explains why one is up there. */
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
   /** Presentation capability; defaults visible for older health responses and direct renders. */
@@ -120,6 +127,11 @@ export function TasksOverview({
   const all = runs ?? []
   const counts = listCounts(all)
   const visible = sortRuns(filterRuns(all, query), view)
+  // Dispatched children nest under the task that ordered them, in that task's own place in the
+  // sort above (spec `.ai/specs/2026-09-10-dispatch.md`). One derivation, both layouts: the table
+  // and the cards are the same rows at two widths, and a tree that disagreed between them would
+  // be two trees.
+  const rows = taskTreeRows(visible)
   // Positions come from the full list, never the filtered one: a search must not renumber the
   // queue the engine is actually going to drain.
   const positions = queuePositions(all)
@@ -127,6 +139,12 @@ export function TasksOverview({
   const finished = finishedRunCount(all)
   const columns = taskColumnsForCapabilities({ tokens: showTokens, cost: showCost })
   const unread = unreadDoneCount(all)
+  // The archived view withholds the pin, the same call `runActionFlags` makes for the thread
+  // header (`pin: !run.archived`): `sortRuns` skips the pin comparator there and `bucketOf`
+  // answers `Archived` before it ever reads `run.pinned`, so the button would be an action with
+  // nowhere to show its result — and one that outlives the view, since un-archiving would then
+  // drop the task at the top of the active list by a click that looked like it did nothing.
+  const pinToggle = view === 'archived' ? undefined : onTogglePin
 
   return (
     <div data-route="tasks" className="flex min-h-full flex-col">
@@ -226,12 +244,17 @@ export function TasksOverview({
                     </tr>
                   </thead>
                   <tbody className="[&>tr:last-child>td]:border-b-0">
-                    {visible.map((run) => (
+                    {rows.map((node) => (
                       <TableRow
-                        key={run.id}
-                        run={run}
-                        queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
+                        key={node.run.id}
+                        run={node.run}
+                        depth={node.depth}
+                        childCount={node.childCount}
+                        queuePosition={
+                          node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
+                        }
                         onRename={onRename}
+                        onTogglePin={pinToggle}
                         now={now}
                         columns={columns}
                         expandedColumns={expandedColumns}
@@ -244,14 +267,19 @@ export function TasksOverview({
 
             {/* <md: the same runs as stacked cards. */}
             <div data-slot="task-cards" className="flex flex-col gap-2.5 md:hidden">
-              {visible.map((run) => (
+              {rows.map((node) => (
                 <TaskCard
-                  key={run.id}
-                  run={run}
-                  queuePosition={run.status === 'queued' ? (positions.get(run.id) ?? null) : null}
+                  key={node.run.id}
+                  run={node.run}
+                  depth={node.depth}
+                  childCount={node.childCount}
+                  queuePosition={
+                    node.run.status === 'queued' ? (positions.get(node.run.id) ?? null) : null
+                  }
                   now={now}
                   showTokens={showTokens}
                   showCost={showCost}
+                  onTogglePin={pinToggle}
                 />
               ))}
             </div>
@@ -494,15 +522,23 @@ const TD_BASE = 'h-11 border-b border-border px-2.5 whitespace-nowrap first:pl-4
  */
 function TableRow({
   run,
+  depth,
+  childCount,
   queuePosition,
   onRename,
+  onTogglePin,
   now,
   columns,
   expandedColumns,
 }: {
   run: RunRecord
+  /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
+  depth: number
+  /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
+  childCount: number
   queuePosition: number | null
   onRename: (id: string, title: string) => void
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
   now: number
   columns: readonly TaskColumnDefinition[]
   expandedColumns: NormalizedExpandedColumns
@@ -518,6 +554,9 @@ function TableRow({
     <tr
       data-slot="task-table-row"
       data-run-id={run.id}
+      // The nesting is carried on the ROW, not only in the Task cell's padding: a test (and a
+      // stylesheet) should be able to ask how deep a row sits without parsing an indent.
+      data-depth={depth}
       onClick={(event) => {
         if ((event.target as Element).closest('a, button, input')) return
         navigate(to)
@@ -527,7 +566,12 @@ function TableRow({
       {columns.map((column) => {
         if (column.id === 'memory') return null
         if (column.id === 'cpu') {
-          return queuePosition !== null ? (
+          const cpuExpanded = isColumnExpanded('cpu', expandedColumns)
+          const memoryExpanded = isColumnExpanded('memory', expandedColumns)
+          // The queue note borrows the CPU/Mem pair, but only while there is room to borrow: the
+          // table is auto-layout, so `#N in queue` under `whitespace-nowrap` would push both folded
+          // columns back open (#821). Fold beats the note; one expanded column is enough to carry it.
+          return queuePosition !== null && (cpuExpanded || memoryExpanded) ? (
             <td
               key={column.id}
               data-slot="queue-note"
@@ -541,8 +585,8 @@ function TableRow({
             <UsageTds
               key={column.id}
               run={run}
-              cpuExpanded={isColumnExpanded('cpu', expandedColumns)}
-              memoryExpanded={isColumnExpanded('memory', expandedColumns)}
+              cpuExpanded={cpuExpanded}
+              memoryExpanded={memoryExpanded}
             />
           )
         }
@@ -552,12 +596,15 @@ function TableRow({
             column={column}
             expanded={isColumnExpanded(column.id, expandedColumns)}
             run={run}
+            depth={depth}
+            childCount={childCount}
             attention={attention}
             scheduled={scheduled}
             reference={reference}
             cost={cost}
             to={to}
             onRename={onRename}
+            onTogglePin={onTogglePin}
             now={now}
           />
         )
@@ -570,23 +617,29 @@ function TaskTableCell({
   column,
   expanded,
   run,
+  depth,
+  childCount,
   attention,
   scheduled,
   reference,
   cost,
   to,
   onRename,
+  onTogglePin,
   now,
 }: {
   column: TaskColumnDefinition
   expanded: boolean
   run: RunRecord
+  depth: number
+  childCount: number
   attention: ReturnType<typeof deriveAttention>
   scheduled: ReturnType<typeof scheduledResume>
   reference: ReturnType<typeof taskReference>
   cost: string
   to: string
   onRename: (id: string, title: string) => void
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
   now: number
 }) {
   if (!expanded) return <FoldedTd column={column.id} />
@@ -606,7 +659,14 @@ function TaskTableCell({
     case 'task':
       return (
         <td data-column-id={column.id} className={cn(TD_BASE, 'min-w-[220px] max-w-0')}>
-          <TitleCell run={run} to={to} onRename={onRename} />
+          <TitleCell
+            run={run}
+            depth={depth}
+            childCount={childCount}
+            to={to}
+            onRename={onRename}
+            onTogglePin={onTogglePin}
+          />
         </td>
       )
     case 'workflow':
@@ -685,12 +745,18 @@ function FoldedTd({ column }: { column: TaskColumnId }) {
  */
 function TitleCell({
   run,
+  depth,
+  childCount,
   to,
   onRename,
+  onTogglePin,
 }: {
   run: RunRecord
+  depth: number
+  childCount: number
   to: string
   onRename: (id: string, title: string) => void
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const title = runTitle(run)
   const editor = useTitleEditor(title, (next) => onRename(run.id, next))
@@ -699,12 +765,33 @@ function TitleCell({
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
 
+  const subtasks = subtaskLabel(childCount)
+  // The indent, as inline style rather than a class: depth is unbounded (a task may dispatch a
+  // task that dispatches a task), and Tailwind cannot generate a class per level. 14px a level is
+  // the sidebar's own nesting step, so the two lists read as one grammar.
+  const indent = depth > 0 ? { paddingLeft: `${depth * 14}px` } : undefined
+
   if (editor.editing) {
-    return <TitleEditInput editor={editor} className="text-[13px] font-medium" />
+    return (
+      <span className="flex min-w-0 items-center" style={indent}>
+        <TitleEditInput editor={editor} className="text-[13px] font-medium" />
+      </span>
+    )
   }
 
   return (
-    <span className="flex min-w-0 items-center gap-1.5">
+    <span className="flex min-w-0 items-center gap-1.5" style={indent}>
+      {/* The one mark that says this row was ORDERED by the row above it rather than by a
+          person. Padding alone reads as an accident at 13px; the tick reads as a branch. */}
+      {depth > 0 ? (
+        <span
+          aria-hidden="true"
+          data-slot="subtask-tick"
+          className="shrink-0 font-mono text-[11px] leading-none text-soft-foreground"
+        >
+          &#9492;
+        </span>
+      ) : null}
       <Link
         to={to}
         title={title}
@@ -715,6 +802,26 @@ function TitleCell({
       >
         {title}
       </Link>
+      {/* What a DISPATCHED row is for — `review` or `implement` — so a tester can tell a child
+          from a task a person typed without opening it. Null on every root. */}
+      {dispatchKindLabel(run) ? (
+        <span
+          data-slot="dispatch-kind"
+          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+        >
+          {dispatchKindLabel(run)}
+        </span>
+      ) : null}
+      {/* What this task dispatched, counted rather than listed: the children are the rows right
+          underneath, so the count is a label for them, not a second copy of them. */}
+      {subtasks ? (
+        <span
+          data-slot="subtask-count"
+          className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+        >
+          {subtasks}
+        </span>
+      ) : null}
       {/* The unread marker — same trailing violet dot as the sidebar row. */}
       {unread ? (
         <StatusDot
@@ -734,6 +841,20 @@ function TitleCell({
       >
         <PencilIcon className="size-3" aria-hidden="true" />
       </button>
+      {/* The pin (#935), beside the pencil and revealed the same way — except when the row IS
+          pinned, where it stays lit: this table has no `Pinned` header, so the filled pin is the
+          whole explanation for why the row sorted to the top.
+
+          `no-hover:` covers the device this table still reaches without a pointer: it is hidden
+          below `md`, where the cards take over, but a tablet in landscape is ≥md and cannot
+          hover, so without it the pin would be invisible AND unreachable there. */}
+      {onTogglePin ? (
+        <PinToggle
+          pinned={Boolean(run.pinned)}
+          onToggle={(pinned) => onTogglePin(run, pinned)}
+          className="size-[19px] opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 no-hover:opacity-100 data-[pinned=true]:opacity-100"
+        />
+      ) : null}
     </span>
   )
 }
@@ -785,16 +906,23 @@ function UsageTd({ column, cell }: { column: 'cpu' | 'memory'; cell: UsageCell }
 /** One run, one card — the `<md` framing of the same row. */
 function TaskCard({
   run,
+  depth,
+  childCount,
   queuePosition,
   now,
   showTokens,
   showCost,
+  onTogglePin,
 }: {
   run: RunRecord
+  /** Nesting level under the task that dispatched this one; 0 for a top-level card. */
+  depth: number
+  childCount: number
   queuePosition: number | null
   now: number
   showTokens: boolean
   showCost: boolean
+  onTogglePin?: (run: RunRecord, pinned: boolean) => void
 }) {
   const navigate = useNavigate()
   const attention = deriveAttention(run)
@@ -811,8 +939,15 @@ function TaskCard({
     <div
       data-slot="task-card"
       data-run-id={run.id}
+      data-depth={depth}
+      // The card stack's nesting: the child card is inset from the left edge and keeps the whole
+      // card width it had, rather than being squeezed — at phone width a shrinking card would
+      // cost the title the room the indent was supposed to explain.
+      style={depth > 0 ? { marginLeft: `${depth * 14}px` } : undefined}
       onClick={(event) => {
-        if ((event.target as Element).closest('a')) return
+        // `button` as well as `a` since the card grew the pin (#935): a control inside the card
+        // owns its own click, exactly as the desktop row has always had it.
+        if ((event.target as Element).closest('a, button')) return
         navigate(to)
       }}
       className="cursor-pointer rounded-lg border border-border bg-card px-3.5 py-3 shadow-xs"
@@ -831,6 +966,24 @@ function TaskCard({
         >
           {runTitle(run)}
         </Link>
+        {/* Same kind chip as the table's Task cell — what this dispatched card is for. */}
+        {dispatchKindLabel(run) ? (
+          <span
+            data-slot="dispatch-kind"
+            className="mt-px shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+          >
+            {dispatchKindLabel(run)}
+          </span>
+        ) : null}
+        {/* Same count as the table's Task cell — the dispatched children are the cards below. */}
+        {subtaskLabel(childCount) ? (
+          <span
+            data-slot="subtask-count"
+            className="mt-px shrink-0 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-muted-foreground"
+          >
+            {subtaskLabel(childCount)}
+          </span>
+        ) : null}
         {/* The unread marker — trailing violet dot, as on the desktop row. */}
         {unread ? (
           <StatusDot
@@ -844,6 +997,15 @@ function TaskCard({
         <span className="mt-0.5 shrink-0 text-[11.5px] text-soft-foreground tabular-nums">
           {shortAge(run.finishedAt ?? run.createdAt, now)}
         </span>
+        {/* Always visible here, not hover-revealed: a card has no hover to speak of on the
+            device it exists for, and it is the only place a pin can be set or seen on mobile. */}
+        {onTogglePin ? (
+          <PinToggle
+            pinned={Boolean(run.pinned)}
+            onToggle={(pinned) => onTogglePin(run, pinned)}
+            className="-mr-1 mt-px"
+          />
+        ) : null}
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5 font-mono text-[11.5px] font-medium text-muted-foreground tabular-nums">
         <span>{workflowLabel(run)}</span>
@@ -940,6 +1102,8 @@ export function TasksOverviewRoute() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
+  // Pinning (#935) — this page is the scoped project's own table, so no explicit project id.
+  const pin = usePinRun()
   const now = useNow(30_000)
   const taskTableColumns = useTaskTableColumns()
   // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
@@ -969,6 +1133,12 @@ export function TasksOverviewRoute() {
         onArchiveFinished={() => archive.mutate()}
         onMarkAllRead={() => markAllRead.mutate()}
         onRename={(id, title) => rename.mutate({ id, title })}
+        onTogglePin={(run, pinned) =>
+          pin.mutate(
+            { id: run.id, pinned },
+            { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
+          )
+        }
         now={now}
         showTokens={metricVisibility.tokens}
         showCost={metricVisibility.cost}
