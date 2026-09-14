@@ -16,6 +16,7 @@ import type {
   AutomationCheckQueuedResponse,
   AutomationLogResponse,
   AutomationResponse,
+  AutomationRetryResponse,
   AutomationRunResponse,
   AutomationTemplatesResponse,
   CreateAutomationInput,
@@ -1687,6 +1688,18 @@ export async function getAutomationLog(
       init(opts),
     ),
     `/automation-log?automationId=${encodeURIComponent(id)}`,
+  )
+}
+
+/** Relaunch a receipt stuck in `launch-error` (spec 2026-09-14 § API, kind-aware): a schedule
+ *  receipt fires its occurrence again as `manual`, a GitHub one relaunches its candidate. 409 with
+ *  the server's reason when the receipt is not retryable. */
+export async function retryAutomationReceipt(receiptId: string): Promise<AutomationRetryResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['automation-log'][':receiptId'].retry.$post({
+      param: { projectId: queryScope(), receiptId: encodeURIComponent(receiptId) },
+    }),
+    `/automation-log/${encodeURIComponent(receiptId)}/retry`,
   )
 }
 
