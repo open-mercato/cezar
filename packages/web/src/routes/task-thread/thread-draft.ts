@@ -9,6 +9,7 @@ import {
   type RunDraftsResponse,
 } from '@open-mercato/cezar-api-client'
 import {
+  fallbackAttachmentName,
   MAX_ATTACHMENTS,
   type AttachmentsChangeReason,
   type PendingAttachment,
@@ -360,11 +361,20 @@ export function useDraft(runId: string, surface: string, { enabled = true }: Dra
         try {
           const blob = await getRunDraftImage(runId, surface, image.id)
           const isImage = isImageMediaType(blob.mediaType)
+          // The store keeps ONE name — the chip's label — so a restored attachment has to say
+          // again whether that label is a filename the user's upload carried or the generated
+          // `pasted.<ext>` fallback. Only the first is sent on the wire and filed in the
+          // attachment library under (#929); without this, leaving a task and coming back —
+          // which is the whole point of drafts — would quietly turn `alpha-brief.pdf` into
+          // another `pasted.pdf` in the library while the chip still read `alpha-brief.pdf`.
+          const carried =
+            blob.name !== '' && blob.name !== fallbackAttachmentName(blob.mediaType, isImage)
           return {
             id: blob.id,
             mediaType: blob.mediaType,
             data: blob.data,
-            name: blob.name,
+            name: blob.name || fallbackAttachmentName(blob.mediaType, isImage),
+            ...(carried ? { originalName: blob.name } : {}),
             ...(isImage ? { preview: `data:${blob.mediaType};base64,${blob.data}` } : {}),
             isImage,
           }

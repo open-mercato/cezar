@@ -5,7 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import type { DraftEntry, RunDraftsResponse } from '@open-mercato/cezar-api-client'
-import type { PendingAttachment } from '@/components/composer/composer-attachments'
+import {
+  toAttachmentInput,
+  type PendingAttachment,
+} from '@/components/composer/composer-attachments'
 
 import { DRAFT_WRITE_DEBOUNCE_MS, useDraft } from './thread-draft'
 
@@ -26,6 +29,8 @@ interface Call {
 let calls: Call[]
 /** What `GET /runs/:id/drafts` answers, per run. */
 let stored: Record<string, RunDraftsResponse>
+/** What the per-image blob GET answers, per image id; anything unnamed gets the PNG default. */
+let storedBlobs: Record<string, { id: string; mediaType: string; name: string; bytes: number; data: string }>
 /** When set, the draft GET waits on it — the "slow fetch, user typed first" case. */
 let holdGet: Promise<void> | null
 /** When set, every draft WRITE rejects — the silent-failure case the hook promises to survive. */
@@ -34,6 +39,7 @@ let failWrites: boolean
 beforeEach(() => {
   calls = []
   stored = {}
+  storedBlobs = {}
   holdGet = null
   failWrites = false
   fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -49,8 +55,12 @@ beforeEach(() => {
     if (/\/drafts\/[^/]+\/images$/.test(url) && method === 'POST') {
       return json({ id: 'img1', mediaType: 'image/png', name: 'shot.png', bytes: 12 })
     }
-    if (/\/drafts\/[^/]+\/images\/[^/]+$/.test(url) && method === 'GET') {
-      return json({ id: 'img1', mediaType: 'image/png', name: 'shot.png', bytes: 12, data: 'AAA' })
+    const blob = /\/drafts\/[^/]+\/images\/([^/]+)$/.exec(url)
+    if (blob && method === 'GET') {
+      const id = blob[1]!
+      return json(
+        storedBlobs[id] ?? { id, mediaType: 'image/png', name: 'shot.png', bytes: 12, data: 'AAA' },
+      )
     }
     // Every other route is a draft write; the real one echoes the entry it stored.
     if (failWrites) throw new Error('write refused')
@@ -415,6 +425,58 @@ describe('useDraft', () => {
         name: 'shot.png',
         preview: 'data:image/png;base64,AAA',
       })
+    })
+
+    /**
+     * The draft store keeps one name per blob — the chip's label — while the composer keeps two:
+     * the label, and `originalName`, the filename the upload actually carried, which is the only
+     * one that goes on the wire and the only one the attachment library files a copy under (#929).
+     * Restoring the label alone loses that distinction, and the loss is silent: the chip still
+     * reads `alpha-brief.pdf` while the message ships no name at all.
+     */
+    it('a restored file attachment still sends the filename it arrived with', async () => {
+      storedBlobs.doc1 = {
+        id: 'doc1',
+        mediaType: 'application/pdf',
+        name: 'alpha-brief.pdf',
+        bytes: 12,
+        data: 'AAA',
+      }
+      stored.r1 = {
+        surfaces: {
+          composer: entry('about the brief', [
+            { id: 'doc1', mediaType: 'application/pdf', name: 'alpha-brief.pdf', bytes: 12 },
+          ]),
+        },
+      }
+      const { result } = renderHook(() => useDraft('r1', 'composer'), { wrapper: wrapper() })
+
+      await waitFor(() => expect(result.current.images).toHaveLength(1))
+      expect(toAttachmentInput(result.current.images[0]!)).toMatchObject({ name: 'alpha-brief.pdf' })
+    })
+
+    it('a restored paste does NOT send the generated chip label as a filename', async () => {
+      // `pasted.md` is what the composer shows for an upload that carried no name of its own.
+      // Sending it would file the library entry the library exists to replace.
+      storedBlobs.doc1 = {
+        id: 'doc1',
+        mediaType: 'text/markdown',
+        name: 'pasted.md',
+        bytes: 12,
+        data: 'AAA',
+      }
+      stored.r1 = {
+        surfaces: {
+          composer: entry('pasted some notes', [
+            { id: 'doc1', mediaType: 'text/markdown', name: 'pasted.md', bytes: 12 },
+          ]),
+        },
+      }
+      const { result } = renderHook(() => useDraft('r1', 'composer'), { wrapper: wrapper() })
+
+      await waitFor(() => expect(result.current.images).toHaveLength(1))
+      expect(result.current.images[0]).toMatchObject({ name: 'pasted.md' })
+      expect(toAttachmentInput(result.current.images[0]!)).not.toHaveProperty('name')
     })
   })
 

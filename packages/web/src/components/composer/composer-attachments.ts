@@ -67,6 +67,18 @@ export interface PendingAttachment extends AttachmentInput {
 /** Distinguishes a user's removal from the composer's optimistic clear before submit. */
 export type AttachmentsChangeReason = 'edit' | 'submit'
 
+/**
+ * The chip label for an upload that carried no name of its own — `pasted image`, `pasted.md`.
+ *
+ * Exported because it is also the only way to tell, later, whether a name IS one: an attachment
+ * that comes back from the draft store (#939) is rebuilt from a stored label with no record of
+ * where that label came from, and a generated one must not be mistaken for a name the user chose
+ * and filed in the library under (`toAttachmentInput`). One function so the two cannot drift.
+ */
+export function fallbackAttachmentName(mediaType: string, isImage: boolean): string {
+  return isImage ? 'pasted image' : `pasted.${attachmentExtension(mediaType)}`
+}
+
 /** File → base64 (chunked — `String.fromCharCode(...5MB)` would blow the arg limit). */
 export async function fileToPendingAttachment(file: File): Promise<PendingAttachment> {
   const bytes = new Uint8Array(await file.arrayBuffer())
@@ -81,7 +93,7 @@ export async function fileToPendingAttachment(file: File): Promise<PendingAttach
     mediaType,
     data,
     ...(isImage ? { preview: `data:${mediaType};base64,${data}` } : {}),
-    name: file.name || (isImage ? 'pasted image' : `pasted.${attachmentExtension(mediaType)}`),
+    name: file.name || fallbackAttachmentName(mediaType, isImage),
     ...(file.name ? { originalName: file.name } : {}),
     isImage,
   }
