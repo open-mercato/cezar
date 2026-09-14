@@ -67,7 +67,8 @@ import {
  * Data doctrine: `useRun` is authoritative for the record; `useRunHistory` hydrates a bounded
  * visible transcript plus compact current-state context and falls back to `useRunEvents` when
  * the optimized route is unavailable. The rendered rows go through the threshold-switched scroller
- * (thread-scroller.tsx — flat + content-visibility below ~300 rows, virtua above).
+ * (thread-scroller.tsx — flat, with content-visibility where scroll anchoring is available,
+ * below ~300 rows; virtua above).
  */
 export function TaskThreadRoute() {
   const { id } = useParams<{ id: string }>()
@@ -177,6 +178,7 @@ export function ThreadView({
   onMarkedUnread?: (runId: string) => void
 }) {
   const footer = threadFooter(run.status, run.error)
+  const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
   const plan = latestPlanEntries(currentThread)
@@ -311,7 +313,7 @@ export function ThreadView({
       <RunHeader
         run={run}
         planTally={planTally}
-        onMarkedUnread={() => onMarkedUnread?.(run.id)}
+        onMarkedUnread={markedUnread}
         // The badge the user already opens to inspect runner/account/model now edits the SAME
         // continuation choice as the dock. One hook owns both renderings, so a header pick is
         // exactly what the next composer submission sends — no second, drifting engine state.

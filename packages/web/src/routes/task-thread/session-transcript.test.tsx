@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ApiRun, RunEvent, UiToolItem } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from '@/api/query-client'
+import { sameData } from '@/lib/same-data'
 
 import claudeSubagent from '../../../../cezar/src/core/__fixtures__/claude/subagent-task.expected.json'
 import codexReview from '../../../../cezar/src/core/__fixtures__/codex/review-mode.expected.json'
@@ -97,6 +98,26 @@ describe('transcript adapters and row building', () => {
       'turn-1:user',
       'turn-1:answer',
     ])
+  })
+
+  it('re-folds equal events into value-equal rows and changes only the live tail', () => {
+    const events = (tail: string): RunEvent[] =>
+      asRunEvents([
+        { type: 'item.completed', item: { kind: 'message', id: 'm1', role: 'assistant', text: 'Settled prose' } },
+        { type: 'item.completed', item: { kind: 'tool', id: 't1', name: 'Bash', toolKind: 'execute', title: 'Ran npm test', status: 'completed', output: 'all green' } },
+        { type: 'item.updated', item: { kind: 'message', id: 'm2', role: 'assistant', text: tail } },
+      ])
+    const rowsFor = (tail: string) =>
+      buildTranscriptRows(mainTranscriptSections(run(), reduceThread(events(tail))), 'r1')
+
+    const before = rowsFor('Wri')
+    const same = rowsFor('Wri')
+    expect(same).not.toBe(before)
+    expect(same.every((row, index) => sameData(row, before[index]))).toBe(true)
+
+    const grown = rowsFor('Writing')
+    expect(grown).toHaveLength(before.length)
+    expect(grown.filter((row, index) => !sameData(row, before[index]))).toHaveLength(1)
   })
 
   /**
@@ -515,6 +536,28 @@ describe('SessionTranscript', () => {
     expect(document.querySelector('[data-slot="ask-card"]')?.textContent).toContain(
       'Open the main session',
     )
+  })
+
+  it('leaves settled rows alone when a live frame only grows the last one', () => {
+    const renderAsk = vi.fn(() => <p data-slot="test-ask">ask</p>)
+    const sections = (tail: string): TranscriptSection[] => [{
+      id: 'agent:memo',
+      entries: [
+        { kind: 'ask', id: 'ask-1', resolved: false, questions: [{ id: 'q1', header: 'Choice', question: 'Continue?', options: [{ label: 'Yes' }] }] },
+        { kind: 'message', id: 'm1', role: 'assistant', text: tail },
+      ],
+    }]
+    const view = render(
+      <SessionTranscript runId="r1" viewId="memo" sections={sections('Wri')} mode="panel" renderAsk={renderAsk} />,
+    )
+    expect(renderAsk).toHaveBeenCalledTimes(1)
+
+    view.rerender(
+      <SessionTranscript runId="r1" viewId="memo" sections={sections('Writing')} mode="panel" renderAsk={renderAsk} />,
+    )
+
+    expect(renderAsk).toHaveBeenCalledTimes(1)
+    expect(document.querySelector('[data-slot="assistant-message"]')?.textContent).toContain('Writing')
   })
 
   it('provides a bounded, keyboard-scrollable panel with a stable scrollbar gutter', () => {

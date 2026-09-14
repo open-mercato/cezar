@@ -1,6 +1,7 @@
 import { memo, useMemo, type ReactNode } from 'react'
 
 import type { ApiRun, UiMessageItem, UiReasoningItem, UiToolItem } from '@open-mercato/cezar-api-client'
+import { sameData } from '@/lib/same-data'
 
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import {
@@ -245,7 +246,14 @@ export function SessionTranscript({
     () =>
       rowModels.map((row) => ({
         key: row.key,
-        node: renderRowContent(runId, row, messageActions?.[row.key], renderAsk),
+        node: (
+          <MemoizedRow
+            runId={runId}
+            row={row}
+            actions={messageActions?.[row.key]}
+            renderAsk={renderAsk}
+          />
+        ),
       })),
     [messageActions, renderAsk, rowModels, runId],
   )
@@ -283,6 +291,29 @@ export function SessionTranscript({
     </ThreadCardCache>
   )
 }
+
+function TranscriptRow({
+  runId,
+  row,
+  actions,
+  renderAsk,
+}: {
+  runId: string
+  row: TranscriptRowModel
+  actions?: TranscriptMessageActions
+  renderAsk?: (ask: ThreadAsk) => ReactNode
+}) {
+  return renderRowContent(runId, row, actions, renderAsk)
+}
+
+const MemoizedRow = memo(
+  TranscriptRow,
+  (before, after) =>
+    before.runId === after.runId &&
+    before.actions === after.actions &&
+    before.renderAsk === after.renderAsk &&
+    sameData(before.row, after.row),
+)
 
 function renderRowContent(
   runId: string,
