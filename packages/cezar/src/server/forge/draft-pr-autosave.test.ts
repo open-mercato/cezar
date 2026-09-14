@@ -44,6 +44,24 @@ describe('createDraftPr pre-PR autosave (#471 follow-up)', () => {
     rmSync(repo, { recursive: true, force: true });
   });
 
+  it('disables terminal credential prompts for raw git pushes', async () => {
+    vi.stubEnv('CEZ_DRY_RUN', '0');
+    vi.stubEnv('GIT_TERMINAL_PROMPT', '1');
+    const remote = mkdtempSync(join(tmpdir(), 'cez-push-remote-'));
+    try {
+      await run('git', ['init', '--bare', '-q', remote]);
+      await git(['remote', 'add', 'origin', remote]);
+      await git(['branch', 'cez/abc123']);
+      writeFileSync(join(repo, '.git', 'hooks', 'pre-push'),
+        '#!/bin/sh\necho "prompt-setting=$GIT_TERMINAL_PROMPT" >&2\nexit 1\n', { mode: 0o755 });
+      const outcome = await createDraftPr(input());
+      expect(outcome.ok).toBe(false);
+      expect(outcome.ok === false && outcome.error).toContain('prompt-setting=0');
+    } finally {
+      rmSync(remote, { recursive: true, force: true });
+    }
+  });
+
   it('refuses to publish a worktree holding conflict markers', async () => {
     writeFileSync(
       join(repo, 'a.txt'),

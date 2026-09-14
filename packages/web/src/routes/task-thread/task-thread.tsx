@@ -27,6 +27,7 @@ import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { AutoResumeHint } from './auto-resume-hint'
+import { useDraft } from './thread-draft'
 import { WorkingIndicator } from './thread-items'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
@@ -66,7 +67,8 @@ import {
  * Data doctrine: `useRun` is authoritative for the record; `useRunHistory` hydrates a bounded
  * visible transcript plus compact current-state context and falls back to `useRunEvents` when
  * the optimized route is unavailable. The rendered rows go through the threshold-switched scroller
- * (thread-scroller.tsx — flat + content-visibility below ~300 rows, virtua above).
+ * (thread-scroller.tsx — flat, with content-visibility where scroll anchoring is available,
+ * below ~300 rows; virtua above).
  */
 export function TaskThreadRoute() {
   const { id } = useParams<{ id: string }>()
@@ -176,6 +178,7 @@ export function ThreadView({
   onMarkedUnread?: (runId: string) => void
 }) {
   const footer = threadFooter(run.status, run.error)
+  const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
   const plan = latestPlanEntries(currentThread)
@@ -236,6 +239,8 @@ export function ThreadView({
     [currentThread.turns, openAgentId],
   )
   const sendMessage = useSendMessage(run.id)
+  // The reply composer's unsent content (#939) — server-side, per run, restored on return.
+  const draft = useDraft(run.id, 'composer')
   const activeProvider = useActiveProviderAvailability(run)
   // A queued send only amends the persisted prompt; it invokes no provider and therefore
   // remains available even when provider discovery cannot authorize a live session. Once the
@@ -274,12 +279,17 @@ export function ThreadView({
   const messageActions = useMemo<Readonly<Record<string, TranscriptMessageActions>> | undefined>(() => {
     if (edit === undefined) return undefined
     const actions: Record<string, TranscriptMessageActions> = {
-      task: { onEdit: edit.onEditTask, editLabel: 'Edit the prompt' },
+      // `draftSurface` (#939) is what makes an unsaved edit survive leaving the task: the bubble
+      // writes it to the run's draft store and re-opens holding it on return.
+      task: { onEdit: edit.onEditTask, editLabel: 'Edit the prompt', draftSurface: 'task-prompt' },
     }
     for (const message of run.queuedMessages ?? []) {
       actions[`queued:${message.id}`] = {
         onEdit: (text) => edit.onEditMessage(message.id, text),
         onRemove: () => edit.onRemoveMessage(message.id),
+        // Per message, so editing one and switching tasks restores THAT editor and leaves its
+        // neighbours closed and empty.
+        draftSurface: `message:${message.id}`,
       }
     }
     return actions
@@ -303,7 +313,7 @@ export function ThreadView({
       <RunHeader
         run={run}
         planTally={planTally}
-        onMarkedUnread={() => onMarkedUnread?.(run.id)}
+        onMarkedUnread={markedUnread}
         // The badge the user already opens to inspect runner/account/model now edits the SAME
         // continuation choice as the dock. One hook owns both renderings, so a header pick is
         // exactly what the next composer submission sends — no second, drifting engine state.
@@ -458,10 +468,21 @@ export function ThreadView({
           ) : null}
 
           <Composer
-            onSubmit={
-              continuable
-                ? (text, images) => continueAction.continueWith(text, images)
-                : (text, images) => sendMessage.mutateAsync({ text, images })
+            // The draft store's first host (#939). The composer is controlled on BOTH seams here
+            // — text and attachments — so leaving the task mid-sentence and coming back restores
+            // the message exactly as it was left, screenshots included. `draft.submit` wraps the
+            // real send: the optimistic clear only becomes a cleared draft once the message has
+            // actually landed, and a rejection leaves the draft (and its blobs) intact.
+            value={draft.text}
+            onValueChange={draft.setText}
+            images={draft.images}
+            onImagesChange={draft.setImages}
+            onSubmit={(text, images) =>
+              draft.submit<unknown>(() =>
+                continuable
+                  ? continueAction.continueWith(text, images)
+                  : sendMessage.mutateAsync({ text, images }),
+              )
             }
             disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
             // Only reachable now by a closed run with NO session to resume — which is exactly

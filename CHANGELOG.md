@@ -52,12 +52,34 @@
   unchanged for now: their entries are one uninterrupted stream with no turn boundaries to hang a
   clock on. Issue: #941.
 
+## 🐛 Fixes
+- 🐛 **A question from a mid-workflow step now pauses the workflow instead of being ignored.** An
+  agent that ended an implementation or review step with a structured `CEZ:ASK` was asking nobody:
+  cezar only read the marker on the last step of a workflow, so an intermediate one was dropped and
+  the run marched straight into the next check — which then failed, and the whole task was recorded
+  as failed while the question was still unanswered on screen. Every agent step's ask is now read,
+  and one from a non-final step holds the workflow at that step: the task shows as waiting with the
+  question as clickable chips, and answering it resumes the very same session and carries on
+  through the remaining steps. The pause has a complete set of exits, which is the part worth
+  spelling out: Cancel settles it as cancelled, Finish ends it the way Finish always does, and a
+  session that closes with the question never answered — the fifteen-minute idle timeout, a
+  restart — settles as failed with a Continue button that reopens the session, rather than leaving
+  the task stuck at waiting and quietly holding one of the workspace's parallel slots forever. A
+  restart no longer reports such a task as a *successful* run either; its unrun steps stay visibly
+  unrun. A malformed `CEZ:ASK` from an intermediate step deliberately does not pause anything: no
+  card can be rendered for it, so the workflow carries on and the parse failure is noted in the
+  transcript, exactly as before. An **autonomous** run is the one exception to the pause: it has
+  nobody to answer, so the auto-continue nudge outranks a mid-workflow question exactly as it
+  already outranks a final one, and the run parks only if the agent asks the same thing again
+  after being nudged. (#917)
+
 # 0.10.1 (2026-09-04)
 
 ## Highlights
 The cockpit gets easier to live in on a phone and harder to be wrong about. Pinned tasks keep the two or three you're actively working on at the top of the list, a follow-up can be sent to a different Claude login than the one that started it, and the composer now takes PDF, TXT and MD files the same way it's always taken a screenshot. The Claude model picker reads from your own CLI instead of a hand-written list, and a run's reference chips get several correctness passes: a conflicting PR now says so, a task can no longer borrow another repository's pull request as its own, and a stale review request or an "Update branch" click can no longer paint over a real rejection.
 
 ## ✨ Features
+- ✨ What you typed into a task is still there when you come back, across navigation and restarts. (#939) *(@piotrchabros)*
 - ✨ Pin the two or three tasks you are actually living in — a per-project Pinned group above `Needs you` (fixes #935). (#938) *(@piotrchabros)*
 - ✨ Continue a task on another agent account, not just another agent. (#924) *(@patzick)*
 - ✨ The composer takes a PDF, TXT or MD file the same way it already takes a screenshot (fixes #950). (#951) *(@pat-lewczuk)*

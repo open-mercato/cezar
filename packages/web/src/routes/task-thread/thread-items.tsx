@@ -23,6 +23,7 @@ import { isImageAttachmentName, type FileDiff, type ToolKind, type UiToolItem } 
 import { cn } from '@/lib/utils'
 
 import { Markdown } from './markdown'
+import { useDraft } from './thread-draft'
 import { splitToolTitle, streakLabel, type ContextGroupBlock } from './thread-groups'
 import { useThreadCardCache } from './thread-open-cards'
 import { isNearBottom } from './thread-scroll'
@@ -63,6 +64,8 @@ export function UserBubble({
   onRemove,
   editLabel = 'Edit message',
   removeLabel = 'Remove message',
+  draftRunId,
+  draftSurface,
 }: {
   text: string
   imageCount?: number
@@ -74,12 +77,51 @@ export function UserBubble({
   onRemove?: () => Promise<void>
   editLabel?: string
   removeLabel?: string
+  /** Where this bubble's unsaved edit is kept (#939). Both or neither: with them, an edit that
+   *  was never saved survives leaving the task, and the bubble re-opens its editor holding it —
+   *  an editor whose text is restored but stays closed is state the user cannot see. */
+  draftRunId?: string
+  draftSurface?: string
 }) {
   const missing = imageCount - images.length
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(text)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string>()
+  // Called unconditionally (hooks are not optional) and inert unless this bubble is one of the
+  // editable ones with a surface to write to.
+  const store = useDraft(draftRunId ?? '', draftSurface ?? '', {
+    enabled: onEdit !== undefined && draftRunId !== undefined && draftSurface !== undefined,
+  })
+
+  // The bubble's OWN editor state needs the same per-(run, surface) reset `useDraft` does
+  // internally, and for the same reason: the transcript keys the task-prompt row by the constant
+  // `'task'`, so walking to another task swaps this component's props instead of unmounting it.
+  // Without this, a restored draft stayed open over the NEXT task's prompt and the first keystroke
+  // filed task A's sentence under task B — exactly the leak `thread-draft.ts` exists to prevent.
+  // Adjusted during render, not in an effect, so no frame ever paints the outgoing text.
+  const draftKey = `${draftRunId ?? ''} ${draftSurface ?? ''}`
+  const [renderedDraftKey, setRenderedDraftKey] = useState(draftKey)
+  if (renderedDraftKey !== draftKey) {
+    setRenderedDraftKey(draftKey)
+    setEditing(false)
+    setDraft(text)
+    setActionError(undefined)
+  }
+
+  // Re-open with what was left unsaved. Runs once per stored draft: opening does not clear it, and
+  // typing the box empty (or saving, or cancelling) makes `hasDraft` false so it cannot re-fire.
+  useEffect(() => {
+    if (editing || !store.ready || !store.hasDraft) return
+    setDraft(store.text)
+    setActionError(undefined)
+    setEditing(true)
+  }, [editing, store.hasDraft, store.ready, store.text])
+
+  const edit = (next: string) => {
+    setDraft(next)
+    store.setText(next)
+  }
 
   const startEditing = () => {
     setDraft(text)
@@ -90,13 +132,14 @@ export function UserBubble({
     const next = draft.trim()
     // An empty edit is a no-op rather than a delete: removing is its own, explicit action.
     if (!next || next === text) {
+      store.clear()
       setEditing(false)
       return
     }
     setBusy(true)
     setActionError(undefined)
     try {
-      await onEdit?.(next)
+      await store.submit(() => onEdit?.(next) ?? Promise.resolve())
       setEditing(false)
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Could not save the message')
@@ -105,11 +148,19 @@ export function UserBubble({
     }
   }
 
+  const cancel = () => {
+    store.clear()
+    setEditing(false)
+  }
+
   const remove = async () => {
     setBusy(true)
     setActionError(undefined)
     try {
       await onRemove?.()
+      // The message is gone, so an unsaved edit OF it is too — otherwise its draft would sit in
+      // the store with nothing left to restore it into.
+      store.clear()
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Could not remove the message')
     } finally {
@@ -128,13 +179,13 @@ export function UserBubble({
           autoFocus
           aria-label="Edit the message"
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
+          onChange={(e) => edit(e.target.value)}
           onKeyDown={(e) => {
             // Escape cancels; ⌘/Ctrl+Enter saves. Plain Enter stays a newline — these are
             // prompt paragraphs, not chat sends.
             if (e.key === 'Escape') {
               e.stopPropagation()
-              setEditing(false)
+              cancel()
             } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
               e.preventDefault()
               void save()
@@ -145,7 +196,7 @@ export function UserBubble({
         <span className="mt-1.5 flex justify-end gap-1.5">
           <button
             type="button"
-            onClick={() => setEditing(false)}
+            onClick={cancel}
             disabled={busy}
             className="rounded-sm px-2 py-1 text-xs font-medium text-muted-foreground hover:bg-background hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
           >

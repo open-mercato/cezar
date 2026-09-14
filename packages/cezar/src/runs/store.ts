@@ -4,6 +4,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync
 import { join } from 'node:path';
 import { z } from 'zod';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
+// Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
+import { deleteRunDrafts } from './drafts.ts';
 // Pure, dependency-free reference helpers — the same sanity bound the marker parser applies.
 import { MAX_REF } from './task-refs.ts';
 // Type-only module (zod + nothing else), so this cannot cycle back into the store.
@@ -218,6 +220,17 @@ export const runRecordSchema = z.object({
   monitoringWakeAt: z.string().datetime().optional().catch(undefined),
   /** True only for the live epoch that exhausted all automatic monitoring checks. */
   monitoringWakeCapReached: z.boolean().optional(),
+  /** This `waiting` is a MID-WORKFLOW park on a `CEZ:ASK` raised by a non-final
+   *  agent step (#917), not the final interactive session. The difference is
+   *  what has already run: a mid-workflow park still has later steps sitting at
+   *  `pending`, so settling it as a success — which is right for the final step —
+   *  would report work that never happened as done. Durable because the only
+   *  reader that needs it, `recover()`, meets the run after a restart, when the
+   *  in-memory park state is gone. Additive and optional (BACKWARD_COMPATIBILITY
+   *  §3): absent on every record older than #917 and on every run that is not
+   *  parked. Invariant: only a `waiting` run carries it — `updateRun` and
+   *  `reconcileLoadedRun` retire it on any other status, so no caller has to. */
+  askParked: z.boolean().optional(),
   /**
    * Exact deadline at which a run stopped by a provider USAGE LIMIT resumes itself
    * (spec 2026-08-03-auto-resume-after-usage-limit) — the reset instant the provider named plus a
@@ -655,6 +668,9 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // The wake counter is intentionally process-local, so a restarted process
   // starts a fresh epoch instead of displaying a stale cap.
   run.monitoringWakeCapReached = undefined;
+  // A mid-workflow ask park (#917) means nothing off a `waiting` run — including
+  // the `failed` written just above for readers that do not recover.
+  if (run.status !== 'waiting') run.askParked = undefined;
   // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
   // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
   // could match the created number. The evidence is all still on the record — only the
@@ -865,6 +881,12 @@ export class RunStore extends EventEmitter {
     // The manager's timer re-checks the record before it fires, so a cleared field is enough.
     if (normalized.status && ['running', 'waiting', 'queued'].includes(normalized.status)) {
       normalized.autoResumeAt = undefined;
+    }
+    // The mid-workflow ask park (#917) is a flavour of `waiting` and nothing else:
+    // answering it (`running`), cancelling, failing and settling all retire it, so
+    // enforcing the invariant here spares every one of those callers the bookkeeping.
+    if (normalized.status && normalized.status !== 'waiting') {
+      normalized.askParked = undefined;
     }
     Object.assign(run, this.redactPatch(normalized));
     this.touch(run);
@@ -1323,6 +1345,9 @@ export class RunStore extends EventEmitter {
         rmSync(this.eventsPath(id), { force: true });
         rmSync(this.handoffPath(id), { force: true }); // spec 007: the journal goes with the task
         rmSync(this.imagesDir(id), { recursive: true, force: true }); // agent screenshots
+        // Unsent drafts go with the task (#939): a draft for a run that no longer exists is
+        // unreachable by definition, and it may be holding megabytes of pasted screenshots.
+        deleteRunDrafts(this.dataDir, id);
       } catch {
         // best effort — the index is authoritative
       }
@@ -1397,6 +1422,7 @@ export class RunStore extends EventEmitter {
         rmSync(this.eventsPath(stale.id), { force: true });
         rmSync(this.handoffPath(stale.id), { force: true });
         rmSync(this.imagesDir(stale.id), { recursive: true, force: true });
+        deleteRunDrafts(this.dataDir, stale.id);
       } catch {
         // best effort
       }

@@ -1,6 +1,7 @@
 import { memo, useMemo, type ReactNode } from 'react'
 
 import type { ApiRun, UiMessageItem, UiReasoningItem, UiToolItem } from '@open-mercato/cezar-api-client'
+import { sameData } from '@/lib/same-data'
 
 import { groupThreadItems, type ThreadBlock } from './thread-groups'
 import {
@@ -62,6 +63,10 @@ export interface TranscriptMessageActions {
   onRemove?: () => Promise<void>
   editLabel?: string
   removeLabel?: string
+  /** The draft surface this row's inline editor writes to (#939) — `task-prompt` for the initial
+   *  prompt, `message:<msgId>` for a queued message. Absent leaves the editor as it was: local
+   *  state that dies with the row. */
+  draftSurface?: string
 }
 
 export interface TranscriptRowModel {
@@ -241,9 +246,16 @@ export function SessionTranscript({
     () =>
       rowModels.map((row) => ({
         key: row.key,
-        node: renderRowContent(row, messageActions?.[row.key], renderAsk),
+        node: (
+          <MemoizedRow
+            runId={runId}
+            row={row}
+            actions={messageActions?.[row.key]}
+            renderAsk={renderAsk}
+          />
+        ),
       })),
-    [messageActions, renderAsk, rowModels],
+    [messageActions, renderAsk, rowModels, runId],
   )
   const rowMode = renderMode ?? threadRenderMode('', rows.length)
 
@@ -280,14 +292,38 @@ export function SessionTranscript({
   )
 }
 
+function TranscriptRow({
+  runId,
+  row,
+  actions,
+  renderAsk,
+}: {
+  runId: string
+  row: TranscriptRowModel
+  actions?: TranscriptMessageActions
+  renderAsk?: (ask: ThreadAsk) => ReactNode
+}) {
+  return renderRowContent(runId, row, actions, renderAsk)
+}
+
+const MemoizedRow = memo(
+  TranscriptRow,
+  (before, after) =>
+    before.runId === after.runId &&
+    before.actions === after.actions &&
+    before.renderAsk === after.renderAsk &&
+    sameData(before.row, after.row),
+)
+
 function renderRowContent(
+  runId: string,
   row: TranscriptRowModel,
   actions: TranscriptMessageActions | undefined,
   renderAsk: ((ask: ThreadAsk) => ReactNode) | undefined,
 ): ReactNode {
   switch (row.content.kind) {
     case 'user-message':
-      return <TranscriptUserBubble message={row.content.message} actions={actions} />
+      return <TranscriptUserBubble runId={runId} message={row.content.message} actions={actions} />
     case 'day-separator':
       return <DaySeparator ts={row.content.ts} />
     case 'turn-time':
@@ -305,9 +341,11 @@ function renderRowContent(
 }
 
 function TranscriptUserBubble({
+  runId,
   message,
   actions,
 }: {
+  runId: string
   message: TranscriptUserMessage
   actions?: TranscriptMessageActions
 }) {
@@ -321,6 +359,8 @@ function TranscriptUserBubble({
       onRemove={actions?.onRemove}
       editLabel={actions?.editLabel}
       removeLabel={actions?.removeLabel}
+      draftRunId={actions?.draftSurface !== undefined ? runId : undefined}
+      draftSurface={actions?.draftSurface}
     />
   )
 }
