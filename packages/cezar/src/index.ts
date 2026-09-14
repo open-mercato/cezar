@@ -15,6 +15,7 @@ import { pruneOrphans } from './git-worktree.ts';
 import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
 import { reclaimWorktrees } from './runs/retention.ts';
+import { armRepoHandle } from './runs/arm-repo-handle.ts';
 import { RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
@@ -34,12 +35,14 @@ import { runMigrations } from './workspace/migrations.ts';
 import { registerProject, shouldRegisterProject } from './workspace/projects.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
+import { runTaskCommand } from './dispatch/task-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
 Usage:
   cezar                     start the cockpit (server + GUI) for the current repo
   cezar run "<task>"        run a task headless in the terminal
+  cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -77,6 +80,12 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the
+  // cockpit's parser can refuse them. It only talks to an already-running cockpit.
+  if (process.argv[2] === 'task') {
+    process.exitCode = await runTaskCommand(process.argv.slice(3));
+    return;
+  }
   const { values, positionals } = parseArgs({
     options: {
       port: { type: 'string', short: 'p', default: '4321' },
@@ -212,7 +221,7 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore });
+  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
   const providerAuth = new ProviderAuthService();
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -273,6 +282,10 @@ async function serveCommand(
         `    and make sure this interface is not reachable from the internet.\n`,
     );
   }
+  // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
+  // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
+  process.env.CEZ_API_URL = `http://127.0.0.1:${port}`;
+  process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
   startServer({
     repoRoot,
     store,
@@ -656,6 +669,9 @@ description: House rules the agent should follow in this repo.
 function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
   const dataDir = join(repoRoot, '.ai/cezar');
   const store = RunStore.open(dataDir, opts);
+  // Repo-scope the referenced tier (#945) — see `armRepoHandle`. Background, never awaited: a
+  // `gh`-less or offline machine keeps working exactly as it did, just unscoped.
+  armRepoHandle(store, repoRoot);
   ensureDataGitignore(repoRoot);
   return store;
 }

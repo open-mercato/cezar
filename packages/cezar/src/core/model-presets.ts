@@ -26,15 +26,10 @@ const KNOWN_PROVIDERS = ['anthropic', 'openai', 'google', 'openrouter'] as const
  * {@link modelConflictsWithRunner} instead, which needs no vendor knowledge at all.
  */
 export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
-  claude: [
-    'opus',
-    'sonnet',
-    'haiku',
-    'claude-fable-5',
-    'claude-opus-4-8',
-    'claude-sonnet-5',
-    'claude-haiku-4-5',
-  ],
+  // Tier aliases only. The dated ids that used to sit here (`claude-opus-4-8` and friends) came
+  // off the picker when Claude gained host discovery (#784) — a guard that names a specific
+  // vendor release goes stale the same way the picker did, and this list mirrors the picker.
+  claude: ['opus', 'sonnet', 'haiku'],
   codex: ['gpt-5.1-codex', 'gpt-5.1-codex-mini', 'gpt-5-codex'],
   opencode: [],
   // pi lists nothing for the same reason OpenCode does (#794), plus one of its own: it picks a
@@ -44,6 +39,18 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // overlap (`anthropic/claude-sonnet-5`), and a shared id present in pi's list but absent from
   // OpenCode's empty one would read as "another runner's preset" and be refused.
   pi: [],
+};
+
+/**
+ * Bare id shapes that name a backend's OWN vendor — mirrored from the web's
+ * `NATIVE_MODEL_ID_PREFIX`. Structural rather than dated so the guard survives the preset lists
+ * dropping vendor releases (#784): every `claude-*` id is Anthropic's, including the ones that do
+ * not exist yet. A gateway id names its provider explicitly (`anthropic/claude-…`) and is left
+ * alone — {@link namesAnotherKnownProvider} is the half of the guard that judges those.
+ */
+const NATIVE_MODEL_ID_PREFIX: Partial<Record<RunnerId, RegExp>> = {
+  claude: /^claude[-.]/,
+  codex: /^gpt[-.]/,
 };
 
 /**
@@ -66,17 +73,24 @@ function namesAnotherKnownProvider(model: string, runner: RunnerId): boolean {
   return (KNOWN_PROVIDERS as readonly string[]).includes(explicit.provider);
 }
 
-/** True when `model` is recognizably a preset of a runner OTHER than `runner` (and not also one
- *  of `runner`'s own presets), or when its provider prefix is one this runner is known not to
- *  serve. `''`/unknown/custom ids never conflict. */
+/** True when `model` is recognizably another runner's — a preset of a runner OTHER than `runner`,
+ *  its vendor's bare id shape, or a provider prefix this runner is known not to serve — and not
+ *  also one of `runner`'s own. `''`/unknown/custom ids never conflict. */
 export function modelConflictsWithRunner(model: string, runner: RunnerId): boolean {
   if (!model) return false;
   if (KNOWN_PRESETS_BY_RUNNER[runner]?.includes(model)) return false;
-  // The provider half of the guard needs no vendor model knowledge, so — unlike the preset
-  // lists — it keeps holding for models that do not exist yet. That is what lets OpenCode's
-  // entry above be empty (#794) without losing the protection it used to provide.
+  if (NATIVE_MODEL_ID_PREFIX[runner]?.test(model)) return false;
+  // Both structural halves of the guard need no vendor model knowledge, so — unlike the preset
+  // lists — they keep holding for models that do not exist yet. That is what lets OpenCode's
+  // entry above be empty (#794) and Claude's shrink to tier aliases (#784) without either
+  // losing the protection it used to provide.
   if (namesAnotherKnownProvider(model, runner)) return true;
-  return Object.entries(KNOWN_PRESETS_BY_RUNNER).some(
-    ([other, presets]) => other !== runner && presets.includes(model),
+  return (
+    Object.entries(KNOWN_PRESETS_BY_RUNNER).some(
+      ([other, presets]) => other !== runner && presets.includes(model),
+    ) ||
+    Object.entries(NATIVE_MODEL_ID_PREFIX).some(
+      ([other, prefix]) => other !== runner && prefix.test(model),
+    )
   );
 }

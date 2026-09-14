@@ -14,8 +14,10 @@ export {
   readCachedRefStatuses,
   refNumberFromUrl,
   GithubPrNotFoundError,
+  searchGithubItems,
   GH_MAX_LIMIT,
   GH_CHECKS_MAX,
+  GH_SEARCH_MAX,
   GH_REF_STATUS_MAX,
 } from './forge/github.ts';
 export type {
@@ -27,6 +29,7 @@ export type {
 } from './forge/github.ts';
 export type {
   ForgeComment,
+  ForgeSearchData,
   ForgeCommentsData,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,

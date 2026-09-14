@@ -291,6 +291,49 @@ describe('ProjectGroups', () => {
     expect(taskLinks('shop')).toHaveLength(0)
   })
 
+  it('keeps pinned rows past the 10-row cap, and spends the budget on the rest (#935)', async () => {
+    const runs = [
+      ...Array.from({ length: 15 }, () => run()),
+      run({ id: 'kept-a', pinned: true }),
+      run({ id: 'kept-b', pinned: true }),
+    ]
+    serve({ '/api/v1/p/cezar/runs': runs })
+    renderGroups([project()])
+
+    await waitFor(() => expect(taskLinks('cezar').length).toBeGreaterThan(0))
+    // Twelve: both pins, plus the ten the ordinary buckets are still allowed.
+    expect(taskLinks('cezar')).toHaveLength(12)
+    const pinnedBucket = group('cezar').querySelector('[data-bucket="Pinned"]')
+    expect(pinnedBucket?.querySelectorAll('[data-slot="task-row"]')).toHaveLength(2)
+  })
+
+  it("pins through the row's OWN project, not the one the URL names (#935)", async () => {
+    // The failure this pins: `queryScope()` would address whichever project the page is standing
+    // in, so a pin on another group's row would 404 — or, with a colliding run id, pin the wrong
+    // task in the wrong repo.
+    const posts: string[] = []
+    fetchMock.mockImplementation(async (input, init: RequestInit = {}) => {
+      const path = String(input)
+      if (init.method === 'POST') {
+        posts.push(path)
+        return json({})
+      }
+      if (path === '/api/v1/p/cezar/runs') return json([run({ id: 'other-project-task' })])
+      if (path === '/api/v1/p/shop/runs') return json([])
+      return json({ error: 'not found' }, 404)
+    })
+    // Standing in `shop`, with the boot project's group open beside it.
+    storeCollapsed({ cezar: false })
+    renderGroups(
+      [project(), project({ id: 'shop', name: 'shop', lastOpenedAt: '2026-07-19T00:00:00.000Z' })],
+      '/p/shop/',
+    )
+
+    await waitFor(() => expect(taskLinks('cezar')).toHaveLength(1))
+    fireEvent.click(within(group('cezar')).getByRole('button', { name: 'Pin task' }))
+    await waitFor(() => expect(posts).toEqual(['/api/v1/p/cezar/runs/other-project-task/pin']))
+  })
+
   it('renders a missing project greyed and inert, with no nav behind it', async () => {
     serve({ '/api/v1/p/cezar/runs': [] })
     renderGroups([project(), project({ id: 'gone', name: 'old-spike', status: 'missing', lastOpenedAt: '2026-07-01T00:00:00.000Z' })])

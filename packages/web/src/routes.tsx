@@ -1,4 +1,4 @@
-import { Suspense, lazy } from 'react'
+import { lazy, memo, Suspense } from 'react'
 import {
   matchPath,
   Navigate,
@@ -70,11 +70,6 @@ const RepoGitRoute = lazy(() =>
  *  stack the thread carries — thread-chunk weight the home screen must not pay. */
 const GithubRoute = lazy(() =>
   import('./routes/github/github').then((m) => ({ default: m.GithubRoute })),
-)
-/** `/github`'s index (#417) — restores the last-selected tab. Same chunk as `GithubRoute`,
- *  just a second named export off the same lazy import. */
-const GithubIndexRoute = lazy(() =>
-  import('./routes/github/github').then((m) => ({ default: m.GithubIndexRoute })),
 )
 
 /** Lazy because the builder carries dnd-kit (R6 Step 1.6) — drag machinery only this surface
@@ -307,7 +302,7 @@ export function pageTitleContext(pathname: string): PageTitleContext {
  *  `ProjectScopeRoute` layout above; the flat spellings below are relative to that prefix and
  *  stay stable — they are what teammates paste, and the legacy flat URLs redirect onto them.
  */
-export function AppRoutes() {
+export const AppRoutes = memo(function AppRoutes() {
   const capabilities = useHealth().data?.capabilities
   return (
     <Routes>
@@ -407,7 +402,12 @@ export function AppRoutes() {
           path="github"
           element={
             <Suspense fallback={<GithubLoading />}>
-              <GithubIndexRoute />
+              {/* `GithubRoute` itself, with `index`, rather than a wrapper component: React
+                  reconciles by element type, so any other type here would unmount the route on
+                  the hop to `github/issues/:n` and reset its search text — losing the very
+                  cross-state hit the user clicked (#730). The `prs` pair below already renders
+                  one type across its two paths, which is why it never had that bug. */}
+              <GithubRoute view="issues" index />
             </Suspense>
           }
         />
@@ -544,4 +544,4 @@ export function AppRoutes() {
       <Route path="*" element={<LegacyPathRedirect />} />
     </Routes>
   )
-}
+})

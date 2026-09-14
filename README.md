@@ -259,9 +259,10 @@ Three words, no jargon — **task**, **skill**, **chain**:
 
 - 📋 **Tasks** are the unit of work. Every task is a **run**: `queued → running →
   review / done / failed / cancelled`, with a live event log, per-step token and
-  cost usage, cancel/delete, and — for anything with a diff — a review gate. Paste
-  screenshots into the task, or send follow-up messages into the live session
-  while it works.
+  cost usage, cancel/delete, and — for anything with a diff — a review gate. Attach
+  screenshots, PDFs, `.txt` or `.md` files to the task (paperclip, ⌘V or drag-drop;
+  the agent gets each one as a real file on disk), or send follow-up messages into
+  the live session while it works.
 - 📖 **Skills** are Markdown playbooks. Drop them in `.ai/skills/` or
   `.ai/cezar/skills/`, or pull them from a shared **team skills repo** (a bare
   git clone cached globally in `~/.cache/cez/`). A workflow step references one by
@@ -314,7 +315,7 @@ Eight views, one browser window, all live over Server-Sent Events (seven until y
 
 | View | What's in it |
 |---|---|
-| **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
+| **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots and file attachments), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
 | **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. |
@@ -517,6 +518,7 @@ Useful environment variables:
 | `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
 | `CEZ_AUTOMATIONS=1` | Turn on **GitHub automations**: the Automations view appears and cezar polls GitHub on each enabled automation's interval, launching tasks from what it finds. Off by default, and only the exact value `1` enables it — without it nothing polls GitHub, the automations endpoints answer `409`, and the nav item is absent. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are retained, so unsetting it and restarting restores the feature without migration or data loss. |
+| `CEZ_DISPATCH=0` | Turn OFF **task dispatch**, which is on by default: a running task may start other cezar tasks with `cez task create` — each in its OWN worktree forked off the parent's branch, with a budget carved out of the parent's — and they report back into the parent's session when they settle (`cez task report`). Children appear nested under their parent in the task lists. Tasks talk through a tree directory (`.ai/cezar/dispatch/<root>/`: the brief, each task's order/notes/report, an inbox per task) and cezar wakes a parked recipient when a file lands. A `--kind review` child judges another task's branch and answers with a verdict. ON by default (the owner-approved exception to "cost-widening features are opt-in" — see `AGENTS.md`), and only the exact value `0` turns it off; with it off the `/runs/:id/dispatch` and `/runs/:id/report` routes answer `409`, no task is told about the CLI, and the cockpit hides the "Review open PRs" template. A headless `cezar run` never dispatches either way — there is no cockpit for the CLI to reach, so no task is told about it. Read at boot, so restart after changing it. This is the widest cost-widening flag here — one task can start four more agents — so give dispatching tasks a budget. |
 | `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. |
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
@@ -595,6 +597,20 @@ cezar is not married to one vendor. Every agent step runs through a single
 On startup cezar probes which CLIs are installed and the cockpit only offers
 the backends it found — install any one of the four and you're operational.
 
+**Models come from your own machine.** The model picker does not ship a list of
+vendor releases that goes stale between cezar versions. For Claude, Codex and
+OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
+Code's `list_models` control request; the Codex app-server's `model/list`;
+`opencode models`) and shows exactly that, in that order — so a model your
+account gained yesterday is selectable today with no cezar release, and one your
+provider retired stops being offered. Discovery is read-only, costs no tokens,
+and is cached briefly in memory. If the CLI is missing, logged out, too old or
+slow, the picker quietly falls back to that runner's built-in entries (`auto`
+plus Claude's tier aliases) and says so in a status row; `pi`, which has no
+host-local catalog yet, always shows its built-in entries. `auto` — send no
+model at all and let the CLI decide — is always available, and a model you
+pinned by hand stays selectable even when it is no longer advertised.
+
 **Pick a backend at three levels** (most specific wins):
 
 1. **Config default** — `"defaultRunner": "codex"` in `.ai/cezar/config.json`.
@@ -623,17 +639,6 @@ steps:
 
 Parallel variants (×2/×3) of one task share that task's backend — mixing
 happens per task and per step, not inside a variant group.
-
-**Models come from your own machine.** For Codex and OpenCode, the model picker
-is not a list cezar ships — it asks the installed CLI what it can actually run
-(`codex app-server`'s `model/list`, and `opencode models`), caches the answer in
-memory for five minutes, and shows it. A model your provider rolled out
-yesterday is selectable without a cezar release, and one it retired stops being
-offered. Claude Code has no equivalent local catalog, so it keeps a short list
-of tier aliases and pinned versions. `auto` (let the agent decide) is always
-available, including when the CLI is missing, logged out, or slow — discovery
-never blocks the cockpit, and a model you pinned yourself stays selectable even
-if it is absent from the discovered list.
 
 The seam is deliberately small: a backend is one class implementing the
 `AgentRunner` interface (`packages/cezar/src/core/agent-runner.ts`) that turns a prompt into
