@@ -151,19 +151,21 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
 
   return (
     <div data-route="automations" data-slot="automation-editor" className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 flex h-14 shrink-0 items-center gap-3 border-b border-border bg-background px-5">
+      {/* The kit's 56px header. Below `md` it may wrap onto a second row: a phone cannot fit the
+          title, the template toggle and both actions on one line, and Save must stay reachable. */}
+      <header className="sticky top-0 z-10 flex min-h-14 shrink-0 flex-wrap items-center gap-3 border-b border-border bg-background px-5 max-md:py-2 md:h-14 md:flex-nowrap">
         <Button variant="ghost" size="icon-sm" aria-label="Back" onClick={onBack}>
           <ArrowLeftIcon aria-hidden="true" className="size-[15px]" />
         </Button>
-        <h1 className="text-base font-semibold">{automation ? 'Edit automation' : 'New automation'}</h1>
+        <h1 className="truncate text-base font-semibold">{automation ? 'Edit automation' : 'New automation'}</h1>
         {automation ? (
           <Pill dot={automation.enabled ? 'success' : 'neutral'}>{automation.enabled ? 'enabled' : 'paused'}</Pill>
         ) : null}
         <span className="flex-1" />
         {!automation ? (
-          <Button variant="ghost" size="sm" aria-expanded={showTemplates} onClick={() => setShowTemplates((open) => !open)}>
+          <Button variant="ghost" size="sm" aria-expanded={showTemplates} aria-label={showTemplates ? 'Hide templates' : 'Start from a template'} onClick={() => setShowTemplates((open) => !open)}>
             <LayoutTemplateIcon aria-hidden="true" className="size-3.5" />
-            {showTemplates ? 'Hide templates' : 'Start from a template'}
+            <span className="max-md:hidden">{showTemplates ? 'Hide templates' : 'Start from a template'}</span>
           </Button>
         ) : null}
         <Button variant="outline" onClick={onBack}>Cancel</Button>

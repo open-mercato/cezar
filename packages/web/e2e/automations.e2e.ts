@@ -16,7 +16,16 @@ let automationsAvailable = true
 
 type Automation = { id: string; name: string; enabled: boolean; kind: string; nextRunAt?: string }
 
-const api = (path: string, init?: RequestInit) => fetch(`${baseUrl}/api/v1${path}`, init)
+/** Every call closes its socket and retries once: undici reuses keep-alive sockets the server
+ *  may have idled out between browser steps, which surfaces as a spurious ECONNRESET. */
+const api = async (path: string, init: RequestInit = {}): Promise<Response> => {
+  const request = () => fetch(`${baseUrl}/api/v1${path}`, { ...init, headers: { connection: 'close', ...(init.headers ?? {}) } })
+  try {
+    return await request()
+  } catch {
+    return request()
+  }
+}
 const listAutomations = async (): Promise<Automation[]> =>
   ((await (await api('/automations')).json()) as { automations: Automation[] }).automations
 
@@ -126,6 +135,8 @@ describe('Automations', () => {
     clickButton('Next runs')
     browser.waitForFunction(`document.querySelector('[data-slot="next-runs-rail"]') !== null`)
     expect(browser.text('[data-slot="next-runs-rail"]')).toContain(name)
+    // The sheet slides in over 500ms; shoot it settled, not mid-animation.
+    browser.waitForFunction(`document.querySelector('[data-slot="next-runs-rail"]').getBoundingClientRect().right <= window.innerWidth + 1 && document.querySelector('[data-slot="next-runs-rail"]').getAttribute('data-state') === 'open' && !document.querySelector('[data-slot="next-runs-rail"]').getAnimations().length`)
     browser.screenshot(`${artifactsDir}/automations-next-runs-rail.png`)
     browser.press('Escape')
 
