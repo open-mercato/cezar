@@ -4,6 +4,7 @@ import {
   ArchiveRestoreIcon,
   BotIcon,
   CheckIcon,
+  ChevronDownIcon,
   CircleStopIcon,
   CopyIcon,
   EllipsisVerticalIcon,
@@ -16,7 +17,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useMemo, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -42,6 +43,7 @@ import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsButton } from '@/components/reference-conflict-action'
 import { ReferenceStatusProvider } from '@/components/reference-status'
+import { StatusDot } from '@/components/status-dot'
 import { TabLink } from '@/components/tab-link'
 import {
   AlertDialog,
@@ -64,6 +66,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
@@ -77,7 +80,7 @@ import {
   workflowLabel,
 } from '@/lib/tasks-table'
 import { usageMetricVisibility } from '@/lib/token-metrics'
-import { isHttpUrl } from '@/lib/utils'
+import { cn, isHttpUrl } from '@/lib/utils'
 
 import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
@@ -104,11 +107,22 @@ import { useFinishRun } from './use-finish-run'
  *  A prop rather than a route match so the header stays testable with a bare render. */
 export type RunTab = 'session' | 'changes' | 'commits' | 'files'
 
+/** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
+ *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
+ *  module-level and run-keyed, because the two navigations a reader makes here remount the header
+ *  in opposite ways. A Session → Changes hop resolves a different route element, so it DOES remount
+ *  and plain `useState` would throw the expand away; run A → run B stays on `/tasks/:id`, so React
+ *  reconciles the same element and does NOT remount — the docks below it key themselves by `run.id`
+ *  for exactly this reason — so even lazily-initialized `useState` would carry run A's expansion
+ *  into run B. Session-lifetime only; no server persistence invented for it. */
+const detailsOpenByRun = new Map<string, boolean>()
+
 export function RunHeader({
   run,
   planTally,
   tab = 'session',
   onMarkedUnread,
+  continuationEngine,
 }: {
   run: ApiRun
   planTally?: { done: number; total: number }
@@ -117,6 +131,9 @@ export function RunHeader({
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
   onMarkedUnread?: () => void
+  /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
+   *  they share this header but do not own the continuation draft or its pending selection. */
+  continuationEngine?: ReactNode
 }) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
@@ -124,14 +141,28 @@ export function RunHeader({
   const [notesOpen, setNotesOpen] = useState(false)
   const actions = useRunActions(run, onMarkedUnread)
 
+  // The phone-width meta disclosure (#765). The map is the state — a re-render bump rather than a
+  // mirrored `useState` — so switching runs reads that run's own answer instead of the last one's.
+  const [, bumpDetails] = useReducer((n: number) => n + 1, 0)
+  const detailsId = useId()
+  const detailsOpen = detailsOpenByRun.get(run.id) ?? false
+  const toggleDetails = () => {
+    detailsOpenByRun.set(run.id, !detailsOpen)
+    bumpDetails()
+  }
+
   // The queue position a parked run shows in its pill ("queued #2"). Reads the shared runs-list
   // query — already warm from the sidebar quick-list — because position is a property of the
   // whole queue, not of this record.
-  const runs = useRuns()
+  const queuePosition = useRuns(
+    useMemo(
+      () => (runs: ApiRun[]) =>
+        run.status === 'queued' ? queuePositions(runs).get(run.id) : undefined,
+      [run.id, run.status],
+    ),
+  ).data
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
-  const queuePosition =
-    run.status === 'queued' ? queuePositions(runs.data ?? []).get(run.id) : undefined
 
   return (
     <header
@@ -144,7 +175,8 @@ export function RunHeader({
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
             {planTally ? (
               // The plan dock's compact mirror (spec: "mirrored as a compact progress line in
-              // the run header").
+              // the run header"). Desktop only since #764: on a phone the dock it mirrors is
+              // itself on screen, so the mirror would spend the tightest row here restating it.
               <span data-slot="plan-mirror" className="hidden text-[11px] text-soft-foreground tabular-nums md:inline">
                 Plan {planTally.done}/{planTally.total}
               </span>
@@ -153,21 +185,54 @@ export function RunHeader({
               {attention.label}
               {queuePosition !== undefined ? ` #${queuePosition}` : ''}
             </Pill>
+            {/* Phone-width only: above `md` the meta row never collapses, so a control to expand
+                it would be a permanently disabled-looking chevron next to always-visible content.
+                On the Session tab of a run with a plan it lands in the slot #764 freed by hiding
+                the plan mirror here; on the three `task-git` tabs no tally is passed at all, so
+                there the row does grow by one control — the price of the collapse. */}
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="md:hidden"
+              aria-label={detailsOpen ? 'Hide run details' : 'Show run details'}
+              aria-controls={detailsId}
+              aria-expanded={detailsOpen}
+              onClick={toggleDetails}
+            >
+              <ChevronDownIcon
+                aria-hidden="true"
+                className={cn('transition-transform', detailsOpen && 'rotate-180')}
+              />
+            </Button>
             <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
           </span>
         </div>
 
-        <MetaRow
-          run={run}
-          showTokens={metricVisibility.tokens}
-          showCost={metricVisibility.cost}
-          // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
-          // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
-          // own test), so every capability read here tolerates an absent object. Absent stays
-          // fail-closed — the chip degrades to text rather than linking into a disabled view.
-          automationsAvailable={health.data?.capabilities?.automations === true}
-        />
+        {/* #765: workflow, branch, tracker refs, diff, tokens and cost wrap across several rows on
+            a phone. `hidden` rather than a visual-only class so the collapsed rows leave the
+            accessibility tree instead of lingering as invisible-but-focusable chips. `md:block`
+            keeps the desktop header exactly as it was — this is a narrow-viewport fix, and a
+            desktop reader who has always seen these at a glance should not have to click for them. */}
+        <div id={detailsId} data-slot="run-details" className={cn(detailsOpen ? 'block' : 'hidden', 'md:block')}>
+          <MetaRow
+            run={run}
+            continuationEngine={continuationEngine}
+            showTokens={metricVisibility.tokens}
+            showCost={metricVisibility.cost}
+            // `capabilities?.` like `usageMetricVisibility` above it: this header is rendered
+            // against minimal health payloads (a `{defaultRunner}`-only answer is pinned by its
+            // own test), so every capability read here tolerates an absent object. Absent stays
+            // fail-closed — the chip degrades to text rather than linking into a disabled view.
+            automationsAvailable={health.data?.capabilities?.automations === true}
+          />
+        </div>
+        {/* Outside the disclosure on purpose: "this run wakes itself up at 14:20" is status, not
+            metadata — it belongs with the pill above, not behind a tap with the diff stats. */}
         <MonitoringSchedule run={run} />
+        {/* Also outside it, for the same reason: who ordered this task, and what it dispatched,
+            are what the run IS doing right now, not metadata about how it started. */}
+        <DispatchParentLine run={run} />
+        <DispatchChildrenLine run={run} />
 
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
@@ -503,6 +568,67 @@ function EditableTitle({ run }: { run: ApiRun }) {
   )
 }
 
+/** Copyable task branch with confirmation kept local so hovering it does not re-render MetaRow. */
+function CopyBranchChip({ branch }: { branch: string }) {
+  const [copied, setCopied] = useState(false)
+  const [tooltipOpen, setTooltipOpen] = useState(false)
+  const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (dismissTimer.current !== null) clearTimeout(dismissTimer.current)
+    },
+    [],
+  )
+
+  const copy = () => {
+    if (!navigator.clipboard) {
+      toast(`Branch: ${branch}`)
+      return
+    }
+    void navigator.clipboard
+      .writeText(branch)
+      .then(() => {
+        setCopied(true)
+        setTooltipOpen(true)
+        if (dismissTimer.current !== null) clearTimeout(dismissTimer.current)
+        dismissTimer.current = setTimeout(() => {
+          dismissTimer.current = null
+          setTooltipOpen(false)
+        }, 1_500)
+      })
+      .catch(() => toast(`Branch: ${branch}`))
+  }
+
+  return (
+    <TooltipProvider>
+      <Tooltip
+          open={tooltipOpen}
+          onOpenChange={(open) => {
+            if (open && dismissTimer.current === null) setCopied(false)
+            setTooltipOpen(open)
+          }}
+        >
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              data-slot="branch-chip"
+              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              aria-label={`Copy branch name ${branch}`}
+              onClick={copy}
+            >
+              {branch}
+              <span className="sr-only" role="status">
+                {copied ? 'Branch name copied' : ''}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{copied ? 'Copied' : 'Copy branch name'}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
+  )
+}
+
 /** workflow · branch chip · ± on the left; tokens · cost · agent icon on the right (mockup
  *  `.meta-row`, #416). Each part renders only when the record carries it — absence is absence,
  *  not a placeholder. Runner and model no longer sit in the loose dot-list (#416): they read as
@@ -513,10 +639,12 @@ function MetaRow({
   showTokens,
   showCost,
   automationsAvailable,
+  continuationEngine,
 }: {
   run: ApiRun
   showTokens: boolean
   showCost: boolean
+  continuationEngine?: ReactNode
   /** `capabilities.automations` (#801). A run launched while automations were on keeps its
    *  `run.automation` provenance forever, so the chip must survive the flag going off — as
    *  plain text, because the route it used to link to is disabled. */
@@ -544,16 +672,9 @@ function MetaRow({
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
-  if (run.branch) {
-    parts.push(
-      <span
-        key="branch"
-        data-slot="branch-chip"
-        className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium"
-      >
-        {run.branch}
-      </span>,
-    )
+  const branch = run.branch
+  if (branch) {
+    parts.push(<CopyBranchChip key="branch" branch={branch} />)
   }
   // EVERY PR the task points at, in `taskReferences` order — the same order, and the same
   // statuses, the global Tasks table paints. A task opened on someone else's PR that pushes a
@@ -681,10 +802,90 @@ function MetaRow({
               {part}
             </Fragment>
           ))}
-          <AgentBadge run={run} />
+          <AgentBadge run={run} continuationEngine={continuationEngine} />
         </span>
       </div>
     </ReferenceStatusProvider>
+  )
+}
+
+/**
+ * "Dispatched by <parent>" — one row linking a dispatched task back to the task that ordered it
+ * (spec `.ai/specs/2026-09-10-dispatch.md`).
+ *
+ * Provenance, so it renders whether or not `capabilities.dispatch` is still on: a run created by
+ * a dispatch keeps its `dispatch.parentRunId` forever, and hiding the line on a server that later
+ * turned the flag off would leave a thread that cannot explain who ordered it. The parent's TITLE
+ * comes from the run list this page already holds; a parent outside that list (another project,
+ * or pruned) still gets its link, labelled by its id.
+ */
+function DispatchParentLine({ run }: { run: ApiRun }) {
+  const runs = useRuns()
+  const parentRunId = run.dispatch?.parentRunId
+  if (parentRunId === undefined) return null
+  const parent = (runs.data ?? []).find((candidate) => candidate.id === parentRunId)
+  const attention = parent ? deriveAttention(parent) : null
+  return (
+    <div
+      data-slot="dispatch-parent-line"
+      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+    >
+      <span className="shrink-0">Dispatched by</span>
+      <Link
+        to={`/tasks/${parentRunId}`}
+        data-slot="dispatch-parent"
+        data-run-id={parentRunId}
+        className="inline-flex min-w-0 items-center gap-1.5 truncate hover:text-foreground"
+      >
+        {attention ? <StatusDot tone={attention.tone} pulse={attention.pulse} /> : null}
+        <span className="truncate">{parent ? runTitle(parent) : parentRunId}</span>
+      </Link>
+    </div>
+  )
+}
+
+/**
+ * "Subtasks: <child> · <child> …" — one collapsed row naming the tasks this one dispatched.
+ *
+ * Derived from the run list this page already holds rather than fetched: a child's link is its
+ * id and its dot is its status, both of which `useRuns()` carries and keeps live over the run
+ * stream. Nothing renders for a run that dispatched nothing — which is every run on a server
+ * that never turned dispatch on.
+ *
+ * Deliberately ONE row, truncated: the full tree is the task list, and a header that grew a list
+ * would push the transcript off the screen exactly when a parent has the most children.
+ */
+function DispatchChildrenLine({ run }: { run: ApiRun }) {
+  const runs = useRuns()
+  const children = (runs.data ?? []).filter(
+    (candidate) => candidate.dispatch?.parentRunId === run.id,
+  )
+  if (children.length === 0) return null
+  return (
+    <div
+      data-slot="dispatch-children"
+      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+    >
+      <span className="shrink-0">Subtasks</span>
+      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden">
+        {children.map((child) => {
+          const attention = deriveAttention(child)
+          return (
+            <Link
+              key={child.id}
+              to={`/tasks/${child.id}`}
+              data-slot="dispatch-child"
+              data-run-id={child.id}
+              title={`${runTitle(child)} — ${attention.label}`}
+              className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"
+            >
+              <StatusDot tone={attention.tone} pulse={attention.pulse} />
+              <span className="truncate">{runTitle(child)}</span>
+            </Link>
+          )
+        })}
+      </span>
+    </div>
   )
 }
 
@@ -732,7 +933,7 @@ function MonitoringSchedule({ run }: { run: ApiRun }) {
  *  something nobody can tell is load-bearing. The menu is the right home for it — it answers a
  *  question only a user debugging "which provider actually served this?" asks, so it belongs
  *  behind the same disclosure as the account rather than in the truncating summary line. */
-function AgentBadge({ run }: { run: ApiRun }) {
+function AgentBadge({ run, continuationEngine }: { run: ApiRun; continuationEngine?: ReactNode }) {
   // The record keeps only what the caller ASKED for: `POST /api/runs` persists the raw optional
   // `runner` (`src/runs/store.ts`), while the run actually executes as
   // `input.runner ?? config.defaultRunner` (`src/workflows/run.ts`). Mirror that resolution —
@@ -811,6 +1012,24 @@ function AgentBadge({ run }: { run: ApiRun }) {
           >
             identity: {identity}
           </DropdownMenuLabel>
+        ) : null}
+        {continuationEngine ? (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="pb-1 text-[11px] font-normal text-muted-foreground">
+              Next continuation
+            </DropdownMenuLabel>
+            <div
+              data-slot="agent-badge-engine-picker"
+              className="px-2 pb-1"
+              // The controls open their own selection menus. Do not let a click inside this
+              // custom menu row dismiss the parent badge before the nested picker can open.
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              {continuationEngine}
+            </div>
+          </>
         ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
