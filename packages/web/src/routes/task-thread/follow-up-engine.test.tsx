@@ -86,8 +86,10 @@ function serve(
   modelsLocked = false,
   /** Agent accounts (spec 2026-07-29-agent-profiles); omitted answers the zero-config host. */
   agentProfiles?: AgentProfilesResponse,
+  continueResult?: (body: unknown, attempt: number) => { payload: unknown; status?: number },
 ) {
   requests = []
+  let continueAttempts = 0
   const json = (payload: unknown, status = 200) =>
     new Response(JSON.stringify(payload), { status, headers: { 'content-type': 'application/json' } })
   vi.stubGlobal(
@@ -116,7 +118,11 @@ function serve(
         return agentProfiles ? json(agentProfiles) : json({ error: 'not found' }, 404)
       if (url === '/api/v1/repo' && method === 'GET')
         return json({ info: { root: '/repo', branch: 'main' } })
-      if (url.endsWith('/continue') && method === 'POST') return json({ continued: true })
+      if (url.endsWith('/continue') && method === 'POST') {
+        continueAttempts += 1
+        const result = continueResult?.(body, continueAttempts)
+        return json(result?.payload ?? { continued: true }, result?.status)
+      }
       return json({}, 200)
     }),
   )
@@ -200,6 +206,30 @@ describe('follow-up ContinueAction runner/model selection (#401)', () => {
     await waitFor(() => expect(continueBody()).toBeDefined())
     // Only `text` — the pills were never touched, so the run keeps its backend.
     expect(continueBody()).toEqual({ text: 'now also update the changelog' })
+  })
+
+  it('retries the terminal teardown race without dropping the composer draft', async () => {
+    serve(
+      HEALTH_MULTI,
+      {},
+      providersForHealth(HEALTH_MULTI),
+      200,
+      false,
+      undefined,
+      (_body, attempt) =>
+        attempt === 1
+          ? { payload: { error: 'run is still active' }, status: 409 }
+          : { payload: { continued: true } },
+    )
+    renderAction(makeRun(), 'tak, ale kontynuuj od tagu')
+
+    fireEvent.click(await screen.findByRole('button', { name: /continue/i }))
+
+    await waitFor(() => {
+      expect(requests.filter((r) => r.url.endsWith('/continue') && r.method === 'POST')).toHaveLength(2)
+    })
+    expect(requests.filter((r) => r.url.endsWith('/continue') && r.method === 'POST').map((r) => r.body))
+      .toEqual([{ text: 'tak, ale kontynuuj od tagu' }, { text: 'tak, ale kontynuuj od tagu' }])
   })
 
   it('sends the chosen runner + model through to /continue', async () => {
