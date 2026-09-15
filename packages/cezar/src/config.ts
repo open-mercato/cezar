@@ -100,6 +100,29 @@ const configSchema = z.object({
     .optional()
     .catch(undefined),
   /**
+   * Per-runner "auto is the default" override (#906). Additive and independent
+   * of `defaultModels` on purpose: absence of a preset cannot express an
+   * explicit auto, because the answer then falls through to the coding agent's
+   * OWN settings file — so a user whose `~/.claude/settings.json` names a model
+   * had no way to say "ignore that, run with no `--model` flag" short of
+   * editing the vendor's file by hand.
+   *
+   * A separate boolean rather than an `"auto"` sentinel inside `defaultModels`
+   * because an older cezar reading this file would pass such a sentinel
+   * straight to `--model`; a key it has never heard of it simply ignores.
+   * `true` means auto; anything else is no opinion, and the writers delete the
+   * key rather than storing `false`.
+   */
+  defaultModelsAuto: z
+    .object({
+      claude: z.boolean().optional(),
+      codex: z.boolean().optional(),
+      opencode: z.boolean().optional(),
+      pi: z.boolean().optional(),
+    })
+    .optional()
+    .catch(undefined),
+  /**
    * Make each coding agent's native model setting authoritative. This is an
    * optional repo-level counterpart to `CEZ_AGENT_MODELS_LOCKED=1`; absent or
    * false preserves the ordinary per-runner model selector.

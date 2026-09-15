@@ -14,28 +14,80 @@ const ISSUE_B = 'https://github.com/acme/demo/issues/2'
 beforeEach(() => localStorage.clear())
 afterEach(resetFollowupSelection)
 
+const EMPTY = { workflow: null, skills: [], runner: null, model: null }
+
 describe('the follow-up "remembered last selection" store (#408 item 3)', () => {
-  it('starts empty — no workflow, no skills', () => {
-    expect(readFollowupSelection()).toEqual({ workflow: null, skills: [] })
+  it('starts empty — no workflow, no skills, no engine pick', () => {
+    expect(readFollowupSelection()).toEqual(EMPTY)
   })
 
   it('round-trips a workflow + skills pick', () => {
     writeFollowupSelection({ workflow: 'ship-it', skills: ['om-fix', 'om-review'] })
-    expect(readFollowupSelection()).toEqual({ workflow: 'ship-it', skills: ['om-fix', 'om-review'] })
+    expect(readFollowupSelection()).toEqual({
+      ...EMPTY,
+      workflow: 'ship-it',
+      skills: ['om-fix', 'om-review'],
+    })
   })
 
   it('survives a cold read (page reload) via localStorage, not just an in-memory cache', () => {
     writeFollowupSelection({ workflow: null, skills: ['om-fix'] })
     const raw = localStorage.getItem('cez-followup-selection') as string
-    expect(JSON.parse(raw)).toEqual({ workflow: null, skills: ['om-fix'] })
+    expect(JSON.parse(raw)).toEqual({ ...EMPTY, skills: ['om-fix'] })
   })
 
   it('normalizes a malformed/older stored value instead of throwing', () => {
     localStorage.setItem('cez-followup-selection', 'not json at all')
-    expect(readFollowupSelection()).toEqual({ workflow: null, skills: [] })
+    expect(readFollowupSelection()).toEqual(EMPTY)
 
     localStorage.setItem('cez-followup-selection', '{"workflow":7,"skills":["a",2,"b"]}')
-    expect(readFollowupSelection()).toEqual({ workflow: null, skills: ['a', 'b'] })
+    expect(readFollowupSelection()).toEqual({ ...EMPTY, skills: ['a', 'b'] })
+  })
+})
+
+describe('the remembered engine pick (#906)', () => {
+  it('round-trips a runner + model pick', () => {
+    writeFollowupSelection({ runner: 'codex', model: 'gpt-5' })
+    expect(readFollowupSelection()).toEqual({ ...EMPTY, runner: 'codex', model: 'gpt-5' })
+  })
+
+  it("keeps an explicit auto ('') distinct from never-touched (null) — collapsing them IS the bug", () => {
+    writeFollowupSelection({ model: '' })
+    expect(readFollowupSelection().model).toBe('')
+    expect(JSON.parse(localStorage.getItem('cez-followup-selection') as string).model).toBe('')
+
+    writeFollowupSelection({ model: null })
+    expect(readFollowupSelection().model).toBeNull()
+  })
+
+  it('reads the pre-#906 two-field shape as "engine never touched", not as garbage', () => {
+    localStorage.setItem('cez-followup-selection', '{"workflow":"ship-it","skills":["om-fix"]}')
+    expect(readFollowupSelection()).toEqual({
+      ...EMPTY,
+      workflow: 'ship-it',
+      skills: ['om-fix'],
+      runner: null,
+      model: null,
+    })
+  })
+
+  it('degrades a runner this build does not know, and a non-string model, to null', () => {
+    localStorage.setItem('cez-followup-selection', '{"runner":"cursor","model":{"id":"opus"}}')
+    expect(readFollowupSelection()).toMatchObject({ runner: null, model: null })
+  })
+
+  it('merges rather than overwrites, so the engine and the workflow cannot clobber each other', () => {
+    writeFollowupSelection({ runner: 'claude', model: '' })
+    writeFollowupSelection({ workflow: 'ship-it', skills: ['om-fix'] })
+    expect(readFollowupSelection()).toEqual({
+      workflow: 'ship-it',
+      skills: ['om-fix'],
+      runner: 'claude',
+      model: '',
+    })
+
+    writeFollowupSelection({ runner: 'codex', model: 'gpt-5' })
+    expect(readFollowupSelection()).toMatchObject({ workflow: 'ship-it', skills: ['om-fix'] })
   })
 })
 
