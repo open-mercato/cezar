@@ -2,11 +2,14 @@ import { memo } from 'react'
 import {
   Streamdown,
   defaultRemarkPlugins,
+  defaultUrlTransform,
   type CodeHighlighterPlugin,
   type LinkSafetyConfig,
+  type UrlTransform,
 } from 'streamdown'
 
 import { SYN_THEME, highlight, highlightSync, supportedLanguages } from '@/lib/highlighter'
+import { isHttpUrl } from '@/lib/utils'
 
 import { LinkSafetyDialog } from './link-safety-dialog'
 
@@ -91,6 +94,16 @@ function remarkHardBreaks() {
 const HARD_BREAKS = [...Object.values(defaultRemarkPlugins), remarkHardBreaks]
 
 /**
+ * Transcript markdown is agent-influenceable. Browser-openable links stay live; local file paths
+ * and other non-http destinations stay visible but inert so the SPA never turns `/Users/...` into
+ * a bogus localhost route.
+ */
+const markdownUrlTransform: UrlTransform = (url, key, node) => {
+  const transformed = defaultUrlTransform(url, key, node)
+  return isHttpUrl(transformed) ? transformed : undefined
+}
+
+/**
  * A compact preview still uses the real Markdown parser, but it cannot expose links or block
  * structure: ReasoningItem places an invisible collapsible trigger over this text, so a nested
  * focusable anchor would create a second control under the button. Disallowed block elements are
@@ -137,6 +150,7 @@ export const Markdown = memo(function Markdown({
       unwrapDisallowed={inline || undefined}
       components={inline ? INLINE_COMPONENTS : undefined}
       linkSafety={LINK_SAFETY}
+      urlTransform={markdownUrlTransform}
       // Copy + language chip on every fence (the deliverable); download is file-manager noise
       // in a chat, and table export dropdowns are R5-territory chrome.
       controls={{ code: { copy: true, download: false }, table: false, mermaid: false }}
