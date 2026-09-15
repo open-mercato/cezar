@@ -308,15 +308,15 @@ describe('AskCard — answering after the session has ended', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('no agent session to resume')
   })
 
-  it('a closed run that never recorded a session says so and stays inert', () => {
+  // A card whose run never recorded a session used to be a dead end that said so. `/continue`
+  // takes that case now — fresh session, old transcript replayed — so the chips stay live and the
+  // answer goes out on the same seam every other closed run uses.
+  it('a closed run that never recorded a session still delivers its answer', async () => {
     renderAsk(singleAsk, { ...closedRun, steps: [step()] })
-    expect((screen.getByRole('button', { name: /date-fns/ }) as HTMLButtonElement).disabled).toBe(true)
-    expect(
-      screen.getByText(
-        'This session has ended and no agent session was recorded, so the answer cannot be delivered.',
-      ),
-    ).toBeTruthy()
+    const option = screen.getByRole('button', { name: /date-fns/ }) as HTMLButtonElement
+    expect(option.disabled).toBe(false)
+    fireEvent.click(option)
+    await waitFor(() => expect(continueAsync).toHaveBeenCalledWith({ text: 'Library: date-fns' }))
     expect(mutateAsync).not.toHaveBeenCalled()
-    expect(continueAsync).not.toHaveBeenCalled()
   })
 })

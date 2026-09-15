@@ -130,11 +130,6 @@ function PendingAsk({ ask, run }: { ask: ThreadAsk; run: ApiRun }) {
           </Link>
         </div>
       ) : null}
-      {delivery.blockedBy === 'no-session' ? (
-        <p data-slot="ask-no-session" className="mt-3 text-xs text-muted-foreground">
-          {delivery.reason}
-        </p>
-      ) : null}
       {/* A dropped answer used to be silent — the tap did nothing and said nothing. */}
       {delivery.error ? (
         <p data-slot="ask-error" role="alert" className="mt-3 text-xs text-danger">

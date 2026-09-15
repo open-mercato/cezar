@@ -17,6 +17,13 @@ import { RunManager } from './run.ts';
  */
 describe('RunManager agent-profile resolution', () => {
   const savedHome = process.env.CEZ_HOME;
+  // The dispatch seam (#972) reads `CEZ_API_URL`/`CEZ_BIN` off the AMBIENT process env — they are
+  // set by `serveCommand`, so a suite run from a plain shell or from CI has neither, while one run
+  // from inside a cezar task inherits both and `agentEnv` then adds two keys the exact-key
+  // assertion below does not expect. Pinning them absent is what makes the "zero-config env" this
+  // file is about actually zero-config, instead of "whatever started vitest".
+  const savedApiUrl = process.env.CEZ_API_URL;
+  const savedBin = process.env.CEZ_BIN;
   let home: string;
   let repoRoot: string;
   let store: RunStore;
@@ -36,6 +43,8 @@ describe('RunManager agent-profile resolution', () => {
     home = mkdtempSync(join(realpathSync(tmpdir()), 'cez-profile-wiring-home-'));
     repoRoot = mkdtempSync(join(realpathSync(tmpdir()), 'cez-profile-wiring-repo-'));
     process.env.CEZ_HOME = home;
+    delete process.env.CEZ_API_URL;
+    delete process.env.CEZ_BIN;
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     manager = new RunManager(store, repoRoot);
     await registerProject(repoRoot);
@@ -46,6 +55,10 @@ describe('RunManager agent-profile resolution', () => {
     for (const dir of [home, repoRoot]) rmSync(dir, { recursive: true, force: true });
     if (savedHome === undefined) delete process.env.CEZ_HOME;
     else process.env.CEZ_HOME = savedHome;
+    if (savedApiUrl === undefined) delete process.env.CEZ_API_URL;
+    else process.env.CEZ_API_URL = savedApiUrl;
+    if (savedBin === undefined) delete process.env.CEZ_BIN;
+    else process.env.CEZ_BIN = savedBin;
   });
 
   const addAccount = async (id: string, provider: 'claude' | 'codex', dir: string) => {
