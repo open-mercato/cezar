@@ -53,15 +53,24 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
     started.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     for (const id of started) manager.cancel(id);
+    // Cancellation interrupts the agent process, but the terminal lifecycle and its final
+    // writes happen asynchronously. Do not remove the repository while a dispatched child is
+    // still finishing inside it — under a full-suite load that races the recursive delete and
+    // surfaces as ENOTEMPTY (#986).
+    const deadline = Date.now() + 10_000;
+    while (store.listRuns().some(({ id }) => manager.isActive(id))) {
+      if (Date.now() >= deadline) throw new Error('timed out waiting for dispatch runs to stop');
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     manager.dispose();
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
     store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(repoRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   /** A manager with its own semaphore, so a test can decide how much of the tree may run. */
