@@ -3,7 +3,7 @@
  * The authoritative store is the server's `ui-state.json` (`GET/PUT /api/ui-state`, additive
  * `appearance` key) so the choice follows the repo, not the browser. localStorage keeps a
  * per-browser MIRROR of the last-applied values purely so the pre-paint script in
- * `packages/web/index.html` can stamp `data-accent`/`data-density` before first paint — the same
+ * `packages/web/index.html` can stamp `data-accent`/`data-density`/`data-width` before first paint — the same
  * no-flash trick the theme uses. When the server answers, its value wins and the mirror is
  * rewritten.
  *
@@ -26,13 +26,13 @@ export type Accent = 'lime' | 'violet'
 export type Density = 'comfortable' | 'compact' | 'ultra'
 
 /** Reading width flips the one `--measure` token that caps the task-view column (index.css
- *  `:root[data-width="wide"]`): `narrow` is the shipped 820px reading column; `wide` opens it
- *  to 1180px so long transcripts use more of the screen. Type size and spacing stay untouched. */
+ *  `:root[data-width="narrow"]`): `wide` is the zero-config full-width mode; `narrow` restores
+ *  the old 820px reading column. Type size and spacing stay untouched. */
 export type Width = 'narrow' | 'wide'
 
 export const DEFAULT_ACCENT: Accent = 'lime'
 export const DEFAULT_DENSITY: Density = 'comfortable'
-export const DEFAULT_WIDTH: Width = 'narrow'
+export const DEFAULT_WIDTH: Width = 'wide'
 
 export interface Appearance {
   accent: Accent
