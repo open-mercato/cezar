@@ -1,6 +1,6 @@
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { DEFAULT_MONITORING_WAKE_MINUTES, loadWorkspaceConfig } from './config.ts';
+import { DEFAULT_MONITORING_WAKE_MINUTES, DEFAULT_SESSION_IDLE_MINUTES, loadWorkspaceConfig } from './config.ts';
 
 /**
  * Workspace-wide resource governance (spec 2026-07-20-multi-project-workspace,
@@ -42,6 +42,10 @@ export interface WorkspaceResourceLimits {
    *  `DEFAULT_MONITORING_WAKE_MINUTES`; explicit `null` means stay parked; absent means
    *  "this loader predates the key" and reads as the default. */
   monitoringWakeIntervalMinutes?: number | null;
+  /** Idle bound on a `waiting` session before it is closed, in minutes. Default
+   *  `DEFAULT_SESSION_IDLE_MINUTES`; explicit `null` means never close on idle; absent
+   *  means "this loader predates the key" and reads as the default. */
+  sessionIdleMinutes?: number | null;
   /** Resume a run stopped by a provider usage limit when that limit resets. Default ON. */
   autoResumeOnUsageLimit?: boolean;
   /** Per-task process-tree memory ceiling in MiB; null = no limit. */
@@ -112,6 +116,7 @@ const DEFAULT_LIMITS: WorkspaceResourceLimits = {
   maxParallel: 2,
   maxMonitoringSessions: 2,
   monitoringWakeIntervalMinutes: DEFAULT_MONITORING_WAKE_MINUTES,
+  sessionIdleMinutes: DEFAULT_SESSION_IDLE_MINUTES,
   autoResumeOnUsageLimit: true,
   memoryLimitMb: null,
 };
@@ -132,6 +137,7 @@ async function loadResourceLimits(): Promise<WorkspaceResourceLimits> {
     maxParallel: resources.maxParallel,
     maxMonitoringSessions: resources.maxMonitoringSessions,
     monitoringWakeIntervalMinutes: resources.monitoringWakeIntervalMinutes,
+    sessionIdleMinutes: resources.sessionIdleMinutes,
     autoResumeOnUsageLimit: resources.autoResumeOnUsageLimit,
     memoryLimitMb: resources.memoryLimitMb,
     projectLimits,
@@ -194,6 +200,16 @@ export class WorkspaceSemaphore {
   monitoringWakeIntervalMinutes(): number | null {
     const configured = this.limits.monitoringWakeIntervalMinutes;
     return configured === undefined ? DEFAULT_MONITORING_WAKE_MINUTES : configured;
+  }
+
+  /** Idle bound on a `waiting` session, or null when the operator chose "never close on
+   *  idle". Same absent-vs-null discipline as the wake cadence above: `null` is a real
+   *  user choice (#810's lesson) and only an ABSENT key falls back to the shipped 15.
+   *  Answered from the cached snapshot, so a settings change applies on the next arm
+   *  without a restart. */
+  sessionIdleMinutes(): number | null {
+    const configured = this.limits.sessionIdleMinutes;
+    return configured === undefined ? DEFAULT_SESSION_IDLE_MINUTES : configured;
   }
 
   /** Whether a usage-limit stop schedules its own resume. Absent (an older `load` stub, a config
