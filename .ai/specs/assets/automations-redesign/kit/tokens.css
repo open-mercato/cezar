@@ -1,0 +1,209 @@
+<html lang="en"><head><meta charset="utf-8"><title>cezar cockpit</title><style>/* Self-hosted variable woff2 (SIL OFL 1.1) — vendored from cezar packages/web/src/assets/fonts */
+
+
+
+
+
+/* cezar cockpit color tokens — ported from packages/web/src/styles/index.css. Dark is default; `.light` on <html> flips. */
+:root{
+  color-scheme:dark;
+  /* neutral ramp — elevation comes from surface steps, not shadows */
+  --background:#0d0d0d;
+  --foreground:#ffffff;
+  --card:#171717;
+  --card-2:#1c1c1c;
+  --sidebar:var(--card);
+  --muted:#262626;
+  --muted-foreground:#a3a3a3;
+  --soft-foreground:#7b7b7b;
+  --border:#262626;
+  --input:#262626;
+  --contrast:#ebebeb;
+  --contrast-foreground:#171717;
+  /* accents */
+  --accent-lime:#a8f372;
+  --primary:var(--accent-lime);
+  --primary-foreground:#0d0d0d;
+  --violet:#8f86e8;
+  --violet-foreground:#ffffff;
+  --ring:#a8f372;
+  /* status */
+  --danger:#ef4444;
+  --danger-foreground:#ffffff;
+  --success:#10b981;
+  --pending:#fbbf24;          /* fill only — dots/spinners, never text */
+  --pending-strong:#fbbf24;   /* the ink version of pending */
+  --info:#93c5fd;             /* waiting on a person */
+  --conflict:#fb923c;         /* PR will not merge */
+  /* diff tints */
+  --diff-add-bg:rgba(16,185,129,.1);
+  --diff-add-strong:rgba(16,185,129,.28);
+  --diff-del-bg:rgba(239,68,68,.1);
+  --diff-del-strong:rgba(239,68,68,.3);
+  /* brand gradient: lime → yellow → violet */
+  --grad:linear-gradient(135deg,#b4f372 12%,#eefb63 58%,#bc9aff 100%); /* @kind color */
+  /* syntax (shiki) */
+  --syn-key:#c4b5fd;--syn-str:#86efac;--syn-fn:#93c5fd;--syn-com:#6b7280;--syn-num:#fca5a5;--syn-punc:#9ca3af;--syn-var:#e5e7eb;
+  /* shadcn aliases — mapped, never duplicated */
+  --popover:var(--card);
+  --popover-foreground:var(--foreground);
+  --card-foreground:var(--foreground);
+  --accent:var(--muted);
+  --accent-foreground:var(--foreground);
+  --secondary:var(--muted);
+  --secondary-foreground:var(--foreground);
+  --destructive:var(--danger);
+  --destructive-foreground:var(--danger-foreground);
+  /* semantic aliases */
+  --text-body:var(--foreground);
+  --text-muted:var(--muted-foreground);
+  --text-soft:var(--soft-foreground);
+  --surface-page:var(--background);
+  --surface-card:var(--card);
+  --surface-card-2:var(--card-2);
+  --surface-muted:var(--muted);
+  --surface-sidebar:var(--sidebar);
+}
+.light{
+  color-scheme:light;
+  --background:#ffffff;
+  --foreground:#171717;
+  --card:#ffffff;
+  --card-2:#fbfbfb;
+  --sidebar:#fafafa;
+  --muted:#f7f7f7;
+  --muted-foreground:#5c5c5c;
+  --soft-foreground:#a3a3a3;
+  --border:#ebebeb;
+  --input:#ebebeb;
+  --contrast:#262626;
+  --contrast-foreground:#ffffff;
+  --ring:#171717;
+  --info:#1d4ed8;
+  --pending-strong:#b45309;
+  --conflict:#c2410c;
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.12);
+  --diff-add-bg:rgba(16,185,129,.08);
+  --diff-del-bg:rgba(239,68,68,.07);
+  --syn-key:#7c3aed;--syn-str:#15803d;--syn-fn:#1d4ed8;--syn-com:#9ca3af;--syn-num:#b91c1c;--syn-punc:#6b7280;--syn-var:#111827;
+}
+/* Violet accent (Settings → Appearance): exactly a --primary family swap */
+:root[data-accent='violet']{--primary:var(--violet);--primary-foreground:var(--violet-foreground);--ring:var(--violet)}
+
+/* Type — Inter Variable for UI, JetBrains Mono Variable for everything machine-ish (branches, costs, kbd, code). */
+:root{
+  --sans:'Inter Variable','Inter',system-ui,-apple-system,'Segoe UI',sans-serif; /* @kind font */
+  --mono:'JetBrains Mono Variable','JetBrains Mono',ui-monospace,'SF Mono','Menlo',monospace; /* @kind font */
+  --font-sans:var(--sans);
+  --font-mono:var(--mono);
+  /* the cockpit's actual scale — fractional px are deliberate, copy them verbatim */
+  --text-2xs:10.5px;   /* kbd chips, count badges */
+  --text-xs:11px;      /* table headers (uppercase, .05em), ages */
+  --text-xs-plus:11.5px;/* mono meta: branch chips, cost */
+  --text-sm:12px;      /* pills, chips */
+  --text-sm-plus:12.5px;/* small buttons, segmented tabs, workflow cell */
+  --text-base:13px;    /* table cells, tool card titles, sidebar rows */
+  --text-base-plus:13.5px;/* buttons, nav items, user bubbles */
+  --text-md:14px;      /* body */
+  --text-md-plus:15px; /* brand word, inputs, assistant prose */
+  --text-lg:16px;      /* page h1 in headers */
+  --text-xl:18px;      /* dialog titles */
+  --text-2xl:24px;     /* CenteredState titles, hero question */
+  --weight-regular:400;--weight-medium:500;--weight-semibold:600;--weight-bold:700;
+  --leading-tight:1.35;--leading-normal:1.5;--leading-relaxed:1.65;--leading-mono:1.7;
+  --tracking-caps:.05em;
+  --measure:820px;     /* task-view reading column; `wide` = 1180px */
+}
+:root[data-width='wide']{--measure:1180px}
+
+/* Spacing — Tailwind v4 numeric scale keyed off one token; density modes shrink it. */
+:root{
+  --spacing:0.25rem;   /* 4px/unit — comfortable */
+  --space-1:calc(var(--spacing)*1);
+  --space-1-5:calc(var(--spacing)*1.5);
+  --space-2:calc(var(--spacing)*2);
+  --space-2-5:calc(var(--spacing)*2.5);
+  --space-3:calc(var(--spacing)*3);
+  --space-3-5:calc(var(--spacing)*3.5);
+  --space-4:calc(var(--spacing)*4);
+  --space-5:calc(var(--spacing)*5);
+  --space-6:calc(var(--spacing)*6);
+  --space-8:calc(var(--spacing)*8);
+  --space-12:calc(var(--spacing)*12);
+  /* fixed control metrics */
+  --control-h:36px;        /* default button / input */
+  --control-h-sm:30px;     /* sm button */
+  --chip-h:26px;           /* picker chip */
+  --nav-row-h:34px;        /* sidebar nav row (desktop) */
+  --touch-target:44px;     /* mobile minimum */
+  --table-row-h:44px;      /* h-11 */
+  --table-head-h:38px;
+  --header-h:56px;         /* sticky page header (h-14) */
+  --sidebar-w:264px;       /* default; draggable 200–420 */
+  --sidebar-w-min:200px;--sidebar-w-max:420px;
+}
+:root[data-density='compact']{--spacing:0.21875rem}
+:root[data-density='ultra']{--spacing:0.1875rem}
+
+/* Radius + shadow — restrained by design: borders carry separation, surface steps carry elevation. */
+:root{
+  --radius-sm:8px;
+  --radius:10px;      /* default control radius (rounded-md) */
+  --radius-md:var(--radius);
+  --radius-lg:12px;   /* cards, dialogs, table frame */
+  --radius-xl:16px;   /* user bubbles (rounded-2xl) */
+  --radius-tile:18px; /* CenteredState 72px icon tile */
+  --radius-kbd:5px;
+  --radius-pill:999px;
+  --shadow-xs:0 1px 2px 0 rgba(10,13,20,.03);
+  --shadow-sm:0 2px 4px 0 rgba(27,28,29,.04);
+  --shadow-md:0 16px 32px -12px rgba(14,18,27,.1);
+  --shadow-modal:0 16px 48px 0 rgba(0,0,0,.45);
+  --focus-ring:0 0 0 3px color-mix(in srgb,var(--ring) 50%,transparent);
+  --transition-fast:.15s; /* @kind other */
+  --ease-default:ease; /* @kind other */
+}
+@keyframes cez-pulse{50%{opacity:.35}}
+@keyframes cez-shimmer{to{background-position:-200% 0}}
+@keyframes cez-spin{to{transform:rotate(360deg)}}
+
+/* Base resets that the cockpit applies globally. */
+*{box-sizing:border-box;border-color:var(--border)}
+html,body{margin:0;padding:0}
+body{background:var(--background);color:var(--foreground);font:400 14px/1.5 var(--sans);-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+code,pre,kbd,samp{font-family:var(--mono)}
+::placeholder{color:var(--soft-foreground)}
+a{color:inherit;text-decoration:none}
+a:hover{color:var(--foreground)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:var(--muted);border-radius:99px}
+::-webkit-scrollbar-track{background:transparent}
+/* shimmer — running tool-card titles */
+.cez-shimmer{background:linear-gradient(90deg,var(--muted-foreground) 40%,var(--foreground) 50%,var(--muted-foreground) 60%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:cez-shimmer 1.8s linear infinite}
+@media (prefers-reduced-motion:reduce){.cez-shimmer{animation:none;background:none;color:var(--muted-foreground)}}
+
+</style>
+<style>html,body,#root{height:100%;overflow:hidden}.cz-row:hover{background:var(--muted)}.cz-row-pencil{opacity:0}.cz-row:hover .cz-row-pencil{opacity:1}@media (max-width:1280px){.cz-auto-wide{display:none}.cz-auto-status{display:none!important}}</style>
+</head><body><div id="root"></div>
+<script type="text/babel" src="df5718ab-718f-4e2c-8b99-1fe61a302f3e.js"></script>
+<script type="text/babel" src="68b2e51a-798a-4ba9-b2e3-e3e26b06938a.js"></script>
+<script type="text/babel" src="489213af-3969-4fea-82d4-9e626a11efe3.js"></script>
+<script type="text/babel" src="ceec6fe3-7e14-4dad-a30b-cc3e04c3647f.js"></script>
+<script type="text/babel" src="272bdb02-42a1-496a-bd5b-3eac5d6e4420.js"></script>
+<script type="text/babel" src="9101dc74-245b-473c-9107-7db000802d5c.js"></script>
+<script type="text/babel">
+const { CenteredState } = window.CezarDesignSystem_3b4141;
+function App() {
+  const parse = () => (location.hash.replace('#','') || window.CZ_DEFAULT_ROUTE || 'tasks').split('/');
+  const [route, setRoute] = React.useState(() => parse()[0]);
+  const [sub, setSub] = React.useState(() => parse()[1] || null);
+  const [id, setId] = React.useState(() => parse()[2] || parse()[1] || 't4');
+  const [view, setView] = React.useState('active');
+  const go = (r, s, i) => { setRoute(r); if (r === 'automations') { setSub(s || null); if (i) setId(i); location.hash = [r, s, i].filter(Boolean).join('/'); } else { setSub(null); if (s) setId(s); location.hash = s ? r + '/' + s : r; } };
+  React.useEffect(() => { const h = () => { const [r, s, i] = location.hash.replace('#','').split('/'); if (r) setRoute(r); if (r === 'automations') { setSub(s || null); if (i) setId(i); } else if (s) setId(s); }; addEventListener('hashchange', h); return () => removeEventListener('hashchange', h); }, []);
+  const main = route === 'new' ? <NewTaskScreen go={go} /> : route === 'thread' ? <ThreadScreen id={id} go={go} /> : route === 'settings' ? <SettingsScreen /> : route === 'tasks' ? <TasksScreen go={go} view={view} setView={setView} /> : route === 'automations' ? <AutomationsScreen go={go} sub={sub} id={id} /> :
+    <CenteredState icon={{ inbox:'inbox', git:'git-branch', github:'github', skills:'sparkles', workflows:'workflow' }[route] || 'layers'} title={{ inbox:'Inbox', git:'Git', github:'GitHub', skills:'Skills', workflows:'Workflows' }[route] || route} subtitle="Not recreated in this kit — see the cezar repo for this view." />;
+  return <div style={{ display:'flex', height:'100%', background:'var(--background)', color:'var(--foreground)' }}><Sidebar route={route} go={go} currentId={id} view={view} setView={setView} /><main style={{ flex:1, minWidth:0, overflowY:'auto', overscrollBehavior:'contain' }}>{main}</main></div>;
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script></body></html>

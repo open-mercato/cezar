@@ -1,45 +1,72 @@
-# Unreleased
+# 0.11.0 (2026-09-15)
+
+## Highlights
+The cockpit learns to delegate: a running task may now dispatch other tasks with `cez task` and they report back into its session, which replaces the missions experiment. Automations come on by default in the same release, with a schedule as a second trigger kind beside the GitHub poll and a rebuilt surface to run them from. Around that, what you attach and what you type stop being disposable — every attachment lands in a per-project library under its own name, an unsent reply survives leaving the task, and the conversation finally carries a clock. The left drawer takes the order you drag it into and keeps it across browsers, a task can switch runner, model or account mid-thread without a handoff file, and a question from a mid-workflow step now pauses the workflow instead of being ignored. The phone gets a smooth transcript while an agent works, the task view stops burning CPU while one streams, and cloning a repository behind organization SAML walks you through authorization instead of printing a raw token.
+
+## ⚠️ Breaking
+- ⚠️ Automations are on by default, reversing the `CEZ_AUTOMATIONS=1` opt-in from #802 — only the exact value `CEZ_AUTOMATIONS=0` turns them off, and a GitHub poll left enabled and idle past its own lookback is re-baselined at boot rather than replayed, so an upgrade never launches a backlog of missed polls. (#985) *(@pat-lewczuk)*
 
 ## ✨ Features
+- ✨ A running task may dispatch other tasks with `cez task` and they report back into its session, replacing the missions experiment. (#972) *(@pat-lewczuk)*
+- ✨ An automation can run on a schedule as well as a GitHub poll — daily, weekdays, one weekday or every N hours, DST-safe in the cockpit's own zone — on a rebuilt Automations surface with week and day calendars, a template palette and creation from a prompt. (#985) *(@pat-lewczuk)*
+- ✨ Every file you attach to a task lands in a per-project attachment library, under its own name (carries forward @Damian-Szczepanski's #929). (#957) *(@pat-lewczuk)*
+- ✨ Drag the projects in the left drawer into the order you want, stored on the server so every browser agrees (fixes #952). (#953) *(@piotrchabros)*
+- ✨ Switch a task's runner, model or account from the header badge, with its conversation carried over instead of a handoff file. (#954) *(@piotrchabros)*
+- ✨ The task conversation has a clock: a stamp on each turn, how long the turn took, and a dated rule between days (fixes #941). (#942) *(@piotrchabros)*
+- ✨ What you typed into a task is still there when you come back, across navigation and restarts (fixes #939). (#940) *(@piotrchabros)*
+- ✨ The new-task base branch picker filters by name. (#973) *(@piotrchabros)*
+- ✨ Copy a task's branch name straight from the thread header. (#956) *(@piotrchabros)*
 
-- ✨ **Drag the projects in the left drawer into the order you want.** The sidebar sorted its
-  project groups by `lastOpenedAt`, a timestamp bumped only when a project is registered or when
-  cezar boots in that folder — so the order was really "the sequence the servers booted in", and
-  the repo you live in all day could sit below three you touch once a month with no way to move
-  it. Each group now carries a grip: drag it, or focus it and press Space, arrows, Space. The
-  order is stored on the server, in `~/.cezar/ui-state.json` under the new optional
-  `sidebar.projectOrder`, so it is the same order in every browser you open the cockpit in — the
-  phone and the desktop agree — and it survives reloads and restarts. That is deliberately the
-  opposite call from `sidebar.collapsed`, which moved to per-browser storage: which groups are
-  *shut* describes the window you are looking through, while what order your repos are *in* is a
-  considered choice made once, and redoing it on every device is the annoyance. The ⌘K palette
-  reads the same order — one registry, never listed two ways. A project registered after your
-  last drag floats to the top by recency rather than hiding under the list, an id that is no
-  longer registered is ignored instead of leaving a hole, and Settings → Appearance grows a
-  "Reset order" that appears only once there is something to undo. A missing project keeps its
-  place but has no grip: that row is inert by design.
-- ✨ **The task conversation has a clock.** Every other surface gave you a temporal anchor — the
-  tasks table shows relative times, the auto-resume hint an absolute one — while the thread, where
-  the actual work is, showed none: coming back to a task, nothing on screen said whether the last
-  agent message landed thirty seconds ago or last Tuesday, and a forty-message transcript spanning
-  two days read as one undifferentiated scroll. Each conversation turn now carries the two stamps
-  it always had on disk: a short local time at the foot of the user bubble that opened it, and the
-  agent's finishing time with how long the turn took (`14:36 · 4m 12s`) where it ended. Turns that
-  fall on different local days are parted by a dated rule — *Today*, *Yesterday*, or the date — so
-  a task resumed after a usage limit or a night reads as the two sittings it was. Times are
-  absolute and never tick: the exact instant is one hover away in the tooltip, and no row re-renders
-  on a timer or changes height under the virtualizer. Nothing new is persisted and no API changed —
-  every event has carried a required `ts` and every queued message a `createdAt` since the
-  beginning; the thread simply stopped throwing them away. A turn still running shows no completion
-  stamp rather than a placeholder that would jump when it fills in, and a transcript whose stamps
-  are missing or unreadable — an old recording, a hand-edited NDJSON — renders exactly as it did
-  before rather than printing `Invalid Date`. A message you stacked onto a running task keeps its
-  own queued-at time but never dates the older conversation it sits above. Sub-agent panels are
-  unchanged for now: their entries are one uninterrupted stream with no turn boundaries to hang a
-  clock on. Issue: #941.
+## 🐛 Fixes
+- 🐛 A question from a mid-workflow step now pauses the workflow instead of being ignored (supersedes #917). (#984) *(@piotrchabros, via @pat-lewczuk)*
+- 🐛 The autonomous auto-continue nudge is reachable again, so an `#autonomous` run stops parking after its first turn. (#967) *(@pat-lewczuk)*
+- 🐛 Opening a task, or watching one stream, no longer burns CPU and drops frames. (#966) *(@Igloczek)*
+- 🐛 Cloning a repository behind GitHub organization SAML walks you through authorization and retries, instead of printing a raw token. (#968) *(@piotrchabros)*
+- 🐛 The task conversation scrolls smoothly on a phone while the agent is working. (#965) *(@piotrchabros)*
+- 🐛 Folded CPU and Mem columns stay folded while tasks sit in the queue (fixes #821). (#861) *(@wojciechszyjka)*
+- 🐛 The composer's `/` skill menu scrolls to follow arrow-key navigation. (#809) *(@zawoj)*
+
+## 📝 Specs & Documentation
+- 📝 A task remembers every PR it has been associated with. (#839) *(@wojciechszyjka)*
+- 📝 Every release entry is one line again, in 0.9.0's format. (#963) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @piotrchabros
+- @Igloczek
+- @wojciechszyjka
+- @zawoj
+- @Damian-Szczepanski
+
+## 🔧 Changed
+
+- **Starting cezar in a folder only registers it while you have no projects yet.** The first run
+  still seeds the registry from the current repo, and booting a project you already have keeps
+  bumping it to the top of the sidebar — but once anything is registered, running `cezar` somewhere
+  else serves that folder without quietly adding it to your project list. Run it from a worktree or
+  a scratch checkout as often as you like; the list stays the one you curated. The folder you
+  started in is still fully usable: it leads the sidebar marked **not saved**, its tasks and panes
+  work exactly as a saved project's do, and both **Global settings → Projects** and the
+  project's own **Settings → General** show it as *not registered* with a one-click **Add project** —
+  the one place without Remove and a per-project task cap, because there is no registry entry to
+  edit. Adding is otherwise unchanged: `cezar projects add <dir>` or the **+** button.
+  `CEZ_SINGLE_PROJECT=1` deployments are exempt, since there the launch folder *is* the project.
 
 ## 🐛 Fixes
 
+- 🐛 **Automations in the folder cezar is serving keep running when that folder is not one of your
+  saved projects.** The workspace scheduler compares its live handles against the project registry
+  and drops anything the registry does not name — which the folder you started cezar in is not,
+  now that starting somewhere new no longer registers it. Its automations stayed listed and
+  switched on in the cockpit while nothing polled GitHub for them, and nothing said so. The boot
+  project is now pinned against that sweep: cezar is demonstrably serving it, registered or not.
+  And saving that folder with **Add project** no longer splits its automations in two: the folder
+  briefly answered to both the boot alias and its new registry slug, which opened two independent
+  handles on one `.ai/cezar` — so switching an automation off in the cockpit left the copy the
+  scheduler polls untouched, and it went on launching runs until you restarted cezar. Automation
+  state is now keyed by folder, so a folder addressed twice is still one automation set, scheduled
+  once. Only affects deployments that opted into automations with `CEZ_AUTOMATIONS=1`. (#872)
 - 🐛 **A reply typed into a task that looks finished, but is running, now lands.** The thread reads
   from two feeds — the run record for what the task *is*, the event stream for what it *said* — and
   the record can go quietly out of date: a half-open workspace socket (TCP dead, `readyState` still
@@ -62,7 +89,7 @@
   reported as the server worded it, and an empty submit — the one-click Continue — is never turned
   into an empty message. The run header's actions follow the same rule: a refused Continue or Cancel
   refetches the record it was drawn from, so the bar redraws to the truth instead of offering the
-  same refusal.
+  same refusal. (#986)
 
 # 0.10.1 (2026-09-04)
 
@@ -257,7 +284,7 @@ A stabilization release that hardens single-project mode and sharpens the cockpi
 # 0.9.0 (2026-07-21)
 
 ## Highlights
-<!-- TODO: Highlights — auto-update-changelog leaves this blank for the human author to fill in. -->
+The cockpit learns to delegate: a running task may now dispatch other tasks with `cez task` and they report back into its session, which replaces the missions experiment. Around that, what you attach and what you type stop being disposable — every attachment lands in a per-project library under its own name, an unsent reply survives leaving the task, and the conversation finally carries a clock. The left drawer takes the order you drag it into and keeps it across browsers, a task can switch runner, model or account mid-thread without a handoff file, and a question from a mid-workflow step now pauses the workflow instead of being ignored. The phone gets a smooth transcript while an agent works, the task view stops burning CPU while one streams, and cloning a repository behind organization SAML walks you through authorization instead of printing a raw token.
 
 ## ✨ Features
 - ✨ Edit the coding agents' own config files (global vs local, raw + highlighted). (#418) *(@pkarw)*

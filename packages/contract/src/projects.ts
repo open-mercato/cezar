@@ -48,6 +48,12 @@ export const projectListEntrySchema = z.object({
   /** Per-project cap on concurrently running tasks (spec 2026-07-22). Omitted = inherit the
    *  workspace `resources.maxParallel`; a number pins this project. */
   maxParallel: z.number().optional(),
+  /** Set ONLY on the synthetic entry for the folder this server was started in when that folder
+   *  is not in the registry — the ordinary state since boot registration became seed-once. The
+   *  server serves it like any project (it owns the boot context), so the cockpit must be able to
+   *  reach it; but it is not persisted, so the rows that edit the registry (Remove, Max parallel)
+   *  do not apply and Settings offers "Add project" instead. Never present on a registry entry. */
+  unregistered: z.literal(true).optional(),
   /**
    * Free-form labels grouping CONNECTED repositories — a `storefront` tag on the API, the web
    * app and the design system says those three are one piece of work spread over three repos.

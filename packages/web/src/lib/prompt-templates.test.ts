@@ -359,15 +359,35 @@ describe('DEFAULT_PROMPT_TEMPLATES', () => {
 })
 
 describe('availablePromptTemplates', () => {
+  const ids = (caps: { dispatch?: boolean; automations?: boolean } | undefined) =>
+    availablePromptTemplates(DEFAULT_PROMPT_TEMPLATES, caps).map((t) => t.id)
+
   it('hides the dispatching built-in unless the server reports capabilities.dispatch', () => {
-    const ids = (caps: { dispatch?: boolean } | undefined) =>
-      availablePromptTemplates(DEFAULT_PROMPT_TEMPLATES, caps).map((t) => t.id)
     expect(ids(undefined)).not.toContain('review-open-prs')
-    expect(ids({ dispatch: false })).not.toContain('review-open-prs')
+    expect(ids({ dispatch: false, automations: true })).not.toContain('review-open-prs')
     expect(ids({ dispatch: true })).toContain('review-open-prs')
     // Everything else is untouched either way.
-    expect(ids({ dispatch: false })).toEqual(
+    expect(ids({ dispatch: false, automations: true })).toEqual(
       DEFAULT_PROMPT_TEMPLATES.map((t) => t.id).filter((id) => id !== 'review-open-prs'),
     )
+  })
+
+  it('hides the automation-authoring built-in unless the server reports capabilities.automations', () => {
+    expect(ids(undefined)).not.toContain('create-automation')
+    expect(ids({ dispatch: true, automations: false })).not.toContain('create-automation')
+    expect(ids({ dispatch: true, automations: true })).toContain('create-automation')
+    // The two gates are independent: each hides only its own template.
+    expect(ids({ dispatch: true, automations: false })).toEqual(
+      DEFAULT_PROMPT_TEMPLATES.map((t) => t.id).filter((id) => id !== 'create-automation'),
+    )
+    expect(ids({ dispatch: true, automations: true })).toEqual(DEFAULT_PROMPT_TEMPLATES.map((t) => t.id))
+  })
+
+  it('the automation template is assigned to the built-in skill, so picking it pre-fills the box', () => {
+    const template = DEFAULT_PROMPT_TEMPLATES.find((t) => t.id === 'create-automation')
+    expect(template?.skills).toEqual(['create-cezar-automation'])
+    expect(template?.text).toContain('Trigger:')
+    expect(template?.text).toContain('Task for each run:')
+    expect(template?.text).toContain('Leave it paused')
   })
 })

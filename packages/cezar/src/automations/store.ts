@@ -105,8 +105,7 @@ export class AutomationStore {
       updatedAt: this.now().toISOString(),
     });
     this.definitions.set(id, definition);
-    const state = this.state(id);
-    if (state) this.setState(id, { ...state, revision: definition.revision });
+    if (this.state(id)) this.setState(id, (current) => ({ ...current, revision: definition.revision }));
     this.persistDefinitions();
     return definition;
   }
@@ -125,9 +124,26 @@ export class AutomationStore {
     return this.stateFile.states[id];
   }
 
-  setState(id: string, state: AutomationRuntimeState): void {
-    this.stateFile.states = { ...this.stateFile.states, [id]: state };
+  /**
+   * Read-modify-write (spec 2026-09-14 § Edge cases): two cockpits on one project each hold their
+   * own in-memory copy of the state file, and a write from memory alone would clobber the other's
+   * cursor or `nextRunAt`. Re-reading first merges this ONE id over whatever is on disk, so the
+   * two converge — the `mergeWriteWorkspaceConfig` pattern.
+   *
+   * The convergence promise only holds if the write for THIS id is also computed from a fresh
+   * disk read, not from the caller's own possibly-stale in-memory snapshot — two processes racing
+   * on the SAME automation id (e.g. one holds the poll/schedule lease and launches while the
+   * other, having failed to acquire it, still advances its own `nextRunAt`) would otherwise have
+   * the loser's write silently revert the winner's `lastRunAt`/`consecutiveFailures`. `update`
+   * therefore takes the CURRENT on-disk record (or `{}` when none exists yet) and must return the
+   * full next record from it — never close over an outer `state` read from before this call.
+   */
+  setState(id: string, update: (current: AutomationRuntimeState) => AutomationRuntimeState): AutomationRuntimeState {
+    const onDisk = this.readJson(STATE, automationStateFileSchema, { version: 1, states: {} });
+    const next = update(onDisk.states[id] ?? {});
+    this.stateFile = { ...onDisk, states: { ...onDisk.states, [id]: next } };
     this.atomicJson(STATE, this.stateFile);
+    return next;
   }
 
   receipts(): AutomationReceipt[] {
@@ -149,6 +165,8 @@ export class AutomationStore {
     revision: number;
     eventId: string;
     candidate?: GithubCandidate;
+    /** schedule kind: the occurrence being reserved. */
+    occurrenceAt?: string;
   }): AutomationReceipt | undefined {
     const receiptKey = `${input.automationId}:${input.eventId}`;
     if (this.latestReceipts().has(receiptKey)) return undefined;

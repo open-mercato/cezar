@@ -134,7 +134,17 @@ export function ProjectGroups({
   // of whichever route last touched the registry — and shared with the ⌘K palette through
   // `lib/project-order.ts`, so the same registry is never listed two ways.
   const { order, canReorder, setOrder } = useProjectOrder()
-  const ordered = React.useMemo(() => orderProjects(projects, order), [projects, order])
+  const ordered = React.useMemo(() => {
+    const placed = orderProjects(projects, order)
+    // An UNREGISTERED boot folder leads, ahead of BOTH rules above it: it has no `lastOpenedAt`
+    // to sort by (it was never written down, so the recency sort would bury it last) and no
+    // registry entry to be placed by hand — yet it is the folder the user just started cezar in,
+    // and burying it under the saved projects would repeat the disappearance this row exists to
+    // fix. A stable partition, so the result is still a permutation of the input.
+    const lead = placed.filter((project) => project.unregistered)
+    if (lead.length === 0) return placed
+    return [...lead, ...placed.filter((project) => !project.unregistered)]
+  }, [projects, order])
   const orderedIds = React.useMemo(() => ordered.map((project) => project.id), [ordered])
 
   // dnd-kit, configured exactly as the workflow builder's step list (`routes/workflows`): the
@@ -348,7 +358,11 @@ function ProjectGroup({
   // inert (there is nothing behind the chevron either), and a folder that is gone is one to
   // remove in Global settings → Projects, not one to arrange. It still moves when its neighbours
   // do, and its id is still persisted, so removing it later leaves no hole.
-  const canDrag = sortable && !missing
+  //
+  // An unregistered boot folder is excluded for a different reason: its lead position is a RULE,
+  // not a preference (see `ordered` above), so a drag of it could only snap straight back — and
+  // there is no registry entry for a hand-picked order to be about in the first place.
+  const canDrag = sortable && !missing && !project.unregistered
   const {
     attributes,
     listeners,
@@ -492,6 +506,18 @@ function ProjectGroup({
             aria-hidden="true"
           />
           <span className="truncate">{project.name}</span>
+          {project.unregistered ? (
+            // Says what the row is without pretending it is a problem: cezar is serving this
+            // folder, it just is not in the saved list. Global settings → Projects has the
+            // one-click Add; repeating the button here would put a registry write in the nav.
+            <span
+              data-slot="project-unregistered"
+              title="cezar is serving this folder — it is not in your saved projects. Add it in Global settings → Projects."
+              className="shrink-0 rounded-full bg-muted px-[7px] py-px text-[10px] font-medium text-soft-foreground"
+            >
+              not saved
+            </span>
+          ) : null}
           {waiting ? (
             <span
               data-slot="project-attention"

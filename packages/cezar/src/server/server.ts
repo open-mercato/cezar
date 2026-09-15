@@ -3,15 +3,21 @@ import { randomUUID } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
 import { GithubPoller } from '../automations/github-poller.ts';
-import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
-import { launchAutomationRun, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
+import { ProjectAutomationScheduler, WorkspaceAutomationScheduler, type ProjectAutomationHandle } from '../automations/scheduler.ts';
+import { ScheduleRunner } from '../automations/schedule-runner.ts';
+import { automationStats } from '../automations/stats.ts';
+import { automationTemplatesOf } from '../automations/templates.ts';
+import { launchAutomationRun, launchScheduledRun, rebaselineIdleAutomations, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
 import {
   automationEventSchema,
   automationFiltersSchema,
   automationLogResultSchema,
   automationTaskSchema,
+  isGithubAutomation,
+  isScheduleAutomation,
   type AutomationDefinition,
 } from '../automations/types.ts';
+import { automationScheduleSchema, localTimeZone, nextOccurrence } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -87,9 +93,24 @@ import {
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import {
+  countRunDraftImages,
+  deleteRunDraftImage,
+  deleteRunDraftSurface,
+  readRunDraftImage,
+  readRunDrafts,
+  writeRunDraftImage,
+  writeRunDraftSurface,
+} from '../runs/drafts.ts';
+import {
+  draftImageInputSchema,
+  draftImageParamSchema,
+  draftSurfaceParamSchema,
+  DRAFT_MAX_IMAGES,
   runEventsQuerySchema,
   runHistoryQuerySchema,
   runIdParamSchema,
+  setRunDraftInputSchema,
+  type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
@@ -179,6 +200,7 @@ import {
 } from './provider-action-gate.ts';
 import {
   ASSET_CACHE_CONTROL,
+  SHELL_CACHE_CONTROL,
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
@@ -345,12 +367,34 @@ const automationEditableSchema = z
     name: z.string().trim().min(1).max(200),
     description: z.string().max(2_000).optional(),
     enabled: z.boolean().optional(),
-    events: z.array(automationEventSchema).min(1).max(4),
-    intervalSeconds: z.number().int().min(60).max(86_400),
-    filters: automationFiltersSchema,
+    /** Omitted on create = `github`; omitted on update = the stored kind (spec 2026-09-14). */
+    kind: z.enum(['github', 'schedule']).optional(),
+    events: z.array(automationEventSchema).min(1).max(4).optional(),
+    intervalSeconds: z.number().int().min(60).max(86_400).optional(),
+    filters: automationFiltersSchema.optional(),
+    schedule: automationScheduleSchema.optional(),
     task: automationTaskSchema,
   })
   .strict();
+type AutomationEditableBody = z.infer<typeof automationEditableSchema>;
+
+/**
+ * The kind rules the storage schema also enforces, answered as a 400 message rather than a zod
+ * issue path (spec 2026-09-14 § Data Model): a poll needs its three keys; a schedule needs its
+ * schedule and carries no GitHub filter.
+ */
+function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'schedule'): string | null {
+  if (kind === 'schedule') {
+    if (!body.schedule) return 'a scheduled automation needs a schedule';
+    if (body.events || body.filters || body.intervalSeconds !== undefined) return 'a scheduled automation has no GitHub filter';
+    return null;
+  }
+  if (!body.events?.length) return 'a GitHub automation needs at least one event';
+  if (body.intervalSeconds === undefined) return 'a GitHub automation needs a poll interval';
+  if (!body.filters) return 'a GitHub automation needs its bounded filter';
+  if (body.schedule) return 'a GitHub automation has no schedule';
+  return null;
+}
 const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
 const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
 const automationCheckRequestSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
@@ -373,9 +417,11 @@ function editableAutomation(definition: AutomationDefinition) {
     name: definition.name,
     description: definition.description,
     enabled: definition.enabled,
+    kind: definition.kind,
     events: definition.events,
     intervalSeconds: definition.intervalSeconds,
     filters: definition.filters,
+    schedule: definition.schedule,
     task: definition.task,
   };
 }
@@ -426,7 +472,7 @@ export function projectRouteManifest(app: Hono): ProjectRouteInfo[] {
 const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 to enable it';
 
 /** 409 body for every automations route while GitHub automations are off (#801). */
-const AUTOMATIONS_OFF = 'GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them';
+const AUTOMATIONS_OFF = 'Automations are off — this cockpit was started with CEZ_AUTOMATIONS=0';
 
 /** 409 body for every dispatch route while task dispatch is off (spec 2026-09-10-dispatch). */
 const DISPATCH_OFF =
@@ -1116,12 +1162,33 @@ export function createApp(deps: ServerDeps) {
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
   // and plumbs its registry id in via `deps.bootProjectId`. Legacy callers and
   // tests construct the app without one — then it is derived lazily from the
-  // registry by realpath and cached on a hit. A boot repo that is legitimately
-  // unregistered (task worktree, `$HOME` itself, unreadable workspace) falls
-  // back to its would-be slug, so `bootProject` always names the repo this
-  // server was started in. Strictly non-fatal, zero-config: every failure path
-  // degrades to the slug fallback, never an error.
+  // registry by realpath and cached on a hit. A boot repo that is not in the
+  // registry — a task worktree, `$HOME`, an unreadable workspace, or (since
+  // boot registration became seed-once) any folder started in while the user
+  // already has projects — falls back to its would-be slug, so `bootProject`
+  // always names the repo this server was started in. Strictly non-fatal,
+  // zero-config: every failure path degrades to the slug fallback, never an
+  // error.
+  //
+  // BOTH answers are sticky for the process. The registry hit caches for the
+  // obvious reason; the FALLBACK caches because it is a live URL the cockpit
+  // is showing, and it is derived from a file the user edits while the server
+  // runs — recomputing it per call let an unrelated `Add project` with the
+  // same basename take the slug and silently move the boot project to
+  // `<slug>-2` under an open tab. The registry lookup still runs first, so the
+  // day the boot folder IS registered (its own "Add project"), its real id
+  // takes over from the fallback rather than the two disagreeing; the reserved
+  // slug below is what keeps those two the same string.
+  //
+  // Sticky, but never at the cost of correctness: a pinned fallback that some
+  // OTHER root has since taken (an out-of-band `cezar projects add ~/other/beta`
+  // from a second process, where the reservation cannot reach) is dropped and
+  // re-allocated. That gives back the visible `<slug>-2` move instead of
+  // shadowing — the scope resolver binds `/p/<bootProject>/` to the boot
+  // context before it consults the registry, so keeping the stolen slug would
+  // quietly serve the boot folder under a sidebar row pointing somewhere else.
   let bootProjectCache = bootProjectId;
+  let bootProjectFallback: string | undefined;
   const resolveBootProject = async (projects?: readonly WorkspaceProject[]): Promise<string> => {
     if (bootProjectCache) return bootProjectCache;
     let registry = projects ?? [];
@@ -1130,10 +1197,16 @@ export function createApp(deps: ServerDeps) {
       const real = await realpath(bootRoot).catch(() => bootRoot);
       const match = registry.find((p) => p.root === real || p.root === bootRoot);
       if (match) bootProjectCache = match.id;
+      else if (bootProjectFallback !== undefined
+        && registry.some((project) => project.id === bootProjectFallback)) {
+        bootProjectFallback = undefined;
+      }
     } catch {
       // unreadable workspace — fall through to the slug fallback below
     }
-    return bootProjectCache ?? allocateProjectSlug(bootRoot, registry.map((project) => project.id));
+    if (bootProjectCache) return bootProjectCache;
+    bootProjectFallback ??= allocateProjectSlug(bootRoot, registry.map((project) => project.id));
+    return bootProjectFallback;
   };
   // Health's workspace garnish: id+name ONLY — never `root` (#431, see the
   // health route). Reads only the registry file; no per-root status probes,
@@ -1394,7 +1467,11 @@ export function createApp(deps: ServerDeps) {
   const serveShell = (c: Context): Response | undefined => {
     const distIndex = join(distDir, 'index.html');
     // existsSync per request, like the reads below: `npm run build:web` in a
-    // running cockpit takes effect on the next reload, no restart.
+    // running cockpit takes effect on the next reload, no restart. That promise
+    // only reaches a DEVICE if the shell says it may not be reused without
+    // asking (SHELL_CACHE_CONTROL) — the assets it names are immutable, so one
+    // cached shell pins an entire stale cockpit. Both responses carry it: the
+    // hint page becomes the app the moment the build lands.
     const target = resolveGetRequest({
       path: c.req.path,
       distExists: existsSync(distIndex),
@@ -1408,11 +1485,11 @@ export function createApp(deps: ServerDeps) {
         console.log('cezar: web/dist is missing — run `npm run build:web` to build the cockpit');
       }
       return new Response(BUILD_HINT_HTML, {
-        headers: { 'content-type': HTML_TYPE },
+        headers: { 'content-type': HTML_TYPE, 'cache-control': SHELL_CACHE_CONTROL },
       });
     }
     return new Response(readFileSync(distIndex), {
-      headers: { 'content-type': HTML_TYPE },
+      headers: { 'content-type': HTML_TYPE, 'cache-control': SHELL_CACHE_CONTROL },
     });
   };
 
@@ -2353,11 +2430,39 @@ export function createApp(deps: ServerDeps) {
       } catch {
         // unreadable workspace — degrade to the empty registry + defaults
       }
-      const body: ProjectsResponse = {
-        projects,
-        bootProject: await resolveBootProject(projects),
-        projectsDir,
-      };
+      const bootProject = await resolveBootProject(projects);
+      // The folder this server was started in, when the registry does not hold
+      // it — the ordinary state since boot registration became seed-once, and
+      // before that the task-worktree/`$HOME` case. The server serves it (the
+      // boot context answers `/p/<bootProject>/…` and the unscoped alias), so
+      // leaving it out of this list made it unreachable: no sidebar row, no
+      // `lastLocation` (the cockpit only saves registry-known ids), and the
+      // repo chip naming a folder the navigation could not open. It is marked
+      // `unregistered` rather than merged in silently, so Settings offers to
+      // add it instead of offering Remove/Max parallel it cannot honour.
+      //
+      // Also the honest answer when the workspace is unreadable: nothing IS
+      // registered as far as this process can tell, and a cockpit showing the
+      // one folder it can definitely serve beats an empty sidebar.
+      if (!projects.some((project) => project.id === bootProject)) {
+        const root = await realpath(bootRoot).catch(() => bootRoot);
+        projects = [
+          {
+            id: bootProject,
+            root,
+            name: basename(root),
+            // Never registered, so it has no registry timestamps to report —
+            // empty rather than invented, and Settings renders "—" for them.
+            addedAt: '',
+            lastOpenedAt: '',
+            source: 'local',
+            unregistered: true,
+            ...(await probeProjectStatus(root)),
+          },
+          ...projects,
+        ];
+      }
+      const body: ProjectsResponse = { projects, bootProject, projectsDir };
       return c.json(body);
     })
 
@@ -2392,14 +2497,16 @@ export function createApp(deps: ServerDeps) {
       }
       if (!entry) return c.json({ error: `unknown project: ${id}` }, 404);
 
-      // The boot project is refused, not removed: `cezar serve` re-registers the
-      // repo it was started in on every boot, so "removing" it would undo itself
-      // at the next restart while breaking this session's sidebar in the
-      // meantime. The pane disables the button and says the same thing.
+      // The boot project is refused, not removed: this server is serving that
+      // repo right now, and dropping its registry row would break the session's
+      // own sidebar while the process keeps running out of it. Offline removal
+      // is the honest gesture — `cezar projects remove` has no such refusal
+      // because it runs with no server. The pane disables the button and says
+      // the same thing.
       if (id === bootId) {
         return c.json(
           {
-            error: `cezar is serving ${entry.name} right now — it re-registers itself at every start, so it cannot be removed from here`,
+            error: `cezar is serving ${entry.name} right now — stop it and run \`cezar projects remove ${id}\` to drop the registry entry`,
           },
           409,
         );
@@ -2659,9 +2766,16 @@ export function createApp(deps: ServerDeps) {
     } catch {
       // unreadable workspace — treat as unknown; the write below will fail loudly
     }
+    // The boot project's id is reserved even when the registry does not hold
+    // it: an unregistered boot folder is still being served under that slug,
+    // so letting a same-basename folder take it would point a live URL at the
+    // wrong repo. Reserved against OTHER roots only — adding the boot folder
+    // itself is the one registration that should get exactly that slug.
+    const bootReal = await realpath(bootRoot).catch(() => bootRoot);
+    const reserved = real === bootReal ? [] : [await resolveBootProject()];
     let project: ProjectListEntry;
     try {
-      const entry = await registerProject(requested, source);
+      const entry = await registerProject(requested, source, reserved);
       project = { ...entry, ...(await probeProjectStatus(entry.root)) };
     } catch (err) {
       // e.g. a read-only home — nothing was persisted (atomic tmp+rename).
@@ -3214,6 +3328,71 @@ export function createApp(deps: ServerDeps) {
    * including `/health`. The two-line pairing (`/automations` and `/automations/*`) is what makes
    * a path match both the collection and everything under it.
    */
+  /**
+   * Enabling arms the kind (spec 2026-09-14): a poll establishes its current-time baseline
+   * (existing records never launch); a schedule gets its next occurrence. Shared by create-with-
+   * enable and the enable route.
+   */
+  const armAutomation = (store: AutomationStore, automation: AutomationDefinition): void => {
+    const now = Date.now();
+    if (isScheduleAutomation(automation)) {
+      const next = nextOccurrence(automation.schedule, now, localTimeZone());
+      store.setState(automation.id, (current) => ({
+        ...current,
+        revision: automation.revision,
+        ...(next !== null ? { nextRunAt: new Date(next).toISOString() } : {}),
+      }));
+      return;
+    }
+    const baselineAt = new Date(now).toISOString();
+    store.setState(automation.id, (current) => ({
+      ...current,
+      revision: automation.revision,
+      baselineAt,
+      cursor: { timestamp: baselineAt },
+      nextCheckAt: new Date(now + (automation.intervalSeconds ?? 300) * 1_000).toISOString(),
+    }));
+    store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+  };
+
+  /** The schedule runner's view of a project: the store, the zone, and a launcher onto its RunManager. */
+  const scheduleHandle = (project: Parameters<typeof emitAutomationChange>[0]) => ({
+    projectId: project.id,
+    store: project.automationStore,
+    timeZone: localTimeZone(),
+    launch: (definition: Parameters<typeof launchScheduledRun>[0]['definition'], occurrence: Parameters<typeof launchScheduledRun>[0]['occurrence'], receiptId: string) =>
+      launchScheduledRun({ root: project.root, manager: project.manager, store: project.store, definition, occurrence, receiptId, projectName: basename(project.root), timeZone: localTimeZone(), dispatchEnabled: capabilities().dispatch }),
+    onChange: (automationId: string, revision: number) => emitAutomationChange(project, automationId, revision),
+  });
+
+  /** The runs the log rows name, with their dispatch children (spec 2026-09-14 § API). */
+  const logRunsOf = (runStore: RunStore, records: ReadonlyArray<{ runId?: string }>) => {
+    const runs: Record<string, { title: string; status: RunRecord['status']; costUsd?: number; children: Array<{ runId: string; kind?: NonNullable<RunRecord['dispatch']>['kind']; title: string; status: RunRecord['status']; costUsd?: number }> }> = {};
+    const wanted = new Set(records.map((row) => row.runId).filter((id): id is string => typeof id === 'string'));
+    if (!wanted.size) return runs;
+    const all = runStore.listRuns();
+    const showCost = capabilities().costMetrics;
+    for (const run of all) {
+      if (!wanted.has(run.id)) continue;
+      const children = all
+        .filter((child) => child.id !== run.id && child.dispatch?.rootRunId === run.id)
+        .map((child) => ({
+          runId: child.id,
+          ...(child.dispatch?.kind ? { kind: child.dispatch.kind } : {}),
+          title: child.title,
+          status: child.status,
+          ...(showCost && typeof child.costUsd === 'number' ? { costUsd: child.costUsd } : {}),
+        }));
+      runs[run.id] = {
+        title: run.title,
+        status: run.status,
+        ...(showCost && typeof run.costUsd === 'number' ? { costUsd: run.costUsd } : {}),
+        children,
+      };
+    }
+    return runs;
+  };
+
   const requireAutomations = async (c: Context, next: Next) => {
     if (!capabilities().automations) return c.json({ error: AUTOMATIONS_OFF }, 409);
     await next();
@@ -3239,10 +3418,24 @@ export function createApp(deps: ServerDeps) {
         available: false,
         reason: forge ? 'GitHub availability is still being checked' : 'No GitHub remote is configured',
       };
-      const automations = automationStore.list().map((automation) => {
-        const logs = automationStore.logs({ automationId: automation.id, limit: 100 });
+      const definitions = automationStore.list();
+      const logsById = new Map(definitions.map((definition) => [definition.id, automationStore.logs({ automationId: definition.id, limit: 100 })] as const));
+      const timeZone = localTimeZone();
+      // Derived, never stored (spec 2026-09-14 § Proposed Solution 4).
+      const stats = automationStats({
+        definitions,
+        logs: [...logsById.values()].flat(),
+        runs: c.get('project').store.listRuns(),
+        now: Date.now(),
+        timeZone,
+        costMetrics: capabilities().costMetrics,
+      });
+      const automations = definitions.map((automation) => {
+        const logs = logsById.get(automation.id) ?? [];
         const state = automationStore.state(automation.id);
         const latestLog = logs[0];
+        const row = stats.rows.get(automation.id);
+        const nextRunAt = automation.enabled ? (automation.kind === 'schedule' ? state?.nextRunAt : state?.nextCheckAt) : undefined;
         return {
           ...automation,
           // Spread conditionally, never `state: maybeUndefined`: the latter types the key as
@@ -3252,13 +3445,17 @@ export function createApp(deps: ServerDeps) {
           ...(latestLog ? { latestLog } : {}),
           counts: {
             matches: logs.filter((row) => row.result === 'launched' || row.result === 'duplicate').length,
-            launched: logs.filter((row) => row.result === 'launched').length,
+            launched: logs.filter((row) => row.result === 'launched' || row.result === 'manual' || row.result === 'catch-up').length,
             duplicates: logs.filter((row) => row.result === 'duplicate').length,
-            errors: logs.filter((row) => row.result === 'error' || row.result === 'rate-limited').length,
+            errors: logs.filter((row) => row.result === 'error' || row.result === 'rate-limited' || row.result === 'failed').length,
           },
+          ...(nextRunAt ? { nextRunAt } : {}),
+          ...(row?.lastRun ? { lastRun: row.lastRun } : {}),
+          runs7d: row?.runs7d ?? 0,
+          ...(row?.costUsd7d !== undefined ? { costUsd7d: row.costUsd7d } : {}),
         };
       });
-      const nextDue = automations.map((item) => item.state?.nextCheckAt).filter(Boolean).sort()[0];
+      const nextDue = automations.map((item) => item.nextRunAt).filter(Boolean).sort()[0];
       return c.json({
         ...availability,
         scheduler: {
@@ -3267,6 +3464,8 @@ export function createApp(deps: ServerDeps) {
           state: automations.some((item) => item.enabled) ? ('scheduled' as const) : ('idle' as const),
           ...(nextDue ? { nextDue } : {}),
         },
+        timeZone,
+        stats: stats.week,
         automations,
       });
     })
@@ -3274,20 +3473,15 @@ export function createApp(deps: ServerDeps) {
     .post('/automations', jsonZodValidator(() => automationCreateSchema), async (c) => {
       const { automationStore } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+      const kind = parsed.data.kind ?? 'github';
+      const kindIssue = automationKindIssue(parsed.data, kind);
+      if (kindIssue) return c.json({ error: kindIssue }, 400);
+      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
       const { enable, ...input } = parsed.data;
       try {
-        const automation = automationStore.create({ ...input, enabled: enable === true });
-        if (enable) {
-          const baselineAt = new Date().toISOString();
-          automationStore.setState(automation.id, {
-            revision: automation.revision,
-            baselineAt,
-            cursor: { timestamp: baselineAt },
-            nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
-          });
-        }
+        const automation = automationStore.create({ ...input, kind, enabled: enable === true });
+        if (enable) armAutomation(automationStore, automation);
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation }, 201);
@@ -3312,12 +3506,26 @@ export function createApp(deps: ServerDeps) {
     .put('/automations/:id', jsonZodValidator(() => automationUpdateSchema), async (c) => {
       const { automationStore } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+      const current = automationStore.get(c.req.param('id'));
+      if (!current) return c.json({ error: 'not found' }, 404);
+      // The stored kind unless the body names one; a switch is refused — receipts and cursors
+      // are kind-specific, and a silent swap would orphan them (spec 2026-09-14 § Edge cases).
+      const kind = parsed.data.kind ?? current.kind;
+      if (kind !== current.kind) return c.json({ error: 'change the kind by creating a new automation' }, 409);
+      const kindIssue = automationKindIssue(parsed.data, kind);
+      if (kindIssue) return c.json({ error: kindIssue }, 400);
+      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
       const { expectedRevision, ...input } = parsed.data;
-      if (!automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
       try {
-        const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, enabled: input.enabled ?? false });
+        const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, kind, enabled: input.enabled ?? false });
+        // An edited schedule recomputes its next occurrence; `store.update` carried the old
+        // `nextRunAt` forward, so clear it and let the timer's `dueAt` persist the new one.
+        if (kind === 'schedule' && JSON.stringify(current.schedule) !== JSON.stringify(automation.schedule)) {
+          if (automationStore.state(automation.id)?.nextRunAt) {
+            automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
+          }
+        }
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation });
@@ -3342,15 +3550,7 @@ export function createApp(deps: ServerDeps) {
       const current = store.get(c.req.param('id'));
       if (!current) return c.json({ error: 'not found' }, 404);
       const automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: true });
-      const baselineAt = new Date().toISOString();
-      store.setState(automation.id, {
-        ...store.state(automation.id),
-        revision: automation.revision,
-        baselineAt,
-        cursor: { timestamp: baselineAt },
-        nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
-      });
-      store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+      armAutomation(store, automation);
       emitAutomationChange(c.get('project'), automation.id, automation.revision);
       automationsChanged();
       return c.json({ automation });
@@ -3374,6 +3574,7 @@ export function createApp(deps: ServerDeps) {
       const store = project.automationStore;
       const automation = store.get(c.req.param('id'));
       if (!automation) return c.json({ error: 'not found' }, 404);
+      if (!isGithubAutomation(automation)) return c.json({ error: 'a schedule has nothing to preview; use run' }, 409);
       const parsed = { data: c.req.valid('json') };
       // `string`, not `randomUUID`'s template-literal type: the wire carries an opaque id, and
       // leaking `${string}-${string}-…` into the route type would make the contract describe the
@@ -3389,12 +3590,11 @@ export function createApp(deps: ServerDeps) {
           if (!remote || remote.host !== 'github.com') throw new Error('No GitHub remote is configured');
           const scheduler = new ProjectAutomationScheduler({
             projectId: project.id,
-            owner: remote.owner,
-            repo: remote.repo,
+            timeZone: localTimeZone(),
             store,
-            poller: new GithubPoller(),
+            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller() },
             launch: parsed.data.mode === 'execute'
-              ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId })
+              ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch })
               : undefined,
             onChange: (automationId, revision) => emitAutomationChange(project, automationId, revision),
           });
@@ -3407,8 +3607,27 @@ export function createApp(deps: ServerDeps) {
       return c.json({ checkId: id }, 202);
     })
 
+    // A scheduled automation fired NOW, by hand (spec 2026-09-14 Q10): paused or not, the
+    // definition's `enabled` and `nextRunAt` are untouched — this is a launch, not an arm.
+    .post('/automations/:id/run', async (c) => {
+      const project = c.get('project');
+      const store = project.automationStore;
+      const automation = store.get(c.req.param('id'));
+      if (!automation) return c.json({ error: 'not found' }, 404);
+      if (!isScheduleAutomation(automation)) return c.json({ error: 'a GitHub automation is run through check with mode execute' }, 409);
+      const runner = new ScheduleRunner(scheduleHandle(project));
+      const outcome = await runner.runNow(automation);
+      if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
+      if (outcome.result === 'duplicate') return c.json({ error: 'this instant was already launched' }, 409);
+      if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+      automationsChanged();
+      return c.json({ runId: outcome.runId }, 202);
+    })
+
     .get('/automation-log', queryZodValidator(automationLogQuerySchema), (c) => {
-      return c.json({ records: c.get('project').automationStore.logs(c.req.valid('query')) });
+      const project = c.get('project');
+      const records = project.automationStore.logs(c.req.valid('query'));
+      return c.json({ records, runs: logRunsOf(project.store, records) });
     })
 
     .post('/automation-log/:receiptId/retry', async (c) => {
@@ -3417,15 +3636,24 @@ export function createApp(deps: ServerDeps) {
       const receipt = [...store.latestReceipts().values()].find((row) => row.receiptId === c.req.param('receiptId'));
       if (!receipt) return c.json({ error: 'not found' }, 404);
       if (receipt.status !== 'launch-error' || receipt.runId) return c.json({ error: 'receipt is not retryable' }, 409);
-      if (!receipt.candidate) return c.json({ error: 'receipt predates retry context and cannot be retried safely' }, 409);
       const definition = store.get(receipt.automationId);
       if (!definition) return c.json({ error: 'automation not found' }, 404);
+      // A schedule receipt retries as a by-hand launch of the same occurrence, under the same
+      // receipt (spec 2026-09-14 § API).
+      if (isScheduleAutomation(definition)) {
+        const outcome = await new ScheduleRunner(scheduleHandle(project)).retry(definition, receipt);
+        if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
+        if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+        return c.json({ receiptId: receipt.receiptId, runId: outcome.runId }, 202);
+      }
+      if (!isGithubAutomation(definition)) return c.json({ error: 'automation kind cannot be retried' }, 409);
+      if (!receipt.candidate) return c.json({ error: 'receipt predates retry context and cannot be retried safely' }, 409);
       const lease = store.acquireLease();
       if (!lease) return c.json({ error: 'automation polling lease is held by another process' }, 409);
       const reserved = { ...receipt, status: 'reserved' as const, error: undefined, updatedAt: new Date().toISOString() };
       store.appendReceipt(reserved);
       try {
-        const launched = await launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate: receipt.candidate, receiptId: receipt.receiptId });
+        const launched = await launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate: receipt.candidate, receiptId: receipt.receiptId, dispatchEnabled: capabilities().dispatch });
         store.appendReceipt({ ...reserved, status: 'launched', runId: launched.runId, updatedAt: new Date().toISOString() });
         emitAutomationChange(project, definition.id, definition.revision);
         return c.json({ receiptId: receipt.receiptId, runId: launched.runId }, 202);
@@ -3443,6 +3671,16 @@ export function createApp(deps: ServerDeps) {
   // `/api/v1/p/:projectId` too would be a second spelling of a lookup that consults no project.
   const automationChecksRoutes = new Hono()
     .use('/automation-checks/*', requireAutomations)
+    .use('/workspace/automation-templates', requireAutomations)
+    // The editor's "From your other projects" palette (spec 2026-09-14 Q7): every OTHER
+    // registered project's definitions, read-only, from their own stores. Workspace-level
+    // because it reads the registry, not the calling project.
+    .get('/workspace/automation-templates', queryZodValidator(z.object({ exclude: z.string().optional() })), async (c) => {
+      const exclude = c.req.valid('query').exclude;
+      // The registry, not the calling project; an unreadable workspace answers an empty palette.
+      const projects = await listProjects().catch(() => []);
+      return c.json({ templates: automationTemplatesOf(projects, exclude) });
+    })
     .get('/automation-checks/:checkId', (c) => {
       const check = manualChecks.get(c.req.param('checkId'));
       return check ? c.json(check) : c.json({ error: 'not found' }, 404);
@@ -4314,6 +4552,114 @@ export function createApp(deps: ServerDeps) {
       if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
       return store.deleteRun(id) ? c.json({ deleted: true }) : c.json({ error: 'not found' }, 404);
     });
+
+  // ---- chained family: in-task drafts (project-scoped) ----------------------
+  /**
+   * Unsent composer text and attachments, per run and per surface (#939, spec
+   * `.ai/specs/2026-08-30-thread-composer-draft-persistence.md`).
+   *
+   * Its own family and its own files (`.ai/cezar/drafts/`) rather than a key in `ui-state.json`:
+   * that PUT is capped at 128 KiB, merges shallowly, and is read whole on every cockpit load —
+   * none of which survives a 20 MB attachment draft. `runs/drafts.ts` owns the files; this owns
+   * the status codes. Every route 404s on an unknown run, so a draft can never outlive its task
+   * through this surface.
+   *
+   * The `:surface` param is validated as MIDDLEWARE (`draftSurfaceParamSchema`), not interpolated:
+   * it reaches the filesystem as a path segment.
+   */
+  const draftRoutes = new Hono<ProjectApiEnv>()
+    .get('/runs/:id/drafts', paramZodValidator(runIdParamSchema), (c) => {
+      const { dataDir, store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      return c.json(readRunDrafts(dataDir, run.id));
+    })
+
+    .put(
+      '/runs/:id/drafts/:surface',
+      paramZodValidator(draftSurfaceParamSchema),
+      jsonZodValidator(setRunDraftInputSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, surface } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const body = c.req.valid('json');
+        // An empty write DELETES — the "cleared when emptied" policy is the store's, so a
+        // non-cockpit client obeys it too.
+        const result = writeRunDraftSurface(dataDir, run.id, surface, body);
+        if (!result.ok) return c.json({ error: result.error }, 400);
+        return c.json(result.entry);
+      },
+    )
+
+    .delete('/runs/:id/drafts/:surface', paramZodValidator(draftSurfaceParamSchema), (c) => {
+      const { dataDir, store } = c.get('project');
+      const { id, surface } = c.req.valid('param');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      deleteRunDraftSurface(dataDir, run.id, surface);
+      const body: DeleteDraftResponse = { deleted: true };
+      return c.json(body);
+    })
+
+    // Attachments upload when they are ATTACHED, not when the message is sent (the Slack move) —
+    // which is what makes images-in-drafts cheap: the bytes cross the wire once, on paste, and
+    // the draft record only ever references them. Rides the global 32 MiB body limit like
+    // `POST /runs/:id/messages`; `UI_STATE_BODY_LIMIT` is deliberately not in this path.
+    .post(
+      '/runs/:id/drafts/:surface/images',
+      paramZodValidator(draftSurfaceParamSchema),
+      jsonZodValidator(draftImageInputSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, surface } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        // The composer screens this before it ever reaches here; the route re-checks so a client
+        // that is not the composer cannot bypass the cap.
+        const held = countRunDraftImages(dataDir, run.id, surface);
+        if (held >= DRAFT_MAX_IMAGES) {
+          return c.json({ error: `at most ${DRAFT_MAX_IMAGES} images per draft` }, 400);
+        }
+        const body = c.req.valid('json');
+        const result = writeRunDraftImage(dataDir, run.id, body);
+        if (!result.ok) return c.json({ error: result.error }, 400);
+        return c.json(result.image);
+      },
+    )
+
+    // `:surface` is validated (it is a path segment) but deliberately NOT used to scope the
+    // lookup on these two: a blob is minted before any draft record names it, so scoping by
+    // surface would 404 the thumbnail the user just pasted and orphan its bytes when they remove
+    // it again. The run id is what scopes an attachment; the surface is here for URL symmetry.
+    .get(
+      '/runs/:id/drafts/:surface/images/:imageId',
+      paramZodValidator(draftImageParamSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, imageId } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const image = readRunDraftImage(dataDir, run.id, imageId);
+        if (!image) return c.json({ error: 'not found' }, 404);
+        return c.json(image);
+      },
+    )
+
+    .delete(
+      '/runs/:id/drafts/:surface/images/:imageId',
+      paramZodValidator(draftImageParamSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, imageId } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        deleteRunDraftImage(dataDir, run.id, imageId);
+        const body: DeleteDraftResponse = { deleted: true };
+        return c.json(body);
+      },
+    );
 
   // ---- parallel variants (spec 010) -----------------------------------------
 
@@ -5377,6 +5723,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', automationsRoutes)
     .route('/', dispatchRoutes)
     .route('/', runsRoutes)
+    .route('/', draftRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
     .route('/', worktreesRoutes)
@@ -5587,8 +5934,15 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
-  const automationCoordinator = new AutomationCoordinator({ listProjects });
   const bootProjectId = deps.bootProjectId ?? 'default';
+  // `pinned`: the boot project is served whether or not the registry holds it,
+  // and since boot registration became seed-once it usually does NOT — then
+  // `bootProjectId` is the `'default'` alias, which `listProjects()` can never
+  // name, so the coordinator's own refresh sweep would evict the store opened
+  // one line below and the boot folder's automations would silently stop being
+  // scheduled while the cockpit kept showing them enabled. Registered or not,
+  // pinning is the same statement: this process is serving that project.
+  const automationCoordinator = new AutomationCoordinator({ listProjects, pinned: bootProjectId });
   const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,
@@ -5622,33 +5976,39 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   });
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
-  const automationProjects = new Map<string, { root: string; owner: string; repo: string }>();
+  // Every registered project gets a handle (spec 2026-09-14): `github` only when the remote is
+  // on github.com — a project without one still fires its scheduled automations.
+  const automationProjects = new Map<string, { root: string; github?: { owner: string; repo: string } }>();
+  const registerAutomationProject = async (id: string, root: string): Promise<void> => {
+    const parsed = parseRemote((await getRepoInfo(root))?.remote ?? '');
+    automationProjects.set(id, { root, ...(parsed?.host === 'github.com' ? { github: { owner: parsed.owner, repo: parsed.repo } } : {}) });
+  };
   const automationScheduler = new WorkspaceAutomationScheduler({
     coordinator: automationCoordinator,
-    handle: (projectId, store) => {
+    handle: (projectId, store): ProjectAutomationHandle | undefined => {
       const project = automationProjects.get(projectId);
       if (!project) return undefined;
+      const contextOf = async () => {
+        const bootId = deps.bootProjectId ?? 'default';
+        return projectId === bootId
+          ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
+          : await sharedContexts.context(projectId);
+      };
+      const dispatchEnabled = resolveCapabilities(process.env, deps.bindHost).dispatch;
       return {
         projectId,
-        owner: project.owner,
-        repo: project.repo,
         store,
-        poller: new GithubPoller(),
+        timeZone: localTimeZone(),
+        ...(project.github ? { github: { ...project.github, poller: new GithubPoller() } } : {}),
         onChange: (automationId, revision) =>
           workspaceEvents.emit('automation-change', { project: projectId, automationId, revision }),
         launch: async (definition, candidate, receiptId) => {
-          const bootId = deps.bootProjectId ?? 'default';
-          const context = projectId === bootId
-            ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
-            : await sharedContexts.context(projectId);
-          return launchAutomationRun({
-            root: context.root,
-            manager: context.manager,
-            store: context.store,
-            definition,
-            candidate,
-            receiptId,
-          });
+          const context = await contextOf();
+          return launchAutomationRun({ root: context.root, manager: context.manager, store: context.store, definition, candidate, receiptId, dispatchEnabled });
+        },
+        launchSchedule: async (definition, occurrence, receiptId) => {
+          const context = await contextOf();
+          return launchScheduledRun({ root: context.root, manager: context.manager, store: context.store, definition, occurrence, receiptId, projectName: basename(context.root), timeZone: localTimeZone(), dispatchEnabled });
         },
       };
     },
@@ -5665,11 +6025,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
       if (project && typeof project.id === 'string' && typeof project.root === 'string' && project.status !== 'missing') {
         coordinator.add(project.id, project.root);
-        void getRepoInfo(project.root).then((info) => {
-          const parsed = parseRemote(info?.remote ?? '');
-          if (parsed?.host === 'github.com') automationProjects.set(project.id as string, { root: project.root as string, owner: parsed.owner, repo: parsed.repo });
-          return rescheduleAutomations();
-        });
+        void registerAutomationProject(project.id, project.root).then(() => rescheduleAutomations());
       }
     } else if (event === 'project-removed') {
       const id = (data as { id?: unknown }).id;
@@ -5691,13 +6047,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       // a separate feature and starts either way.
       if (!automationsEnabled()) return;
       void Promise.all(all.map(async (project) => {
-        const parsed = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
-        if (parsed?.host === 'github.com') automationProjects.set(project.id, { root: project.root, owner: parsed.owner, repo: parsed.repo });
+        await registerAutomationProject(project.id, project.root);
         const automationStore = automationCoordinator.store(project.id, project.root);
         const runStore = project.id === (deps.bootProjectId ?? 'default')
           ? deps.store
           : sharedContexts.peek(project.id)?.store;
         if (automationStore && runStore) reconcileAutomationReceipts(automationStore, runStore);
+        if (automationStore) rebaselineIdleAutomations(automationStore, (automationId, revision) => workspaceEvents.emit('automation-change', { project: project.id, automationId, revision }));
       })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });

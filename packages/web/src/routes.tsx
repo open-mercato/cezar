@@ -13,6 +13,7 @@ import { useHealth, useProjects } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
 import { locationToRestore, readStoredLastLocation } from './lib/last-location'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
+import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
 import { GithubLoading } from './routes/github/github-loading'
 import { InboxRoute } from './routes/inbox'
@@ -32,7 +33,6 @@ import {
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 import { GlobalTasksRoute } from './routes/global-tasks'
-import { AutomationsRoute } from './routes/automations/automations'
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
  *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
@@ -82,6 +82,14 @@ const WorkflowsRoute = lazy(() =>
  *  thread carries — thread-chunk weight the home screen must not pay (it used to ride the main
  *  bundle as a static Settings section). */
 const SkillsRoute = lazy(() => import('./routes/skills').then((m) => ({ default: m.SkillsRoute })))
+
+/** Lazy because the surface carries the editor (templates, schedule/GitHub fields, a next-five-
+ *  runs preview), the week/day calendars, and the log — ~3k lines nothing outside this route
+ *  imports, and now that automations are on by default, every visitor would otherwise pay for
+ *  it before ever opening `/automations`. */
+const AutomationsRoute = lazy(() =>
+  import('./routes/automations/automations-route').then((m) => ({ default: m.AutomationsRoute })),
+)
 
 /** `/settings/skills` moved to the top-level `/skills` (out of the Settings shell). Redirect —
  *  preserving the `?skill=` selection and any hash — so pasted links and saved bookmarklets
@@ -443,10 +451,38 @@ export const AppRoutes = memo(function AppRoutes() {
             </Suspense>
           }
         />
-        <Route path="automations" element={<AutomationsRoute />} />
-        <Route path="automations/new" element={<AutomationsRoute mode="new" />} />
-        <Route path="automations/:automationId" element={<AutomationsRoute mode="edit" />} />
-        <Route path="automations/:automationId/log" element={<AutomationsRoute mode="log" />} />
+        <Route
+          path="automations"
+          element={
+            <Suspense fallback={<AutomationsLoading />}>
+              <AutomationsRoute />
+            </Suspense>
+          }
+        />
+        <Route
+          path="automations/new"
+          element={
+            <Suspense fallback={<AutomationsLoading />}>
+              <AutomationsRoute mode="new" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="automations/:automationId"
+          element={
+            <Suspense fallback={<AutomationsLoading />}>
+              <AutomationsRoute mode="edit" />
+            </Suspense>
+          }
+        />
+        <Route
+          path="automations/:automationId/log"
+          element={
+            <Suspense fallback={<AutomationsLoading />}>
+              <AutomationsRoute mode="log" />
+            </Suspense>
+          }
+        />
 
         {/* The skills catalog (R6 Step 1.4) — its own top-level surface, no settings sub-nav.
             `/settings/skills` redirects here (below) so pasted links keep working. */}

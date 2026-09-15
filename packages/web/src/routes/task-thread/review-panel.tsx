@@ -23,6 +23,7 @@ import { isHttpUrl } from '@/lib/utils'
 
 import { finishTitle } from './run-actions'
 import { useContinuationProvider } from './continuation-provider'
+import { useDraft } from './thread-draft'
 import { useFinishRun } from './use-finish-run'
 
 /**
@@ -61,7 +62,12 @@ export function ReviewPanel({ run }: { run: ApiRun }) {
 function ReviewActions({ run }: { run: ApiRun }) {
   const queryClient = useQueryClient()
   const notesRef = useRef<HTMLTextAreaElement>(null)
-  const [notes, setNotes] = useState('')
+  // Review notes are the second-longest thing anyone types into a task, and they are typed while
+  // reading a diff — the exact moment a user opens another task to compare (#939). Kept in the
+  // draft store like the composer: restored on return, cleared only when the notes go back.
+  const draft = useDraft(run.id, 'review-notes')
+  const notes = draft.text
+  const setNotes = draft.setText
   const [manual, setManual] = useState<string | null>(null)
   const finish = useFinishRun(run.id)
   const continuation = useContinuationProvider(run)
@@ -73,14 +79,17 @@ function ReviewActions({ run }: { run: ApiRun }) {
   const sendBack = useMutation({
     mutationFn: async (text: string) => {
       if (!continuation.canContinue) return null
-      return continueRun(run.id, {
-        text: `Review feedback:\n${text}`,
-        runner: continuation.runnerOverride,
-      })
+      // Through the draft's submit seam: the notes are dropped once they have really gone back,
+      // and a rejected send-back leaves them in the box AND in the store.
+      return draft.submit(() =>
+        continueRun(run.id, {
+          text: `Review feedback:\n${text}`,
+          runner: continuation.runnerOverride,
+        }),
+      )
     },
     onSuccess: (result) => {
       if (result === null) return
-      setNotes('')
       invalidate()
     },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),

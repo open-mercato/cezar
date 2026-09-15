@@ -1,23 +1,31 @@
 import type { AutomationCoordinator } from './coordinator.ts';
 import type { GithubCandidate, GithubPoller, GithubPollResult } from './github-poller.ts';
+import { ScheduleRunner, type ScheduleLauncher } from './schedule-runner.ts';
 import type { AutomationStore } from './store.ts';
-import type { AutomationDefinition } from './types.ts';
+import { isGithubAutomation, isScheduleAutomation, type GithubAutomationDefinition } from './types.ts';
 
 export interface AutomationLaunchResult { runId: string }
 export type AutomationLauncher = (
-  definition: AutomationDefinition,
+  definition: GithubAutomationDefinition,
   candidate: GithubCandidate,
   receiptId: string,
 ) => Promise<AutomationLaunchResult>;
 
+/**
+ * One project as the schedulers see it. `github` is present only for a project whose remote is
+ * on github.com (spec 2026-09-14-automations-redesign): a project without it still gets a
+ * handle, so its scheduled automations fire — only the poll kind is skipped.
+ */
 export interface ProjectAutomationHandle {
   projectId: string;
-  owner: string;
-  repo: string;
   store: AutomationStore;
-  poller: GithubPoller;
+  /** The zone every schedule is evaluated in — the server's own. */
+  timeZone: string;
+  github?: { owner: string; repo: string; poller: GithubPoller };
   launch?: AutomationLauncher;
+  launchSchedule?: ScheduleLauncher;
   onChange?: (automationId: string, revision: number) => void;
+  now?: () => number;
 }
 
 /** One request chain process-wide. The promise tail also prevents a failed request from
@@ -35,7 +43,9 @@ const githubRequests = new GithubRequestArbiter();
 export class ProjectAutomationScheduler {
   constructor(private readonly handle: ProjectAutomationHandle) {}
 
-  async check(definition: AutomationDefinition, mode: 'preview' | 'execute' = 'execute'): Promise<GithubPollResult> {
+  async check(definition: GithubAutomationDefinition, mode: 'preview' | 'execute' = 'execute'): Promise<GithubPollResult> {
+    const github = this.handle.github;
+    if (!github) throw new Error('No GitHub remote is configured');
     const detectionOnly = mode === 'execute' && !this.handle.launch;
     if (detectionOnly) mode = 'preview';
     const { store } = this.handle;
@@ -52,9 +62,9 @@ export class ProjectAutomationScheduler {
       const overlapSince = since
         ? new Date(Date.parse(since) - 120_000).toISOString()
         : undefined;
-      const result = await githubRequests.run(() => this.handle.poller.poll(
-        this.handle.owner,
-        this.handle.repo,
+      const result = await githubRequests.run(() => github.poller.poll(
+        github.owner,
+        github.repo,
         definition,
         { since: overlapSince },
       ));
@@ -69,25 +79,27 @@ export class ProjectAutomationScheduler {
       }
       if (mode === 'execute') {
         const now = new Date().toISOString();
-        const cursor = laterCursor(state.cursor, result.cursor);
-        store.setState(definition.id, {
-          ...state,
-          revision: definition.revision,
-          cursor,
-          frozenHighWatermark: result.truncated && cursor?.tieBreaker
-            ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
-            : undefined,
-          lastSuccessAt: now,
-          nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
-          consecutiveFailures: 0,
-          backoffUntil: undefined,
+        store.setState(definition.id, (current) => {
+          const cursor = laterCursor(current.cursor, result.cursor);
+          return {
+            ...current,
+            revision: definition.revision,
+            cursor,
+            frozenHighWatermark: result.truncated && cursor?.tieBreaker
+              ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
+              : undefined,
+            lastSuccessAt: now,
+            nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
+            consecutiveFailures: 0,
+            backoffUntil: undefined,
+          };
         });
       } else if (detectionOnly) {
-        store.setState(definition.id, {
-          ...state,
+        store.setState(definition.id, (current) => ({
+          ...current,
           revision: definition.revision,
           nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
-        });
+        }));
       }
       this.handle.onChange?.(definition.id, definition.revision);
       completion = mode === 'preview'
@@ -105,7 +117,7 @@ export class ProjectAutomationScheduler {
     }
   }
 
-  private async launch(definition: AutomationDefinition, candidate: GithubCandidate): Promise<void> {
+  private async launch(definition: GithubAutomationDefinition, candidate: GithubCandidate): Promise<void> {
     const receipt = this.handle.store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId: candidate.eventId, candidate });
     if (!receipt) {
       this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, event: candidate.event, result: 'duplicate', reason: 'A durable receipt already exists for this automation and event.', githubNumber: candidate.number, githubTitle: candidate.title, githubUrl: candidate.url });
@@ -121,15 +133,16 @@ export class ProjectAutomationScheduler {
     }
   }
 
-  private recordFailure(definition: AutomationDefinition, error: unknown): void {
-    const state = this.handle.store.state(definition.id) ?? {};
-    const failures = (state.consecutiveFailures ?? 0) + 1;
-    const delay = Math.min(6 * 60 * 60_000, 60_000 * 2 ** (failures - 1));
-    this.handle.store.setState(definition.id, {
-      ...state,
-      consecutiveFailures: failures,
-      backoffUntil: new Date(Date.now() + delay).toISOString(),
-      nextCheckAt: new Date(Date.now() + delay).toISOString(),
+  private recordFailure(definition: GithubAutomationDefinition, error: unknown): void {
+    this.handle.store.setState(definition.id, (current) => {
+      const failures = (current.consecutiveFailures ?? 0) + 1;
+      const delay = Math.min(6 * 60 * 60_000, 60_000 * 2 ** (failures - 1));
+      return {
+        ...current,
+        consecutiveFailures: failures,
+        backoffUntil: new Date(Date.now() + delay).toISOString(),
+        nextCheckAt: new Date(Date.now() + delay).toISOString(),
+      };
     });
     this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason: error instanceof Error ? error.message : String(error) });
     this.handle.onChange?.(definition.id, definition.revision);
@@ -184,16 +197,32 @@ export class WorkspaceAutomationScheduler {
 
   hasTimer(): boolean { return this.timer !== undefined; }
 
+  /**
+   * Arm ONE timer for the earliest due item across every project and both kinds: a poll is due
+   * at its `nextCheckAt`, a schedule at its `nextRunAt` (computed and persisted on first sight by
+   * `ScheduleRunner.dueAt`). A poll whose project has no GitHub remote is skipped — the handle
+   * says so — and a schedule needs no remote at all.
+   */
   private schedule(): void {
     if (this.stopped) return;
-    const due: Array<{ at: number; definition: AutomationDefinition; scheduler: ProjectAutomationScheduler }> = [];
+    const now = this.options.now?.() ?? Date.now();
+    const due: Array<{ at: number; fire: () => Promise<unknown> }> = [];
     for (const projectId of this.options.coordinator.enabledProjectIds()) {
       const store = this.options.coordinator.store(projectId);
       if (!store) continue;
       const handle = this.options.handle(projectId, store);
       if (!handle) continue;
       for (const definition of store.list().filter((item) => item.enabled)) {
-        due.push({ at: Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date().toISOString()), definition, scheduler: new ProjectAutomationScheduler(handle) });
+        if (isGithubAutomation(definition)) {
+          if (!handle.github) continue;
+          const scheduler = new ProjectAutomationScheduler(handle);
+          due.push({ at: Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString()), fire: () => scheduler.check(definition) });
+        } else if (isScheduleAutomation(definition)) {
+          const runner = new ScheduleRunner({ ...handle, launch: handle.launchSchedule, now: this.options.now });
+          const at = runner.dueAt(definition);
+          if (at === null) continue;
+          due.push({ at, fire: () => runner.fire(definition) });
+        }
       }
     }
     if (!due.length) return;
@@ -201,7 +230,7 @@ export class WorkspaceAutomationScheduler {
     const next = due[0]!;
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void next.scheduler.check(next.definition).catch(() => undefined).finally(() => this.schedule());
-    }, Math.max(0, next.at - (this.options.now?.() ?? Date.now())));
+      void next.fire().catch(() => undefined).finally(() => this.schedule());
+    }, Math.max(0, next.at - now));
   }
 }

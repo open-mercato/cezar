@@ -16,6 +16,9 @@ import type {
   AutomationCheckQueuedResponse,
   AutomationLogResponse,
   AutomationResponse,
+  AutomationRetryResponse,
+  AutomationRunResponse,
+  AutomationTemplatesResponse,
   CreateAutomationInput,
   UpdateAutomationInput,
   AgentConfigListing,
@@ -34,8 +37,15 @@ import type {
   CreatePrResponse,
   CreateRunInput,
   CreateRunResponse,
+  DeleteDraftResponse,
   DeleteRunResponse,
   DeleteWorkflowResponse,
+  DraftEntry,
+  DraftImage,
+  DraftImageContent,
+  DraftImageInput,
+  RunDraftsResponse,
+  SetRunDraftInput,
   FinishResponse,
   FsBrowseResponse,
   GitCommitResponse,
@@ -1562,6 +1572,113 @@ export async function removeQueuedMessage(
   )
 }
 
+// ---- in-task drafts (#939) ------------------------------------------------------------------
+//
+// The unsent text and attachments of a task's editable inputs. Server-side so a draft follows the
+// user across browsers and survives a reload and a `cez` restart — the one thing the localStorage
+// stores behind `/new` and the GitHub hand-off box cannot do. `routes/task-thread/thread-draft.ts`
+// is the cockpit's ONLY caller: no component talks to this API directly.
+
+/** Every surface of one run that holds a draft. */
+export async function getRunDrafts(id: string, opts?: ReadOptions): Promise<RunDraftsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/drafts'),
+  )
+}
+
+/**
+ * The Fetch standard's ceiling on the TOTAL body of all in-flight `keepalive` requests. Past it
+ * the browser REJECTS the request outright — so a long draft asked to fly `keepalive` would be
+ * the one draft guaranteed not to be saved. Deliberately under the 64 KiB spec figure: other
+ * `keepalive` requests share the same allowance.
+ */
+const KEEPALIVE_BODY_MAX = 56 * 1024
+
+/** Replace one surface's draft. `images` are the ids `postRunDraftImage` minted; an empty write
+ *  (no text, no images) DELETES the entry — that is the server's rule, not a client courtesy. */
+export async function putRunDraft(
+  id: string,
+  surface: string,
+  body: SetRunDraftInput,
+  // `keepalive` is what makes the tab-close flush real: a page hidden mid-sentence dispatches one
+  // last write, and the browser is allowed to finish it after the document is gone.
+  opts?: { keepalive?: boolean },
+): Promise<DraftEntry> {
+  // …but only while the body fits. Above the cap an ordinary request is strictly better: a tab
+  // that is merely hidden (the common case) completes it normally, where `keepalive` would have
+  // thrown before it left. `DRAFT_TEXT_MAX` is 100 000 characters, so this is reachable by typing.
+  const keepalive =
+    opts?.keepalive === true && new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_BODY_MAX
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].$put(
+      {
+        param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+        json: body,
+      },
+      { init: { keepalive } },
+    ),
+    runPath(id, `/drafts/${surface}`),
+  )
+}
+
+export async function deleteRunDraft(id: string, surface: string): Promise<DeleteDraftResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+    }),
+    runPath(id, `/drafts/${surface}`),
+  )
+}
+
+/** Upload one attachment. Called when the image is ATTACHED, not when the message is sent, so a
+ *  draft record only ever references bytes the server already holds. */
+export async function postRunDraftImage(
+  id: string,
+  surface: string,
+  image: DraftImageInput,
+): Promise<DraftImage> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+      json: image,
+    }),
+    runPath(id, `/drafts/${surface}/images`),
+  )
+}
+
+/** The bytes behind a restored thumbnail, base64. */
+export async function getRunDraftImage(
+  id: string,
+  surface: string,
+  imageId: string,
+  opts?: ReadOptions,
+): Promise<DraftImageContent> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images[':imageId'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id), surface, imageId } },
+      init(opts),
+    ),
+    runPath(id, `/drafts/${surface}/images/${imageId}`),
+  )
+}
+
+export async function deleteRunDraftImage(
+  id: string,
+  surface: string,
+  imageId: string,
+): Promise<DeleteDraftResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images[':imageId'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface, imageId },
+    }),
+    runPath(id, `/drafts/${surface}/images/${imageId}`),
+  )
+}
+
 /** Repo-view branch action (R5): switch to an existing branch, or create one (from `from` or
  *  HEAD) and switch. Invalid names, unknown start points and dirty-tree checkout conflicts
  *  all come back as 409 whose ApiError carries git's own reason. */
@@ -1685,6 +1802,49 @@ export async function getAutomationLog(
       init(opts),
     ),
     `/automation-log?automationId=${encodeURIComponent(id)}`,
+  )
+}
+
+/** Relaunch a receipt stuck in `launch-error` (spec 2026-09-14 § API, kind-aware): a schedule
+ *  receipt fires its occurrence again as `manual`, a GitHub one relaunches its candidate. 409 with
+ *  the server's reason when the receipt is not retryable. */
+export async function retryAutomationReceipt(receiptId: string): Promise<AutomationRetryResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['automation-log'][':receiptId'].retry.$post({
+      param: { projectId: queryScope(), receiptId: encodeURIComponent(receiptId) },
+    }),
+    `/automation-log/${encodeURIComponent(receiptId)}/retry`,
+  )
+}
+
+/** Fire a SCHEDULED automation now, by hand (spec 2026-09-14 Q10) — paused or not; neither
+ *  `enabled` nor the timer changes. A GitHub automation answers 409: it runs through `check`. */
+export async function runAutomationNow(id: string): Promise<AutomationRunResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].run.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    `/automations/${encodeURIComponent(id)}/run`,
+  )
+}
+
+/** Delete a definition. Its runs, receipts and log rows stay; the id is tombstoned. */
+export async function deleteAutomation(id: string): Promise<void> {
+  const res = await cez.api.v1.p[':projectId'].automations[':id'].$delete({
+    param: { projectId: queryScope(), id: encodeURIComponent(id) },
+  })
+  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+}
+
+/** The other registered projects' automations, as the editor's template palette lists them
+ *  (spec 2026-09-14 Q7). Workspace-level; `exclude` keeps the calling project out. */
+export async function getAutomationTemplates(exclude: string | null, opts?: ReadOptions): Promise<AutomationTemplatesResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['automation-templates'].$get(
+      { query: exclude ? { exclude } : {} },
+      init(opts),
+    ),
+    '/workspace/automation-templates',
   )
 }
 

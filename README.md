@@ -334,11 +334,20 @@ a GitHub page.
 ## Multiple projects, one cockpit
 
 One `cezar serve` hosts **every repo you work in**, not just the one you started
-it in. Each repo cezar boots in registers itself in a per-user registry at
-`~/.cezar/config.json` — the workspace file that also holds the global knobs
+it in. Projects live in a per-user registry at `~/.cezar/config.json` — the
+workspace file that also holds the global knobs
 (the parallel cap, the memory ceiling, the browse root, and the checkout root). Nothing is added to
 the repo: per-project state stays exactly where it was, in that repo's
 `.ai/cezar/`.
+
+**Your first run registers the repo you start it in** — that is the whole setup.
+After that the registry is yours to curate: starting cezar somewhere else serves
+that folder as usual (its own tasks, its own `.ai/cezar/`) but does not add it to
+the list behind your back. It shows up at the top of the sidebar marked **not
+saved**, and **Settings → Projects** lists it as *not registered* with an
+**Add project** button — so the folder you launched in is always one click from
+being kept, and never kept without the click. `cezar projects add` does the same
+from a terminal.
 
 Every view is project-scoped:
 
@@ -363,8 +372,8 @@ and task list — and the new-task composer names the project it will run in.
 
 Removing a project (**Settings → Projects**) drops the registry entry only — the
 repo and its `.ai/cezar/` are never touched, so re-adding it later finds all its
-tasks intact. The project cezar is currently serving can't be removed: it
-re-registers itself at the next start.
+tasks intact. The project cezar is currently serving can't be removed from the
+cockpit — stop the server and use `cezar projects remove <id>` instead.
 
 **From the terminal** — the same registry, no cockpit required (handy over ssh):
 
@@ -517,7 +526,7 @@ Useful environment variables:
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
 | `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
 | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
-| `CEZ_AUTOMATIONS=1` | Turn on **GitHub automations**: the Automations view appears and cezar polls GitHub on each enabled automation's interval, launching tasks from what it finds. Off by default, and only the exact value `1` enables it — without it nothing polls GitHub, the automations endpoints answer `409`, and the nav item is absent. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are retained, so unsetting it and restarting restores the feature without migration or data loss. |
+| `CEZ_AUTOMATIONS=0` | Turn **automations** off. On by default since the automations redesign (spec `.ai/specs/2026-09-14-automations-redesign.md`): the Automations view lists GitHub-triggered and scheduled automations, and cezar polls GitHub or fires schedules on each enabled one while it is running — nothing runs until you enable an automation yourself. An agent can also **create an automation from a prompt**: type "whenever a PR is opened, review it" into New task — pick the built-in `create-cezar-automation` skill, or just ask; every task's system prompt teaches it to recognise the intent — and the agent writes the definition and creates it through `cez automation create` (paused, with a `cez automation check` preview of what it would match), then links the Automations page. Only the exact value `0` opts out (`CEZ_AUTOMATIONS=1`, the old opt-in, is accepted and changes nothing); opted out, the nav item is absent, the endpoints answer `409`, and the workspace scheduler never starts. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are kept either way. |
 | `CEZ_DISPATCH=0` | Turn OFF **task dispatch**, which is on by default: a running task may start other cezar tasks with `cez task create` — each in its OWN worktree forked off the parent's branch, with a budget carved out of the parent's — and they report back into the parent's session when they settle (`cez task report`). Children appear nested under their parent in the task lists. Tasks talk through a tree directory (`.ai/cezar/dispatch/<root>/`: the brief, each task's order/notes/report, an inbox per task) and cezar wakes a parked recipient when a file lands. A `--kind review` child judges another task's branch and answers with a verdict. ON by default (the owner-approved exception to "cost-widening features are opt-in" — see `AGENTS.md`), and only the exact value `0` turns it off; with it off the `/runs/:id/dispatch` and `/runs/:id/report` routes answer `409`, no task is told about the CLI, and the cockpit hides the "Review open PRs" template. A headless `cezar run` never dispatches either way — there is no cockpit for the CLI to reach, so no task is told about it. Read at boot, so restart after changing it. This is the widest cost-widening flag here — one task can start four more agents — so give dispatching tasks a budget. |
 | `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. |

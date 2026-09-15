@@ -1,4 +1,4 @@
-import { ChevronDownIcon, SearchIcon } from 'lucide-react'
+import { SearchIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 import { DEFAULT_AGENT_ACCOUNT_ID, type Runner } from '@open-mercato/cezar-api-client'
@@ -17,13 +17,11 @@ import { RUNNERS } from '@/routes/new-task-form'
  * surface reuses the exact same runner/model control — one pill grammar, one place to change it.
  */
 
-/** The mockup's `.chip`: a quiet bordered pill that darkens on hover. */
-export const chipClass =
-  'inline-flex h-[26px] items-center gap-1.5 rounded-full border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-55'
+/** The mockup's `.chip` — defined once in `components/chip.tsx` (spec 2026-09-14-automations-redesign
+ *  § Primitives) and re-exported here for the composer's existing importers. */
+import { chipChevron as chevron, chipClass } from '@/components/chip'
 
-export const chevron = (
-  <ChevronDownIcon aria-hidden="true" className="size-2.5 shrink-0 text-soft-foreground" />
-)
+export { chevron, chipClass }
 
 /** A generic single-choice pill (runner / model / variants): DropdownMenu radio semantics,
  *  two-line items (label + quiet description), disabled state carries its reason as `title`. */

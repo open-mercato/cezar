@@ -98,11 +98,12 @@ describe('visibleNavItems', () => {
     expect(visibleNavItems({ forge: true, inbox: true, automations: true })).toEqual(NAV_ITEMS)
   })
 
-  it('without a forge, the GitHub AND Automations items drop out', () => {
+  it('without a forge, only the GitHub item drops out — a schedule needs no remote', () => {
     expect(labelsOf({ forge: false, inbox: true, automations: true })).toEqual([
       'Tasks',
       'Inbox',
       'Git',
+      'Automations',
       'Skills',
       'Workflows',
       'Settings',
@@ -121,7 +122,7 @@ describe('visibleNavItems', () => {
     ])
   })
 
-  it('without the automations opt-in, exactly the Automations item drops out (#801)', () => {
+  it('opted out of automations, exactly the Automations item drops out', () => {
     expect(labelsOf({ forge: true, inbox: true, automations: false })).toEqual([
       'Tasks',
       'Inbox',

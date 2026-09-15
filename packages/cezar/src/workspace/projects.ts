@@ -14,6 +14,9 @@ import {
  * Project registry operations over `~/.cezar/config.json` (spec
  * 2026-07-20-multi-project-workspace, "Project identity" + "Boot flow"):
  *
+ * - `shouldRegisterProject(root)` / `shouldAutoRegisterProject(root)` — the
+ *   path-shape guard every registration passes, and the stricter boot-time
+ *   guard that only seeds the registry while it is still empty.
  * - `registerProject(root)` — realpath-normalize, dedupe by realpath, allocate
  *   a human-readable slug from `basename(root)`. Registration is additive and
  *   goes through the read-modify-write merge, so the worst race outcome
@@ -111,21 +114,63 @@ function isInsideTaskWorktree(path: string): boolean {
  * - the user's home directory itself (realpath-compared, so a symlinked
  *   `$HOME` still matches).
  */
-export async function shouldRegisterProject(repoRoot: string): Promise<boolean> {
-  const real = await normalizeRoot(repoRoot);
-  if (isInsideTaskWorktree(real) || isInsideTaskWorktree(resolve(repoRoot))) return false;
+async function isRegistrableRoot(real: string, spelled: string): Promise<boolean> {
+  if (isInsideTaskWorktree(real) || isInsideTaskWorktree(resolve(spelled))) return false;
   const home = await normalizeRoot(homedir());
   return real !== home;
+}
+
+export async function shouldRegisterProject(repoRoot: string): Promise<boolean> {
+  return isRegistrableRoot(await normalizeRoot(repoRoot), repoRoot);
+}
+
+/**
+ * The BOOT-time guard: `shouldRegisterProject` plus the "seed once" rule.
+ * Starting cezar inside a folder is only an implicit "this is my project"
+ * when the user has no projects yet — once the registry has any entry, the
+ * cwd is a place the cockpit is being *opened from*, not a project the user
+ * asked to add. Booting in an unregistered repo then serves it exactly as
+ * before; it just never lands in the sidebar behind the user's back. Adding
+ * a project stays an explicit gesture (`cezar projects add`, the cockpit's
+ * Add project dialog) — both go through `shouldRegisterProject` directly.
+ *
+ * An already-registered root still passes, so booting a known project keeps
+ * bumping its `lastOpenedAt` and keeps handing the server its registry id.
+ *
+ * Single-project mode is exempt: there the launch context IS the project
+ * (`cezar projects list` reads its identity back out of the registry), so
+ * suppressing the boot write would leave that deployment with no project at
+ * all.
+ */
+export async function shouldAutoRegisterProject(
+  repoRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<boolean> {
+  const real = await normalizeRoot(repoRoot);
+  if (!(await isRegistrableRoot(real, repoRoot))) return false;
+  if (env.CEZ_SINGLE_PROJECT === '1') return true;
+  const { projects } = await loadWorkspaceConfig();
+  return projects.length === 0 || projects.some((project) => project.root === real);
 }
 
 /**
  * Register `root` in the workspace registry (idempotent). Known root (by
  * realpath) → bump its `lastOpenedAt` and return the existing entry, id and
  * all. Unknown → allocate a slug and append a new entry via merge-write.
+ *
+ * `reservedIds` keeps slugs the registry does not (yet) contain out of the
+ * allocator. A running server hands it the id its UNREGISTERED boot folder is
+ * being served under: that id is a live URL and the boot context answers it,
+ * so handing the same slug to a newly added `~/other/beta` would silently
+ * shadow the served folder. The registry file is the only cross-process truth,
+ * so this closes the collision for the server that knows about it, not for a
+ * concurrent `cezar projects add` — which is the same last-writer-wins window
+ * every registry write already lives with.
  */
 export async function registerProject(
   root: string,
   source: 'local' | 'checkout' = 'local',
+  reservedIds: Iterable<string> = [],
 ): Promise<WorkspaceProject> {
   const real = await normalizeRoot(root);
   const now = new Date().toISOString();
@@ -138,7 +183,7 @@ export async function registerProject(
       return;
     }
     entry = {
-      id: allocateProjectSlug(real, config.projects.map((p) => p.id)),
+      id: allocateProjectSlug(real, [...config.projects.map((p) => p.id), ...reservedIds]),
       root: real,
       name: basename(real),
       addedAt: now,
@@ -192,6 +237,10 @@ export interface ProjectListEntry extends WorkspaceProject {
    *  The sidebar gates each project group's GitHub tab on this, instead of on
    *  the boot folder's health-level forge answer. */
   forge?: ForgeKind;
+  /** Only ever set by `GET /api/v1/projects` on the synthetic entry for an
+   *  unregistered boot folder (see the route). Nothing in this module writes
+   *  it: a row that came out of the registry is registered by definition. */
+  unregistered?: true;
   /** The remote's web root (`https://github.com/owner/repo`), rebuilt from the
    *  parsed remote so it can never carry credentials. What lets a cross-project
    *  surface link a reference the run knows only by NUMBER — the global Tasks
