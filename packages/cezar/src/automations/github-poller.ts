@@ -202,7 +202,18 @@ export class GithubPoller {
       'api', '--method', 'GET', `repos/${owner}/${repo}/issues/${number}/timeline`,
       '-H', 'Accept: application/vnd.github+json', '-f', 'per_page=100',
     ]);
-    return z.array(timelineEventSchema).parse(JSON.parse(raw));
+    // Filter BEFORE validating. `/timeline` is a heterogeneous, additive GitHub
+    // surface — `commented`, `cross-referenced`, `assigned`, `renamed`, … all
+    // share the array with the two entries this poller reconstructs from. Passing
+    // the whole array through `timelineEventSchema` made the first such entry
+    // reject the parse, and the throw propagated out of `poll()`, so no candidate
+    // on the page was ever evaluated (#914). `timelineEventSchema` stays strict
+    // for the entries that matter: a `labeled` entry with a malformed `label` is
+    // still dropped rather than crashing the poll.
+    return z.array(z.unknown()).parse(JSON.parse(raw)).flatMap((entry) => {
+      const parsed = timelineEventSchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    });
   }
 }
 
