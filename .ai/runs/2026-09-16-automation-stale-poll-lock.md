@@ -92,7 +92,20 @@ container whose pid namespace we do not share).
 - **Conflict with #982.** Both changes touch `scheduler.ts`. This one stays out of the poll body
   (cursor/eligibility/state-write block) entirely.
 
+## Validation note — the cezar task environment breaks the suite, not the change
+
+Run inside a cezar task, `npm test` reports 10-13 failures with or without this change. Two causes,
+both environmental: `TMPDIR` points at `.ai/cezar/tmp/<runId>` *inside the repository*, so every
+"outside a git repository" test (`git.test.ts`, `git-worktree.test.ts`, `git-changes.test.ts`,
+`health-forge.test.ts`, `route-parity.test.ts`) finds a repo where it expects none; and the run's
+`CEZ_*` variables (notably `CEZ_TODOS_FILE`) are exactly what the zero-config prompt tests assert
+are absent. The gate below was therefore run with `TMPDIR=/tmp` and the `CEZ_*` variables unset,
+where the whole suite is green. The same run on unmodified `origin/main` sources produced an
+identical failure set before that scrub, so none of it is attributable to this change.
+
 ## Progress
+
+PR: #993
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
@@ -113,5 +126,5 @@ container whose pid namespace we do not share).
 
 ### Phase 4: Validate and ship
 
-- [ ] 4.1 Full validation gate
+- [x] 4.1 Full validation gate — all five commands exit 0 (see the PR body)
 - [ ] 4.2 PR body, labels, authoritative review pass
