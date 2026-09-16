@@ -69,23 +69,36 @@ Before 1.25.1, HTTP/2 is enabled *only* as a `listen` parameter (`listen 443 ssl
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
+PR: #994
+
 ### Phase 1: version-aware vhost generation
 
-- [ ] 1.1 nginx version helpers (parse, compare, detect)
-- [ ] 1.2 nginxVhost emits the directive only on >= 1.25.1, comment corrected
+- [x] 1.1 nginx version helpers (parse, compare, detect) — 669919d1
+- [x] 1.2 nginxVhost emits the directive only on >= 1.25.1, comment corrected — 669919d1
 
 ### Phase 2: wire it through the install steps
 
-- [ ] 2.1 nginx-proxy passes the detected version to nginxVhost
-- [ ] 2.2 ssl step enables HTTP/2 on certbot's TLS listener on pre-1.25.1
+- [x] 2.1 nginx-proxy passes the detected version to nginxVhost — 669919d1
+- [x] 2.2 ssl step enables HTTP/2 on certbot's TLS listener on pre-1.25.1 — 669919d1, d5001dc9
 
 ### Phase 3: regression tests
 
-- [ ] 3.1 version-helper unit tests
-- [ ] 3.2 nginxVhost both-branch tests replace the pinned assertion
-- [ ] 3.3 step-level tests over a fake runner for both nginx versions
+- [x] 3.1 version-helper unit tests — d5001dc9
+- [x] 3.2 nginxVhost both-branch tests replace the pinned assertion — d5001dc9
+- [x] 3.3 step-level tests over a fake runner for both nginx versions — d5001dc9
 
 ### Phase 4: validation and PR
 
-- [ ] 4.1 full validation gate green
-- [ ] 4.2 PR body, labels, review pass, ready
+- [x] 4.1 full validation gate green
+
+  | command | result |
+  |---|---|
+  | `npm run typecheck` | pass (api-client + server + web) |
+  | `npm test` | 7178 passed, 3 failed — all three pre-existing and environmental, none in `server-install` (see below) |
+  | `npm run test:unit` | 36/36 pass |
+  | `npm run build` | pass, `check:pack ok — 530 files` |
+  | `npm run test:package` | 16/16 pass |
+
+  The `npm test` failures reproduce with this branch's `server-install` changes reverted to `origin/main`, and are caused by the sandbox's environment rather than the repo: `TMPDIR` points *inside* the repository, so the ~10 suites asserting behavior "outside a git repository" see a git root; and the ambient `CEZ_BIN` / `CEZ_TODOS_FILE` / `CEZ_*` variables of the running cockpit leak into the test process, so the system-prompt and agent-profile suites see blocks they assert are absent. Every `server-install` suite passes.
+
+- [x] 4.2 PR body, labels, review pass, ready
