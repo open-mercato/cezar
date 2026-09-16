@@ -105,25 +105,93 @@ same ordering cannot leak `CEZ:MONITORING` into the transcript.
 
 ## Progress
 
+PR: #995
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Agent-contract wording
 
-- [ ] 1.1 Rewrite the `Still-working marker` paragraph in `HANDOFF_ONLY_INSTRUCTIONS` with the async-subagent case and a worked example
-- [ ] 1.2 Pin the contract in `handoff.test.ts`
+- [x] 1.1 Rewrite the `Still-working marker` paragraph in `HANDOFF_ONLY_INSTRUCTIONS` with the async-subagent case and a worked example — 4904a580
+- [x] 1.2 Pin the contract in `handoff.test.ts` — 4904a580
 
 ### Phase 2: Detection hardening
 
-- [ ] 2.1 Add the shared `turnEndMarkerText` / `endsWithMonitoringMarker` helper in `run.ts`
-- [ ] 2.2 Route both turn-end sites (`runContinuation`, `runAgentStep`) through it, and strip task markers first on the display path
-- [ ] 2.3 Add the `mock:monitoring-refs` dry-run variant to `mock-claude.mjs`
+- [x] 2.1 Add the shared `turnEndMarkerText` / `endsWithMonitoringMarker` helper in `run.ts` — 66a2ad58
+- [x] 2.2 Route both turn-end sites (`runContinuation`, `runAgentStep`) through it, and strip task markers first on the display path — 66a2ad58
+- [x] 2.3 Add the `mock:monitoring-refs` dry-run variant to `mock-claude.mjs` — 66a2ad58
 
 ### Phase 3: Regression coverage
 
-- [ ] 3.1 Unit tests for the detection helper (incl. the cases that must still park `waiting`)
-- [ ] 3.2 Integration regression at BOTH turn-end sites in `run.test.ts`
-- [ ] 3.3 Prove the new tests fail without the fix
+- [x] 3.1 Unit tests for the detection helper (incl. the cases that must still park `waiting`) — 9966e202
+- [x] 3.2 Integration regression at BOTH turn-end sites in `run.test.ts` — 9966e202
+- [x] 3.3 Prove the new tests fail without the fix — 9966e202
 
 ### Phase 4: Validation and PR
 
-- [ ] 4.1 Full validation gate, PR body with `Fixes #933`, labels
+- [x] 4.1 Full validation gate, PR body with `Fixes #933`, labels
+
+## Validation gate — output
+
+Run in this branch's worktree, in `validation.commands` order.
+
+| Command | Result |
+|---|---|
+| `npm run typecheck` | pass (contract, api-client, server, web — no diagnostics) |
+| `npm test` | 7183 passed, 9 pre-existing environment failures (see below) |
+| `npm run test:unit` | `tests 36 / pass 36 / fail 0` |
+| `npm run build` | pass — `check:pack ok — 530 files, 88 under web/dist` |
+| `npm run test:package` | `tests 16 / pass 16 / fail 0` |
+
+The 9 `npm test` failures are **pre-existing and environment-caused, not introduced here**. They
+were reproduced on a clean detached worktree at `origin/main` (`0e9dfd76`) with the same
+`npm ci`, and the same files fail there:
+
+```
+Test Files  9 failed (9)      # origin/main baseline, same 9 files
+Tests  10 failed | 242 passed (252)
+```
+
+`packages/cezar/src/workflows/system-prompt.test.ts` — the only failing file this change could
+plausibly touch, since it asserts on the injected handoff contract — fails **identically** on both:
+
+```
+# origin/main                          # fix/false-needs-you-dispatched-subagents
+FAIL … > without CEZ_FOLLOWUPS …       FAIL … > without CEZ_FOLLOWUPS …
+Tests  1 failed | 33 passed (34)       Tests  1 failed | 33 passed (34)
+```
+
+The cause is ambient: this sandbox injects a `cez automation` / dispatch preamble and a
+`CONFIG-DEFAULT:` line into the system prompt, and those byte-identical assertions see it. The
+same class of ambient dependency explains the rest (`getRepoInfo … outside a git repository`,
+`commitAll on a non-repo dir`, the automations-gate scheduler tests).
+
+## Regression evidence — red without the fix
+
+`turnEndMarkerText` was temporarily reverted to the pre-#933 `turnText.trimEnd()` and the display
+strippers to their outside-in order, with the tests unchanged (AGENTS.md: "Prove the regression
+test fails without the fix"):
+
+```
+× detects the marker followed by a PR declaration
+× detects the marker followed by every task-reference marker
+× detects a blank line between the marker and the references
+× only peels task-reference lines off the END of the turn
+× parks running/monitoring at the first-session turn-end (runAgentStep)
+× parks running/monitoring at the continuation turn-end (runContinuation)
+× keeps the marker out of the v1 transcript when references follow it
+AssertionError: expected 'waiting' to be 'running'   # ← the bug, at both turn-end sites
+Tests  7 failed | 7 passed | 108 skipped (122)
+```
+
+The 7 that pass both ways are the guard tests — the markerless turn, references with no marker,
+a marker with prose after it, and the superset invariant. They pin what must NOT change.
+
+With the fix restored: `Tests 122 passed (122)` for the whole of `run.test.ts`.
+
+## Follow-up left open (deliberately)
+
+The issue's step 4 asks whether the spec's "no turn ever ended with an open sub-agent tool-use"
+premise still holds. It does not — `094388f3` turn_1 ended with an open `Read` and turn_2 with an
+open `Bash`. The issue files the tool-event backstop it suggests as an explicitly-scoped follow-up
+rather than a requirement, and it would add a grace-period timer adjacent to the closed #654
+lifecycle work, so it is not in this PR.
