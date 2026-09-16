@@ -182,9 +182,9 @@ export async function detectNginxVersion(ctx: InstallContext): Promise<string | 
  * certbot adds has no 443 listener and is left alone. Idempotent, so a
  * `--reconfigure ssl` re-run is a no-op.
  */
-export function enableHttp2OnTlsListenerCmd(vhostPath: string): string {
-  const sed = `/^[[:space:]]*listen[[:space:]].*443.*[[:space:]]ssl([[:space:]]|;)/{/http2/!s/;/ http2;/;}`;
-  return `sed -i -E ${shquote(sed)} ${vhostPath} && nginx -t && systemctl reload nginx`;
+export function enableHttp2OnTlsListenerSed(vhostPath: string): string {
+  const program = `/^[[:space:]]*listen[[:space:]].*443.*[[:space:]]ssl([[:space:]]|;)/{/http2/!s/;/ http2;/;}`;
+  return `sed -i -E ${shquote(program)} ${vhostPath}`;
 }
 
 /**
@@ -600,7 +600,7 @@ const sslStep: InstallStep = {
       try {
         await sudoStep(ctx, {
           description: `Enable HTTP/2 on the new TLS listener (nginx ${nginxVersion ?? '< 1.25.1'} takes it as a "listen" parameter).`,
-          command: enableHttp2OnTlsListenerCmd(vhostAvail),
+          command: `${enableHttp2OnTlsListenerSed(vhostAvail)} && nginx -t && systemctl reload nginx`,
           skippable: true,
           skipHint: `add http2 to the "listen 443 ssl;" line in ${vhostAvail} yourself, then reload nginx`,
           verify: (c) =>
