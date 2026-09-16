@@ -174,7 +174,7 @@ function outputTail(r: { stdout: string; stderr: string }): string {
   return text
     ? `\n${text
         .split('\n')
-        .map((l) => `  ${l}`)
+        .map((line) => `  ${line}`)
         .join('\n')}`
     : '';
 }

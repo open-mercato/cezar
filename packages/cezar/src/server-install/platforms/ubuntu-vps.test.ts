@@ -376,6 +376,8 @@ describe('ubuntu-vps redeploy restart verification (#912)', () => {
     /** non-zero ⇒ only the read AFTER the restart fails. */
     showCodeAfterRestart?: number;
     running?: { pid: string; started: string } | null;
+    /** The sudo-driven system unit instead of the rootless `--user` one. */
+    scope?: 'user' | 'system';
   }) {
     let current = over.running === undefined ? { pid: '1111', started: '1000' } : over.running;
     let restarted = false;
@@ -406,9 +408,9 @@ describe('ubuntu-vps redeploy restart verification (#912)', () => {
       state: {
         installed: true,
         externalProxy: true,
-        // Pin the user scope the way a real install records it (otherwise the
-        // scope falls back to "does the unit file exist on this machine").
-        steps: { autostart: { status: 'done', created: { artifacts: [{ kind: 'owned', type: 'service', name: 'cezar.service', scope: 'user', path: '/tmp/cezar.service' }] } } },
+        // Pin the scope the way a real install records it (otherwise it falls
+        // back to "does the unit file exist on this machine").
+        steps: { autostart: { status: 'done', created: { artifacts: [{ kind: 'owned', type: 'service', name: 'cezar.service', scope: over.scope ?? 'user', path: '/tmp/cezar.service' }] } } },
       },
     });
     return { ctx, warns, pid: () => current?.pid ?? null };
@@ -460,6 +462,13 @@ describe('ubuntu-vps redeploy restart verification (#912)', () => {
   it('a unit that was not running before the deploy has nothing to compare against', async () => {
     const { ctx } = deployCtx({ running: null });
     await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+  });
+
+  it('the sudo-driven system unit is held to the same proof', async () => {
+    // `is-active` passes for the process that was already there, so the system
+    // scope needs the same before/after comparison the user scope gets.
+    const { ctx } = deployCtx({ scope: 'system' });
+    await expect(ubuntuVps.redeploy!(ctx)).rejects.toThrow(/did not actually restart/);
   });
 
   it('dry-run still stops before touching the service', async () => {

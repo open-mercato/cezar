@@ -109,3 +109,4 @@ thrown `StepAborted` to `{ status: 'failed' }`, and `index.ts` maps `failed` to
 
 - [x] 3.1 Document the D-Bus trap in the ubuntu-vps troubleshooting table — 5cc6edde
 - [x] 3.2 Run the full validation gate — all five commands green
+- [x] Post-review fix: cover the sudo/system scope's did-it-really-restart proof, and name the `outputTail` line variable
