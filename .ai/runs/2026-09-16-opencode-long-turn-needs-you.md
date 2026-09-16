@@ -114,21 +114,23 @@ error, surfaced as before.
 
 ## Progress
 
+PR: #1005
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: timeout-free transport
 
-- [ ] 1.1 Add the `opencode-http.ts` node:http request/SSE helper
-- [ ] 1.2 Unit-test the transport helper
-- [ ] 1.3 Point the runner's HTTP and SSE at the helper
+- [x] 1.1 Add the `opencode-http.ts` node:http request/SSE helper — d6de031b
+- [x] 1.2 Unit-test the transport helper — fce8e56f
+- [x] 1.3 Point the runner's HTTP and SSE at the helper — d6de031b
 
 ### Phase 2: the turn boundary is `session.idle`
 
-- [ ] 2.1 Teach the bundled mock server a long-turn (dropped POST) mode
-- [ ] 2.2 End the turn on `session.idle` with bounded fallbacks
-- [ ] 2.3 A transport failure on a live session is neither a turn end nor a fatal error
+- [x] 2.1 Teach the bundled mock server a long-turn (dropped POST) mode — fce8e56f
+- [x] 2.2 End the turn on `session.idle` with bounded fallbacks — d6de031b
+- [x] 2.3 A transport failure on a live session is neither a turn end nor a fatal error — d6de031b
 
 ### Phase 3: tests and gate
 
-- [ ] 3.1 Regression tests for the long turn, the short turn and the fallbacks
-- [ ] 3.2 Full validation gate and comment refresh
+- [x] 3.1 Regression tests for the long turn, the short turn and the fallbacks — fce8e56f
+- [x] 3.2 Full validation gate and comment refresh — (this commit)
