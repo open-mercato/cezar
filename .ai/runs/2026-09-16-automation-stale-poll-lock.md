@@ -98,18 +98,18 @@ container whose pid namespace we do not share).
 
 ### Phase 1: Reclaim a lock whose writer is gone
 
-- [ ] 1.1 Consult the lock's pid in `acquireLease`, with the age check as fallback
-- [ ] 1.2 Unit tests for dead pid, live pid, malformed lock, and the real liveness probe
+- [x] 1.1 Consult the lock's pid in `acquireLease`, with the age check as fallback — 73b04566
+- [x] 1.2 Unit tests for dead pid, live pid, malformed lock, and the real liveness probe — 73b04566
 
 ### Phase 2: A poll that cannot take the lease leaves a trace
 
-- [ ] 2.1 Acquire the lease inside `check()`'s try and record contention as a `skipped` poll
-- [ ] 2.2 Unit tests for the skipped record, the advanced `nextCheckAt`, and untouched failure counters
+- [x] 2.1 Acquire the lease inside `check()`'s try and record contention as a `skipped` poll — 081d4a4f
+- [x] 2.2 Unit tests for the skipped record, the advanced `nextCheckAt`, and untouched failure counters — 081d4a4f
 
 ### Phase 3: Never reschedule a failed fire at zero delay
 
-- [ ] 3.1 Per-item retry floor in `WorkspaceAutomationScheduler.schedule`
-- [ ] 3.2 Unit tests for the no-zero-delay invariant, the unblocked second project, and floor clearing
+- [x] 3.1 Per-item retry floor in `WorkspaceAutomationScheduler.schedule` — 2e4bff62
+- [x] 3.2 Unit tests for the no-zero-delay invariant and the unblocked second project — 2e4bff62
 
 ### Phase 4: Validate and ship
 
