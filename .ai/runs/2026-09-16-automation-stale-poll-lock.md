@@ -127,4 +127,4 @@ PR: #993
 ### Phase 4: Validate and ship
 
 - [x] 4.1 Full validation gate — all five commands exit 0 (see the PR body)
-- [ ] 4.2 PR body, labels, authoritative review pass
+- [x] 4.2 PR body, labels, authoritative review pass — om-auto-review-pr: APPROVE, no blockers
