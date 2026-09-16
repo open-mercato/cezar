@@ -299,6 +299,42 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(Date.now() - started).toBeGreaterThanOrEqual(TURN_IDLE_GRACE_MS);
   }, 30_000);
 
+  it('a POST that drops on a session that then DIES is still reported', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession({ userPrompt: 'do it #drop-then-die', cwd: process.cwd() }, onEvent, {
+      autoEndAfterFirstTurn: true,
+    });
+    await session.result;
+
+    // Swallowing the drop must not swallow a real failure: no `session.idle`
+    // ever arrived, so the drop was never explained and the note stands.
+    expect(notes(events).join(' ')).toContain('opencode: prompt failed:');
+    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
+  }, 30_000);
+
+  it('a prompt sent while a turn is still running supersedes it instead of hanging it', async () => {
+    const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
+    const { events, onEvent } = record();
+    const session = runner.startSession({ userPrompt: 'check the tree', cwd: process.cwd() }, onEvent, {});
+    // `sendMessage` queues behind `ready`, so only once the FIRST turn is over
+    // can two prompts genuinely overlap — which they do the moment the cockpit
+    // delivers a second message into a task that is still running (#986).
+    await afterTurnEnds(events, 1);
+
+    expect(session.sendMessage([{ type: 'text', text: 'watch CI #drop-post' }])).toBe(true);
+    expect(session.sendMessage([{ type: 'text', text: 'actually, do this instead' }])).toBe(true);
+    await afterTurnEnds(events, 3);
+
+    // Three prompts, three turn-ends. Without the supersede the second turn's
+    // waiter is overwritten by the third's and never resolves — its `prompt()`
+    // (and, on the first prompt, the `ready` everything else awaits) hangs.
+    expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(3);
+
+    session.end();
+    await session.result;
+  }, 30_000);
+
   it('with no event bus at all the HTTP response stays the turn boundary', async () => {
     const runner = new OpencodeServerRunner({ bin: mockBin, timeoutMs: 60_000 });
     const { events, onEvent } = record();

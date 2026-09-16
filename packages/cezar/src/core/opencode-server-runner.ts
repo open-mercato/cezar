@@ -137,6 +137,11 @@ class OpencodeSession implements AgentSession {
   /** Resolves the in-flight turn's `prompt()` — called from `finishTurn()`. */
   private endTurn: (() => void) | undefined;
   private turnGraceTimer: NodeJS.Timeout | undefined;
+  /** A transport drop swallowed during this turn (#897), kept so a turn that
+   *  then ends WITHOUT a `session.idle` still reports it. Dropping the POST is
+   *  no evidence on its own; dropping it AND never hearing the session finish
+   *  is, and that must not disappear along with the false "Needs you". */
+  private turnDropped: string | undefined;
   /** Did the SSE subscription ever connect, and is it still open? Together
    *  they answer "does the event bus still show a live session?" — the
    *  question that decides whether a dropped prompt POST means anything. */
@@ -391,8 +396,18 @@ class OpencodeSession implements AgentSession {
    */
   private async prompt(text: string): Promise<void> {
     if (!this.sessionId) return;
+    // A prompt posted while a turn is still in flight supersedes it — the
+    // cockpit lets a user type into a running task (#986), so this is reachable.
+    // Close the old turn here or its `await turnEnded` never resolves, and with
+    // it the `sendMessage`/`bootstrap` call that is waiting on it.
+    this.finishTurn();
+    if (this.autoEndTimer) {
+      clearTimeout(this.autoEndTimer);
+      this.autoEndTimer = undefined;
+    }
     this.turnInFlight = true;
     this.turnPostSettled = false;
+    this.turnDropped = undefined;
     const turnEnded = new Promise<void>((resolve) => {
       this.endTurn = resolve;
     });
@@ -413,7 +428,11 @@ class OpencodeSession implements AgentSession {
       // evidence about the agent — swallow it and keep listening. Anything
       // else (an HTTP status, a dead server) is a real failure and is raised
       // to the caller exactly as before.
-      if (!this.isDropWhileSessionLives(err)) failure = err;
+      if (this.isDropWhileSessionLives(err)) {
+        this.turnDropped = err instanceof Error ? err.message : String(err);
+      } else {
+        failure = err;
+      }
     }
     this.turnPostSettled = true;
     if (failure !== undefined) {
@@ -428,17 +447,28 @@ class OpencodeSession implements AgentSession {
    * End the in-flight turn, once. The single place `turn-end` is emitted, so
    * every exit — `session.idle`, the grace window, teardown, a server that
    * exited — produces exactly one.
+   *
+   * `fromIdle` marks the one exit that is the session's own word for "the turn
+   * is over". Every other exit is cezar synthesizing a boundary, and if the
+   * POST also dropped during this turn that drop was never explained: report it
+   * then, so a server that really did die does not go quiet just because #897
+   * stopped a live one from being parked.
    */
-  private finishTurn(): void {
+  private finishTurn(fromIdle = false): void {
     if (!this.turnInFlight) return;
     this.turnInFlight = false;
     if (this.turnGraceTimer) {
       clearTimeout(this.turnGraceTimer);
       this.turnGraceTimer = undefined;
     }
+    const dropped = this.turnDropped;
+    this.turnDropped = undefined;
     // A part that never saw `time.end` (abort, server quirk) still surfaces
     // its prose before the turn boundary (run.ts reads markers there).
     this.textCoalescer.flush();
+    if (dropped !== undefined && !fromIdle) {
+      this.emit({ type: 'note', message: `opencode: prompt failed: ${dropped}` });
+    }
     this.emit({ type: 'turn-end' });
     if (this.opts.autoEndAfterFirstTurn && this.serverOpen && !this.autoEndTimer) {
       this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
@@ -529,7 +559,7 @@ class OpencodeSession implements AgentSession {
       // The turn boundary (#897). A subtask session going idle closes only its
       // own scope, exactly as the v2 mapper reads it.
       const sid = stringField(props, 'sessionID');
-      if (sid === undefined || sid === this.sessionId) this.finishTurn();
+      if (sid === undefined || sid === this.sessionId) this.finishTurn(true);
     }
   }
 
