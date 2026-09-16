@@ -133,6 +133,105 @@ async function confirmCezarRunning(ctx: InstallContext, statusCmd: string, logsC
 }
 
 /**
+ * Who is serving right now: the unit's main PID plus the monotonic timestamp
+ * systemd recorded when it started. Two reads that agree on BOTH mean the same
+ * process has been running the whole time — i.e. nothing restarted (#912).
+ */
+type ServiceIdentity = { mainPid: string; startedAt: string };
+
+/**
+ * Read the running process's identity, or `null` when it cannot be established:
+ * the query failed (no user bus, unknown unit) or the unit is not running
+ * (`MainPID=0`), leaving no "old process" to compare against. Callers degrade on
+ * `null` rather than inventing a failure. Read-only, so — like `readExecStart` —
+ * it needs no sudo even for a system unit.
+ */
+async function readServiceIdentity(
+  ctx: InstallContext,
+  scope: 'user' | 'system',
+  unit: string,
+): Promise<ServiceIdentity | null> {
+  const args = [
+    ...(scope === 'user' ? ['--user'] : []),
+    'show',
+    unit,
+    '-p',
+    'MainPID',
+    '-p',
+    'ExecMainStartTimestampMonotonic',
+  ];
+  const { code, stdout } = await ctx.runner.capture('systemctl', args);
+  if (code !== 0) return null;
+  const mainPid = /^MainPID=(\d+)$/m.exec(stdout)?.[1];
+  const startedAt = /^ExecMainStartTimestampMonotonic=(\d+)$/m.exec(stdout)?.[1];
+  if (!mainPid || mainPid === '0' || !startedAt || startedAt === '0') return null;
+  return { mainPid, startedAt };
+}
+
+/** A failed command's own output, indented under our message (empty when it was silent). */
+function outputTail(r: { stdout: string; stderr: string }): string {
+  const text = `${r.stderr}\n${r.stdout}`.trim();
+  return text
+    ? `\n${text
+        .split('\n')
+        .map((l) => `  ${l}`)
+        .join('\n')}`
+    : '';
+}
+
+/**
+ * `systemctl --user` needs a D-Bus user session. `sudo -u <service-user>` from
+ * cron, a CI runner or an SSH command run as root gives none, and every call then
+ * fails with "Failed to connect to bus: No medium found" — the trap behind #912,
+ * and exactly the unattended flow where the exit code is the only signal anyone
+ * reads. Name it, and say how to get a real session.
+ */
+function noDbusSessionHint(scope: 'user' | 'system', output: string): string | null {
+  if (scope !== 'user') return null;
+  const busError = /Failed to connect to bus|No medium found|DBUS_SESSION_BUS_ADDRESS/i.test(output);
+  if (!busError && process.env.XDG_RUNTIME_DIR) return null;
+  const user = currentUsername();
+  return (
+    `No D-Bus user session${busError ? '' : ' (XDG_RUNTIME_DIR is not set)'} — \`systemctl --user\` cannot reach ` +
+    `the user manager, so nothing was restarted.\n` +
+    `Running this through \`sudo -u ${user}\`, cron or an SSH root script? Those have no login session. Use either:\n` +
+    `  • sudo -i -u ${user} …   (or: machinectl shell ${user}@)\n` +
+    `  • sudo -u ${user} env XDG_RUNTIME_DIR=/run/user/$(id -u ${user}) ` +
+    `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u ${user})/bus …`
+  );
+}
+
+/**
+ * Prove the restart actually replaced the process. `confirmCezarRunning` only
+ * proves that SOMETHING answers the port, and the un-restarted old process
+ * answers it just as well — which is how a deploy that did nothing reported
+ * "reloaded and verified" (#912). When both reads are available and identical,
+ * the deploy was a no-op: fail it.
+ */
+async function confirmServiceRestarted(
+  ctx: InstallContext,
+  scope: 'user' | 'system',
+  unit: string,
+  before: ServiceIdentity | null,
+): Promise<void> {
+  if (before === null) return; // nothing to compare against — never invent a failure
+  const after = await readServiceIdentity(ctx, scope, unit);
+  if (after === null) {
+    ctx.ui.warn(`Could not read ${unit}'s main PID after the restart — skipping the did-it-really-restart check.`);
+    return;
+  }
+  if (after.mainPid === before.mainPid && after.startedAt === before.startedAt) {
+    const status = `systemctl${scope === 'user' ? ' --user' : ''} status ${unit}`;
+    throw new StepAborted(
+      `${unit} did not actually restart — PID ${after.mainPid} has been serving since before this deploy, so the ` +
+        `cockpit is still running the OLD version and nothing was deployed.\n` +
+        `Check \`${status}\`, then restart it by hand to see the real error.`,
+    );
+  }
+  ctx.ui.success(`Service restarted (PID ${before.mainPid} → ${after.mainPid}).`);
+}
+
+/**
  * The nginx server block: auth_basic identity + SSE-safe proxy to loopback.
  * `serverName` defaults to the catch-all `_`; the SSL step rewrites it to the
  * real domain so the `certbot --nginx` plugin can find this vhost to edit.
@@ -1057,10 +1156,29 @@ export const ubuntuVps: PlatformStrategy = {
       return;
     }
     ctx.ui.info(`Redeploying — restarting the cezar ${scope} service to pick up the new version.`);
+    // Who is serving BEFORE the restart, so the verification below can tell a real
+    // deploy from one that left the old process in place (#912).
+    const before = await readServiceIdentity(ctx, scope, UNIT_NAME);
     if (scope === 'user') {
-      await ctx.runner.interactive('systemctl', ['--user', 'daemon-reload']);
-      const code = await ctx.runner.interactive('systemctl', ['--user', 'restart', UNIT_NAME]);
-      if (code !== 0) ctx.ui.warn('systemctl --user restart returned non-zero — check `systemctl --user status cezar`.');
+      // Captured rather than streamed: systemd's own failure text ("Failed to
+      // connect to bus…") IS the diagnosis, and it has to reach the abort message
+      // instead of scrolling past above a success banner. Both commands are silent
+      // when they succeed, so nothing is lost on the happy path.
+      const reload = await ctx.runner.capture('systemctl', ['--user', 'daemon-reload']);
+      if (reload.code !== 0) ctx.ui.warn(`systemctl --user daemon-reload exited ${reload.code}.${outputTail(reload)}`);
+      const restart = await ctx.runner.capture('systemctl', ['--user', 'restart', UNIT_NAME]);
+      if (restart.code !== 0) {
+        // A restart that did not run is a FAILED deploy, not a warning: the old
+        // process keeps serving, and `runDeploy` turns this into exit 1 with no
+        // "complete — reloaded and verified" banner (#912).
+        const hint = noDbusSessionHint(scope, [reload.stderr, reload.stdout, restart.stderr, restart.stdout].join('\n'));
+        throw new StepAborted(
+          `systemctl --user restart ${UNIT_NAME} exited ${restart.code} — the service was NOT restarted, so the old ` +
+            `process is still serving the previous version.${outputTail(restart)}\n` +
+            (hint ? `${hint}\n` : '') +
+            `Check \`systemctl --user status ${UNIT_NAME}\` / \`journalctl --user -u cezar -n 50 --no-pager\`.`,
+        );
+      }
     } else {
       await sudoStep(ctx, {
         description: 'Reload systemd and restart the cezar service.',
@@ -1068,6 +1186,9 @@ export const ubuntuVps: PlatformStrategy = {
         verify: (c) => verifyCommand(c, 'systemctl', ['is-active', UNIT_NAME]),
       });
     }
+    // `is-active` and "the port answers" are both satisfied by the process that was
+    // already there — only a changed PID/start time proves the restart happened.
+    await confirmServiceRestarted(ctx, scope, UNIT_NAME, before);
     await confirmCezarRunning(
       ctx,
       scope === 'user' ? 'systemctl --user status cezar' : 'sudo systemctl status cezar',
