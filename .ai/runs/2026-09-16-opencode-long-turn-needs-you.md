@@ -130,7 +130,12 @@ PR: #1005
 - [x] 2.2 End the turn on `session.idle` with bounded fallbacks — d6de031b
 - [x] 2.3 A transport failure on a live session is neither a turn end nor a fatal error — d6de031b
 
+### Phase 4: review pass (om-auto-review-pr)
+
+- [x] 4.1 A superseded turn settles instead of hanging its own `prompt()` — 5785aa62
+- [x] 4.2 A drop on a turn that never reaches `session.idle` is still reported — 5785aa62
+
 ### Phase 3: tests and gate
 
 - [x] 3.1 Regression tests for the long turn, the short turn and the fallbacks — fce8e56f
-- [x] 3.2 Full validation gate and comment refresh — (this commit)
+- [x] 3.2 Full validation gate and comment refresh — dfcc26f7
