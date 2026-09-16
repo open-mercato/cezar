@@ -96,16 +96,16 @@ thrown `StepAborted` to `{ status: 'failed' }`, and `index.ts` maps `failed` to
 
 ### Phase 1: A failed restart is a failed deploy
 
-- [ ] 1.1 Add the service-identity reader and the D-Bus-session hint
-- [ ] 1.2 Treat a non-zero `systemctl --user restart` as a hard failure
-- [ ] 1.3 Abort when the process did not actually change
+- [x] 1.1 Add the service-identity reader and the D-Bus-session hint — 5cc6edde
+- [x] 1.2 Treat a non-zero `systemctl --user restart` as a hard failure — 5cc6edde
+- [x] 1.3 Abort when the process did not actually change — 5cc6edde
 
 ### Phase 2: Regression tests
 
-- [ ] 2.1 Cover failed restart, stale process, success, degraded identity and dry-run
-- [ ] 2.2 Prove the new tests fail without the fix
+- [x] 2.1 Cover failed restart, stale process, success, degraded identity and dry-run — 5cc6edde
+- [x] 2.2 Prove the new tests fail without the fix — 5cc6edde
 
 ### Phase 3: Docs and the gate
 
-- [ ] 3.1 Document the D-Bus trap in the ubuntu-vps troubleshooting table
-- [ ] 3.2 Run the full validation gate
+- [x] 3.1 Document the D-Bus trap in the ubuntu-vps troubleshooting table — 5cc6edde
+- [x] 3.2 Run the full validation gate — all five commands green
