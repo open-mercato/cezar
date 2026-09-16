@@ -192,6 +192,9 @@ function laterCursor(
   return order > 0 ? observed : current;
 }
 
+/** The shortest a failed item is ever pushed out; a poll interval is at least this anyway. */
+const MIN_RETRY_MS = 60_000;
+
 export interface WorkspaceAutomationSchedulerOptions {
   coordinator: AutomationCoordinator;
   handle: (projectId: string, store: AutomationStore) => ProjectAutomationHandle | undefined;
@@ -203,6 +206,8 @@ export class WorkspaceAutomationScheduler {
   private timer?: ReturnType<typeof setTimeout>;
   private stopped = true;
   private scheduleGeneration = 0;
+  /** `projectId:automationId` → the instant a just-failed item may be tried again. */
+  private readonly retryAfter = new Map<string, number>();
   constructor(private readonly options: WorkspaceAutomationSchedulerOptions) {}
 
   async start(): Promise<void> {
@@ -238,31 +243,48 @@ export class WorkspaceAutomationScheduler {
   private schedule(): void {
     if (this.stopped) return;
     const now = this.options.now?.() ?? Date.now();
-    const due: Array<{ at: number; fire: () => Promise<unknown> }> = [];
+    const due: Array<{ key: string; at: number; retryAfterMs: number; fire: () => Promise<unknown> }> = [];
+    const live = new Set<string>();
     for (const projectId of this.options.coordinator.enabledProjectIds()) {
       const store = this.options.coordinator.store(projectId);
       if (!store) continue;
       const handle = this.options.handle(projectId, store);
       if (!handle) continue;
       for (const definition of store.list().filter((item) => item.enabled)) {
+        const key = `${projectId}:${definition.id}`;
+        live.add(key);
         if (isGithubAutomation(definition)) {
           if (!handle.github) continue;
           const scheduler = new ProjectAutomationScheduler(handle);
-          due.push({ at: Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString()), fire: () => scheduler.check(definition) });
+          const at = Date.parse(store.state(definition.id)?.nextCheckAt ?? new Date(now).toISOString());
+          due.push({ key, at: this.notBefore(key, at), retryAfterMs: Math.max(definition.intervalSeconds * 1_000, MIN_RETRY_MS), fire: () => scheduler.check(definition) });
         } else if (isScheduleAutomation(definition)) {
           const runner = new ScheduleRunner({ ...handle, launch: handle.launchSchedule, now: this.options.now });
           const at = runner.dueAt(definition);
           if (at === null) continue;
-          due.push({ at, fire: () => runner.fire(definition) });
+          due.push({ key, at: this.notBefore(key, at), retryAfterMs: MIN_RETRY_MS, fire: () => runner.fire(definition) });
         }
       }
     }
+    for (const key of this.retryAfter.keys()) if (!live.has(key)) this.retryAfter.delete(key);
     if (!due.length) return;
     due.sort((a, b) => a.at - b.at);
     const next = due[0]!;
     this.timer = setTimeout(() => {
       this.timer = undefined;
-      void next.fire().catch(() => undefined).finally(() => this.schedule());
+      void next.fire().then(
+        () => { this.retryAfter.delete(next.key); },
+        // Never re-arm a rejected item at its own past `at` (#983): that is a zero-delay spin, and
+        // because one timer serves the whole workspace it also starves every other project until
+        // something else moves the item forward. The floor is this workspace's own memory of the
+        // failure — independent of whatever the project's store did or did not manage to persist.
+        () => { this.retryAfter.set(next.key, (this.options.now?.() ?? Date.now()) + next.retryAfterMs); },
+      ).finally(() => this.schedule());
     }, Math.max(0, next.at - now));
+  }
+
+  /** An item that just failed waits out its retry floor, however due its persisted state looks. */
+  private notBefore(key: string, at: number): number {
+    return Math.max(at, this.retryAfter.get(key) ?? 0);
   }
 }
