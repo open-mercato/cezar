@@ -135,6 +135,51 @@ const DONE_MARKER_RE = /CEZ:DONE\s*$/;
  */
 const MONITORING_MARKER_RE = /CEZ:MONITORING\s*$/;
 /**
+ * Trailing task-reference marker lines — `CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`
+ * (spec 2026-07-18-task-ref-markers), whole lines, at the very end of the turn.
+ *
+ * #933: the handoff contract asks for those "as soon as you know which PR or issue
+ * this task is ABOUT", and until now said nothing about where they sit relative to
+ * the turn-end markers. An agent that declared its PR right AFTER `CEZ:MONITORING`
+ * buried the marker behind them, the `$`-anchored test below failed, and a turn that
+ * was only waiting on its own sub-agents parked as `waiting` — "needs you", the
+ * "paused, waiting for your reply" footer, and a browser notification for work
+ * nobody needs to look at. The contract now asks for the other order; this is the
+ * engine half, so an agent that gets it wrong is still read correctly.
+ *
+ * Deliberately NOT `/m`: with the multiline flag `$` matches every line end, so the
+ * pattern would also strip a task-reference line from the MIDDLE of a turn. `^|\n`
+ * pins each line's start and the unanchored `$` pins the run of them to the end.
+ *
+ * Looser than `stripTaskMarkers`'s `MARKER_LINE` on the VALUE (`=[^\n]*`, not `=\d+`)
+ * on purpose: a mistyped reference line is still the agent talking protocol, and the
+ * failure it must not cause is burying the turn-end marker behind it.
+ */
+const TRAILING_TASK_MARKER_LINES_RE = /(?:(?:^|\n)[ \t]*CEZ:(?:PR|ISSUE|TITLE)=[^\n]*)+$/;
+/**
+ * The text a turn-end marker is matched against: the accumulated turn text with
+ * trailing whitespace and trailing task-reference lines removed.
+ *
+ * ONE helper, because there are TWO near-identical turn-end handlers here
+ * (`runContinuation` and `runAgentStep`) and AGENTS.md is explicit about them:
+ * "a lifecycle change applied to one of them ships half a fix … route both sites
+ * through one helper". Exported so the detection can be unit-tested directly
+ * rather than only through a parked run.
+ */
+export function turnEndMarkerText(turnText: string): string {
+  return turnText.trimEnd().replace(TRAILING_TASK_MARKER_LINES_RE, '').trimEnd();
+}
+/**
+ * Did this turn end on the still-working marker? Strictly a SUPERSET of the old
+ * `MONITORING_MARKER_RE.test(turnText.trimEnd())` — anything that parked as
+ * `monitoring` before still does, which is what keeps #933 additive under
+ * `BACKWARD_COMPATIBILITY.md` §8 (an already-emitted `CEZ:MONITORING` keeps
+ * meaning exactly what it meant).
+ */
+export function endsWithMonitoringMarker(turnText: string): boolean {
+  return MONITORING_MARKER_RE.test(turnEndMarkerText(turnText));
+}
+/**
  * Preserve boundaries between complete assistant text blocks while a turn is
  * accumulated for marker parsing. The runners join these same v1 blocks with
  * newlines in `AgentRunResult`; matching that contract here prevents a
@@ -3378,7 +3423,11 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        // `stripTaskMarkers` runs INNERMOST (#933): it deletes whole `CEZ:PR=`/`CEZ:ISSUE=`/
+        // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
+        // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
+        // they saw those references and left the protocol marker in the transcript.
+        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -3429,7 +3478,7 @@ export class RunManager {
           !done &&
           !ask &&
           !dispatchTurn.overBudget &&
-          (dispatchTurn.dispatched || MONITORING_MARKER_RE.test(turnText.trimEnd()));
+          (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         if (done) {
@@ -4139,7 +4188,11 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        // `stripTaskMarkers` runs INNERMOST (#933): it deletes whole `CEZ:PR=`/`CEZ:ISSUE=`/
+        // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
+        // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
+        // they saw those references and left the protocol marker in the transcript.
+        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
@@ -4213,7 +4266,7 @@ export class RunManager {
           !done &&
           !ask &&
           !dispatchTurn.overBudget &&
-          (dispatchTurn.dispatched || MONITORING_MARKER_RE.test(turnText.trimEnd()));
+          (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
