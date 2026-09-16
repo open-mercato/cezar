@@ -167,8 +167,16 @@ export function supportsHttp2Directive(version: string | null | undefined): bool
   return true;
 }
 
-/** The installed nginx's version, or null when it cannot be read. `nginx -v`
- *  prints its banner on STDERR, so both streams are searched. */
+/**
+ * The installed nginx's version, or null when it cannot be read. `nginx -v`
+ * prints its banner on STDERR, so both streams are searched.
+ *
+ * Deliberately NOT gated on `ctx.dryRun` like this file's other probes: it is
+ * read-only (no sudo, no package install, no network), and running it makes a
+ * dry run on a host that already has nginx preview the exact vhost a real run
+ * would write. With no nginx the runner resolves 127 rather than throwing, so
+ * the preview falls back to the conservative syntax.
+ */
 export async function detectNginxVersion(ctx: InstallContext): Promise<string | null> {
   const r = await ctx.runner.capture('nginx', ['-v']);
   return parseNginxVersion(`${r.stderr}\n${r.stdout}`);
