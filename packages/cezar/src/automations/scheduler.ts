@@ -1,8 +1,13 @@
 import type { AutomationCoordinator } from './coordinator.ts';
 import type { GithubCandidate, GithubPoller, GithubPollResult } from './github-poller.ts';
 import { ScheduleRunner, type ScheduleLauncher } from './schedule-runner.ts';
-import type { AutomationStore } from './store.ts';
+import type { AutomationLease, AutomationStore } from './store.ts';
 import { isGithubAutomation, isScheduleAutomation, type GithubAutomationDefinition } from './types.ts';
+
+/** Another process is polling this project right now. A skip, not a broken automation. */
+export class LeaseHeldError extends Error {
+  constructor() { super('automation polling lease is held by another process'); }
+}
 
 export interface AutomationLaunchResult { runId: string }
 export type AutomationLauncher = (
@@ -48,12 +53,17 @@ export class ProjectAutomationScheduler {
     if (!github) throw new Error('No GitHub remote is configured');
     const detectionOnly = mode === 'execute' && !this.handle.launch;
     if (detectionOnly) mode = 'preview';
+    /** This call is the scheduler's own turn, not a by-hand preview from the API. */
+    const scheduled = mode === 'execute' || detectionOnly;
     const { store } = this.handle;
-    const lease = store.acquireLease();
-    if (!lease) throw new Error('automation polling lease is held by another process');
     const started = Date.now();
     let completion: { result: 'preview' | 'no-match'; reason: string } | undefined;
+    let lease: AutomationLease | undefined;
     try {
+      // Inside the try: a lease we cannot take is the one failure mode that used to produce no
+      // diagnostics at all, and it is the one that lasted longest (#983).
+      lease = store.acquireLease();
+      if (!lease) throw new LeaseHeldError();
       const state = store.state(definition.id) ?? {};
       if (state.backoffUntil && Date.parse(state.backoffUntil) > Date.now()) {
         throw new Error(`automation is backed off until ${state.backoffUntil}`);
@@ -107,13 +117,17 @@ export class ProjectAutomationScheduler {
         : { result: 'no-match', reason: 'Scheduled check completed.' };
       return { ...result, candidates: eligible };
     } catch (error) {
-      if (mode === 'execute') this.recordFailure(definition, error);
+      if (error instanceof LeaseHeldError) this.recordSkip(definition, error, scheduled);
+      else if (mode === 'execute') this.recordFailure(definition, error);
       else store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason: error instanceof Error ? error.message : String(error) });
       throw error;
     } finally {
       if (completion) store.appendLog({ automationId: definition.id, revision: definition.revision, ...completion, durationMs: Date.now() - started });
-      try { store.maybeCompact(); } catch { /* append-only state remains readable; next check retries */ }
-      lease.release();
+      if (lease) {
+        // Compaction rewrites the NDJSON files: only ever under the lease we actually hold.
+        try { store.maybeCompact(); } catch { /* append-only state remains readable; next check retries */ }
+        lease.release();
+      }
     }
   }
 
@@ -131,6 +145,24 @@ export class ProjectAutomationScheduler {
       this.handle.store.appendReceipt({ ...receipt, status: 'launch-error', error: error instanceof Error ? error.message : String(error), updatedAt: new Date().toISOString() });
       throw error;
     }
+  }
+
+  /**
+   * A lease held elsewhere is a skip, not a failure: another cockpit is polling this project and
+   * will do the work. Log it so the poll that did not happen leaves a trace, and move our own
+   * `nextCheckAt` on by one interval — without touching `consecutiveFailures`/`backoffUntil`,
+   * which are for the automation being broken. `ScheduleRunner.launch` treats the same condition
+   * the same way.
+   */
+  private recordSkip(definition: GithubAutomationDefinition, error: Error, scheduled: boolean): void {
+    const { store } = this.handle;
+    store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'skipped', reason: error.message });
+    if (!scheduled) return;
+    store.setState(definition.id, (current) => ({
+      ...current,
+      nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
+    }));
+    this.handle.onChange?.(definition.id, definition.revision);
   }
 
   private recordFailure(definition: GithubAutomationDefinition, error: unknown): void {

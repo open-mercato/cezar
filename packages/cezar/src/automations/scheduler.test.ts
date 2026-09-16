@@ -50,6 +50,38 @@ describe('ProjectAutomationScheduler', () => {
     expect(store.state(definition.id)).toMatchObject({ consecutiveFailures: 1, backoffUntil: expect.any(String) });
   });
 
+  it('logs the poll it skipped when another process holds the lease, and re-arms one interval out (#983)', async () => {
+    const { store, definition } = await setup();
+    const held = store.acquireLease();
+    expect(held).toBeDefined();
+    const poll = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1 }));
+    const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll } as never }, launch: async () => ({ runId: 'unused' }) });
+    const before = Date.now();
+    await expect(scheduler.check(definition)).rejects.toThrow('lease is held by another process');
+    expect(poll).not.toHaveBeenCalled();
+    // The poll that did not happen is on the record, instead of ten silent minutes.
+    expect(store.logs({ automationId: definition.id })[0]).toMatchObject({
+      result: 'skipped',
+      reason: 'automation polling lease is held by another process',
+    });
+    const state = store.state(definition.id)!;
+    expect(Date.parse(state.nextCheckAt!)).toBeGreaterThanOrEqual(before + definition.intervalSeconds * 1_000);
+    // A busy lease is not the automation being broken: no failure counter, no exponential backoff.
+    expect(state.consecutiveFailures).toBeUndefined();
+    expect(state.backoffUntil).toBeUndefined();
+    held?.release();
+  });
+
+  it('logs a contended lease in preview mode without writing state', async () => {
+    const { store, definition } = await setup();
+    const held = store.acquireLease();
+    const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll: async () => ({ candidates: [], truncated: false, pages: 1 }) } as never }, launch: async () => ({ runId: 'unused' }) });
+    await expect(scheduler.check(definition, 'preview')).rejects.toThrow('lease is held by another process');
+    expect(store.logs({ automationId: definition.id })[0]).toMatchObject({ result: 'skipped' });
+    expect(store.state(definition.id)).toBeUndefined();
+    held?.release();
+  });
+
   it('starts provider discovery from the durable cursor overlap', async () => {
     const { store, definition } = await setup();
     store.setState(definition.id, (current) => ({
