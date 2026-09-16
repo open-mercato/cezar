@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { reasoningEffortSchema } from './agent.ts';
 import { runnerSchema } from './health.ts';
 import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
@@ -85,6 +86,8 @@ export const stepStateSchema = z.object({
   sessionId: z.string().optional(),
   /** Backend that owns `sessionId`; absent on records written before backend affinity. */
   backend: runnerSchema.optional(),
+  /** Reasoning level selected when this agent step started. Absent means the native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Agent account (spec 2026-07-29-agent-profiles) that owns `sessionId` — `default`, or a
    *  stored profile id. The two are a PAIR: a session id only resolves inside the config dir
    *  that created it, so resume and Continue read this rather than the project's current
@@ -153,6 +156,8 @@ export const runRecordSchema = z.object({
    *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
+  /** Per-run Codex reasoning level. Absent means the App Server's native default. */
+  reasoningEffort: reasoningEffortSchema.optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
   modelIdentity: z.string().optional(),
   runner: runnerSchema.optional(),
@@ -850,6 +855,7 @@ export const createRunInputBaseSchema = z
     steps: z.array(workflowStepDefSchema).min(1).max(8).optional(),
     task: z.string().min(1).max(100_000, 'must be at most 100000 characters'),
     model: z.string().optional(),
+    reasoningEffort: reasoningEffortSchema.optional(),
     runner: runnerSchema.optional(),
     /** Agent account for this task (spec 2026-07-29-agent-profiles). Omit to follow the
      *  project's own selection; an id that no longer exists is a 400, not a silent default. */
@@ -896,6 +902,23 @@ export const createRunInputSchema = createRunInputBaseSchema.refine(
   { message: 'provide either "workflow" or "steps", not both' },
 );
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
+
+/**
+ * `POST /runs/:id/continue`. An empty body preserves the run's current engine choices; a
+ * selected reasoning effort replaces that run-level choice for the continuation and later turns.
+ */
+export const continueRunInputSchema = z.object({
+  text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
+  images: z.array(attachmentInputSchema).max(4).optional(),
+  runner: runnerSchema.optional(),
+  model: z.string().max(200).optional(),
+  /** Empty string is the explicit reset token; omission preserves the stored run choice. */
+  reasoningEffort: z.union([reasoningEffortSchema, z.literal('')]).optional(),
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
+   *  `POST /runs`' own `agentProfile`. Omitted = keep the account the run is already on. */
+  agentProfile: z.string().max(64).optional(),
+});
+export type ContinueRunInput = z.input<typeof continueRunInputSchema>;
 
 /**
  * `POST /runs/:id/messages` — text and/or pasted attachments for a live session. Both keys have

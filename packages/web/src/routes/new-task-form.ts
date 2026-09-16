@@ -15,6 +15,7 @@ import type {
   UiState,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
+import type { ReasoningEffortOption } from '@/components/reasoning-effort-pill'
 
 /**
  * The new-task form's picker rules and its POST body, as pure functions — the exact semantics
@@ -200,6 +201,27 @@ export function modelCatalogStatus(
   return undefined
 }
 
+/** The App Server advertises effort levels per Codex model, never per runner. */
+export function reasoningEffortsForModel(
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): readonly ReasoningEffortOption[] {
+  if (runner !== 'codex' || model === '' || catalog?.runner !== 'codex') return []
+  return catalog.models.find((candidate) => candidate.id === model)?.reasoningEfforts ?? []
+}
+
+/** A stale draft effort is never sent after its runner/model capability disappears. */
+export function resolveReasoningEffort(
+  picked: string | null,
+  runner: Runner,
+  model: string,
+  catalog: RunnerModelCatalogResponse | undefined,
+): string {
+  const options = reasoningEffortsForModel(runner, model, catalog)
+  return picked !== null && options.some((option) => option.id === picked) ? picked : ''
+}
+
 /** Which runners the pill offers, from the health checks (legacy `renderChrome`). The `claude`
  *  fallback when nothing is detected is deliberate legacy behavior: the form must always have
  *  a runner, and claude is the default engine. */
@@ -306,6 +328,8 @@ export function buildCreateRunBody(opts: {
   /** `null` — nothing picked — runs the built-in `quick-task`. */
   source: TaskSource | null
   model: string
+  /** Empty means the selected Codex model's native default; it is omitted on the wire. */
+  reasoningEffort?: string
   /** Native coding-agent settings stay visible, but a locked model is never a request override. */
   modelsLocked?: boolean
   runner: Runner
@@ -339,6 +363,7 @@ export function buildCreateRunBody(opts: {
     task,
     source,
     model,
+    reasoningEffort,
     modelsLocked,
     runner,
     runnerExplicit,
@@ -358,6 +383,7 @@ export function buildCreateRunBody(opts: {
       ? { steps: [{ id: 'task', name: source.ref, skill: source.ref, prompt: '{{task}}' }] }
       : { workflow: source?.ref ?? QUICK_TASK }),
     model: modelsLocked ? undefined : model || undefined,
+    ...(modelsLocked || !reasoningEffort ? {} : { reasoningEffort }),
     runner: runnerOverride(runner, defaultRunner, runnerExplicit),
     // Sent only when the user picked one — an absent key is "follow the project", which is what
     // every launch that never touched the control means.

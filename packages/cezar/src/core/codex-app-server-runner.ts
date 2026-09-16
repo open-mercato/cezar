@@ -387,10 +387,22 @@ class CodexSession implements AgentSession {
     // with its default (no summary), so the reasoning thread stays empty even
     // though the mapper and UI can render it. The override persists for this
     // turn and every subsequent turn, so seeding it on turn/start is enough.
+    //
+    // `effort` rides the same request but does NOT depend on that persistence
+    // claim, which was written about `summary` alone. It needs no equivalent,
+    // because there is no turn this branch does not cover: `turn/steer` above
+    // injects into a turn that ALREADY started here with the effort applied
+    // (it is gated on an active turn id, so it is never a turn of its own), and
+    // every genuinely new turn comes back through this branch and re-sends
+    // `this.spec.reasoningEffort`, which is fixed for the session. So no turn
+    // can run at a different effort than the one selected for the session.
+    // Omitted when unset — absence is what preserves the App Server's native
+    // default, and the run record distinguishes "unset" from any chosen value.
     const res = await this.rpc.request('turn/start', {
       threadId: this.threadId,
       input,
       summary: reasoningSummary(),
+      ...(this.spec.reasoningEffort ? { effort: this.spec.reasoningEffort } : {}),
     });
     this.activeTurnId = turnIdOf(res) ?? this.activeTurnId;
   }

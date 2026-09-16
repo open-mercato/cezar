@@ -7,9 +7,12 @@ import { queryKeys, useConfig, useRunnerModels } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-api-client'
 import type { ApiRun, ContinueResponse, AttachmentInput, Runner } from '@open-mercato/cezar-api-client'
 import { PickerPill, RunnerPill } from '@/components/picker-pill'
+import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import {
   modelsForRunner,
   modelCatalogStatus,
+  reasoningEffortsForModel,
+  resolveReasoningEffort,
   resolveModel,
 } from '@/routes/new-task-form'
 import { useContinuationProvider } from './continuation-provider'
@@ -55,6 +58,9 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   // untouched Continue behaves exactly as before this feature existed.
   const [pickedRunner, setPickedRunner] = useState<Runner | null>(null)
   const [pickedModel, setPickedModel] = useState<string | null>(null)
+  // `null` preserves the existing session's effort; `''` deliberately resets
+  // the resumed Codex turn to its native default.
+  const [pickedReasoningEffort, setPickedReasoningEffort] = useState<string | null>(null)
   const [pickedAccount, setPickedAccount] = useState<string | null>(null)
 
   const continuation = useContinuationProvider(run, pickedRunner)
@@ -75,6 +81,16 @@ export function useContinueAction(run: ApiRun): ContinueAction {
   const effectivePickedModel = modelsLocked ? null : pickedModel
   const models = modelsForRunner(runner, catalog.data, [effectivePickedModel, modelDefaults?.[runner]])
   const model = resolveModel(effectivePickedModel, runner, modelDefaults, catalog.data)
+  const carriedReasoningEffort = !runnerChanged
+    ? [...run.steps].reverse().find((step) => step.sessionId)?.reasoningEffort ?? run.reasoningEffort
+    : undefined
+  const reasoningEfforts = reasoningEffortsForModel(runner, model, catalog.data)
+  const reasoningEffort = resolveReasoningEffort(
+    pickedReasoningEffort ?? carriedReasoningEffort ?? null,
+    runner,
+    model,
+    catalog.data,
+  )
 
   // Agent accounts (spec 2026-07-29-agent-profiles): rows of the RUNNER pill, exactly as the /new
   // composer offers them — `claude · Default` / `claude · Klaudiusz` / `codex`. Without them a
@@ -114,6 +130,21 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // connected fallback must be explicit even when the pills were untouched.
         runner: continuation.runnerOverride,
         model: !modelsLocked && pickedModel !== null ? model : undefined,
+        // Sent whenever the effort pill was touched — and ALSO whenever a model rides along while
+        // there is a non-default effort to preserve. The server treats any explicit `model` as an
+        // engine change and resets the stored effort to Codex's native default, so staying silent
+        // in that second case would drop an effort the pill is still displaying: the user switches
+        // Codex model, the pill still reads `high`, and the turn quietly runs at the default. The
+        // value re-sent is the RESOLVED one, so an effort the newly-picked model does not
+        // advertise degrades to `''` rather than being sent into a model that cannot take it.
+        // Nothing rides along when the resolved effort is already `''` (any non-Codex runner, or a
+        // Codex run that never picked one) — the reset the server would do anyway is not worth a
+        // field on the wire.
+        reasoningEffort:
+          !modelsLocked &&
+          (pickedReasoningEffort !== null || (pickedModel !== null && reasoningEffort !== ''))
+            ? reasoningEffort
+            : undefined,
         // Only a login the user actually picked rides the request. Omitted, the run keeps the
         // account it is on — and the reopened session still resumes, which an explicit switch
         // deliberately does not (a session id lives inside ONE account's config dir).
@@ -145,10 +176,12 @@ export function useContinueAction(run: ApiRun): ContinueAction {
               // must not become one: recording it would put a `runner` on the wire that the run is
               // already on. Changing the AGENT does invalidate the model pick — presets are
               // per-runner — while an account switch keeps it, the catalog being the same either
-              // way.
+              // way. The effort pick follows the model pick: efforts are a per-model Codex
+              // capability, so they cannot survive an agent change either.
               if (next !== runner) {
                 setPickedRunner(next)
                 setPickedModel(null)
+                setPickedReasoningEffort(null)
               }
             }}
           />
@@ -160,9 +193,20 @@ export function useContinueAction(run: ApiRun): ContinueAction {
           value={model}
           readOnly={modelsLocked}
           disabledHint="Model selection is locked to native coding-agent settings."
-          onPick={(next) => setPickedModel(next)}
+          onPick={(next) => {
+            setPickedModel(next)
+            setPickedReasoningEffort(null)
+          }}
           options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
           status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+        />
+        <ReasoningEffortPill
+          runner={runner}
+          model={model}
+          value={reasoningEffort}
+          options={reasoningEfforts}
+          modelsLocked={modelsLocked}
+          onPick={setPickedReasoningEffort}
         />
       </div>
     ),
