@@ -859,6 +859,36 @@ describe('ProviderAuthService', () => {
       expect(runCommand).toHaveBeenCalledTimes(1);
     });
 
+    it('folds the verified row into the cache instead of uncovering an older answer', async () => {
+      // What the cockpit last heard about Claude, then what the CLI says when the latch is checked.
+      const claudeAnswers: ProviderCommandResult[] = [
+        { stdout: 'not json at all', stderr: '', exitCode: 0 },
+        { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 },
+      ];
+      const service = new ProviderAuthService({
+        runCommand: runner((executable) => (
+          executable === 'claude'
+            ? claudeAnswers.shift() ?? connectedResults.claude!
+            : resultFor(executable)
+        )),
+        now: () => 1_000,
+        createAuthFailureId: () => 'incident-1',
+      });
+
+      await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'unknown' } });
+      service.reportRuntimeAuthFailure('claude');
+      await expect(service.verifyRuntimeAuthFailure('claude'))
+        .resolves.toEqual({ provider: 'claude', status: 'connected' });
+
+      // peekStatus never spawns, so this is the cache itself: dropping the latch must not put the
+      // stale `unknown` back on screen in place of the answer the self-check just got.
+      expect(service.peekStatus()).toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'connected' }),
+        ]),
+      });
+    });
+
     it('is a no-op when nothing was latched', async () => {
       const runCommand = runner();
       const service = new ProviderAuthService({ runCommand });
