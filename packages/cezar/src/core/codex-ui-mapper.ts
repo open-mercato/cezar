@@ -169,6 +169,13 @@ export function mapCodexNotification(frame: unknown, state: CodexUiMapperState):
       return mapItemLifecycle(params, state, 'item.started');
     case 'item/updated':
       return mapItemLifecycle(params, state, 'item.updated');
+    // `contextCompaction` arrives here like any other tool item and is mapped like any
+    // other tool item — a `tool`/`other` row titled "Compacted context" (`tool-display.ts`).
+    // Deliberately unchanged by #955: the v2 vocabulary is a protected contract
+    // (BACKWARD_COMPATIBILITY.md §7) and the golden fixtures pin this shape. The LIFECYCLE
+    // meaning the compaction boundary also carries travels on the v1 `turn-end` reason
+    // instead (`codex-app-server-runner.ts`), which is additive and leaves every v2
+    // consumer, and every old recording, reading exactly what it read before.
     case 'item/completed':
       return mapItemLifecycle(params, state, 'item.completed');
     case 'item/agentMessage/delta':
