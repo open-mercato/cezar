@@ -96,5 +96,5 @@ This run adds the missing exit: one bounded self-check per incident, in the obse
 
 ### Phase 3: Verification and handoff
 
-- [ ] 3.1 Run the full validation gate
+- [x] 3.1 Run the full validation gate — fe715376
 - [ ] 3.2 Open the PR, review pass, labels, summary comment
