@@ -12,7 +12,6 @@ import type {
   Runner,
   RunnerModelCatalogResponse,
   Skill,
-  UiState,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
 

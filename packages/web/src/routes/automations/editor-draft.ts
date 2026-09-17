@@ -154,6 +154,7 @@ export function splitList(text: string): string[] {
 export function fromDefinition(definition: AutomationDefinition): EditorDraft {
   const base = newDraft()
   const { task, filters } = definition
+  const skill = skillOfSteps(task.steps)
   return {
     ...base,
     name: definition.name,
@@ -176,8 +177,8 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
       : base.filters,
     prompt: task.prompt,
     workflow: task.workflow ?? base.workflow,
-    skill: skillOfSteps(task.steps),
-    customSteps: task.steps && !skillOfSteps(task.steps) ? task.steps : null,
+    skill,
+    customSteps: task.steps && !skill ? task.steps : null,
     runner: task.runner ?? null,
     account: task.agentProfile ?? null,
     model: task.model ?? null,

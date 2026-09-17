@@ -6,7 +6,9 @@ import type { GithubAutomationDefinition, AutomationEvent } from './types.ts';
 const execFileAsync = promisify(execFile);
 const HARD_CANDIDATE_CAP = 100;
 const TIMELINE_PAGE_SIZE = 100;
-/** At most 500 of the newest timeline rows per item — the bound `HARD_CANDIDATE_CAP` is to items. */
+/** How many of the NEWEST timeline pages one item is read back to — the bound `HARD_CANDIDATE_CAP`
+ *  is to items. Page 1 is kept as well when the whole history is within reach of the cap, so an
+ *  item just inside it can cost one page more than this. */
 const TIMELINE_MAX_PAGES = 5;
 const GITHUB_COMMAND_TIMEOUT_MS = 30_000;
 
