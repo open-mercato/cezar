@@ -1,10 +1,14 @@
+import type { Runner } from '@open-mercato/cezar-api-client'
+
+import { RUNNERS } from '@/routes/new-task-form'
+
 /**
  * Follow-up composer persistence (#408), localStorage-backed like `new-task-draft.ts` — the
  * same store-per-file convention, just two stores instead of one because the two pieces of
  * state have different lifetimes:
  *
- *  - The PICKER PICK (workflow + skills) is a "way of working, not a property of one item"
- *    (see `HandToAgent`'s doc block) — it already survives switching between GitHub items
+ *  - The PICKER PICK (workflow + skills + engine) is a "way of working, not a property of one
+ *    item" (see `HandToAgent`'s doc block) — it already survives switching between GitHub items
  *    within a session via route state (`github.tsx`). This adds survival across a full page
  *    reload, and — read on FIRST mount — doubles as the "remembered last selection" (#408 item
  *    3) that pre-fills a hand-off you have never touched yet.
@@ -19,17 +23,38 @@
 export interface FollowupSelection {
   workflow: string | null
   skills: string[]
+  /**
+   * The engine pick (#906). It belongs here for the reason the workflow does — it is a way of
+   * working, not a property of one item — and it MUST be here, because an unremembered pick is
+   * indistinguishable from "never touched", and "never touched" is precisely the state that lets
+   * the NATIVE agent default (`~/.claude/settings.json`) override the user's own repeated choice
+   * (`resolveModel`, new-task-form.ts).
+   *
+   * `null` therefore keeps meaning "never touched", and an explicit auto pick is `model: ''`.
+   * Collapsing the two is the bug, not a tidy-up: `''` must round-trip as `''`.
+   */
+  runner: Runner | null
+  model: string | null
 }
 
-const EMPTY_SELECTION: FollowupSelection = { workflow: null, skills: [] }
+const EMPTY_SELECTION: FollowupSelection = { workflow: null, skills: [], runner: null, model: null }
 
 const SELECTION_KEY = 'cez-followup-selection'
 
+const KNOWN_RUNNERS: readonly Runner[] = RUNNERS.map((option) => option.id)
+
+/** Tolerant per-key normalization, the store's existing stance: a garbage value degrades to
+ *  "never touched" rather than throwing or riding a request. The two-field shape written before
+ *  #906 still reads — its missing engine keys are exactly "never touched". */
 function normalizeSelection(raw: unknown): FollowupSelection {
   const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
   return {
     workflow: typeof obj.workflow === 'string' ? obj.workflow : null,
     skills: Array.isArray(obj.skills) ? obj.skills.filter((s): s is string => typeof s === 'string') : [],
+    // A runner this build does not know (an older/newer cezar, or a hand-edited value) is not a
+    // runner — the pill would render nothing selectable and the POST would name a dead backend.
+    runner: KNOWN_RUNNERS.includes(obj.runner as Runner) ? (obj.runner as Runner) : null,
+    model: typeof obj.model === 'string' ? obj.model : null,
   }
 }
 
@@ -42,9 +67,16 @@ export function readFollowupSelection(): FollowupSelection {
   }
 }
 
-export function writeFollowupSelection(next: FollowupSelection): void {
+/**
+ * Read-modify-write, so one owner of the selection never clobbers another's keys — the same
+ * stance `PUT /api/config` takes on the raw `config.json`. It matters here because the pieces
+ * have separate owners: `github.tsx` writes the workflow/skills pick, and the engine pick is
+ * written by the shared hook in `engine-pills.tsx`. A full overwrite would let whichever
+ * effect ran last erase the other's choice.
+ */
+export function writeFollowupSelection(patch: Partial<FollowupSelection>): void {
   try {
-    localStorage.setItem(SELECTION_KEY, JSON.stringify(next))
+    localStorage.setItem(SELECTION_KEY, JSON.stringify({ ...readFollowupSelection(), ...patch }))
   } catch {
     // Storage disabled/full — the picker still works this session, just won't be remembered.
   }
