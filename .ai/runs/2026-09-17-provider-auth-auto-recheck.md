@@ -82,6 +82,8 @@ This run adds the missing exit: one bounded self-check per incident, in the obse
 
 ## Progress
 
+PR: #1014
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: The self-check in the service
@@ -97,4 +99,4 @@ This run adds the missing exit: one bounded self-check per incident, in the obse
 ### Phase 3: Verification and handoff
 
 - [x] 3.1 Run the full validation gate — fe715376
-- [ ] 3.2 Open the PR, review pass, labels, summary comment
+- [x] 3.2 Open the PR, review pass, labels, summary comment — 3396e0ff
