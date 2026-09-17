@@ -17,6 +17,7 @@ import {
   __clearCommentsCacheForTests,
   __clearRepoHandleCacheForTests,
   resolveRepoHandle,
+  createGithubDriver,
   detectGithubCached,
   fetchGithubComments,
   fetchTimelinePages,
@@ -567,6 +568,18 @@ describe('detectGithubCached', () => {
     // …and a background revalidate was kicked off exactly once for the stale read.
     await vi.advanceTimersByTimeAsync(0);
     expect(execFileMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('probes once when a cold read is followed by an awaited detect', async () => {
+    ghOk();
+    const coldRoot = '/repo/detect-inflight';
+    // What `GET /automations` does on a cold cache: the SWR read fires a revalidation and answers
+    // null, then the route awaits the real probe — which must join it rather than shell out again.
+    expect(detectGithubCached(coldRoot)).toBeNull();
+    const awaited = createGithubDriver(coldRoot, null).detect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await awaited).toEqual({ available: true });
+    expect(execFileMock).toHaveBeenCalledTimes(1);
   });
 
   it('keeps one project\'s cached availability when a different project is probed afterward', async () => {

@@ -2578,12 +2578,23 @@ function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000):
  *  ran more recently — the toggle going dark for reasons that have nothing to do with that
  *  project's own GitHub reachability. */
 const detectCache = new Map<string, { at: number; result: ForgeAvailability }>();
+/** Probes in flight, keyed by repo root: a cold read joins the revalidation the previous line of
+ *  the same request already started, rather than shelling out to `gh repo view` a second time. */
+const detectInflight = new Map<string, Promise<ForgeAvailability>>();
 const DETECT_CACHE_MAX = 50;
 
-async function detectGithub(repoRoot: string): Promise<ForgeAvailability> {
-  if (process.env.CEZ_DRY_RUN === '1') return { available: true };
+function detectGithub(repoRoot: string): Promise<ForgeAvailability> {
+  if (process.env.CEZ_DRY_RUN === '1') return Promise.resolve({ available: true });
   const hit = detectCache.get(repoRoot);
-  if (hit && Date.now() - hit.at < CACHE_MS) return hit.result;
+  if (hit && Date.now() - hit.at < CACHE_MS) return Promise.resolve(hit.result);
+  const inflight = detectInflight.get(repoRoot);
+  if (inflight) return inflight;
+  const probe = probeGithub(repoRoot).finally(() => detectInflight.delete(repoRoot));
+  detectInflight.set(repoRoot, probe);
+  return probe;
+}
+
+async function probeGithub(repoRoot: string): Promise<ForgeAvailability> {
   let result: ForgeAvailability;
   try {
     await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner'], 5_000);

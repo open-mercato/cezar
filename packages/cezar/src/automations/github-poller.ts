@@ -5,6 +5,9 @@ import type { GithubAutomationDefinition, AutomationEvent } from './types.ts';
 
 const execFileAsync = promisify(execFile);
 const HARD_CANDIDATE_CAP = 100;
+const TIMELINE_PAGE_SIZE = 100;
+/** At most 500 of the newest timeline rows per item — the bound `HARD_CANDIDATE_CAP` is to items. */
+const TIMELINE_MAX_PAGES = 5;
 const GITHUB_COMMAND_TIMEOUT_MS = 30_000;
 
 const githubItemSchema = z.object({
@@ -266,12 +269,47 @@ export class GithubPoller {
     };
   }
 
+  /**
+   * The timeline of one issue or PR, NEWEST rows guaranteed present.
+   *
+   * GitHub returns this endpoint ASCENDING, so page 1 is the oldest hundred rows — and a poll
+   * only ever cares about what happened since its cursor, i.e. the end. A PR under active review
+   * passes a hundred rows easily (a `committed` row per commit, every comment, every label), so
+   * reading page 1 alone made the review events silently never fire on exactly the PRs they are
+   * for. One page still costs one request: the `Link` header is only consulted when page 1 comes
+   * back full, and at most `TIMELINE_MAX_PAGES` pages are read, the newest ones.
+   */
   private async timeline(owner: string, repo: string, number: number) {
+    const first = await this.timelinePage(owner, repo, number, 1);
+    if (first.length < TIMELINE_PAGE_SIZE) return first;
+    const last = await this.lastTimelinePage(owner, repo, number);
+    const from = Math.max(2, last - TIMELINE_MAX_PAGES + 1);
+    // Complete history only while it fits the cap; past it the oldest pages are the ones to drop,
+    // which costs `reconstructReviewEvents` the "has this login reviewed before" memory for rows
+    // that far back — a re-request then reads as a plain request, never as nothing at all.
+    const rows = from === 2 ? [...first] : [];
+    for (let page = from; page <= last; page += 1) {
+      rows.push(...await this.timelinePage(owner, repo, number, page));
+    }
+    return rows;
+  }
+
+  private async timelinePage(owner: string, repo: string, number: number, page: number) {
     const raw = await this.run('gh', [
       'api', '--method', 'GET', `repos/${owner}/${repo}/issues/${number}/timeline`,
-      '-H', 'Accept: application/vnd.github+json', '-f', 'per_page=100',
+      '-H', 'Accept: application/vnd.github+json', '-f', `per_page=${TIMELINE_PAGE_SIZE}`,
+      '-f', `page=${page}`,
     ]);
     return z.array(timelineEventSchema).parse(JSON.parse(raw));
+  }
+
+  /** The last page number from the `Link` header of a header-included request; 1 when absent. */
+  private async lastTimelinePage(owner: string, repo: string, number: number): Promise<number> {
+    const raw = await this.run('gh', [
+      'api', '--include', '--method', 'GET', `repos/${owner}/${repo}/issues/${number}/timeline`,
+      '-H', 'Accept: application/vnd.github+json', '-f', `per_page=${TIMELINE_PAGE_SIZE}`,
+    ]);
+    return lastPageOfLinkHeader(raw);
   }
 }
 
@@ -293,6 +331,37 @@ export function onePerPullRequest(candidates: GithubCandidate[]): GithubCandidat
   }
   const kept = new Set(latest.values());
   return candidates.filter((candidate) => familyOf(candidate.event) === null || kept.has(candidate));
+}
+
+/**
+ * The rows of one timeline kind, narrowed by the SCHEMA rather than by `event` alone.
+ *
+ * The union's catch-all branch parses any row (it is what keeps a `commented` row from failing
+ * the whole page), so a row that merely CLAIMS `event: 'reviewed'` while missing `user` — GitHub
+ * does that for some removed accounts — would satisfy an `event`-only predicate and then throw on
+ * field access, which the scheduler records as a failure and backs the automation off for hours.
+ * A row that does not parse is skipped instead.
+ */
+function narrow<T extends z.ZodTypeAny>(
+  timeline: z.infer<typeof timelineEventSchema>[],
+  schema: T,
+): z.infer<T>[] {
+  return timeline.flatMap((entry) => {
+    const parsed = schema.safeParse(entry);
+    return parsed.success ? [parsed.data as z.infer<T>] : [];
+  });
+}
+
+/** `<…page=7>; rel="last"` out of a `gh api --include` response; 1 when there is no such link. */
+export function lastPageOfLinkHeader(raw: string): number {
+  const header = raw.split(/\r?\n\r?\n/, 1)[0] ?? '';
+  const link = header.split(/\r?\n/).find((line) => line.toLowerCase().startsWith('link:')) ?? '';
+  for (const part of link.split(',')) {
+    if (!/rel="?last"?/.test(part)) continue;
+    const page = Number(part.match(/[?&]page=(\d+)/)?.[1]);
+    if (Number.isInteger(page) && page > 0) return page;
+  }
+  return 1;
 }
 
 export function buildSearchQuery(
@@ -346,10 +415,7 @@ export function reconstructLabelEvents(
   item: z.infer<typeof githubItemSchema>,
   timeline: z.infer<typeof timelineEventSchema>[],
 ): GithubCandidate[] {
-  const labelEntries = timeline.filter(
-    (entry): entry is z.infer<typeof labelTimelineEventSchema> =>
-      entry.event === 'labeled' || entry.event === 'unlabeled',
-  );
+  const labelEntries = narrow(timeline, labelTimelineEventSchema);
   const current = new Set(item.labels.map((label) => label.name));
   const ordered = [...labelEntries].sort((a, b) => b.created_at.localeCompare(a.created_at));
   const rows: GithubCandidate[] = [];
@@ -386,10 +452,10 @@ export function reconstructReviewEvents(
   item: z.infer<typeof githubItemSchema>,
   timeline: z.infer<typeof timelineEventSchema>[],
 ): GithubCandidate[] {
-  const reviewEntries = timeline.filter(
-    (entry): entry is z.infer<typeof reviewedTimelineEventSchema> | z.infer<typeof reviewRequestedTimelineEventSchema> =>
-      entry.event === 'reviewed' || entry.event === 'review_requested',
-  );
+  const reviewEntries = [
+    ...narrow(timeline, reviewedTimelineEventSchema),
+    ...narrow(timeline, reviewRequestedTimelineEventSchema),
+  ];
   const ordered = [...reviewEntries].sort((a, b) => {
     const at = a.event === 'reviewed' ? a.submitted_at : a.created_at;
     const bt = b.event === 'reviewed' ? b.submitted_at : b.created_at;

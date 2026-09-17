@@ -4,7 +4,7 @@ import { PickerPill } from '@/components/picker-pill'
 import { Label } from '@/components/ui/label'
 import { SourcePill } from '@/components/source-pill'
 import { Switch } from '@/components/ui/switch'
-import type { TaskSource } from '@/routes/new-task-form'
+import type { TaskSource } from '@/lib/task-source'
 
 /**
  * The "runs as" row of What to run (spec 2026-09-14-automations-redesign § UI/UX 4.4): the

@@ -30,7 +30,7 @@ import {
   skillKeywords,
 } from '@/lib/skills'
 import { cn } from '@/lib/utils'
-import { QUICK_TASK, type TaskSource } from '@/routes/new-task-form'
+import { QUICK_TASK, type TaskSource } from '@/lib/task-source'
 
 /**
  * The workflow/skill picker (#385's searchable cmdk dropdown, #519's tier ordering): ONE pill
@@ -76,7 +76,7 @@ export function SourcePill({
   const matched = searchSkills(skills, search, skillUsage)
   const { mostUsed, project, global } = partitionSkillsForDisplay(matched, skillUsage)
   const quickTask = workflows.find((workflow) => workflow.name === QUICK_TASK)
-  const matchedWorkflows = searchWorkflows(workflows, search).filter((w) => w.name !== QUICK_TASK)
+  const matchedWorkflows = searchWorkflows(workflows, search).filter((workflow) => workflow.name !== QUICK_TASK)
   // The empty row answers to what people type when they mean "none of these" — including the
   // built-in's own name, which is no longer a row of its own. Same match signal as every other
   // row, so one query ranks the whole list.

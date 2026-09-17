@@ -131,6 +131,17 @@ describe('fromDefinition / toBody', () => {
       .toEqual({ prompt: 'p', workflow: 'fix-and-verify', autonomous: false })
   })
 
+  it('sends the picked agent account, and a template naming a runner drops it', () => {
+    const picked = { ...newDraft(), prompt: 'p', runner: 'claude' as const, account: 'work' }
+    expect(toBody(picked).task).toMatchObject({ runner: 'claude', agentProfile: 'work' })
+    expect(toBody({ ...picked, account: null }).task.agentProfile).toBeUndefined()
+    expect(fromDefinition({ ...SCHEDULE_DEF, task: { prompt: 'p', agentProfile: 'work' } }).account).toBe('work')
+    // An account belongs to one runner, so a template that names one must not inherit it.
+    const template = { name: 'Sweep', kind: 'schedule' as const, prompt: 'sweep' }
+    expect(applyTemplate(picked, { ...template, runner: 'codex' }).account).toBeNull()
+    expect(applyTemplate(picked, template).account).toBe('work')
+  })
+
   it('clamps lookback and max records into the server bounds', () => {
     const draft = newDraft()
     draft.kind = 'github'

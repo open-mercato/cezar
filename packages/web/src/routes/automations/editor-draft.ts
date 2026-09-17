@@ -11,7 +11,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import type { CliDefinition } from '@/lib/automation-cli'
-import { QUICK_TASK, type TaskSource } from '@/routes/new-task-form'
+import { QUICK_TASK, type TaskSource } from '@/lib/task-source'
 import type { AutomationTemplateDraft } from '@/lib/automation-templates'
 
 /**
