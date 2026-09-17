@@ -17,7 +17,7 @@ import {
   SquareTerminalIcon,
   Trash2Icon,
 } from 'lucide-react'
-import { Fragment, useId, useMemo, useReducer, useState, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
 import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
@@ -38,7 +38,7 @@ import {
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
-import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
+import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
 import { ResolveConflictsButton } from '@/components/reference-conflict-action'
@@ -66,6 +66,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { deriveAttention } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
@@ -86,6 +87,7 @@ import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
 import { WorkflowSteps } from './step-rail'
 import { useFinishRun } from './use-finish-run'
+import { useDraft } from './thread-draft'
 
 /**
  * The run header (spec §"Task thread" → Header): editable title + status pill, the meta line,
@@ -116,13 +118,7 @@ export type RunTab = 'session' | 'changes' | 'commits' | 'files'
  *  into run B. Session-lifetime only; no server persistence invented for it. */
 const detailsOpenByRun = new Map<string, boolean>()
 
-export function RunHeader({
-  run,
-  planTally,
-  tab = 'session',
-  onMarkedUnread,
-  continuationEngine,
-}: {
+interface RunHeaderProps {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
@@ -133,7 +129,30 @@ export function RunHeader({
   /** The Session tab's engine picker for the next continuation. Kept out of the three Git tabs:
    *  they share this header but do not own the continuation draft or its pending selection. */
   continuationEngine?: ReactNode
-}) {
+}
+
+// Every prop must participate: adding one without a comparator is a compile error.
+const headerPropComparators = {
+  run: (before, after) => before.run === after.run,
+  tab: (before, after) => before.tab === after.tab,
+  onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
+  continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
+  planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
+    before.planTally?.total === after.planTally?.total,
+} satisfies Record<keyof RunHeaderProps, (before: RunHeaderProps, after: RunHeaderProps) => boolean>
+const compareHeaderProps = Object.values(headerPropComparators)
+
+export const RunHeader = memo(RunHeaderView, (before, after) =>
+  compareHeaderProps.every((compare) => compare(before, after)),
+)
+
+function RunHeaderView({
+  run,
+  planTally,
+  tab = 'session',
+  onMarkedUnread,
+  continuationEngine,
+}: RunHeaderProps) {
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)
@@ -440,7 +459,15 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
   const [confirming, setConfirming] = useState<'cancel' | 'delete' | null>(null)
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
-  const onError = (error: Error) => toast(error.message, { tone: 'danger' })
+  const onError = (error: Error) => {
+    // Every 409 here says the same thing: the record these buttons were drawn from is not the run
+    // the server has (Continue on a run that is running again, Cancel on one that just finished).
+    // Refetch it, so the bar redraws to the truth instead of offering the same refused action —
+    // the composer's rule (deliver-prompt.ts) and the thread's healer (run-reconcile.ts), applied
+    // to the actions. `useSendMessage` in queries.ts has always done exactly this.
+    if (error instanceof ApiError && error.status === 409) void invalidate()
+    toast(error.message, { tone: 'danger' })
+  }
 
   // Shared with the review panel's ✓ Accept (use-finish-run.ts) — the review-accept semantics
   // must be ONE implementation, not two buttons that happen to agree today.
@@ -542,12 +569,36 @@ async function copyToClipboard(text: string, doneMessage: string): Promise<void>
 function EditableTitle({ run }: { run: ApiRun }) {
   const patch = usePatchRun(run.id)
   const title = runTitle(run)
+  const draft = useDraft(run.id, 'title')
   const editor = useTitleEditor(title, (next) =>
     patch.mutate({ title: next }, { onError: (error) => toast(error.message, { tone: 'danger' }) }),
   )
+  const drafted: TitleEditor = {
+    ...editor,
+    setDraft: (value) => {
+      editor.setDraft(value)
+      draft.setText(value)
+    },
+    commit: () => {
+      editor.commit()
+      draft.clear()
+    },
+    cancel: () => {
+      editor.cancel()
+      draft.clear()
+    },
+  }
+
+  const begin = useRef(editor.beginWith)
+  begin.current = editor.beginWith
+  const editing = editor.editing
+  useEffect(() => {
+    if (editing || !draft.ready || !draft.hasDraft) return
+    begin.current(draft.text)
+  }, [draft.hasDraft, draft.ready, draft.text, editing])
 
   if (editor.editing) {
-    return <TitleEditInput editor={editor} className="flex-1 text-[15px] font-semibold" />
+    return <TitleEditInput editor={drafted} className="flex-1 text-[15px] font-semibold" />
   }
 
   return (
@@ -564,6 +615,67 @@ function EditableTitle({ run }: { run: ApiRun }) {
         <PencilIcon className="size-3.5" aria-hidden="true" />
       </button>
     </span>
+  )
+}
+
+/** Copyable task branch with confirmation kept local so hovering it does not re-render MetaRow. */
+function CopyBranchChip({ branch }: { branch: string }) {
+  const [copied, setCopied] = useState(false)
+  const [tooltipOpen, setTooltipOpen] = useState(false)
+  const dismissTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(
+    () => () => {
+      if (dismissTimer.current !== null) clearTimeout(dismissTimer.current)
+    },
+    [],
+  )
+
+  const copy = () => {
+    if (!navigator.clipboard) {
+      toast(`Branch: ${branch}`)
+      return
+    }
+    void navigator.clipboard
+      .writeText(branch)
+      .then(() => {
+        setCopied(true)
+        setTooltipOpen(true)
+        if (dismissTimer.current !== null) clearTimeout(dismissTimer.current)
+        dismissTimer.current = setTimeout(() => {
+          dismissTimer.current = null
+          setTooltipOpen(false)
+        }, 1_500)
+      })
+      .catch(() => toast(`Branch: ${branch}`))
+  }
+
+  return (
+    <TooltipProvider>
+      <Tooltip
+          open={tooltipOpen}
+          onOpenChange={(open) => {
+            if (open && dismissTimer.current === null) setCopied(false)
+            setTooltipOpen(open)
+          }}
+        >
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              data-slot="branch-chip"
+              className="cursor-copy rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              aria-label={`Copy branch name ${branch}`}
+              onClick={copy}
+            >
+              {branch}
+              <span className="sr-only" role="status">
+                {copied ? 'Branch name copied' : ''}
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{copied ? 'Copied' : 'Copy branch name'}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   )
 }
 
@@ -610,16 +722,9 @@ function MetaRow({
   // `workflowLabel` so an inline chain shows its first step's name, not the bare "(planned)"
   // placeholder — which reads like a status next to the live status pill.
   const parts: ReactNode[] = [<span key="workflow">{workflowLabel(run)}</span>]
-  if (run.branch) {
-    parts.push(
-      <span
-        key="branch"
-        data-slot="branch-chip"
-        className="rounded-sm border border-border bg-card px-1.5 py-px font-mono text-[11px] font-medium"
-      >
-        {run.branch}
-      </span>,
-    )
+  const branch = run.branch
+  if (branch) {
+    parts.push(<CopyBranchChip key="branch" branch={branch} />)
   }
   // EVERY PR the task points at, in `taskReferences` order — the same order, and the same
   // statuses, the global Tasks table paints. A task opened on someone else's PR that pushes a

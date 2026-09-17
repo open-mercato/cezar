@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   parseAskMarker,
   parseAskMarkerResult,
@@ -9,7 +9,7 @@ import {
   type AskMarkerParseResult,
   type AskRequest,
 } from '../core/ask.ts';
-import { type AgentSession } from '../core/claude-cli-runner.ts';
+import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
@@ -38,9 +38,12 @@ import {
   attachmentExtension,
   isImageAttachmentName,
   isImageMediaType,
+  sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
 import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
 import { discoverSkills, type Skill } from '../skills.ts';
+import { automationsReachable } from '../automations/builtin-skill.ts';
+import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
@@ -274,6 +277,24 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /**
+   * A NON-FINAL agent step emitted `CEZ:ASK`, so the workflow is parked on that
+   * step instead of advancing into its next check (#917). Two values, because
+   * the park has two endings and they settle differently:
+   *
+   *  - `'waiting'` — live: the session is open and the answer is still expected.
+   *    `execute` sits inside `runAgentStep` for as long as that holds, so seeing
+   *    this value after the step loop means the session closed WITHOUT an answer
+   *    (the idle timer, the wall clock, a crash) and the run settles `failed`.
+   *  - `'abandoned'` — the user pressed Finish instead of answering: "stop here",
+   *    so the run settles like any other finished run.
+   *
+   * A delivered answer clears it (`deliverMessage`) and the workflow resumes.
+   * Mirrored durably onto the record as `RunRecord.askParked` for `recover()`.
+   * Never set on an autonomous run whose nudge outranked the ask — see
+   * `tryAutonomousNudge` and the park in `runAgentStep`'s turn-end.
+   */
+  askPark?: 'waiting' | 'abandoned';
   /** The last `CEZ:ASK` the autonomous nudge overrode, as its joined question text. An agent
    *  that asks the SAME thing again right after being nudged is blocked on something the nudge
    *  cannot answer (a disabled capability, a missing credential), and parks instead of burning
@@ -290,6 +311,13 @@ interface ActiveRun {
    * record instead, because the stored `dispatch` changes under us.
    */
   dispatchPrompt?: string;
+  /**
+   * The GitHub-automations prompt part this session runs under (spec
+   * 2026-09-13-automations-from-prompt), resolved by `prepareAutomationsSession` at the SAME two
+   * construction sites as `dispatchPrompt`, for the same reason. Present ⇔ automations are on and
+   * the cockpit is reachable — a task that could not run `cez automation` is never told about it.
+   */
+  automationsPrompt?: string;
   /** Set by `dispatch()` during a turn, read and cleared at that turn's end: the run parks as a
    *  monitor for the children it just created. */
   dispatchedThisTurn?: boolean;
@@ -535,14 +563,26 @@ export function dispatchPromptPart(prompt: string | undefined, extra: string | u
 
 /**
  * The directories a spawned agent may reach outside its worktree: the run-state
- * folder that holds its handoff file, plus its own temp directory when this run
- * got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed to
- * write would trade one silent failure for another, so the two travel together;
- * under `CEZ_AGENT_TMPDIR=0` there is no per-run directory and the list is
- * exactly what it always was.
+ * folder that holds its handoff file and its pasted attachments, the attachment
+ * library when the project has one (#929), plus its own temp directory when this
+ * run got one (#785). Handing an agent a `TMPDIR` its file tools are not allowed
+ * to write would trade one silent failure for another, so the two travel
+ * together; under `CEZ_AGENT_TMPDIR=0` there is no per-run directory and the
+ * list is exactly what it always was.
+ *
+ * The library is on this list for the same reason `runsDir` is: `pastedAttachmentsText`
+ * NAMES it in the note appended to a message, and a directory an agent is told to look in
+ * but whose `Read`/`Glob` it is refused is worse than one it was never told about — headless
+ * runs use `--permission-mode dontAsk`, so the refusal does not even prompt. Pass `undefined`
+ * when the project has no library yet: `--add-dir` on a path that is not there is its own
+ * failure, and a project where nothing has been filed has nothing to grant.
  */
-export function agentDirectories(runsDir: string, env: Record<string, string>): string[] {
-  const dirs = env.TMPDIR ? [runsDir, env.TMPDIR] : [runsDir];
+export function agentDirectories(
+  runsDir: string,
+  libraryDir: string | undefined,
+  env: Record<string, string>,
+): string[] {
+  const dirs = [runsDir, ...(libraryDir ? [libraryDir] : []), ...(env.TMPDIR ? [env.TMPDIR] : [])];
   // A dispatched run's tree directory (spec 2026-09-10-dispatch: the filesystem channel) — its
   // brief, its notes, its inbox. Same rule as TMPDIR: the env names it, so the file tools must
   // reach it.
@@ -589,6 +629,68 @@ export interface PersistedAttachment {
   path: string;
 }
 
+/** The per-project attachment library (#929): one folder per repository holding every document a
+ *  user has attached to any task in it, under the name they know it by. Ignored via
+ *  `ensureDataGitignore` — it is USER content and must never surface in their `git status`. */
+export function attachmentLibraryDir(dataDir: string): string {
+  return join(dataDir, 'attachments');
+}
+
+/** How many `<stem>-<n>.<ext>` variants to try before giving up on a name. */
+const MAX_LIBRARY_COLLISION_ATTEMPTS = 100;
+
+/**
+ * File a copy of an attachment in the per-project library and answer where it landed, or `null`
+ * when it could not be filed.
+ *
+ * Two files with the same name are the common case here, not the edge case — a library spanning
+ * every task in a repository collects a great many `notes.md` — so the name is resolved against
+ * CONTENT first: byte-identical means the same document, and the existing copy is reused rather
+ * than duplicated (attaching the same brief to six tasks leaves one file, not six). Only a genuine
+ * clash — same name, different bytes — takes a `-2`/`-3` suffix.
+ *
+ * Strictly best-effort, exactly like `persistAttachment`: this is a convenience copy of a file
+ * that is already safely on disk in the run folder, so a read-only volume or a full disk must cost
+ * the user the library entry and nothing else.
+ *
+ * Concurrency note: the exclusive create plus content compare below is exact within one process,
+ * because these writes are synchronous and cannot interleave. Two cezar processes on the same
+ * repository can have the second read a partially written file, miss the dedupe and keep a
+ * redundant `-2` copy. That is the best-effort contract doing its job, not a bug to fix here.
+ */
+export function copyToAttachmentLibrary(dataDir: string, name: string, bytes: Buffer): string | null {
+  try {
+    // Defense in depth: every caller today comes through `toPastedContent`, which sanitizes at the
+    // wire boundary — but `FileBlock.name` is a plain `string`, so a future route that builds one
+    // directly would hand a raw client value to `join()` below and the failure would be a path
+    // traversal rather than a type error. The check belongs next to the write that would suffer
+    // from its absence.
+    if (name !== basename(name) || name.startsWith('.') || name === '') return null;
+    const dir = attachmentLibraryDir(dataDir);
+    mkdirSync(dir, { recursive: true });
+    const dot = name.lastIndexOf('.');
+    const stem = dot > 0 ? name.slice(0, dot) : name;
+    const ext = dot > 0 ? name.slice(dot) : '';
+    for (let attempt = 1; attempt <= MAX_LIBRARY_COLLISION_ATTEMPTS; attempt += 1) {
+      const candidate = attempt === 1 ? name : `${stem}-${attempt}${ext}`;
+      const path = join(dir, candidate);
+      try {
+        // Exclusive create, so two runs persisting at once cannot overwrite each other's file
+        // between the existence check and the write.
+        writeFileSync(path, bytes, { flag: 'wx' });
+        return path;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      // Taken. The same document already filed here is a hit, not a collision.
+      if (readFileSync(path).equals(bytes)) return path;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A user attachment that is NOT an image (#950) — a PDF, a `.txt`, a `.md`.
  *
@@ -601,6 +703,11 @@ export interface FileBlock {
   type: 'file';
   mediaType: string;
   data: string;
+  /** The user's own filename, ALREADY through `sanitizeAttachmentName` — `toPastedContent` is the
+   *  wire boundary and does it there, so no raw client string travels past it. Absent when the
+   *  client sent none, or when nothing usable survived sanitization. Names the copy in the
+   *  per-project attachment library (#929); the run folder still names files itself. */
+  name?: string;
 }
 
 /** What the routes hand the engine: image/text blocks the session will see, plus file blocks it
@@ -610,10 +717,20 @@ export type PastedContent = ContentBlock | FileBlock;
 /** One wire attachment (`{mediaType, data}`) as the engine wants it: an image the model can view,
  *  or a file it will only ever be given the path of. The single mapping the four attachment-
  *  carrying routes share, so none of them can invent a different one. */
-export function toPastedContent(attachment: { mediaType: string; data: string }): PastedContent {
-  return isImageMediaType(attachment.mediaType)
-    ? { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } }
-    : { type: 'file', mediaType: attachment.mediaType, data: attachment.data };
+export function toPastedContent(attachment: {
+  mediaType: string;
+  data: string;
+  name?: string;
+}): PastedContent {
+  if (isImageMediaType(attachment.mediaType)) {
+    // Deliberately unchanged, and deliberately NOT carrying the name: this branch produces a
+    // `ContentBlock`, which is the runner protocol (`AGENT_PROTOCOL.md`) and goes to a backend
+    // verbatim. An extra key here would survive `contentBlocksOf` and reach a vendor API that
+    // rejects unknown fields.
+    return { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } };
+  }
+  const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
+  return { type: 'file', mediaType: attachment.mediaType, data: attachment.data, ...(name ? { name } : {}) };
 }
 
 /** The image blocks of a mixed list — what may be delivered to a session. */
@@ -628,11 +745,24 @@ export function contentBlocksOf(content: readonly PastedContent[]): ContentBlock
  * files as files — and the only usable reference on backends (codex,
  * opencode) whose `textOf()` drops image blocks before reaching the model.
  */
-export function pastedAttachmentsText(attachments: PersistedAttachment[]): string {
+export function pastedAttachmentsText(attachments: PersistedAttachment[], libraryDir?: string): string {
   const list = attachments.map((a) => `- ${a.path}`).join('\n');
+  // The library (#929) is pointed at as a DIRECTORY rather than per-file, deliberately: the paths
+  // above already cover the files on THIS message, and what the library is for is the file the
+  // user attached to some earlier task and now refers to only by name. Naming the folder also
+  // keeps the note independent of per-attachment state, which does not survive the re-read at
+  // dequeue (`readPersistedAttachments` reconstructs an attachment from its URL alone).
+  // Says "documents", not "files": images and uploads that arrived without a name of their own are
+  // deliberately never filed, so a note promising every attachment would send an agent hunting for
+  // last week's pasted screenshot in a folder that was never going to hold it.
+  const library = libraryDir
+    ? `Documents (PDF, TXT, MD) attached anywhere in this project are also kept under their ` +
+      `original names in ${libraryDir} — look there for a document the user names but did not ` +
+      `attach to this message.\n`
+    : '';
   return (
     `The user attached ${attachments.length} pasted file${attachments.length > 1 ? 's' : ''}, ` +
-    `also saved on disk at:\n${list}\n` +
+    `also saved on disk at:\n${list}\n${library}` +
     `When the task involves saving, uploading, attaching, or transforming the pasted content ` +
     `(e.g. attaching to a GitHub issue/PR, copying into the repo), operate on these files — do ` +
     `not attempt to reconstruct them from the conversation.`
@@ -641,8 +771,8 @@ export function pastedAttachmentsText(attachments: PersistedAttachment[]): strin
 
 /** Same note as `pastedAttachmentsText`, wrapped as a trailing `ContentBlock`
  *  ready to append to a message's content array. */
-export function pastedAttachmentsNote(attachments: PersistedAttachment[]): ContentBlock {
-  return { type: 'text', text: pastedAttachmentsText(attachments) };
+export function pastedAttachmentsNote(attachments: PersistedAttachment[], libraryDir?: string): ContentBlock {
+  return { type: 'text', text: pastedAttachmentsText(attachments, libraryDir) };
 }
 
 /** Variant letters + the fixed diversification hints (spec 010). A runs the
@@ -1363,7 +1493,9 @@ export class RunManager {
    *  - `queued`  → back into the queue (FIFO by createdAt), from the persisted
    *    workflowDef (or the catalog by name for older records);
    *  - `waiting` → the turn was over and the ball was in the user's court —
-   *    settle exactly like a closed session (review/done, Continue still works);
+   *    settle exactly like a closed session (review/done, Continue still works),
+   *    unless `askParked` says the workflow stopped mid-way on a question (#917),
+   *    which settles `failed` instead so unrun steps are not reported as done;
    *  - `running` → mark interrupted, then immediately resume the last agent
    *    session via the Continue path, pointing the agent at its handoff file.
    * Call once, before the server starts taking requests.
@@ -1383,6 +1515,36 @@ export class RunManager {
         continue;
       }
       if (run.status === 'waiting') {
+        // Two different parks wear this status. The final interactive step's
+        // session was open for follow-ups and the workflow had already run to
+        // its end, so settling it as a success is right. A mid-workflow park on
+        // a `CEZ:ASK` (#917) had NOT run to its end — its later steps are still
+        // `pending` — so the same settlement would report a workflow that
+        // stopped at its first question as a finished one. It ends the way any
+        // interrupted run ends instead: `failed`, with the Continue button that
+        // reopens the session so the question can still be answered. No
+        // automatic resume here, unlike the `running` branch below: the agent
+        // asked for a decision, and nudging it onward would be cezar making
+        // that decision on the user's behalf.
+        if (run.askParked) {
+          const interruptedAt = new Date().toISOString();
+          for (const step of run.steps) {
+            if (step.status === 'waiting' || step.status === 'running') {
+              this.store.updateStep(run.id, step.id, { status: 'failed', finishedAt: interruptedAt });
+            }
+          }
+          this.store.updateRun(run.id, {
+            status: 'failed',
+            error: 'interrupted — cezar process exited while the task was waiting for an answer',
+            finishedAt: interruptedAt,
+            currentStepId: undefined,
+          });
+          this.store.appendEvent(run.id, {
+            type: 'lifecycle',
+            message: 'cezar restarted — the task was waiting for your answer; continue it to reply',
+          });
+          continue;
+        }
         for (const step of run.steps) {
           if (step.status === 'waiting' || step.status === 'running') {
             this.store.updateStep(run.id, step.id, { status: 'done', finishedAt: new Date().toISOString() });
@@ -1561,6 +1723,17 @@ export class RunManager {
     const dispatch = this.store.getRun(runId)?.dispatch;
     // The intent block belongs to the ROOT the user started; a child reads its order instead.
     state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+  }
+
+  /**
+   * The automations twin of `prepareDispatchSession` (spec 2026-09-13-automations-from-prompt):
+   * the short prompt part that lets a task recognise "whenever a PR is opened, do X" as an
+   * automation and create one with `cez automation`. Gated on `automationsReachable` — the flag
+   * AND the transport — so a headless run, or a cockpit with `CEZ_AUTOMATIONS` unset, composes
+   * nothing and behaves exactly as it did before the feature existed.
+   */
+  private prepareAutomationsSession(state: ActiveRun): void {
+    state.automationsPrompt = automationsReachable() ? AUTOMATIONS_PROMPT : undefined;
   }
 
   /**
@@ -2874,7 +3047,9 @@ export class RunManager {
     // here rather than letting one reach a backend that has no idea what it is.
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
-    const deliverable = persisted.length ? [...expanded, pastedAttachmentsNote(persisted)] : expanded;
+    const deliverable = persisted.length
+      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted))]
+      : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
       this.clearPendingAsk(runId);
@@ -2882,6 +3057,10 @@ export class RunManager {
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
       this.leaveMonitoring(runId);
+      // The answer landed, so a mid-workflow ask park (#917) is over and the
+      // workflow may advance past this step again. The durable twin
+      // (`RunRecord.askParked`) is retired by the status write below.
+      state.askPark = undefined;
       // Clear any `monitoring` activity — the agent is actively working again
       // (spec 2026-07-18-subagent-monitoring-status, #490).
       this.store.updateRun(runId, { status: 'running', activity: undefined });
@@ -2901,6 +3080,11 @@ export class RunManager {
     const state = this.active.get(runId);
     if (state?.session?.open) {
       this.clearIdleTimer(state);
+      // Finish on a run parked mid-workflow on a `CEZ:ASK` (#917) is not an
+      // answer, it is "stop here" — so it settles like every other Finish
+      // (`done`, or `review` when the worktree holds changes) instead of the
+      // `failed` a question nobody ever answered settles as.
+      if (state.askPark === 'waiting') state.askPark = 'abandoned';
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'session closed by user' });
       state.session.end();
       return true;
@@ -3148,6 +3332,7 @@ export class RunManager {
     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
+    this.prepareAutomationsSession(state);
 
     this.store.updateRun(runId, {
       status: 'running',
@@ -3423,17 +3608,22 @@ export class RunManager {
         // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
         systemPrompt: composeSystemPrompt(
           dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
+          state.automationsPrompt,
           record?.systemPrompt,
           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
         ),
         userPrompt: attachments.length
-          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments)}`
+          ? `${contextualOpeningPrompt}\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`
           : contextualOpeningPrompt,
         ...(openingImages.length ? { images: openingImages } : {}),
         cwd: state.cwd,
         allowedTools: toolsStep?.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
         bashAllowlist: toolsStep?.bashAllowlist,
-        additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), continueProfile.env),
+        additionalDirectories: agentDirectories(
+          join(this.dataDir, 'runs'),
+          this.grantableAttachmentLibrary(),
+          continueProfile.env,
+        ),
         env: continueProfile.env,
         model: continueModel,
         sessionId,
@@ -3652,6 +3842,7 @@ export class RunManager {
     // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
     // twin is in `runContinuation`.
     this.prepareDispatchSession(runId, state);
+    this.prepareAutomationsSession(state);
     const retriesUsed = new Map<string, number>();
     let checkFailure: string | null = null;
     let runError: string | null = null;
@@ -3733,6 +3924,17 @@ export class RunManager {
           runError = `step "${step.id}" failed: ${failure}`;
           break;
         }
+        // This step parked the workflow on a `CEZ:ASK` (#917) and its session
+        // has now closed with the park still standing — nobody answered, or the
+        // user pressed Finish. Either way the step is over and the workflow must
+        // not walk into the next check; the settlement below owns the outcome.
+        if (state.askPark) {
+          // An abandoned park is the user accepting the step as it stands, so
+          // the rail reads like any other finished step. An unanswered one is
+          // marked by the settlement, alongside the run it failed.
+          if (state.askPark === 'abandoned') this.finishStep(runId, step.id, 'done', undefined, emit);
+          break;
+        }
         this.finishStep(runId, step.id, 'done', undefined, emit);
         i++;
         continue;
@@ -3771,6 +3973,18 @@ export class RunManager {
       break;
     }
 
+    // How a mid-workflow ask park (#917) ended, read once before the settlement
+    // below clears it. A LIVE park never reaches this line: the parked session
+    // stays open, so `execute` is still awaiting `runAgentStep` and the answer
+    // that resumes the workflow clears the flag first. Reaching here with the
+    // park still set therefore means the session is gone — and every one of the
+    // ways that can happen has to settle the run and reach `dropActive`, or the
+    // run is stranded at `waiting` holding a `maxParallel` slot for the lifetime
+    // of the process. Cancellation and step failures keep their own branches
+    // below, ahead of the park, so they still land as `cancelled`/`failed`.
+    const askPark = state.askPark;
+    state.askPark = undefined;
+
     // Final autosave: the branch always ends holding the finished state.
     this.clearAutosaveTimer(state);
     if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'run finalize');
@@ -3788,7 +4002,29 @@ export class RunManager {
     } else if (runError) {
       this.store.updateRun(runId, { status: 'failed', error: runError, finishedAt, currentStepId: undefined });
       emit({ type: 'lifecycle', message: `run failed — ${runError}` });
+    } else if (askPark === 'waiting') {
+      // The question was never answered, so the steps behind it never ran.
+      // `settleSuccess` would put a finished badge on a workflow that stopped at
+      // its first question; `failed` says what happened and keeps the Continue
+      // button, which reopens the session so the answer can still be given.
+      const run = this.store.getRun(runId);
+      for (const s of run?.steps ?? []) {
+        if (s.status === 'running' || s.status === 'waiting') {
+          this.store.updateStep(runId, s.id, { status: 'failed', finishedAt });
+        }
+      }
+      // Say what Continue will and will not do. It reopens the session through
+      // `runContinuation`, so the question can still be answered — but that is a
+      // standalone continuation, not a re-entry into `execute`, so the steps this
+      // park never reached stay `pending` and nothing will run them automatically.
+      const error =
+        'the session closed before the question was answered — continue to answer it, ' +
+        'but the remaining workflow steps will not resume automatically';
+      this.store.updateRun(runId, { status: 'failed', error, finishedAt, currentStepId: undefined });
+      emit({ type: 'lifecycle', message: `run stopped — ${error}` });
     } else {
+      // Includes `askPark === 'abandoned'`: Finish on a parked run ends it the
+      // way Finish always does, with the later steps left honestly at `pending`.
       await this.settleSuccess(runId);
     }
     this.clearIdleTimer(state);
@@ -3881,7 +4117,9 @@ export class RunManager {
     // at all. Deliberately NOT nested in the branch above: gating the paths on an image block
     // existing is what would leave an agent holding a task about a `.pdf` it was never told the
     // location of.
-    if (attachments.length) userPrompt += `\n\n${pastedAttachmentsText(attachments)}`;
+    if (attachments.length) {
+      userPrompt += `\n\n${pastedAttachmentsText(attachments, this.attachmentLibraryHint(attachments))}`;
+    }
 
     const sessionId = randomUUID();
     const backend = step.runner ?? taskBackend;
@@ -3942,10 +4180,31 @@ export class RunManager {
         });
         // `CEZ:ASK` → the user is blocked; wins over `CEZ:MONITORING`, loses to
         // `CEZ:DONE` (#473) and to a turn that dispatched.
+        //
+        // No longer gated on `interactive` (#917). `interactive` is only true for
+        // the final step, so a `CEZ:ASK` from an implementation or review step was
+        // ignored outright and the workflow advanced into its next check — which
+        // then failed, marking the whole run failed while the question was still on
+        // the user's screen. Every agent step may need user input. The
+        // `!dispatchTurn.dispatched` half of the gate is unchanged and still right
+        // for every step: a turn that spawned children is waiting on them, not on
+        // the user.
         const { ask, notes: askNotes } = resolveAskTurn(
           turnText,
-          Boolean(interactive && sessionOpen) && !done && !dispatchTurn.dispatched,
+          Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
         );
+        // Does this ask park the WORKFLOW — hold a non-final step open instead
+        // of letting `execute` mark it done and run the next check (#917)?
+        //
+        // Only a marker that parsed can: a malformed one produces no ask card,
+        // so parking on it would halt an otherwise autonomous workflow on a
+        // question the user cannot even see, for as long as the session lives.
+        // It degrades to the `resolveAskTurn` note plus the raw marker left in
+        // the transcript, and the workflow carries on. The final interactive step
+        // is untouched by this: it parks at `waiting` whatever the marker looked
+        // like, where the prose fallback is still answerable and nothing
+        // downstream is being blocked (#473).
+        const parksWorkflow = !interactive && ask !== null && Boolean(sessionOpen);
         // A spawn parks the commander like `CEZ:MONITORING` does — it waits on its children and
         // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
         const monitoring =
@@ -3965,13 +4224,24 @@ export class RunManager {
           state.session?.end();
           return;
         }
-        const waiting = interactive && sessionOpen;
+        // `waiting` now also covers a NON-final step parking on an ask (#917), which
+        // is what holds the workflow at that step instead of running its next check.
+        const waiting = (interactive || parksWorkflow) && sessionOpen;
         // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to keep
         // going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`. The SAME helper
         // `runContinuation`'s twin turn-end calls — this branch was missing here entirely, so an
         // autonomous run's FIRST session parked like any other (the nudge only ever existed on
-        // the continuation path). Gated on `waiting`: a non-interactive step's session belongs to
-        // the workflow loop, which moves to the next step on its own.
+        // the continuation path).
+        //
+        // Widening `waiting` (#917) deliberately brings the intermediate park under the nudge
+        // too, and the ordering matters: #967's promise is that an autonomous run never stops for
+        // a human, and an intermediate ask is exactly as unanswerable as a final one when nobody
+        // is watching. Parking it would strand the run on a question with no one to read it —
+        // strictly worse than the pre-#917 behaviour, which at least kept going. So the nudge
+        // wins, and the backstop it already carries covers the genuinely blocked case: an agent
+        // that repeats the SAME question after being nudged sets `lastOverriddenAsk` and parks on
+        // the second ask. For every non-autonomous run `tryAutonomousNudge` returns at its first
+        // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
           dispatchTurn.rePrompted || (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false);
         if (waiting && !autoContinued) {
@@ -3984,6 +4254,13 @@ export class RunManager {
           // run frees its slot and keeps the idle timer. The autonomous nudge
           // above still wins over either.
           if (ask) this.recordAsk(runId, sink, ask);
+          // The final interactive step already parks at `waiting` by its own
+          // lifecycle; only a non-final step needs the workflow held back, so
+          // `execute` does not mark it done and run the next check (#917).
+          // Inside the `!autoContinued` branch on purpose: a nudged autonomous
+          // turn did not park, so it must not leave a park behind for `execute`
+          // to settle.
+          if (parksWorkflow) state.askPark = 'waiting';
           if (monitoring) {
             this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
             this.store.updateStep(runId, step.id, { status: 'running' });
@@ -3993,7 +4270,14 @@ export class RunManager {
             this.clearIdleTimer(state);
             this.armMonitoringWakeTimer(runId, state);
           } else {
-            this.store.updateRun(runId, { status: 'waiting', activity: undefined });
+            this.store.updateRun(runId, {
+              status: 'waiting',
+              activity: undefined,
+              // The durable half of the park, and the only thing a restart can
+              // read: without it `recover()` cannot tell this `waiting` from a
+              // finished interactive session and settles it as a success.
+              askParked: parksWorkflow ? true : undefined,
+            });
             this.store.updateStep(runId, step.id, { status: 'waiting' });
             this.leaveMonitoring(runId);
             this.clearMonitoringWakeTimer(state, runId);
@@ -4002,6 +4286,31 @@ export class RunManager {
           this.waiting.add(runId);
           if (!monitoring) this.armIdleTimer(runId, state);
           this.releaseSlot(); // the freed slot can start a queued run right away — in any project
+        }
+        // One-shot close for an ordinary intermediate step — the behavior the
+        // runners' `autoEndAfterFirstTurn` used to provide, moved here so a step
+        // that parks on a `CEZ:ASK` can keep its session open for the answer
+        // instead of having the runner close it first (#917).
+        //
+        // The delay reproduces the runners' own `AUTO_END_DELAY_MS`, which they
+        // all apply for the same two reasons: `end()` stays out of the event
+        // dispatch that is announcing the turn, and frames trailing the turn's
+        // final `result` message still land before stdin closes. The session is
+        // captured rather than re-read so a later step's session can never be
+        // the one this timer closes.
+        //
+        // `!autoContinued` is the one condition the runners' own flag could not
+        // express: a turn that was nudged or re-prompted has just had a message
+        // written into its session, and closing it 250 ms later would throw that
+        // turn away. Cancellation is deliberately NOT handled here — `sessionOpen`
+        // is false once `state.cancelled` is set, and `cancel()` tears the session
+        // down through `state.interrupt()` instead.
+        const closing = state.session;
+        if (!interactive && sessionOpen && !parksWorkflow && !autoContinued && closing) {
+          const autoEnd = setTimeout(() => {
+            if (closing.open) closing.end();
+          }, AUTO_END_DELAY_MS);
+          autoEnd.unref?.();
         }
         // The window is proven open — see the twin in `runContinuation`.
         if (this.store.getRun(runId)?.autoResumeAttempts !== undefined) {
@@ -4067,12 +4376,14 @@ export class RunManager {
       session = runner.startSession(
         {
           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
-          // reports and asks), then the run's extra
-          // prompt (POST override or config default, which may amend either), then the
+          // reports and asks), then the automations prompt (spec 2026-09-13-automations-from-prompt
+          // — how a task creates a GitHub automation), then the run's extra
+          // prompt (POST override or config default, which may amend any of them), then the
           // handoff/todos contract — every agent step.
           systemPrompt: composeSystemPrompt(
             systemPrompt,
             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
+            state.automationsPrompt,
             extraSystemPrompt,
             followupsEnabled() && input.generateFollowups !== false
               ? HANDOFF_INSTRUCTIONS
@@ -4084,16 +4395,34 @@ export class RunManager {
           allowedTools: step.allowedTools ?? DEFAULT_ALLOWED_TOOLS,
           bashAllowlist: step.bashAllowlist,
           // The handoff file lives outside the worktree — grant access.
-          additionalDirectories: agentDirectories(join(this.dataDir, 'runs'), stepProfile.env),
+          additionalDirectories: agentDirectories(
+            join(this.dataDir, 'runs'),
+            this.grantableAttachmentLibrary(),
+            stepProfile.env,
+          ),
           env: stepProfile.env,
           model: backendModel,
           sessionId,
           // Interactive sessions have no wall clock — the idle timer rules.
+          //
+          // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
+          // even though it may now park on a `CEZ:ASK` and sit open waiting for
+          // an answer (#917). Dropping it for every intermediate step is the
+          // wrong trade: it would leave a runaway step with nothing to stop it,
+          // to buy a park that is bounded by the 15-minute idle timer first in
+          // all but the longest steps. What matters is that neither expiry can
+          // strand the run — both close the session, and a park whose session
+          // closed unanswered settles as `failed` with a Continue button (see
+          // the `askPark` branch in `execute`), never as a run stuck `waiting`.
           timeoutMs: interactive ? 0 : undefined,
         },
         onEvent,
         {
-          autoEndAfterFirstTurn: !interactive,
+          // Ordinary intermediate sessions are closed explicitly at turn-end
+          // instead (with the same delay the runners apply). That is what lets
+          // the turn-end handler hold an intermediate `CEZ:ASK` session open for
+          // the user's answer rather than have the runner close it first (#917).
+          autoEndAfterFirstTurn: false,
           onUiEvent: (event) => this.handleRunnerUiEvent(runId, state, sink, event),
         },
       );
@@ -4433,6 +4762,11 @@ export class RunManager {
    * Persist every attachment a user message carries — images and files alike (#950) — into the
    * run's own attachment folder, in the order they were attached. The returned paths are what the
    * agent is told about; the caller decides which of them also ride along as viewable blocks.
+   *
+   * A named FILE is additionally filed in the per-project attachment library (#929). This is the
+   * only caller that does so, which is what keeps the library to user uploads: `persistAttachment`
+   * is also how the agent's own tool screenshots land, and a folder of those would be a log, not
+   * a library.
    */
   private persistPastedAttachments(
     runId: string,
@@ -4443,10 +4777,54 @@ export class RunManager {
         b.type === 'image'
           ? this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted')
           : b.type === 'file'
-            ? this.persistAttachment(runId, b.mediaType, b.data, 'pasted')
+            ? this.fileInAttachmentLibrary(this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name)
             : null,
       )
       .filter((saved): saved is PersistedAttachment => saved !== null);
+  }
+
+  /**
+   * Copy a just-persisted file into the per-project attachment library (#929), under the name the
+   * user knows it by.
+   *
+   * The bytes are re-read from the run folder rather than decoded again from the message: the two
+   * copies are then byte-identical by construction, which is what the library's content dedupe
+   * compares on. A file that arrived without a usable name is left out — the library exists to be
+   * browsable by name, and `pasted-3.md` is exactly what it is an answer to.
+   */
+  private fileInAttachmentLibrary(
+    saved: PersistedAttachment | null,
+    name: string | undefined,
+  ): PersistedAttachment | null {
+    if (!saved || !name) return saved;
+    try {
+      copyToAttachmentLibrary(this.dataDir, name, readFileSync(saved.path));
+    } catch {
+      // Best-effort by contract: the run folder already holds the file the agent was promised.
+    }
+    return saved;
+  }
+
+  /**
+   * This project's attachment library when it exists on disk, for the two questions that need it:
+   * which directories a spawned agent may reach (`agentDirectories`) and whether a message's note
+   * has a library to point at. `undefined` for a project where nothing has ever been filed — there
+   * is no folder to grant and nothing to name.
+   */
+  private grantableAttachmentLibrary(): string | undefined {
+    const dir = attachmentLibraryDir(this.dataDir);
+    return existsSync(dir) ? dir : undefined;
+  }
+
+  /**
+   * The attachment library to name in a message's note, or `undefined` when there is nothing to
+   * point at yet — no file attachment on this message, or a project where nothing has ever been
+   * filed. Derived from the persisted NAMES rather than from per-attachment state, so it survives
+   * the dequeue/restart re-read that reconstructs an attachment from its URL alone.
+   */
+  private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
+    if (!attachments.some((a) => !isImageAttachmentName(a.name))) return undefined;
+    return this.grantableAttachmentLibrary();
   }
 
   /**

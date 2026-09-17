@@ -6,7 +6,7 @@ import { runRecordSchema } from './runs.ts';
 
 /**
  * One discovered skill: repo (`.ai/skills`, `.ai/cezar/skills`), `npx skills` install dirs
- * (project + global), or a configured team skills repo (spec 005).
+ * (project + global), a configured team skills repo (spec 005), or the one built-in.
  */
 export const skillSchema = z.object({
   name: z.string(),
@@ -15,7 +15,9 @@ export const skillSchema = z.object({
   interactive: z.literal(true).optional(),
   body: z.string(),
   path: z.string(),
-  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team']),
+  /** `builtin`: the one skill cezar ships itself (`create-cezar-automation`), served only while
+   *  GitHub automations are on and reachable (spec 2026-09-13-automations-from-prompt). */
+  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'builtin']),
   /** Team skills only: where the definition lives in its skills repo. */
   team: z
     .object({

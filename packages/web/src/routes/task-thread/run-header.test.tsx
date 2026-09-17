@@ -1,7 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
 import { createQueryClient } from '@/api/query-client'
@@ -11,9 +11,22 @@ import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { RunHeader } from './run-header'
 import { resolveConflictsPrompt } from './run-actions'
 
+beforeEach(() => {
+  // Radix's tooltip arrow measures itself with a ResizeObserver; jsdom has no layout observer.
+  vi.stubGlobal(
+    'ResizeObserver',
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  )
+})
+
 afterEach(() => {
   act(() => resetToasts())
   cleanup()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -188,6 +201,84 @@ describe('editable title (#389)', () => {
     expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
   })
 
+  /** #939 — this editor commits on blur, but a route change unmounts it without one, so a
+   *  half-typed rename is exactly the kind of text that used to vanish. */
+  it('re-opens holding a half-typed rename that was never committed', async () => {
+    stubFetch({
+      '/api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            title: { text: 'Half a new na', images: [], updatedAt: '2026-08-30T00:00:00.000Z' },
+          },
+        }),
+    })
+    renderHeader(run('waiting'))
+
+    const input = (await screen.findByLabelText('Task title')) as HTMLInputElement
+    expect(input.value).toBe('Half a new na')
+    // No pencil click was needed — an editor whose text is restored but stays closed is state
+    // the user cannot see.
+  })
+
+  it('a restored rename is not applied by the next stray click — only by Enter', async () => {
+    const sent = stubFetch({
+      '/api/v1/runs/r1/drafts': () =>
+        jsonResponse({
+          surfaces: {
+            title: { text: 'Half a new na', images: [], updatedAt: '2026-08-30T00:00:00.000Z' },
+          },
+        }),
+    })
+    renderHeader(run('waiting'))
+    const input = (await screen.findByLabelText('Task title')) as HTMLInputElement
+
+    // The user comes back an hour later and clicks somewhere in the thread. Blur commits for an
+    // editor they opened; this one opened itself, and committing here would silently rename the
+    // task to text they walked away from.
+    fireEvent.blur(input)
+    expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
+    expect((screen.getByLabelText('Task title') as HTMLInputElement).value).toBe('Half a new na')
+
+    // Once they touch it, it is an ordinary rename again.
+    fireEvent.change(input, { target: { value: 'Half a new name' } })
+    fireEvent.blur(input)
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'PATCH')?.body).toEqual({ title: 'Half a new name' }),
+    )
+  })
+
+  it('typing a rename writes it to the draft store, and committing clears it', async () => {
+    const sent = stubFetch()
+    renderHeader(run('waiting'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
+    const input = screen.getByLabelText('Task title')
+    fireEvent.change(input, { target: { value: 'A better name' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/runs/r1/drafts/title')).toMatchObject(
+        { body: { text: '', images: [] } },
+      ),
+    )
+  })
+
+  it('Escape clears the stored rename too — the user resolved it', async () => {
+    const sent = stubFetch()
+    renderHeader(run('waiting'))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rename task' }))
+    fireEvent.change(screen.getByLabelText('Task title'), { target: { value: 'Never mind' } })
+    fireEvent.keyDown(screen.getByLabelText('Task title'), { key: 'Escape' })
+
+    await waitFor(() =>
+      expect(sent.find((r) => r.method === 'PUT' && r.path === '/api/v1/runs/r1/drafts/title')).toMatchObject(
+        { body: { text: '', images: [] } },
+      ),
+    )
+    expect(sent.some((r) => r.method === 'PATCH')).toBe(false)
+  })
+
   it('an unchanged or emptied draft is not worth a request', () => {
     const sent = stubFetch()
     renderHeader(run('waiting'))
@@ -337,6 +428,28 @@ describe('actions hit their endpoints', () => {
     await waitFor(() => {
       expect(sent.some((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/continue')).toBe(true)
     })
+  })
+
+  it('a refused Continue refetches the record it was drawn from', async () => {
+    // The drift case: the record says `done`, the run is running again (a lost workspace-stream
+    // frame — run-reconcile.ts). Nothing else refetches a run record here, so without this the bar
+    // would keep offering a Continue the server keeps refusing.
+    const sent = stubFetch({
+      '/api/v1/runs/r1/continue': () => jsonResponse({ error: 'run is still active' }, 409),
+    })
+    renderHeader(run('done'))
+    const button = actionBar().getByRole<HTMLButtonElement>('button', { name: 'Continue' })
+    await waitFor(() => expect(button.disabled).toBe(false))
+    const listReadsBefore = sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length
+
+    fireEvent.click(button)
+
+    await waitFor(() => expect(screen.getByText('run is still active')).not.toBeNull())
+    await waitFor(() =>
+      expect(sent.filter((r) => r.method === 'GET' && r.path === '/api/v1/runs').length).toBeGreaterThan(
+        listReadsBefore,
+      ),
+    )
   })
 
   it('disables desktop Continue and its mutation guard blocks a forced click without a provider', async () => {
@@ -1302,6 +1415,70 @@ describe('meta line, tabs, pill and resume hint', () => {
     expect(tabs.getByRole('link', { name: 'Session' }).getAttribute('aria-current')).toBe('page')
     expect(tabs.getByRole('link', { name: 'Changes' }).getAttribute('href')).toBe('/tasks/r1/changes')
     expect(tabs.getByRole('link', { name: 'Files' }).getAttribute('href')).toBe('/tasks/r1/files')
+  })
+
+  it('copies the branch name from its header chip and confirms it in the tooltip', async () => {
+    stubFetch()
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('cez/feature-branch')
+      expect(screen.getAllByText('Copied').length).toBeGreaterThan(0)
+      expect(screen.getByRole('status').textContent).toBe('Branch name copied')
+    })
+  })
+
+  it('keeps the full confirmation window after a rapid second copy', async () => {
+    vi.useFakeTimers()
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText } })
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+    const chip = screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' })
+
+    fireEvent.click(chip)
+    await act(async () => {})
+    act(() => vi.advanceTimersByTime(1_000))
+    fireEvent.click(chip)
+    await act(async () => {})
+    act(() => vi.advanceTimersByTime(500))
+
+    expect(writeText).toHaveBeenCalledTimes(2)
+    expect(screen.getAllByText('Copied').length).toBeGreaterThan(0)
+    vi.useRealTimers()
+  })
+
+  it.each([
+    ['has no Clipboard API', {}],
+    ['is denied clipboard access', { clipboard: { writeText: () => Promise.reject(new Error('denied')) } }],
+  ])('shows the branch itself when the browser %s', async (_case, navigatorStub) => {
+    stubFetch()
+    vi.stubGlobal('navigator', navigatorStub)
+    renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+
+    expect(await screen.findByText('Branch: cez/feature-branch')).not.toBeNull()
+  })
+
+  it('clears the pending copy confirmation when the header unmounts', async () => {
+    vi.useFakeTimers()
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
+    const clearTimeoutSpy = vi.spyOn(globalThis, 'clearTimeout')
+    vi.stubGlobal('navigator', { ...navigator, clipboard: { writeText: () => Promise.resolve() } })
+    const view = renderHeader(run('done', { branch: 'cez/feature-branch' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy branch name cez/feature-branch' }))
+    await act(async () => {})
+    const dismissCall = setTimeoutSpy.mock.calls.findIndex(([, delay]) => delay === 1_500)
+    expect(dismissCall).toBeGreaterThanOrEqual(0)
+    const dismissTimer = setTimeoutSpy.mock.results[dismissCall]?.value
+    view.unmount()
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(dismissTimer)
+    vi.useRealTimers()
   })
 
   it('a queued run shows its position in the pill, from the shared runs list', async () => {

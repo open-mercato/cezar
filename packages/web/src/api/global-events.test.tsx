@@ -211,6 +211,61 @@ describe('useGlobalEvents — connection', () => {
   })
 })
 
+describe('useGlobalEvents — liveness watchdog', () => {
+  /**
+   * The half-open socket: TCP is dead, `readyState` still says CONNECTING/OPEN, and no `error`
+   * ever fires — so neither the CLOSED-gated reopen nor the visibility path can see it. The
+   * records simply stop updating, in a tab that looks live. Nothing else refetches them (no
+   * polling, five-minute staleTime, no refetch on focus), which is how a thread ends up showing
+   * a finished task that is still running and refusing every action aimed at that record.
+   */
+  it('reopens a silently-dead socket that never reached CLOSED', () => {
+    vi.useFakeTimers()
+    mount()
+    expect(FakeEventSource.instances).toHaveLength(1)
+
+    act(() => vi.advanceTimersByTime(55_000)) // past the ~40 s threshold with total silence
+
+    expect(FakeEventSource.instances).toHaveLength(2)
+    expect(FakeEventSource.last.url).toBe('/api/v1/workspace/events')
+  })
+
+  it('a keep-alive alone proves liveness — a quiet workspace is not a dead socket', () => {
+    vi.useFakeTimers()
+    const { source } = mount()
+
+    // Nothing is running, so no run/todos/usage frames — only the server's 15 s ping.
+    act(() => vi.advanceTimersByTime(30_000))
+    source.emit('ping', '')
+    act(() => vi.advanceTimersByTime(30_000))
+    source.emit('ping', '')
+    act(() => vi.advanceTimersByTime(30_000))
+
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('does not reopen while the tab is hidden — a throttled tab is expected to be quiet', () => {
+    vi.useFakeTimers()
+    mount()
+    setVisibility('hidden')
+
+    act(() => vi.advanceTimersByTime(60_000))
+
+    // `visibilitychange` reconciles and reopens on return instead.
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+
+  it('stops the watchdog on unmount — no reopen after the effect is torn down', () => {
+    vi.useFakeTimers()
+    const { unmount } = mount()
+
+    unmount()
+    act(() => vi.advanceTimersByTime(60_000))
+
+    expect(FakeEventSource.instances).toHaveLength(1)
+  })
+})
+
 describe('useGlobalEvents — back/forward cache', () => {
   // jsdom has no PageTransitionEvent; a plain Event with `persisted` defined is what the
   // handler reads either way.

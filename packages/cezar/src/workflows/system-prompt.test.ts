@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -120,13 +121,18 @@ describe('systemPrompt end-to-end (dry run)', () => {
     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
     savedEnv.CEZ_AUTONAME = process.env.CEZ_AUTONAME;
     savedEnv.CEZ_DISPATCH = process.env.CEZ_DISPATCH;
-    // The two dispatch tests below set and clear this; restore whatever the outer process had.
+    savedEnv.CEZ_AUTOMATIONS = process.env.CEZ_AUTOMATIONS;
+    // The dispatch and automations tests below set and clear this; restore whatever the outer process had.
     savedEnv.CEZ_API_URL = process.env.CEZ_API_URL;
     process.env.CEZ_DRY_RUN = '1';
     // Dispatch is on by default (spec 2026-09-10-dispatch A2) and composes its own prompt part
     // ahead of everything asserted here. These goldens are about the BASE composition, so they
     // run with it off; the default-on part is pinned by its own test below.
     process.env.CEZ_DISPATCH = '0';
+    // GitHub automations are opt-in (#801) and compose their own prompt part when on AND
+    // reachable (spec 2026-09-13-automations-from-prompt); the goldens run without it and the
+    // part is pinned by its own tests below.
+    delete process.env.CEZ_AUTOMATIONS;
     // The global inbox is opt-in (#471). These assertions are about prompt composition and the
     // per-run opt-out, so they run on an inbox-enabled server; the gate itself is covered by
     // the suite below.
@@ -248,6 +254,42 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const prompt = capturedSystemPrompt();
     expect(prompt).not.toContain('cez task create');
     expect(prompt).toContain(CONFIG_PROMPT);
+  });
+
+  // The automations twin of the two dispatch cases above (spec 2026-09-13-automations-from-prompt):
+  // the part rides only when the flag is on AND the cockpit is reachable, at the same session
+  // sites as the dispatch prompt — so a Continue keeps it too.
+  it('automations on and reachable: every task is taught the cez automation CLI', async () => {
+    process.env.CEZ_AUTOMATIONS = '1';
+    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+    try {
+      await runToEnd({ task: 'do the thing mock:done' });
+    } finally {
+      delete process.env.CEZ_AUTOMATIONS;
+      delete process.env.CEZ_API_URL;
+    }
+    const prompt = capturedSystemPrompt();
+    expect(prompt).toContain('node "$CEZ_BIN" automation');
+    expect(prompt).toContain(CONFIG_PROMPT);
+    // Dispatch is off in this suite, so the automations part is the only cockpit part composed —
+    // ahead of the extra prompt, which may amend it.
+    expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS));
+  });
+
+  it('automations on but unreachable (headless), or opted out: no task is taught the CLI', async () => {
+    delete process.env.CEZ_AUTOMATIONS;
+    delete process.env.CEZ_API_URL;
+    await runToEnd({ task: 'do the thing mock:done' });
+    expect(capturedSystemPrompt()).not.toContain('cez automation');
+    process.env.CEZ_AUTOMATIONS = '0';
+    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+    try {
+      await runToEnd({ task: 'do the thing mock:done' });
+    } finally {
+      delete process.env.CEZ_AUTOMATIONS;
+      delete process.env.CEZ_API_URL;
+    }
+    expect(capturedSystemPrompt()).not.toContain('cez automation');
   });
 
   it('no override: the config default reaches the CLI and is echoed on the record', async () => {

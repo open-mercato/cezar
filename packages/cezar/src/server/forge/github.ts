@@ -2547,7 +2547,17 @@ function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000):
     execFile(
       bin,
       args,
-      { cwd, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' },
+      {
+        cwd,
+        timeout: timeoutMs,
+        maxBuffer: 4 * 1024 * 1024,
+        encoding: 'utf8',
+        // Nobody can answer a prompt here: git opens /dev/tty directly, so
+        // piped stdio is not enough to stop it. Without this a `git push` that
+        // cannot authenticate hangs for the whole timeout and surfaces as a
+        // blank one-minute stall instead of git's own "could not read Username".
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+      },
       (err, stdout, stderr) =>
         resolve({
           ok: !err,

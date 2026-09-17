@@ -40,6 +40,7 @@ import {
   getRun,
   getRunChanges,
   getRunDiff,
+  getRunDrafts,
   getRunFile,
   getRunHandoff,
   getRuns,
@@ -135,6 +136,9 @@ export const queryKeys = {
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
+    /** Unsent drafts for one task (#939). Read once per visit and never refetched in the
+     *  background — see `useRunDrafts`. */
+    drafts: (id: string) => [queryScope(), 'runs', 'drafts', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
   },
@@ -839,11 +843,23 @@ export function useProjectRuns<TData = ApiRun[]>(
   })
 }
 
+/**
+ * The authoritative single-run read, as options rather than a hook — so a caller that needs the
+ * record RIGHT NOW (`queryClient.fetchQuery`, with its own `staleTime: 0`) asks the same question
+ * at the same cache key as the thread's own `useRun`, and the answer lands in the cache every
+ * mounted view already reads. Spelling it twice would mean a refetch that heals nothing.
+ */
+export function runQueryOptions(id: string) {
+  return {
+    queryKey: queryKeys.runs.detail(id),
+    queryFn: ({ signal }: { signal: AbortSignal }) => getRun(id, { signal }),
+  }
+}
+
 /** One run, authoritative. `id` may be absent while a route param is still unresolved. */
 export function useRun(id: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.runs.detail(id ?? ''),
-    queryFn: ({ signal }) => getRun(id as string, { signal }),
+    ...runQueryOptions(id ?? ''),
     enabled: Boolean(id),
   })
 }
@@ -948,6 +964,28 @@ export function useRunHandoff(id: string | undefined, enabled = true) {
     queryKey: queryKeys.runs.handoff(id ?? ''),
     queryFn: ({ signal }) => getRunHandoff(id as string, { signal }),
     enabled: Boolean(id) && enabled,
+  })
+}
+
+/**
+ * The unsent drafts of one task's editable inputs (#939).
+ *
+ * `staleTime: Infinity` and no focus refetch, and both are load-bearing rather than tuning: this
+ * query seeds inputs the user is typing into, so a background refetch landing mid-sentence would
+ * overwrite live text with what the server last heard. The cockpit's own writes update the cache
+ * in place (`useDraft`), which is the only thing that ever changes it while a task is open.
+ */
+export function useRunDrafts(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.runs.drafts(id ?? ''),
+    queryFn: ({ signal }) => getRunDrafts(id as string, { signal }),
+    enabled: Boolean(id),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    // A draft is a convenience, not the page: a task whose drafts cannot be read still opens,
+    // with an empty composer, exactly as it did before this feature existed.
+    retry: false,
   })
 }
 

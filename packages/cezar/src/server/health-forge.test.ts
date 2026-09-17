@@ -53,7 +53,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
     // must not decide what these assertions see.
     delete process.env.CEZ_FOLLOWUPS;
     delete process.env.CEZ_SINGLE_PROJECT;
-    // #801: automations are opt-in for the same reason, and the same ambient-env hazard applies.
+    // Automations are default-on since spec 2026-09-14 (an exact `0` opts out); the same ambient-env hazard applies.
     delete process.env.CEZ_AUTOMATIONS;
     delete process.env.CEZ_HIDE_TOKEN_METRICS;
     delete process.env.CEZ_HIDE_TOKEN_USAGE;
@@ -107,7 +107,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: false,
       singleProject: false,
-      automations: false,
+      automations: true,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -157,7 +157,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: false,
       followups: false,
       singleProject: false,
-      automations: false,
+      automations: true,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -186,7 +186,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: false,
       followups: false,
       singleProject: false,
-      automations: false,
+      automations: true,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -200,7 +200,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: false,
       singleProject: false,
-      automations: false,
+      automations: true,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -219,7 +219,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: true,
       singleProject: false,
-      automations: false,
+      automations: true,
       dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
@@ -229,11 +229,16 @@ describe('GET /api/v1/health — forge + capabilities', () => {
 
   // #801 — the automations capability rides the same payload, and is what the cockpit's nav gate
   // reads. Asserted as a whole object so a capability leaking on by accident cannot pass.
-  it('reports automations:false by default — GitHub automations are opt-in', async () => {
+  it('reports automations:true by default — the redesign flipped the opt-in', async () => {
+    expect((await health()).capabilities.automations).toBe(true);
+  });
+
+  it('reports automations:false with CEZ_AUTOMATIONS=0', async () => {
+    process.env.CEZ_AUTOMATIONS = '0';
     expect((await health()).capabilities.automations).toBe(false);
   });
 
-  it('reports automations:true with CEZ_AUTOMATIONS=1', async () => {
+  it('reports the whole capability set with CEZ_AUTOMATIONS=1 (accepted, a no-op)', async () => {
     process.env.CEZ_AUTOMATIONS = '1';
     expect((await health()).capabilities).toEqual({
       localHandoff: true,
@@ -253,7 +258,7 @@ describe('GET /api/v1/health — forge + capabilities', () => {
       localHandoff: true,
       followups: false,
       singleProject: false,
-      automations: false,
+      automations: true,
       dispatch: true,
       tokenMetrics: false,
       tokenUsageMetrics: false,

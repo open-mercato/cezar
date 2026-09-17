@@ -156,7 +156,8 @@ describe('Markdown', () => {
 
   /**
    * Link safety. Streamdown enables it by default and renders its own modal INLINE, next to the
-   * link — a `fixed inset-0` box with no portal. Thread rows carry `content-visibility: auto`
+   * link — a `fixed inset-0` box with no portal. On engines with scroll anchoring, thread rows
+   * carry `content-visibility: auto`
    * (⇒ `contain: paint`), which makes the row the containing block and clip rect for exactly
    * such a box, so that modal rendered *inside the message* as an unreachable blurred rectangle.
    * These tests pin the fix: the confirm is ours, and it leaves the contained subtree.
@@ -173,7 +174,7 @@ describe('Markdown', () => {
       vi.unstubAllGlobals()
     })
 
-    /** Renders one link inside a paint-CONTAINED wrapper — the thread row, in miniature. */
+    /** Renders one link inside a paint-CONTAINED Chrome-style thread row, in miniature. */
     function renderLink(markdown = '[docs](https://example.com/a/very/long/path?q=1)') {
       return render(
         <div style={{ contentVisibility: 'auto' }} data-testid="contained-row">

@@ -451,6 +451,8 @@ describe('ThreadView', () => {
   it('inserts the stacked rows directly after the task row, in order', () => {
     const keys = transcriptRows(
       run('queued', {
+        // Stacked a week after the run and its transcript: the stack stays out of the thread's
+        // day sequence (#941), so no separator is invented between the rows this test is about.
         queuedMessages: [
           { id: 'm1', text: 'one', createdAt: '2026-07-21T10:00:00.000Z' },
           { id: 'm2', text: 'two', createdAt: '2026-07-21T10:01:00.000Z' },
@@ -496,6 +498,243 @@ describe('ThreadView', () => {
     )
     expect(screen.getAllByLabelText('Remove message')).toHaveLength(1)
     expect(screen.getAllByLabelText('Edit message')).toHaveLength(1)
+  })
+
+  /**
+   * #939 — the thread is the draft store's first host. What is asserted here is the WIRING (the
+   * composer and the inline editors read the run's own drafts); the hook's own rules — debounce,
+   * seed-once, flush, clear-on-send — live in thread-draft.test.tsx.
+   */
+  describe('in-task drafts', () => {
+    const withDrafts = (surfaces: Record<string, { text: string }>) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) => {
+          const path = String(input)
+          const body =
+            path === '/api/v1/runs/r1/drafts'
+              ? {
+                  surfaces: Object.fromEntries(
+                    Object.entries(surfaces).map(([surface, entry]) => [
+                      surface,
+                      { ...entry, images: [], updatedAt: '2026-08-30T00:00:00.000Z' },
+                    ]),
+                  ),
+                }
+              : path === '/api/v1/providers/status'
+                ? { providers: [{ provider: 'claude', status: 'connected', enabled: true }] }
+                : []
+          return Promise.resolve(
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          )
+        }),
+      )
+      const queryClient = createQueryClient()
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <ThreadView run={run('waiting')} thread={reduceThread(EVENTS)} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      return queryClient
+    }
+
+    it('puts the stored reply back in the composer on arrival', async () => {
+      withDrafts({ composer: { text: 'the correction I was half-way through' } })
+
+      const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
+      await waitFor(() => expect(composer.value).toBe('the correction I was half-way through'))
+    })
+
+    /**
+     * The seam between the draft store (#939) and the composer's delivery re-route
+     * (deliver-prompt.ts): the draft is held open across the send, so the ONE thing that must
+     * not happen is a recovered send leaving the message sitting in the box as though it had
+     * failed. The record here says `done` while the run is actually running — the reported
+     * drift — so `POST /continue` is refused, the record is refetched, and the reply goes to
+     * the live session instead. The draft clears because the message landed.
+     */
+    it('clears the draft when a refused Continue is re-routed to the live session', async () => {
+      const sent: { path: string; method: string; body: unknown }[] = []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL, init: RequestInit = {}) => {
+          const path = String(input)
+          const method = init.method ?? 'GET'
+          sent.push({ path, method, body: typeof init.body === 'string' ? JSON.parse(init.body) : undefined })
+          const json = (body: unknown, status = 200) =>
+            Promise.resolve(
+              new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }),
+            )
+          if (path === '/api/v1/runs/r1/continue') return json({ error: 'run is still active' }, 409)
+          // The truth the stale record was missing: the run is live again.
+          if (path === '/api/v1/runs/r1' && method === 'GET') return json(run('running'))
+          if (path === '/api/v1/runs/r1/messages') return json({ delivered: true })
+          if (path === '/api/v1/providers/status')
+            return json({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+          if (path === '/api/v1/runs/r1/drafts') return json({ surfaces: {} })
+          return json([])
+        }),
+      )
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MemoryRouter>
+            <ThreadView
+              run={run('done', { steps: [{ id: 'task', kind: 'agent', sessionId: 'sess-1' }] as ApiRun['steps'] })}
+              thread={reduceThread(EVENTS)}
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+
+      const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
+      // The composer's OWN send — on a continuable run the header offers a `Continue` button too,
+      // and this test is about the one the typed reply rides.
+      const send = () =>
+        composer.closest('[data-slot="composer"]')?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Continue"]',
+        )
+      await waitFor(() => expect(send()?.disabled).toBe(false))
+      fireEvent.change(composer, { target: { value: 'one more thing' } })
+      fireEvent.click(send() as HTMLButtonElement)
+
+      await waitFor(() =>
+        expect(sent.find((r) => r.method === 'POST' && r.path === '/api/v1/runs/r1/messages')?.body)
+          .toMatchObject({ text: 'one more thing' }),
+      )
+      // Landed, so the box is empty — not restored as a failed send would be.
+      await waitFor(() => expect(composer.value).toBe(''))
+    })
+
+    it('leaves the composer empty when this task has no draft — including another surface\'s', async () => {
+      const queryClient = withDrafts({ 'review-notes': { text: 'notes, not a reply' } })
+
+      const composer = (await screen.findByLabelText('Reply to the agent')) as HTMLTextAreaElement
+      // Wait for the answer to actually land — asserting "empty" before it arrives proves nothing.
+      await waitFor(() =>
+        expect(queryClient.getQueryData(queryKeys.runs.drafts('r1'))).toBeDefined(),
+      )
+      expect(composer.value).toBe('')
+    })
+
+    it('re-opens a queued message\'s editor holding its unsaved edit, and only that one', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: RequestInfo | URL) => {
+          const path = String(input)
+          const body =
+            path === '/api/v1/runs/r1/drafts'
+              ? {
+                  surfaces: {
+                    'message:m1': {
+                      text: 'the edit I never saved',
+                      images: [],
+                      updatedAt: '2026-08-30T00:00:00.000Z',
+                    },
+                  },
+                }
+              : []
+          return Promise.resolve(
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            }),
+          )
+        }),
+      )
+      render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MemoryRouter>
+            <ThreadView
+              run={run('queued', {
+                queuedMessages: [
+                  { id: 'm1', text: 'first', createdAt: '2026-07-21T10:00:00.000Z' },
+                  { id: 'm2', text: 'second', createdAt: '2026-07-21T10:01:00.000Z' },
+                ],
+              })}
+              thread={reduceThread([])}
+            />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+
+      const editors = await screen.findAllByLabelText('Edit the message')
+      expect(editors).toHaveLength(1)
+      expect((editors[0] as HTMLTextAreaElement).value).toBe('the edit I never saved')
+      // The other message's bubble stays closed and untouched.
+      expect(screen.getByText('second')).toBeTruthy()
+    })
+
+    it('does not carry a restored prompt draft into the next task', async () => {
+      // The transcript keys the prompt row by the constant 'task', so walking from one task to
+      // another swaps `UserBubble`'s props instead of unmounting it. Before the reset in
+      // `thread-items.tsx`, task A's restored editor stayed open over task B's prompt and the
+      // first keystroke filed A's text under B — the leak `thread-draft.ts` promises against.
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const path = String(input)
+        const body =
+          path === '/api/v1/runs/r1/drafts'
+            ? {
+                surfaces: {
+                  'task-prompt': {
+                    text: 'DRAFT OF TASK ONE',
+                    images: [],
+                    updatedAt: '2026-08-30T00:00:00.000Z',
+                  },
+                },
+              }
+            : path === '/api/v1/runs/r2/drafts'
+              ? { surfaces: {} }
+              : path === '/api/v1/providers/status'
+                ? { providers: [{ provider: 'claude', status: 'connected', enabled: true }] }
+                : []
+        void init
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          }),
+        )
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const view = (id: string) => (
+        <ThreadView run={run('queued', { id })} thread={reduceThread([])} />
+      )
+      const queryClient = createQueryClient()
+      const { rerender } = render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>{view('r1')}</MemoryRouter>
+        </QueryClientProvider>,
+      )
+
+      // Task one's prompt editor opens by itself holding the stored draft — the feature working.
+      const opened = await screen.findAllByLabelText('Edit the message')
+      expect((opened[0] as HTMLTextAreaElement).value).toBe('DRAFT OF TASK ONE')
+
+      rerender(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>{view('r2')}</MemoryRouter>
+        </QueryClientProvider>,
+      )
+
+      await waitFor(() =>
+        expect(queryClient.getQueryData(queryKeys.runs.drafts('r2'))).toBeDefined(),
+      )
+      // Task two has no draft, so nothing should be open and nothing should be written to it.
+      expect(screen.queryAllByLabelText('Edit the message')).toHaveLength(0)
+      expect(
+        fetchMock.mock.calls.filter(
+          ([input, init]) =>
+            String(input).startsWith('/api/v1/runs/r2/drafts/') &&
+            (init as RequestInit | undefined)?.method === 'PUT',
+        ),
+      ).toHaveLength(0)
+    })
   })
 
   /** #472 — the edit/remove affordances exist only while the run is queued. */

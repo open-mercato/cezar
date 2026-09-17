@@ -180,6 +180,14 @@ describe('iOS sweep — every primary view at 390×844', () => {
     )
   })
 
+  it('/automations (list, spec 2026-09-14)', () => {
+    sweep('automations', '/automations', '[data-slot="automations-list"], [data-slot="centered-state"]')
+  })
+
+  it('/automations/new (editor)', () => {
+    sweep('automations-new', '/automations/new', '[data-slot="automation-editor"]')
+  })
+
   it('/new (full-screen composer)', () => {
     sweep('new', '/new', '[data-route="new"]')
   })

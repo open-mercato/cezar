@@ -5,10 +5,10 @@ import {
   matchesFilters,
   reconstructLabelEvents,
 } from './github-poller.ts';
-import type { AutomationDefinition } from './types.ts';
+import type { GithubAutomationDefinition } from './types.ts';
 
-const definition: AutomationDefinition = {
-  id: 'one', revision: 1, name: 'Issues', enabled: true,
+const definition: GithubAutomationDefinition = {
+  id: 'one', revision: 1, name: 'Issues', enabled: true, kind: 'github',
   events: ['issue.opened'], intervalSeconds: 300,
   filters: { lookbackDays: 7, maxRecords: 25 },
   task: { prompt: 'Review {{github.url}}' },

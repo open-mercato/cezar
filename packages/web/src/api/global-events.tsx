@@ -443,6 +443,20 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     let reopenTimer: ReturnType<typeof setTimeout> | undefined
     let everOpened = false
     let disposed = false
+    // Liveness watchdog — the same one the per-run transcript stream has carried since #424, and
+    // missing here until a thread showed a `done` header over a session that was visibly still
+    // working. A backgrounded tab (or the desktop app's iframe) can leave the socket half-open:
+    // TCP dead, `readyState` still OPEN, so no `error` fires and none of the reopen paths below
+    // match. The transcript reopens itself and keeps flowing; the RECORDS stop, and nothing else
+    // refetches them (no polling, a five-minute staleTime, no refetch on focus — query-client.ts).
+    // The cockpit then shows a finished task that is running, and every action aimed at that
+    // record is refused until a reload. The server pings every 15 s (server.ts), so a long silence
+    // across BOTH data and pings is a dead socket: reopen it, and the `open` handler's reconcile
+    // asks for everything that happened while we were not listening.
+    const STALE_MS = 40_000 // ~2.5× the 15 s ping — one dropped ping must not trip it
+    const LIVENESS_CHECK_MS = 10_000
+    let lastFrameAt = Date.now()
+    let livenessTimer: ReturnType<typeof setInterval> | undefined
     let providerStatusRefetching = false
     let providerStatusDirty = false
     let reconciliationDepth = 0
@@ -529,6 +543,9 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
 
     const connect = (): void => {
       source?.close()
+      // A fresh socket resets the clock: its first frames are still on the way, so it must not be
+      // judged dead before any of them land.
+      lastFrameAt = Date.now()
       // Remote cockpits commonly sit behind HTTP Basic Auth. EventSource supports an explicit
       // credentials mode (unlike WebSocket), so keep every automatic reconnect authenticated.
       const current = new Source(url, { withCredentials: true })
@@ -536,6 +553,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
 
       current.addEventListener('open', () => {
         if (disposed || source !== current) return
+        lastFrameAt = Date.now()
         // Not the first one: at boot the queries are fetching anyway, and invalidating them here
         // would only ask the same questions twice. Every later open is a *re*connect — we were
         // disconnected, events happened without us, and the cache is now a guess.
@@ -546,6 +564,9 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       for (const name of EVENT_NAMES) {
         current.addEventListener(name, (event) => {
           if (disposed || source !== current) return
+          // Before the parse, so a keep-alive (`ping`, which carries nothing to apply) and even a
+          // malformed frame still prove the socket is alive.
+          lastFrameAt = Date.now()
           const parsed = parseWorkspaceEvent(name, (event as MessageEvent<string>).data)
           if (!parsed) return
           // The cross-project index first, and BEFORE the scope filter below — it is the one
@@ -574,6 +595,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       for (const name of WORKSPACE_EVENT_NAMES) {
         current.addEventListener(name, (event) => {
           if (disposed || source !== current) return
+          lastFrameAt = Date.now()
           let payload: unknown
           try {
             payload = JSON.parse((event as MessageEvent<string>).data)
@@ -593,6 +615,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
 
       current.addEventListener('provider-status', (event) => {
         if (disposed || source !== current) return
+        lastFrameAt = Date.now()
         let payload: unknown
         try {
           payload = JSON.parse((event as MessageEvent<string>).data)
@@ -653,6 +676,17 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       connect()
     }
 
+    // Only while the tab is visible: a hidden tab is legitimately throttled into silence, and
+    // `onVisibilityChange` above already reconciles and reopens on return. This catches the case
+    // that cannot — a socket still reported OPEN that has silently stopped delivering.
+    livenessTimer = setInterval(() => {
+      if (disposed || document.visibilityState !== 'visible') return
+      if (Date.now() - lastFrameAt <= STALE_MS) return
+      clearTimeout(reopenTimer)
+      reopenTimer = undefined
+      connect()
+    }, LIVENESS_CHECK_MS)
+
     document.addEventListener('visibilitychange', onVisibilityChange)
     window.addEventListener('pagehide', onPageHide)
     window.addEventListener('pageshow', onPageShow)
@@ -661,6 +695,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     return () => {
       disposed = true
       clearTimeout(reopenTimer)
+      clearInterval(livenessTimer)
       runsIndexRefresher.cancel()
       inactiveProjectRefresher.cancel()
       runEventBatcher.cancel()
