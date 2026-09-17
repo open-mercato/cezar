@@ -147,6 +147,8 @@ export const automationRuntimeStateSchema = z.object({
   cursor: automationCursorSchema.optional(),
   frozenHighWatermark: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
   backlogAfter: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
+  /** The cursor a widening re-poll could not get past even at the search ceiling (#982). */
+  pinnedCursor: automationCursorSchema.optional(),
   nextCheckAt: z.string().optional(),
   lastSuccessAt: z.string().optional(),
   /** `schedule` kind: the next occurrence's instant and the last fired one's. */

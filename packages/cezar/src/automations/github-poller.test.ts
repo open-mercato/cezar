@@ -3,6 +3,7 @@ import {
   buildSearchQuery,
   GithubPoller,
   matchesFilters,
+  POLL_RECORD_CEILING,
   reconstructLabelEvents,
 } from './github-poller.ts';
 import type { GithubAutomationDefinition } from './types.ts';
@@ -105,6 +106,40 @@ describe('GithubPoller', () => {
       timestamp: item.created_at,
       tieBreaker: item.node_id,
     });
+  });
+
+  it('spends a wider one-call budget without touching the definition (#982)', async () => {
+    const items = Array.from({ length: 12 }, (_, index) => ({
+      ...item,
+      id: index + 1,
+      node_id: `I_${String(index).padStart(2, '0')}`,
+      number: index + 1,
+      created_at: `2026-07-26T01:00:${String(index).padStart(2, '0')}.000Z`,
+    }));
+    const narrow: GithubAutomationDefinition = { ...definition, filters: { ...definition.filters, maxRecords: 5 } };
+    const run = vi.fn(async (_executable: string, args: readonly string[]) => {
+      const perPage = Number(args.find((arg) => arg.startsWith('per_page='))?.slice('per_page='.length));
+      return JSON.stringify({ items: items.slice(0, perPage) });
+    });
+    const poller = new GithubPoller({ run });
+
+    const budgeted = await poller.poll('acme', 'demo', narrow);
+    expect(run).toHaveBeenLastCalledWith('gh', expect.arrayContaining(['per_page=5']));
+    expect(budgeted.candidates).toHaveLength(5);
+    expect(budgeted.truncated).toBe(true);
+    expect(budgeted.cursor).toEqual({ timestamp: items[4]!.created_at, tieBreaker: items[4]!.node_id });
+
+    const widened = await poller.poll('acme', 'demo', narrow, { maxRecords: 10 });
+    expect(run).toHaveBeenLastCalledWith('gh', expect.arrayContaining(['per_page=10']));
+    expect(widened.candidates).toHaveLength(10);
+    expect(widened.cursor).toEqual({ timestamp: items[9]!.created_at, tieBreaker: items[9]!.node_id });
+    expect(narrow.filters.maxRecords).toBe(5);
+  });
+
+  it('clamps an over-wide budget to the 100-record search ceiling (#982)', async () => {
+    const run = vi.fn(async () => JSON.stringify({ items: [item] }));
+    await new GithubPoller({ run }).poll('acme', 'demo', definition, { maxRecords: POLL_RECORD_CEILING * 4 });
+    expect(run).toHaveBeenCalledWith('gh', expect.arrayContaining([`per_page=${POLL_RECORD_CEILING}`]));
   });
 
   it('repeats all/any/exclude/author/assignee filters locally', () => {

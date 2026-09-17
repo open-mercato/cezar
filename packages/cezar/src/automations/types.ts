@@ -142,6 +142,12 @@ export const automationRuntimeStateSchema = z
       .extend({ tieBreaker: z.string() })
       .optional(),
     backlogAfter: automationCursorSchema.extend({ tieBreaker: z.string() }).optional(),
+    /**
+     * The cursor a widening re-poll failed to get past, even at the 100-record search ceiling
+     * (#982). While `cursor` still equals it the scheduler skips the climb, so a band saturated at
+     * the API's own ceiling costs one climb, not one per interval; the cursor moving clears it.
+     */
+    pinnedCursor: automationCursorSchema.optional(),
     nextCheckAt: z.string().datetime().optional(),
     lastSuccessAt: z.string().datetime().optional(),
     /** schedule kind (spec 2026-09-14): the next occurrence's instant and the last fired one's. */

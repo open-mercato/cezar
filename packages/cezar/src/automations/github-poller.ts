@@ -60,7 +60,16 @@ export interface GithubPollerOptions {
 
 export interface GithubPollOptions {
   since?: string;
+  /**
+   * Widen this ONE poll's record budget past the definition's own `filters.maxRecords`, clamped
+   * to the search API's 100-record ceiling. The scheduler raises it to climb out of a saturated
+   * overlap band (#982); the stored definition is never touched.
+   */
+  maxRecords?: number;
 }
+
+/** The widest budget one poll may be given — the `/search/issues` page ceiling. */
+export const POLL_RECORD_CEILING = HARD_CANDIDATE_CAP;
 
 export class GithubPoller {
   private readonly run: NonNullable<GithubPollerOptions['run']>;
@@ -104,7 +113,7 @@ export class GithubPoller {
       sources.push({ family: 'issues', activity: 'updated', opened: false, labels: true });
     }
 
-    const perPage = Math.min(definition.filters.maxRecords, HARD_CANDIDATE_CAP);
+    const maxRecords = Math.min(options.maxRecords ?? definition.filters.maxRecords, HARD_CANDIDATE_CAP);
     const expectedRepoUrl = `https://api.github.com/repos/${owner}/${repo}`.toLowerCase();
     const observations: Array<{
       timestamp: string;
@@ -124,14 +133,14 @@ export class GithubPoller {
       const args = [
         'api', '--method', 'GET', '/search/issues',
         '-f', `q=${query}`,
-        '-f', `per_page=${perPage}`,
+        '-f', `per_page=${maxRecords}`,
         '-f', `sort=${source.activity}`,
         '-f', 'order=asc',
       ];
       const raw = await this.run('gh', args);
       const response = searchResponseSchema.parse(JSON.parse(raw));
       const sourceObservations: typeof observations = [];
-      truncated ||= response.items.length >= perPage;
+      truncated ||= response.items.length >= maxRecords;
       for (const item of response.items.slice(0, HARD_CANDIDATE_CAP)) {
         if (item.repository_url.toLowerCase() !== expectedRepoUrl) continue;
         if (source.opened && item.pull_request && definition.events.includes('pull_request.opened')) {
@@ -165,11 +174,11 @@ export class GithubPoller {
                 ? event
                 : undefined,
             });
-            if (sourceObservations.length >= perPage) break;
+            if (sourceObservations.length >= maxRecords) break;
           }
           const lastEventAt = events.at(-1)?.timestamp;
           if (
-            sourceObservations.length < perPage
+            sourceObservations.length < maxRecords
             && item.updated_at
             && atOrAfter(item.updated_at, options.since)
             && (!lastEventAt || item.updated_at > lastEventAt)
@@ -180,18 +189,18 @@ export class GithubPoller {
             });
           }
         }
-        if (sourceObservations.length >= perPage) break;
+        if (sourceObservations.length >= maxRecords) break;
       }
       sourceObservations.sort(compareObservation);
-      truncated ||= sourceObservations.length >= perPage;
-      observations.push(...sourceObservations.slice(0, perPage));
+      truncated ||= sourceObservations.length >= maxRecords;
+      observations.push(...sourceObservations.slice(0, maxRecords));
     }
     observations.sort(compareObservation);
-    const evaluated = observations.slice(0, definition.filters.maxRecords);
+    const evaluated = observations.slice(0, maxRecords);
     const cursor = evaluated.at(-1);
     return {
       candidates: evaluated.flatMap((observation) => observation.candidate ? [observation.candidate] : []),
-      truncated: truncated || observations.length > definition.filters.maxRecords,
+      truncated: truncated || observations.length > maxRecords,
       pages: sources.length,
       cursor: cursor ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker } : undefined,
     };

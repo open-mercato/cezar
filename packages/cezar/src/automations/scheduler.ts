@@ -1,4 +1,5 @@
 import type { AutomationCoordinator } from './coordinator.ts';
+import { POLL_RECORD_CEILING } from './github-poller.ts';
 import type { GithubCandidate, GithubPoller, GithubPollResult } from './github-poller.ts';
 import { ScheduleRunner, type ScheduleLauncher } from './schedule-runner.ts';
 import type { AutomationLease, AutomationStore } from './store.ts';
@@ -72,12 +73,42 @@ export class ProjectAutomationScheduler {
       const overlapSince = since
         ? new Date(Date.parse(since) - 120_000).toISOString()
         : undefined;
-      const result = await githubRequests.run(() => github.poller.poll(
+      const drain = (maxRecords?: number) => githubRequests.run(() => github.poller.poll(
         github.owner,
         github.repo,
         definition,
-        { since: overlapSince },
+        maxRecords === undefined ? { since: overlapSince } : { since: overlapSince, maxRecords },
       ));
+      let result = await drain();
+      /**
+       * A poll whose whole budget lands inside the 120-second overlap band hands back the cursor
+       * it was given, and the next interval derives the identical window from that same cursor:
+       * the automation is pinned, logs `no-match` forever, and never fires again (#982). Only the
+       * scheduler holds the stored cursor, so only it can tell "this poll made no progress" from
+       * "this poll found nothing new" — and `laterCursor` answers that by reference, returning its
+       * `current` argument unchanged when the observation is not later.
+       */
+      const pinned = (observed: GithubPollResult): boolean =>
+        observed.truncated && laterCursor(state.cursor, observed.cursor) === state.cursor;
+      let budget = Math.min(definition.filters.maxRecords, POLL_RECORD_CEILING);
+      let exhausted = false;
+      let climbedTo: number | undefined;
+      /**
+       * A band still saturated at the ceiling is at the search API's own limit and stays pinned,
+       * so the climb is paid ONCE per pinned cursor: `pinnedCursor` records the cursor the ladder
+       * failed at, and the cursor moving off it is the recovery path that clears it.
+       */
+      const stillPinned = sameCursor(state.pinnedCursor, state.cursor);
+      if (mode === 'execute' && state.cursor && !stillPinned) {
+        // Safe to widen: `poll()` evaluates a contiguous prefix and takes its cursor from the last
+        // evaluated observation, so a bigger budget only reaches further into the same ordered run.
+        while (pinned(result) && budget < POLL_RECORD_CEILING) {
+          budget = Math.min(budget * 2, POLL_RECORD_CEILING);
+          result = await drain(budget);
+          climbedTo = budget;
+        }
+        exhausted = pinned(result);
+      }
       const eligible = result.candidates.filter((candidate) => {
         if (state.baselineAt && candidate.timestamp <= state.baselineAt) return false;
         if (!state.cursor) return true;
@@ -98,6 +129,9 @@ export class ProjectAutomationScheduler {
             frozenHighWatermark: result.truncated && cursor?.tieBreaker
               ? { timestamp: cursor.timestamp, tieBreaker: cursor.tieBreaker }
               : undefined,
+            pinnedCursor: exhausted
+              ? cursor
+              : sameCursor(current.pinnedCursor, cursor) ? current.pinnedCursor : undefined,
             lastSuccessAt: now,
             nextCheckAt: new Date(Date.now() + definition.intervalSeconds * 1_000).toISOString(),
             consecutiveFailures: 0,
@@ -114,7 +148,16 @@ export class ProjectAutomationScheduler {
       this.handle.onChange?.(definition.id, definition.revision);
       completion = mode === 'preview'
         ? { result: 'preview', reason: `Bounded preview found ${eligible.length} match${eligible.length === 1 ? '' : 'es'}; no tasks were launched.` }
-        : { result: 'no-match', reason: 'Scheduled check completed.' };
+        : {
+          result: 'no-match',
+          reason: pollReason({
+            climbedTo,
+            exhausted,
+            // The marker only still describes this poll if the cursor did not move after all.
+            stillPinned: stillPinned && laterCursor(state.cursor, result.cursor) === state.cursor,
+            cursor: state.cursor,
+          }),
+        };
       return { ...result, candidates: eligible };
     } catch (error) {
       if (error instanceof LeaseHeldError) this.recordSkip(definition, error, scheduled);
@@ -179,6 +222,36 @@ export class ProjectAutomationScheduler {
     this.handle.store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'error', reason: error instanceof Error ? error.message : String(error) });
     this.handle.onChange?.(definition.id, definition.revision);
   }
+}
+
+/**
+ * What the `no-match` row says. A pinned cursor used to be invisible — the only trace anywhere was
+ * `frozenHighWatermark` in `automation-state.json` (#982) — so the poll log now names it.
+ */
+function pollReason(poll: {
+  climbedTo?: number;
+  exhausted: boolean;
+  stillPinned: boolean;
+  cursor?: { timestamp: string };
+}): string {
+  if (poll.exhausted || poll.stillPinned) {
+    return `The 120-second overlap band at ${poll.cursor?.timestamp} holds ${POLL_RECORD_CEILING} or more records, `
+      + 'so the cursor cannot advance past it. Narrow the automation\'s filter to let it move again; '
+      + 'until it does, the widening re-poll is skipped.';
+  }
+  if (poll.climbedTo !== undefined) {
+    return `The overlap band was saturated; a ${poll.climbedTo}-record re-poll moved the cursor past it.`;
+  }
+  return 'Scheduled check completed.';
+}
+
+/** Cursor identity — the marker only holds while the stored cursor is still the one it recorded. */
+function sameCursor(
+  a: { timestamp: string; tieBreaker?: string } | undefined,
+  b: { timestamp: string; tieBreaker?: string } | undefined,
+): boolean {
+  if (!a || !b) return false;
+  return a.timestamp === b.timestamp && (a.tieBreaker ?? '') === (b.tieBreaker ?? '');
 }
 
 function laterCursor(

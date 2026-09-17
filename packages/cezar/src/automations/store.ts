@@ -109,7 +109,13 @@ export class AutomationStore {
       updatedAt: this.now().toISOString(),
     });
     this.definitions.set(id, definition);
-    if (this.state(id)) this.setState(id, (current) => ({ ...current, revision: definition.revision }));
+    // `pinnedCursor` records that a cursor was unescapable *under the previous definition*, and the
+    // pinned poll log tells the operator to narrow the filter to escape it. Carrying the marker across
+    // an edit would skip the widening re-poll that makes the narrowed filter take effect, so the very
+    // remediation the log prescribes would silently do nothing (#982).
+    if (this.state(id)) {
+      this.setState(id, (current) => ({ ...current, revision: definition.revision, pinnedCursor: undefined }));
+    }
     this.persistDefinitions();
     return definition;
   }

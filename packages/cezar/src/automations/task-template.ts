@@ -223,6 +223,7 @@ export function rebaselineIdleAutomations(
       cursor: { timestamp: baselineAt },
       frozenHighWatermark: undefined,
       backlogAfter: undefined,
+      pinnedCursor: undefined,
       nextCheckAt: new Date(now + (definition.intervalSeconds ?? 300) * 1_000).toISOString(),
       backoffUntil: undefined,
       consecutiveFailures: 0,
