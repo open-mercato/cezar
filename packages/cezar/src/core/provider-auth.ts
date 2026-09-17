@@ -102,6 +102,19 @@ const COMMAND_TIMEOUT_MS = 10_000;
 const CONNECTED_TTL_MS = 10 * 60_000;
 const UNSETTLED_TTL_MS = 60_000;
 
+/**
+ * How long before the same provider may be self-checked again after a runtime rejection
+ * (`verifyRuntimeAuthFailure`).
+ *
+ * A latch is raised from a PATTERN MATCH on a runner's error text, and a single failing run can emit
+ * several auth-shaped lines in a row. Without a floor, each line that re-latches after a successful
+ * self-check would buy its own CLI spawn. One self-check a minute is plenty for the case this exists
+ * for — a rejection that was transient against credentials that are still valid — and it bounds the
+ * pathological case (a CLI that reports logged in while the vendor keeps rejecting the token) to one
+ * probe per minute instead of one per error line.
+ */
+const RUNTIME_AUTH_VERIFY_COOLDOWN_MS = 60_000;
+
 /** The lifetime for a set of rows: minutes only when EVERY row is connected. A mixed answer takes
  *  the short window, because the not-connected row in it is the one that might self-heal.
  *
@@ -342,6 +355,11 @@ export class ProviderAuthService {
   private readonly platform: NodeJS.Platform;
   private readonly createAuthFailureId: () => string;
   private readonly runtimeFailures = new Map<ProviderId, RuntimeAuthFailure>();
+  /** One self-check at a time per provider, and not more often than the cooldown. Both guard the
+   *  same thing — a CLI spawn per auth-shaped error line — from the two directions it can arrive
+   *  from: concurrently, and in quick succession. */
+  private readonly verifyingRuntimeFailures = new Set<ProviderId>();
+  private readonly lastRuntimeVerification = new Map<ProviderId, number>();
   private nextRuntimeFailureGeneration = 0;
   private nextProbeGeneration = 0;
   private completed?: {
@@ -435,6 +453,77 @@ export class ProviderAuthService {
     if (!current || current.authFailureId !== authFailureId) return false;
     this.runtimeFailures.delete(provider);
     return true;
+  }
+
+  /**
+   * Ask the provider's OWN CLI whether a runtime rejection was real, and drop the incident when it
+   * was not. Resolves to the recovered row when it cleared one, `null` otherwise.
+   *
+   * A latch is raised by matching a runner's error text against
+   * {@link isRuntimeProviderAuthFailure} — a heuristic over vendor prose — and it then outranks every
+   * probe (`withRuntimeFailures`). Before this existed, `clearRuntimeAuthFailure` had exactly one
+   * caller, `POST /providers/:provider/retry`, so the only way out of a latch was a human opening
+   * Settings and pressing "Try again". That button clears the incident and re-probes, and it works,
+   * which is the whole diagnosis: the credentials were still there. A transient 401 and a false
+   * positive of the text match were both indistinguishable from a real logout, and both parked the
+   * cockpit until someone clicked.
+   *
+   * So the latch stays authoritative — it is raised instantly, and `provider-action-gate` keeps
+   * refusing to start runs against it — but it no longer stands unexamined. This is deliberately the
+   * same two steps the retry route performs, minus the human: probe, then clear.
+   *
+   * What it will NOT do:
+   * - clear an incident it did not observe. The id is captured before the probe and handed to
+   *   `clearRuntimeAuthFailure`, so a rejection that arrives mid-probe survives the answer to an
+   *   older question.
+   * - clear on anything but `connected`. `disconnected`, `not-installed` and `unknown` all leave the
+   *   latch alone; an inconclusive probe is not evidence of health.
+   * - spawn more than one probe per provider per {@link RUNTIME_AUTH_VERIFY_COOLDOWN_MS}.
+   */
+  async verifyRuntimeAuthFailure(provider: ProviderId): Promise<ProviderStatus | null> {
+    if (process.env.CEZ_DRY_RUN === '1' || providerAuthChecksDisabled()) return null;
+    const failure = this.runtimeFailures.get(provider);
+    if (!failure) return null;
+    if (this.verifyingRuntimeFailures.has(provider)) return null;
+    const lastVerifiedAt = this.lastRuntimeVerification.get(provider);
+    if (lastVerifiedAt !== undefined && this.now() - lastVerifiedAt < RUNTIME_AUTH_VERIFY_COOLDOWN_MS) {
+      return null;
+    }
+
+    this.verifyingRuntimeFailures.add(provider);
+    let probed: ProviderStatus;
+    try {
+      this.lastRuntimeVerification.set(provider, this.now());
+      probed = await this.probe(descriptorFor(provider));
+    } finally {
+      this.verifyingRuntimeFailures.delete(provider);
+    }
+
+    if (probed.status !== 'connected') return null;
+    if (!this.clearRuntimeAuthFailure(provider, failure.authFailureId)) return null;
+    this.rememberProbedRow(probed);
+    return probed;
+  }
+
+  /**
+   * Fold ONE freshly probed row into the cached response.
+   *
+   * Without this, dropping a latch would uncover whatever the last full probe happened to say about
+   * that provider — which can be older than the answer we just got, and on a cold-ish cache can be
+   * `unknown`. Clearing an incident only to reveal a stale contradiction would trade a red banner for
+   * a grey one. The cache TIMESTAMP is deliberately untouched: this corrects one row, it is not a
+   * full probe, and it must not extend the whole response's lifetime.
+   */
+  private rememberProbedRow(status: ProviderStatus): void {
+    if (!this.completed) return;
+    this.completed = {
+      ...this.completed,
+      response: {
+        providers: this.completed.response.providers.map((row) => (
+          row.provider === status.provider ? status : row
+        )),
+      },
+    };
   }
 
   /**
