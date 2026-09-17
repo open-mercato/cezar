@@ -95,6 +95,55 @@ describe('AutomationStore', () => {
   });
 });
 
+describe('AutomationStore.acquireLease — a lock nobody is holding any more (#983)', () => {
+  const FOREIGN_PID = 424_242;
+  /** Above every platform's pid_max, so the real probe always reports it gone. */
+  const UNREACHABLE_PID = 2_147_483_647;
+
+  async function lockedDirectory(contents: string): Promise<string> {
+    const dir = await directory();
+    writeFileSync(join(dir, 'automation-poll.lock'), contents);
+    return dir;
+  }
+
+  it('reclaims a fresh lock whose writer is gone instead of waiting out the ten-minute age rule', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: FOREIGN_PID, startedAt: new Date().toISOString() }));
+    const store = AutomationStore.open(dir, { processAlive: () => false });
+    const lease = store.acquireLease();
+    expect(lease).toBeDefined();
+    // The reclaimed lock now names this process, so the next contender probes us, not the corpse.
+    expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(process.pid);
+    lease?.release();
+  });
+
+  it('leaves a lock alone while its writer is still alive', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: FOREIGN_PID, startedAt: new Date().toISOString() }));
+    const probed: number[] = [];
+    const store = AutomationStore.open(dir, { processAlive: (pid) => { probed.push(pid); return true; } });
+    expect(store.acquireLease()).toBeUndefined();
+    expect(probed).toEqual([FOREIGN_PID]);
+    // And the live holder's lock is still on disk, untouched.
+    expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(FOREIGN_PID);
+  });
+
+  it('falls back to the age rule for a lock whose pid cannot be read', async () => {
+    const dir = await lockedDirectory('{half-writ');
+    const store = AutomationStore.open(dir, { processAlive: () => false });
+    expect(store.acquireLease()).toBeUndefined();
+    // Same unreadable lock, once it is old enough: reclaimed on age alone.
+    expect(store.acquireLease(0)).toBeDefined();
+  });
+
+  it('probes real pids when nothing is injected', async () => {
+    const live = await lockedDirectory(JSON.stringify({ pid: process.ppid, startedAt: new Date().toISOString() }));
+    expect(AutomationStore.open(live).acquireLease()).toBeUndefined();
+    const dead = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const lease = AutomationStore.open(dead).acquireLease();
+    expect(lease).toBeDefined();
+    lease?.release();
+  });
+});
+
 describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => {
   it('lets two stores on one directory interleave writes without clobbering each other', async () => {
     const dir = await directory();

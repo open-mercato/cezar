@@ -533,6 +533,129 @@ describe('ubuntu-vps redeploy npx-cache refresh (#696)', () => {
   });
 });
 
+describe('ubuntu-vps redeploy restart verification (#912)', () => {
+  /** What `systemctl show -p MainPID -p ExecMainStartTimestampMonotonic` prints. */
+  const showOutput = (p: { pid: string; started: string } | null) =>
+    p ? `MainPID=${p.pid}\nExecMainStartTimestampMonotonic=${p.started}\n` : 'MainPID=0\nExecMainStartTimestampMonotonic=0\n';
+
+  /**
+   * A ctx modelling a real `--external-proxy` box: curl always answers 200 (the
+   * port is served — by the OLD process when the restart failed, which is exactly
+   * why "something answers" proves nothing), and `systemctl show` reports whoever
+   * is serving at that moment.
+   */
+  function deployCtx(over: {
+    restartCode?: number;
+    restartStderr?: string;
+    /** false ⇒ restart exits 0 but the process is untouched (the #912 stale process). */
+    restartReplacesProcess?: boolean;
+    /** non-zero ⇒ the identity can't be read at all (no user bus). */
+    showCode?: number;
+    /** non-zero ⇒ only the read AFTER the restart fails. */
+    showCodeAfterRestart?: number;
+    running?: { pid: string; started: string } | null;
+    /** The sudo-driven system unit instead of the rootless `--user` one. */
+    scope?: 'user' | 'system';
+  }) {
+    let current = over.running === undefined ? { pid: '1111', started: '1000' } : over.running;
+    let restarted = false;
+    const warns: string[] = [];
+    const runner: Runner = {
+      interactive: async () => 0,
+      capture: async (program, args) => {
+        if (program === 'curl') return { code: 0, stdout: '200', stderr: '' }; // the port always answers
+        if (program === 'systemctl' && args.includes('show')) {
+          if (args.includes('ExecStart')) return { code: 0, stdout: '/usr/bin/node /srv/dist/index.js', stderr: '' };
+          const failCode = over.showCode ?? (restarted ? over.showCodeAfterRestart : undefined);
+          if (failCode) return { code: failCode, stdout: '', stderr: 'Failed to connect to bus: No medium found\n' };
+          return { code: 0, stdout: showOutput(current), stderr: '' };
+        }
+        if (program === 'systemctl' && args.includes('restart')) {
+          const code = over.restartCode ?? 0;
+          if (code === 0 && (over.restartReplacesProcess ?? true)) current = { pid: '2222', started: '2000' };
+          restarted = true;
+          return { code, stdout: '', stderr: over.restartStderr ?? '' };
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      },
+    };
+    const ui = { ...createAutoUi(), warn: (message: string) => warns.push(message) } as Ui;
+    const ctx = ctxWith({
+      runner,
+      ui,
+      state: {
+        installed: true,
+        externalProxy: true,
+        // Pin the scope the way a real install records it (otherwise it falls
+        // back to "does the unit file exist on this machine").
+        steps: { autostart: { status: 'done', created: { artifacts: [{ kind: 'owned', type: 'service', name: 'cezar.service', scope: over.scope ?? 'user', path: '/tmp/cezar.service' }] } } },
+      },
+    });
+    return { ctx, warns, pid: () => current?.pid ?? null };
+  }
+
+  it('a non-zero `systemctl --user restart` fails the deploy instead of warning', async () => {
+    const { ctx } = deployCtx({ restartCode: 1 });
+    // StepAborted ⇒ runDeploy reports `failed` ⇒ exit 1 and NO
+    // "complete — the service was reloaded and verified" banner.
+    await expect(ubuntuVps.redeploy!(ctx)).rejects.toBeInstanceOf(StepAborted);
+    await expect(ubuntuVps.redeploy!(deployCtx({ restartCode: 1 }).ctx)).rejects.toThrow(/was NOT restarted/);
+  });
+
+  it('names the missing D-Bus session when that is why the restart failed', async () => {
+    const bus = { restartCode: 1, restartStderr: 'Failed to connect to bus: No medium found\n' };
+    await expect(ubuntuVps.redeploy!(deployCtx(bus).ctx)).rejects.toThrow(/No D-Bus user session/);
+    // …echoing systemd's own line, and pointing at a way to get a real session.
+    await expect(ubuntuVps.redeploy!(deployCtx(bus).ctx)).rejects.toThrow(/Failed to connect to bus: No medium found/);
+    await expect(ubuntuVps.redeploy!(deployCtx(bus).ctx)).rejects.toThrow(/XDG_RUNTIME_DIR|machinectl shell/);
+  });
+
+  it('fails when the restart exits 0 but the OLD process is still serving', async () => {
+    // The exact stale-process shape: the port answers, `is-active` would pass, and
+    // nothing was deployed.
+    const { ctx, pid } = deployCtx({ restartReplacesProcess: false });
+    await expect(ubuntuVps.redeploy!(ctx)).rejects.toThrow(/did not actually restart/);
+    expect(pid()).toBe('1111');
+  });
+
+  it('succeeds when the process really was replaced', async () => {
+    const { ctx, pid } = deployCtx({});
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+    expect(pid()).toBe('2222');
+  });
+
+  it('degrades (no false failure) when the service identity cannot be read at all', async () => {
+    // `systemctl show` unavailable ⇒ nothing to compare; the restart's own exit
+    // code stays the gate, so a clean restart must still pass.
+    const { ctx } = deployCtx({ showCode: 1 });
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+  });
+
+  it('warns instead of failing when only the post-restart read is unavailable', async () => {
+    const { ctx, warns } = deployCtx({ showCodeAfterRestart: 1 });
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+    expect(warns.some((w) => /did-it-really-restart/.test(w))).toBe(true);
+  });
+
+  it('a unit that was not running before the deploy has nothing to compare against', async () => {
+    const { ctx } = deployCtx({ running: null });
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+  });
+
+  it('the sudo-driven system unit is held to the same proof', async () => {
+    // `is-active` passes for the process that was already there, so the system
+    // scope needs the same before/after comparison the user scope gets.
+    const { ctx } = deployCtx({ scope: 'system' });
+    await expect(ubuntuVps.redeploy!(ctx)).rejects.toThrow(/did not actually restart/);
+  });
+
+  it('dry-run still stops before touching the service', async () => {
+    const { ctx } = deployCtx({ restartCode: 1 });
+    ctx.dryRun = true;
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+  });
+});
+
 describe('ubuntu-vps autostart step (dry-run)', () => {
   it('records a user-scoped service artifact and writes nothing to disk', async () => {
     const created = await stepById('autostart').run(ctxWith({ dryRun: true }));

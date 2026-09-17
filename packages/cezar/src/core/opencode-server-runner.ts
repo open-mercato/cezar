@@ -14,6 +14,11 @@ import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.t
 import { parseModelIdentity } from './model-identity.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
 import {
+  OpencodeTransportError,
+  openOpencodeEventStream,
+  opencodeRequest,
+} from './opencode-http.ts';
+import {
   createOpencodeUiState,
   mapOpencodeEvent,
   opencodeSessionStarted,
@@ -35,12 +40,27 @@ const SERVER_START_TIMEOUT_MS = 30_000;
 export const KILL_GRACE_MS = 4_000;
 
 /**
+ * How long a turn waits for a `session.idle` that never comes, once the prompt
+ * POST has settled and the event bus has gone quiet.
+ *
+ * `session.idle` is the turn boundary (#897), and the window below is the
+ * transition out of the state that signal would otherwise be the only exit
+ * from: an opencode build that does not emit it still ends its turn. Every
+ * `message.*` frame re-arms the window, so a session that is genuinely working
+ * — the case this whole fix is about — never trips it. This is NOT the
+ * configurable agent-step wall clock (#880); that deadline is untouched.
+ */
+export const TURN_IDLE_GRACE_MS = 5_000;
+
+/**
  * `AgentRunner` over `opencode serve` — a headless HTTP server (the same one
  * the opencode TUI talks to) with an SSE event stream. One server per session,
  * bound to the run's `cwd` (worktree), gives OpenCode the same multi-turn shape
  * as the Claude runner: each `sendMessage` posts another prompt to the same
- * session (history is kept server-side), `session/abort` cancels, and reusing
- * the session id resumes for "Continue".
+ * session (history is kept server-side) and `session/abort` cancels. "Continue"
+ * starts a fresh server and a fresh session — `bootstrap()` always `POST
+ * /session` and does not read `spec.sessionId`; resuming a server-side session
+ * id is not implemented.
  *
  * Auth = the host's opencode config/logins. The agent runs autonomously
  * (auto-approved permissions); OpenCode has no per-tool allowlist, so
@@ -111,10 +131,26 @@ class OpencodeSession implements AgentSession {
   private tokensUsed = 0;
   private lastCost = 0;
   private turnInFlight = false;
+  /** Has this turn's prompt POST settled (either way)? Until it has, nothing
+   *  synthesizes a turn end — only the wire does. */
+  private turnPostSettled = false;
+  /** Resolves the in-flight turn's `prompt()` — called from `finishTurn()`. */
+  private endTurn: (() => void) | undefined;
+  private turnGraceTimer: NodeJS.Timeout | undefined;
+  /** A transport drop swallowed during this turn (#897), kept so a turn that
+   *  then ends WITHOUT a `session.idle` still reports it. Dropping the POST is
+   *  no evidence on its own; dropping it AND never hearing the session finish
+   *  is, and that must not disappear along with the false "Needs you". */
+  private turnDropped: string | undefined;
+  /** Did the SSE subscription ever connect, and is it still open? Together
+   *  they answer "does the event bus still show a live session?" — the
+   *  question that decides whether a dropped prompt POST means anything. */
+  private sseConnected = false;
+  private sseClosed = false;
   /** Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
    *  byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
-   *  lands in R2 step 2.1). Unlike v1's HTTP-response-synthesized turn-end,
-   *  v2 takes its `turn.completed` from the wire `session.idle`. */
+   *  lands in R2 step 2.1). Both streams now take their turn end from the wire
+   *  `session.idle`; v1's used to be synthesized from the HTTP response. */
   private uiState: OpencodeUiMapperState = createOpencodeUiState();
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
@@ -148,8 +184,16 @@ class OpencodeSession implements AgentSession {
     this.exited = new Promise<void>((resolve) => {
       this.resolveExit = resolve;
     });
-    this.child.once('exit', () => this.resolveExit());
-    this.child.once('close', () => this.resolveExit());
+    // A server that is gone will never send `session.idle`, so the turn ends
+    // here rather than waiting for a signal that cannot arrive.
+    this.child.once('exit', () => {
+      this.finishTurn();
+      this.resolveExit();
+    });
+    this.child.once('close', () => {
+      this.finishTurn();
+      this.resolveExit();
+    });
 
     const stderrChunks: string[] = [];
     this.child.stderr.setEncoding('utf8');
@@ -242,6 +286,7 @@ class OpencodeSession implements AgentSession {
   end(): void {
     if (!this.serverOpen) return;
     this.serverOpen = false;
+    this.finishTurn();
     this.sse.abort();
     this.terminate();
   }
@@ -251,6 +296,7 @@ class OpencodeSession implements AgentSession {
     if (this.baseUrl && this.sessionId) {
       void this.http('POST', `/session/${this.sessionId}/abort`, undefined).catch(() => undefined);
     }
+    this.finishTurn();
     this.sse.abort();
     this.terminate();
   }
@@ -335,11 +381,37 @@ class OpencodeSession implements AgentSession {
     await this.prompt(first);
   }
 
+  /**
+   * Post one prompt and resolve when the TURN ends — not when the HTTP
+   * response does.
+   *
+   * Opencode holds `POST /session/:id/message` open for the whole turn, so the
+   * response is neither a reliable nor a timely boundary: it lands before the
+   * final text part (the bundled mock exists to pin that ordering), and when
+   * the transport drops it mid-turn the turn has not ended at all. Reading it
+   * as the boundary is what parked live runs under "Needs you" at exactly 5:00
+   * (#897). The end comes from the wire `session.idle`, the same signal v2 has
+   * always used, with `armTurnGrace()` as the bounded way out when no such
+   * signal is coming.
+   */
   private async prompt(text: string): Promise<void> {
     if (!this.sessionId) return;
+    // A prompt posted while a turn is still in flight supersedes it — the
+    // cockpit lets a user type into a running task (#986), so this is reachable.
+    // Close the old turn here or its `await turnEnded` never resolves, and with
+    // it the `sendMessage`/`bootstrap` call that is waiting on it.
+    this.finishTurn();
+    if (this.autoEndTimer) {
+      clearTimeout(this.autoEndTimer);
+      this.autoEndTimer = undefined;
+    }
     this.turnInFlight = true;
-    // v2 turn boundary — the prompt POST is the turn start (§7.1); the end
-    // comes from the SSE `session.idle`, never from the HTTP response below.
+    this.turnPostSettled = false;
+    this.turnDropped = undefined;
+    const turnEnded = new Promise<void>((resolve) => {
+      this.endTurn = resolve;
+    });
+    // v2 turn boundary — the prompt POST is the turn start (§7.1).
     this.emitUi(opencodeTurnStarted);
     const body: Record<string, unknown> = { parts: [{ type: 'text', text }] };
     // `spec.model` arrives already normalised to canonical `provider/model`
@@ -347,20 +419,92 @@ class OpencodeSession implements AgentSession {
     // one every runner uses — into opencode's `{ providerID, modelID }`.
     const id = parseModelIdentity(this.spec.model);
     if (id) body.model = { providerID: id.provider, modelID: id.model };
+    let failure: unknown;
     try {
       const res = await this.http('POST', `/session/${this.sessionId}/message`, body);
       this.absorbUsage(res);
-    } finally {
-      this.turnInFlight = false;
-      // A part that never saw `time.end` (abort, server quirk) still surfaces
-      // its prose before the turn boundary (run.ts reads markers there).
-      this.textCoalescer.flush();
-      this.emit({ type: 'turn-end' });
-      if (this.opts.autoEndAfterFirstTurn && this.serverOpen && !this.autoEndTimer) {
-        this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
-        this.autoEndTimer.unref?.();
+    } catch (err) {
+      // A transport drop on a session the event bus still shows alive is no
+      // evidence about the agent — swallow it and keep listening. Anything
+      // else (an HTTP status, a dead server) is a real failure and is raised
+      // to the caller exactly as before.
+      if (this.isDropWhileSessionLives(err)) {
+        this.turnDropped = err instanceof Error ? err.message : String(err);
+      } else {
+        failure = err;
       }
     }
+    this.turnPostSettled = true;
+    if (failure !== undefined) {
+      this.finishTurn();
+      throw failure;
+    }
+    this.armTurnGrace();
+    await turnEnded;
+  }
+
+  /**
+   * End the in-flight turn, once. The single place `turn-end` is emitted, so
+   * every exit — `session.idle`, the grace window, teardown, a server that
+   * exited — produces exactly one.
+   *
+   * `fromIdle` marks the one exit that is the session's own word for "the turn
+   * is over". Every other exit is cezar synthesizing a boundary, and if the
+   * POST also dropped during this turn that drop was never explained: report it
+   * then, so a server that really did die does not go quiet just because #897
+   * stopped a live one from being parked.
+   */
+  private finishTurn(fromIdle = false): void {
+    if (!this.turnInFlight) return;
+    this.turnInFlight = false;
+    if (this.turnGraceTimer) {
+      clearTimeout(this.turnGraceTimer);
+      this.turnGraceTimer = undefined;
+    }
+    const dropped = this.turnDropped;
+    this.turnDropped = undefined;
+    // A part that never saw `time.end` (abort, server quirk) still surfaces
+    // its prose before the turn boundary (run.ts reads markers there).
+    this.textCoalescer.flush();
+    if (dropped !== undefined && !fromIdle) {
+      this.emit({ type: 'note', message: `opencode: prompt failed: ${dropped}` });
+    }
+    this.emit({ type: 'turn-end' });
+    if (this.opts.autoEndAfterFirstTurn && this.serverOpen && !this.autoEndTimer) {
+      this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
+      this.autoEndTimer.unref?.();
+    }
+    const resolve = this.endTurn;
+    this.endTurn = undefined;
+    resolve?.();
+  }
+
+  /**
+   * Arm (or re-arm) the wait for a `session.idle` that may never come. Only
+   * meaningful once the POST has settled — before that the turn is plainly
+   * still running. With no event bus to listen to there is nothing to wait
+   * for, so the HTTP response stays the boundary, exactly as it was.
+   */
+  private armTurnGrace(): void {
+    if (!this.turnInFlight || !this.turnPostSettled) return;
+    if (this.turnGraceTimer) {
+      clearTimeout(this.turnGraceTimer);
+      this.turnGraceTimer = undefined;
+    }
+    if (!this.sseConnected || this.sseClosed) {
+      this.finishTurn();
+      return;
+    }
+    this.turnGraceTimer = setTimeout(() => this.finishTurn(), TURN_IDLE_GRACE_MS);
+    this.turnGraceTimer.unref?.();
+  }
+
+  /** Did the prompt POST drop on a session the event bus still shows alive? */
+  private isDropWhileSessionLives(err: unknown): boolean {
+    // An HTTP status is an answer from the server, not a lost connection.
+    if (!(err instanceof OpencodeTransportError)) return false;
+    if (!this.serverOpen || this.hasExited()) return false;
+    return this.sseConnected && !this.sseClosed;
   }
 
   // ---- SSE stream ---------------------------------------------------------
@@ -370,37 +514,16 @@ class OpencodeSession implements AgentSession {
    *  event emitted after this resolves can be missed. */
   private async consumeEvents(): Promise<void> {
     if (!this.baseUrl) return;
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}/event`, {
-        headers: { accept: 'text/event-stream' },
-        signal: this.sse.signal,
-      });
-    } catch {
-      return; // aborted or server gone — the turn response still carries results
-    }
-    if (!res.body) return;
-    void this.readEvents(res.body.getReader());
-  }
-
-  private async readEvents(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<void> {
-    const decoder = new TextDecoder();
-    let buffer = '';
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let sep: number;
-        while ((sep = buffer.indexOf('\n\n')) >= 0) {
-          const frame = buffer.slice(0, sep);
-          buffer = buffer.slice(sep + 2);
-          this.handleFrame(frame);
-        }
-      }
-    } catch {
-      // aborted — normal on end()/interrupt
-    }
+    this.sseConnected = await openOpencodeEventStream(`${this.baseUrl}/event`, {
+      signal: this.sse.signal,
+      onFrame: (frame) => this.handleFrame(frame),
+      // The bus is the turn's evidence of life; once it is gone a turn waiting
+      // on `session.idle` would wait forever.
+      onClose: () => {
+        this.sseClosed = true;
+        this.armTurnGrace();
+      },
+    });
   }
 
   private handleFrame(frame: string): void {
@@ -428,8 +551,15 @@ class OpencodeSession implements AgentSession {
       const role = stringField(info, 'role');
       if (mid && role) this.msgRole.set(mid, role);
       this.absorbUsage(info);
+      this.armTurnGrace();
     } else if (type === 'message.part.updated' || type === 'message.part.created') {
       this.handlePart((props.part as Record<string, unknown>) ?? props);
+      this.armTurnGrace();
+    } else if (type === 'session.idle') {
+      // The turn boundary (#897). A subtask session going idle closes only its
+      // own scope, exactly as the v2 mapper reads it.
+      const sid = stringField(props, 'sessionID');
+      if (sid === undefined || sid === this.sessionId) this.finishTurn(true);
     }
   }
 
@@ -498,25 +628,28 @@ class OpencodeSession implements AgentSession {
 
   // ---- http ---------------------------------------------------------------
 
+  /**
+   * One call to the server. Goes through `opencode-http.ts` rather than the
+   * global `fetch` so no undici `headersTimeout`/`bodyTimeout` default cuts the
+   * prompt long-poll at 300 s (#897) — see that module's header for why.
+   *
+   * Rejects with `OpencodeTransportError` when the connection failed and a
+   * plain `Error` when the server answered with a status; only the caller can
+   * tell whether the first of those means anything.
+   */
   private async http(
     method: string,
     path: string,
     body: unknown,
   ): Promise<Record<string, unknown>> {
     if (!this.baseUrl) throw new Error('opencode server not ready');
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      method,
-      headers: body !== undefined ? { 'content-type': 'application/json' } : {},
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => '');
-      throw new Error(`${method} ${path} → ${res.status} ${detail.slice(0, 200)}`);
+    const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
     }
-    const text = await res.text();
-    if (!text) return {};
+    if (!res.body) return {};
     try {
-      return JSON.parse(text) as Record<string, unknown>;
+      return JSON.parse(res.body) as Record<string, unknown>;
     } catch {
       return {};
     }

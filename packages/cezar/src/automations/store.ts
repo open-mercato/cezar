@@ -31,6 +31,8 @@ const RECEIPTS = 'automation-receipts.ndjson';
 const LOG = 'automation-log.ndjson';
 const POLL_LOCK = 'automation-poll.lock';
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
+/** How many times one `acquireLease` call may reclaim an abandoned lock and retry. */
+const LEASE_RECLAIM_ATTEMPTS = 1;
 
 type DefinitionsFile = ReturnType<typeof automationDefinitionsFileSchema.parse>;
 type StateFile = ReturnType<typeof automationStateFileSchema.parse>;
@@ -38,6 +40,8 @@ type StateFile = ReturnType<typeof automationStateFileSchema.parse>;
 export interface AutomationStoreOptions {
   warn?: (message: string) => void;
   now?: () => Date;
+  /** Liveness probe for the pid recorded in the poll lock. Injected by tests only. */
+  processAlive?: (pid: number) => boolean;
 }
 
 export class AutomationStore {
@@ -223,24 +227,44 @@ export class AutomationStore {
     }
   }
 
+  /**
+   * Take the project's poll lock, reclaiming one nobody is holding any more (#983). A cockpit
+   * killed mid-poll leaves the lock behind with its own pid inside; consulting that pid makes the
+   * crash case instant instead of a ten-minute, workspace-wide outage. `staleAfterMs` stays as the
+   * fallback for a lock whose pid we cannot read or trust.
+   */
   acquireLease(staleAfterMs = 10 * 60_000): AutomationLease | undefined {
     mkdirSync(this.dataDir, { recursive: true });
-    const path = join(this.dataDir, POLL_LOCK);
+    return this.tryAcquireLease(join(this.dataDir, POLL_LOCK), staleAfterMs, 0);
+  }
+
+  private tryAcquireLease(path: string, staleAfterMs: number, attempt: number): AutomationLease | undefined {
     try {
       const fd = openSync(path, 'wx', 0o600);
       writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: this.now().toISOString() }));
       return new AutomationLease(path, fd);
     } catch {
+      // One reclaim per call: if the lock is back a moment later, a live contender took it.
+      if (attempt >= LEASE_RECLAIM_ATTEMPTS) return undefined;
       try {
-        if (this.now().getTime() - statSync(path).mtimeMs > staleAfterMs) {
+        if (this.isLeaseAbandoned(path, staleAfterMs)) {
           unlinkSync(path);
-          return this.acquireLease(staleAfterMs);
+          return this.tryAcquireLease(path, staleAfterMs, attempt + 1);
         }
       } catch {
         // A contender removed the lock or the directory is read-only.
       }
       return undefined;
     }
+  }
+
+  /** Abandoned = the process that wrote the lock is gone, or nobody released it in `staleAfterMs`. */
+  private isLeaseAbandoned(path: string, staleAfterMs: number): boolean {
+    if (this.now().getTime() - statSync(path).mtimeMs > staleAfterMs) return true;
+    const pid = readLeasePid(path);
+    // An unreadable pid (an empty or half-written lock) leaves only the age rule above.
+    if (pid === undefined || pid === process.pid) return false;
+    return !(this.options.processAlive ?? isProcessAlive)(pid);
   }
 
   private load(): void {
@@ -355,6 +379,32 @@ export class AutomationStore {
     if (this.warned.has(key)) return;
     this.warned.add(key);
     this.options.warn?.(message);
+  }
+}
+
+/** The pid `acquireLease` wrote into the lock, or `undefined` for a lock we cannot read. */
+function readLeasePid(path: string): number | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pid?: unknown } | null;
+    const pid = parsed?.pid;
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Signal 0 probes a pid without touching the process. `EPERM` means it exists and belongs to
+ * somebody else — alive, as far as the lock is concerned. A recycled pid, or a pid from a
+ * namespace we do not share, reads as alive and degrades to the age rule: never worse than not
+ * looking at all.
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 

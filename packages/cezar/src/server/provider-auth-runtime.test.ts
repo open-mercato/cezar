@@ -30,6 +30,20 @@ const providerForExecutable = (executable: string): ProviderId => {
   throw new Error(`unexpected executable: ${executable}`);
 };
 
+/** A service whose Claude CLI agrees the credentials are gone, so the latch's self-check confirms
+ *  the rejection instead of clearing it. */
+function loggedOutClaudeProviderAuth(): ProviderAuthService {
+  return new ProviderAuthService({
+    platform: 'linux',
+    runCommand: vi.fn<RunProviderCommand>(async (executable) => (
+      executable === 'claude'
+        ? { stdout: '{"loggedIn":false}', stderr: '', exitCode: 1 }
+        : { stdout: CONNECTED_OUTPUT[providerForExecutable(executable)], stderr: '', exitCode: 0 }
+    )),
+    createAuthFailureId: () => 'auth-incident-1',
+  });
+}
+
 describe('watchProviderRuntimeAuthFailures', () => {
   let root: string;
   let store: RunStore;
@@ -256,6 +270,87 @@ describe('watchProviderRuntimeAuthFailures', () => {
     }
   });
 
+  describe('the latch checks itself against the CLI before it stands', () => {
+    const failing = (store_: RunStore, runner: ProviderId = 'claude') => {
+      const run = store_.createRun({
+        title: 'self-check',
+        workflow: 'quick-task',
+        task: 'work',
+        runner,
+        steps: [],
+      });
+      store_.appendEvent(run.id, {
+        type: 'error',
+        message: 'Failed to authenticate. API Error: 401 OAuth access token has been revoked.',
+      });
+      return run;
+    };
+
+    it('announces the recovery when the credentials were never gone', async () => {
+      const onProviderStatus = watch();
+      const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
+
+      failing(store);
+      await verifying.mock.results[0]!.value;
+
+      expect(onProviderStatus.mock.calls.map(([status]) => status)).toEqual([
+        expect.objectContaining({ provider: 'claude', status: 'disconnected' }),
+        { provider: 'claude', status: 'connected' },
+      ]);
+      await expect(providerAuth.status()).resolves.toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'connected' }),
+        ]),
+      });
+    });
+
+    it('leaves the latch standing when the CLI confirms the logout', async () => {
+      providerAuth = loggedOutClaudeProviderAuth();
+      const onProviderStatus = watch();
+      const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
+
+      failing(store);
+      await verifying.mock.results[0]!.value;
+
+      expect(onProviderStatus).toHaveBeenCalledTimes(1);
+      expect(onProviderStatus).toHaveBeenCalledWith(expect.objectContaining({
+        provider: 'claude',
+        status: 'disconnected',
+        authFailureId: 'auth-incident-1',
+      }));
+      await expect(providerAuth.status()).resolves.toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'disconnected' }),
+        ]),
+      });
+    });
+
+    it('self-checks once for a burst of auth-shaped lines under one latch', async () => {
+      watch();
+      const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
+      const run = failing(store);
+
+      // Same run, same incident: the second and third line describe the latch already standing.
+      for (const type of ['session.error', 'note']) {
+        store.appendEvent(run.id, { type, message: 'unauthorized: 401 token expired' });
+      }
+      await verifying.mock.results[0]!.value;
+
+      expect(verifying).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the task transcript record of what the runner reported', async () => {
+      watch();
+      const verifying = vi.spyOn(providerAuth, 'verifyRuntimeAuthFailure');
+      const run = failing(store);
+      await verifying.mock.results[0]!.value;
+
+      // Recovery repairs workspace status, not history: the task still shows why it stopped.
+      expect(store.readEvents(run.id).filter(({ type }) => type === 'provider-auth-required'))
+        .toEqual([expect.objectContaining({ provider: 'claude', authFailureId: 'auth-incident-1' })]);
+    });
+  });
+
   it('unsubscribes cleanly', () => {
     const onInvalidated = vi.fn();
     const unwatch = watchProviderRuntimeAuthFailures(store, providerAuth, onInvalidated);
@@ -305,6 +400,9 @@ describe('watchProviderRuntimeAuthFailures', () => {
       runner: 'claude',
       steps: [],
     });
+    // A CLI that agrees the credentials are gone, so the self-check leaves the latch standing and
+    // this case stays about its own subject: observation is attached BEFORE recovery runs.
+    providerAuth = loggedOutClaudeProviderAuth();
     const observer = new ProviderRuntimeAuthObserver(providerAuth, vi.fn());
 
     await recoverWithProviderRuntimeAuthObservation(

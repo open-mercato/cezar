@@ -50,6 +50,38 @@ describe('ProjectAutomationScheduler', () => {
     expect(store.state(definition.id)).toMatchObject({ consecutiveFailures: 1, backoffUntil: expect.any(String) });
   });
 
+  it('logs the poll it skipped when another process holds the lease, and re-arms one interval out (#983)', async () => {
+    const { store, definition } = await setup();
+    const held = store.acquireLease();
+    expect(held).toBeDefined();
+    const poll = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1 }));
+    const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll } as never }, launch: async () => ({ runId: 'unused' }) });
+    const before = Date.now();
+    await expect(scheduler.check(definition)).rejects.toThrow('lease is held by another process');
+    expect(poll).not.toHaveBeenCalled();
+    // The poll that did not happen is on the record, instead of ten silent minutes.
+    expect(store.logs({ automationId: definition.id })[0]).toMatchObject({
+      result: 'skipped',
+      reason: 'automation polling lease is held by another process',
+    });
+    const state = store.state(definition.id)!;
+    expect(Date.parse(state.nextCheckAt!)).toBeGreaterThanOrEqual(before + definition.intervalSeconds * 1_000);
+    // A busy lease is not the automation being broken: no failure counter, no exponential backoff.
+    expect(state.consecutiveFailures).toBeUndefined();
+    expect(state.backoffUntil).toBeUndefined();
+    held?.release();
+  });
+
+  it('logs a contended lease in preview mode without writing state', async () => {
+    const { store, definition } = await setup();
+    const held = store.acquireLease();
+    const scheduler = new ProjectAutomationScheduler({ projectId: 'p', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll: async () => ({ candidates: [], truncated: false, pages: 1 }) } as never }, launch: async () => ({ runId: 'unused' }) });
+    await expect(scheduler.check(definition, 'preview')).rejects.toThrow('lease is held by another process');
+    expect(store.logs({ automationId: definition.id })[0]).toMatchObject({ result: 'skipped' });
+    expect(store.state(definition.id)).toBeUndefined();
+    held?.release();
+  });
+
   it('starts provider discovery from the durable cursor overlap', async () => {
     const { store, definition } = await setup();
     store.setState(definition.id, (current) => ({
@@ -210,6 +242,77 @@ describe('WorkspaceAutomationScheduler — both kinds (spec 2026-09-14)', () => 
       await vi.advanceTimersByTimeAsync(61_000);
       expect(launchSchedule).toHaveBeenCalledTimes(1);
       expect(poll).not.toHaveBeenCalled();
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('WorkspaceAutomationScheduler — a rejected check never re-arms at zero delay (#983)', () => {
+  const T0 = Date.parse('2026-09-14T06:00:00Z');
+
+  /**
+   * `persist: false` models a cockpit that cannot write its automation state — a read-only home
+   * degrades rather than crashing (AGENTS.md). Nothing then moves `nextCheckAt` forward, so the
+   * workspace scheduler's own retry floor is the only thing standing between a rejected check and
+   * a `Math.max(0, past - now) === 0` spin.
+   */
+  async function project(id: string, dueAt: number, options: { persist?: boolean } = {}) {
+    const dir = await mkdtemp(join(tmpdir(), `cezar-scheduler-retry-${id}-`)); dirs.push(dir);
+    const store = AutomationStore.open(dir);
+    const definition = store.create({ name: 'Issues', enabled: true, events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'Review' } }, `${id}-issues`) as GithubAutomationDefinition;
+    store.setState(definition.id, (current) => ({ ...current, nextCheckAt: new Date(dueAt).toISOString() }));
+    if (options.persist === false) store.setState = () => { throw new Error('read-only automation state'); };
+    return { store, definition };
+  }
+
+  it('pushes a rejected check out by its interval instead of spinning, then tries it again', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(T0);
+      const poll = vi.fn(async () => { throw new Error('rate limited'); });
+      const { store } = await project('a', T0 - 60_000, { persist: false });
+      const scheduler = new WorkspaceAutomationScheduler({
+        coordinator: { refresh: async () => undefined, enabledProjectIds: () => ['a'], store: () => store } as never,
+        handle: () => ({ projectId: 'a', timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll } as never }, launch: async () => ({ runId: 'unused' }) }),
+        now: () => T0,
+      });
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(poll).toHaveBeenCalledTimes(1);
+      // Before the fix this re-armed at 0ms and burned CPU until the lock aged out.
+      await vi.advanceTimersByTimeAsync(299_000);
+      expect(poll).toHaveBeenCalledTimes(1);
+      // A backoff, not a mute: once the interval has passed the check runs again.
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(poll).toHaveBeenCalledTimes(2);
+      scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('gives the workspace slot to another project while the failing one waits out its floor', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(T0);
+      const failing = vi.fn(async () => { throw new Error('rate limited'); });
+      const healthy = vi.fn(async () => ({ candidates: [], truncated: false, pages: 1 }));
+      const stores: Record<string, AutomationStore> = {
+        a: (await project('a', T0 - 60_000, { persist: false })).store,
+        b: (await project('b', T0 + 30_000)).store,
+      };
+      const scheduler = new WorkspaceAutomationScheduler({
+        coordinator: { refresh: async () => undefined, enabledProjectIds: () => ['a', 'b'], store: (id: string) => stores[id] } as never,
+        handle: (projectId, store) => ({ projectId, timeZone: 'UTC', store, github: { owner: 'acme', repo: 'demo', poller: { poll: projectId === 'a' ? failing : healthy } as never }, launch: async () => ({ runId: 'unused' }) }),
+        now: () => T0,
+      });
+      await scheduler.start();
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(failing).toHaveBeenCalledTimes(1);
+      // Before the fix project 'a' owned the workspace's only slot and 'b' never got a turn.
+      expect(healthy).toHaveBeenCalledTimes(1);
       scheduler.stop();
     } finally {
       vi.useRealTimers();
