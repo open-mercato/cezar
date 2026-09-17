@@ -86,13 +86,13 @@ This run adds the missing exit: one bounded self-check per incident, in the obse
 
 ### Phase 1: The self-check in the service
 
-- [ ] 1.1 Add `verifyRuntimeAuthFailure` with its in-flight guard, cooldown, and cache fold
-- [ ] 1.2 Cover the self-check in `provider-auth.test.ts`
+- [x] 1.1 Add `verifyRuntimeAuthFailure` with its in-flight guard, cooldown, and cache fold — 48c58eb0
+- [x] 1.2 Cover the self-check in `provider-auth.test.ts` — 48c58eb0
 
 ### Phase 2: Trigger it where the latch is raised
 
-- [ ] 2.1 Kick the self-check off on the latch edge and fan recovery out as `provider-status`
-- [ ] 2.2 Cover the observer behavior in `provider-auth-runtime.test.ts`
+- [x] 2.1 Kick the self-check off on the latch edge and fan recovery out as `provider-status` — 0c043b72
+- [x] 2.2 Cover the observer behavior in `provider-auth-runtime.test.ts` — 0c043b72
 
 ### Phase 3: Verification and handoff
 
