@@ -369,7 +369,7 @@ const automationEditableSchema = z
     enabled: z.boolean().optional(),
     /** Omitted on create = `github`; omitted on update = the stored kind (spec 2026-09-14). */
     kind: z.enum(['github', 'schedule']).optional(),
-    events: z.array(automationEventSchema).min(1).max(4).optional(),
+    events: z.array(automationEventSchema).min(1).max(7).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
     schedule: automationScheduleSchema.optional(),
@@ -3393,6 +3393,19 @@ export function createApp(deps: ServerDeps) {
     return runs;
   };
 
+  /** An account named on save is checked like `POST /runs` checks one: the user just picked it, so
+   *  a stale id is a 400. At launch a since-deleted id falls back to the default, as any stored
+   *  reference does. */
+  const automationAccountIssue = async (
+    root: string,
+    task: { runner?: ProviderId; agentProfile?: string },
+  ): Promise<string | null> => {
+    if (task.agentProfile === undefined) return null;
+    const runner = task.runner ?? (await loadConfig(root)).defaultRunner;
+    const account = await resolveWorkspaceProfile(runner, task.agentProfile);
+    return 'error' in account ? account.error : null;
+  };
+
   const requireAutomations = async (c: Context, next: Next) => {
     if (!capabilities().automations) return c.json({ error: AUTOMATIONS_OFF }, 409);
     await next();
@@ -3414,10 +3427,12 @@ export function createApp(deps: ServerDeps) {
       // Annotated, so the two branches are ONE shape rather than a union of two: the fallback
       // literal always carries `reason`, the cached answer only sometimes does, and the route
       // type is what `contract/src/automations.ts` has to describe.
-      const availability: ForgeAvailability = forge?.detectCached() ?? {
-        available: false,
-        reason: forge ? 'GitHub availability is still being checked' : 'No GitHub remote is configured',
-      };
+      // A cold cache (first read after boot) waits for the probe instead of answering "still being
+      // checked": nothing re-reads this page when the background probe lands, so that answer
+      // would lock the editor's GitHub trigger off. Only `/api/health` has a latency budget.
+      const availability: ForgeAvailability = forge
+        ? forge.detectCached() ?? (await forge.detect())
+        : { available: false, reason: 'No GitHub remote is configured' };
       const definitions = automationStore.list();
       const logsById = new Map(definitions.map((definition) => [definition.id, automationStore.logs({ automationId: definition.id, limit: 100 })] as const));
       const timeZone = localTimeZone();
@@ -3478,6 +3493,8 @@ export function createApp(deps: ServerDeps) {
       if (kindIssue) return c.json({ error: kindIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
+      const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
+      if (accountIssue) return c.json({ error: accountIssue }, 400);
       const { enable, ...input } = parsed.data;
       try {
         const automation = automationStore.create({ ...input, kind, enabled: enable === true });
@@ -3516,6 +3533,8 @@ export function createApp(deps: ServerDeps) {
       if (kindIssue) return c.json({ error: kindIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
+      const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
+      if (accountIssue) return c.json({ error: accountIssue }, 400);
       const { expectedRevision, ...input } = parsed.data;
       try {
         const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, kind, enabled: input.enabled ?? false });
@@ -3526,6 +3545,9 @@ export function createApp(deps: ServerDeps) {
             automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
           }
         }
+        // Switched on from the editor: the same current-time baseline the Enable button sets, or
+        // the first poll would launch the whole lookback window's backlog.
+        if (automation.enabled && !current.enabled) armAutomation(automationStore, automation);
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation });

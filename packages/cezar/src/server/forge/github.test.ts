@@ -568,6 +568,25 @@ describe('detectGithubCached', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(execFileMock).toHaveBeenCalledTimes(2);
   });
+
+  it('keeps one project\'s cached availability when a different project is probed afterward', async () => {
+    ghOk();
+    const firstRoot = '/repo/detect-multi-a'; // distinct roots, isolated from the other cases here
+    const otherRoot = '/repo/detect-multi-b';
+
+    expect(detectGithubCached(firstRoot)).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectGithubCached(firstRoot)).toEqual({ available: true });
+
+    // A second project is probed later — this used to overwrite the single shared slot and make
+    // the first project's next read come back null again, disabling its "When GitHub changes"
+    // toggle even though its GitHub was never unreachable.
+    expect(detectGithubCached(otherRoot)).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(detectGithubCached(otherRoot)).toEqual({ available: true });
+
+    expect(detectGithubCached(firstRoot)).toEqual({ available: true });
+  });
 });
 
 // ---- timeline events (#525) -------------------------------------------------

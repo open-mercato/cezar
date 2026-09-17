@@ -3,8 +3,11 @@ import {
   buildSearchQuery,
   GithubPoller,
   matchesFilters,
+  onePerPullRequest,
   reconstructLabelEvents,
+  reconstructReviewEvents,
 } from './github-poller.ts';
+import type { GithubCandidate } from './github-poller.ts';
 import type { GithubAutomationDefinition } from './types.ts';
 
 const definition: GithubAutomationDefinition = {
@@ -117,5 +120,91 @@ describe('GithubPoller', () => {
     const rows = reconstructLabelEvents('acme', 'demo', item, [{ id: 9, event: 'unlabeled', created_at: '2026-07-26T02:00:00.000Z', label: { name: 'triage' } }]);
     expect(rows[0]).toMatchObject({ event: 'issue.unlabeled', changedLabel: 'triage', labels: expect.arrayContaining(['triage']) });
     expect(rows[0]?.eventId).toContain('issue.unlabeled:9');
+  });
+
+  it('reconstructs a submitted review as pull_request.reviewed, carrying the reviewer', () => {
+    const rows = reconstructReviewEvents('acme', 'demo', item, [
+      { id: 1, event: 'reviewed', submitted_at: '2026-07-26T02:00:00.000Z', user: { login: 'carol' } },
+    ]);
+    expect(rows).toEqual([expect.objectContaining({ event: 'pull_request.reviewed', reviewer: 'carol' })]);
+  });
+
+  it('emits only review_requested for a first-time request', () => {
+    const rows = reconstructReviewEvents('acme', 'demo', item, [
+      { id: 1, event: 'review_requested', created_at: '2026-07-26T02:00:00.000Z', requested_reviewer: { login: 'carol' } },
+    ]);
+    expect(rows.map((row) => row.event)).toEqual(['pull_request.review_requested']);
+  });
+
+  it('also emits rereview_requested when the requested reviewer already reviewed the PR', () => {
+    const rows = reconstructReviewEvents('acme', 'demo', item, [
+      { id: 1, event: 'reviewed', submitted_at: '2026-07-26T01:00:00.000Z', user: { login: 'carol' } },
+      { id: 2, event: 'review_requested', created_at: '2026-07-26T02:00:00.000Z', requested_reviewer: { login: 'carol' } },
+    ]);
+    expect(rows.map((row) => row.event)).toEqual([
+      'pull_request.reviewed',
+      'pull_request.review_requested',
+      'pull_request.rereview_requested',
+    ]);
+    expect(rows[1]?.reviewer).toBe('carol');
+    expect(rows[2]?.reviewer).toBe('carol');
+  });
+
+  it('launches a re-request once, as rereview_requested, when both request events are selected', async () => {
+    const pullRequest = { ...item, node_id: 'PR_one', number: 8, html_url: 'https://github.com/acme/demo/pull/8', pull_request: {} };
+    const run = vi.fn(async (_executable: string, args: readonly string[]) => {
+      if (args.some((arg) => arg.includes('/timeline'))) {
+        return JSON.stringify([
+          { id: 1, event: 'review_requested', created_at: '2026-07-26T01:00:00.000Z', requested_reviewer: { login: 'carol' } },
+          { id: 2, event: 'reviewed', submitted_at: '2026-07-26T02:00:00.000Z', user: { login: 'carol' } },
+          { id: 3, event: 'review_requested', created_at: '2026-07-26T03:00:00.000Z', requested_reviewer: { login: 'carol' } },
+          { id: 4, event: 'commented', created_at: '2026-07-26T03:30:00.000Z' },
+        ]);
+      }
+      return JSON.stringify({ items: [pullRequest] });
+    });
+    const result = await new GithubPoller({ run }).poll('acme', 'demo', {
+      ...definition,
+      events: ['pull_request.review_requested', 'pull_request.rereview_requested'],
+    });
+    // The first request is superseded too: one launch per PR per poll, the latest request.
+    expect(result.candidates.map((candidate) => [candidate.event, candidate.tieBreaker])).toEqual([
+      ['pull_request.rereview_requested', '3:rereview'],
+    ]);
+  });
+
+  it('collapses several reviewers requested on one PR into one launch, per event family', () => {
+    const base = { repo: 'acme/demo', nodeId: 'PR', title: 'x', url: item.html_url, author: 'alice', assignees: [], labels: [] };
+    const row = (event: GithubCandidate['event'], number: number, tieBreaker: string, reviewer?: string): GithubCandidate =>
+      ({ ...base, eventId: `${number}:${event}:${tieBreaker}`, event, number, timestamp: `2026-07-26T0${tieBreaker}:00:00.000Z`, tieBreaker, reviewer });
+    const kept = onePerPullRequest([
+      row('pull_request.review_requested', 8, '1', 'a'),
+      row('pull_request.review_requested', 8, '2', 'b'),
+      row('pull_request.reviewed', 8, '3', 'a'),
+      row('pull_request.review_requested', 9, '4', 'c'),
+      row('issue.opened', 10, '5'),
+      row('pull_request.rereview_requested', 8, '6', 'a'),
+    ]);
+    expect(kept.map((candidate) => [candidate.number, candidate.event, candidate.tieBreaker])).toEqual([
+      [8, 'pull_request.reviewed', '3'],
+      [9, 'pull_request.review_requested', '4'],
+      [10, 'issue.opened', '5'],
+      [8, 'pull_request.rereview_requested', '6'],
+    ]);
+  });
+
+  it('searches only open PRs for the review events', async () => {
+    const run = vi.fn(async (_executable: string, args: readonly string[]) =>
+      args.some((arg) => arg.includes('/timeline')) ? '[]' : JSON.stringify({ items: [] }));
+    await new GithubPoller({ run }).poll('acme', 'demo', { ...definition, events: ['pull_request.reviewed', 'issue.opened'] });
+    const queries = run.mock.calls.map(([, args]) => args.find((arg) => arg.startsWith('q=')) ?? '');
+    expect(queries.find((query) => query.includes('updated:'))).toContain('is:pr is:open');
+    expect(queries.find((query) => query.includes('created:'))).not.toContain('is:open');
+  });
+
+  it('matches candidates by reviewer, case-insensitively', () => {
+    const candidate = { eventId: 'e', event: 'pull_request.reviewed' as const, timestamp: item.created_at, tieBreaker: 'I', repo: 'acme/demo', nodeId: 'I', number: 7, title: 'x', url: item.html_url, author: 'alice', assignees: [], labels: [], reviewer: 'Carol' };
+    expect(matchesFilters(candidate, { ...definition, filters: { ...definition.filters, reviewers: ['carol'] } })).toBe(true);
+    expect(matchesFilters(candidate, { ...definition, filters: { ...definition.filters, reviewers: ['dave'] } })).toBe(false);
   });
 });
