@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { isLoopbackHost, isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import {
+  agentAccountsEnabled,
+  isLoopbackHost,
+  isLoopbackHostHeader,
+  normalizeHostname,
+  resolveCapabilities,
+} from './capabilities.ts';
 
 /**
  * `resolveCapabilities` takes its env as a parameter, so these drive it
@@ -135,6 +141,20 @@ describe('resolveCapabilities — localHandoff', () => {
 
   it('is off for a non-loopback bind host', () => {
     expect(resolveCapabilities({}, '0.0.0.0').localHandoff).toBe(false);
+  });
+});
+
+describe('agentAccountsEnabled', () => {
+  it('is available locally without configuration', () => {
+    expect(agentAccountsEnabled({})).toBe(true);
+  });
+
+  it('is off remotely unless the operator opts in with exact 1', () => {
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1' })).toBe(false);
+    expect(agentAccountsEnabled({}, '0.0.0.0')).toBe(false);
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1', CEZ_REMOTE_AGENT_ACCOUNTS: 'true' })).toBe(false);
+    expect(agentAccountsEnabled({ CEZ_REMOTE: '1', CEZ_REMOTE_AGENT_ACCOUNTS: '1' })).toBe(true);
+    expect(agentAccountsEnabled({ CEZ_REMOTE_AGENT_ACCOUNTS: '1' }, '0.0.0.0')).toBe(true);
   });
 });
 
