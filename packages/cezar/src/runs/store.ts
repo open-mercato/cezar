@@ -1483,25 +1483,47 @@ export class RunStore extends EventEmitter {
    * passed through `reconcileLoadedRun` (and so not read via `readRunIndexFromDisk`, which looks
    * like the right helper and is not): demoting a live-looking row to `interrupted` is correct when
    * opening a store and wrong here, where that row may be a run still executing in the process that
-   * owns it. Parsing is otherwise `open()`'s, down to treating an unparseable index as empty rather
-   * than as a reason to lose our own runs.
+   * owns it. An index that cannot be read contributes nothing rather than costing us our own runs,
+   * exactly as in `open()`.
    */
   private mergeWithIndexOnDisk(indexPath: string): RunRecord[] {
     const mine = this.listRuns();
-    if (!existsSync(indexPath)) return mine;
-    let onDisk: RunRecord[];
-    try {
-      const parsed = z
-        .array(runRecordSchema)
-        .safeParse(JSON.parse(readFileSync(indexPath, 'utf8')));
-      if (!parsed.success) return mine;
-      onDisk = parsed.data;
-    } catch {
-      return mine;
-    }
-    const foreign = onDisk.filter((run) => !this.runs.has(run.id) && !this.forgotten.has(run.id));
+    const foreign = this.foreignRecordsOnDisk(indexPath);
     if (foreign.length === 0) return mine;
     // Same ordering rule `listRuns` applies, so the file's shape is unchanged.
     return [...mine, ...foreign].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /**
+   * The records in `runs.json` this process knows nothing about — the ones a save has to carry
+   * over rather than overwrite.
+   *
+   * Validated one record at a time, and only for the ids we are actually adopting, which is the
+   * difference between this and `open()`'s whole-array parse. `saveNow` runs on a 300 ms debounce
+   * for as long as an agent is streaming, so this runs several times a second on the main thread of
+   * the process also serving the cockpit's SSE, while retention lets the index reach
+   * `MAX_RUNS_KEPT + MAX_ARCHIVED_KEPT` records — and in the ordinary single-process case every one
+   * of them is ours, so a `z.array(...)` parse would spend all of its time validating records the
+   * next line throws away. The id check is cheap and rejects nearly everything; zod sees what is
+   * left, which is normally nothing. Per-record also degrades better than `open()` can afford to:
+   * one unreadable row costs only itself instead of every foreign record in the file.
+   */
+  private foreignRecordsOnDisk(indexPath: string): RunRecord[] {
+    if (!existsSync(indexPath)) return [];
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(indexPath, 'utf8'));
+    } catch {
+      return []; // not JSON — an index we cannot read contributes nothing, and costs us nothing
+    }
+    if (!Array.isArray(raw)) return [];
+    const foreign: RunRecord[] = [];
+    for (const entry of raw) {
+      const id: unknown = (entry as { id?: unknown } | null)?.id;
+      if (typeof id !== 'string' || this.runs.has(id) || this.forgotten.has(id)) continue;
+      const parsed = runRecordSchema.safeParse(entry);
+      if (parsed.success) foreign.push(parsed.data);
+    }
+    return foreign;
   }
 }

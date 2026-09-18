@@ -2041,6 +2041,61 @@ describe('RunStore — a save never drops another process’s runs (#1)', () => 
     expect(idsOnDisk()).toContain(mine);
   });
 
+  it('keeps an adopted run across later saves, not only the save that adopted it', () => {
+    // `saveNow` skips re-reading an index it recognizes as its own last write, so what it
+    // remembered has to include the records it adopted — otherwise the second save drops the
+    // foreign run again and the bug comes back one tick later.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, id: 'foreign-1' }]),
+      'utf8',
+    );
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+
+    store.updateRun(mine, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+  });
+
+  it('picks up a write that lands after our own save', () => {
+    // The other half of that cache: a signature that no longer matches must force the re-read.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    const onDisk = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[];
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([...onDisk, { ...LEGACY_RUN, id: 'arrived-later' }]),
+      'utf8',
+    );
+
+    store.updateRun(mine, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'arrived-later']));
+  });
+
+  it('one unreadable row on disk costs only itself', () => {
+    // Records are validated one at a time here, unlike `open()`'s whole-array parse, so a single
+    // hand-mangled row does not take the other process's good records down with it.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ id: 'garbage', title: 42 }, { ...LEGACY_RUN, id: 'foreign-1' }]),
+      'utf8',
+    );
+    store.flush();
+
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+    expect(idsOnDisk()).not.toContain('garbage');
+  });
+
   it('a deleted run stays deleted — the merge never resurrects it', () => {
     // The one way this merge could be worse than the bug it fixes: the index we re-read is
     // the one WE wrote a moment ago, so a deletion would come straight back as a record
