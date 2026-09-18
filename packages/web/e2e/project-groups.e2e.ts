@@ -155,6 +155,12 @@ function gotoGrouped(path: string): void {
   )
 }
 
+/** The chevron. Disclosing a group and SELECTING a project are two controls since #1018 — this
+ *  is the one that owns `aria-expanded`, and the one that must never navigate. */
+const groupDisclosure = (projectId: string) =>
+  `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-disclosure"]`
+/** The project name — a link into that project's own scope, which is what makes it the active
+ *  project everything else (New task above all) then follows. */
 const groupHeader = (projectId: string) =>
   `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-header"]`
 const groupBody = (projectId: string) =>
@@ -185,12 +191,14 @@ const renderedOrder = (): string[] => String(browser.evaluate(renderedOrderJs)).
  * a test never has to assume which state a previous test left behind.
  */
 function setGroupExpanded(projectId: string, expanded: boolean): void {
-  const header = groupHeader(projectId)
-  const state = `document.querySelector('${header}')?.getAttribute('aria-expanded')`
+  // The chevron, never the name: since #1018 clicking the name navigates into the project, so
+  // driving disclosure through it would silently change the active project under every caller.
+  const chevron = groupDisclosure(projectId)
+  const state = `document.querySelector('${chevron}')?.getAttribute('aria-expanded')`
   browser.waitForFunction(`${state} !== null && ${state} !== undefined`)
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (browser.evaluate(state) === String(expanded)) break
-    browser.click(header)
+    browser.click(chevron)
     try {
       browser.waitForFunction(`${state} === '${expanded}'`)
       break
@@ -230,7 +238,7 @@ describe('the grouped multi-project sidebar', () => {
     ])
 
     // The project you are looking at is open, the rest are shut (the no-stored-state default).
-    expect(browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-group-header"]'))
+    expect(browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-group-disclosure"]'))
       .map((el) => el.getAttribute('aria-expanded'))`)).toEqual(['true', 'false', 'false'])
     expect(browser.count('[data-slot="project-group-body"]')).toBe(1)
 
@@ -259,11 +267,17 @@ describe('the grouped multi-project sidebar', () => {
     expect(hrefs(ALPHA.id)).toEqual(expectedNavHrefs(ALPHA.id))
 
     // `/git` is a flat, project-agnostic route, so exactly one Git row may claim the URL — the
-    // one in the scoped group. Alpha's Git link points elsewhere and must stay unmarked.
+    // one in the scoped group. Alpha's Git link points elsewhere and must stay unmarked. The
+    // selected project's own name row is `aria-current="true"` rather than `page` (#1018): it
+    // says which project you are standing IN, not which page you are on.
     expect(
       browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-groups"] a[aria-current="page"]'))
         .map((a) => new URL(a.href).pathname)`)
     ).toEqual([scoped(bootProject, '/git')])
+    expect(
+      browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-groups"] a[aria-current="true"]'))
+        .map((a) => new URL(a.href).pathname)`)
+    ).toEqual([scoped(bootProject, '/')])
 
     // Each group's door into its own tasks pane.
     expect(
@@ -271,6 +285,52 @@ describe('the grouped multi-project sidebar', () => {
         `new URL(document.querySelector('${groupBody(ALPHA.id)} [data-slot="project-group-more"]').href).pathname`
       )
     ).toBe(scoped(ALPHA.id, '/'))
+  })
+
+  /**
+   * #1018 — clicking a project makes it the project you are working in.
+   *
+   * Before this, the header only disclosed: you could open another project's group, see its
+   * tasks, and still have the New task CTA start a run in the project you came from, because
+   * "active" is the URL's `/p/<id>` prefix and nothing in the sidebar changed it. The two jobs
+   * are separate controls now, and this spec drives both in a real browser: the chevron peeks,
+   * the name moves you.
+   */
+  it('selects the project you click, and leaves the chevron peeking', ({ skip }) => {
+    if (singleProject) skip()
+    gotoGrouped(scoped(bootProject, '/'))
+
+    // The chevron PEEKS: Alpha's task list opens with the boot project still active.
+    setGroupExpanded(ALPHA.id, true)
+    expect(browser.evaluate(`location.pathname`)).toBe(scoped(bootProject, '/'))
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="project-group"][data-project="${bootProject}"]')
+        .hasAttribute('data-active')`)
+    ).toBe(true)
+
+    // The name MOVES you — into Alpha's scope, which is what every scoped affordance follows.
+    browser.click(groupHeader(ALPHA.id))
+    browser.waitForFunction(`location.pathname === '${scoped(ALPHA.id, '/')}'`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="project-group"][data-project="${ALPHA.id}"]').hasAttribute('data-active')`
+    )
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="project-group"][data-project="${bootProject}"]')
+        .hasAttribute('data-active')`)
+    ).toBe(false)
+    // Selected, and visibly so — the marker `bg-muted` alone could not carry, because every row
+    // in this sidebar is `hover:bg-muted`.
+    expect(browser.count(`[data-slot="project-group"][data-project="${ALPHA.id}"] [data-slot="project-group-selected"]`)).toBe(1)
+
+    // …and the New task CTA now starts a task in the project the user picked. This is the bug as
+    // reported: the composer used to open on whichever project the sidebar had left active.
+    expect(
+      browser.evaluate(
+        `new URL(document.querySelector('[data-slot="sidebar"] a[href$="/new"]').href).pathname`
+      )
+    ).toBe(scoped(ALPHA.id, '/new'))
+
+    browser.screenshot(`${artifactsDir}/sidebar-project-selected.png`)
   })
 
   it('persists a collapse in THIS browser, so a reload keeps it and the workspace file does not', async ({
@@ -293,7 +353,7 @@ describe('the grouped multi-project sidebar', () => {
     gotoGrouped(scoped(bootProject, '/'))
     expect(browser.count(groupBody(bootProject))).toBe(0)
     expect(
-      browser.evaluate(`document.querySelector('${groupHeader(bootProject)}').getAttribute('aria-expanded')`)
+      browser.evaluate(`document.querySelector('${groupDisclosure(bootProject)}').getAttribute('aria-expanded')`)
     ).toBe('false')
 
     // And back: the same gesture re-opens it, so the stored `true` is a toggle and not a trap.
