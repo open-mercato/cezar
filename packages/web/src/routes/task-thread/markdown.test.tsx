@@ -246,6 +246,28 @@ describe('Markdown', () => {
       )
     })
 
+    it('does not offer to open local filesystem paths as browser links', () => {
+      const localPath = '/Users/maciejgren/Documents/AITL/git-konwencje-aitl.md'
+      const { container } = renderLink(`[lesson](${localPath})`)
+      const rendered = container.querySelector('[data-streamdown="link"]') as HTMLElement
+
+      fireEvent.click(rendered)
+
+      expect(document.querySelector('[data-slot="link-safety-dialog"]')).toBeNull()
+      expect(openMock).not.toHaveBeenCalled()
+      expect(rendered.hasAttribute('href')).toBe(false)
+      expect(rendered.textContent).toBe('lesson')
+    })
+
+    it('keeps non-http image sources visible while filtering only link destinations', () => {
+      const { container } = render(<Markdown>{'![Screenshot](/home/me/qa/shot.png)'}</Markdown>)
+      const image = container.querySelector('img')
+
+      expect(image).not.toBeNull()
+      expect(image?.getAttribute('alt')).toBe('Screenshot')
+      expect(image?.getAttribute('src')).toBe('/home/me/qa/shot.png')
+    })
+
     it('cancelling closes the dialog and follows nothing', async () => {
       const { container } = renderLink()
       fireEvent.click(container.querySelector('[data-streamdown="link"]') as HTMLElement)
