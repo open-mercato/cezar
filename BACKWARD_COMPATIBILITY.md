@@ -277,6 +277,13 @@ instruction rather than silently.
   the composers offer a `create-automation` template. With the flag off, none of the three appear
   and the listed catalog is byte-identical to before.
 
+## Reading width default (#976)
+
+The workspace migration cursor is now 2. Migration 002 is the compatibility
+path for the reading-width default: it removes the legacy workspace-owned
+appearance.width value narrow once, while preserving accent, density and
+unknown ui-state keys. It does not touch per-repo files.
+
 
 ## Automations — default-on, scheduled triggers, `automationTrigger` (spec 2026-09-14-automations-redesign)
 
