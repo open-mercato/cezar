@@ -1464,7 +1464,7 @@ export class RunStore extends EventEmitter {
   }
 
   /**
-   * What `saveNow` writes: our own records, plus every record on disk we have never seen (#1).
+   * What `saveNow` writes: our own records, plus every record on disk we have never seen.
    *
    * `serve` and headless `run` each open their own store over the same data directory — a shared
    * index is the whole intent — but `open()` reads `runs.json` exactly once and nothing re-reads

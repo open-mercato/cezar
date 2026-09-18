@@ -1970,7 +1970,7 @@ describe('RunStore — pinned tasks (#935)', () => {
   });
 });
 
-describe('RunStore — a save never drops another process’s runs (#1)', () => {
+describe('RunStore — a save never drops another process’s runs', () => {
   let dataDir: string;
 
   beforeEach(() => {
