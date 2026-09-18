@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { AgentRunSpec } from '../core/agent-runner.ts';
+import type { AgentEvent, AgentRunResult, AgentRunSpec } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { RunManager } from './run.ts';
 import { DEFAULT_ALLOWED_TOOLS, type WorkflowDef } from './types.ts';
@@ -22,10 +22,22 @@ vi.mock('../core/runner-factory.ts', () => ({
   createRunner: () => ({
     backend: 'claude' as const,
     run: async () => ({ text: '', toolCalls: [], tokensUsed: 0 }),
-    startSession: (spec: AgentRunSpec) => {
+    startSession: (spec: AgentRunSpec, onEvent?: (event: AgentEvent) => void) => {
       captured.specs.push(spec);
+      // A real backend mints the session id on the wire and the engine persists it on the step;
+      // `continueRun` refuses a run whose steps carry none ('no agent session to resume'), so a
+      // stub that never emits one cannot be driven `startRun` → Continue. Emitted on a macrotask
+      // so the engine has finished wiring `state.session` before the event lands, and before
+      // `result` resolves so the step is never marked done without its id. `onEvent` is optional
+      // on `AgentRunner.startSession`, so the stub keeps it optional too.
+      const sessionId = `sess-${captured.specs.length}`;
       return {
-        result: Promise.resolve({ text: 'ok', toolCalls: [], tokensUsed: 0 }),
+        result: new Promise<AgentRunResult>((resolve) => {
+          setTimeout(() => {
+            onEvent?.({ type: 'session', sessionId });
+            resolve({ text: 'ok', toolCalls: [], tokensUsed: 0 });
+          }, 0);
+        }),
         sendMessage: () => false,
         end: () => {},
         interrupt: () => {},
@@ -148,6 +160,47 @@ describe('a resumed session keeps its workflow step tools', () => {
       .poll(() => store.getRun(runId)?.status, { timeout: 15_000 })
       .toSatisfy((status) => ['done', 'review', 'failed', 'cancelled'].includes(String(status)));
   }
+
+  it('the opening spawn and the Continue spawn of one real run agree on the tool policy', async () => {
+    // The invariant #877 asked for, stated as the issue states it: a step narrows Bash to
+    // `['git']`, a Continue follows, and the SECOND spec must carry the same allowlist as the
+    // FIRST. Every other case in this file synthesizes a terminal record with
+    // `store.createRun`/`updateRun` and asserts the lone continuation spec against a
+    // module-level constant — which pins how `runContinuation` resolves the policy, but not
+    // that the two spawns AGREE. The two call sites live ~800 lines apart (`runAgentStep` and
+    // `runContinuation`, the two `ActiveRun` construction sites AGENTS.md warns about), so
+    // "both sides read the same policy" is its own assertion: a change to how the OPENING
+    // spawn resolves tools would leave every constant-based case above green while reopening
+    // the hole — the allowlist holding for one turn and silently widening to unrestricted
+    // `Bash` after it (`buildAllowedTools`, `claude-cli-runner.ts`).
+    const NARROWED: WorkflowDef = {
+      name: 'narrowed-task',
+      source: 'file',
+      steps: [{ id: 'work', name: 'Work', prompt: '{{task}}', allowedTools: TOOLS, bashAllowlist: ['git'] }],
+    };
+
+    // Both ends pin `claude` explicitly. An absent `defaultRunner` falls through to the
+    // MACHINE-wide `~/.cezar/` agent defaults (`withMachineDefaults`, `config.ts`), so leaving it
+    // implicit would make this assertion depend on the config of whoever runs the suite.
+    const record = manager!.startRun(NARROWED, { task: 'do the thing', worktree: false, runner: 'claude' });
+    const opening = await specAt(0);
+    await settled(record.id);
+
+    expect(manager!.continueRun(record.id, { text: 'keep going', runner: 'claude' })).toEqual({ ok: true });
+    const resumed = await specAt(1);
+
+    // Anchor the first spawn, then compare the second to it rather than to a constant, so the
+    // assertion fails if EITHER side drifts.
+    expect(opening.bashAllowlist).toEqual(['git']);
+    expect(resumed.resume).toBe(true);
+    expect(resumed.bashAllowlist).toEqual(opening.bashAllowlist);
+    expect(resumed.allowedTools).toEqual(opening.allowedTools);
+
+    await expect
+      .poll(() => store.getRun(record.id)?.steps.find((s) => s.id === 'continue-1')?.status, { timeout: 15_000 })
+      .toSatisfy((status) => ['done', 'failed', 'cancelled'].includes(String(status)));
+    await settled(record.id);
+  });
 
   it("Continue rebuilds the session with the OWNING step's allowedTools and bashAllowlist, verbatim", async () => {
     // The resumed session belongs to `implement`, NOT the definition's last agent step —
