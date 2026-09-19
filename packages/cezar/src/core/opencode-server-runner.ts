@@ -40,6 +40,19 @@ const SERVER_START_TIMEOUT_MS = 30_000;
 export const KILL_GRACE_MS = 4_000;
 
 /**
+ * Inline opencode config cezar serves the child with when the run does not
+ * bring its own. Headless runs can answer no approval prompt, and an
+ * unanswered `ask` stalls the turn indefinitely: `external_directory` and
+ * `doom_loop` default to `ask`, so a worktree agent touching cezar's own
+ * state dirs outside its cwd (handoff files, run records) hung every time it
+ * did. `serve` has no `--auto` flag, so the allow rides in on
+ * `OPENCODE_CONFIG_CONTENT` — inline config that overrides files without
+ * touching them. A per-run `OPENCODE_CONFIG_CONTENT` still wins when present.
+ */
+export const OPENCODE_AUTO_APPROVE_CONFIG = '{"permission":"allow"}';
+const OPENCODE_CONFIG_CONTENT_ENV = 'OPENCODE_CONFIG_CONTENT';
+
+/**
  * How long a turn waits for a `session.idle` that never comes, once the prompt
  * POST has settled and the event bus has gone quiet.
  *
@@ -170,7 +183,7 @@ class OpencodeSession implements AgentSession {
     try {
       this.child = nodeSpawn(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
         cwd: spec.cwd,
-        env: buildChildEnv({ backend: 'opencode', extraEnv: spec.env }),
+        env: buildChildEnv({ backend: 'opencode', extraEnv: withAutoApprove(spec.env) }),
       });
     } catch (err) {
       throw wrapSpawnError(err, bin);
@@ -675,6 +688,14 @@ class OpencodeSession implements AgentSession {
 }
 
 // ---- helpers --------------------------------------------------------------
+
+/** Default the inline opencode config to auto-approve; an explicit per-run
+ *  value always wins, an empty string counts as absent. */
+export function withAutoApprove(env: Record<string, string> | undefined): Record<string, string> {
+  if (env?.[OPENCODE_CONFIG_CONTENT_ENV]) return env;
+  const { [OPENCODE_CONFIG_CONTENT_ENV]: _dropped, ...rest } = env ?? {};
+  return { ...rest, [OPENCODE_CONFIG_CONTENT_ENV]: OPENCODE_AUTO_APPROVE_CONFIG };
+}
 
 interface OpencodeEvent {
   type?: string;
