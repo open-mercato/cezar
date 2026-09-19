@@ -20,6 +20,10 @@ function opts(over: Partial<RunOptions> = {}): RunOptions {
     now: '2026-07-16T00:00:00.000Z',
     ui: createAutoUi(),
     runner: noRunner,
+    // Stubbed, never dropped: these installs must not care what the machine
+    // running the suite happens to have bound on 4321, but the check itself
+    // still runs on every one of them.
+    portProbe: async () => true,
     ...over,
   };
 }
@@ -61,6 +65,42 @@ describe('engine', () => {
     expect(res.state.installed).toBe(true);
     expect(a.run).toHaveBeenCalledOnce();
     expect(loadServerState().steps.a?.status).toBe('done');
+  });
+
+  // #913: `primaryPort` is settled before anything renders it, and everything
+  // downstream — the nginx `proxy_pass`, the unit's `--port` — is that one
+  // number. A port held by someone else therefore means a front end pointed at
+  // THEIR process, which is how a second unix user ended up inside the first
+  // user's cockpit. Refuse instead of installing a working-looking cross-wire.
+  it('refuses a first install whose port is held by a process it does not own', async () => {
+    const a = fakeStep('a');
+    await expect(runInstall(strategyOf([a]), opts({ portProbe: async () => false }))).rejects.toThrow(
+      /port 4321 is already in use .*--port/s,
+    );
+    expect(a.run).not.toHaveBeenCalled(); // nothing was rendered, nothing written
+    expect(loadServerState().installed).toBe(false);
+  });
+
+  it('does not mistake this instance\'s OWN running service for a port conflict', async () => {
+    const a = fakeStep('a');
+    expect((await runInstall(strategyOf([a]), opts())).status).toBe('complete');
+    // The service is now up on 4321 — a resume/--reinstall must still work.
+    const again = fakeStep('a');
+    const res = await runInstall(strategyOf([again]), opts({ portProbe: async () => false, reinstall: true }));
+    expect(res.status).toBe('complete');
+  });
+
+  it('lets the platform\'s own preflight refuse first — a wrong OS is not reported as a port clash', async () => {
+    const strategy = strategyOf([fakeStep('a')]);
+    strategy.preflight = async () => {
+      throw new Error('this platform needs Ubuntu/Debian');
+    };
+    await expect(runInstall(strategy, opts({ portProbe: async () => false }))).rejects.toThrow(/Ubuntu/);
+  });
+
+  it('a dry-run preview asserts nothing about the host\'s ports', async () => {
+    const res = await runInstall(strategyOf([fakeStep('a')]), opts({ dryRun: true, portProbe: async () => false }));
+    expect(res.status).toBe('complete');
   });
 
   it('resume skips already-done steps', async () => {

@@ -536,11 +536,21 @@ async function serverCommand(
 
   // Port: an explicit --port always wins; a brand-new named instance otherwise
   // auto-picks the next free loopback port so it can't collide with the first.
+  // ALLOCATE, then announce: the number printed here is the number that reaches
+  // `state.primaryPort`, the vhost's `proxy_pass` and the unit's `--port`.
+  // Announcing a default the allocation could still invalidate is what made the
+  // wizard say "loopback port 4321" while the service ran on 4322 (#913).
   let port = flags.port;
   if (mode === 'install' && instance !== DEFAULT_SERVER_INSTANCE && port === undefined) {
     const known = listServerInstances().some((i) => i.instance === instance);
     if (!known) {
-      port = nextFreeInstancePort();
+      try {
+        port = await nextFreeInstancePort();
+      } catch (err) {
+        console.error(err instanceof Error ? err.message : String(err));
+        process.exitCode = 1;
+        return;
+      }
       console.log(`\n  New instance "${instance}" (${domain}) → loopback port ${port} (override with --port).`);
     }
   }
