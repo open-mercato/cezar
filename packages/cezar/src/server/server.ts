@@ -5999,15 +5999,30 @@ export function createApp(deps: ServerDeps) {
       projects = [];
     }
     const bootId = await resolveBootProject(projects);
+    // Boot context is NEVER in `contexts` (seeded from deps). Match by registry id AND the
+    // reserved alias — a mismatch here used to make Tower report an empty swarm while
+    // `GET /runs` (which resolves scope differently) still showed live tasks.
+    const isBootProject = (id: string) =>
+      id === bootId || id === bootContext.id || id === 'default';
     const sources: Parameters<typeof buildTowerSnapshot>[0]['runs'] = [];
-    for (const project of projects) {
-      if (project.status === 'missing') continue;
-      const owned = project.id === bootId ? bootContext : contexts.peek(project.id);
-      const recent = owned ? owned.store.listRuns() : [];
-      for (const run of recent) {
+    const seen = new Set<string>();
+    const pushRuns = (
+      projectId: string,
+      projectName: string,
+      runs: Array<{
+        id: string;
+        title?: string;
+        status: string;
+        costUsd?: number;
+        createdAt: string;
+      }>,
+    ) => {
+      for (const run of runs) {
+        if (seen.has(run.id)) continue;
+        seen.add(run.id);
         sources.push({
-          projectId: project.id,
-          projectName: project.name || project.id,
+          projectId,
+          projectName,
           runId: run.id,
           title: run.title || run.id,
           status: run.status,
@@ -6015,6 +6030,17 @@ export function createApp(deps: ServerDeps) {
           createdAt: run.createdAt,
         });
       }
+    };
+    // Always seed from the live boot store first — this is the process holding the agents.
+    pushRuns(bootId, projects.find((p) => isBootProject(p.id))?.name || bootId, bootContext.store.listRuns());
+    for (const project of projects) {
+      if (project.status === 'missing') continue;
+      if (isBootProject(project.id)) continue; // already pushed from bootContext
+      const owned = contexts.peek(project.id);
+      const recent = owned
+        ? owned.store.listRuns()
+        : readRunIndexFromDisk(join(project.root, '.ai/cezar'));
+      pushRuns(project.id, project.name || project.id, recent);
     }
     return buildTowerSnapshot({
       governor,
@@ -6023,7 +6049,7 @@ export function createApp(deps: ServerDeps) {
       apply,
       extraParallel,
       pauseRun: (projectId, runId, reason) => {
-        const ctx = projectId === bootId ? bootContext : contexts.peek(projectId);
+        const ctx = isBootProject(projectId) ? bootContext : contexts.peek(projectId);
         if (!ctx) return false;
         return ctx.manager.pauseForGovernor(runId, reason);
       },
