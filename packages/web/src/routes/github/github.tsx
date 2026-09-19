@@ -1034,7 +1034,7 @@ function GithubMergeBox({ number }: { number: number }) {
               <MergeRequirementIcon state={conflictState} />
               <span>Conflicts: {state.mergeable === 'conflicting' ? 'present' : state.mergeable === 'mergeable' ? 'none' : 'unknown'}</span>
             </li>
-            {state.checks.length === 0 ? <li>No checks configured</li> : state.checks.map((check) => (
+            {state.checks.length === 0 && state.checksTier !== 'none' ? <li>No checks configured</li> : state.checks.map((check) => (
               <li key={check.name} className="flex items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-2">
                   <MergeRequirementIcon state={check.state} />
@@ -1043,7 +1043,25 @@ function GithubMergeBox({ number }: { number: number }) {
                 {check.url && isHttpUrl(check.url) ? <a href={check.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline">details</a> : null}
               </li>
             ))}
-            {state.blockers.map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
+            {/* What the token could NOT read (#969). A fine-grained PAT cannot expand
+                `statusCheckRollup` into CheckRun contexts — there is no permission to grant — so
+                the panel says which tier it is showing instead of passing a degraded read off as
+                the whole truth, or (tier `none`) an empty list off as "no CI". */}
+            {state.checksTier === 'aggregate' || state.checksTier === 'none' ? (
+              <li data-slot="gh-merge-checks-degraded" className="flex items-start gap-2">
+                <MergeRequirementIcon state="unknown" />
+                <span className="min-w-0">
+                  {state.checksTier === 'aggregate'
+                    ? 'Only the rolled-up check state is readable here — per-check detail is not.'
+                    : 'This token cannot read the checks on this pull request.'}
+                  {state.checksReason ? <span className="mt-0.5 block break-words text-soft-foreground">{state.checksReason}</span> : null}
+                </span>
+              </li>
+            ) : null}
+            {/* The row above already said `checks-unknown`, with the reason — don't say it twice. */}
+            {state.blockers
+              .filter((blocker) => !(blocker.code === 'checks-unknown' && state.checksTier === 'none'))
+              .map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
           </ul>
           {state.canOverride ? (
             <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
