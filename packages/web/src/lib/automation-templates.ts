@@ -66,4 +66,13 @@ export const BUILTIN_AUTOMATION_TEMPLATES: readonly AutomationTemplateDraft[] = 
     schedule: { type: 'daily', hour: 6, minute: 0 },
     prompt: 'Run npm audit; for each high/critical advisory open a task with the upgrade path.',
   },
+  {
+    name: 'Self-Heal cycle',
+    when: 'Every day at 03:00',
+    kind: 'schedule',
+    schedule: { type: 'daily', hour: 3, minute: 0 },
+    prompt:
+      'Run the cezar-self-heal skill: scout open bugs / failing checks in this repo, fan out fix candidates with cez task create, verify each with the successCriteria shell (engine truth, not narrative), review winners, open a draft PR. Never merge. Cap spend and watch Control Tower.',
+    dispatch: { maxSubtasks: 8, reviewChild: true },
+  },
 ]

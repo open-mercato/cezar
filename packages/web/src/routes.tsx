@@ -33,6 +33,7 @@ import {
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 import { GlobalTasksRoute } from './routes/global-tasks'
+import { ControlTowerRoute } from './routes/control-tower'
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
  *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
@@ -277,6 +278,7 @@ const PAGE_TITLE_ROUTES = [
   // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
   // but it goes through the same table, because the browser title is one mechanism.
   { pattern: '/tasks', pageLabel: 'All tasks' },
+  { pattern: '/tower', pageLabel: 'Control Tower' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
   { pattern: '/git/*', pageLabel: 'Git' },
@@ -316,6 +318,7 @@ export const AppRoutes = memo(function AppRoutes() {
     <Routes>
       <Route path="/p/:projectId" element={<ProjectScopeRoute />}>
         <Route index element={<TasksOverviewRoute />} />
+        <Route path="tower" element={<ControlTowerRoute />} />
         <Route path="new" element={<NewTaskProjectRoute />} />
 
         <Route

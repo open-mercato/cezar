@@ -89,6 +89,7 @@ export function ProjectGroups({
   bootProjectId,
   inboxAvailable = false,
   automationsAvailable = false,
+  autopilotAvailable = false,
   inboxCount = null,
   skillsUpdateAvailable = false,
 }: {
@@ -100,6 +101,8 @@ export function ProjectGroups({
   /** `capabilities.automations` (#801) — workspace-wide, unlike the per-project forge gate:
    *  the opt-in is one env var on the one server that serves every group. */
   automationsAvailable?: boolean
+  /** `capabilities.autopilot` — Control Tower, workspace-wide. */
+  autopilotAvailable?: boolean
   inboxCount?: number | null
   skillsUpdateAvailable?: boolean
 }) {
@@ -215,6 +218,7 @@ export function ProjectGroups({
       now={now}
       inboxAvailable={inboxAvailable}
       automationsAvailable={automationsAvailable}
+      autopilotAvailable={autopilotAvailable}
       inboxCount={inboxCount}
       skillsUpdateAvailable={skillsUpdateAvailable}
       showTokens={metricVisibility.tokens}
@@ -320,6 +324,7 @@ function ProjectGroup({
   now,
   inboxAvailable,
   automationsAvailable,
+  autopilotAvailable,
   inboxCount,
   skillsUpdateAvailable,
   showTokens,
@@ -342,6 +347,7 @@ function ProjectGroup({
   now: number
   inboxAvailable: boolean
   automationsAvailable: boolean
+  autopilotAvailable: boolean
   inboxCount: number | null
   skillsUpdateAvailable: boolean
   showTokens: boolean
@@ -558,6 +564,7 @@ function ProjectGroup({
               forge: project.forge === 'github',
               inbox: inboxAvailable,
               automations: automationsAvailable,
+              autopilot: autopilotAvailable,
             }).map((item) => {
               // Only the active group can own the current URL: the flat route map is
               // project-agnostic, so `/git` lights Git in exactly one project — the scoped one.

@@ -2,6 +2,7 @@ import {
   GitBranchIcon,
   InboxIcon,
   ListChecksIcon,
+  RadarIcon,
   SettingsIcon,
   SparklesIcon,
   WorkflowIcon,
@@ -33,6 +34,8 @@ export type NavItem = {
    *  needs no GitHub remote, so a repo without one still gets the page (with the poll kind
    *  disabled there). See `visibleNavItems`. */
   automations?: boolean
+  /** Autopilot-gated (Control Tower): on by default; `CEZ_AUTOPILOT=0` hides it. */
+  autopilot?: boolean
 }
 
 /** The sidebar nav from the spec's "App shell & navigation" section, in mockup order.
@@ -43,6 +46,7 @@ export type NavItem = {
  */
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Tasks', icon: ListChecksIcon, match: ['/', '/tasks', '/compare'], badge: 'tasks-unread' },
+  { to: '/tower', label: 'Tower', icon: RadarIcon, match: ['/tower'], autopilot: true },
   { to: '/inbox', label: 'Inbox', icon: InboxIcon, match: ['/inbox'], badge: 'inbox-count', inbox: true },
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
@@ -60,32 +64,25 @@ export type NavAvailability = {
   inbox?: boolean
   /** `capabilities.automations` — automations, default-on (spec 2026-09-14), `CEZ_AUTOMATIONS=0` off. */
   automations?: boolean
+  /** `capabilities.autopilot` — Control Tower + Self-Heal, default-on. */
+  autopilot?: boolean
 }
 
 /**
  * The nav items a surface should actually render: a gated item drops out — nav item AND tab —
- * unless the health payload says its feature is there. The forge-gated GitHub item needs the
- * forge driver (spec §"GitHub tab (forge tab)"); the Inbox item needs `capabilities.followups`,
- * which is off unless `CEZ_FOLLOWUPS=1` (#471); the Automations item needs
- * `capabilities.automations` alone (spec 2026-09-14: on by default, and a schedule needs no
- * forge — the page itself disables the poll kind when there is no GitHub remote).
- *
- * Gates are ANDed per item, never ORed, which is what would let one item carry two of them.
- *
- * Everything defaults to absent while health is still unknown, on the shell's honesty rule: the
- * nav must not claim a tab exists before the server has said so (the Tools menu's forge note
- * explains the GitHub absence). Both the sidebar and the ⌘K palette's Views group render through
- * this, so the two can never disagree.
+ * unless the health payload says its feature is there.
  */
 export function visibleNavItems({
   forge = false,
   inbox = false,
   automations = false,
+  autopilot = false,
 }: NavAvailability = {}): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
-    && (item.automations ? automations : true))
+    && (item.automations ? automations : true)
+    && (item.autopilot ? autopilot : true))
 }
 
 /** Does `pathname` sit inside the area rooted at `prefix`?
@@ -101,10 +98,6 @@ function inArea(pathname: string, prefix: string): boolean {
 /**
  * The `to` of the nav item that owns `pathname`, or null when no item does (e.g. `/new`,
  * which is a full-screen surface with no nav home).
- *
- * Longest matching prefix wins, which is what disambiguates nested areas: the `/` root only
- * matches the exact path (see `inArea`), so every deeper route falls to its own item —
- * `/settings/agents` lights Settings, `/git/commits` lights Git.
  */
 export function activeNavPath(pathname: string): string | null {
   let best: { to: string; length: number } | null = null

@@ -42,6 +42,11 @@
  * `/runs/:id/{dispatch,report}` routes answer 409 and no task's system prompt mentions
  * dispatching; the `dispatch` field on existing run records survives the flag being off.
  *
+ * `autopilot` (spec 2026-09-19-autopilot-heal-tower): Self-Heal Loop + Control Tower is **on by
+ * default** and `CEZ_AUTOPILOT=0` turns it off. Brakes are null-by-default governor caps (no
+ * spend/RSS/stuck enforcement until the operator sets one) plus the existing review gate (never
+ * auto-merge). Off, Tower nav and `/workspace/autopilot/*` + `/heal*` routes are gone.
+ *
  * Usage presentation: token counts and monetary cost stay visible by default.
  * `CEZ_HIDE_TOKEN_USAGE=1` and `CEZ_HIDE_COST=1` hide them independently;
  * legacy `CEZ_HIDE_TOKEN_METRICS=1` remains the master hide-all switch. None
@@ -155,7 +160,10 @@ export function isLoopbackHostHeader(host: string | null | undefined): boolean {
  *
  *  `dispatch` is boot-time for a third reason: the dispatch prompt is composed into a run's system
  *  prompt when the run STARTS, so flipping the flag mid-flight would open (or close) the routes
- *  while every run already in the tree kept its prompt. Set it and restart. */
+ *  while every run already in the tree kept its prompt. Set it and restart.
+ *
+ *  `autopilot` is boot-time for the same reason as automations: the Tower nav and heal skill hang
+ *  off `/health`, and a mid-flight flip would leave open SSE clients with a stale capability map. */
 export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHost?: string): Capabilities {
   const hideAllUsage = env.CEZ_HIDE_TOKEN_METRICS === '1';
   const tokenUsageMetrics = !hideAllUsage && env.CEZ_HIDE_TOKEN_USAGE !== '1';
@@ -168,6 +176,7 @@ export function resolveCapabilities(env: NodeJS.ProcessEnv = process.env, bindHo
     singleProject: env.CEZ_SINGLE_PROJECT === '1',
     automations: env.CEZ_AUTOMATIONS !== '0',
     dispatch: env.CEZ_DISPATCH !== '0',
+    autopilot: env.CEZ_AUTOPILOT !== '0',
     tokenMetrics: tokenUsageMetrics && costMetrics,
     tokenUsageMetrics,
     costMetrics,

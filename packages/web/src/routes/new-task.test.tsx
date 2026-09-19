@@ -64,7 +64,7 @@ const HEALTH: HealthResponse = {
     { name: 'git', available: true, version: '2.43.0' },
   ],
   forge: null,
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: true, singleProject: false, automations: false, dispatch: false, autopilot: true },
 }
 
 const HEALTH_MULTI: HealthResponse = {
@@ -1277,7 +1277,7 @@ describe('submit', () => {
   // #471 — the composer must not offer a switch the server overrides anyway.
   const inboxOffHealth: HealthResponse = {
     ...HEALTH,
-    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
+    capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false, autopilot: true },
   }
   const followupsToggle = () =>
     document.querySelector('[data-slot="generate-followups-toggle"]')
@@ -2285,7 +2285,7 @@ describe('the composer runner pill carries the account', () => {
 describe('the Dispatch toggle', () => {
   const HEALTH_DISPATCH: HealthResponse = {
     ...HEALTH,
-    capabilities: { ...HEALTH.capabilities, dispatch: true },
+    capabilities: { ...HEALTH.capabilities, dispatch: true, autopilot: true },
   }
   const dispatchToggle = () =>
     document.querySelector('[data-slot="dispatch-toggle"]') as HTMLButtonElement | null

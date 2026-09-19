@@ -48,6 +48,21 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+import {
+  createHealCycleInputSchema,
+  evaluateTowerInputSchema,
+  patchHealCycleInputSchema,
+  setAutopilotGovernorInputSchema,
+} from '@open-mercato/cezar-contract';
+import { loadAutopilotGovernor, writeAutopilotGovernor } from '../autopilot/config.ts';
+import {
+  createHealCycle,
+  deleteHealCycle,
+  listHealCycles,
+  patchHealCycle,
+  readHealCycle,
+} from '../autopilot/heal.ts';
+import { buildTowerSnapshot } from '../autopilot/tower.ts';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
@@ -477,6 +492,10 @@ const AUTOMATIONS_OFF = 'Automations are off — this cockpit was started with C
 /** 409 body for every dispatch route while task dispatch is off (spec 2026-09-10-dispatch). */
 const DISPATCH_OFF =
   'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.';
+
+/** 409 body while Autopilot is off (spec 2026-09-19-autopilot-heal-tower). */
+const AUTOPILOT_OFF =
+  'Autopilot is off — this cockpit was started with CEZ_AUTOPILOT=0';
 
 // ---- variant-compare response shapes (spec 010) ----------------------------
 // Named and exported so `api-types.test.ts` can drift-guard the cockpit's
@@ -3746,6 +3765,41 @@ export function createApp(deps: ServerDeps) {
       return c.json({ ok: true as const });
     });
 
+  const requireAutopilot = async (c: Context, next: Next) => {
+    if (!capabilities().autopilot) return c.json({ error: AUTOPILOT_OFF }, 409);
+    await next();
+  };
+
+  // ---- chained family: Self-Heal cycle ledger (project-scoped) ----
+  const healRoutes = new Hono<ProjectApiEnv>()
+    .use('/heal', requireAutopilot)
+    .use('/heal/*', requireAutopilot)
+    .get('/heal', (c) => {
+      const { dataDir } = c.get('project');
+      return c.json({ cycles: listHealCycles(dataDir) });
+    })
+    .post('/heal', jsonZodValidator(createHealCycleInputSchema), (c) => {
+      const { dataDir } = c.get('project');
+      const cycle = createHealCycle(dataDir, c.req.valid('json'));
+      return c.json(cycle, 201);
+    })
+    .get('/heal/:id', async (c) => {
+      const { dataDir } = c.get('project');
+      const cycle = await readHealCycle(dataDir, c.req.param('id'));
+      return cycle ? c.json(cycle) : c.json({ error: 'not found' }, 404);
+    })
+    .patch('/heal/:id', jsonZodValidator(patchHealCycleInputSchema), async (c) => {
+      const { dataDir } = c.get('project');
+      const cycle = await patchHealCycle(dataDir, c.req.param('id'), c.req.valid('json'));
+      return cycle ? c.json(cycle) : c.json({ error: 'not found' }, 404);
+    })
+    .delete('/heal/:id', (c) => {
+      const { dataDir } = c.get('project');
+      return deleteHealCycle(dataDir, c.req.param('id'))
+        ? c.json({ ok: true as const })
+        : c.json({ error: 'not found' }, 404);
+    });
+
   // ---- runs ----------------------------------------------------------------
 
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
@@ -5745,6 +5799,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', planRoutes)
     .route('/', automationsRoutes)
     .route('/', dispatchRoutes)
+    .route('/', healRoutes)
     .route('/', runsRoutes)
     .route('/', draftRoutes)
     .route('/', groupsRoutes)
@@ -5908,6 +5963,73 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     });
 
+  // ---- chained family: Control Tower (workspace-level) ----
+  const autopilotRoutes = new Hono()
+    .use('/workspace/autopilot', requireAutopilot)
+    .use('/workspace/autopilot/*', requireAutopilot)
+    .get('/workspace/autopilot/governor', async (c) => c.json(await loadAutopilotGovernor()))
+    .put('/workspace/autopilot/governor', jsonZodValidator(setAutopilotGovernorInputSchema), async (c) => {
+      const written = await writeAutopilotGovernor(c.req.valid('json'));
+      return c.json(written);
+    })
+    .get('/workspace/autopilot/tower', async (c) => {
+      const snapshot = await assembleTowerSnapshot(false, 4);
+      return c.json(snapshot);
+    })
+    .post(
+      '/workspace/autopilot/tower',
+      jsonZodValidator(evaluateTowerInputSchema, { absent: ({}) }),
+      async (c) => {
+        const body = c.req.valid('json');
+        const snapshot = await assembleTowerSnapshot(body.apply === true, body.extraParallel ?? 4);
+        return c.json(snapshot);
+      },
+    );
+
+  async function assembleTowerSnapshot(apply: boolean, extraParallel: number) {
+    const governor = await loadAutopilotGovernor();
+    const config = await loadWorkspaceConfig();
+    let projects: ProjectListEntry[] = [];
+    try {
+      const selector = capabilities().singleProject
+        ? { projectId: await resolveBootProject() }
+        : undefined;
+      projects = await listProjects(selector);
+    } catch {
+      projects = [];
+    }
+    const bootId = await resolveBootProject(projects);
+    const sources: Parameters<typeof buildTowerSnapshot>[0]['runs'] = [];
+    for (const project of projects) {
+      if (project.status === 'missing') continue;
+      const owned = project.id === bootId ? bootContext : contexts.peek(project.id);
+      const recent = owned ? owned.store.listRuns() : [];
+      for (const run of recent) {
+        sources.push({
+          projectId: project.id,
+          projectName: project.name || project.id,
+          runId: run.id,
+          title: run.title || run.id,
+          status: run.status,
+          ...(typeof run.costUsd === 'number' ? { costUsd: run.costUsd } : {}),
+          createdAt: run.createdAt,
+        });
+      }
+    }
+    return buildTowerSnapshot({
+      governor,
+      maxParallel: config.resources.maxParallel,
+      runs: sources,
+      apply,
+      extraParallel,
+      pauseRun: (projectId, runId, reason) => {
+        const ctx = projectId === bootId ? bootContext : contexts.peek(projectId);
+        if (!ctx) return false;
+        return ctx.manager.pauseForGovernor(runId, reason);
+      },
+    });
+  }
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
@@ -5921,6 +6043,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
+    .route('/', autopilotRoutes)
     .route('/', workspaceEventsRoutes);
 
   // ---- mount ---------------------------------------------------------------

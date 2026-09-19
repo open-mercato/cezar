@@ -3156,6 +3156,28 @@ export class RunManager {
   }
 
   /**
+   * Autopilot Control Tower pause — same settlement as the memory-limit guard:
+   * close the live session, suppress autonomous continue, leave the run resumable
+   * via Continue. Used by `/workspace/autopilot/tower` when `apply: true`.
+   */
+  pauseForGovernor(runId: string, reason: string): boolean {
+    const state = this.active.get(runId);
+    if (!state?.session?.open || state.cancelled) return false;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      message: `⚠ Control Tower paused this task — ${reason}. Resume with Continue when ready.`,
+    });
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `paused — control tower (${reason})`,
+    });
+    state.autonomous = false;
+    this.clearIdleTimer(state);
+    state.session.end();
+    return true;
+  }
+
+  /**
    * "Continue" (spec 003): reopen a finished run's claude session in-process
    * (`claude --resume <sessionId>`) as a new synthetic step. The session then
    * behaves exactly like an interactive step: `waiting` after each turn,

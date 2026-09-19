@@ -56,6 +56,14 @@ export const capabilitiesSchema = z.object({
    */
   dispatch: z.boolean(),
   /**
+   * `true` means Autopilot (Self-Heal Loop + Control Tower) is on — the default;
+   * `CEZ_AUTOPILOT=0` turns it off (spec `.ai/specs/2026-09-19-autopilot-heal-tower.md`).
+   * Off: `/workspace/autopilot/*` and `/heal*` routes answer 409, the Tower nav item is gone,
+   * and the built-in self-heal skill is absent. Governor knobs default to null (no enforcement)
+   * even when the capability is on, so zero-config stays safe.
+   */
+  autopilot: z.boolean(),
+  /**
    * `false` means `CEZ_HIDE_TOKEN_METRICS=1` asks the browser to omit token counts and monetary
    * cost (#481). The telemetry itself still rides in run/event payloads — this is presentation
    * only.

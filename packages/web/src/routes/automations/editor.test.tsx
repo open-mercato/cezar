@@ -22,7 +22,7 @@ const health = (dispatch = true) => ({
   repoRoot: '/repo',
   repo: { root: '/repo', branch: 'main' },
   forge: null,
-  capabilities: { localHandoff: true, followups: true, singleProject: false, automations: true, dispatch, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true },
+  capabilities: { localHandoff: true, followups: true, singleProject: false, automations: true, dispatch, autopilot: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true },
   defaultRunner: 'claude',
   checks: [{ name: 'claude', available: true }],
   projects: [],

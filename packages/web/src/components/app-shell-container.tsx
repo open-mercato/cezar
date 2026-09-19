@@ -63,6 +63,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // GitHub automations are opt-in too (#801) — same honesty rule: without the server's word for
   // it the nav must not offer a tab whose every request would 409.
   const automationsAvailable = health.data?.capabilities.automations === true
+  // Autopilot / Control Tower — default-on; only an exact CEZ_AUTOPILOT=0 clears it.
+  const autopilotAvailable = health.data?.capabilities.autopilot !== false
   const todos = useTodos(inboxAvailable)
   // One query in the shell feeds every rendering of the active project's navigation (desktop,
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
@@ -129,6 +131,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           // the other projects in the workspace.
           inboxAvailable={inboxAvailable}
           automationsAvailable={automationsAvailable}
+          autopilotAvailable={autopilotAvailable}
           inboxCount={todos.data?.length ?? null}
           skillsUpdateAvailable={skillsUpdateAvailable}
         />
@@ -137,6 +140,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
       projects,
       inboxAvailable,
       automationsAvailable,
+      autopilotAvailable,
       todos.data?.length,
       skillsUpdateAvailable,
     ],
@@ -168,6 +172,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         inboxAvailable={inboxAvailable}
         // Hidden unless health reports the opt-in automations capability (#801).
         automationsAvailable={automationsAvailable}
+        autopilotAvailable={autopilotAvailable}
         banner={banner}
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={taskQuickList}

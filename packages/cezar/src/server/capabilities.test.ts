@@ -161,6 +161,7 @@ describe('resolveCapabilities — followups (#471)', () => {
       singleProject: false,
       automations: true,
       dispatch: true,
+      autopilot: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
@@ -237,6 +238,31 @@ describe('resolveCapabilities — dispatch (spec 2026-09-10-dispatch)', () => {
     expect(resolveCapabilities({})).toMatchObject({
       dispatch: true,
       automations: true,
+      followups: false,
+      singleProject: false,
+    });
+  });
+});
+
+describe('resolveCapabilities — autopilot (spec 2026-09-19-autopilot-heal-tower)', () => {
+  it('is ON by default', () => {
+    expect(resolveCapabilities({}).autopilot).toBe(true);
+  });
+
+  it('is off only for an exact CEZ_AUTOPILOT=0', () => {
+    expect(resolveCapabilities({ CEZ_AUTOPILOT: '0' }).autopilot).toBe(false);
+  });
+
+  it.each(['1', 'true', 'yes', '', 'on', 'off', 'false'])(
+    'stays on for CEZ_AUTOPILOT=%j — only an exact "0" turns it off',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_AUTOPILOT: value }).autopilot).toBe(true);
+    },
+  );
+
+  it('does not turn on any other opt-in capability', () => {
+    expect(resolveCapabilities({})).toMatchObject({
+      autopilot: true,
       followups: false,
       singleProject: false,
     });
