@@ -42,6 +42,17 @@ The created tier always wins. Both fields are additive and optional — old
   into `pullRequestUrl` only when the same event also matches
   `CREATED_PR_RE`. Scanning v2 sources fixes creation detection for backends
   that report `gh pr create` through tool items.
+  - **Amendment — where the claim may come from.** Matching `CREATED_PR_RE`
+    against *everything* an event carried made tool OUTPUT able to claim
+    authorship: a task that printed a log, a stored transcript or a test
+    fixture containing someone else's `gh pr create` line adopted their PR —
+    in another repository — and, because the first adoption freezes the tier,
+    never looked at the one it really opened. The claim is now read from
+    `eventCreationClaimFragments` (the agent's own turn text, an assistant
+    message item, and the tool TITLE cezar renders from the command it saw
+    run) while the URL is still taken from the whole event, since `gh` prints
+    it in the output. The referenced tier is untouched by this: it may be
+    wrong about a *subject*, never about *authorship*.
 - **Referenced detection:** every distinct PR URL spotted accumulates into
   `referencedPrCandidates` (capped at 8 — beyond that the conversation is a
   survey, not a subject). `referencedPullRequestUrl` is then resolved:
@@ -51,6 +62,29 @@ The created tier always wins. Both fields are additive and optional — old
     exactly one candidate matches;
   - otherwise → unset. Ambiguity **clears** a previously resolved value —
     a wrong chip is worse than no chip.
+  - and finally, whatever the rules above produced is **repo-scoped**: a
+    winner whose `owner/repo` is not the project's own resolves only when the
+    **task prompt** names that `owner/repo` (a pasted URL does inherently).
+    Otherwise → unset.
+  - **Amendment — the resolution is repo-scoped (#945).** The rules above were
+    text-scoped but never repo-scoped: `PR_URL_RE` matches *any*
+    `github.com/<owner>/<repo>/pull/N`, so "exactly one distinct candidate"
+    adopted a pull request the project has nothing to do with. A research task
+    is exactly that shape — an `oko` task that read about migration safety,
+    cited one upstream `supabase/cli` PR, and wore `#6056` as its subject.
+    This is the `CREATED_PR_RE` amendment above one tier down: the same
+    failure (a URL from another repository adopted as this task's), and the
+    same remedy (ask where the claim came from before believing it). The
+    prompt is the corroborating source because it is the trust boundary this
+    module already uses, and it preserves the legitimate cross-repo case
+    (#819 — `om-auto-fix-pr https://github.com/other/repo/pull/1977` started
+    from a different project). Candidates are still **collected** unscoped:
+    the guard changes what is *promoted*, never what is *recorded*. With no
+    known repository — no `gh`, no remote, a non-git root — behavior is
+    exactly the pre-#945 rules, and the guard is strictly subtractive, so it
+    can only ever lose a resolution, never gain one. The project's handle
+    arrives asynchronously (`RunStore.setRepoHandle`), and its arrival also
+    heals records the un-scoped rule already poisoned.
 - Once `pullRequestUrl` (created tier) is set, all discovery stops.
 - Candidates persist on the record so a restart/resume re-evaluates from the
   same working set instead of re-adopting the next URL as "the only one".

@@ -87,12 +87,14 @@ function serve({
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'connected', enabled: true },
       { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'pi', status: 'connected', enabled: true },
     ],
   },
   providerStatusCode = 200,
   providerStatusPending = false,
   providerStatusAfterFirstError,
   agentProfiles,
+  hostModels = {},
 }: {
   config?: Partial<ConfigResponse>
   putStatus?: number
@@ -104,6 +106,9 @@ function serve({
   /** Extra agent accounts (spec 2026-07-29-agent-profiles). Omitted = the route never answers,
    *  which is how every pre-existing test in this file keeps its byte-identical surface. */
   agentProfiles?: AgentProfilesResponse
+  /** What each runner's host CLI reports it can run (`GET /api/v1/models?runner=…`, #794).
+   *  Omitted = every catalog answers empty, so only `auto` and configured pins are offered. */
+  hostModels?: Record<string, Array<{ id: string; label: string; description: string }>>
 } = {}) {
   requests = []
   let providerStatusReads = 0
@@ -185,6 +190,12 @@ function serve({
       }
       if (url === '/api/v1/projects' && method === 'GET') {
         return json({ projects: [PROJECT], bootProject: 'boot', projectsDir: '~/cezar/projects' })
+      }
+      // One catalog per discovery runner (#794): this screen renders a row per runner, so it
+      // asks each host CLI separately rather than reusing Codex's answer everywhere.
+      if (url.startsWith('/api/v1/models?runner=') && method === 'GET') {
+        const runner = url.slice('/api/v1/models?runner='.length)
+        return json({ runner, models: hostModels[runner] ?? [], source: 'live', stale: false })
       }
       return new Promise<never>(() => {})
     }),
@@ -423,6 +434,36 @@ describe('the agents form', () => {
     await waitFor(() => expect(claude.value).toBe(''))
   })
 
+  it('offers each runner the models its own host CLI reports (#794)', async () => {
+    serve({
+      hostModels: {
+        codex: [{ id: 'gpt-5.6-codex', label: 'gpt-5.6-codex', description: 'Newest' }],
+        opencode: [
+          { id: 'openai/gpt-5.5', label: 'openai/gpt-5.5', description: 'via openai' },
+          { id: 'anthropic/claude-sonnet-5', label: 'anthropic/claude-sonnet-5', description: 'via anthropic' },
+        ],
+      },
+    })
+    renderAt('/settings/agents')
+    await waitFor(() => expect(form()).not.toBeNull())
+
+    const opencode = screen.getByLabelText<HTMLSelectElement>('Default model for opencode')
+    await waitFor(() =>
+      expect([...opencode.options].map((o) => o.value)).toEqual([
+        '',
+        'openai/gpt-5.5',
+        'anthropic/claude-sonnet-5',
+      ]),
+    )
+    // The stale hard-coded presets this issue reported are gone, and Codex's catalog — fetched
+    // under its own key — never leaks into OpenCode's row.
+    expect([...opencode.options].map((o) => o.value)).not.toContain('openai/gpt-5.1')
+    expect([...opencode.options].map((o) => o.value)).not.toContain('gpt-5.6-codex')
+    expect(
+      [...screen.getByLabelText<HTMLSelectElement>('Default model for codex').options].map((o) => o.value),
+    ).toEqual(['', 'gpt-5.6-codex'])
+  })
+
   it('shows native models as read-only values while keeping the runner selectable', async () => {
     serve({
       config: {
@@ -538,7 +579,7 @@ describe('the agents form', () => {
       await waitFor(() => expect(form()).not.toBeNull())
       // Settled: the default-models field below it has rendered, so the pane is not mid-load.
       await screen.findByLabelText('Default model for claude')
-      expect(rows().map((r) => r.getAttribute('data-value'))).toEqual(['claude', 'codex', 'opencode'])
+      expect(rows().map((r) => r.getAttribute('data-value'))).toEqual(['claude', 'codex', 'opencode', 'pi'])
       // …and it is still called what it always was, because there is no account in play.
       expect(document.body.textContent).toContain('Default runner')
     })
@@ -547,12 +588,13 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(4))
+      await waitFor(() => expect(rows()).toHaveLength(5))
       expect(rows().map((r) => r.textContent)).toEqual([
         'claude · Default/home/u/.claude',
         'claude · Klaudiusz~/.claude-klaudiusz',
         'codexOpenAI Codex (app-server)',
         'opencodeOpenCode (serve)',
+        'pipi CLI (provider/model)',
       ])
       // The discovered account is the checked row until the repo says otherwise.
       expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
@@ -575,7 +617,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(4))
+      await waitFor(() => expect(rows()).toHaveLength(5))
       fireEvent.click(rowFor('claude', 'klaudiusz')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -598,7 +640,7 @@ describe('the agents form', () => {
 
       // Wait for the SPLIT state: until the accounts land, claude is one plain row, and clicking
       // that one writes no selection — which is correct, and would make this pass for no reason.
-      await waitFor(() => expect(rows()).toHaveLength(4))
+      await waitFor(() => expect(rows()).toHaveLength(5))
       fireEvent.click(rowFor('claude', '')!)
 
       await waitFor(() => expect(selections()).toHaveLength(1))
@@ -613,7 +655,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(4))
+      await waitFor(() => expect(rows()).toHaveLength(5))
       fireEvent.click(rowFor('codex')!)
 
       await waitFor(() => expect(puts()).toHaveLength(1))
@@ -645,7 +687,7 @@ describe('the agents form', () => {
       serve({ agentProfiles: WITH_WORK_ACCOUNT })
       renderAt('/settings/agents')
 
-      await waitFor(() => expect(rows()).toHaveLength(4))
+      await waitFor(() => expect(rows()).toHaveLength(5))
       const pane = document.querySelector('[data-slot="agents-runner"]')?.closest('section')
       expect(pane?.textContent).toContain('never committed')
       // The consequence a reader cannot guess: sessions live in the account's own folder.

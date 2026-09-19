@@ -21,6 +21,11 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  pi: {
+    stdout: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
+    stderr: '',
+    exitCode: 0,
+  },
 };
 
 const originalEnv = {
@@ -29,6 +34,7 @@ const originalEnv = {
   CEZ_CLAUDE_BIN: process.env.CEZ_CLAUDE_BIN,
   CEZ_CODEX_BIN: process.env.CEZ_CODEX_BIN,
   CEZ_OPENCODE_BIN: process.env.CEZ_OPENCODE_BIN,
+  CEZ_PI_BIN: process.env.CEZ_PI_BIN,
 };
 
 beforeEach(() => {
@@ -37,6 +43,7 @@ beforeEach(() => {
   delete process.env.CEZ_CLAUDE_BIN;
   delete process.env.CEZ_CODEX_BIN;
   delete process.env.CEZ_OPENCODE_BIN;
+  delete process.env.CEZ_PI_BIN;
 });
 
 afterEach(() => {
@@ -49,7 +56,8 @@ afterEach(() => {
 function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'claude') return connectedResults.claude!;
   if (executable.includes('codex')) return connectedResults.codex!;
-  return connectedResults.opencode!;
+  if (executable.includes('opencode')) return connectedResults.opencode!;
+  return connectedResults.pi!;
 }
 
 function runner(
@@ -450,10 +458,44 @@ describe('provider auth parsers', () => {
 
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
   });
+
+  it('recognizes pi model availability as connected without reading credential files', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'pi'
+        ? connectedResults.pi!
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ pi: { status: 'connected' } });
+  });
+
+  it('recognizes pi explicit no-models login guidance as disconnected', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'pi'
+        ? {
+          stdout: 'No models available. Use /login to authenticate.',
+          stderr: '',
+          exitCode: 0,
+        }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ pi: { status: 'disconnected' } });
+  });
+
+  it('does not guess from unrecognized pi model output', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'pi'
+        ? { stdout: 'Models may be available', stderr: 'private detail', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ pi: { status: 'unknown' } });
+  });
 });
 
 describe('ProviderAuthService', () => {
-  it('always returns claude, codex, opencode in descriptor order', async () => {
+  it('always returns claude, codex, opencode, pi in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
     await expect(service.status()).resolves.toMatchObject({
@@ -461,11 +503,12 @@ describe('ProviderAuthService', () => {
         { provider: 'claude' },
         { provider: 'codex' },
         { provider: 'opencode' },
+        { provider: 'pi' },
       ],
     });
   });
 
-  it('runs the three status commands concurrently with a 10 second timeout', async () => {
+  it('runs the four status commands concurrently with a 10 second timeout', async () => {
     const calls: Array<{ executable: string; args: readonly string[]; timeoutMs: number }> = [];
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
@@ -477,11 +520,12 @@ describe('ProviderAuthService', () => {
     const service = new ProviderAuthService({ runCommand });
     const pending = service.status();
 
-    await vi.waitFor(() => expect(calls).toHaveLength(3));
+    await vi.waitFor(() => expect(calls).toHaveLength(4));
     expect(calls).toEqual([
       { executable: 'claude', args: ['auth', 'status', '--json'], timeoutMs: 10_000 },
       { executable: 'codex', args: ['login', 'status'], timeoutMs: 10_000 },
       { executable: 'opencode', args: ['auth', 'list'], timeoutMs: 10_000 },
+      { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -527,8 +571,8 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 9 * 60_000;
       await service.status();
-      // Still three: one probe per provider, from the first call only.
-      expect(runCommand).toHaveBeenCalledTimes(3);
+      // Still four: one probe per provider, from the first call only.
+      expect(runCommand).toHaveBeenCalledTimes(4);
     });
 
     it('re-probes an all-connected answer once the long window passes', async () => {
@@ -539,7 +583,7 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 10 * 60_000 + 1;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(6);
+      expect(runCommand).toHaveBeenCalledTimes(8);
     });
 
     it('re-checks a NOT-connected answer sooner, so a terminal login is noticed on its own', async () => {
@@ -557,10 +601,10 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 59_999;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(3); // still inside the short window
+      expect(runCommand).toHaveBeenCalledTimes(4); // still inside the short window
       now += 2;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(6); // past it → re-probed
+      expect(runCommand).toHaveBeenCalledTimes(8); // past it → re-probed
     });
 
     it('serves the stale answer immediately and refreshes BEHIND it, never in front', async () => {
@@ -575,7 +619,7 @@ describe('ProviderAuthService', () => {
         now: () => now,
         runCommand: async (executable) => {
           probes += 1;
-          if (probes > 3) await gate; // only the SECOND round of probes hangs
+          if (probes > 4) await gate; // only the SECOND round of probes hangs
           return resultFor(executable);
         },
       });
@@ -589,11 +633,11 @@ describe('ProviderAuthService', () => {
           expect.objectContaining({ provider: 'claude', status: 'connected' }),
         ]),
       });
-      expect(probes).toBe(6); // …and it did kick the refresh off
+      expect(probes).toBe(8); // …and it did kick the refresh off
 
       // A reader arriving mid-revalidation is served from cache too, not attached to the probe.
       await expect(service.status()).resolves.toBeDefined();
-      expect(probes).toBe(6); // no second refresh piled on top
+      expect(probes).toBe(8); // no second refresh piled on top
       release();
     });
 
@@ -605,7 +649,7 @@ describe('ProviderAuthService', () => {
           expect.objectContaining({ provider: 'claude', status: 'connected' }),
         ]),
       });
-      expect(runCommand).toHaveBeenCalledTimes(3);
+      expect(runCommand).toHaveBeenCalledTimes(4);
     });
 
     it('applies the same asymmetry per account', async () => {
@@ -626,7 +670,7 @@ describe('ProviderAuthService', () => {
 
     await service.status();
     await service.status({ refresh: true });
-    expect(runCommand).toHaveBeenCalledTimes(6);
+    expect(runCommand).toHaveBeenCalledTimes(8);
   });
 
   it('keeps one incident id until an explicit matching clear and creates a new id afterward', async () => {
@@ -689,6 +733,183 @@ describe('ProviderAuthService', () => {
     });
   });
 
+  describe('a latch verifies itself against the provider CLI', () => {
+    const loggedOutClaude: ProviderCommandResult = {
+      stdout: '{"loggedIn":false}',
+      stderr: '',
+      exitCode: 1,
+    };
+
+    it('clears the incident when the CLI is still logged in', async () => {
+      const runCommand = runner();
+      const service = new ProviderAuthService({ runCommand, createAuthFailureId: () => 'incident-1' });
+      service.reportRuntimeAuthFailure('claude');
+
+      await expect(service.verifyRuntimeAuthFailure('claude'))
+        .resolves.toEqual({ provider: 'claude', status: 'connected' });
+      // Only the rejected provider is asked — the other three were never accused of anything.
+      expect(runCommand).toHaveBeenCalledTimes(1);
+      expect(runCommand).toHaveBeenCalledWith('claude', ['auth', 'status', '--json'], 10_000);
+      await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'connected' } });
+    });
+
+    it('keeps the incident when the CLI confirms the credentials are gone', async () => {
+      const service = new ProviderAuthService({
+        runCommand: runner((executable) => (executable === 'claude' ? loggedOutClaude : resultFor(executable))),
+        createAuthFailureId: () => 'incident-1',
+      });
+      service.reportRuntimeAuthFailure('claude');
+
+      await expect(service.verifyRuntimeAuthFailure('claude')).resolves.toBeNull();
+      await expect(service.status()).resolves.toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'disconnected', authFailureId: 'incident-1' }),
+        ]),
+      });
+    });
+
+    it.each(['unknown', 'not-installed'] as const)(
+      'treats an inconclusive probe (%s) as no evidence of health',
+      async (kind) => {
+        const claudeResult: ProviderCommandResult = kind === 'not-installed'
+          ? { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+          : { stdout: 'not json at all', stderr: '', exitCode: 0 };
+        const service = new ProviderAuthService({
+          runCommand: runner((executable) => (executable === 'claude' ? claudeResult : resultFor(executable))),
+          createAuthFailureId: () => 'incident-1',
+        });
+        service.reportRuntimeAuthFailure('claude');
+
+        await expect(service.verifyRuntimeAuthFailure('claude')).resolves.toBeNull();
+        await expect(service.status()).resolves.toMatchObject({
+          providers: expect.arrayContaining([
+            expect.objectContaining({ provider: 'claude', authFailureId: 'incident-1' }),
+          ]),
+        });
+      },
+    );
+
+    it('spawns at most one probe per provider per cooldown window', async () => {
+      const ids = ['incident-1', 'incident-2', 'incident-3'];
+      let now = 1_000;
+      const runCommand = runner();
+      const service = new ProviderAuthService({
+        runCommand,
+        now: () => now,
+        createAuthFailureId: () => ids.shift()!,
+      });
+
+      service.reportRuntimeAuthFailure('claude');
+      await expect(service.verifyRuntimeAuthFailure('claude')).resolves.not.toBeNull();
+      expect(runCommand).toHaveBeenCalledTimes(1);
+
+      // The run keeps failing: a fresh latch inside the window must not buy a fresh spawn.
+      service.reportRuntimeAuthFailure('claude');
+      now += 59_000;
+      await expect(service.verifyRuntimeAuthFailure('claude')).resolves.toBeNull();
+      expect(runCommand).toHaveBeenCalledTimes(1);
+
+      now += 2_000;
+      await expect(service.verifyRuntimeAuthFailure('claude')).resolves.not.toBeNull();
+      expect(runCommand).toHaveBeenCalledTimes(2);
+    });
+
+    it('never answers an older question: a rejection arriving mid-probe survives', async () => {
+      const ids = ['incident-1', 'incident-2'];
+      let release!: () => void;
+      const waiting = new Promise<void>((resolve) => { release = resolve; });
+      const runCommand = vi.fn(async (executable: string) => {
+        await waiting;
+        return resultFor(executable);
+      });
+      const service = new ProviderAuthService({ runCommand, createAuthFailureId: () => ids.shift()! });
+      service.reportRuntimeAuthFailure('claude');
+
+      const verifying = service.verifyRuntimeAuthFailure('claude');
+      await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
+      // Recovery began, then the user acknowledged incident-1 and the runner rejected them again.
+      expect(service.clearRuntimeAuthFailure('claude', 'incident-1')).toBe(true);
+      service.reportRuntimeAuthFailure('claude');
+      release();
+
+      await expect(verifying).resolves.toBeNull();
+      await expect(service.status()).resolves.toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'disconnected', authFailureId: 'incident-2' }),
+        ]),
+      });
+    });
+
+    it('collapses concurrent self-checks onto the one already in flight', async () => {
+      let release!: () => void;
+      const waiting = new Promise<void>((resolve) => { release = resolve; });
+      const runCommand = vi.fn(async (executable: string) => {
+        await waiting;
+        return resultFor(executable);
+      });
+      const service = new ProviderAuthService({ runCommand, createAuthFailureId: () => 'incident-1' });
+      service.reportRuntimeAuthFailure('claude');
+
+      const first = service.verifyRuntimeAuthFailure('claude');
+      await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(1));
+      await expect(service.verifyRuntimeAuthFailure('claude')).resolves.toBeNull();
+      release();
+
+      await expect(first).resolves.toEqual({ provider: 'claude', status: 'connected' });
+      expect(runCommand).toHaveBeenCalledTimes(1);
+    });
+
+    it('folds the verified row into the cache instead of uncovering an older answer', async () => {
+      // What the cockpit last heard about Claude, then what the CLI says when the latch is checked.
+      const claudeAnswers: ProviderCommandResult[] = [
+        { stdout: 'not json at all', stderr: '', exitCode: 0 },
+        { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 },
+      ];
+      const service = new ProviderAuthService({
+        runCommand: runner((executable) => (
+          executable === 'claude'
+            ? claudeAnswers.shift() ?? connectedResults.claude!
+            : resultFor(executable)
+        )),
+        now: () => 1_000,
+        createAuthFailureId: () => 'incident-1',
+      });
+
+      await expect(statuses(service)).resolves.toMatchObject({ claude: { status: 'unknown' } });
+      service.reportRuntimeAuthFailure('claude');
+      await expect(service.verifyRuntimeAuthFailure('claude'))
+        .resolves.toEqual({ provider: 'claude', status: 'connected' });
+
+      // peekStatus never spawns, so this is the cache itself: dropping the latch must not put the
+      // stale `unknown` back on screen in place of the answer the self-check just got.
+      expect(service.peekStatus()).toMatchObject({
+        providers: expect.arrayContaining([
+          expect.objectContaining({ provider: 'claude', status: 'connected' }),
+        ]),
+      });
+    });
+
+    it('is a no-op when nothing was latched', async () => {
+      const runCommand = runner();
+      const service = new ProviderAuthService({ runCommand });
+
+      await expect(service.verifyRuntimeAuthFailure('claude')).resolves.toBeNull();
+      expect(runCommand).not.toHaveBeenCalled();
+    });
+
+    it.each(['CEZ_DRY_RUN', 'CEZ_AGENT_MODELS_LOCKED'])(
+      'probes nothing under %s=1',
+      async (variable) => {
+        process.env[variable] = '1';
+        const runCommand = runner();
+        const service = new ProviderAuthService({ runCommand });
+
+        await expect(service.verifyRuntimeAuthFailure('claude')).resolves.toBeNull();
+        expect(runCommand).not.toHaveBeenCalled();
+      },
+    );
+  });
+
   it('applies a runtime failure that arrives while an ordinary probe is in flight', async () => {
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
@@ -699,7 +920,7 @@ describe('ProviderAuthService', () => {
     const service = new ProviderAuthService({ runCommand });
 
     const pending = service.status();
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(4));
     service.reportRuntimeAuthFailure('claude');
     release();
 
@@ -757,6 +978,7 @@ describe('ProviderAuthService', () => {
         { provider: 'claude', status: 'connected' },
         { provider: 'codex', status: 'connected' },
         { provider: 'opencode', status: 'connected' },
+        { provider: 'pi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -783,10 +1005,10 @@ describe('ProviderAuthService', () => {
     const ordinary = service.status();
     const refresh = service.status({ refresh: true });
     expect(refresh).toBe(ordinary);
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(4));
     release();
     await expect(Promise.all([ordinary, refresh])).resolves.toHaveLength(2);
-    expect(runCommand).toHaveBeenCalledTimes(3);
+    expect(runCommand).toHaveBeenCalledTimes(4);
   });
 
   it('gives ordinary callers one shared visible promise for a fresh probe after a latch', async () => {
@@ -803,7 +1025,7 @@ describe('ProviderAuthService', () => {
     const ordinary = service.status();
 
     expect(refresh).toBe(ordinary);
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(4));
     release();
     await expect(ordinary.then(({ providers }) => providers[0])).resolves.toMatchObject({
       provider: 'claude',
@@ -822,6 +1044,17 @@ describe('ProviderAuthService', () => {
     expect(runCommand).toHaveBeenCalledWith('/tools/opencode custom', ['auth', 'list'], 10_000);
     expect(service.loginCommand('codex')).toBe("'/tools/codex custom' login");
     expect(service.loginCommand('opencode')).toBe("'/tools/opencode custom' auth login");
+  });
+
+  it('uses CEZ_PI_BIN for the model-availability probe and interactive login', async () => {
+    process.env.CEZ_PI_BIN = '/tools/pi custom';
+    const runCommand = runner((executable) =>
+      executable === '/tools/pi custom' ? connectedResults.pi! : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand, platform: 'linux' });
+
+    await service.status();
+    expect(runCommand).toHaveBeenCalledWith('/tools/pi custom', ['--list-models'], 10_000);
+    expect(service.loginCommand('pi')).toBe("'/tools/pi custom' /login");
   });
 
   it('uses the documented CEZ_CLAUDE_BIN override for both probe and login commands', async () => {
@@ -845,7 +1078,7 @@ describe('ProviderAuthService', () => {
       .toBe('"C:\\Program Files\\op^%en^&co^!de^".exe" auth login');
   });
 
-  it('reports all three providers connected in CEZ_DRY_RUN without executing a command', async () => {
+  it('reports all four providers connected in CEZ_DRY_RUN without executing a command', async () => {
     process.env.CEZ_DRY_RUN = '1';
     const runCommand = runner();
     const service = new ProviderAuthService({ runCommand });
@@ -855,6 +1088,7 @@ describe('ProviderAuthService', () => {
         { provider: 'claude', status: 'connected' },
         { provider: 'codex', status: 'connected' },
         { provider: 'opencode', status: 'connected' },
+        { provider: 'pi', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -909,7 +1143,7 @@ describe('ProviderAuthService', () => {
       const before = spawns;
       now += 60 * 60_000; // an hour later
 
-      expect(service.peekStatus()?.providers).toHaveLength(3);
+      expect(service.peekStatus()?.providers).toHaveLength(4);
       expect(service.peekProfileStatus('claude', 'work')).toBeDefined();
       expect(spawns).toBe(before); // …and still nothing spawned
     });
@@ -932,7 +1166,7 @@ describe('ProviderAuthService', () => {
       await service.status();
       await service.profileStatus('claude', { id: 'work', configDir: '/work' });
       const before = spawns;
-      expect(service.peekStatus()?.providers).toHaveLength(3);
+      expect(service.peekStatus()?.providers).toHaveLength(4);
       expect(service.peekProfileStatus('claude', 'work')?.profileId).toBe('work');
       expect(spawns).toBe(before);
     });

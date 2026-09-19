@@ -2,11 +2,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   CheckIcon,
   ChevronDownIcon,
-  EyeIcon,
   FolderOpenIcon,
   SparklesIcon,
   SquareIcon,
-  WorkflowIcon,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useParams, useSearchParams } from 'react-router'
@@ -15,9 +13,9 @@ import { Link, useNavigate } from '@/lib/project-router'
 
 import { createRun, getLaunchKey, postPlan, putConfig, putUiState } from '@/api/client'
 import { useProjectScope } from '@/api/project-scope-context'
+import { hasAccountChoice, useAgentAccounts } from '@/api/agent-accounts'
 import {
   queryKeys,
-  useAgentProfiles,
   useConfig,
   useHealth,
   useProviderStatus,
@@ -30,24 +28,24 @@ import {
   useWorkflows,
 } from '@/api/queries'
 import type {
-  ImageInput,
+  AttachmentInput,
+  DispatchIntent,
   ProjectListEntry,
   RepoResponse,
   Runner,
-  Skill,
-  WorkflowDef,
 } from '@open-mercato/cezar-api-client'
 import { TwinkleBackdrop } from '@/components/centered-state'
 import { Composer, type ComposerHandle } from '@/components/composer/composer'
+import { DispatchToggle } from '@/components/dispatch-toggle'
 import { GhostCodeBackdrop } from '@/components/ghost-code-backdrop'
 import { PickerPill, RunnerPill, chevron, chipClass } from '@/components/picker-pill'
 import { PromptTemplateMenu } from '@/components/prompt-template-menu'
 import { ReasoningEffortPill } from '@/components/reasoning-effort-pill'
 import { SkillPreviewDialog } from '@/components/skill-detail'
+import { SourcePill } from '@/components/source-pill'
 import {
   Command,
   CommandEmpty,
-  CommandGroup,
   CommandInput,
   CommandItem,
   CommandList,
@@ -56,17 +54,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { toast } from '@/components/ui/toaster'
 import {
   autoApplyText,
+  availablePromptTemplates,
   normalizePromptTemplates,
   resolveAutoApply,
 } from '@/lib/prompt-templates'
 import {
   bumpSkillUsage,
-  isProjectSkill,
   orderSkillsByUsage,
-  partitionSkillsForDisplay,
-  searchSkills,
-  searchWorkflows,
-  skillKeywords,
 } from '@/lib/skills'
 import { submitShortcutHint } from '@/lib/use-submit-shortcut'
 import { cn } from '@/lib/utils'
@@ -79,7 +73,8 @@ import {
   type DeepLinkNotice,
 } from './new-task-autostart'
 import {
-  clearDraftText,
+  clearStartedDraft,
+  composerRunModeNote,
   readDraft,
   resolveComposerRunMode,
   writeDraft,
@@ -181,8 +176,10 @@ export function NewTaskRoute() {
   const projectList = projects.data?.projects ?? []
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
-  const source = resolveSource([draft.source, uiState.data?.lastTask], skillList, workflowList)
-  const selectedSkill = source.source === 'skill'
+  // The draft's pick alone — a fresh `/new` selects nothing (see `resolveSource` for what the
+  // persisted `lastTask` preselection was load-bearing for, and why it is gone).
+  const source = resolveSource(draft.source, skillList, workflowList)
+  const selectedSkill = source?.source === 'skill'
     ? skillList.find((skill) => skill.name === source.ref)
     : undefined
 
@@ -192,10 +189,14 @@ export function NewTaskRoute() {
   // applies them on selection — but only into a box the user has not typed in (`resolveAutoApply`).
   const composerRef = useRef<ComposerHandle>(null)
   const templates = useMemo(
-    () => normalizePromptTemplates(uiState.data?.promptTemplates),
-    [uiState.data?.promptTemplates],
+    () =>
+      availablePromptTemplates(
+        normalizePromptTemplates(uiState.data?.promptTemplates),
+        health.data?.capabilities,
+      ),
+    [uiState.data?.promptTemplates, health.data?.capabilities],
   )
-  const autoText = autoApplyText(templates, source.source === 'skill' ? [source.ref] : [])
+  const autoText = autoApplyText(templates, source?.source === 'skill' ? [source.ref] : [])
   const draftTextRef = useRef(draft.text)
   draftTextRef.current = draft.text
   const autoAppliedRef = useRef('')
@@ -217,7 +218,7 @@ export function NewTaskRoute() {
   const runner = runners.length > 0 ? resolveRunner(draft.runner, runners, preferredRunner) : null
   const displayRunner = runner ?? preferredRunner
   const providersReady = providers.isSuccess && runners.length > 0
-  const catalog = useRunnerModels()
+  const catalog = useRunnerModels(displayRunner)
   const modelsLocked = config.data?.modelsLocked === true
   const models = runner === null
     ? []
@@ -235,13 +236,7 @@ export function NewTaskRoute() {
   // a pill of their own — `claude · Default` / `claude · Klaudiusz` / `codex` — so what will run is
   // readable at a glance instead of assembled from two controls. An agent with a single login stays
   // a single row, which is why a host with no extra accounts sees the list it always saw.
-  const profiles = useAgentProfiles()
-  const accountChoices = (profiles.data?.profiles ?? []).map((profile) => ({
-    provider: profile.provider as Runner,
-    id: profile.id,
-    label: profile.label,
-    configDir: profile.configDir,
-  }))
+  const { accounts: accountChoices, repoAccount } = useAgentAccounts()
   // A draft account belonging to ANOTHER runner is ignored rather than sent: switching runner must
   // not silently carry a foreign account along.
   const agentProfile = accountChoices.some(
@@ -249,14 +244,6 @@ export function NewTaskRoute() {
   )
     ? draft.agentProfile
     : null
-  // Which account each runner falls back to until the task overrides it. Selections are keyed by
-  // repo ROOT — the same key the store uses — and the root comes from `useRepo`, which is
-  // project-scoped and so already answers for the ACTIVE project; going through the projects list
-  // would mean re-deriving a mapping the API has already done.
-  const repoRoot = repo.data?.info?.root
-  const repoAccount = (repoRoot ? profiles.data?.selections[repoRoot] : undefined) as
-    | Partial<Record<Runner, string>>
-    | undefined
 
   // A cold /new load mounts the textarea disabled while provider status is checked. Restore
   // the route's autofocus contract once that check enables the form, but never steal focus if
@@ -284,7 +271,38 @@ export function NewTaskRoute() {
   // checkout. Parallel variants are the one hard constraint because each competing run needs
   // its own tree; a non-git repo already runs in place.
   const worktreeToggleShown = hasGit
-  const worktreeForced = variants > 1
+
+  // Dispatch (spec 2026-09-10-dispatch): this task may fan work out to subtasks. Offered only
+  // while the server has it on (`CEZ_DISPATCH=0` hides it — the routes 409 then) and in a git
+  // repo: a child forks off the parent's committed branch, so there is nothing to fork without
+  // one. A draft toggled on under a server that has since turned it off sends nothing.
+  const dispatchAvailable = health.data?.capabilities.dispatch === true && hasGit
+  const dispatch: DispatchIntent | null = dispatchAvailable ? draft.dispatch : null
+  const dispatchOn = dispatch !== null
+  // The hint line under the composer: up for 6 s after every change of the toggle or its
+  // settings, and the whole time the settings surface is open.
+  const [dispatchHintFlash, setDispatchHintFlash] = useState(false)
+  const [dispatchSettingsOpen, setDispatchSettingsOpen] = useState(false)
+  const dispatchHintTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const changeDispatch = (next: DispatchIntent | null) => {
+    update({ dispatch: next })
+    if (dispatchHintTimer.current !== null) clearTimeout(dispatchHintTimer.current)
+    dispatchHintTimer.current = null
+    setDispatchHintFlash(next !== null)
+    if (next !== null) {
+      dispatchHintTimer.current = setTimeout(() => setDispatchHintFlash(false), 6_000)
+    }
+  }
+  useEffect(
+    () => () => {
+      if (dispatchHintTimer.current !== null) clearTimeout(dispatchHintTimer.current)
+    },
+    [],
+  )
+
+  // Worktree is forced by parallel variants (one tree per competing run) and by dispatch (the
+  // server forces it too: subtasks fork off this task's commits).
+  const worktreeForced = variants > 1 || dispatchOn
 
   // Autonomous (#autonomous): the run never pauses for the user. An explicit toggle this session
   // wins; then an interactive skill recommends handing the ball back; otherwise the configured
@@ -306,7 +324,10 @@ export function NewTaskRoute() {
       workspaceConfig.data?.composerDefaults?.worktree
       ?? workspaceConfig.data?.composerDefaults?.inheritedWorktree
       ?? true,
-    source: source.source,
+    // Nothing picked runs the plain built-in workflow, and the 'source-dependent' autonomy
+    // default keys off exactly that: skills default autonomous, everything else does not.
+    source: source?.source ?? 'workflow',
+    dispatch: dispatchOn,
   })
   const worktreeOn = runMode.worktree
   const autonomousOn = runMode.autonomous
@@ -379,7 +400,7 @@ export function NewTaskRoute() {
       if (launchKey !== '' && deepLink.key === launchKey) {
         try {
           const created = await createRun(bookmarkletRunBody(deepLink, runner, defaultRunner))
-          clearDraftText(draftProjectId)
+          clearStartedDraft(draftProjectId)
           void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
           void navigate(startedRunPath(created))
           return
@@ -407,12 +428,9 @@ export function NewTaskRoute() {
         ? deepLink.skill
         : ''
     if (unknownSkill !== '') {
-      update({
-        text: unknownSkillPrefillText(deepLink.skill, deepLink.ref),
-        ...(workflowList.some((w) => w.name === 'quick-task')
-          ? { source: { source: 'workflow', ref: 'quick-task' } as TaskSource }
-          : {}),
-      })
+      // Legacy put the intent into the text and ran quick-task; `null` IS that run now, and
+      // needs no catalog lookup to say so.
+      update({ text: unknownSkillPrefillText(deepLink.skill, deepLink.ref), source: null })
     }
     const { message, tone } = deepLinkToast(notice, unknownSkill)
     toast(message, { tone })
@@ -424,7 +442,7 @@ export function NewTaskRoute() {
       ?.focus()
   }, [notice, sourcesReady]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const submit = async (text: string, images: ImageInput[]) => {
+  const submit = async (text: string, images: AttachmentInput[]) => {
     if (!providersReady || runner === null) {
       throw new Error(
         providers.isPending
@@ -474,27 +492,32 @@ export function NewTaskRoute() {
         // Deliberately not gated on generateFollowupsOn (#444): turning off follow-up
         // generation for THIS task must not stop the entry it came from being marked started.
         todoId: deepLink.todo,
+        dispatch,
       }),
     )
     // Remember what was actually run so the next visit preselects it (legacy
     // `saveLastTaskSource`) and float it to the top of the picker next time
     // (recency sort) — fire-and-forget: a failed write only costs the convenience.
     void putUiState({
+      // `null` when nothing was picked — an honest record of a plain run, and the value that
+      // stops an older cockpit (which still preselects `lastTask`) restoring a stale skill.
       lastTask: source,
-      recentSources: pushRecentSource(recentSources, source),
+      // Recency is a list of PICKS: a task that chose nothing did not pick quick-task, and
+      // filling the list with the default would push real choices out of it.
+      ...(source ? { recentSources: pushRecentSource(recentSources, source) } : {}),
       ...(followupsToggleShown ? { lastGenerateFollowups: generateFollowupsOn } : {}),
       // Frequency sort (#408): only a SKILL pick counts — the map is keyed by skill name, and a
       // workflow choice here doesn't select one directly. Gated on the CURRENT map being known:
       // the PUT merge is shallow, so bumping off an errored ui-state query (`sourcesReady` only
       // rules out `isPending`, not a failed fetch) would send a one-entry map and wipe every
       // accumulated count.
-      ...(source.source === 'skill' && uiState.data !== undefined
+      ...(source?.source === 'skill' && uiState.data !== undefined
         ? { skillUsage: bumpSkillUsage(uiState.data.skillUsage, source.ref) }
         : {}),
     })
       .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
       .catch(() => {})
-    clearDraftText(draftProjectId)
+    clearStartedDraft(draftProjectId)
     void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
     navigate(startedRunPath(created))
   }
@@ -519,6 +542,7 @@ export function NewTaskRoute() {
           images: plan.images,
           generateFollowups: generateFollowupsOn,
           todoId: deepLink.todo, // #374: planning first must not lose the inbox entry
+          dispatch,
         }),
       )
       // Run-mode choices live in the current draft; stable defaults come from workspace policy.
@@ -529,7 +553,7 @@ export function NewTaskRoute() {
           .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.uiState }))
           .catch(() => {})
       }
-      clearDraftText(draftProjectId)
+      clearStartedDraft(draftProjectId)
       setPlan(null)
       void queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
       navigate(startedRunPath(created))
@@ -573,8 +597,16 @@ export function NewTaskRoute() {
           <h1 className="text-lg font-semibold tracking-tight max-md:text-base">
             What should the agent work on?
           </h1>
-          <p className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
-            Runs in an isolated worktree — review everything before it lands.
+          {/* Follows the resolved run mode (#793). Printing the isolation promise
+              unconditionally made this line false for every run the user opted out of — and
+              for a non-git folder, where there is no worktree to opt into. */}
+          <p data-slot="run-mode-note" className="mt-1.5 text-[13.5px] text-muted-foreground max-md:text-xs">
+            {composerRunModeNote({
+              worktree: worktreeOn,
+              hasGit,
+              dispatch: dispatchOn,
+              autonomous: autonomousOn,
+            })}
           </p>
         </header>
 
@@ -621,17 +653,9 @@ export function NewTaskRoute() {
                 workflows={workflowList}
                 onPick={(next) => update({ source: next })}
               />
-              {/* Icon-only: this row already carries source/runner/model/variants/worktree/
-                  autonomous/branch, and templates is the least-used of them. */}
-              <PromptTemplateMenu
-                templates={templates}
-                iconOnly
-                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
-              />
               {/* Shown when there is a choice to make: more than one runner, or more than one
                   login for one of them. A host with neither sees no pill, exactly as before. */}
-              {runners.length > 1
-              || runners.some((id) => accountChoices.filter((c) => c.provider === id).length > 1) ? (
+              {runners.length > 1 || runners.some((id) => hasAccountChoice(accountChoices, id)) ? (
                 <RunnerPill
                   runners={runners}
                   value={displayRunner}
@@ -691,11 +715,20 @@ export function NewTaskRoute() {
                   { value: '3', label: '×3 variants', desc: 'Three competing runs — pick the diff you keep' },
                 ]}
               />
+              {/* The row reads in clusters: WHAT runs (project, source, runner, model,
+                  variants) | HOW it runs (worktree, autonomous, follow-ups) | the icon
+                  extras (templates, dispatch) | WHERE it forks from. The dividers only
+                  exist on md-and-up; a phone wraps the row and a divider mid-wrap is noise. */}
+              <PillDivider />
               {worktreeToggleShown ? (
                 <WorktreeToggle
                   on={worktreeOn}
                   disabled={worktreeForced}
-                  disabledReason="Parallel variants always use isolated worktrees"
+                  disabledReason={
+                    dispatchOn
+                      ? "Dispatch forks this task's commits — subtasks need a worktree"
+                      : 'Parallel variants always use isolated worktrees'
+                  }
                   onChange={(on) => update({ worktree: on })}
                 />
               ) : null}
@@ -704,18 +737,39 @@ export function NewTaskRoute() {
                 disabled={draft.planFirst}
                 onChange={(on) => update({ autonomous: on })}
               />
-              {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
-                <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
-                  This skill recommends an interactive run in the current checkout. You can change either setting.
-                </p>
-              ) : null}
               {followupsToggleShown ? (
                 <GenerateFollowupsToggle
                   on={generateFollowupsOn}
                   onChange={(on) => update({ generateFollowups: on })}
                 />
               ) : null}
+              {templates.length > 0 || dispatchAvailable ? <PillDivider /> : null}
+              {/* Icon-only: this row already carries source/runner/model/variants/worktree/
+                  autonomous/branch, and templates is the least-used of them. */}
+              <PromptTemplateMenu
+                templates={templates}
+                iconOnly
+                onInsert={(text) => composerRef.current?.insertAtCaret(text)}
+              />
+              <DispatchToggle
+                available={dispatchAvailable}
+                value={dispatch}
+                onChange={changeDispatch}
+                onSettingsOpenChange={setDispatchSettingsOpen}
+                runners={runners}
+                parentRunner={displayRunner}
+                // The parent's runner gets the composer's live catalog (one fetch, shared);
+                // any other runner its static presets — a second discovery per runner for a
+                // setting this rarely touched is not worth the request.
+                modelsFor={(id) => (id === displayRunner ? models : modelsForRunner(id))}
+              />
+              {repo.data?.info ? <PillDivider /> : null}
               {repo.data ? <BaseBranchPill repo={repo.data} /> : null}
+              {selectedSkill?.interactive && (draft.autonomous === null || draft.worktree === null) ? (
+                <p className="basis-full text-xs text-muted-foreground" data-slot="interactive-skill-hint">
+                  This skill recommends an interactive run in the current checkout. You can change either setting.
+                </p>
+              ) : null}
             </>
           }
           footerEnd={
@@ -742,6 +796,17 @@ export function NewTaskRoute() {
             </>
           }
         />
+
+        {dispatchOn && (dispatchSettingsOpen || dispatchHintFlash) ? (
+          <p
+            data-slot="dispatch-hint"
+            className="mt-2 rounded-md border border-primary/25 bg-primary/[0.07] px-3 py-1.5 text-xs text-muted-foreground"
+          >
+            <strong className="font-semibold text-foreground">Dispatch is on.</strong> Splits this
+            task into subtasks it runs as separate tasks. Worktree stays on. Long-press the icon
+            for limits.
+          </p>
+        ) : null}
 
         <SuggestedChips onPick={(text) => update({ text })} />
       </div>
@@ -770,6 +835,11 @@ export function NewTaskRoute() {
       ) : null}
     </div>
   )
+}
+
+/** The thin seam between the footer's pill clusters. Hidden on phones, where the row wraps. */
+function PillDivider() {
+  return <span aria-hidden="true" className="mx-0.5 h-3.5 w-px shrink-0 bg-border max-md:hidden" />
 }
 
 /** Worktree opt-out toggle (#worktree-toggle): a checkbox-style chip for ordinary runs.
@@ -1016,182 +1086,6 @@ function ProjectPill({
   )
 }
 
-/**
- * The workflow/skill picker (#385's searchable cmdk dropdown, #519's tier ordering): ONE pill
- * for both kinds of source. Groups render Most used (skills picked before, frequency
- * descending), Project skills (bold), Workflows, then Global.
- */
-function SourcePill({
-  source,
-  ready,
-  skills,
-  skillUsage,
-  workflows,
-  onPick,
-}: {
-  source: TaskSource
-  ready: boolean
-  skills: readonly Skill[]
-  skillUsage: Readonly<Record<string, number>> | undefined
-  workflows: readonly WorkflowDef[]
-  onPick: (source: TaskSource) => void
-}) {
-  const [open, setOpen] = useState(false)
-  const [search, setSearch] = useState('')
-  const [preview, setPreview] = useState<Skill | null>(null)
-  const listRef = useRef<HTMLDivElement>(null)
-  // #484: rank in JS (cmdk's own score-sort does not re-order reliably here), then split the
-  // ranked matches into the #519 display tiers so each group stays match-ordered.
-  const matched = searchSkills(skills, search, skillUsage)
-  const { mostUsed, project, global } = partitionSkillsForDisplay(matched, skillUsage)
-  const matchedWorkflows = searchWorkflows(workflows, search)
-  const nothingMatches =
-    mostUsed.length === 0 && project.length === 0 && global.length === 0 && matchedWorkflows.length === 0
-  const pick = (next: TaskSource) => {
-    onPick(next)
-    setOpen(false)
-  }
-
-  const skillItem = (skill: Skill, emphasized: boolean) => {
-    const selected = source.source === 'skill' && source.ref === skill.name
-    return (
-      <CommandItem
-        key={skill.path}
-        // The path suffix keeps values unique when a project skill shadows a global one.
-        value={`skill ${skill.name} ${skill.path}`}
-        keywords={skillKeywords(skill.name, skill.description)}
-        data-slot="source-option"
-        data-source-kind="skill"
-        data-source-ref={skill.name}
-        onSelect={() => pick({ source: 'skill', ref: skill.name })}
-      >
-        <span className={cn('shrink-0 font-mono text-xs', emphasized && 'font-semibold')}>
-          {skill.name}
-        </span>
-        {skill.description ? (
-          <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
-            {skill.description}
-          </span>
-        ) : null}
-        {/* Read-only "View skill" (spec §Skills) — the Settings catalog's detail component
-            as a dialog. stopPropagation: viewing must not pick the source. */}
-        <button
-          type="button"
-          data-slot="source-skill-view"
-          aria-label={`View skill ${skill.name}`}
-          title="View skill"
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            setPreview(skill)
-          }}
-          className="ml-auto shrink-0 rounded-sm p-0.5 text-soft-foreground transition-colors hover:text-foreground"
-        >
-          <EyeIcon aria-hidden="true" className="size-3.5" />
-        </button>
-        {selected ? <CheckIcon aria-hidden="true" className="size-3.5 shrink-0 text-primary" /> : null}
-      </CommandItem>
-    )
-  }
-
-  return (
-    <>
-      <SkillPreviewDialog skill={preview} onClose={() => setPreview(null)} />
-      <Popover
-        open={open}
-        onOpenChange={(next) => {
-          setOpen(next)
-          if (!next) setSearch('')
-        }}
-      >
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            data-slot="source-pill"
-            aria-label="Choose a skill or workflow"
-            disabled={!ready}
-            className={cn(chipClass, 'border-foreground/60 font-mono text-[11.5px] font-semibold text-foreground')}
-          >
-            {source.source === 'skill' ? (
-              <SparklesIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
-            ) : (
-              <WorkflowIcon aria-hidden="true" className="size-3 shrink-0 text-violet" />
-            )}
-            <span className="max-w-44 truncate">{ready ? source.ref : '…'}</span>
-            {chevron}
-          </button>
-        </PopoverTrigger>
-        <PopoverContent
-          align="start"
-          sideOffset={8}
-          className="w-[336px] max-w-[calc(100vw-2rem)] p-0"
-        >
-          <Command shouldFilter={false}>
-            <CommandInput
-              placeholder="search skills & workflows…"
-              value={search}
-              onValueChange={setSearch}
-              onInput={() => listRef.current?.scrollTo(0, 0)}
-            />
-            {/* The 3rem headroom is the CommandInput row: the popper's available-height var
-                covers the whole popover, and the list must leave the search box visible. */}
-            <CommandList
-              ref={listRef}
-              data-slot="source-menu"
-              className="max-h-[min(18rem,calc(var(--radix-popover-content-available-height)-3rem))]"
-            >
-              {nothingMatches ? <CommandEmpty>Nothing matches.</CommandEmpty> : null}
-              {/* Most used leads (#519), then Project skills before Global — the closer a
-                  skill lives to the repo, the more likely it's the one being picked. */}
-              {mostUsed.length > 0 ? (
-                <CommandGroup heading="Most used">
-                  {mostUsed.map((skill) => skillItem(skill, isProjectSkill(skill)))}
-                </CommandGroup>
-              ) : null}
-              {project.length > 0 ? (
-                <CommandGroup heading="Project skills">
-                  {project.map((skill) => skillItem(skill, true))}
-                </CommandGroup>
-              ) : null}
-              {matchedWorkflows.length > 0 ? (
-                <CommandGroup heading="Workflows">
-                  {matchedWorkflows.map((workflow) => {
-                    const selected = source.source === 'workflow' && source.ref === workflow.name
-                    return (
-                      <CommandItem
-                        key={workflow.name}
-                        value={`workflow ${workflow.name}`}
-                        keywords={skillKeywords(workflow.name, workflow.description)}
-                        data-slot="source-option"
-                        data-source-kind="workflow"
-                        data-source-ref={workflow.name}
-                        onSelect={() => pick({ source: 'workflow', ref: workflow.name })}
-                      >
-                        <span className="shrink-0 font-mono text-xs">{workflow.name}</span>
-                        {workflow.description ? (
-                          <span className="min-w-0 flex-1 truncate text-xs text-soft-foreground">
-                            {workflow.description}
-                          </span>
-                        ) : null}
-                        {selected ? (
-                          <CheckIcon aria-hidden="true" className="ml-auto size-3.5 shrink-0 text-primary" />
-                        ) : null}
-                      </CommandItem>
-                    )
-                  })}
-                </CommandGroup>
-              ) : null}
-              {global.length > 0 ? (
-                <CommandGroup heading="Global">{global.map((skill) => skillItem(skill, false))}</CommandGroup>
-              ) : null}
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-    </>
-  )
-}
-
 /** Base-branch picker: worktrees fork from it and PRs target it. It is repo-level CONFIG
  *  (`PUT /api/config`, exactly the legacy Repo tab's picker), not a per-run flag — so it
  *  mutates the server and refetches, rather than living in the draft. Hidden without git. */
@@ -1218,6 +1112,7 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
       label={<span className="font-mono text-[11.5px]">base: {current}</span>}
       value={repo.baseBranch ?? ''}
       onPick={(value) => mutation.mutate(value === '' ? null : value)}
+      searchPlaceholder="Search branches…"
       options={[
         { value: '', label: `follow checked-out branch (${repo.info.branch})`, desc: 'New task worktrees fork from whatever branch is checked out' },
         ...repo.branches.map((branch) => ({ value: branch, label: branch })),

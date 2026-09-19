@@ -10,6 +10,9 @@ How cezar reaches npm. Two paths, deliberately separate
 - **Previews** are **CI-driven**: the `publish-snapshot` job in
   [`ci.yml`](../.github/workflows/ci.yml) publishes a snapshot of every package
   after a fully green `verify` run — on `develop` pushes and same-repo PRs only.
+- **Nightlies** are **clock-driven**: [`nightly.yml`](../.github/workflows/nightly.yml)
+  cuts `main`'s tip every night under the `nightly` dist-tag, so `npx cezar-cli@nightly`
+  is always the trunk. Also runnable on demand from the Actions tab.
 
 Three packages are in the release, always at the same version; two of them ship:
 
@@ -53,13 +56,44 @@ with `--tag latest --provenance`, commits the bump, tags `v<version>`, and cuts 
 GitHub Release. It's gated behind the `production` environment, so a release can
 require reviewer approval. Without `NPM_TOKEN` it degrades to a loud dry run.
 
+## Nightlies
+
+Every night at **03:17 UTC**, [`nightly.yml`](../.github/workflows/nightly.yml)
+verifies `main` (typecheck, unit suites, build, packaged-CLI e2e — the same gate
+a release runs) and publishes it under the `nightly` dist-tag:
+
+```bash
+npx cezar-cli@nightly              # whatever is on main as of last night
+npx cezar-cli@0.1.5-nightly.20260813.126   # that exact night, forever
+```
+
+The version is named after the **day it was cut** — `<base>-nightly.<YYYYMMDD>.<run_number>`
+— so the version list reads as a calendar and a user can tell how old their build
+is without looking anything up. The run number trails the date so an on-demand cut
+never collides with the scheduled one; both are numeric semver identifiers, so the
+ordering stays chronological.
+
+**Manual runs:** Actions → Nightly → *Run workflow* (from `main`). It publishes
+immediately, even if nothing has merged since the last one — that's what the
+`force` input defaults to. A *scheduled* run skips itself when `main` has not moved
+in 24 hours, because that build is already the one tagged `nightly`.
+
+The channel is requested **by name** (`CEZ_RELEASE_CHANNEL=nightly`), never inferred
+from the event, so no other workflow's manual dispatch can cut a nightly by accident;
+`computeSnapshot` additionally re-checks that the ref is `main`. Nightlies are
+prereleases under an explicit dist-tag like every other snapshot — they can never
+become the default install.
+
 ## Preview channels
 
 | Event | Version (example) | dist-tag | Install |
 |---|---|---|---|
 | same-repo PR, CI green | `0.1.5-pr482.123` | `pr-482` | `npx cezar-cli@0.1.5-pr482.123` |
 | push to `develop` | `0.1.5-develop.124` | `develop` | `npx cezar-cli@develop` |
-| push to `main` | `0.1.5-main.125` | `main` | `npx cezar-cli@main` |
+| nightly cut of `main` | `0.1.5-nightly.20260813.126` | `nightly` | `npx cezar-cli@nightly` |
+
+A push to `main` publishes **nothing**: the trunk reaches npm through the nightly
+above, or through an owner-driven stable release — never straight off a merge.
 
 Version scheme: `<base>-<channel>.<run_number>`, with `.<run_attempt>` appended
 on re-runs so no publish ever collides. Prerelease versions under explicit
@@ -88,6 +122,7 @@ prereleases are inert).
 | `packages/cezar/src/release/manifests.ts` | the shared stamper: which manifests exist, and how each pins the next (unit-tested) |
 | `scripts/release-snapshot.mjs` | orchestrator: stamps manifests, `npm publish --tag <channel> --provenance`, emits result JSON (`--dry-run` supported; e2e-tested) |
 | `ci.yml` → `publish-snapshot` | gate (`needs: verify`), same-repo guard, provenance permissions, sticky PR comment, step summary |
+| `nightly.yml` | the 03:17 UTC cron + manual dispatch: main-only guard, "did main move?" check, full verify, then the same orchestrator with `CEZ_RELEASE_CHANNEL=nightly` |
 | `npm-preview-cleanup.yml` | dist-tag removal on PR close |
 
 Guards: the job runs only for pushes and same-repo PRs (fork PRs get no

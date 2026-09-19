@@ -37,6 +37,26 @@ const REGISTRY: ProjectsResponse = {
   ],
 }
 
+/** What the server answers when cezar was started outside every saved project:
+ *  the served folder leads the list, flagged, and `bootProject` names it. */
+const UNREGISTERED_BOOT: ProjectsResponse = {
+  bootProject: 'scratch',
+  projectsDir: '/work',
+  projects: [
+    {
+      id: 'scratch',
+      name: 'scratch',
+      root: '/tmp/scratch',
+      addedAt: '',
+      lastOpenedAt: '',
+      source: 'local',
+      status: 'ok',
+      unregistered: true,
+    },
+    ...REGISTRY.projects,
+  ],
+}
+
 describe('locationToSave', () => {
   it('normalizes a registered project URL including query and hash', () => {
     expect(
@@ -82,6 +102,18 @@ describe('locationToSave', () => {
 
   it('waits for the project registry before saving', () => {
     expect(locationToSave({ pathname: '/p/boot/', search: '', hash: '' }, undefined)).toBeNull()
+  })
+
+  // Since boot registration became seed-once, the folder cezar was started in is
+  // routinely absent from the registry — `GET /api/v1/projects` lists it with
+  // `unregistered: true` so it stays a usable project everywhere, this included.
+  // Without that row it could never be the restore target, and reopening the bare
+  // root would drop the user into some other project.
+  it('saves an unregistered boot project like any other', () => {
+    expect(locationToSave({ pathname: '/p/scratch/tasks', search: '', hash: '' }, UNREGISTERED_BOOT)).toEqual({
+      projectId: 'scratch',
+      pathname: '/p/scratch/tasks',
+    })
   })
 })
 

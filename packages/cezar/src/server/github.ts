@@ -9,13 +9,27 @@ export {
   fetchGithubChecks,
   fetchGithubComments,
   fetchGithubPrDiff,
+  fetchGithubRefStatus,
+  forgetRefStatus,
+  readCachedRefStatuses,
+  refNumberFromUrl,
   GithubPrNotFoundError,
+  searchGithubItems,
   GH_MAX_LIMIT,
   GH_CHECKS_MAX,
+  GH_SEARCH_MAX,
+  GH_REF_STATUS_MAX,
 } from './forge/github.ts';
-export type { GithubData, GithubItem, GithubChecksData } from './forge/github.ts';
+export type {
+  GithubData,
+  GithubItem,
+  GithubChecksData,
+  GithubRefStatusData,
+  ReferenceStatus,
+} from './forge/github.ts';
 export type {
   ForgeComment,
+  ForgeSearchData,
   ForgeCommentsData,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,

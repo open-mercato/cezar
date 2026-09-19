@@ -1,21 +1,39 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // `vi.hoisted` so `spawnMock` is initialized before the (hoisted) vi.mock factory runs — the
 // factory sets its default implementation, so a bare `const` would be read before init.
 const spawnMock = vi.hoisted(() => vi.fn());
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
-  // Default to the REAL spawn: the JetBrains stub test launches actual detached processes and
-  // reads back their log. The openFileInDefaultApp arg-surface tests (#365) override this
-  // per-test with mockReturnValue in their own beforeEach.
-  spawnMock.mockImplementation((...args: unknown[]) =>
-    (actual.spawn as (...a: unknown[]) => unknown)(...args),
-  );
+  // Default to an INERT child — nothing in this file needs a real process. `runDetached` only
+  // touches `once`/`unref` before resolving true on its own settle timer, so a stub is enough to
+  // exercise every launcher path. The previous default (delegate to the real spawn, so the
+  // JetBrains case could execute stubs and read back their log) is what made that case flaky
+  // (#823): it raced fork+exec latency, which is unbounded on a loaded host, against a fixed
+  // poll budget. The openFileInDefaultApp arg-surface tests (#365) still override this per-test
+  // with mockReturnValue in their own beforeEach.
+  spawnMock.mockImplementation(() => ({ once: vi.fn(), unref: vi.fn() }));
   return { ...actual, spawn: (...args: unknown[]) => spawnMock(...args) };
+});
+
+import { RUNNER_IDS } from '../core/agent-runner.ts';
+
+// This file is the one place allowed past the #824 spawn guard, and the reason is visible above:
+// `spawn` is replaced file-wide by an inert stub, so no launcher call here reaches the OS. The
+// exemption is still required because `refuseSpawnUnderTest` runs inside `runDetached` BEFORE
+// `spawn`, so it trips on the mock exactly as it would on the real thing. Scoped to the file and
+// restored afterwards, so no other suite inherits the exemption.
+const savedAllowSpawn = process.env.CEZ_ALLOW_TEST_SPAWN;
+beforeAll(() => {
+  process.env.CEZ_ALLOW_TEST_SPAWN = '1';
+});
+afterAll(() => {
+  if (savedAllowSpawn === undefined) delete process.env.CEZ_ALLOW_TEST_SPAWN;
+  else process.env.CEZ_ALLOW_TEST_SPAWN = savedAllowSpawn;
 });
 
 import {
@@ -27,22 +45,6 @@ import {
   openInApp,
   resolveOnPath,
 } from './open-in-app.ts';
-
-/** Polls `assertion` until it stops throwing or `timeoutMs` elapses (then rethrows) — there is
- *  no @testing-library here, and the detached child processes this suite launches settle on
- *  their own schedule, not the test's. */
-async function waitFor(assertion: () => void, timeoutMs = 2000, intervalMs = 20): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    try {
-      assertion();
-      return;
-    } catch (error) {
-      if (Date.now() >= deadline) throw error;
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    }
-  }
-}
 
 describe('detectOpenTargets', () => {
   it('always offers a file manager and a terminal, first, both with an icon', () => {
@@ -68,16 +70,13 @@ describe('detectOpenTargets', () => {
 
     const STUBS = ['idea', 'pycharm', 'webstorm', 'goland', 'rubymine', 'phpstorm', 'clion', 'rider', 'studio'];
 
-    let callLog: string;
-
     function withStubsOnPath() {
       stubDir = mkdtempSync(join(tmpdir(), 'cez-open-in-test-'));
-      callLog = join(stubDir, 'calls.log');
       for (const name of STUBS) {
         const p = join(stubDir, name);
-        // Records its own name and argv so the "opens with the right dir" test can confirm the
-        // resolved binary actually ran with the worktree path, not just that spawn didn't throw.
-        writeFileSync(p, `#!/usr/bin/env bash\necho "${name} $1" >> ${JSON.stringify(callLog)}\ntrue\n`, 'utf8');
+        // Marker files, not scripts: `resolveOnPath` probes them with `accessSync(X_OK)` and
+        // nothing in this file executes them, because `spawn` is mocked file-wide.
+        writeFileSync(p, '', 'utf8');
         chmodSync(p, 0o755);
       }
       originalPath = process.env.PATH;
@@ -107,16 +106,30 @@ describe('detectOpenTargets', () => {
 
     it('opens the resolved JetBrains stub with the worktree dir as its argument', async () => {
       withStubsOnPath();
+      spawnMock.mockClear();
+
       expect(await openInApp('clion', '/tmp/some-worktree')).toBe(true);
       expect(await openInApp('rider', '/tmp/some-worktree')).toBe(true);
-      // runDetached's own 250ms settle window is enough for these trivial scripts to run, but
-      // it unrefs rather than waiting on the child — poll briefly rather than risk a flaky
-      // exact-timing race under load.
-      await waitFor(() => {
-        const log = readFileSync(callLog, 'utf8');
-        expect(log).toContain('clion /tmp/some-worktree');
-        expect(log).toContain('rider /tmp/some-worktree');
+
+      // Read off the spawn seam rather than by executing the stubs and polling a log they append
+      // to (#823). `runDetached` unrefs its child instead of waiting on it, so the log version
+      // raced real fork+exec latency — unbounded on a loaded host, and measured at 2.1–2.6s
+      // against a 2s poll budget — for no extra coverage: the recorded argv proves the same
+      // property the log did, that the RESOLVED binary was launched with the worktree path,
+      // while executing the stub only ever proved that bash works.
+      const launched = spawnMock.mock.calls.map((call) => {
+        const [bin, args] = call as [string, string[]];
+        return { bin, args };
       });
+      expect(launched).toEqual([
+        { bin: 'clion', args: ['/tmp/some-worktree'] },
+        { bin: 'rider', args: ['/tmp/some-worktree'] },
+      ]);
+      // Detached and stdio-free, which a launch must stay: an editor may outlive the cockpit and
+      // must never inherit its stdio. Reading the stub's own log could not observe this at all.
+      for (const call of spawnMock.mock.calls) {
+        expect(call[2]).toMatchObject({ stdio: 'ignore', detached: true });
+      }
     });
   });
 });
@@ -226,10 +239,13 @@ describe('resolveOnPath (#469 Windows launcher safety)', () => {
 });
 
 describe('agentCliRunner', () => {
-  it('maps cli:<runner> ids to the runner, and rejects everything else', () => {
-    expect(agentCliRunner('cli:claude')).toBe('claude');
-    expect(agentCliRunner('cli:codex')).toBe('codex');
-    expect(agentCliRunner('cli:opencode')).toBe('opencode');
+  // Driven off RUNNER_IDS, not a literal list, so runner #5 is covered the moment it is added
+  // (the pi entry was missed on the hand-written list, #387 review).
+  it.each(RUNNER_IDS)('maps cli:%s to that runner', (runner) => {
+    expect(agentCliRunner(`cli:${runner}`)).toBe(runner);
+  });
+
+  it('rejects every id that is not a CLI handoff', () => {
     expect(agentCliRunner('vscode')).toBeNull();
     expect(agentCliRunner('terminal')).toBeNull();
     expect(agentCliRunner('cli:bogus')).toBeNull();

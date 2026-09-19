@@ -4,7 +4,7 @@ Status: approved in design review · Date: 2026-07-22
 
 ## Summary
 
-cezar currently knows whether the Claude Code, Codex, and OpenCode executables are installed,
+cezar currently knows whether the Claude Code, Codex, OpenCode, and pi executables are installed,
 but it treats an installed CLI as runnable even when that CLI has no usable provider
 credentials. The task composer then offers an agent that fails only after a run starts, while
 Settings → Agents cannot explain or repair the missing authentication.
@@ -21,7 +21,7 @@ user explicitly asks to check again.
 
 ## Goals
 
-- Detect provider-owned credentials for Claude Code, Codex, and OpenCode through supported CLI
+- Detect provider-owned credentials for Claude Code, Codex, OpenCode, and pi through supported CLI
   commands.
 - Distinguish connected, disconnected, not-installed, and indeterminate providers without
   exposing credentials or account details.
@@ -58,6 +58,7 @@ private storage:
 | Claude Code | `claude auth status --json` | `claude auth login` | Exit 0 plus `loggedIn: true` is connected; the documented not-logged-in result is disconnected. |
 | Codex | `codex login status` | `codex login` | A recognized logged-in result is connected; a recognized not-logged-in result is disconnected. |
 | OpenCode | `opencode auth list` | `opencode auth login` | One or more CLI-reported credentials is connected; an explicitly empty list is disconnected. |
+| pi | `pi --list-models` | `pi /login` | One or more CLI-reported available models is connected; pi's explicit no-models guidance is disconnected. |
 
 Claude documents `claude auth status` as returning JSON and exiting 0 when logged in and 1 when
 not logged in: <https://code.claude.com/docs/en/cli-usage>. OpenCode documents `opencode auth
@@ -79,7 +80,7 @@ the command table, parsers, process timeouts, hints, and cache. It does not chan
 for the Tools menu and other compatibility surfaces.
 
 ```ts
-export type ProviderId = 'claude' | 'codex' | 'opencode';
+export type ProviderId = 'claude' | 'codex' | 'opencode' | 'pi';
 export type ProviderConnectionState =
   | 'connected'
   | 'disconnected'
@@ -96,7 +97,7 @@ export interface ProviderStatus {
   authFailureId?: string;
 }
 
-/** Complete workspace HTTP response: all three providers, ordered, with enablement applied. */
+/** Complete workspace HTTP response: all four providers, ordered, with enablement applied. */
 export interface ProviderStatusResponse {
   providers: Array<ProviderStatus & { enabled: boolean }>;
 }
@@ -108,8 +109,8 @@ clients always receive every provider with required `enabled`; the browser may m
 SSE row whose optional `enabled` field is absent into that cached complete response. An
 `authFailureId` is opaque and is present only on the current runtime-latched `disconnected` row.
 
-All three probes run concurrently with a 10-second per-process timeout, matching existing host
-tool probes. Each provider always produces one row, in `claude`, `codex`, `opencode` order:
+All four probes run concurrently with a 10-second per-process timeout, matching existing host
+tool probes. Each provider always produces one row, in `claude`, `codex`, `opencode`, `pi` order:
 
 - `ENOENT` means `not-installed`.
 - A recognized vendor answer means `connected` or `disconnected`.
@@ -119,14 +120,14 @@ tool probes. Each provider always produces one row, in `claude`, `codex`, `openc
 
 The detector coalesces concurrent requests and caches the completed result for five seconds so
 multiple tabs do not fan out identical processes. An explicit refresh bypasses the completed
-cache while still joining an already-running probe. `CEZ_DRY_RUN=1` returns all three providers
+cache while still joining an already-running probe. `CEZ_DRY_RUN=1` returns all four providers
 as connected mock providers and invokes no real CLI, preserving offline runner selection.
 
-Existing binary overrides remain authoritative: `CEZ_CLAUDE_BIN`, `CEZ_CODEX_BIN`, and
-`CEZ_OPENCODE_BIN` select the executable used by both status and login commands. The executable
+Existing binary overrides remain authoritative: `CEZ_CLAUDE_BIN`, `CEZ_CODEX_BIN`,
+`CEZ_OPENCODE_BIN`, and `CEZ_PI_BIN` select the executable used by both status and login commands. The executable
 is shell-quoted before it is rendered into the terminal command; every argument comes from the
-closed server descriptor. No environment variable or configuration key is added, so
-`.env.example` does not change.
+closed server descriptor. The pi runner already documents `CEZ_PI_BIN` in `.env.example`; this
+integration reuses it and adds no new environment variable or configuration key.
 
 ## Runtime invalidation
 
@@ -186,7 +187,7 @@ existing global same-origin request guard.
 
 ### `GET /api/providers/status`
 
-Returns the complete `ProviderStatusResponse`: exactly the three ordered provider rows, each with
+Returns the complete `ProviderStatusResponse`: exactly the four ordered provider rows, each with
 required `enabled`, plus optional `hint` and current runtime `authFailureId`. `?refresh=1`
 bypasses the five-second completed-result cache for the Check again action, but does not clear a
 runtime-authentication incident. The query accepts only the literal `refresh=1`; another value is
@@ -203,7 +204,7 @@ nor appropriate on that surface.
 The strict JSON body is validated with Zod (no extra keys):
 
 ```ts
-{ provider: 'claude' | 'codex' | 'opencode' }
+{ provider: 'claude' | 'codex' | 'opencode' | 'pi' }
 ```
 
 The validated provider id selects a server-owned descriptor; request text never becomes an
@@ -228,7 +229,7 @@ Behavior:
 - When `capabilities.localHandoff` is false, the route never attempts a local GUI launch. It
   returns 409 with the command and tells the user to run it on the cezar host.
 - Invalid JSON or provider ids return
-  `400 { error: 'provider must be claude, codex, or opencode' }`.
+  `400 { error: 'provider must be claude, codex, opencode, or pi' }`.
 - If the selected provider row cannot be found after a fresh probe, the route returns
   `500 { error: 'Authentication could not be verified. Try again.' }`. The route's 409 responses
   always include the copyable command; they cover not-installed, unknown, hosted-handoff, and

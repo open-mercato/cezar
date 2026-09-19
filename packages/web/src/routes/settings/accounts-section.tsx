@@ -15,7 +15,7 @@ import {
   useOpenTargets,
   useProviderStatus,
   useRemoveAgentProfile,
-  useRunnerModels,
+  useRunnerModelCatalogs,
   useSelectAgentProfile,
   useUpdateAgentProfile,
   useWorkspaceConfig,
@@ -92,6 +92,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  pi: 'pi',
 }
 
 /** The vendor's own install/login instruction, shown when the CLI is not on this machine. */
@@ -99,6 +100,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   claude: 'npm i -g @anthropic-ai/claude-code',
   codex: 'npm i -g @openai/codex',
   opencode: 'https://opencode.ai',
+  pi: 'https://github.com/badlogic/pi-mono',
 }
 
 /** Same vocabulary the Providers card uses — one wording for "is this logged in?". */
@@ -142,7 +144,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   // Every agent gets a tab, including one that cannot carry a second login: the tab is where its
   // install state and config folder live, and hiding OpenCode would just move the question
   // "is OpenCode set up?" somewhere else.
-  const providers: ProviderId[] = ['claude', 'codex', 'opencode']
+  const providers: ProviderId[] = ['claude', 'codex', 'opencode', 'pi']
 
   if (!data.editable) {
     return (
@@ -356,7 +358,8 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
   const queryClient = useQueryClient()
   const config = useWorkspaceConfig()
   const providerStatus = useProviderStatus()
-  const catalog = useRunnerModels()
+  // A row per runner, so every runner's own host catalog is needed at once (#794).
+  const catalogs = useRunnerModelCatalogs()
   const select = useSelectAgentProfile()
 
   const save = useMutation({
@@ -428,13 +431,15 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
               }
               className="block w-full max-w-xs rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
             >
-              {modelsForRunner(entry.id, catalog.data, [models[entry.id]]).map((model) => (
+              {modelsForRunner(entry.id, catalogs[entry.id].data, [models[entry.id]]).map((model) => (
                 <option key={model.id} value={model.id}>
                   {model.id === '' ? 'auto (default)' : model.label}
                 </option>
               ))}
-              {modelCatalogStatus(entry.id, catalog.data, catalog.isError) ? (
-                <option disabled>{modelCatalogStatus(entry.id, catalog.data, catalog.isError)}</option>
+              {modelCatalogStatus(entry.id, catalogs[entry.id].data, catalogs[entry.id].isError) ? (
+                <option disabled>
+                  {modelCatalogStatus(entry.id, catalogs[entry.id].data, catalogs[entry.id].isError)}
+                </option>
               ) : null}
             </select>
           </label>

@@ -167,6 +167,11 @@ green deploy means the cockpit is actually serving the new version.
   **clears that cached `cezar-cli` build** and then restarts — the next launch
   re-resolves the latest published version. (Before this, a restart silently
   kept running the cached version — see #696.) `server-deploy` alone is enough.
+- **A restart that fails, fails the deploy.** A non-zero `systemctl restart`, or a
+  restart that leaves the *same* process serving (same PID and start time), exits
+  non-zero with no "complete" line instead of reporting success over stale code —
+  so cron/CI can trust the exit status. (Before this, the port answering was the
+  whole check, and the old process answered it too — see #912.)
 
 The installer is also **idempotent** if you need to change the setup itself:
 
@@ -258,6 +263,8 @@ break other vhosts).
 | nginx won't start: `Address already in use` | Another proxy (Dokploy/Coolify → Traefik, Caddy) owns :80/:443. Re-run with `--external-proxy` (see above). `sudo ss -ltnp \| grep -E ':80\|:443'` shows who holds them. |
 | `run server-install as a normal sudo-capable user, not root` | You're `root`. `adduser cezar && usermod -aG sudo cezar`, `su - cezar`, log your agent CLI in **as that user**, then re-run. |
 | External-proxy install: proxy returns 502 | Traefik runs in a container and can't reach `127.0.0.1`. Reinstall with `--bind-host 172.17.0.1` (or your `docker0` address). |
+| `server-deploy` fails with `Failed to connect to bus: No medium found` | `systemctl --user` has no D-Bus session — the deploy ran through `sudo -u <user>`, cron or an SSH root script, which give no login session. Use `sudo -i -u <user> …` (or `machinectl shell <user>@`), or export `XDG_RUNTIME_DIR=/run/user/$(id -u <user>)` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus` first. Until #912 this was only a warning and the deploy still reported success. |
+| `cezar.service did not actually restart — PID … is still serving` | The restart command returned but the process never changed, so the cockpit is still on the old code. `systemctl --user status cezar` / `journalctl --user -u cezar -n 50` shows why; restart it by hand to see the real error. |
 | Cockpit stuck on an old version after `server-deploy` | npx-based unit whose cache wasn't refreshed (fixed in #696 — `server-deploy` now clears it). Manual: `rm -rf ~/.npm/_npx` as the service user, then `sudo systemctl restart cezar-<instance>`. |
 
 ← Back to [Remote access overview](./README.md)

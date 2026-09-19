@@ -22,6 +22,8 @@
  * that is still refusing, and "we don't know when" is an honest answer the caller can surface.
  */
 
+import { isValidTimeZone, zonedParts, zonedWallTimeToUtc } from '@open-mercato/cezar-contract';
+
 export interface UsageLimitHit {
   /** When the provider says the limit lifts. Never in the past — a stale instant clamps to now. */
   resetAt: Date;
@@ -129,8 +131,8 @@ function parseClockReset(match: RegExpExecArray, now: number): number | null {
     return null;
   }
 
-  const timeZone = validTimeZone(match[5]?.trim());
-  if (timeZone) return nextClockInTimeZone(hour, minute, timeZone, now);
+  const timeZone = match[5]?.trim();
+  if (isValidTimeZone(timeZone)) return nextClockInTimeZone(hour, minute, timeZone, now);
   return nextLocalClock(hour, minute, now);
 }
 
@@ -158,72 +160,6 @@ function nextClockInTimeZone(hour: number, minute: number, timeZone: string, now
     );
   }
   return candidate;
-}
-
-function validTimeZone(candidate: string | undefined): string | null {
-  if (!candidate) return null;
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: candidate }).format(new Date(0));
-    return candidate;
-  } catch {
-    return null;
-  }
-}
-
-function zonedWallTimeToUtc(
-  year: number,
-  month: number,
-  day: number,
-  hour: number,
-  minute: number,
-  timeZone: string,
-): number | null {
-  const wallAsUtc = Date.UTC(year, month - 1, day, hour, minute, 0, 0);
-  let candidate = wallAsUtc;
-  for (let i = 0; i < 3; i += 1) {
-    const offset = timeZoneOffsetMs(timeZone, candidate);
-    if (offset === null) return null;
-    const next = wallAsUtc - offset;
-    if (Math.abs(next - candidate) < 1_000) return next;
-    candidate = next;
-  }
-  return candidate;
-}
-
-function timeZoneOffsetMs(timeZone: string, utcMs: number): number | null {
-  const parts = zonedParts(utcMs, timeZone);
-  if (!parts) return null;
-  const asUtc = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
-  return asUtc - utcMs;
-}
-
-function zonedParts(
-  utcMs: number,
-  timeZone: string,
-): { year: number; month: number; day: number; hour: number; minute: number; second: number } | null {
-  try {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone,
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hourCycle: 'h23',
-    }).formatToParts(new Date(utcMs));
-    const value = (type: string) => Number(parts.find((part) => part.type === type)?.value);
-    return {
-      year: value('year'),
-      month: value('month'),
-      day: value('day'),
-      hour: value('hour'),
-      minute: value('minute'),
-      second: value('second'),
-    };
-  } catch {
-    return null;
-  }
 }
 
 /** Bound a candidate instant: past → now (the limit already lifted), absurd → not believed. */

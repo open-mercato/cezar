@@ -2,14 +2,16 @@ import type {
   ProviderId,
   ProviderStatusResponse,
 } from '../core/provider-auth.ts';
+import { PROVIDER_IDS } from '../core/provider-auth.ts';
 import type { RunRecord } from '../runs/store.ts';
 import { stepKind, type WorkflowDef } from '../workflows/types.ts';
 
-const ORDER: readonly ProviderId[] = ['claude', 'codex', 'opencode'];
+const ORDER: readonly ProviderId[] = PROVIDER_IDS;
 const LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  pi: 'pi',
 };
 
 export function providersRequiredByWorkflow(

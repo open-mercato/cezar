@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
+import { DISPATCH_MAX_IN_FLIGHT } from '@open-mercato/cezar-api-client'
 import {
   autoApplyText,
+  availablePromptTemplates,
   DEFAULT_PROMPT_TEMPLATES,
   insertTemplate,
   makeTemplateId,
@@ -320,5 +322,72 @@ describe('resolveAutoApply', () => {
       expect(resolveAutoApply('', '', 'AUTO', '')).toEqual(resolveAutoApply('', '', 'AUTO'))
       expect(resolveAutoApply('mine', '', 'AUTO', '')).toEqual(resolveAutoApply('mine', '', 'AUTO'))
     })
+  })
+})
+
+/** The built-in list itself. Its CONTENTS are a product decision, so only the invariants that
+ *  would break a surface are pinned here — plus the one template that exists to teach a feature. */
+describe('DEFAULT_PROMPT_TEMPLATES', () => {
+  it('has unique, non-empty ids and labels — the menu keys on the id', () => {
+    const ids = DEFAULT_PROMPT_TEMPLATES.map((t) => t.id)
+    expect(new Set(ids).size).toBe(ids.length)
+    for (const template of DEFAULT_PROMPT_TEMPLATES) {
+      expect(template.id.trim()).not.toBe('')
+      expect(template.label.trim()).not.toBe('')
+      expect(template.text.trim()).not.toBe('')
+    }
+  })
+
+  // Every other built-in tells ONE task how to do its own work. This is the worked example of a
+  // task that fans work out to dispatched children and then waits for their reports (spec
+  // `.ai/specs/2026-09-10-dispatch.md`), so its shape is load-bearing: the `cez task create`
+  // invocation, the concurrency ceiling, and the CEZ:MONITORING end that makes the waiting work.
+  it('ships the dispatching example, with the CLI call and the monitoring end intact', () => {
+    const template = DEFAULT_PROMPT_TEMPLATES.find((t) => t.id === 'review-open-prs')
+    expect(template?.label).toBe('Review open PRs')
+    expect(template?.text).toContain('gh pr list --state open')
+    expect(template?.text).toContain('cez task create --kind review --review-of <headRefName>')
+    // The cap is the contract's, not a literal: the engine enforces it and DISPATCH_PROMPT states
+    // it, so a template that named its own number would be a fourth copy free to drift.
+    expect(template?.text).toContain(`at most ${DISPATCH_MAX_IN_FLIGHT} at a time`)
+    expect(template?.text).toContain('CEZ:MONITORING')
+  })
+
+  it('survives its own normalizer unchanged — the built-ins must round-trip', () => {
+    expect(normalizePromptTemplates(DEFAULT_PROMPT_TEMPLATES)).toEqual(DEFAULT_PROMPT_TEMPLATES)
+  })
+})
+
+describe('availablePromptTemplates', () => {
+  const ids = (caps: { dispatch?: boolean; automations?: boolean } | undefined) =>
+    availablePromptTemplates(DEFAULT_PROMPT_TEMPLATES, caps).map((t) => t.id)
+
+  it('hides the dispatching built-in unless the server reports capabilities.dispatch', () => {
+    expect(ids(undefined)).not.toContain('review-open-prs')
+    expect(ids({ dispatch: false, automations: true })).not.toContain('review-open-prs')
+    expect(ids({ dispatch: true })).toContain('review-open-prs')
+    // Everything else is untouched either way.
+    expect(ids({ dispatch: false, automations: true })).toEqual(
+      DEFAULT_PROMPT_TEMPLATES.map((t) => t.id).filter((id) => id !== 'review-open-prs'),
+    )
+  })
+
+  it('hides the automation-authoring built-in unless the server reports capabilities.automations', () => {
+    expect(ids(undefined)).not.toContain('create-automation')
+    expect(ids({ dispatch: true, automations: false })).not.toContain('create-automation')
+    expect(ids({ dispatch: true, automations: true })).toContain('create-automation')
+    // The two gates are independent: each hides only its own template.
+    expect(ids({ dispatch: true, automations: false })).toEqual(
+      DEFAULT_PROMPT_TEMPLATES.map((t) => t.id).filter((id) => id !== 'create-automation'),
+    )
+    expect(ids({ dispatch: true, automations: true })).toEqual(DEFAULT_PROMPT_TEMPLATES.map((t) => t.id))
+  })
+
+  it('the automation template is assigned to the built-in skill, so picking it pre-fills the box', () => {
+    const template = DEFAULT_PROMPT_TEMPLATES.find((t) => t.id === 'create-automation')
+    expect(template?.skills).toEqual(['create-cezar-automation'])
+    expect(template?.text).toContain('Trigger:')
+    expect(template?.text).toContain('Task for each run:')
+    expect(template?.text).toContain('Leave it paused')
   })
 })

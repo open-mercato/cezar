@@ -16,6 +16,9 @@ import type {
   AutomationCheckQueuedResponse,
   AutomationLogResponse,
   AutomationResponse,
+  AutomationRetryResponse,
+  AutomationRunResponse,
+  AutomationTemplatesResponse,
   CreateAutomationInput,
   UpdateAutomationInput,
   AgentConfigListing,
@@ -35,13 +38,22 @@ import type {
   CreatePrResponse,
   CreateRunInput,
   CreateRunResponse,
+  DeleteDraftResponse,
   DeleteRunResponse,
   DeleteWorkflowResponse,
+  DraftEntry,
+  DraftImage,
+  DraftImageContent,
+  DraftImageInput,
+  RunDraftsResponse,
+  SetRunDraftInput,
   FinishResponse,
   FsBrowseResponse,
   GitCommitResponse,
   GitPushResponse,
   GithubChecksData,
+  GithubSearchData,
+  GithubRefStatusData,
   GithubCommentsData,
   GithubData,
   GithubMergeMethod,
@@ -50,7 +62,7 @@ import type {
   GithubPrChangesData,
   GroupResponse,
   HealthResponse,
-  ImageInput,
+  AttachmentInput,
   LaunchKeyResponse,
   MessageInput,
   EditQueuedMessageResponse,
@@ -75,7 +87,11 @@ import type {
   RepoBranchResponse,
   RepoCommitPayload,
   RunCommitsResponse,
+  RunHistoryContext,
+  RunHistoryPage,
   RepoResponse,
+  Runner,
+  ModelDiscoveryRunner,
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
@@ -86,6 +102,7 @@ import type {
   SetConfigResponse,
   SetAgentConfigInput,
   SetWorkspaceConfigInput,
+  SetWorkspaceUiStateInput,
   ImportableSkill,
   Skill,
   StartTodoInput,
@@ -105,6 +122,8 @@ import {
   getApiBaseUrl,
   getApiScope,
   queryScope,
+  runHistoryContextSchema,
+  runHistoryPageSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -295,6 +314,45 @@ async function unwrap<R extends ClientResponse<unknown, number, ResponseFormat>>
 }
 
 /**
+ * The `safeParse` half of a contract schema, spelled structurally.
+ *
+ * Keeps this package free of a direct `zod` dependency: the schemas arrive through the
+ * api-client barrel as runtime values (`contract-pipeline.test.ts` pins that), and this is the
+ * only part of them `unwrapValidated` uses.
+ */
+type ResponseValidator<T> = {
+  safeParse: (value: unknown) => { success: true; data: T } | { success: false }
+}
+
+/**
+ * `unwrap`, plus the shape check its cast cannot make.
+ *
+ * `unwrap` ends in `parsed as OkJson<R>` — a compile-time claim about a body the server sent at
+ * runtime. For most routes the claim is harmless: a caller reading a missing field gets
+ * `undefined` and renders nothing. The history routes are different — `useRunHistory` iterates
+ * `page.events`, so a 200 whose body is not a page throws a `TypeError` mid-render and takes the
+ * session view down with it, bypassing the hook's own full-replay fallback (which only triggers
+ * on a REJECTED query). Validating here turns that body into the same `ApiError` a non-JSON body
+ * already produces, so the malformed case degrades exactly like the unreachable one.
+ *
+ * Its own server cannot produce such a body (`contract-parity.test.ts` pins both response types
+ * to these schemas) — this guards the boundary against a proxy, a stale server, or a stub.
+ */
+async function unwrapValidated<R extends ClientResponse<unknown, number, ResponseFormat>>(
+  res: R,
+  label: string,
+  schema: ResponseValidator<OkJson<R>>,
+): Promise<OkJson<R>> {
+  const status = res.status
+  const parsed = await unwrap(res, label)
+  const result = schema.safeParse(parsed)
+  if (!result.success) {
+    throw new ApiError(status, `the cezar server answered ${label} with an unexpected body`)
+  }
+  return result.data
+}
+
+/**
  * The one `fetch` both request paths go through — hand-written and typed alike.
  *
  * Shared rather than duplicated because the two behaviours below are the contract, and a
@@ -350,9 +408,13 @@ export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
 }
 
-/** Host-local Codex catalog. Workspace-level: one CLI/account serves every project. */
-export async function getRunnerModels(opts?: ReadOptions): Promise<RunnerModelCatalogResponse> {
-  return unwrap(await cez.api.v1.models.$get({ query: { runner: 'codex' } }, init(opts)), '/models')
+/** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode` — #794, #784).
+ *  Workspace-level: one CLI/account serves every project. */
+export async function getRunnerModels(
+  runner: ModelDiscoveryRunner,
+  opts?: ReadOptions,
+): Promise<RunnerModelCatalogResponse> {
+  return unwrap(await cez.api.v1.models.$get({ query: { runner } }, init(opts)), '/models')
 }
 
 /** Host-local authentication state shared by every project. */
@@ -452,6 +514,56 @@ export async function getRun(id: string, opts?: ReadOptions): Promise<ApiRun> {
       init(opts),
     ),
     runPath(id),
+  )
+}
+
+/**
+ * The same read by EXPLICIT project — the twin of `getRun`, for the reason `archiveProjectRun`
+ * spells out: the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would
+ * name the BOOT project for a row that belongs to another one. It is also the only way that page
+ * can learn a run's steps: its own index ships a deliberately slim entry (no `steps`, no
+ * `runner`), and whether a finished task can be reopened is a question only the full record
+ * answers.
+ */
+export async function getProjectRun(projectId: string, id: string, opts?: ReadOptions): Promise<ApiRun> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].$get(
+      { param: { projectId, id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id),
+  )
+}
+
+/** One reverse-paged history page. Validated (not merely cast) because `useRunHistory` iterates
+ *  `events`: see `unwrapValidated`. */
+export async function getRunHistory(
+  id: string,
+  cursor?: string,
+  opts?: ReadOptions,
+): Promise<RunHistoryPage> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].runs[':id'].history.$get(
+      {
+        param: { projectId: queryScope(), id: encodeURIComponent(id) },
+        query: { ...(cursor !== undefined ? { cursor } : {}) },
+      },
+      init(opts),
+    ),
+    `${runPath(id)}/history`,
+    runHistoryPageSchema,
+  )
+}
+
+/** The compact current-state context for a run. Validated for the same reason as the page above. */
+export async function getRunHistoryContext(id: string, opts?: ReadOptions): Promise<RunHistoryContext> {
+  return unwrapValidated(
+    await cez.api.v1.p[':projectId'].runs[':id']['history-context'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    `${runPath(id)}/history-context`,
+    runHistoryContextSchema,
   )
 }
 
@@ -684,6 +796,62 @@ export async function getGithubChecks(
       init(opts),
     ),
     '/github/checks',
+  )
+}
+
+/** Search issues/PRs in ANY state (#730). `getGithub` lists the open set only, so the tab's
+ *  in-memory filter cannot reach a closed or merged item — this is the fallback it calls when the
+ *  local filter comes up empty. Degrades to `{ available: false, reason }` server-side. */
+export async function getGithubSearch(
+  kind: 'issue' | 'pr',
+  query: string,
+  params: { limit?: number } = {},
+  opts?: ReadOptions,
+): Promise<GithubSearchData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github.search.$get(
+      {
+        param: { projectId: queryScope() },
+        // The search route validates `limit` with `z.coerce.number()`, so the typed client's
+        // query input is `number | undefined` — pass the number, not a stringified copy (the
+        // `/github` list route below coerces from a bare string, hence the difference).
+        query: { kind, q: query, limit: params.limit },
+      },
+      init(opts),
+    ),
+    '/github/search',
+  )
+}
+
+/**
+ * Batched status for the PR/issue chips on screen. Takes its project EXPLICITLY, like
+ * `getProjectRuns` and `archiveProjectRun` and for the same reason: the global Tasks page stands
+ * outside every `/p/:projectId`, and its rows belong to different projects — `queryScope()` would
+ * ask the boot project about another project's PR number and get a confident wrong answer.
+ * Callers standing in one project pass their own id.
+ *
+ * Degrades to `{ available: false, reason }` server-side; an absent number is "nothing known",
+ * which the chip renders exactly as it did before statuses existed.
+ */
+export async function getGithubRefStatus(
+  projectId: string,
+  refs: { prs?: readonly number[]; issues?: readonly number[] },
+  opts?: ReadOptions,
+): Promise<GithubRefStatusData> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].github['ref-status'].$get(
+      {
+        param: { projectId },
+        query: {
+          // Spread conditionally: the route reads an ABSENT key as "not asked for", and an empty
+          // string would be a malformed list (a 400) rather than a silent no-op.
+          ...(refs.prs?.length ? { prs: refs.prs.join(',') } : {}),
+          ...(refs.issues?.length ? { issues: refs.issues.join(',') } : {}),
+        },
+      },
+      init(opts),
+    ),
+    '/github/ref-status',
   )
 }
 
@@ -976,6 +1144,77 @@ export async function archiveRun(id: string, archived = true): Promise<RunRecord
   )
 }
 
+/** Pins by default; pass `false` to drop the task back into its ordinary bucket (#935). */
+export async function pinRun(id: string, pinned = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: { pinned },
+    }),
+    runPath(id, '/pin'),
+  )
+}
+
+/**
+ * The same pin by EXPLICIT project — the twin of `archiveProjectRun` below, and needed for the
+ * same reason one step closer to home: the multi-project sidebar paints a quick-list per
+ * REGISTERED project, so a pin toggle on another project's row would otherwise be sent with the
+ * scope of whichever project the URL happens to name.
+ */
+export async function pinProjectRun(projectId: string, id: string, pinned = true): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].pin.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { pinned },
+    }),
+    runPath(id, '/pin'),
+  )
+}
+
+/**
+ * The same route by EXPLICIT project — the twin of `getProjectRuns`, and for the same reason:
+ * the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would send the
+ * BOOT project's id for a row that belongs to another project, and the archive would either 404
+ * or (with a colliding id) land on the wrong task. Every caller that is already standing in the
+ * run's own project keeps using `archiveRun`.
+ */
+export async function archiveProjectRun(
+  projectId: string,
+  id: string,
+  archived = true,
+): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].archive.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { archived },
+    }),
+    runPath(id, '/archive'),
+  )
+}
+
+/**
+ * The read receipt by EXPLICIT project — the twin of `archiveProjectRun`, and for the same
+ * reason: the global Tasks page stands outside every `/p/:projectId`, so `queryScope()` would
+ * stamp the receipt on the boot project. `read: false` is the inverse route (#775).
+ */
+export async function setProjectRunRead(
+  projectId: string,
+  id: string,
+  read: boolean,
+): Promise<RunRecord> {
+  const route = read ? 'read' : 'unread'
+  return unwrap(
+    await (read
+      ? cez.api.v1.p[':projectId'].runs[':id'].read.$post({
+          param: { projectId, id: encodeURIComponent(id) },
+        })
+      : cez.api.v1.p[':projectId'].runs[':id'].unread.$post({
+          param: { projectId, id: encodeURIComponent(id) },
+        })),
+    runPath(id, `/${route}`),
+  )
+}
+
 /** Stop THIS task from resuming itself after a usage limit (spec
  *  2026-08-03-auto-resume-after-usage-limit) — the per-task twin of the workspace setting.
  *  Idempotent: a task with nothing scheduled answers the same way. */
@@ -1042,10 +1281,8 @@ export async function finishRun(id: string): Promise<FinishResponse> {
   )
 }
 
-/** The follow-up composer's optional overrides for a Continue (#401): pick which backend, model,
- *  and Codex reasoning effort handle the reopened session. Omitted fields keep the run's current engine.
- *  `text`/`images` are the prompt the reopened session starts on — omitted, the engine opens
- *  with its plain "Continue.". */
+/** The follow-up composer's optional engine, effort and account overrides. The contract owns this
+ * shape, so the typed client and server cannot disagree about which fields a Continue accepts. */
 export type ContinueOptions = ContinueRunInput
 
 /** Reopen a finished run's session. 409 (with the reason) when it cannot be resumed. An optional
@@ -1057,11 +1294,33 @@ export async function continueRun(id: string, opts: ContinueOptions = {}): Promi
     ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
     ...(opts.model !== undefined ? { model: opts.model } : {}),
     ...(opts.reasoningEffort !== undefined ? { reasoningEffort: opts.reasoningEffort } : {}),
+    ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
   }
   return unwrap(
     await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
       json: body,
+    }),
+    runPath(id, '/continue'),
+  )
+}
+
+/** The same reopen by EXPLICIT project — see `archiveProjectRun`. */
+export async function continueProjectRun(
+  projectId: string,
+  id: string,
+  opts: ContinueOptions = {},
+): Promise<ContinueResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].continue.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: {
+        ...(opts.text !== undefined ? { text: opts.text } : {}),
+        ...(opts.images !== undefined ? { images: opts.images } : {}),
+        ...(opts.runner !== undefined ? { runner: opts.runner } : {}),
+        ...(opts.model !== undefined ? { model: opts.model } : {}),
+        ...(opts.agentProfile !== undefined ? { agentProfile: opts.agentProfile } : {}),
+      },
     }),
     runPath(id, '/continue'),
   )
@@ -1259,6 +1518,22 @@ export async function sendMessage(id: string, message: MessageInput): Promise<Me
   )
 }
 
+/** The same delivery by EXPLICIT project — see `archiveProjectRun`. What lets a chip on the
+ *  global Tasks page speak to a run in a project this page is not standing in. */
+export async function sendProjectRunMessage(
+  projectId: string,
+  id: string,
+  message: MessageInput,
+): Promise<MessageResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].messages.$post({
+      param: { projectId, id: encodeURIComponent(id) },
+      json: { text: message.text ?? '', images: message.images ?? [] },
+    }),
+    runPath(id, '/messages'),
+  )
+}
+
 /** Replace a stacked message on a still-queued run (#472). 404 unknown run/message,
  *  409 once the run has started. */
 export async function editQueuedMessage(
@@ -1285,6 +1560,113 @@ export async function removeQueuedMessage(
       param: { projectId: queryScope(), id: encodeURIComponent(id), msgId: encodeURIComponent(msgId) },
     }),
     runPath(id, `/queued-messages/${encodeURIComponent(msgId)}`),
+  )
+}
+
+// ---- in-task drafts (#939) ------------------------------------------------------------------
+//
+// The unsent text and attachments of a task's editable inputs. Server-side so a draft follows the
+// user across browsers and survives a reload and a `cez` restart — the one thing the localStorage
+// stores behind `/new` and the GitHub hand-off box cannot do. `routes/task-thread/thread-draft.ts`
+// is the cockpit's ONLY caller: no component talks to this API directly.
+
+/** Every surface of one run that holds a draft. */
+export async function getRunDrafts(id: string, opts?: ReadOptions): Promise<RunDraftsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts.$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) } },
+      init(opts),
+    ),
+    runPath(id, '/drafts'),
+  )
+}
+
+/**
+ * The Fetch standard's ceiling on the TOTAL body of all in-flight `keepalive` requests. Past it
+ * the browser REJECTS the request outright — so a long draft asked to fly `keepalive` would be
+ * the one draft guaranteed not to be saved. Deliberately under the 64 KiB spec figure: other
+ * `keepalive` requests share the same allowance.
+ */
+const KEEPALIVE_BODY_MAX = 56 * 1024
+
+/** Replace one surface's draft. `images` are the ids `postRunDraftImage` minted; an empty write
+ *  (no text, no images) DELETES the entry — that is the server's rule, not a client courtesy. */
+export async function putRunDraft(
+  id: string,
+  surface: string,
+  body: SetRunDraftInput,
+  // `keepalive` is what makes the tab-close flush real: a page hidden mid-sentence dispatches one
+  // last write, and the browser is allowed to finish it after the document is gone.
+  opts?: { keepalive?: boolean },
+): Promise<DraftEntry> {
+  // …but only while the body fits. Above the cap an ordinary request is strictly better: a tab
+  // that is merely hidden (the common case) completes it normally, where `keepalive` would have
+  // thrown before it left. `DRAFT_TEXT_MAX` is 100 000 characters, so this is reachable by typing.
+  const keepalive =
+    opts?.keepalive === true && new TextEncoder().encode(JSON.stringify(body)).length <= KEEPALIVE_BODY_MAX
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].$put(
+      {
+        param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+        json: body,
+      },
+      { init: { keepalive } },
+    ),
+    runPath(id, `/drafts/${surface}`),
+  )
+}
+
+export async function deleteRunDraft(id: string, surface: string): Promise<DeleteDraftResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+    }),
+    runPath(id, `/drafts/${surface}`),
+  )
+}
+
+/** Upload one attachment. Called when the image is ATTACHED, not when the message is sent, so a
+ *  draft record only ever references bytes the server already holds. */
+export async function postRunDraftImage(
+  id: string,
+  surface: string,
+  image: DraftImageInput,
+): Promise<DraftImage> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface },
+      json: image,
+    }),
+    runPath(id, `/drafts/${surface}/images`),
+  )
+}
+
+/** The bytes behind a restored thumbnail, base64. */
+export async function getRunDraftImage(
+  id: string,
+  surface: string,
+  imageId: string,
+  opts?: ReadOptions,
+): Promise<DraftImageContent> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images[':imageId'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id), surface, imageId } },
+      init(opts),
+    ),
+    runPath(id, `/drafts/${surface}/images/${imageId}`),
+  )
+}
+
+export async function deleteRunDraftImage(
+  id: string,
+  surface: string,
+  imageId: string,
+): Promise<DeleteDraftResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].drafts[':surface'].images[':imageId'].$delete({
+      param: { projectId: queryScope(), id: encodeURIComponent(id), surface, imageId },
+    }),
+    runPath(id, `/drafts/${surface}/images/${imageId}`),
   )
 }
 
@@ -1414,6 +1796,49 @@ export async function getAutomationLog(
   )
 }
 
+/** Relaunch a receipt stuck in `launch-error` (spec 2026-09-14 § API, kind-aware): a schedule
+ *  receipt fires its occurrence again as `manual`, a GitHub one relaunches its candidate. 409 with
+ *  the server's reason when the receipt is not retryable. */
+export async function retryAutomationReceipt(receiptId: string): Promise<AutomationRetryResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId']['automation-log'][':receiptId'].retry.$post({
+      param: { projectId: queryScope(), receiptId: encodeURIComponent(receiptId) },
+    }),
+    `/automation-log/${encodeURIComponent(receiptId)}/retry`,
+  )
+}
+
+/** Fire a SCHEDULED automation now, by hand (spec 2026-09-14 Q10) — paused or not; neither
+ *  `enabled` nor the timer changes. A GitHub automation answers 409: it runs through `check`. */
+export async function runAutomationNow(id: string): Promise<AutomationRunResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].automations[':id'].run.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    `/automations/${encodeURIComponent(id)}/run`,
+  )
+}
+
+/** Delete a definition. Its runs, receipts and log rows stay; the id is tombstoned. */
+export async function deleteAutomation(id: string): Promise<void> {
+  const res = await cez.api.v1.p[':projectId'].automations[':id'].$delete({
+    param: { projectId: queryScope(), id: encodeURIComponent(id) },
+  })
+  if (!res.ok) throw errorFor(res.status, res.statusText, await res.text())
+}
+
+/** The other registered projects' automations, as the editor's template palette lists them
+ *  (spec 2026-09-14 Q7). Workspace-level; `exclude` keeps the calling project out. */
+export async function getAutomationTemplates(exclude: string | null, opts?: ReadOptions): Promise<AutomationTemplatesResponse> {
+  return unwrap(
+    await cez.api.v1.workspace['automation-templates'].$get(
+      { query: exclude ? { exclude } : {} },
+      init(opts),
+    ),
+    '/workspace/automation-templates',
+  )
+}
+
 /** Save an approved plan as a reusable chain. A 409 carries `exists: true` on the ApiError —
  *  ask the user, then retry with `overwrite: true`. */
 export async function createWorkflow(input: SaveWorkflowInput): Promise<SaveWorkflowResponse> {
@@ -1470,9 +1895,15 @@ export async function getWorkspaceUiState(opts?: ReadOptions): Promise<Workspace
 
 /** Shallow top-level merge server-side, same as its per-repo twin — send whole top-level
  *  objects (`{ sidebar: {...} }`), never a nested leaf alone. Answers the merged state. */
-export async function putWorkspaceUiState(patch: WorkspaceUiState): Promise<WorkspaceUiState> {
+export async function putWorkspaceUiState(
+  patch: SetWorkspaceUiStateInput,
+  opts: { keepalive?: boolean } = {},
+): Promise<WorkspaceUiState> {
   return unwrap(
-    await cez.api.v1.workspace['ui-state'].$put({ json: patch }),
+    await cez.api.v1.workspace['ui-state'].$put(
+      { json: patch },
+      { init: { keepalive: opts.keepalive } },
+    ),
     '/workspace/ui-state',
   )
 }

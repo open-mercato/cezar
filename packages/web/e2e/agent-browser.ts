@@ -61,7 +61,40 @@ export function fixtureServeEnv(
   dataRoot: string,
   extra: Record<string, string> = {},
 ): NodeJS.ProcessEnv {
-  return { ...process.env, CEZ_DRY_RUN: '1', CEZ_HOME: resolve(dataRoot, '.cez-home'), ...extra }
+  return {
+    ...process.env,
+    // One line on purpose: the `fixture-serve-must-pin-cez-home` design guardian reads these
+    // two together, and a CEZ_DRY_RUN without CEZ_HOME beside it is exactly the mistake it
+    // exists to catch.
+    CEZ_DRY_RUN: '1', CEZ_HOME: resolve(dataRoot, '.cez-home'),
+    // A fixture repo must hold exactly the skills the fixture wrote. Open Mercato skill updates
+    // are default-on (AGENTS.md § Zero config), so a boot inside the six-hour window installs the
+    // whole `om-*` collection INTO the fixture and every "these are the project skills"
+    // assertion starts depending on the machine's cache and network. The shared test env
+    // (`skills-update.e2e.ts` attaches to it) is where that behaviour is exercised on purpose;
+    // `extra` can still turn it back on for a spec that wants it.
+    CEZ_SKILLS_AUTO_UPDATE: '0',
+    ...extra,
+  }
+}
+
+/**
+ * A JSON GET that survives a RESET idle connection.
+ *
+ * Specs boot a server, drive the browser for tens of seconds, then read the API back. Node's
+ * fetch pools the connection opened during the health probe, and reusing a socket the server has
+ * since closed surfaces as `ECONNRESET` — a dead connection, never a dead server (the process is
+ * still answering the browser at that moment). One retry opens a fresh one.
+ */
+export async function getJson<T>(url: string): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return (await (await fetch(url)).json()) as T
+    } catch (error) {
+      if (attempt >= 2) throw error
+      await new Promise((r) => setTimeout(r, 250))
+    }
+  }
 }
 
 /**

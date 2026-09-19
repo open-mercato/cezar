@@ -1,0 +1,1520 @@
+From cdde154b38ce5a9096b03737376d10a000392471 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Sun, 13 Sep 2026 20:40:30 +0000
+Subject: [PATCH] =?UTF-8?q?feat(automations):=20create=20a=20GitHub=20auto?=
+ =?UTF-8?q?mation=20from=20a=20prompt=20=E2=80=94=20cez=20automation=20CLI?=
+ =?UTF-8?q?,=20built-in=20skill,=20system-prompt=20part?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+A user can now type "whenever a PR is opened, review it" into New task and get an
+automation instead of a one-off run. Two ways in, one mechanism underneath:
+
+- `cez automation schema|create|update|check|list|show|enable|pause|delete` — a thin
+  client over the existing automations routes, addressed by the same CEZ_API_URL /
+  CEZ_PROJECT_ID / CEZ_BIN the dispatch CLI uses. Definitions travel as JSON (--file,
+  --json or stdin); create is paused unless --enable; check queues a preview and polls
+  it; update merges over the editable keys and echoes the revision.
+- A short automations part composed into every task's system prompt at both session
+  construction sites, so an agent recognises the intent and knows the CLI.
+- The built-in `create-cezar-automation` skill (source `builtin`, interactive), appended
+  last to the catalog so a repo skill of the same name shadows it, plus a "Create an
+  automation" composer template assigned to it.
+
+All of it gated on capabilities.automations AND the cockpit transport
+(automationsReachable): a headless run or a cockpit with CEZ_AUTOMATIONS unset composes
+nothing, lists nothing, offers nothing — the dispatch lesson (spec 2026-09-10 A2/A8).
+
+Spec: .ai/specs/2026-09-13-automations-from-prompt.md
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Htes33kPGJXohZYwtv7LYG
+---
+ .../2026-09-13-automations-from-prompt.md     |  51 +++
+ .../2026-09-13-automations-from-prompt.md     |  84 +++++
+ .env.example                                  |   6 +-
+ BACKWARD_COMPATIBILITY.md                     |   8 +-
+ README.md                                     |   2 +-
+ .../src/automations/automation-cli.test.ts    | 216 +++++++++++++
+ .../cezar/src/automations/automation-cli.ts   | 299 ++++++++++++++++++
+ .../cezar/src/automations/builtin-skill.ts    |  44 +++
+ .../cezar/src/automations/prompts.test.ts     |  91 ++++++
+ packages/cezar/src/automations/prompts.ts     | 111 +++++++
+ packages/cezar/src/index.ts                   |   7 +
+ packages/cezar/src/server/capabilities.ts     |   7 +-
+ packages/cezar/src/skills.test.ts             |  60 +++-
+ packages/cezar/src/skills.ts                  |  11 +-
+ packages/cezar/src/workflows/run.ts           |  29 +-
+ .../cezar/src/workflows/system-prompt.test.ts |  46 ++-
+ packages/contract/src/skills.ts               |   6 +-
+ packages/web/src/lib/prompt-templates.test.ts |  28 +-
+ packages/web/src/lib/prompt-templates.ts      |  35 +-
+ 19 files changed, 1121 insertions(+), 20 deletions(-)
+ create mode 100644 .ai/runs/2026-09-13-automations-from-prompt.md
+ create mode 100644 .ai/specs/2026-09-13-automations-from-prompt.md
+ create mode 100644 packages/cezar/src/automations/automation-cli.test.ts
+ create mode 100644 packages/cezar/src/automations/automation-cli.ts
+ create mode 100644 packages/cezar/src/automations/builtin-skill.ts
+ create mode 100644 packages/cezar/src/automations/prompts.test.ts
+ create mode 100644 packages/cezar/src/automations/prompts.ts
+
+diff --git a/.ai/runs/2026-09-13-automations-from-prompt.md b/.ai/runs/2026-09-13-automations-from-prompt.md
+new file mode 100644
+index 0000000..3ccbd1f
+--- /dev/null
++++ b/.ai/runs/2026-09-13-automations-from-prompt.md
+@@ -0,0 +1,51 @@
++# Automations from a prompt — implementation
++
++Source doc: .ai/specs/2026-09-13-automations-from-prompt.md
++Builds on: .ai/specs/2026-07-25-github-automations.md, .ai/specs/2026-09-10-dispatch.md
++
++## Goal
++
++Let a user create a GitHub automation from the New task window by describing it — either by picking
++the built-in `create-cezar-automation` skill or by simply asking, with the agent recognising the
++intent from its system prompt — without adding routes, state or flags.
++
++## What was built
++
++- `packages/cezar/src/automations/prompts.ts` — `AUTOMATIONS_PROMPT` (always-on part),
++  `AUTOMATION_SCHEMA_REFERENCE` (the definition shape `cez automation schema` prints),
++  `CREATE_AUTOMATION_SKILL_BODY` (the playbook).
++- `packages/cezar/src/automations/automation-cli.ts` — `cez automation
++  schema|create|update|check|list|show|enable|pause|delete`, a thin client over the existing
++  automations routes; routed in `src/index.ts` ahead of the cockpit parser like `cez task`.
++- `packages/cezar/src/automations/builtin-skill.ts` — `automationsReachable()` (flag AND
++  `CEZ_API_URL`), the built-in `Skill` (`source: 'builtin'`, `interactive: true`) and
++  `builtinSkills()`; `src/skills.ts` appends it last in `discoverSkills`. `Skill.source` gains
++  `'builtin'` in `src/skills.ts` and `packages/contract/src/skills.ts` (additive).
++- `packages/cezar/src/workflows/run.ts` — `ActiveRun.automationsPrompt`,
++  `prepareAutomationsSession` at both session construction sites, composed after the dispatch part
++  at both `startSession` calls.
++- `packages/web/src/lib/prompt-templates.ts` — built-in `create-automation` template assigned to
++  the skill; `AUTOMATIONS_TEMPLATE_IDS` gate in `availablePromptTemplates` (now reads
++  `capabilities.automations` too; the three composers already pass the whole capabilities object).
++- Docs: README (env row + CLI), `.env.example`, `BACKWARD_COMPATIBILITY.md` (CLI section), this spec.
++
++## Tests
++
++- `automations/automation-cli.test.ts` — request shape per command, `--enable` lifting, stdin,
++  malformed input, refusal relay, update merge + revision echo, check polling, no-cockpit exit.
++- `automations/prompts.test.ts` — the reference names every event and key of the storage schema
++  and parses as a valid definition once comments are stripped; prompt and skill pin the CLI and
++  the paused/preview rules.
++- `skills.test.ts` — built-in absent with the flag off or no transport, present and `builtin`
++  when reachable, shadowed by a repo skill of the same name.
++- `workflows/system-prompt.test.ts` — the part rides only when on AND reachable.
++- `web/src/lib/prompt-templates.test.ts` — the automations gate, independent of the dispatch gate.
++
++## Validation
++
++`npm run typecheck`, `npm test` (server + web), `npm run test:unit`, `npm run build` — see the PR.
++
++## Not done
++
++The redesigned Automations screens from the Claude Design export (the export was not available in
++the session); the composer keeps its existing skill picker and template menu as the entry points.
+diff --git a/.ai/specs/2026-09-13-automations-from-prompt.md b/.ai/specs/2026-09-13-automations-from-prompt.md
+new file mode 100644
+index 0000000..a623ba9
+--- /dev/null
++++ b/.ai/specs/2026-09-13-automations-from-prompt.md
+@@ -0,0 +1,84 @@
++# Automations from a prompt — a task may create a GitHub automation
++
++> Slug: `automations-from-prompt` · Status: implemented · Gated by the existing `CEZ_AUTOMATIONS=1`
++> (→ `capabilities.automations`) plus the cockpit transport (`CEZ_API_URL`), exactly like dispatch.
++> Extends: `2026-07-25-github-automations.md` (the feature), `2026-09-10-dispatch.md` (the mechanism).
++
++## TLDR
++
++A user types "whenever a PR is opened, review it" into the **New task** window and the agent creates
++the automation instead of doing the work once. Two ways in, one mechanism underneath:
++
++- **Pick the skill.** A built-in skill, `create-cezar-automation`, is listed in the composer's skill
++  picker (and `/create-cezar-automation`) on any cockpit with automations on. Picking it pre-fills the
++  prompt box with the two questions every automation needs answered (trigger, task) through a
++  built-in prompt template assigned to it, and runs the task under a playbook: understand → write the
++  definition → `cez automation create` (paused) → `cez automation check` (preview) → report the link.
++- **Or just ask.** Every task's system prompt carries a short **automations part** that teaches the
++  agent to recognise "whenever / every time a PR or issue …" as an automation and names the CLI. An
++  agent that reads it runs `cez automation schema` for the shape and proceeds the same way.
++
++Underneath: a `cez automation` CLI (`packages/cezar/src/automations/automation-cli.ts`), a thin HTTP
++client over the existing `/api/v1/p/:projectId/automations*` routes, addressed by the same
++`CEZ_API_URL` / `CEZ_PROJECT_ID` / `CEZ_BIN` variables the dispatch CLI uses. No new routes, no new
++state, no new flag.
++
++## Why this shape
++
++- **Reuse the dispatch transport.** Spec 2026-09-10 found that turn-end markers were the cause of
++  every fatal refusal; a CLI call gets a synchronous, typed answer, and the engine already publishes
++  the cockpit's address and its own entrypoint to every agent. The automation CLI is the second
++  client of that transport, not a third mechanism.
++- **JSON, not flags.** A definition has nested filters and a task block. An agent writes JSON to a
++  file more reliably than it quotes a dozen flags in a shell — so `create`/`update` take `--file`,
++  `--json` or stdin, and `cez automation schema` prints the shape with every bound.
++- **Paused by default, preview before enable.** The automations spec's Q1 (enabling establishes a
++  baseline; a preview never launches) is exactly the safety an unattended agent needs: it cannot
++  fan out a hundred tasks by creating one automation. The prompt and the skill both say create
++  paused, preview, and enable only when the user asked.
++- **Tell an agent only about what it can use.** The dispatch lesson (A2/A8: an agent taught a CLI
++  whose every call is refused reads the refusal as "stop"): the prompt part, the built-in skill and
++  the composer template are all gated on `capabilities.automations` **and** the transport
++  (`automationsReachable()`), so a headless `cezar run` or a cockpit with the flag off composes
++  nothing, lists nothing, offers nothing.
++- **A built-in skill is the exception, named.** cezar has never shipped a skill file — every skill
++  is discovered from the repo, the `npx skills` dirs or a team repo. This playbook belongs to the
++  cockpit that runs the automations, not to any repository, so it ships as a TypeScript constant
++  (`automations/builtin-skill.ts`, `source: 'builtin'`), appended LAST to the catalog so a repo
++  skill of the same name shadows it. The `files` list, the pack gate and the discovery walk are
++  untouched.
++
++## Resolved assumptions
++
++| # | Question | Applied default | Why |
++|---|---|---|---|
++| A1 | How a task creates an automation | `cez automation …` over the existing automations routes, through `node "$CEZ_BIN"`, with `CEZ_API_URL` and `CEZ_PROJECT_ID` from the agent's env. | Same transport and reasoning as dispatch A1; the routes already validate, baseline and log. |
++| A2 | Gating | `automationsReachable()` = `capabilities.automations && CEZ_API_URL`. Off or unreachable: no prompt part, no built-in skill, no template; the CLI without `CEZ_API_URL` exits 2 saying so; with the flag off the routes' 409 (naming `CEZ_AUTOMATIONS=1`) is relayed verbatim and exits 1. | Dispatch A2/A8. |
++| A3 | Enabled or paused on create | Paused unless `--enable`; the prompt says enable only when the user asked, and never without a preview. A definition copied from `show` carrying `enabled: true` is lifted into the route's `enable` flag rather than refused. | Automations Q1: no backfill, no surprise fan-out. |
++| A4 | How the skill ships | One built-in `Skill` with `source: 'builtin'`, `path: builtin:create-cezar-automation`, `interactive: true`; `discoverSkills` appends `builtinSkills()` last. Contract enum gains `'builtin'` (additive). | The user's repo is the source of truth; nothing to isolate in a worktree, and the agent may have to ask which label was meant. |
++| A5 | What the composer shows | The skill in the picker; a built-in template `create-automation` (Settings → Prompt templates, editable) assigned to the skill, hidden with `AUTOMATIONS_TEMPLATE_IDS` unless `capabilities.automations`. | Same gate as `DISPATCH_TEMPLATE_IDS`, same reason. |
++| A6 | Where the prompt part sits | `ActiveRun.automationsPrompt`, resolved by `prepareAutomationsSession` at BOTH session construction sites, composed after the dispatch part and before the run's extra prompt. | AGENTS.md § "every construction site" — a Continue must keep it. |
++| A7 | `update` semantics | Reads the current definition, merges the patch over the six editable keys, restates `enabled` and echoes `expectedRevision`. | A partial JSON from an agent must not blank keys it did not mention; a cockpit edit in between is a 409, not a clobber. |
++| A8 | `check` | POSTs `{mode}` and polls the workspace-level `/automation-checks/:id` every 500 ms for up to 120 s; preview prints the count and "nothing was launched". | The check is asynchronous server-side; the agent needs one command that answers. |
++
++## CLI (`packages/cezar/src/automations/automation-cli.ts`)
++
++`cez automation schema` · `create [--file <def.json> | --json '<json>'] [--enable]` (stdin when
++neither) · `update <id> [--file | --json]` · `check <id> [--execute]` · `list` · `show <id>` ·
++`enable <id>` · `pause <id>` · `delete <id>`. Every mutating command prints the automation's cockpit
++page (`<CEZ_API_URL>/p/<project>/automations/<id>`). Exit 0 ok, 1 refused/failed, 2 usage or no
++cockpit. Routed in `index.ts` before the cockpit's own parser, like `cez task`.
++
++## Prompt (`packages/cezar/src/automations/prompts.ts`)
++
++`AUTOMATIONS_PROMPT` (the short always-on part), `AUTOMATION_SCHEMA_REFERENCE` (what `schema` prints:
++every key of `automationDefinitionSchema` with its bounds, the events, the placeholders, the paused
++rule — pinned against the storage schema by `prompts.test.ts`) and `CREATE_AUTOMATION_SKILL_BODY`
++(the playbook, embedding the reference).
++
++## Not done (deliberately)
++
++A composer toggle or a dedicated "New automation from prompt" screen — the skill picker and the
++template are the composer's existing affordances and cost nothing. Automation creation from a
++headless `cezar run`. A `--dry-run` that validates a definition without a cockpit (the routes are
++the validator). Changing the Automations page itself.
+diff --git a/.env.example b/.env.example
+index 7500db3..d85894f 100644
+--- a/.env.example
++++ b/.env.example
+@@ -104,6 +104,10 @@
+ # leave it off), and it is read at boot — set it and restart cezar. Left off, nothing polls
+ # GitHub and no task is ever launched from it. Automation definitions, receipts and their
+ # frozen high-watermarks are kept either way, so this is safe to flip back and forth.
++# On, a running task may also create automations from a prompt (spec
++# .ai/specs/2026-09-13-automations-from-prompt.md): the built-in `create-cezar-automation` skill
++# is listed, every task's system prompt names the `cez automation` CLI, and the composer offers
++# the "Create an automation" template. Off, none of the three appear.
+ # CEZ_AUTOMATIONS=1
+ # The browser suite exercises the default-off route. To also exercise enabled automations in a
+ # fresh shared test environment, run: `CEZ_AUTOMATIONS=1 npm run test:e2e -- --force`.
+@@ -183,7 +187,7 @@
+ #   CEZ_TASK_ID, CEZ_HANDOFF_FILE, CEZ_TODOS_FILE
+ #   — and, while dispatch is on (not CEZ_DISPATCH=0): CEZ_API_URL (this cockpit's address), CEZ_PROJECT_ID (the
+ #   run's project) and CEZ_BIN (this cockpit's own entrypoint, so `node "$CEZ_BIN" task …`
+-#   never hits an older `cez` on the PATH), which the `cez task` CLI uses; and, for a run in a dispatch tree only,
++#   never hits an older `cez` on the PATH), which the `cez task` and `cez automation` CLIs use; and, for a run in a dispatch tree only,
+ #   CEZ_TREE_DIR: the tree directory under .ai/cezar/dispatch/<rootRunId>/ (brief.md,
+ #   units/<id8>/{order,notes,report}.md, inbox/<id8>/) that every task of the tree reads and
+ #   writes as its file channel.
+diff --git a/BACKWARD_COMPATIBILITY.md b/BACKWARD_COMPATIBILITY.md
+index fd50b46..a3f7cd7 100644
+--- a/BACKWARD_COMPATIBILITY.md
++++ b/BACKWARD_COMPATIBILITY.md
+@@ -7,7 +7,7 @@ cezar is a published npm CLI (`@open-mercato/cezar`, currently 0.x — renamed f
+ ## 1. CLI commands, flags and exit codes (`packages/cezar/src/index.ts`)
+ 
+ - **Bins:** `cezar` and `cez` (both in `package.json` `bin`). Removing either alias is breaking.
+-- **Commands:** bare invocation = `serve` (cockpit); `cezar run "<task>"`; `cezar init`.
++- **Commands:** bare invocation = `serve` (cockpit); `cezar run "<task>"`; `cezar init`; `cezar task <create|report|list|tree>` (spec `.ai/specs/2026-09-10-dispatch.md`) and `cezar automation <schema|create|update|check|list|show|enable|pause|delete>` (spec `.ai/specs/2026-09-13-automations-from-prompt.md`) — both thin clients of a running cockpit addressed by `CEZ_API_URL`/`CEZ_PROJECT_ID`, exit 2 without one, 1 on a refusal (the automations 409 under `CEZ_AUTOMATIONS` unset included), 0 otherwise.
+ - **`cezar projects` subcommands:** `list` (the default), `add`, `remove`/`rm`, `tag`. `tag <id> [<tag>…]` replaces a project's grouping tags wholesale; naming none clears them.
+ - **Flags:** `-p/--port` (default 4321, auto-picks the next free port), `--repo <dir>`, `--workflow <name>` (default `quick-task`), `--model <model>`, `--no-open`, `-h/--help`.
+ - **Exit codes:** `run` exits 0 on `done` **and** `review` (spec 009 — headless runs must not hang on the review gate), 1 on `failed`/`cancelled`/unknown workflow. CI scripts depend on this.
+@@ -263,6 +263,12 @@ instruction rather than silently.
+ - **No deprecation alias**: the flag *is* the migration path — one env var restores the previous
+   behavior wholesale, which is what the "keep the old spelling for a minor release" rule exists to
+   provide.
++- **Additive since 2026-09-13** (spec `.ai/specs/2026-09-13-automations-from-prompt.md`): with
++  the flag on and a cockpit running, `GET /api/v1/skills` lists one more skill,
++  `create-cezar-automation`, with the new `source` value `builtin` (the enum gained a member;
++  every existing value is unchanged), every task's system prompt gains an automations part, and
++  the composers offer a `create-automation` template. With the flag off, none of the three appear
++  and the listed catalog is byte-identical to before.
+ 
+ ## When in doubt
+ 
+diff --git a/README.md b/README.md
+index a734a9f..20bbaa7 100644
+--- a/README.md
++++ b/README.md
+@@ -517,7 +517,7 @@ Useful environment variables:
+ | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
+ | `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
+ | `CEZ_FOLLOWUPS=1` | Turn on the global follow-up **Inbox**: agents are asked to leave follow-ups in `todos.json` when they finish, and the Inbox view appears. Off by default — each task's own **Notes** handoff journal runs either way. |
+-| `CEZ_AUTOMATIONS=1` | Turn on **GitHub automations**: the Automations view appears and cezar polls GitHub on each enabled automation's interval, launching tasks from what it finds. Off by default, and only the exact value `1` enables it — without it nothing polls GitHub, the automations endpoints answer `409`, and the nav item is absent. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are retained, so unsetting it and restarting restores the feature without migration or data loss. |
++| `CEZ_AUTOMATIONS=1` | Turn on **GitHub automations**: the Automations view appears and cezar polls GitHub on each enabled automation's interval, launching tasks from what it finds. With it on, an agent can also **create an automation from a prompt**: type "whenever a PR is opened, review it" into New task — pick the built-in `create-cezar-automation` skill, or just ask; every task's system prompt teaches it to recognise the intent — and the agent writes the definition and creates it through `cez automation create` (paused, with a `cez automation check` preview of what it would match), then links the Automations page. Off by default, and only the exact value `1` enables it — without it nothing polls GitHub, the automations endpoints answer `409`, the nav item is absent, no task is told about the CLI and the skill is not listed. Read at boot, so restart after changing it; definitions, receipts and high-watermarks are retained, so unsetting it and restarting restores the feature without migration or data loss. |
+ | `CEZ_DISPATCH=0` | Turn OFF **task dispatch**, which is on by default: a running task may start other cezar tasks with `cez task create` — each in its OWN worktree forked off the parent's branch, with a budget carved out of the parent's — and they report back into the parent's session when they settle (`cez task report`). Children appear nested under their parent in the task lists. Tasks talk through a tree directory (`.ai/cezar/dispatch/<root>/`: the brief, each task's order/notes/report, an inbox per task) and cezar wakes a parked recipient when a file lands. A `--kind review` child judges another task's branch and answers with a verdict. ON by default (the owner-approved exception to "cost-widening features are opt-in" — see `AGENTS.md`), and only the exact value `0` turns it off; with it off the `/runs/:id/dispatch` and `/runs/:id/report` routes answer `409`, no task is told about the CLI, and the cockpit hides the "Review open PRs" template. A headless `cezar run` never dispatches either way — there is no cockpit for the CLI to reach, so no task is told about it. Read at boot, so restart after changing it. This is the widest cost-widening flag here — one task can start four more agents — so give dispatching tasks a budget. |
+ | `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
+ | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. |
+diff --git a/packages/cezar/src/automations/automation-cli.test.ts b/packages/cezar/src/automations/automation-cli.test.ts
+new file mode 100644
+index 0000000..3df3c01
+--- /dev/null
++++ b/packages/cezar/src/automations/automation-cli.test.ts
+@@ -0,0 +1,216 @@
++import { describe, expect, it } from 'vitest';
++import { runAutomationCommand, type AutomationCliIo } from './automation-cli.ts';
++import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
++
++/** The `cez automation` CLI is a thin client: what is pinned is the request it builds from the
++ *  definition and env, how it relays a refusal, and that it never talks to a server it was not
++ *  given — never the routes, which have their own tests (`server/automations-api.test.ts`). */
++describe('cez automation', () => {
++  const env = { CEZ_API_URL: 'http://127.0.0.1:4321/', CEZ_PROJECT_ID: 'proj' };
++
++  const definition = {
++    name: 'Review new PRs',
++    events: ['pull_request.opened'],
++    intervalSeconds: 300,
++    filters: { lookbackDays: 7, maxRecords: 25 },
++    task: { prompt: 'Review #{{github.number}}', worktree: true, autonomous: true },
++  };
++
++  type Reply = { status: number; body?: unknown };
++  const harness = (replies: Reply[] | ((url: string, init?: RequestInit) => Reply), files: Record<string, string> = {}, stdin = '') => {
++    const calls: Array<{ url: string; init?: RequestInit }> = [];
++    const out: string[] = [];
++    const err: string[] = [];
++    const queue = Array.isArray(replies) ? [...replies] : null;
++    const io: AutomationCliIo = {
++      fetch: (async (url: string | URL | Request, init?: RequestInit) => {
++        calls.push({ url: String(url), init });
++        const reply = queue ? (queue.shift() ?? { status: 500, body: { error: 'unexpected call' } }) : (replies as (url: string, init?: RequestInit) => Reply)(String(url), init);
++        return new Response(reply.body === undefined ? null : JSON.stringify(reply.body), {
++          status: reply.status,
++          headers: { 'content-type': 'application/json' },
++        });
++      }) as typeof fetch,
++      log: (line) => out.push(line),
++      error: (line) => err.push(line),
++      readFile: async (path) => {
++        if (!(path in files)) throw new Error(`ENOENT: ${path}`);
++        return files[path]!;
++      },
++      readStdin: async () => stdin,
++      sleep: async () => {},
++    };
++    return { calls, out, err, io };
++  };
++
++  it('create posts the definition from --file to the project-scoped route, paused, and prints the cockpit link', async () => {
++    const h = harness([{ status: 201, body: { automation: { id: 'auto-1', name: 'Review new PRs', enabled: false } } }], { '/tmp/def.json': JSON.stringify(definition) });
++    const code = await runAutomationCommand(['create', '--file', '/tmp/def.json'], env, h.io);
++    expect(code).toBe(0);
++    expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/automations');
++    expect(h.calls[0]?.init?.method).toBe('POST');
++    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual(definition);
++    expect(h.out[0]).toContain('created automation auto-1 "Review new PRs" — paused');
++    expect(h.out[1]).toBe('cockpit: http://127.0.0.1:4321/p/proj/automations/auto-1');
++    expect(h.out[2]).toContain('cez automation check auto-1');
++  });
++
++  it('create --enable (or a definition carrying enabled: true) sends the route’s enable flag, never a body key it refuses', async () => {
++    const h = harness([
++      { status: 201, body: { automation: { id: 'a', name: 'n', enabled: true } } },
++      { status: 201, body: { automation: { id: 'b', name: 'n', enabled: true } } },
++    ]);
++    expect(await runAutomationCommand(['create', '--enable', '--json', JSON.stringify(definition)], env, h.io)).toBe(0);
++    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({ ...definition, enable: true });
++    expect(h.out[0]).toContain('ENABLED from a current-time baseline');
++    expect(await runAutomationCommand(['create', '--json', JSON.stringify({ ...definition, enabled: true })], env, h.io)).toBe(0);
++    const second = JSON.parse(String(h.calls[1]?.init?.body)) as Record<string, unknown>;
++    expect(second.enable).toBe(true);
++    expect('enabled' in second).toBe(false);
++  });
++
++  it('create reads the definition from stdin when neither --file nor --json is given', async () => {
++    const h = harness([{ status: 201, body: { automation: { id: 'a', name: 'n', enabled: false } } }], {}, JSON.stringify(definition));
++    expect(await runAutomationCommand(['create'], env, h.io)).toBe(0);
++    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual(definition);
++    const empty = harness([], {}, '');
++    expect(await runAutomationCommand(['create'], env, empty.io)).toBe(1);
++    expect(empty.err[0]).toContain('no definition given');
++    expect(empty.calls).toHaveLength(0);
++  });
++
++  it('create rejects malformed input before any request: invalid JSON, a non-object, both flags at once', async () => {
++    const bad = harness([]);
++    expect(await runAutomationCommand(['create', '--json', '{not json'], env, bad.io)).toBe(1);
++    expect(bad.err[0]).toContain('not valid JSON');
++    const array = harness([]);
++    expect(await runAutomationCommand(['create', '--json', '[1]'], env, array.io)).toBe(1);
++    expect(array.err[0]).toContain('must be a JSON object');
++    const both = harness([], { '/d.json': '{}' });
++    expect(await runAutomationCommand(['create', '--file', '/d.json', '--json', '{}'], env, both.io)).toBe(1);
++    expect(both.err[0]).toContain('--file OR --json');
++    expect([...bad.calls, ...array.calls, ...both.calls]).toHaveLength(0);
++  });
++
++  it('create relays the cockpit’s refusal — the automations-off 409 included — with a non-zero exit', async () => {
++    const h = harness([{ status: 409, body: { error: 'GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them' } }]);
++    expect(await runAutomationCommand(['create', '--json', JSON.stringify(definition)], env, h.io)).toBe(1);
++    expect(h.err[0]).toBe('cez automation: create refused — GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them');
++  });
++
++  it('update reads the current definition, merges the patch over its editable keys, restates enabled and echoes the revision', async () => {
++    const stored = { id: 'auto-1', revision: 3, enabled: true, createdAt: 't', updatedAt: 't', description: 'old', ...definition };
++    const h = harness([
++      { status: 200, body: { automation: stored } },
++      { status: 200, body: { automation: { id: 'auto-1', name: 'Review new PRs', revision: 4, enabled: true } } },
++    ]);
++    const code = await runAutomationCommand(['update', 'auto-1', '--json', JSON.stringify({ intervalSeconds: 900, task: { prompt: 'new prompt' } })], env, h.io);
++    expect(code).toBe(0);
++    expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/automations/auto-1');
++    expect(h.calls[1]?.init?.method).toBe('PUT');
++    expect(JSON.parse(String(h.calls[1]?.init?.body))).toEqual({
++      name: 'Review new PRs',
++      description: 'old',
++      events: ['pull_request.opened'],
++      intervalSeconds: 900,
++      filters: { lookbackDays: 7, maxRecords: 25 },
++      task: { prompt: 'new prompt' },
++      enabled: true,
++      expectedRevision: 3,
++    });
++    expect(h.out[0]).toContain('updated automation auto-1 "Review new PRs" (revision 4, enabled)');
++  });
++
++  it('check queues a preview, polls the workspace-level check until it completes, and launches nothing', async () => {
++    let polls = 0;
++    const h = harness((url, init) => {
++      if (url.endsWith('/check')) return { status: 202, body: { checkId: 'chk-9' } };
++      expect(url).toBe('http://127.0.0.1:4321/api/v1/automation-checks/chk-9');
++      expect(init?.method).toBeUndefined();
++      polls += 1;
++      return polls < 3
++        ? { status: 200, body: { id: 'chk-9', status: 'running' } }
++        : { status: 200, body: { id: 'chk-9', status: 'complete', matches: 2, truncated: false } };
++    });
++    expect(await runAutomationCommand(['check', 'auto-1'], env, h.io)).toBe(0);
++    expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/automations/auto-1/check');
++    expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({ mode: 'preview' });
++    expect(polls).toBe(3);
++    expect(h.out[0]).toBe('preview: 2 matches right now — nothing was launched');
++  });
++
++  it('check --execute sends the execute mode, and a failed check exits non-zero with its error', async () => {
++    const ok = harness([
++      { status: 202, body: { checkId: 'c' } },
++      { status: 200, body: { status: 'complete', matches: 1 } },
++    ]);
++    expect(await runAutomationCommand(['check', 'auto-1', '--execute'], env, ok.io)).toBe(0);
++    expect(JSON.parse(String(ok.calls[0]?.init?.body))).toEqual({ mode: 'execute' });
++    expect(ok.out[0]).toContain('execute: 1 match');
++    const failed = harness([
++      { status: 202, body: { checkId: 'c' } },
++      { status: 200, body: { status: 'error', error: 'No GitHub remote is configured' } },
++    ]);
++    expect(await runAutomationCommand(['check', 'auto-1'], env, failed.io)).toBe(1);
++    expect(failed.err[0]).toContain('check failed — No GitHub remote is configured');
++  });
++
++  it('list, show, enable, pause and delete address the project-scoped routes', async () => {
++    const list = harness([{ status: 200, body: { available: true, automations: [
++      { id: 'a1', name: 'One', enabled: true, events: ['issue.opened'], intervalSeconds: 300, counts: { launched: 2, duplicates: 0, errors: 1 }, state: { nextCheckAt: '2026-09-13T10:00:00.000Z' } },
++      { id: 'a2', name: 'Two', enabled: false, events: ['pull_request.opened'], intervalSeconds: 3600, counts: { launched: 0, duplicates: 0, errors: 0 } },
++    ] } }]);
++    expect(await runAutomationCommand(['list'], env, list.io)).toBe(0);
++    expect(list.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/automations');
++    expect(list.out[0]).toContain('a1  enabled  every 300s  issue.opened  launched 2, duplicates 0, errors 1  next 2026-09-13T10:00:00.000Z  One');
++    expect(list.out[1]).toContain('a2  paused ');
++
++    const show = harness([{ status: 200, body: { automation: { id: 'a1' }, state: { revision: 1 } } }]);
++    expect(await runAutomationCommand(['show', 'a1'], env, show.io)).toBe(0);
++    expect(JSON.parse(show.out[0]!)).toEqual({ automation: { id: 'a1' }, state: { revision: 1 } });
++
++    const enable = harness([{ status: 200, body: { automation: { id: 'a1', name: 'One' } } }]);
++    expect(await runAutomationCommand(['enable', 'a1'], env, enable.io)).toBe(0);
++    expect(enable.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/automations/a1/enable');
++    expect(enable.calls[0]?.init?.method).toBe('POST');
++    expect(enable.out[0]).toContain('enabled automation a1 "One" from a current-time baseline');
++
++    const pause = harness([{ status: 200, body: { automation: { id: 'a1', name: 'One' } } }]);
++    expect(await runAutomationCommand(['pause', 'a1'], env, pause.io)).toBe(0);
++    expect(pause.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/automations/a1/pause');
++
++    const del = harness([{ status: 204 }]);
++    expect(await runAutomationCommand(['delete', 'a1'], env, del.io)).toBe(0);
++    expect(del.calls[0]?.init?.method).toBe('DELETE');
++    expect(del.out[0]).toBe('deleted automation a1');
++  });
++
++  it('schema prints the reference without a server; every other command refuses without one', async () => {
++    const schema = harness([]);
++    expect(await runAutomationCommand(['schema'], {}, schema.io)).toBe(0);
++    expect(schema.out[0]).toBe(AUTOMATION_SCHEMA_REFERENCE);
++    const none = harness([]);
++    expect(await runAutomationCommand(['list'], {}, none.io)).toBe(2);
++    expect(none.err[0]).toContain('CEZ_API_URL is not set');
++    expect(none.err[0]).toContain('Do not substitute a cron job');
++    expect(none.calls).toHaveLength(0);
++  });
++
++  it('falls back to the unscoped API and link without a project id', async () => {
++    const h = harness([{ status: 201, body: { automation: { id: 'x', name: 'n', enabled: false } } }]);
++    expect(await runAutomationCommand(['create', '--json', JSON.stringify(definition)], { CEZ_API_URL: 'http://127.0.0.1:1' }, h.io)).toBe(0);
++    expect(h.calls[0]?.url).toBe('http://127.0.0.1:1/api/v1/automations');
++    expect(h.out[1]).toBe('cockpit: http://127.0.0.1:1/automations/x');
++  });
++
++  it('prints usage for help and for an unknown command', async () => {
++    const help = harness([]);
++    expect(await runAutomationCommand(['help'], {}, help.io)).toBe(0);
++    expect(help.out[0]).toContain('cez automation create');
++    const unknown = harness([]);
++    expect(await runAutomationCommand(['frobnicate'], env, unknown.io)).toBe(2);
++    expect(unknown.err[0]).toContain('unknown command "frobnicate"');
++    const bare = harness([]);
++    expect(await runAutomationCommand([], env, bare.io)).toBe(2);
++  });
++});
+diff --git a/packages/cezar/src/automations/automation-cli.ts b/packages/cezar/src/automations/automation-cli.ts
+new file mode 100644
+index 0000000..3b8164c
+--- /dev/null
++++ b/packages/cezar/src/automations/automation-cli.ts
+@@ -0,0 +1,299 @@
++/**
++ * `cez automation …` — the CLI a running agent (or a human at a shell) uses to create and manage
++ * GitHub automations on a running cockpit (spec `.ai/specs/2026-09-13-automations-from-prompt.md`).
++ *
++ * A thin HTTP client over the automations family, addressed like `cez task` is: `CEZ_API_URL`
++ * (the cockpit) and `CEZ_PROJECT_ID` (which project the run belongs to), both put in every agent's
++ * environment by the engine while the cockpit is reachable. No server: the command says so and
++ * exits 2. Automations off on the cockpit (`CEZ_AUTOMATIONS` unset): every route answers 409 with
++ * the flag's name, which this command relays verbatim and exits 1 — the agent is told to stop and
++ * report, never to substitute a cron job or a polling script.
++ *
++ * The definition travels as JSON (`--file`, `--json`, or stdin) rather than as flags: it has
++ * nested filters and a task block, and an agent writes JSON to a file more reliably than it
++ * quotes a dozen flags in a shell.
++ */
++import { readFile } from 'node:fs/promises';
++import { parseArgs } from 'node:util';
++import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
++
++export interface AutomationCliEnv {
++  CEZ_API_URL?: string;
++  CEZ_PROJECT_ID?: string;
++}
++
++export interface AutomationCliIo {
++  fetch: typeof fetch;
++  log: (line: string) => void;
++  error: (line: string) => void;
++  /** Reads `--file`; injectable so the tests never touch the disk. */
++  readFile?: (path: string) => Promise<string>;
++  /** Reads the definition from stdin when neither `--file` nor `--json` is given. */
++  readStdin?: () => Promise<string>;
++  /** The check poll's pause; injectable so the tests do not wait. */
++  sleep?: (ms: number) => Promise<void>;
++}
++
++const USAGE = `cez automation — create and manage GitHub automations on a running cockpit (CEZ_AUTOMATIONS=1)
++
++  cez automation schema                         print the definition shape, bounds and prompt placeholders
++  cez automation create [--file <def.json> | --json '<json>'] [--enable]
++                                                create one from a JSON definition (stdin when neither flag is given);
++                                                paused unless --enable
++  cez automation update <id> [--file | --json]  replace the definition's editable keys (name, description, events,
++                                                intervalSeconds, filters, task); keys you omit keep their value
++  cez automation check <id> [--execute]         run the filter now — preview counts matches and launches nothing,
++                                                --execute launches a task per match exactly as a scheduled poll would
++  cez automation list                           every automation of this project, with state and counts
++  cez automation show <id>                      one definition with its runtime state, as JSON
++  cez automation enable <id>                    enable it from a current-time baseline (the backlog is never launched)
++  cez automation pause <id>                     pause it (the definition and its history stay)
++  cez automation delete <id>                    delete it`;
++
++const CHECK_POLL_MS = 500;
++const CHECK_TIMEOUT_MS = 120_000;
++
++/** The keys `PUT /automations/:id` accepts besides `enabled` and `expectedRevision`. */
++const EDITABLE_KEYS = ['name', 'description', 'events', 'intervalSeconds', 'filters', 'task'] as const;
++
++function base(env: AutomationCliEnv): { url: string; scope: string; projectId?: string } | null {
++  const url = env.CEZ_API_URL?.replace(/\/+$/, '');
++  if (!url) return null;
++  const projectId = env.CEZ_PROJECT_ID || undefined;
++  const scope = projectId ? `${url}/api/v1/p/${encodeURIComponent(projectId)}` : `${url}/api/v1`;
++  return { url, scope, projectId };
++}
++
++/** Where the cockpit shows this automation — the link every mutating command prints. */
++function pageUrl(api: { url: string; projectId?: string }, id: string): string {
++  const prefix = api.projectId ? `${api.url}/p/${encodeURIComponent(api.projectId)}` : api.url;
++  return `${prefix}/automations/${encodeURIComponent(id)}`;
++}
++
++async function readError(response: Response): Promise<string> {
++  try {
++    const body = (await response.json()) as { error?: unknown };
++    if (typeof body.error === 'string') return body.error;
++  } catch {
++    // not JSON
++  }
++  return `${response.status} ${response.statusText}`;
++}
++
++function isRecord(value: unknown): value is Record<string, unknown> {
++  return !!value && typeof value === 'object' && !Array.isArray(value);
++}
++
++async function readDefinition(
++  values: { file?: string; json?: string },
++  io: AutomationCliIo,
++): Promise<Record<string, unknown>> {
++  if (values.file && values.json) throw new Error('give the definition as --file OR --json, not both');
++  let raw: string;
++  if (values.file) {
++    raw = await (io.readFile ?? ((path) => readFile(path, 'utf8')))(values.file);
++  } else if (values.json !== undefined) {
++    raw = values.json;
++  } else {
++    raw = await (io.readStdin ?? readStdinText)();
++    if (!raw.trim()) throw new Error('no definition given: pass --file <def.json>, --json \'<json>\', or pipe the JSON on stdin');
++  }
++  let parsed: unknown;
++  try {
++    parsed = JSON.parse(raw);
++  } catch (error) {
++    throw new Error(`the definition is not valid JSON — ${error instanceof Error ? error.message : String(error)}`);
++  }
++  if (!isRecord(parsed)) throw new Error('the definition must be a JSON object (see cez automation schema)');
++  return parsed;
++}
++
++async function readStdinText(): Promise<string> {
++  if (process.stdin.isTTY) return '';
++  const chunks: Buffer[] = [];
++  for await (const chunk of process.stdin) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
++  return Buffer.concat(chunks).toString('utf8');
++}
++
++function shortEvents(events: unknown): string {
++  return Array.isArray(events) ? events.map(String).join(',') : '';
++}
++
++export async function runAutomationCommand(
++  args: string[],
++  env: AutomationCliEnv = process.env,
++  io: AutomationCliIo = { fetch, log: console.log, error: console.error },
++): Promise<number> {
++  const [command, ...rest] = args;
++  if (!command || command === 'help' || command === '--help') {
++    io.log(USAGE);
++    return command ? 0 : 2;
++  }
++  if (rest.includes('--help') || rest.includes('-h')) {
++    io.log(USAGE);
++    return 0;
++  }
++  // The reference needs no server: an agent reads it before it has anything to send.
++  if (command === 'schema') {
++    io.log(AUTOMATION_SCHEMA_REFERENCE);
++    return 0;
++  }
++  const api = base(env);
++  if (!api) {
++    io.error('cez automation: CEZ_API_URL is not set — this command only works inside a task run by a cockpit with automations on (CEZ_AUTOMATIONS=1). Do not substitute a cron job, a GitHub Action or a polling script: stop and report that automations are unavailable.');
++    return 2;
++  }
++  const json = async (url: string, init?: RequestInit): Promise<Response> =>
++    io.fetch(url, { ...init, headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) } });
++  const sleep = io.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
++
++  try {
++    switch (command) {
++      case 'create': {
++        const { values } = parseArgs({
++          args: rest,
++          allowPositionals: false,
++          options: { file: { type: 'string' }, json: { type: 'string' }, enable: { type: 'boolean', default: false } },
++        });
++        const definition = await readDefinition(values, io);
++        // `enabled` is not a body key of POST — a definition is always created paused and
++        // `enable: true` is the one-step "create and baseline". A definition that carries it
++        // (copied from `show`) would be refused, so it is lifted into the flag's slot.
++        const { enabled, ...body } = definition;
++        const enable = values.enable || enabled === true;
++        const response = await json(`${api.scope}/automations`, {
++          method: 'POST',
++          body: JSON.stringify({ ...body, ...(enable ? { enable: true } : {}) }),
++        });
++        if (!response.ok) throw new Error(`create refused — ${await readError(response)}`);
++        const { automation } = (await response.json()) as { automation: { id: string; name: string; enabled: boolean } };
++        io.log(`created automation ${automation.id} "${automation.name}" — ${automation.enabled ? 'ENABLED from a current-time baseline' : 'paused'}`);
++        io.log(`cockpit: ${pageUrl(api, automation.id)}`);
++        if (!automation.enabled) io.log(`Preview its matches with: cez automation check ${automation.id} — then enable it with: cez automation enable ${automation.id}`);
++        return 0;
++      }
++      case 'update': {
++        const { values, positionals } = parseArgs({
++          args: rest,
++          allowPositionals: true,
++          options: { file: { type: 'string' }, json: { type: 'string' } },
++        });
++        const id = positionals[0];
++        if (!id) throw new Error('an automation id is required: cez automation update <id> --file <def.json>');
++        const patch = await readDefinition(values, io);
++        const current = await json(`${api.scope}/automations/${encodeURIComponent(id)}`);
++        if (!current.ok) throw new Error(`could not read automation ${id} — ${await readError(current)}`);
++        const { automation } = (await current.json()) as { automation: Record<string, unknown> };
++        const body: Record<string, unknown> = {};
++        for (const key of EDITABLE_KEYS) {
++          const value = key in patch ? patch[key] : automation[key];
++          if (value !== undefined) body[key] = value;
++        }
++        // A PUT restates `enabled` (an edit may not silently pause a running automation) and
++        // echoes the revision it read, so a concurrent edit in the cockpit is a 409, not a clobber.
++        body.enabled = 'enabled' in patch ? patch.enabled : automation.enabled;
++        body.expectedRevision = automation.revision;
++        const response = await json(`${api.scope}/automations/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) });
++        if (!response.ok) throw new Error(`update refused — ${await readError(response)}`);
++        const updated = (await response.json()) as { automation: { id: string; name: string; revision: number; enabled: boolean } };
++        io.log(`updated automation ${updated.automation.id} "${updated.automation.name}" (revision ${updated.automation.revision}, ${updated.automation.enabled ? 'enabled' : 'paused'})`);
++        io.log(`cockpit: ${pageUrl(api, updated.automation.id)}`);
++        return 0;
++      }
++      case 'check': {
++        const { values, positionals } = parseArgs({
++          args: rest,
++          allowPositionals: true,
++          options: { execute: { type: 'boolean', default: false } },
++        });
++        const id = positionals[0];
++        if (!id) throw new Error('an automation id is required: cez automation check <id>');
++        const mode = values.execute ? 'execute' : 'preview';
++        const queued = await json(`${api.scope}/automations/${encodeURIComponent(id)}/check`, { method: 'POST', body: JSON.stringify({ mode }) });
++        if (!queued.ok) throw new Error(`check refused — ${await readError(queued)}`);
++        const { checkId } = (await queued.json()) as { checkId: string };
++        // The check runs in the server's background; its record is workspace-level (keyed by the
++        // unguessable id the project route handed back), so it is polled off the plain API root.
++        const deadline = Date.now() + CHECK_TIMEOUT_MS;
++        for (;;) {
++          const response = await io.fetch(`${api.url}/api/v1/automation-checks/${encodeURIComponent(checkId)}`);
++          if (!response.ok) throw new Error(`could not read check ${checkId} — ${await readError(response)}`);
++          const check = (await response.json()) as { status: string; matches?: number; truncated?: boolean; error?: string };
++          if (check.status === 'complete') {
++            const matches = check.matches ?? 0;
++            io.log(
++              mode === 'preview'
++                ? `preview: ${matches} match${matches === 1 ? '' : 'es'} right now${check.truncated ? ' (truncated at the filter\'s maxRecords)' : ''} — nothing was launched`
++                : `execute: ${matches} match${matches === 1 ? '' : 'es'}${check.truncated ? ' (truncated at the filter\'s maxRecords)' : ''} — a task was launched per new match; see the automation's log in the cockpit`,
++            );
++            io.log(`cockpit: ${pageUrl(api, id)}`);
++            return 0;
++          }
++          if (check.status === 'error') throw new Error(`check failed — ${check.error ?? 'unknown error'}`);
++          if (Date.now() > deadline) throw new Error(`check ${checkId} did not finish within ${CHECK_TIMEOUT_MS / 1000}s; it may still be running — read the automation's log in the cockpit`);
++          await sleep(CHECK_POLL_MS);
++        }
++      }
++      case 'list': {
++        const response = await io.fetch(`${api.scope}/automations`);
++        if (!response.ok) throw new Error(`could not list automations — ${await readError(response)}`);
++        const data = (await response.json()) as {
++          available: boolean;
++          reason?: string;
++          automations: Array<{
++            id: string; name: string; enabled: boolean; events: string[]; intervalSeconds: number;
++            counts: { launched: number; duplicates: number; errors: number };
++            state?: { nextCheckAt?: string; lastSuccessAt?: string };
++          }>;
++        };
++        if (!data.available) io.log(`GitHub is not available to this cockpit${data.reason ? ` — ${data.reason}` : ''}; automations will not poll until it is.`);
++        if (data.automations.length === 0) {
++          io.log('no automations in this project');
++          return 0;
++        }
++        for (const item of data.automations) {
++          const next = item.enabled && item.state?.nextCheckAt ? `  next ${item.state.nextCheckAt}` : '';
++          io.log(`${item.id}  ${item.enabled ? 'enabled' : 'paused '}  every ${item.intervalSeconds}s  ${shortEvents(item.events)}  launched ${item.counts.launched}, duplicates ${item.counts.duplicates}, errors ${item.counts.errors}${next}  ${item.name}`);
++        }
++        return 0;
++      }
++      case 'show': {
++        const id = rest[0];
++        if (!id) throw new Error('an automation id is required: cez automation show <id>');
++        const response = await io.fetch(`${api.scope}/automations/${encodeURIComponent(id)}`);
++        if (!response.ok) throw new Error(`could not read automation ${id} — ${await readError(response)}`);
++        io.log(JSON.stringify(await response.json(), null, 2));
++        return 0;
++      }
++      case 'enable':
++      case 'pause': {
++        const id = rest[0];
++        if (!id) throw new Error(`an automation id is required: cez automation ${command} <id>`);
++        const response = await json(`${api.scope}/automations/${encodeURIComponent(id)}/${command}`, { method: 'POST' });
++        if (!response.ok) throw new Error(`${command} refused — ${await readError(response)}`);
++        const { automation } = (await response.json()) as { automation: { id: string; name: string } };
++        io.log(
++          command === 'enable'
++            ? `enabled automation ${automation.id} "${automation.name}" from a current-time baseline — existing pull requests and issues are not launched`
++            : `paused automation ${automation.id} "${automation.name}"`,
++        );
++        io.log(`cockpit: ${pageUrl(api, automation.id)}`);
++        return 0;
++      }
++      case 'delete': {
++        const id = rest[0];
++        if (!id) throw new Error('an automation id is required: cez automation delete <id>');
++        const response = await io.fetch(`${api.scope}/automations/${encodeURIComponent(id)}`, { method: 'DELETE' });
++        if (!response.ok) throw new Error(`delete refused — ${await readError(response)}`);
++        io.log(`deleted automation ${id}`);
++        return 0;
++      }
++      default:
++        io.error(`cez automation: unknown command "${command}"\n\n${USAGE}`);
++        return 2;
++    }
++  } catch (error) {
++    io.error(`cez automation: ${error instanceof Error ? error.message : String(error)}`);
++    return 1;
++  }
++}
+diff --git a/packages/cezar/src/automations/builtin-skill.ts b/packages/cezar/src/automations/builtin-skill.ts
+new file mode 100644
+index 0000000..bdbf2ec
+--- /dev/null
++++ b/packages/cezar/src/automations/builtin-skill.ts
+@@ -0,0 +1,44 @@
++/**
++ * The built-in `create-cezar-automation` skill (spec `.ai/specs/2026-09-13-automations-from-prompt.md`).
++ *
++ * cezar ships no skill files of its own — every skill is discovered from the repo, the `npx
++ * skills` dirs or a team repo — and this is the one deliberate exception: the playbook for
++ * turning a prompt into a GitHub automation belongs to the cockpit that runs the automations, not
++ * to a repository. It is a TypeScript constant rather than a Markdown file in the tarball so the
++ * pack gate, the `files` list and the discovery walk stay exactly what they were.
++ *
++ * Gated like everything else an agent is TOLD about automations (`automationsReachable`): the
++ * skill lists only on a cockpit that has automations on AND can be reached over `CEZ_API_URL` — a
++ * headless `cezar run` or a cockpit with the flag off would hand the agent a playbook whose every
++ * command is refused. Lowest precedence in the catalog: a repo that ships its own skill of this
++ * name wins ("the user's repo is the source of truth").
++ */
++import { resolveCapabilities } from '../server/capabilities.ts';
++import type { Skill } from '../skills.ts';
++import { CREATE_AUTOMATION_SKILL_BODY, CREATE_AUTOMATION_SKILL_NAME } from './prompts.ts';
++
++/**
++ * Can a task actually USE automations? The flag alone is not enough: `CEZ_API_URL` is set by
++ * `serveCommand`, so a headless run has no cockpit to call. The one predicate behind the built-in
++ * skill and the always-on prompt part (`RunManager.prepareAutomationsSession`).
++ */
++export function automationsReachable(env: NodeJS.ProcessEnv = process.env): boolean {
++  return resolveCapabilities(env).automations && Boolean(env.CEZ_API_URL);
++}
++
++export const CREATE_AUTOMATION_SKILL: Skill = {
++  name: CREATE_AUTOMATION_SKILL_NAME,
++  description:
++    'Turn a request like "whenever a PR is opened, review it" into a GitHub automation on this cockpit — the trigger, its filters and the task it launches — created paused, previewed, and linked.',
++  // An automation is authored, not coded: nothing to isolate in a worktree, and the agent may
++  // have to ask which label or event the user meant — the interactive, in-place composer default.
++  interactive: true,
++  body: CREATE_AUTOMATION_SKILL_BODY,
++  path: `builtin:${CREATE_AUTOMATION_SKILL_NAME}`,
++  source: 'builtin',
++};
++
++/** The built-in skills this process offers right now — empty unless automations are reachable. */
++export function builtinSkills(env: NodeJS.ProcessEnv = process.env): Skill[] {
++  return automationsReachable(env) ? [{ ...CREATE_AUTOMATION_SKILL }] : [];
++}
+diff --git a/packages/cezar/src/automations/prompts.test.ts b/packages/cezar/src/automations/prompts.test.ts
+new file mode 100644
+index 0000000..ededf70
+--- /dev/null
++++ b/packages/cezar/src/automations/prompts.test.ts
+@@ -0,0 +1,91 @@
++import { describe, expect, it } from 'vitest';
++import { automationDefinitionSchema, automationEventSchema } from './types.ts';
++import {
++  AUTOMATIONS_PROMPT,
++  AUTOMATION_SCHEMA_REFERENCE,
++  CREATE_AUTOMATION_SKILL_BODY,
++  CREATE_AUTOMATION_SKILL_NAME,
++} from './prompts.ts';
++
++/** The prompts are the ONLY place an agent learns the `cez automation` CLI and the definition
++ *  shape, so they must name every command, every event and every key the storage schema accepts. */
++describe('the automations prompt part', () => {
++  it('teaches the CLI through the cockpit’s own entrypoint, and the create → check → enable order', () => {
++    expect(AUTOMATIONS_PROMPT).toContain('node "$CEZ_BIN" automation');
++    for (const command of ['schema', 'create --file', '--enable', 'check <id>', 'list', 'show <id>', 'update <id>', 'enable <id>', 'pause <id>', 'delete <id>']) {
++      expect(AUTOMATIONS_PROMPT).toContain(command);
++    }
++    expect(AUTOMATIONS_PROMPT).toMatch(/Create it PAUSED/);
++    expect(AUTOMATIONS_PROMPT).toMatch(/Never enable an automation whose filter you have not previewed/);
++  });
++
++  it('names the intent it recognises and forbids the substitutes a refused agent reaches for', () => {
++    expect(AUTOMATIONS_PROMPT).toContain('"whenever"');
++    expect(AUTOMATIONS_PROMPT).toMatch(/instead of polling GitHub yourself/);
++    expect(AUTOMATIONS_PROMPT).toMatch(/do not write a cron job, a GitHub Action or a polling script/);
++    expect(AUTOMATIONS_PROMPT).toMatch(/stop and report that automations are unavailable/);
++  });
++});
++
++describe('the definition reference', () => {
++  it('names every event the storage schema accepts, and no other', () => {
++    for (const event of automationEventSchema.options) expect(AUTOMATION_SCHEMA_REFERENCE).toContain(event);
++    const mentioned = AUTOMATION_SCHEMA_REFERENCE.match(/\b(?:pull_request|issue)\.[a-z_]+/g) ?? [];
++    for (const event of new Set(mentioned)) expect(automationEventSchema.options).toContain(event);
++  });
++
++  it('names every top-level, filter and task key of the storage schema', () => {
++    const shape = automationDefinitionSchema.shape;
++    for (const key of Object.keys(shape)) {
++      if (['id', 'revision', 'createdAt', 'updatedAt', 'enabled'].includes(key)) continue;
++      expect(AUTOMATION_SCHEMA_REFERENCE).toContain(`"${key}"`);
++    }
++    for (const key of Object.keys(shape.filters.shape)) expect(AUTOMATION_SCHEMA_REFERENCE).toContain(`"${key}"`);
++    for (const key of Object.keys(shape.task.shape)) expect(AUTOMATION_SCHEMA_REFERENCE).toContain(`"${key}"`);
++  });
++
++  it('lists the prompt placeholders the task template accepts and the paused-by-default rule', () => {
++    for (const placeholder of ['github.kind', 'github.number', 'github.title', 'github.url', 'github.author', 'github.assignees', 'github.labels', 'github.event']) {
++      expect(AUTOMATION_SCHEMA_REFERENCE).toContain(`{{${placeholder}}}`);
++    }
++    expect(AUTOMATION_SCHEMA_REFERENCE).toMatch(/PAUSED unless created with --enable/);
++    expect(AUTOMATION_SCHEMA_REFERENCE).toMatch(/changedLabels.*REQUIRED for issue\.labeled/);
++  });
++
++  it('is a definition the storage schema accepts once the comments are stripped', () => {
++    // The object runs from the first brace to the first closing brace on a line of its own; the
++    // prose after it mentions `{{placeholders}}`, so `lastIndexOf('}')` would overshoot.
++    const start = AUTOMATION_SCHEMA_REFERENCE.indexOf('{');
++    const end = AUTOMATION_SCHEMA_REFERENCE.indexOf('\n}', start) + 2;
++    const block = AUTOMATION_SCHEMA_REFERENCE.slice(start, end);
++    const withoutComments = block.replace(/\/\/[^\n]*/g, '');
++    const parsed = JSON.parse(withoutComments) as Record<string, unknown>;
++    // The example shows BOTH ways to name the task's chain; a real definition picks one.
++    const task = { ...(parsed.task as Record<string, unknown>) };
++    delete task.steps;
++    const result = automationDefinitionSchema.safeParse({
++      ...parsed,
++      task,
++      id: 'example',
++      revision: 1,
++      createdAt: '2026-09-13T00:00:00.000Z',
++      updatedAt: '2026-09-13T00:00:00.000Z',
++    });
++    expect(result.success, JSON.stringify(result.success ? null : result.error.issues)).toBe(true);
++    const steps = { ...parsed, task: { ...task, workflow: undefined, steps: (parsed.task as { steps: unknown }).steps }, id: 'e', revision: 1, createdAt: '2026-09-13T00:00:00.000Z', updatedAt: '2026-09-13T00:00:00.000Z' };
++    expect(automationDefinitionSchema.safeParse(steps).success).toBe(true);
++  });
++});
++
++describe('the built-in skill body', () => {
++  it('walks the create → preview → report path and embeds the reference', () => {
++    expect(CREATE_AUTOMATION_SKILL_NAME).toBe('create-cezar-automation');
++    expect(CREATE_AUTOMATION_SKILL_BODY).toContain('node "$CEZ_BIN" automation create --file');
++    expect(CREATE_AUTOMATION_SKILL_BODY).toContain('node "$CEZ_BIN" automation check <id>');
++    expect(CREATE_AUTOMATION_SKILL_BODY).toContain('cez automation update <id> --file');
++    expect(CREATE_AUTOMATION_SKILL_BODY).toContain(AUTOMATION_SCHEMA_REFERENCE);
++    expect(CREATE_AUTOMATION_SKILL_BODY).toMatch(/created PAUSED/);
++    expect(CREATE_AUTOMATION_SKILL_BODY).toMatch(/ask one precise question and stop/);
++    expect(CREATE_AUTOMATION_SKILL_BODY).toMatch(/do not add cron jobs, GitHub Actions, webhooks or polling scripts/);
++  });
++});
+diff --git a/packages/cezar/src/automations/prompts.ts b/packages/cezar/src/automations/prompts.ts
+new file mode 100644
+index 0000000..ce2aa66
+--- /dev/null
++++ b/packages/cezar/src/automations/prompts.ts
+@@ -0,0 +1,111 @@
++/**
++ * What a task is told about GitHub automations, and the playbook the built-in
++ * `create-cezar-automation` skill runs under (spec `.ai/specs/2026-09-13-automations-from-prompt.md`).
++ *
++ * Two texts, one mechanism. `AUTOMATIONS_PROMPT` is the SHORT part composed into every task's
++ * system prompt while automations are on and reachable — enough for an agent to recognise "do X
++ * whenever Y happens on GitHub" as an automation rather than a one-off, and to know the CLI that
++ * creates one. `CREATE_AUTOMATION_SKILL_BODY` is the full playbook: it goes into the run only when
++ * the user picks the skill (or the agent, having read the short part, runs `cez automation schema`
++ * to get the same reference). Neither is composed when the cockpit cannot serve the routes — an
++ * agent told about a CLI whose every call is refused reads the refusal as an instruction (the
++ * dispatch lesson, spec 2026-09-10-dispatch A2/A8).
++ *
++ * The CLI contract below is the ONLY place an agent learns the `cez automation` commands, so it
++ * restates the definition keys of `automationDefinitionSchema` (`./types.ts`) one for one.
++ */
++
++export const CREATE_AUTOMATION_SKILL_NAME = 'create-cezar-automation';
++
++/**
++ * The definition reference, as `cez automation schema` prints it and as the skill body embeds
++ * it. Kept as one string so the two can never disagree about a key or a bound.
++ */
++export const AUTOMATION_SCHEMA_REFERENCE = `An automation definition is one JSON object:
++
++{
++  "name": "Review every new pull request",          // required, 1-200 chars
++  "description": "What this automation is for",      // optional, up to 2000 chars
++  "events": ["pull_request.opened"],                 // 1-4 of: pull_request.opened, issue.opened, issue.labeled, issue.unlabeled
++  "intervalSeconds": 300,                            // required: how often GitHub is polled, in seconds, 60-86400 (300 is the usual choice)
++  "filters": {                                       // required, may be {}; every key optional; a candidate must pass ALL given filters
++    "authors": ["octocat"],                          //   GitHub logins that opened it
++    "assignees": ["octocat"],                        //   current assignees
++    "allLabels": ["bug"],                            //   must carry every one of these labels
++    "anyLabels": ["bug", "regression"],              //   must carry at least one of these
++    "excludeLabels": ["wontfix"],                    //   must carry none of these
++    "changedLabels": ["needs-agent"],                //   REQUIRED for issue.labeled / issue.unlabeled: the label whose change fires it
++    "lookbackDays": 7,                               //   1-90 (default 7): how far back one poll looks
++    "maxRecords": 25                                 //   1-100 (default 25): the most candidates one poll considers
++  },
++  "task": {                                          // the ordinary cezar task each match launches
++    "prompt": "Review pull request #{{github.number}} ({{github.title}}) at {{github.url}}: read the diff, run the tests, and post your findings as a review.",
++    "workflow": "quick-task",                        // a workflow name — OR inline "steps", never both
++    "steps": [{ "id": "task", "skill": "om-auto-review-pr", "prompt": "{{task}}" }],  // to run a skill: one agent step naming it
++    "runner": "claude",                              // optional: claude | codex | opencode | pi
++    "model": "sonnet",                               // optional
++    "variants": 1,                                   // 1 | 2 | 3 competing runs per match
++    "worktree": true,                                // isolate each run in its own git worktree (recommended)
++    "autonomous": true,                              // never park to ask — an automation has no one watching (recommended)
++    "generateFollowups": false,
++    "systemPrompt": "Extra guidance for every launched run"  // optional
++  }
++}
++
++name, events, intervalSeconds, filters and task are required; no other top-level key is accepted.
++
++Prompt placeholders, substituted per match: {{github.kind}} (issue | pull request), {{github.number}}, {{github.title}}, {{github.url}}, {{github.author}}, {{github.assignees}}, {{github.labels}} and {{github.event}}. Any other {{…}} is rejected. The matched item's title, author, labels and URL are also appended to every launched task as untrusted context, so the prompt need not repeat them.
++
++A new automation is PAUSED unless created with --enable. Enabling establishes a current-time baseline: only pull requests and issues that appear AFTER it are ever launched, never the backlog. Editing a definition never re-considers what an earlier revision already saw.`;
++
++/** The part composed into EVERY task's system prompt while automations are on and reachable. */
++export const AUTOMATIONS_PROMPT = `GitHub automations. This cockpit can watch this repository's GitHub for you: an automation is a bounded poll — a new pull request, a new issue, a label added to or removed from an issue, optionally filtered by author, assignee or labels — that launches an ordinary cezar task for every match, with a prompt template you write. When the user asks for something to happen "whenever", "every time" or "each time" a pull request or issue appears or is labelled, they are asking for an automation: create one instead of doing the work once, and instead of polling GitHub yourself.
++
++Always through the cockpit's own binary, node "$CEZ_BIN", because a cez on your PATH may be an older install without this command; every "cez automation …" below means node "$CEZ_BIN" automation …:
++
++  cez automation schema                              the definition shape, every key, every bound, the prompt placeholders
++  cez automation create --file <def.json> [--enable]  create one (paused unless --enable); --json '<json>' or stdin work too
++  cez automation check <id> [--execute]              preview what the filter matches right now (launches nothing without --execute)
++  cez automation list | show <id> | update <id> --file <def.json> | enable <id> | pause <id> | delete <id>
++
++Write the definition to a file and read cez automation schema first. Create it PAUSED and run a preview check so the user can see what it would have matched, unless they explicitly asked for it to be enabled; only enable when the user asked, and say so. Never enable an automation whose filter you have not previewed. The command prints the automation's id and its page in the cockpit — put that link in your final message. If cez automation is refused or CEZ_BIN is unset, stop and report that automations are unavailable on this cockpit: do not write a cron job, a GitHub Action or a polling script in the repository as a substitute.`;
++
++/**
++ * The built-in skill's body — the full playbook a run under `create-cezar-automation` follows.
++ * The user picks it in the composer (or `/create-cezar-automation`); a prompt template assigned
++ * to it pre-fills the box with the two questions every automation needs answered.
++ */
++export const CREATE_AUTOMATION_SKILL_BODY = `# Create a cezar automation
++
++You turn the user's request into a GitHub automation on this cockpit: a bounded poll of this repository's pull requests or issues that launches an ordinary cezar task for every match. You do NOT do the recurring work yourself, and you do not add cron jobs, GitHub Actions, webhooks or polling scripts to the repository — the cockpit already polls.
++
++## 1. Understand the request
++
++Every automation answers two questions. Find both in the user's message before writing anything:
++
++- **Trigger** — which event: a new pull request (\`pull_request.opened\`), a new issue (\`issue.opened\`), a label added to an issue (\`issue.labeled\`) or removed from one (\`issue.unlabeled\`); and which filters narrow it — authors, assignees, labels it must or must not carry. A label event needs the label whose change fires it (\`filters.changedLabels\`).
++- **Task** — what the launched task must do for each match, as a prompt template. Write it the way you would brief a colleague who sees only that text plus the item's number, title, URL, author and labels: the goal, the checks to run, how to finish (a review comment, a draft PR, a report). Use \`{{github.number}}\`, \`{{github.title}}\`, \`{{github.url}}\` and the other placeholders \`cez automation schema\` lists.
++
++If the user named a skill, workflow, runner or model for the launched tasks, use it (a skill is one inline step: \`"steps": [{ "id": "task", "skill": "<name>", "prompt": "{{task}}" }]\`). Otherwise leave those keys out so the cockpit's defaults apply. Default \`"worktree": true\` and \`"autonomous": true\` — an automation runs unattended, so a task that parks to ask a question waits forever. Pick an interval that matches how urgent a match is (300 seconds is the default; an hourly triage needs 3600). If the request leaves the trigger or the task genuinely open, ask one precise question and stop; do not guess a filter that could launch tasks on the wrong items.
++
++## 2. Create it
++
++Run \`node "$CEZ_BIN" automation schema\` and read it. Write the definition as JSON to a file outside the repository (your temp directory is fine) and create it:
++
++    node "$CEZ_BIN" automation create --file <def.json>
++
++The automation is created PAUSED. The command prints its id and the cockpit page where the user can edit it. If the user explicitly asked for it to be switched on, add \`--enable\`; otherwise leave it paused and say how to enable it. If the command is refused, stop and report exactly what it printed — do not work around it.
++
++## 3. Preview before anyone enables it
++
++    node "$CEZ_BIN" automation check <id>
++
++This runs the filter against GitHub right now and counts the matches without launching anything. Report the count. Zero matches on a filter that should match something means a wrong label, author or event — fix the definition (\`cez automation update <id> --file <def.json>\`) and preview again. Enabling establishes a current-time baseline, so a preview is the only way to see what the filter does to existing items.
++
++## 4. Finish
++
++Your final message names the automation, its id, the cockpit link the create command printed, whether it is paused or enabled, what the preview matched, and the exact prompt template it will launch. Keep the definition file you wrote out of the repository.
++
++## Reference
++
++${AUTOMATION_SCHEMA_REFERENCE}`;
+diff --git a/packages/cezar/src/index.ts b/packages/cezar/src/index.ts
+index 2a40961..d227f09 100644
+--- a/packages/cezar/src/index.ts
++++ b/packages/cezar/src/index.ts
+@@ -36,6 +36,7 @@ import { registerProject, shouldRegisterProject } from './workspace/projects.ts'
+ import { runProjectsCommand } from './workspace/projects-cli.ts';
+ import { WorkspaceSemaphore } from './workspace/semaphore.ts';
+ import { runTaskCommand } from './dispatch/task-cli.ts';
++import { runAutomationCommand } from './automations/automation-cli.ts';
+ 
+ const HELP = `cezar — local cockpit for AI agent tasks in your repo
+ 
+@@ -43,6 +44,7 @@ Usage:
+   cezar                     start the cockpit (server + GUI) for the current repo
+   cezar run "<task>"        run a task headless in the terminal
+   cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
++  cezar automation <create|check|list|…>  create and manage GitHub automations on a running cockpit (CEZ_AUTOMATIONS=1)
+   cezar init                scaffold .ai/cezar/ (example workflow + skill)
+   cezar projects            list the projects this cockpit serves
+                             (also: projects add [<dir>] · projects remove <id>)
+@@ -86,6 +88,11 @@ async function main(): Promise<void> {
+     process.exitCode = await runTaskCommand(process.argv.slice(3));
+     return;
+   }
++  // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.
++  if (process.argv[2] === 'automation') {
++    process.exitCode = await runAutomationCommand(process.argv.slice(3));
++    return;
++  }
+   const { values, positionals } = parseArgs({
+     options: {
+       port: { type: 'string', short: 'p', default: '4321' },
+diff --git a/packages/cezar/src/server/capabilities.ts b/packages/cezar/src/server/capabilities.ts
+index 9b828fa..b11f9a1 100644
+--- a/packages/cezar/src/server/capabilities.ts
++++ b/packages/cezar/src/server/capabilities.ts
+@@ -27,7 +27,12 @@
+  * GitHub — the flag removes the behavior, not only the UI. Activation is
+  * strict, like the two capabilities above. Nothing on disk is touched:
+  * definitions, receipts and high-watermarks survive the flag being off, so
+- * unsetting it and restarting restores the feature wholesale.
++ * unsetting it and restarting restores the feature wholesale. On, and with a
++ * cockpit to reach (`CEZ_API_URL`), a task may also CREATE automations from a
++ * prompt (spec 2026-09-13-automations-from-prompt): the `cez automation` CLI,
++ * an automations part in every task's system prompt, the built-in
++ * `create-cezar-automation` skill and the composer's "Create an automation"
++ * template all hang off this one capability.
+  *
+  * `dispatch` (spec 2026-09-10-dispatch): a task dispatching other tasks through the `cez task`
+  * CLI is **on by default** and `CEZ_DISPATCH=0` turns it off (the owner-approved exception to
+diff --git a/packages/cezar/src/skills.test.ts b/packages/cezar/src/skills.test.ts
+index 20eff6a..e2a064a 100644
+--- a/packages/cezar/src/skills.test.ts
++++ b/packages/cezar/src/skills.test.ts
+@@ -1,7 +1,7 @@
+ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+ import { tmpdir } from 'node:os';
+ import { join } from 'node:path';
+-import { afterEach, describe, expect, it } from 'vitest';
++import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+ import {
+   discoverSkills,
+   filterImportedTeamSkills,
+@@ -156,3 +156,61 @@ describe('discoverSkills local entrypoints', () => {
+     expect(skills[0]?.source).toBe('agents');
+   });
+ });
++
++/**
++ * The one skill cezar ships itself (spec 2026-09-13-automations-from-prompt): listed only on a
++ * cockpit that has automations on AND publishes a transport, and shadowed by a repo skill of the
++ * same name — the same "user's repo is the source of truth" rule every other source follows.
++ */
++describe('the built-in create-cezar-automation skill', () => {
++  const saved: Record<string, string | undefined> = {};
++  beforeEach(() => {
++    saved.CEZ_AUTOMATIONS = process.env.CEZ_AUTOMATIONS;
++    saved.CEZ_API_URL = process.env.CEZ_API_URL;
++  });
++  afterEach(() => {
++    for (const [key, value] of Object.entries(saved)) {
++      if (value === undefined) delete process.env[key];
++      else process.env[key] = value;
++    }
++  });
++
++  async function emptyRepo(): Promise<string> {
++    const repoRoot = await mkdtemp(join(tmpdir(), 'cezar-skills-'));
++    tempDirs.push(repoRoot);
++    // A repo that names its own skills repos gates nothing and clones nothing here — the
++    // team cache is empty in a fresh process, so the catalog is exactly the local + built-in set.
++    await mkdir(join(repoRoot, '.ai/cezar'), { recursive: true });
++    return repoRoot;
++  }
++
++  it('is absent with automations off, and absent with the flag on but no cockpit to reach', async () => {
++    const repoRoot = await emptyRepo();
++    delete process.env.CEZ_AUTOMATIONS;
++    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
++    expect((await discoverSkills(repoRoot)).some((s) => s.name === 'create-cezar-automation')).toBe(false);
++    process.env.CEZ_AUTOMATIONS = '1';
++    delete process.env.CEZ_API_URL;
++    expect((await discoverSkills(repoRoot)).some((s) => s.name === 'create-cezar-automation')).toBe(false);
++  });
++
++  it('lists as a builtin, interactive skill when automations are on and reachable', async () => {
++    const repoRoot = await emptyRepo();
++    process.env.CEZ_AUTOMATIONS = '1';
++    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
++    const skill = (await discoverSkills(repoRoot)).find((s) => s.name === 'create-cezar-automation');
++    expect(skill).toMatchObject({ source: 'builtin', interactive: true, path: 'builtin:create-cezar-automation' });
++    expect(skill?.body).toContain('cez automation');
++  });
++
++  it('is shadowed by a repo skill of the same name', async () => {
++    const repoRoot = await emptyRepo();
++    process.env.CEZ_AUTOMATIONS = '1';
++    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
++    await mkdir(join(repoRoot, '.ai/skills'), { recursive: true });
++    await writeFile(join(repoRoot, '.ai/skills/create-cezar-automation.md'), '---\nname: create-cezar-automation\n---\nHouse version');
++    const matches = (await discoverSkills(repoRoot)).filter((s) => s.name === 'create-cezar-automation');
++    expect(matches).toHaveLength(1);
++    expect(matches[0]).toMatchObject({ source: 'ai', body: 'House version' });
++  });
++});
+diff --git a/packages/cezar/src/skills.ts b/packages/cezar/src/skills.ts
+index aa81368..27bbace 100644
+--- a/packages/cezar/src/skills.ts
++++ b/packages/cezar/src/skills.ts
+@@ -4,6 +4,7 @@ import { join, resolve, basename, dirname, extname } from 'node:path';
+ import { gatedSkillsRepos } from './config.ts';
+ import { getTeamSkillsCached } from './skills-remote.ts';
+ import { readWorkspaceUiState } from './workspace/ui-state.ts';
++import { builtinSkills } from './automations/builtin-skill.ts';
+ 
+ /**
+  * A skill is a Markdown file with optional YAML-ish frontmatter (`name`,
+@@ -20,7 +21,9 @@ export interface Skill {
+   interactive?: true;
+   body: string;
+   path: string;
+-  source: 'ai' | 'cezar' | 'agents' | 'global' | 'team';
++  /** `builtin` is the one skill cezar ships itself (`create-cezar-automation`, spec
++   *  2026-09-13-automations-from-prompt) — listed last, and only while automations are reachable. */
++  source: 'ai' | 'cezar' | 'agents' | 'global' | 'team' | 'builtin';
+   /** Team skills only: where the definition lives in its skills repo. */
+   team?: {
+     repo: string;
+@@ -69,7 +72,9 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
+  * ("the user's repo is the source of truth"). Missing directories are fine —
+  * an empty catalog is fully supported (steps fall back to their plain
+  * prompt). Team skills come from the in-process cache; the first call starts
+- * a background load so nothing here ever waits on the network.
++ * a background load so nothing here ever waits on the network. The built-in skill (the one
++ * cezar ships, `automations/builtin-skill.ts`) comes LAST, so every user-authored skill of the
++ * same name shadows it.
+  *
+  * Opt-out gate: skills from a *default* (vendor) skills repo — `open-mercato/skills`
+  * for the zero-config majority, see `gatedSkillsRepos` — appear unless the user has
+@@ -98,7 +103,7 @@ export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
+   );
+   const merged: Skill[] = [];
+   const seen = new Set<string>();
+-  for (const skills of [...lists, teamSkills]) {
++  for (const skills of [...lists, teamSkills, builtinSkills()]) {
+     for (const skill of skills) {
+       if (seen.has(skill.name)) continue;
+       seen.add(skill.name);
+diff --git a/packages/cezar/src/workflows/run.ts b/packages/cezar/src/workflows/run.ts
+index 0e6589c..71654a9 100644
+--- a/packages/cezar/src/workflows/run.ts
++++ b/packages/cezar/src/workflows/run.ts
+@@ -41,6 +41,8 @@ import {
+ } from '@open-mercato/cezar-contract';
+ import type { AgentEvent, ContentBlock } from '../core/agent-runner.ts';
+ import { discoverSkills, type Skill } from '../skills.ts';
++import { automationsReachable } from '../automations/builtin-skill.ts';
++import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+ import { materializeSkillDir } from '../skills-remote.ts';
+ import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
+ import { readAgentModelProvider } from '../agent-config/models.ts';
+@@ -290,6 +292,13 @@ interface ActiveRun {
+    * record instead, because the stored `dispatch` changes under us.
+    */
+   dispatchPrompt?: string;
++  /**
++   * The GitHub-automations prompt part this session runs under (spec
++   * 2026-09-13-automations-from-prompt), resolved by `prepareAutomationsSession` at the SAME two
++   * construction sites as `dispatchPrompt`, for the same reason. Present ⇔ automations are on and
++   * the cockpit is reachable — a task that could not run `cez automation` is never told about it.
++   */
++  automationsPrompt?: string;
+   /** Set by `dispatch()` during a turn, read and cleared at that turn's end: the run parks as a
+    *  monitor for the children it just created. */
+   dispatchedThisTurn?: boolean;
+@@ -1563,6 +1572,17 @@ export class RunManager {
+     state.dispatchPrompt = composeDispatchPrompt(dispatch?.kind, dispatch?.parentRunId ? undefined : dispatch?.intent);
+   }
+ 
++  /**
++   * The automations twin of `prepareDispatchSession` (spec 2026-09-13-automations-from-prompt):
++   * the short prompt part that lets a task recognise "whenever a PR is opened, do X" as an
++   * automation and create one with `cez automation`. Gated on `automationsReachable` — the flag
++   * AND the transport — so a headless run, or a cockpit with `CEZ_AUTOMATIONS` unset, composes
++   * nothing and behaves exactly as it did before the feature existed.
++   */
++  private prepareAutomationsSession(state: ActiveRun): void {
++    state.automationsPrompt = automationsReachable() ? AUTOMATIONS_PROMPT : undefined;
++  }
++
+   /**
+    * The reports a parent's children left while it had no session. Returned as the block for the
+    * opening prompt, and cleared in the same breath — a flush that did not clear would re-deliver
+@@ -3148,6 +3168,7 @@ export class RunManager {
+     // that skipped this would resume a task with no dispatch prompt and no way to dispatch:
+     // a run that quietly degrades into an ordinary task.
+     this.prepareDispatchSession(runId, state);
++    this.prepareAutomationsSession(state);
+ 
+     this.store.updateRun(runId, {
+       status: 'running',
+@@ -3423,6 +3444,7 @@ export class RunManager {
+         // dispatch prompt rides along with both (spec 2026-09-10-dispatch).
+         systemPrompt: composeSystemPrompt(
+           dispatchPromptPart(state.dispatchPrompt, record?.systemPrompt),
++          state.automationsPrompt,
+           record?.systemPrompt,
+           generateFollowups ? HANDOFF_INSTRUCTIONS : HANDOFF_ONLY_INSTRUCTIONS,
+         ),
+@@ -3652,6 +3674,7 @@ export class RunManager {
+     // role's prompt a spawn will need). This is the FIRST of the two construction sites; the
+     // twin is in `runContinuation`.
+     this.prepareDispatchSession(runId, state);
++    this.prepareAutomationsSession(state);
+     const retriesUsed = new Map<string, number>();
+     let checkFailure: string | null = null;
+     let runError: string | null = null;
+@@ -4067,12 +4090,14 @@ export class RunManager {
+       session = runner.startSession(
+         {
+           // Skill body, then the dispatch prompt (spec 2026-09-10-dispatch — how a task dispatches,
+-          // reports and asks), then the run's extra
+-          // prompt (POST override or config default, which may amend either), then the
++          // reports and asks), then the automations prompt (spec 2026-09-13-automations-from-prompt
++          // — how a task creates a GitHub automation), then the run's extra
++          // prompt (POST override or config default, which may amend any of them), then the
+           // handoff/todos contract — every agent step.
+           systemPrompt: composeSystemPrompt(
+             systemPrompt,
+             dispatchPromptPart(state.dispatchPrompt, extraSystemPrompt),
++            state.automationsPrompt,
+             extraSystemPrompt,
+             followupsEnabled() && input.generateFollowups !== false
+               ? HANDOFF_INSTRUCTIONS
+diff --git a/packages/cezar/src/workflows/system-prompt.test.ts b/packages/cezar/src/workflows/system-prompt.test.ts
+index a88e3ea..fb37d09 100644
+--- a/packages/cezar/src/workflows/system-prompt.test.ts
++++ b/packages/cezar/src/workflows/system-prompt.test.ts
+@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
+ import { join } from 'node:path';
+ import { promisify } from 'node:util';
+ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
++import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
+ import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
+ import { RunStore } from '../runs/store.ts';
+ import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
+@@ -120,13 +121,18 @@ describe('systemPrompt end-to-end (dry run)', () => {
+     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
+     savedEnv.CEZ_AUTONAME = process.env.CEZ_AUTONAME;
+     savedEnv.CEZ_DISPATCH = process.env.CEZ_DISPATCH;
+-    // The two dispatch tests below set and clear this; restore whatever the outer process had.
++    savedEnv.CEZ_AUTOMATIONS = process.env.CEZ_AUTOMATIONS;
++    // The dispatch and automations tests below set and clear this; restore whatever the outer process had.
+     savedEnv.CEZ_API_URL = process.env.CEZ_API_URL;
+     process.env.CEZ_DRY_RUN = '1';
+     // Dispatch is on by default (spec 2026-09-10-dispatch A2) and composes its own prompt part
+     // ahead of everything asserted here. These goldens are about the BASE composition, so they
+     // run with it off; the default-on part is pinned by its own test below.
+     process.env.CEZ_DISPATCH = '0';
++    // GitHub automations are opt-in (#801) and compose their own prompt part when on AND
++    // reachable (spec 2026-09-13-automations-from-prompt); the goldens run without it and the
++    // part is pinned by its own tests below.
++    delete process.env.CEZ_AUTOMATIONS;
+     // The global inbox is opt-in (#471). These assertions are about prompt composition and the
+     // per-run opt-out, so they run on an inbox-enabled server; the gate itself is covered by
+     // the suite below.
+@@ -250,6 +256,44 @@ describe('systemPrompt end-to-end (dry run)', () => {
+     expect(prompt).toContain(CONFIG_PROMPT);
+   });
+ 
++  // The automations twin of the two dispatch cases above (spec 2026-09-13-automations-from-prompt):
++  // the part rides only when the flag is on AND the cockpit is reachable, at the same session
++  // sites as the dispatch prompt — so a Continue keeps it too.
++  it('automations on and reachable: every task is taught the cez automation CLI', async () => {
++    process.env.CEZ_AUTOMATIONS = '1';
++    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
++    try {
++      await runToEnd({ task: 'do the thing mock:done' });
++    } finally {
++      delete process.env.CEZ_AUTOMATIONS;
++      delete process.env.CEZ_API_URL;
++    }
++    const prompt = capturedSystemPrompt();
++    expect(prompt).toContain('node "$CEZ_BIN" automation');
++    expect(prompt).toContain(CONFIG_PROMPT);
++    // Dispatch is off in this suite, so the automations part is the only cockpit part composed —
++    // ahead of the extra prompt, which may amend it.
++    expect(prompt).toBe(composeSystemPrompt(AUTOMATIONS_PROMPT, CONFIG_PROMPT, HANDOFF_INSTRUCTIONS));
++  });
++
++  it('automations on but unreachable (headless), or off: no task is taught the CLI', async () => {
++    process.env.CEZ_AUTOMATIONS = '1';
++    delete process.env.CEZ_API_URL;
++    try {
++      await runToEnd({ task: 'do the thing mock:done' });
++    } finally {
++      delete process.env.CEZ_AUTOMATIONS;
++    }
++    expect(capturedSystemPrompt()).not.toContain('cez automation');
++    process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
++    try {
++      await runToEnd({ task: 'do the thing mock:done' });
++    } finally {
++      delete process.env.CEZ_API_URL;
++    }
++    expect(capturedSystemPrompt()).not.toContain('cez automation');
++  });
++
+   it('no override: the config default reaches the CLI and is echoed on the record', async () => {
+     const id = await runToEnd({ task: 'do the thing' });
+     const record = store.getRun(id);
+diff --git a/packages/contract/src/skills.ts b/packages/contract/src/skills.ts
+index 2c22cf3..c135fd4 100644
+--- a/packages/contract/src/skills.ts
++++ b/packages/contract/src/skills.ts
+@@ -6,7 +6,7 @@ import { runRecordSchema } from './runs.ts';
+ 
+ /**
+  * One discovered skill: repo (`.ai/skills`, `.ai/cezar/skills`), `npx skills` install dirs
+- * (project + global), or a configured team skills repo (spec 005).
++ * (project + global), a configured team skills repo (spec 005), or the one built-in.
+  */
+ export const skillSchema = z.object({
+   name: z.string(),
+@@ -15,7 +15,9 @@ export const skillSchema = z.object({
+   interactive: z.literal(true).optional(),
+   body: z.string(),
+   path: z.string(),
+-  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team']),
++  /** `builtin`: the one skill cezar ships itself (`create-cezar-automation`), served only while
++   *  GitHub automations are on and reachable (spec 2026-09-13-automations-from-prompt). */
++  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'builtin']),
+   /** Team skills only: where the definition lives in its skills repo. */
+   team: z
+     .object({
+diff --git a/packages/web/src/lib/prompt-templates.test.ts b/packages/web/src/lib/prompt-templates.test.ts
+index a60d26d..d114128 100644
+--- a/packages/web/src/lib/prompt-templates.test.ts
++++ b/packages/web/src/lib/prompt-templates.test.ts
+@@ -359,15 +359,35 @@ describe('DEFAULT_PROMPT_TEMPLATES', () => {
+ })
+ 
+ describe('availablePromptTemplates', () => {
++  const ids = (caps: { dispatch?: boolean; automations?: boolean } | undefined) =>
++    availablePromptTemplates(DEFAULT_PROMPT_TEMPLATES, caps).map((t) => t.id)
++
+   it('hides the dispatching built-in unless the server reports capabilities.dispatch', () => {
+-    const ids = (caps: { dispatch?: boolean } | undefined) =>
+-      availablePromptTemplates(DEFAULT_PROMPT_TEMPLATES, caps).map((t) => t.id)
+     expect(ids(undefined)).not.toContain('review-open-prs')
+-    expect(ids({ dispatch: false })).not.toContain('review-open-prs')
++    expect(ids({ dispatch: false, automations: true })).not.toContain('review-open-prs')
+     expect(ids({ dispatch: true })).toContain('review-open-prs')
+     // Everything else is untouched either way.
+-    expect(ids({ dispatch: false })).toEqual(
++    expect(ids({ dispatch: false, automations: true })).toEqual(
+       DEFAULT_PROMPT_TEMPLATES.map((t) => t.id).filter((id) => id !== 'review-open-prs'),
+     )
+   })
++
++  it('hides the automation-authoring built-in unless the server reports capabilities.automations', () => {
++    expect(ids(undefined)).not.toContain('create-automation')
++    expect(ids({ dispatch: true, automations: false })).not.toContain('create-automation')
++    expect(ids({ dispatch: true, automations: true })).toContain('create-automation')
++    // The two gates are independent: each hides only its own template.
++    expect(ids({ dispatch: true, automations: false })).toEqual(
++      DEFAULT_PROMPT_TEMPLATES.map((t) => t.id).filter((id) => id !== 'create-automation'),
++    )
++    expect(ids({ dispatch: true, automations: true })).toEqual(DEFAULT_PROMPT_TEMPLATES.map((t) => t.id))
++  })
++
++  it('the automation template is assigned to the built-in skill, so picking it pre-fills the box', () => {
++    const template = DEFAULT_PROMPT_TEMPLATES.find((t) => t.id === 'create-automation')
++    expect(template?.skills).toEqual(['create-cezar-automation'])
++    expect(template?.text).toContain('Trigger:')
++    expect(template?.text).toContain('Task for each match:')
++    expect(template?.text).toContain('Leave it paused')
++  })
+ })
+diff --git a/packages/web/src/lib/prompt-templates.ts b/packages/web/src/lib/prompt-templates.ts
+index 810644a..cd01da0 100644
+--- a/packages/web/src/lib/prompt-templates.ts
++++ b/packages/web/src/lib/prompt-templates.ts
+@@ -82,6 +82,22 @@ export const DEFAULT_PROMPT_TEMPLATES: readonly PromptTemplate[] = [
+       + 'that dispatch is disabled on this cockpit — do not review the PRs yourself and do not '
+       + 'use sub-agents instead.',
+   },
++  // The one built-in that AUTHORS AN AUTOMATION (spec `.ai/specs/2026-09-13-automations-from-prompt.md`).
++  // Assigned to the cockpit's built-in `create-cezar-automation` skill, so picking that skill
++  // pre-fills the two questions every automation needs answered; it also inserts by hand. Gated
++  // with `AUTOMATIONS_TEMPLATE_IDS`: on a cockpit without `capabilities.automations` the skill is
++  // not listed and `cez automation` is refused, so the template would only send a run into a
++  // refusal.
++  {
++    id: 'create-automation',
++    label: 'Create an automation',
++    skills: ['create-cezar-automation'],
++    text:
++      'Create a GitHub automation for this repository.\n'
++      + 'Trigger: <when — e.g. every new pull request; every issue labelled `needs-agent`; issues opened by `octocat`>.\n'
++      + 'Task for each match: <what the launched task must do — e.g. review the diff, run the tests and post findings as a review comment>.\n'
++      + 'Leave it paused and preview its matches so I can check the filter before enabling it.',
++  },
+ ]
+ 
+ /**
+@@ -94,12 +110,25 @@ export const DEFAULT_PROMPT_TEMPLATES: readonly PromptTemplate[] = [
+  */
+ export const DISPATCH_TEMPLATE_IDS: ReadonlySet<string> = new Set(['review-open-prs'])
+ 
++
++/**
++ * Templates that only make sense when the server runs GitHub automations
++ * (`capabilities.automations`, spec 2026-09-13-automations-from-prompt): the built-in "Create an
++ * automation" briefs the agent for the `create-cezar-automation` skill, which the server only
++ * lists — and whose `cez automation` CLI only answers — with `CEZ_AUTOMATIONS=1`. Same gate, same
++ * reasoning as `DISPATCH_TEMPLATE_IDS`; Settings keeps listing it so the text stays editable.
++ */
++export const AUTOMATIONS_TEMPLATE_IDS: ReadonlySet<string> = new Set(['create-automation'])
++
+ export function availablePromptTemplates(
+   templates: readonly PromptTemplate[],
+-  capabilities: { dispatch?: boolean } | undefined,
++  capabilities: { dispatch?: boolean; automations?: boolean } | undefined,
+ ): PromptTemplate[] {
+-  if (capabilities?.dispatch === true) return [...templates]
+-  return templates.filter((template) => !DISPATCH_TEMPLATE_IDS.has(template.id))
++  return templates.filter(
++    (template) =>
++      (capabilities?.dispatch === true || !DISPATCH_TEMPLATE_IDS.has(template.id))
++      && (capabilities?.automations === true || !AUTOMATIONS_TEMPLATE_IDS.has(template.id)),
++  )
+ }
+ 
+ function isRecord(value: unknown): value is Record<string, unknown> {
+-- 
+2.43.0
+

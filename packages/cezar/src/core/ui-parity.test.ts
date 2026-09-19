@@ -3,11 +3,14 @@
  *
  * The spec (`.ai/specs/2026-07-14-cockpit-ui-redesign.md` §"Backend parity
  * requirement") demands that every capability in the parity matrix is
- * emitted by ALL THREE backends, so the GUI degrades per-capability, never
+ * emitted by EVERY backend, so the GUI degrades per-capability, never
  * per-backend. This table test asserts it over the golden fixtures' expected
  * outputs (the hand-verified wire-faithful contract for each mapper): if a
  * future mapper change drops a capability — or a new fixture set forgets to
  * cover one — a named row fails here.
+ *
+ * `BACKENDS` lists every backend that owns a wire mapper. Pi uses its documented
+ * RPC protocol and therefore has its own wire-faithful fixture set.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -17,7 +20,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'pi'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -81,7 +84,7 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   ['turn.completed with a stopReason', (events) => events.some((e) => e.type === 'turn.completed' && e.stopReason !== undefined)],
 ] as const;
 
-describe('protocol v2 backend parity (all three mappers emit every matrix capability)', () => {
+describe('protocol v2 backend parity (every mapper emits every matrix capability)', () => {
   for (const backend of BACKENDS) {
     const events = fixtureEvents(backend);
     for (const [name, produced] of CAPABILITIES) {

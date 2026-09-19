@@ -46,7 +46,7 @@ const HEALTH: HealthResponse = {
   checks: [],
   defaultRunner: 'claude',
   forge: { kind: 'github', available: true },
-  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false },
+  capabilities: { localHandoff: true, tokenMetrics: true, tokenUsageMetrics: true, costMetrics: true, followups: false, singleProject: false, automations: false, dispatch: false },
 }
 
 /** The PROJECT-scoped `/repo` answer. The remote that gates Push is read from here rather than
@@ -173,6 +173,27 @@ describe('the Changes tab route', () => {
     // Collapsing a folder folds its rows.
     fireEvent.click(dir)
     expect(document.querySelectorAll('[data-slot="tree-file"]')).toHaveLength(1)
+  })
+
+  // The tree column is its OWN scroller. Sticky alone left a tree taller than the viewport
+  // growing the PAGE, so reaching its last file meant dragging the shared `main` scroller — and
+  // the diff with it — all the way down. jsdom lays nothing out, so the classes are all this can
+  // check; the real-layout proof (the pane overflows, and scrolling it leaves `main` where it
+  // was) lives in `e2e/diff-scroll.e2e.ts`.
+  it('gives the tree column its own bounded scroller, not the page’s', async () => {
+    stubFetch()
+    renderChangesRoute()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="changes-tree-pane"]')).not.toBeNull())
+    const pane = document.querySelector('[data-slot="changes-tree-pane"]') as HTMLElement
+    // Bounded by the room left under the sticky chrome — an unbounded pane cannot scroll at all.
+    expect(pane.className).toContain('max-h-[calc(100dvh_-_var(--diff-sticky-top)_-_1rem)]')
+    expect(pane.className).toContain('overflow-y-auto')
+    // …and a wheel that bottoms out inside the tree must not chain into the diff.
+    expect(pane.className).toContain('overscroll-contain')
+    // The cap is measured from the offset the pane is actually pinned at (`top-40` = 10rem).
+    expect(pane.className).toContain('sticky top-40')
+    expect(pane.parentElement?.className).toContain('[--diff-sticky-top:10rem]')
   })
 
   it('shows the empty state when the worktree is clean', async () => {

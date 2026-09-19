@@ -12,11 +12,17 @@ import { Virtualizer, type VirtualizerHandle } from 'virtua'
 
 import {
   NEAR_BOTTOM_SLACK_PX,
+  isNearHistoryStart,
   isNearBottom,
+  firstVisibleThreadAnchor,
   readThreadMeasurements,
   readThreadScroll,
   saveThreadMeasurements,
   saveThreadScroll,
+  threadAnchorScrollTop,
+  threadRowClass,
+  type ThreadRowAnchor,
+  type ThreadRowPosition,
 } from './thread-scroll'
 
 /**
@@ -28,6 +34,20 @@ import {
  * only scroller — flat rows scroll it natively, virtua receives it via `scrollRef`, and this
  * hook is the only code steering it. Nothing here owns a nested scroll container.
  */
+
+/**
+ * Does this engine re-point `scrollTop` when content above the viewport changes size?
+ *
+ * Read at render rather than once at import: it is one `CSS.supports` call per rows render, and
+ * a module-level constant would freeze whatever the first test in a file happened to stub.
+ * Unknown counts as YES — every engine that cannot answer the question is also not the one this
+ * guards against (WebKit answers it, with `false`), and the safe default is the behavior that
+ * shipped.
+ */
+export function hasScrollAnchoring(): boolean {
+  if (typeof CSS === 'undefined' || typeof CSS.supports !== 'function') return true
+  return CSS.supports('overflow-anchor', 'auto')
+}
 
 /** One renderable thread row — a user bubble, a grouped block, whatever the view flattened. */
 export interface ThreadRow {
@@ -47,6 +67,8 @@ export interface ThreadScrollControls {
   pillVisible: boolean
   /** The pill's action: smooth-scroll to the tail and stick again. */
   jumpToLatest: () => void
+  /** Load one older page while preserving the current pixel anchor. */
+  loadOlder: () => void
   /** Re-pin if stuck — the keyboard-settled hook (content height didn't change, but the
    *  visual viewport did, so the RO won't fire). */
   restickIfStuck: () => void
@@ -64,8 +86,14 @@ export interface ThreadScrollControls {
  */
 export function useThreadScroll(
   viewKey: string,
-  surface: 'document' | 'panel' = 'document',
+  options: {
+    surface?: 'document' | 'panel'
+    onLoadOlder?: () => Promise<void>
+    onJumpToLatest?: () => Promise<void>
+    rowKeys?: readonly string[]
+  } = {},
 ): ThreadScrollControls {
+  const { surface = 'document', onLoadOlder, onJumpToLatest, rowKeys = [] } = options
   const scrollElRef = useRef<HTMLElement | null>(null)
   // State, not a ref: crossing the virtualization threshold mid-replay REPLACES the rows
   // container, and the observers below must re-subscribe to the new element.
@@ -79,15 +107,6 @@ export function useThreadScroll(
   const arrivedForRef = useRef<string | null>(null)
   /** virtua's handle while virtualized (VirtualRows fills it), null in flat mode. */
   const virtualizerRef = useRef<VirtualizerHandle | null>(null)
-
-  const attachContent = useCallback((el: HTMLElement | null) => {
-    setContentEl(el)
-    if (el) {
-      scrollElRef.current = el.closest<HTMLElement>(
-        surface === 'panel' ? '[data-slot="transcript-viewport"]' : '[data-slot="main"]',
-      )
-    }
-  }, [surface])
 
   // EVERY programmatic scroll goes through virtua's handle when virtualized. A raw
   // `scrollTop` write races virtua's own jump compensation (it also writes scrollTop, from
@@ -106,37 +125,123 @@ export function useThreadScroll(
     if (scroller) setOffset(scroller.scrollHeight - scroller.clientHeight)
   }, [setOffset])
 
-  const restickIfStuck = useCallback(() => {
-    if (stuckRef.current) toBottom()
-  }, [toBottom])
-
-  const jumpToLatest = useCallback(() => {
+  const applyArrival = useCallback(() => {
     const scroller = scrollElRef.current
     if (!scroller) return
-    pendingRestoreRef.current = null
-    stuckRef.current = true
-    scroller.scrollTo({ top: scroller.scrollHeight - scroller.clientHeight, behavior: 'smooth' })
-  }, [])
-
-  useEffect(() => {
-    const scroller = scrollElRef.current
-    const content = contentEl
-    if (!scroller || !content) return
-
-    // Arrival: cached position if the reader had one away from the tail, else the tail.
-    // Once per view — a container swap (threshold crossing) re-subscribes without re-arriving.
     if (arrivedForRef.current !== viewKey) {
       arrivedForRef.current = viewKey
       const memory = readThreadScroll(viewKey)
       if (memory && !memory.atBottom) {
         stuckRef.current = false
         pendingRestoreRef.current = memory.top
-        scroller.scrollTop = memory.top
       } else {
         stuckRef.current = true
-        toBottom()
+        pendingRestoreRef.current = null
       }
     }
+    if (pendingRestoreRef.current !== null) setOffset(pendingRestoreRef.current)
+    else if (stuckRef.current) toBottom()
+  }, [viewKey, setOffset, toBottom])
+
+  // The callback ref runs in the destination commit itself. Applying arrival here closes the
+  // gap between the route render and the follow-up state update that installs subscriptions;
+  // the layout effect below re-applies once virtua's handle/content state are fully attached.
+  const attachContent = useCallback((el: HTMLElement | null) => {
+    setContentEl(el)
+    if (el) {
+      scrollElRef.current = el.closest<HTMLElement>(
+        surface === 'panel' ? '[data-slot="transcript-viewport"]' : '[data-slot="main"]',
+      )
+      applyArrival()
+    }
+  }, [surface, applyArrival])
+
+  const restickIfStuck = useCallback(() => {
+    if (stuckRef.current) toBottom()
+  }, [toBottom])
+
+  const loadingOlderRef = useRef(false)
+  const wheelGestureActiveRef = useRef(false)
+  const wheelGestureTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const touchHistoryConsumedRef = useRef(false)
+  /** A finger is on the scroller right now — no programmatic scroll may run under it. */
+  const touchActiveRef = useRef(false)
+  const pointerHistoryConsumedRef = useRef(false)
+  /** Where the reader's eyes are, for the anchoring polyfill below. Undefined = nothing to hold. */
+  const readingAnchorRef = useRef<ThreadRowAnchor | undefined>(undefined)
+  const anchorFrameRef = useRef(0)
+  const rowKeysRef = useRef(rowKeys)
+  rowKeysRef.current = rowKeys
+
+  const measuredRows = useCallback((scroller: HTMLElement): ThreadRowPosition[] =>
+    [...scroller.querySelectorAll<HTMLElement>('[data-slot="thread-row"][data-row-key]')].map((row) => {
+      const rect = row.getBoundingClientRect()
+      return { key: row.dataset.rowKey!, top: rect.top, bottom: rect.bottom }
+    }), [])
+
+  const loadOlder = useCallback(() => {
+    const scroller = scrollElRef.current
+    if (!scroller || !onLoadOlder || loadingOlderRef.current) return
+    loadingOlderRef.current = true
+    const beforeHeight = scroller.scrollHeight
+    const beforeTop = scroller.scrollTop
+    const beforeViewportTop = scroller.getBoundingClientRect().top
+    const anchor = firstVisibleThreadAnchor(beforeViewportTop, measuredRows(scroller))
+    void onLoadOlder().finally(() => {
+      requestAnimationFrame(() => {
+        const current = scrollElRef.current
+        if (current) {
+          const fallbackTop = beforeTop + Math.max(0, current.scrollHeight - beforeHeight)
+          const viewportTop = current.getBoundingClientRect().top
+          const anchorIndex = anchor === undefined ? -1 : rowKeysRef.current.indexOf(anchor.key)
+          const handle = virtualizerRef.current
+          if (handle && anchorIndex >= 0) {
+            handle.scrollToIndex(anchorIndex, { align: 'start', offset: -anchor!.offset })
+          } else {
+            setOffset(threadAnchorScrollTop(
+              current.scrollTop,
+              viewportTop,
+              anchor,
+              measuredRows(current),
+              fallbackTop,
+            ))
+          }
+        }
+        loadingOlderRef.current = false
+      })
+    })
+  }, [measuredRows, onLoadOlder, setOffset])
+
+  useEffect(() => () => clearTimeout(wheelGestureTimerRef.current), [])
+
+  const jumpToLatest = useCallback(() => {
+    const scroller = scrollElRef.current
+    if (!scroller) return
+    pendingRestoreRef.current = null
+    stuckRef.current = true
+    void (onJumpToLatest?.() ?? Promise.resolve()).finally(() => {
+      requestAnimationFrame(() => {
+        const current = scrollElRef.current
+        current?.scrollTo({ top: current.scrollHeight - current.clientHeight, behavior: 'smooth' })
+      })
+    })
+  }, [onJumpToLatest])
+
+  // Arrival is the route-owned pre-paint write. AppShell deliberately does not reset task
+  // routes, so a destination thread never exposes an intermediate top-of-transcript frame.
+  // Keep this separate from the long-lived event/observer effect below: route arrival has a
+  // stricter timing contract, while subscriptions only need to exist after paint.
+  useLayoutEffect(() => {
+    const scroller = scrollElRef.current
+    const content = contentEl
+    if (!scroller || !content) return
+    applyArrival()
+  }, [contentEl, applyArrival])
+
+  useEffect(() => {
+    const scroller = scrollElRef.current
+    const content = contentEl
+    if (!scroller || !content) return
 
     // PINNING FOLLOWS INTENT, NOT POSITION. During replay/streaming the scroller's position
     // moves without the user's hand: this hook pins it, virtua re-measures rows and writes
@@ -150,9 +255,79 @@ export function useThreadScroll(
     //    window, virtua's at-rest sub-pixel corrections near the tail would re-pin a reader
     //    who just wheeled up. A slow scrollbar drag to the tail (>2s) misses the window,
     //    accepted — wheel and touch cover real readers.
+    // THE ANCHORING POLYFILL (only where the engine has none — see hasScrollAnchoring).
+    //
+    // Content above the reader legitimately changes height while an agent works: a streaming
+    // tool-output box grows toward its 216px cap, a finished one gains its "Show all N lines"
+    // control, an image loads, the header re-wraps as the token count gets wider. Every one of
+    // those pushes everything below it down, and a reader parked in the middle of the thread
+    // goes with it. Chrome re-points scrollTop at the same content (scroll anchoring); WebKit —
+    // every browser on iOS — does not. Measured on a live thread at 390×844: 200px of growth
+    // above the viewport moved the reader exactly 200px.
+    //
+    // So we do what the platform won't: remember the row the reader is looking at, and after a
+    // resize put it back where it was. Flat mode only — past the virtualization threshold virtua
+    // owns offset compensation, and a second corrector would fight it.
+    const polyfillAnchoring = !hasScrollAnchoring()
+    const rowAtViewportTop = (current: HTMLElement, viewport: DOMRect): ThreadRowPosition | undefined => {
+      // The WebKit path this polyfill serves gets an O(1) hit-test and measures one row, not up
+      // to 300 row rects per scroll frame. `elementsFromPoint` sees through a child element to
+      // the owning row; the fallback exists for jsdom/older test hosts, not shipping browsers.
+      if (typeof document.elementsFromPoint === 'function') {
+        const hit = document.elementsFromPoint(viewport.left + viewport.width / 2, viewport.top + 1)
+          .map((element) => element.closest<HTMLElement>('[data-slot="thread-row"][data-row-key]'))
+          .find((row) => row !== null && current.contains(row))
+        if (hit) {
+          const rect = hit.getBoundingClientRect()
+          return { key: hit.dataset.rowKey!, top: rect.top, bottom: rect.bottom }
+        }
+        // The probe can land on the header, a gutter or an overlay. A browser miss must not
+        // reinstate the full row scan this hit test replaces (PR #965).
+        return undefined
+      }
+      return measuredRows(current).find(({ bottom }) => bottom > viewport.top)
+    }
+    const anchoredRow = (current: HTMLElement, key: string): ThreadRowPosition | undefined => {
+      const escaped = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+        ? CSS.escape(key)
+        : key.replace(/["\\]/g, '\\$&')
+      const row = current.querySelector<HTMLElement>(`[data-slot="thread-row"][data-row-key="${escaped}"]`)
+      if (!row) return undefined
+      const rect = row.getBoundingClientRect()
+      return { key, top: rect.top, bottom: rect.bottom }
+    }
+    const trackReadingAnchor = () => {
+      // Pinned readers are handled by the pin itself, and a restore in flight owns the offset.
+      if (!polyfillAnchoring || stuckRef.current || pendingRestoreRef.current !== null) return
+      if (anchorFrameRef.current !== 0) return // at most one measurement per frame
+      anchorFrameRef.current = requestAnimationFrame(() => {
+        anchorFrameRef.current = 0
+        const current = scrollElRef.current
+        if (!current || stuckRef.current) return
+        const viewport = current.getBoundingClientRect()
+        const row = rowAtViewportTop(current, viewport)
+        readingAnchorRef.current = row === undefined
+          ? undefined
+          : { key: row.key, offset: row.top - viewport.top }
+      })
+    }
+    const holdReadingAnchor = () => {
+      const anchor = readingAnchorRef.current
+      if (!polyfillAnchoring || anchor === undefined || virtualizerRef.current) return
+      const viewportTop = scroller.getBoundingClientRect().top
+      const row = anchoredRow(scroller, anchor.key)
+      const corrected = row === undefined
+        ? scroller.scrollTop
+        : scroller.scrollTop + (row.top - viewportTop - anchor.offset)
+      // Sub-pixel noise is not a jump; correcting it would fight momentum scrolling for nothing.
+      if (Math.abs(corrected - scroller.scrollTop) >= 1) setOffset(corrected)
+    }
+
     const RESTICK_INTENT_MS = 2000
     let downIntentAt = 0
     let lastTouchY: number | null = null
+    let pointerScrolling = false
+    let previousScrollTop = scroller.scrollTop
     const unstick = () => {
       pendingRestoreRef.current = null
       stuckRef.current = false
@@ -162,31 +337,74 @@ export function useThreadScroll(
       downIntentAt = Date.now()
     }
     const onWheel = (event: WheelEvent) => {
-      if (event.deltaY < 0) unstick()
+      if (event.deltaY < 0) {
+        unstick()
+        const freshGesture = !wheelGestureActiveRef.current
+        wheelGestureActiveRef.current = true
+        clearTimeout(wheelGestureTimerRef.current)
+        wheelGestureTimerRef.current = setTimeout(() => {
+          wheelGestureActiveRef.current = false
+        }, 180)
+        if (freshGesture && isNearHistoryStart(scroller)) loadOlder()
+      }
       else markDown()
     }
     const onKey = (event: KeyboardEvent) => {
-      if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) unstick()
+      if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) {
+        unstick()
+        if (!event.repeat && isNearHistoryStart(scroller)) loadOlder()
+      }
       else if (['ArrowDown', 'PageDown', 'End'].includes(event.key)) markDown()
     }
     const onPointerDown = () => {
+      pointerScrolling = true
+      pointerHistoryConsumedRef.current = false
+      previousScrollTop = scroller.scrollTop
       if (!isNearBottom(scroller, NEAR_BOTTOM_SLACK_PX)) {
         unstick()
         markDown() // a scrollbar grab can go either way — let a drag to the tail re-pin
       }
     }
+    const onPointerUp = () => {
+      pointerScrolling = false
+    }
     const onTouchStart = (event: TouchEvent) => {
+      touchHistoryConsumedRef.current = false
+      touchActiveRef.current = true
       lastTouchY = event.touches[0]?.clientY ?? null
+    }
+    // A finger on the glass owns the scroller. Growth-driven re-pinning resumes when it lifts —
+    // if the gesture went upward at all, `unstick()` has already cancelled it.
+    const onTouchEnd = () => {
+      if (!touchActiveRef.current) return
+      touchActiveRef.current = false
+      if (stuckRef.current && pendingRestoreRef.current === null) toBottom()
     }
     const onTouchMove = (event: TouchEvent) => {
       const y = event.touches[0]?.clientY
       if (y === undefined) return
       // Finger moving down pans the content up (away from the tail), and vice versa.
-      if (lastTouchY !== null && y > lastTouchY + 1) unstick()
+      if (lastTouchY !== null && y > lastTouchY + 1) {
+        unstick()
+        if (!touchHistoryConsumedRef.current && isNearHistoryStart(scroller)) {
+          touchHistoryConsumedRef.current = true
+          loadOlder()
+        }
+      }
       else if (lastTouchY !== null && y < lastTouchY - 1) markDown()
       lastTouchY = y
     }
     const onScroll = () => {
+      if (
+        pointerScrolling &&
+        !pointerHistoryConsumedRef.current &&
+        scroller.scrollTop < previousScrollTop &&
+        isNearHistoryStart(scroller)
+      ) {
+        pointerHistoryConsumedRef.current = true
+        loadOlder()
+      }
+      previousScrollTop = scroller.scrollTop
       const near = isNearBottom(scroller, NEAR_BOTTOM_SLACK_PX)
       // No re-pinning while a restore is in flight: the clamped position rides the (still
       // growing) bottom on its way to the cached offset, and near-bottom moments there are
@@ -200,12 +418,20 @@ export function useThreadScroll(
       if (pendingRestoreRef.current === null) {
         saveThreadScroll(viewKey, { top: scroller.scrollTop, atBottom: near })
       }
+      // The anchor has to be captured BEFORE the mutation that moves it, and scrolling is the
+      // only thing that changes which row the reader is on.
+      trackReadingAnchor()
     }
     scroller.addEventListener('scroll', onScroll, { passive: true })
     scroller.addEventListener('wheel', onWheel, { passive: true })
     scroller.addEventListener('touchstart', onTouchStart, { passive: true })
     scroller.addEventListener('touchmove', onTouchMove, { passive: true })
+    // On the window: a drag that started on the thread can end anywhere (over the dock, off the
+    // edge), and a touch left "active" would park the pin for good.
+    window.addEventListener('touchend', onTouchEnd, { passive: true })
+    window.addEventListener('touchcancel', onTouchEnd, { passive: true })
     scroller.addEventListener('pointerdown', onPointerDown, { passive: true })
+    window.addEventListener('pointerup', onPointerUp, { passive: true })
     scroller.addEventListener('keydown', onKey)
 
     // Content growth (streamed items, replay, virtua's total-size updates) re-applies the
@@ -218,26 +444,48 @@ export function useThreadScroll(
         if (pending !== null) {
           const maxTop = scroller.scrollHeight - scroller.clientHeight
           setOffset(Math.min(pending, maxTop))
-          if (maxTop >= pending) pendingRestoreRef.current = null // reached — restore done
+          if (maxTop >= pending) {
+            pendingRestoreRef.current = null // reached — restore done
+            trackReadingAnchor()
+          }
         } else if (stuckRef.current) {
-          toBottom()
+          // …but NEVER while a finger is on the glass. A `scrollTop` write mid-drag moves the
+          // content out from under the touch that is holding it — the "scrolling jumps while
+          // the agent works" report, which only phones can produce because only a touch scroll
+          // is a gesture the browser is already animating. `onTouchEnd` re-pins if still stuck.
+          if (!touchActiveRef.current) toBottom()
+        } else {
+          // Away from the tail: keep the reader on the row they are reading. Unlike the pin,
+          // this one DOES run under a finger — it is compensation, not repositioning, so the
+          // content stays visually still exactly when a drag would otherwise be yanked.
+          holdReadingAnchor()
         }
       })
       observer.observe(content)
     }
 
+    // Seed a restored mid-thread reader before the first later resize. A still reader emits no
+    // scroll event, so waiting solely for onScroll would leave the first growth uncompensated.
+    trackReadingAnchor()
+
     return () => {
+      cancelAnimationFrame(anchorFrameRef.current)
+      anchorFrameRef.current = 0
+      readingAnchorRef.current = undefined // another view's row is not this reader's anchor
       scroller.removeEventListener('scroll', onScroll)
       scroller.removeEventListener('wheel', onWheel)
       scroller.removeEventListener('touchstart', onTouchStart)
       scroller.removeEventListener('touchmove', onTouchMove)
+      window.removeEventListener('touchend', onTouchEnd)
+      window.removeEventListener('touchcancel', onTouchEnd)
       scroller.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointerup', onPointerUp)
       scroller.removeEventListener('keydown', onKey)
       observer?.disconnect()
     }
-  }, [viewKey, contentEl, setOffset, toBottom])
+  }, [viewKey, contentEl, loadOlder, setOffset, toBottom])
 
-  return { attachContent, scrollElRef, virtualizerRef, pillVisible, jumpToLatest, restickIfStuck }
+  return { attachContent, scrollElRef, virtualizerRef, pillVisible, jumpToLatest, loadOlder, restickIfStuck }
 }
 
 /**
@@ -258,16 +506,14 @@ export function ThreadRows({
   controls: ThreadScrollControls
 }) {
   if (mode === 'virtual') return <VirtualRows runId={runId} rows={rows} controls={controls} />
+  // content-visibility skips render work for off-screen rows, and the intrinsic-size hint keeps
+  // the scrollbar stable before a skipped row is first measured — but only an engine with scroll
+  // anchoring can hide the moment that hint is corrected. See threadRowClass.
+  const rowClass = threadRowClass(hasScrollAnchoring())
   return (
     <div ref={controls.attachContent} data-slot="thread-rows" data-virtualized="false">
       {rows.map((row) => (
-        // content-visibility skips render work for off-screen rows; the intrinsic-size hint
-        // keeps the scrollbar stable before a skipped row is first measured.
-        <div
-          key={row.key}
-          data-slot="thread-row"
-          className="flex w-full flex-col pb-2.5 [contain-intrinsic-block-size:auto_3rem] [content-visibility:auto]"
-        >
+        <div key={row.key} data-slot="thread-row" data-row-key={row.key} className={rowClass}>
           {row.node}
         </div>
       ))}
@@ -348,7 +594,7 @@ function VirtualRows({
         {...(measurements !== undefined ? { cache: measurements } : {})}
       >
         {rows.map((row) => (
-          <div key={row.key} data-slot="thread-row" className="flex w-full flex-col pb-2.5">
+          <div key={row.key} data-slot="thread-row" data-row-key={row.key} className="flex w-full flex-col pb-2.5">
             {row.node}
           </div>
         ))}

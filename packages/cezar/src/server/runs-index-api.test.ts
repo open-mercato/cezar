@@ -9,6 +9,7 @@ import { clearProjectProbeCache, listProjects, registerProject } from '../worksp
 import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp, type ServerDeps } from './server.ts';
+import { __seedRefStatusCacheForTests } from './forge/github.ts';
 
 /**
  * `GET /api/v1/workspace/runs-index` — the ⌘K palette's cross-project task finder.
@@ -78,7 +79,7 @@ describe('workspace runs index API', () => {
 
   it('answers an empty index for an empty registry — never a 404', async () => {
     const body = await getIndex();
-    expect(body).toEqual({ runs: [], perProjectLimit: 200, truncated: [] });
+    expect(body).toEqual({ runs: [], perProjectLimit: 200, truncated: [], referenceStatuses: {} });
   });
 
   it('merges the boot project’s live store with a cold project read off disk, newest first', async () => {
@@ -143,13 +144,88 @@ describe('workspace runs index API', () => {
       // for a project it is not standing in — the same inputs the Tasks badge reads.
       seenAt: '2026-07-14T12:00:00Z',
       archived: false,
+      // The global Tasks page's own columns: always-present workflow, plus branch/startedAt
+      // when the run has them (this one does not — see the absent-key assertions below).
+      workflow: 'build',
     });
-    // The fat keys the palette has no use for never reach the wire.
+    // The fat keys neither consumer has a use for never reach the wire — `workflow` rides along
+    // as a plain string, `steps[]` and `workflowDef` (the expensive half) do not.
     expect(row).not.toHaveProperty('steps');
     expect(row).not.toHaveProperty('task');
     expect(row).not.toHaveProperty('workflowDef');
     // An absent optional is absent, not `undefined` — the wire has no such value.
     expect(Object.keys(row!)).not.toContain('activity');
+    expect(Object.keys(row!)).not.toContain('branch');
+    expect(Object.keys(row!)).not.toContain('startedAt');
+    // …including every tracker-reference input and every usage field: an untracked, never-run
+    // task carries none of them.
+    for (const key of [
+      'pullRequestUrl',
+      'referencedPullRequestUrl',
+      'prNumber',
+      'issueNumber',
+      'referencedIssueUrl',
+      'markerRefs',
+      'costUsd',
+      'peakRssBytes',
+      'peakProcCount',
+      'usage',
+    ]) {
+      expect(Object.keys(row!), key).not.toContain(key);
+    }
+  });
+
+  it('carries cost and the persisted usage peaks the cross-project table paints', async () => {
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'measured',
+        title: 'Measured',
+        costUsd: 0.31,
+        peakRssBytes: 943718400,
+        peakProcCount: 4,
+      }),
+    ]);
+
+    const body = await getIndex();
+    const row = body.runs.find((entry) => entry.id === 'measured');
+
+    expect(row).toMatchObject({ costUsd: 0.31, peakRssBytes: 943718400, peakProcCount: 4 });
+    // The LIVE sample is not persisted, so a cold project's row never carries one.
+    expect(Object.keys(row!)).not.toContain('usage');
+  });
+
+  it('carries the tracker-reference inputs so a cross-project row can show its PR/issue chip', async () => {
+    // Verbatim, not pre-resolved: the rule that picks between them (#407, #526) lives in the
+    // cockpit's `taskReference()`, and resolving it a second time here would be a second rule.
+    await registerProject(repoRoot);
+    await registerProject(otherRoot);
+    seedColdProject(otherRoot, [
+      storedRun({
+        id: 'tracked',
+        title: 'Ship it',
+        branch: 'feat/ship',
+        startedAt: '2026-07-14T10:00:05Z',
+        pullRequestUrl: 'https://github.com/acme/demo/pull/42',
+        prNumber: 42,
+        markerRefs: { pr: 42 },
+      }),
+    ]);
+
+    const body = await getIndex();
+    const row = body.runs.find((entry) => entry.id === 'tracked');
+
+    expect(row).toMatchObject({
+      branch: 'feat/ship',
+      startedAt: '2026-07-14T10:00:05Z',
+      pullRequestUrl: 'https://github.com/acme/demo/pull/42',
+      prNumber: 42,
+      markerRefs: { pr: 42 },
+    });
+    // Still the slim row — the expensive half never rides along.
+    expect(row).not.toHaveProperty('steps');
+    expect(row).not.toHaveProperty('workflowDef');
   });
 
   it('includes archived runs — findable from a project is findable from anywhere', async () => {
@@ -238,5 +314,71 @@ describe('workspace runs index API', () => {
 
     // One unreadable project costs its own rows, never the whole workspace's search.
     expect(body.runs.map((run) => run.id)).toEqual([live.id]);
+  });
+
+  /**
+   * Statuses ride along with the rows that carry the references, so the chips are coloured in the
+   * same paint as the table rather than a round trip later. The rule that makes it free — and
+   * therefore safe on a route the palette hits — is that it reads the ref-status cache and NEVER
+   * asks the forge.
+   */
+  describe('reference statuses', () => {
+    it('ships an empty map when the server has looked nothing up', async () => {
+      await registerProject(repoRoot);
+      const run = store.createRun({ title: 'Has a PR', workflow: 'build', task: 't', steps: [] });
+      store.updateRun(run.id, { pullRequestUrl: 'https://github.com/acme/demo/pull/42' });
+
+      const body = await getIndex();
+
+      // Present but empty — never absent, so a consumer can read it without a guard, and never
+      // invented, so a cold reference stays "nothing known" rather than a guessed status.
+      expect(body.referenceStatuses).toEqual({});
+      expect(body.runs.some((row) => row.id === run.id)).toBe(true);
+    });
+
+    it('ships what the cache holds, keyed by project', async () => {
+      await registerProject(repoRoot);
+      const run = store.createRun({ title: 'Has a PR', workflow: 'build', task: 't', steps: [] });
+      store.updateRun(run.id, {
+        pullRequestUrl: 'https://github.com/acme/demo/pull/42',
+        issueNumber: 7,
+      });
+      // Warm the cache the way the lazy route would have.
+      __seedRefStatusCacheForTests(realpathSync(repoRoot), [
+        [42, { kind: 'pr', status: 'merged' }],
+        [7, { kind: 'issue', status: 'open' }],
+      ]);
+
+      const body = await getIndex();
+
+      const project = Object.keys(body.referenceStatuses)[0]!;
+      expect(body.referenceStatuses[project]).toEqual({ prs: { 42: 'merged' }, issues: { 7: 'open' } });
+    });
+
+    it('looks up every number a run MENTIONS, not just the one its chip will show', async () => {
+      // Which reference is displayed is the cockpit's rule (#407, #526) and is deliberately not
+      // re-derived here. A cache read costs nothing per number, so the superset is free — and it
+      // is what lets the client apply its own rule to whatever it gets.
+      await registerProject(repoRoot);
+      const run = store.createRun({ title: 'Several', workflow: 'build', task: 't', steps: [] });
+      store.updateRun(run.id, {
+        pullRequestUrl: 'https://github.com/acme/demo/pull/42',
+        referencedPullRequestUrl: 'https://github.com/acme/demo/pull/40',
+        referencedIssueUrl: 'https://github.com/acme/demo/issues/12',
+      });
+      __seedRefStatusCacheForTests(realpathSync(repoRoot), [
+        [42, { kind: 'pr', status: 'merged' }],
+        [40, { kind: 'pr', status: 'ready' }],
+        [12, { kind: 'issue', status: 'completed' }],
+      ]);
+
+      const body = await getIndex();
+
+      const project = Object.keys(body.referenceStatuses)[0]!;
+      expect(body.referenceStatuses[project]).toEqual({
+        prs: { 40: 'ready', 42: 'merged' },
+        issues: { 12: 'completed' },
+      });
+    });
   });
 });

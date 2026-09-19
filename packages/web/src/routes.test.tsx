@@ -349,16 +349,16 @@ describe('the global settings area (/settings/global)', () => {
     })
   }
 
-  // #801: a bookmarked deep link into any of the four `/automations*` routes still resolves — the
-  // route map is unchanged — but the view says the feature is off instead of rendering an editor
-  // whose every request would 409.
+  // A bookmarked deep link into any of the four `/automations*` routes still resolves — the route
+  // map is unchanged — but on a cockpit started with CEZ_AUTOMATIONS=0 the view says the feature
+  // is off instead of rendering an editor whose every request would 409.
   for (const path of ['automations', 'automations/new', 'automations/a-1', 'automations/a-1/log']) {
     it(`/${path} renders the disabled state while the capability is off`, async () => {
       renderAt(`/p/${BOOT}/${path}`)
       expect(currentPathname()).toBe(`/p/${BOOT}/${path}`)
       expect(routeName()).toBe('automations')
-      expect(await screen.findByText('GitHub automations are off')).not.toBeNull()
-      expect(screen.getByText(/CEZ_AUTOMATIONS=1/)).not.toBeNull()
+      expect(await screen.findByText('Automations are off')).not.toBeNull()
+      expect(screen.getByText(/CEZ_AUTOMATIONS=0/)).not.toBeNull()
     })
   }
 
@@ -370,7 +370,7 @@ describe('the global settings area (/settings/global)', () => {
     expect(routeName()).toBe('automations')
     expect(screen.getByText('Loading automations…')).not.toBeNull()
     expect(document.querySelector('#automation-name')).toBeNull()
-    expect(screen.queryByText('GitHub automations are off')).toBeNull()
+    expect(screen.queryByText('Automations are off')).toBeNull()
   })
 
   it('omits the Projects route when single-project mode is active', () => {

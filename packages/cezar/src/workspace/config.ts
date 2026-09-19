@@ -3,6 +3,10 @@ import { chmodSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { z } from 'zod';
+// Contract VALUES, like `workspaceUiStateSchema` in workspace/migrations.ts: the tag bounds this
+// file must not `.catch` away are the same constants the PATCH route validates against, so they
+// are imported rather than repeated.
+import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
 import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.ts';
 
@@ -17,10 +21,14 @@ import { assertCezarHomeWriteIsSandboxed, workspaceConfigPath } from '../paths.t
  *   survive a round-trip through an older one;
  * - `.max()` bounds on strings (this file is parsed on every boot);
  * - atomic tmp+rename writes with mode `0600` (dir `0700`);
- * - a corrupt file degrades to in-memory defaults plus ONE warning line — the
- *   registry rebuilds as projects are opened, so losing it is an
- *   inconvenience, not data loss. The corrupt file is left in place until the
- *   next successful merge-write replaces it.
+ * - a corrupt file degrades to in-memory defaults plus ONE warning line, and
+ *   is left in place until the next successful merge-write replaces it. What
+ *   makes that survivable is the `config.json.bak` snapshot below, which the
+ *   load path restores from before degrading — NOT re-registration: since boot
+ *   registration became seed-once (`shouldAutoRegisterProject`), opening a
+ *   project no longer writes it back, so a registry lost with its snapshot is
+ *   re-added with `cezar projects add <dir>` (or the cockpit's Add project),
+ *   one gesture per project. Nothing inside any repo is ever at stake.
  */
 
 /** `id` slug rule — mirrors the spec: `^[a-z0-9][a-z0-9-]{0,63}$`. */
@@ -48,6 +56,16 @@ const workspaceProjectSchema = z
      *  value degrades to "inherit" (`.catch(undefined)`) rather than a hard
      *  default, and `.passthrough()` preserves the key across cezar round-trips. */
     maxParallel: z.number().int().min(1).max(16).optional().catch(undefined),
+    /** Free-form labels grouping connected repositories (`storefront`, `infra`), used by the
+     *  global Tasks page to filter and group across projects. Absent = untagged; the writers
+     *  (`PATCH /api/projects/:id`, `cezar projects tag`) delete the key rather than storing `[]`,
+     *  so an untagged project costs nothing in the file. Bounds mirror the PATCH schema exactly,
+     *  so a value that route accepts can never be degraded away by the next load's `.catch`. */
+    tags: z
+      .array(z.string().trim().min(1).max(PROJECT_TAG_MAX_LENGTH))
+      .max(PROJECT_TAGS_MAX)
+      .optional()
+      .catch(undefined),
   })
   .passthrough();
 
@@ -132,6 +150,7 @@ const agentDefaultsSchema = z
         claude: z.string().trim().min(1).max(200).optional().catch(undefined),
         codex: z.string().trim().min(1).max(200).optional().catch(undefined),
         opencode: z.string().trim().min(1).max(200).optional().catch(undefined),
+        pi: z.string().trim().min(1).max(200).optional().catch(undefined),
       })
       .passthrough()
       .optional()
@@ -310,7 +329,9 @@ export async function loadWorkspaceConfig(path: string = workspaceConfigPath()):
     return restored;
   }
   if (raw === null) return defaultWorkspaceConfig();
-  console.warn(`[cez] workspace config ${path} is corrupt — using defaults (registry rebuilds)`);
+  console.warn(
+    `[cez] workspace config ${path} is corrupt — using defaults (re-add projects with \`cezar projects add\`)`,
+  );
   return defaultWorkspaceConfig();
 }
 

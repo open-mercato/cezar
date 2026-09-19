@@ -7,13 +7,20 @@ import { createQueryClient } from '@/api/query-client'
 import { queryKeys } from '@/api/queries'
 import type { ApiRun, RunEvent } from '@open-mercato/cezar-api-client'
 
-import { settledSessionSeq, STALE_RECORD_GRACE_MS, useRunRecordReconcile } from './run-reconcile'
+import {
+  liveSessionSeq,
+  settledSessionSeq,
+  STALE_RECORD_GRACE_MS,
+  useRunRecordReconcile,
+} from './run-reconcile'
 
 /**
- * The stale-record healer (run-reconcile.ts): the transcript's `session.ended` arbitrates a
- * record still claiming a live session. The reported shape: the thread shows "goal achieved —
- * session closed" / "run finished" while the record says `running`, so Working… spins forever
- * and the composer sends into a session that 409s.
+ * The stale-record healer (run-reconcile.ts): the transcript's session boundaries arbitrate a
+ * record that disagrees with them, in both directions. One reported shape is the thread showing
+ * "goal achieved — session closed" / "run finished" while the record says `running`, so Working…
+ * spins forever and the composer sends into a session that 409s. The mirror is the thread reading
+ * as done while the task is running — the composer then aims at `POST /continue`, which answers
+ * "run is still active", and every reply bounces until the page is reloaded.
  */
 
 const line = (seq: number, type: string, extra: Record<string, unknown> = {}): RunEvent => ({
@@ -80,6 +87,38 @@ describe('settledSessionSeq', () => {
   })
 })
 
+describe('liveSessionSeq', () => {
+  it('no events → 0', () => {
+    expect(liveSessionSeq([])).toBe(0)
+  })
+
+  it('an opening with nothing after it is the live signal', () => {
+    const events = [line(8, 'session.ended'), line(9, 'step-start', { kind: 'agent' })]
+    expect(liveSessionSeq(events)).toBe(9)
+  })
+
+  it('session.started counts as an opening too', () => {
+    expect(liveSessionSeq([line(8, 'session.ended'), line(9, 'session.started')])).toBe(9)
+  })
+
+  it('an end after the opening means settled, not live', () => {
+    const events = [line(9, 'step-start', { kind: 'agent' }), line(20, 'session.ended')]
+    expect(liveSessionSeq(events)).toBe(0)
+  })
+
+  it('a check step is not a session opening', () => {
+    const events = [line(8, 'session.ended'), line(9, 'step-start', { kind: 'check' })]
+    expect(liveSessionSeq(events)).toBe(0)
+  })
+
+  it('the two readings are mutually exclusive', () => {
+    const live = [line(8, 'session.ended'), line(9, 'session.started')]
+    const settled = [line(9, 'session.started'), line(20, 'session.ended')]
+    expect([liveSessionSeq(live), settledSessionSeq(live)]).toEqual([9, 0])
+    expect([liveSessionSeq(settled), settledSessionSeq(settled)]).toEqual([0, 20])
+  })
+})
+
 function renderReconcile(record: ApiRun | undefined, events: RunEvent[]) {
   const client = createQueryClient()
   const invalidate = vi.spyOn(client, 'invalidateQueries')
@@ -138,6 +177,56 @@ describe('useRunRecordReconcile', () => {
     const events = [line(8, 'session.ended')]
     const { rerender, invalidate } = renderReconcile(run(), events)
     rerender({ r: run(), e: [...events, line(9, 'step-start', { kind: 'agent' })] })
+    vi.advanceTimersByTime(STALE_RECORD_GRACE_MS * 2)
+    expect(invalidate).not.toHaveBeenCalled()
+  })
+
+  // The mirror: the record says the run is finished while the transcript has it live again.
+  it('a `done` record over a reopened session refetches after the grace', () => {
+    vi.useFakeTimers()
+    const { invalidate } = renderReconcile(run({ status: 'done' }), [
+      line(8, 'session.ended'),
+      line(9, 'step-start', { kind: 'agent' }),
+    ])
+    expect(invalidate).not.toHaveBeenCalled()
+
+    vi.advanceTimersByTime(STALE_RECORD_GRACE_MS)
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.detail('r1') })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.list() })
+  })
+
+  it('`review` and `failed` are settled claims too — an auto-resume heals either', () => {
+    for (const status of ['review', 'failed', 'cancelled'] as const) {
+      vi.useFakeTimers()
+      const { invalidate } = renderReconcile(run({ status }), [line(9, 'session.started')])
+      vi.advanceTimersByTime(STALE_RECORD_GRACE_MS)
+      expect(invalidate, status).toHaveBeenCalled()
+      cleanup()
+      vi.useRealTimers()
+    }
+  })
+
+  it('the healthy Continue stays quiet: the record flips to running within the grace', () => {
+    vi.useFakeTimers()
+    const events = [line(8, 'session.ended'), line(9, 'step-start', { kind: 'agent' })]
+    const { rerender, invalidate } = renderReconcile(run({ status: 'done' }), events)
+    rerender({ r: run({ status: 'running' }), e: events })
+    vi.advanceTimersByTime(STALE_RECORD_GRACE_MS * 2)
+    expect(invalidate).not.toHaveBeenCalled()
+  })
+
+  it('a queued run is neither claim — a deferred continuation parks with its step already open', () => {
+    vi.useFakeTimers()
+    const { invalidate } = renderReconcile(run({ status: 'queued' }), [
+      line(9, 'step-start', { kind: 'agent' }),
+    ])
+    vi.advanceTimersByTime(STALE_RECORD_GRACE_MS * 2)
+    expect(invalidate).not.toHaveBeenCalled()
+  })
+
+  it('a settled record over a transcript with no boundary at all stays quiet', () => {
+    vi.useFakeTimers()
+    const { invalidate } = renderReconcile(run({ status: 'done' }), [line(5, 'text')])
     vi.advanceTimersByTime(STALE_RECORD_GRACE_MS * 2)
     expect(invalidate).not.toHaveBeenCalled()
   })

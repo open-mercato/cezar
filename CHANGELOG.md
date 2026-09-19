@@ -1,139 +1,217 @@
-# Unreleased
+# 0.11.1 (2026-09-18)
+
+## Highlights
+A patch release that makes the cockpit tell the truth about what it is doing. A reply typed into a task that looks finished, but is still running, now reaches the live session instead of bouncing into the draft, and a turn parked on its own dispatched subagents stops reading as "needs you". Starting cezar in a folder no longer adds it to the project list you curated. Three more failures that all looked like "nothing is happening" are fixed: a stale poll lock that silenced every project for ten minutes, an OpenCode turn over five minutes parked under Needs you, and a provider disabled by an auth rejection nobody verified. Automations gain a PR-review trigger with account and skill pickers, a picked or dropped image keeps a named copy in the attachment library so a later task can name the file it means, and the server install stops emitting an nginx directive older servers reject while `server-deploy` fails when the service did not actually restart. The README is a short front page again — demo video, screenshots, a reference doc beside it — and it reads correctly on a phone.
 
 ## ✨ Features
-- ✨ **Advanced users can opt out of repository-root run serialization.** Set the exact value
-  `CEZ_DISABLE_REPO_LOCK=1` to let runs executing in the shared checkout overlap, including
-  explicit `worktree=false` runs, non-Git degradation, and continuations whose worktree cannot be
-  restored. The safe default is unchanged and isolated worktree runs are unaffected. This escape
-  hatch is intentionally dangerous: concurrent agents can overwrite each other's files or Git
-  state, so cezar emits a visible unsafe-mode note whenever it is active. (#762)
-- ✨ **Agent accounts: run one project on your work login and another on your personal one.**
-  The same CLI logged in twice — `CLAUDE_CONFIG_DIR=~/.claude-klaudiusz claude`, or `CODEX_HOME` for
-  Codex — is now something cezar can address. Add the extra config folder under **Settings → Agent
-  accounts**, pick which account each project uses in **Settings → Agents**, and override it for a
-  single task from the composer. Each account reports its own connection state and gets its own
-  **Connect**, and "Open in → Claude CLI" hands the terminal the account that actually ran the
-  work, so `--resume` lands on the right conversation instead of silently starting a fresh one.
-  Each agent gets its own tab, showing whether it is installed, its version, and its logins.
-  **Show details** on a login reveals the email, organization and plan it is signed in as, and
-  opens any of that account's own config files — `settings.json`, `CLAUDE.md`, `config.toml`,
-  `AGENTS.md` — resolved inside *that* folder rather than the default account's, through the same
-  **Open in…** menu the task thread uses, so you can pick the system default or any editor the
-  machine has. Identity is opt-in
-  by construction: it has its own request, made only when you expand a row, so nothing carries an
-  email until you ask.
-  Zero-config is untouched: with one login there is no new control anywhere, and no new variable in
-  any spawned process. Accounts live in their own `~/.cezar/agent-accounts.json` rather than a key
-  in `config.json`, so switching to an older cezar and back cannot lose them — a version that has
-  never heard of accounts does not open that file. cezar does not go looking for accounts (a folder
-  is one because you said so, and you can type a path that does not exist yet), and it never
-  silently falls back to another account when the one you chose is unavailable,
-  because that would bill the wrong subscription while the UI said otherwise. OpenCode is not
-  supported yet: it keeps credentials outside its config folder, so a second folder would change
-  settings without changing the account. Spec: `.ai/specs/2026-07-29-agent-profiles.md`.
+- ✨ Starting cezar in a folder registers it only while your project list is empty, so a worktree or scratch checkout is served without joining the list you curated (fixes #872). (#774) *(@patzick)*
+- ✨ Automations can trigger on PR reviews, and pick the agent account and skills a triggered run uses. (#1016) *(@patzick)*
+- ✨ A picked or dropped image keeps a named copy in the project's attachment library, so a later task can refer to `architecture-v2.png` — clipboard screenshots stay out of it (fixes #960). (#1012) *(@matwiatrzyk)*
 
 ## 🐛 Fixes
-- 🐛 **Opening the cockpit on your phone no longer rearranges it on your desktop.** Which sidebar
-  project groups are collapsed, and which page a bare `/` restores, were stored workspace-wide in
-  `~/.cezar/ui-state.json` — so every open cockpit shared one answer: the last client to navigate
-  decided where the next launch landed on every other client, and a group collapsed on a narrow
-  screen collapsed everywhere. Both now live in each browser's own storage, which is also what they
-  always described. Each toggle costs zero requests, the sidebar paints its real state on the first
-  frame instead of after a fetch, and the bare-root restore no longer waits on the UI-state read.
-  The server keys stay accepted and round-tripped for older cockpits; existing collapse state and a
-  remembered location are workspace-wide values with no per-browser answer yet, so each browser
-  starts from the defaults once and remembers from there.
+- 🐛 A reply typed into a task that looks done, but is running, lands in the live session instead of bouncing into the draft. (#986) *(@patzick)*
+- 🐛 A stale automations poll lock no longer silences every project for ten minutes (fixes #983). (#993) *(@pat-lewczuk)*
+- 🐛 An OpenCode turn longer than five minutes no longer parks the run under Needs you (fixes #897). (#1005) *(@pat-lewczuk)*
+- 🔐 A runtime auth rejection verifies itself before it sticks, so a provider is not disabled by a transient refusal. (#1014) *(@pat-lewczuk)*
+- 🐛 A dispatching parent is told `--budget` is optional, so uncapped task trees stop inventing caps for their children. (#1015) *(@patzick)*
+- 🐛 A turn parked on its own dispatched subagents stops reading as "needs you" (fixes #654, #933). (#995) *(@pat-lewczuk)*
+- 🔧 The ubuntu-vps vhost no longer emits a standalone `http2` directive that nginx older than 1.25.1 rejects (fixes #910). (#994) *(@pat-lewczuk)*
+- 🔧 `server-deploy` fails the deploy when the service did not actually restart (fixes #912). (#1009) *(@pat-lewczuk)*
+
+## 📝 Specs & Documentation
+- 📝 The README is a short front page again — demo video, screenshots and a mobile gallery — with the long reference moved to `docs/reference.md`. (#1013) *(@pat-lewczuk)*
+- 📝 The README's link row and screenshot gallery read correctly on a phone. (#1022) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @patzick
+- @pat-lewczuk
+- @matwiatrzyk
+
+# 0.11.0 (2026-09-15)
+
+## Highlights
+The cockpit learns to delegate: a running task may now dispatch other tasks with `cez task` and they report back into its session, which replaces the missions experiment. Automations come on by default in the same release, with a schedule as a second trigger kind beside the GitHub poll and a rebuilt surface to run them from. Around that, what you attach and what you type stop being disposable — every attachment lands in a per-project library under its own name, an unsent reply survives leaving the task, and the conversation finally carries a clock. The left drawer takes the order you drag it into and keeps it across browsers, a task can switch runner, model or account mid-thread without a handoff file, and a question from a mid-workflow step now pauses the workflow instead of being ignored. The phone gets a smooth transcript while an agent works, the task view stops burning CPU while one streams, and cloning a repository behind organization SAML walks you through authorization instead of printing a raw token.
+
+## ⚠️ Breaking
+- ⚠️ Automations are on by default, reversing the `CEZ_AUTOMATIONS=1` opt-in from #802 — only the exact value `CEZ_AUTOMATIONS=0` turns them off, and a GitHub poll left enabled and idle past its own lookback is re-baselined at boot rather than replayed, so an upgrade never launches a backlog of missed polls. (#985) *(@pat-lewczuk)*
+
+## ✨ Features
+- ✨ A running task may dispatch other tasks with `cez task` and they report back into its session, replacing the missions experiment. (#972) *(@pat-lewczuk)*
+- ✨ An automation can run on a schedule as well as a GitHub poll — daily, weekdays, one weekday or every N hours, DST-safe in the cockpit's own zone — on a rebuilt Automations surface with week and day calendars, a template palette and creation from a prompt. (#985) *(@pat-lewczuk)*
+- ✨ Every file you attach to a task lands in a per-project attachment library, under its own name (carries forward @Damian-Szczepanski's #929). (#957) *(@pat-lewczuk)*
+- ✨ Drag the projects in the left drawer into the order you want, stored on the server so every browser agrees (fixes #952). (#953) *(@piotrchabros)*
+- ✨ Switch a task's runner, model or account from the header badge, with its conversation carried over instead of a handoff file. (#954) *(@piotrchabros)*
+- ✨ The task conversation has a clock: a stamp on each turn, how long the turn took, and a dated rule between days (fixes #941). (#942) *(@piotrchabros)*
+- ✨ What you typed into a task is still there when you come back, across navigation and restarts (fixes #939). (#940) *(@piotrchabros)*
+- ✨ The new-task base branch picker filters by name. (#973) *(@piotrchabros)*
+- ✨ Copy a task's branch name straight from the thread header. (#956) *(@piotrchabros)*
+
+## 🐛 Fixes
+- 🐛 A question from a mid-workflow step now pauses the workflow instead of being ignored (supersedes #917). (#984) *(@piotrchabros, via @pat-lewczuk)*
+- 🐛 The autonomous auto-continue nudge is reachable again, so an `#autonomous` run stops parking after its first turn. (#967) *(@pat-lewczuk)*
+- 🐛 Opening a task, or watching one stream, no longer burns CPU and drops frames. (#966) *(@Igloczek)*
+- 🐛 Cloning a repository behind GitHub organization SAML walks you through authorization and retries, instead of printing a raw token. (#968) *(@piotrchabros)*
+- 🐛 The task conversation scrolls smoothly on a phone while the agent is working. (#965) *(@piotrchabros)*
+- 🐛 Folded CPU and Mem columns stay folded while tasks sit in the queue (fixes #821). (#861) *(@wojciechszyjka)*
+- 🐛 The composer's `/` skill menu scrolls to follow arrow-key navigation. (#809) *(@zawoj)*
+
+## 📝 Specs & Documentation
+- 📝 A task remembers every PR it has been associated with. (#839) *(@wojciechszyjka)*
+- 📝 Every release entry is one line again, in 0.9.0's format. (#963) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @piotrchabros
+- @Igloczek
+- @wojciechszyjka
+- @zawoj
+- @Damian-Szczepanski
+
+# 0.10.1 (2026-09-04)
+
+## Highlights
+The cockpit gets easier to live in on a phone and harder to be wrong about. Pinned tasks keep the two or three you're actively working on at the top of the list, a follow-up can be sent to a different Claude login than the one that started it, and the composer now takes PDF, TXT and MD files the same way it's always taken a screenshot. The Claude model picker reads from your own CLI instead of a hand-written list, and a run's reference chips get several correctness passes: a conflicting PR now says so, a task can no longer borrow another repository's pull request as its own, and a stale review request or an "Update branch" click can no longer paint over a real rejection.
+
+## ✨ Features
+- ✨ Pin the two or three tasks you are actually living in — a per-project Pinned group above `Needs you` (fixes #935). (#938) *(@piotrchabros)*
+- ✨ Continue a task on another agent account, not just another agent. (#924) *(@patzick)*
+- ✨ The composer takes a PDF, TXT or MD file the same way it already takes a screenshot (fixes #950). (#951) *(@pat-lewczuk)*
+
+## 🐛 Fixes
+- 🐛 A question one closing brace short is now a card, not a wall of JSON (fixes #936). (#937) *(@piotrchabros)*
+- 🐛 A pull request with merge conflicts no longer reads "ready to merge", and carries a Resolve conflicts button. (#904) *(@patzick)*
+- 🐛 A task that opens its own PR keeps the chip for the PR it was working on. (#901) *(@patzick)*
+- 🐛 A task can no longer be credited with a PR it only read about. (#901) *(@patzick)*
+- 🐛 A reference chip on a task's own page links, in every project. (#901) *(@patzick)*
+- 🐛 A pull request's own repository decides whether cezar trusts it, not just the URL (fixes #945). (#946) *(@pat-lewczuk)*
+- 🐛 A stale review request, and GitHub's own "Update branch" merge, can no longer clear a real rejection. (#909) *(@patzick)*
+- 🐛 Opening another project's task from All tasks or the sidebar no longer 404s until you reload. (#905) *(@patzick)*
+- 🐛 The Changes tab's file tree scrolls on its own. (#918) *(@piotrchabros)*
+- 🐛 The composer's skill picker can be cleared, and no longer haunts the next task. (#919) *(@pat-lewczuk)*
+- 🐛 A resumed session keeps the tools its step was actually granted. (#928) *(@AGmakonts)*
+- 🐛 Typing a Polish letter in the composer no longer sends a canned reply. (#943) *(@matgren)*
+- 🐛 The Claude model picker lists what your own CLI actually offers (fixes #784). (#841) *(@wojciechszyjka)*
+- 🐛 The GitHub tab's search finds an issue or PR whatever its state (fixes #730). (#732) *(@wojciechszyjka)*
+- 🐛 Mobile task history reclaims the screen space its chrome was taking. (#764) *(@blabbler78)*
+- 🐛 The run header's metadata row collapses behind a disclosure on phones, not the whole page (fixes #765). (#873) *(@pat-lewczuk)*
+- 🐛 A fresh task started with a `/skill` command actually runs it. (#947) *(@matgren)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 A CI re-run no longer fails the packaged-CLI e2e regardless of the diff. (#911) *(@wojciechszyjka)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @wojciechszyjka
+- @piotrchabros
+- @blabbler78
+- @matgren
+- @AGmakonts
+- @patzick
+
+# 0.10.0 (2026-08-14)
+
+## Highlights
+The cockpit stops being one-project-at-a-time: All tasks shows every registered repo's work in a single filterable table, grouped by tags you give your repositories, and every PR or issue chip in cezar now says where that PR or issue stands. Alongside that, agent accounts let one project run on your work login and another on your personal one, `pi` joins claude, codex and opencode as a runner, and a task killed by a provider usage limit resumes itself when the window reopens.
+
+## ⚠️ Breaking
+- ⚠️ GitHub Automations are now opt-in via `CEZ_AUTOMATIONS=1` — they used to run for any project with a GitHub remote with no way to switch them off, and are off by default now, so every automations route answers `409` and `GET /api/v1/health` reports the new required `capabilities.automations` (fixes #801). (#802) *(@pat-lewczuk)*
+
+## ✨ Features
+- ✨ All tasks: one table for every project, grouped by the repository tags you give them. (#845) *(@patzick)*
+- ✨ A task's PR or issue chip now says where that PR or issue stands. (#871) *(@patzick)*
+- ✨ Agent accounts: run one project on your work login and another on your personal one.
+- ✨ Handing an issue or PR to the agent can pick which account runs it. (#878) *(@patzick)*
+- ✨ `pi` is a fourth agent backend. (#470) *(@pat-lewczuk)*
+- ✨ A task killed by a provider usage limit resumes itself when the window reopens. (#778) *(@patzick)*
+- ✨ Long sessions load progressively. (#739) *(@pkarw)*
+- ✨ Foldable task table columns. (#743) *(@pkarw)*
+- ✨ A General page for the project you are inside (`/p/<id>/settings`). (#772) *(@patzick)*
+- ✨ Readable task names in the sidebar quick-list. (#789) *(@pat-lewczuk)*
+- ✨ The agent badge shows the canonical model identity (fixes #546). (#833) *(@pat-lewczuk)*
+- ✨ Toasts animate in and out from the top right. (#820) *(@pat-lewczuk)*
+- ✨ Advanced users can opt out of repository-root run serialization with `CEZ_DISABLE_REPO_LOCK=1`. (#762) *(@dominikpalatynski)*
+
+## 🐛 Fixes
+- 🐛 `npx cezar-cli` starts again (fixes #851). (#852) *(@wojciechszyjka)*
+- 🐛 Killing a run really kills it — the SIGKILL escalation no longer trusts `ChildProcess.killed` (fixes #844, #858). (#857, #867) *(@wojciechszyjka)*
+- 🐛 The sidebar's Tools dot is green when cezar can actually start a task. (#884) *(@pat-lewczuk)*
+- 🐛 The settings gear and the theme toggle stay inside the sidebar on a nightly build. (#879) *(@patzick)*
+- 🐛 A malformed history response degrades instead of throwing mid-render (fixes #827). (#863) *(@wojciechszyjka)*
+- 🐛 A task's diff stat means something again — it is anchored at the freshest base instead of a drifting branch name. (#782) *(@pat-lewczuk)*
+- 🐛 The global Tasks page reacts to work happening in other projects.
+- 🐛 A reference's status is shared across every surface again.
+- 🐛 Opening the cockpit on your phone no longer rearranges it on your desktop. (#786) *(@patzick)*
+- 🐛 Each task gets its own `TMPDIR`, preflighted (fixes #785). (#787) *(@pkarw)*
+- 🐛 The composer reads git state from the project, not the folder cezar booted in (fixes #791). (#792) *(@sapersky)*
+- 🐛 The `/new` header follows the run mode the composer resolved (fixes #793). (#835) *(@pat-lewczuk)*
+- 🐛 A `CEZ:MONITORING` run resumes on its own again, and `/skill` expands on continuations (fixes #810, #811). (#812) *(@pat-lewczuk)*
+- 🐛 "Mark all read" no longer stamps a run that is waiting out a usage limit (fixes #803). (#834) *(@pat-lewczuk)*
+- 🐛 A legacy `claude-cli` runner id in `runs.json` stays parseable (fixes #547). (#832) *(@pat-lewczuk)*
+- 🐛 OpenCode models are discovered, not hard-coded. (#799) *(@pat-lewczuk)*
+- 🐛 Answers to an Ask reach the agent through idle teardown. (#758) *(@pkarw)*
+- 🐛 `server-install` refuses to uninstall a registered project again (fixes #535). (#790) *(@andrzejewsky)*
+- 🐛 `npm test` no longer opens a real Terminal window (fixes #824). (#825) *(@pat-lewczuk)*
+
+## 🔧 Changed
+- 🔧 Dropped the unused `KNOWN_PROVIDERS` export (fixes #548). (#831) *(@pat-lewczuk)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 `npx cezar-cli@nightly` is always the trunk. (#876) *(@patzick)*
+- 🚀 Allow releasing from `release/*` branches. (#780) *(@pat-lewczuk)*
+- 🚀 Synchronize the repository-root lease test instead of racing a timer (fixes #797). (#800) *(@pat-lewczuk)*
+- 🚀 Stop the JetBrains launcher case racing a real process (fixes #823). (#862) *(@wojciechszyjka)*
+- 🚀 Give the health-topic probe waits a realistic budget (fixes #701). (#733) *(@wojciechszyjka)*
+
+## 📝 Specs & Documentation
+- 📝 Design spec for publishable Cezar React components. (#710) *(@andrzejewsky)*
+- 📝 Spec for linked-PR chips on the GitHub Issues list. (#816) *(@sheeerth)*
+- 📝 Disambiguate cezar (OSS) from the hosted team SaaS. (#883) *(@pat-lewczuk)*
+- 📝 Add the missing root `LICENSE` file (MIT). (#796) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @pat-lewczuk
+- @patzick
+- @pkarw
+- @wojciechszyjka
+- @andrzejewsky
+- @sheeerth
+- @sapersky
+- @dominikpalatynski
 
 # 0.9.2 (2026-08-04)
 
 ## ⚠️ Breaking
-- **The HTTP API moved to `/api/v1`.** Every route answers under `/api/v1/…` (project-scoped:
-  `/api/v1/p/<projectId>/…`) and the WebSocket bus is `/api/v1/ws`; the unversioned `/api/*`
-  spelling is gone. The bundled cockpit ships in lockstep, so a normal upgrade needs nothing from
-  you — this only matters if you script the API directly, where the fix is adding `/v1`.
-  `GET /api/v1/health` is still the CORS-open discovery endpoint, historical run transcripts keep
-  rendering (old image URLs are upgraded when read), and saved bookmarklets are unaffected.
-  Versioning is what lets the typed client describe the whole surface and makes a future `v2` an
-  additive mount rather than an edit to every route.
+- ⚠️ The HTTP API moved to `/api/v1` (`/api/v1/p/<projectId>/…` when project-scoped, `/api/v1/ws` for the WebSocket bus) and the unversioned `/api/*` spelling is gone — the bundled cockpit ships in lockstep, so only a script calling the API directly needs the `/v1`.
 
 ## ✨ Features
-- ✨ **The two mixed-format routes do real HTTP content negotiation.** `GET /api/v1/repo/commit/:sha`
-  (legacy text blob or structured commit payload) and `GET /api/v1/runs/:id/files` (JSON listing or
-  an image's raw bytes) now honour the request's `Accept` header, answer `Vary: Accept`, and set a
-  `Content-Type` confirming what they actually sent. Purely additive: the `?structured=`/`?raw=`
-  flags still decide whenever the request carries one, `*/*` (what `fetch` and `curl` send) is read
-  as "no preference" and keeps each route's existing default, so every current caller's answer is
-  byte-identical. What is new is that a client that really does ask — an `<img>`, a browser
-  navigation — gets the other representation without the flag, under the same allowlist, size cap
-  and sandbox CSP as before.
-- ✨ **Finished tasks now carry a read/unread marker (#767).** A done or failed run you have not
-  opened since it finished reads as *unread* — its row is promoted (brighter, semibold) and wears a
-  small trailing violet dot — while everything you have already seen dims back. The Tasks nav item
-  shows how many are unread, opening a task's thread clears it, and a "Mark all read" sweep clears
-  the lot. Unread is a deliberately separate channel from the status dot, which keeps saying
-  done/failed, so "what happened" and "have I seen it" never collapse into one signal.
-
-- ✨ **⌘K searches the whole workspace, not just the project you are standing in.** The palette
-  now lists your **projects** — recency-ordered like the sidebar, the active one last — so
-  switching is a keystroke, and it finds **tasks in any project**, each row labelled with the
-  project it belongs to. That is backed by one new workspace-level route,
-  `GET /api/v1/workspace/runs-index`, which answers a deliberately slim row per run instead of the
-  full record: it never builds a project context, so reading it cannot prune worktrees or resume
-  interrupted runs — typing in a search box must not restart agents. Projects this process has
-  never opened are read straight off `runs.json`, sharing `RunStore`'s own reconciliation so a
-  crashed process's `running` row reads as interrupted here exactly as it would once opened.
-  The palette also opens on **New task** (one row now, not three scattered copies) followed by
-  **Recently finished** — the tasks you have not opened since they finished, the same signal
-  behind the Tasks badge. Ranking is substring-based rather than cmdk's fuzzy subsequence, because
-  a run id is a uuid and typing a task number used to match stray digits inside unrelated ids
-  ahead of the task actually named that; searching also folds the sections into one ranked list so
-  a near-miss can never sit above an exact hit. The dialog is wider on wider screens, taller on
-  taller ones, and anchored near the top so it no longer jumps as results come and go.
+- ✨ The two mixed-format routes do real HTTP content negotiation — `GET /api/v1/repo/commit/:sha` and `GET /api/v1/runs/:id/files` honour `Accept` and answer `Vary: Accept`, additively, so every current caller's answer is byte-identical.
+- ✨ Finished tasks now carry a read/unread marker, with an unread count on the Tasks nav item and a "Mark all read" sweep. (#767) *(@pat-lewczuk)*
+- ✨ ⌘K searches the whole workspace — every project and every project's tasks — backed by the new `GET /api/v1/workspace/runs-index`.
 
 ## 🔧 Changed
-- Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
-  Its body used to be parsed inside the handler to keep "unknown id 404s before the body is
-  validated"; a small existence guard registered *before* the body validator keeps that status
-  order while the body becomes part of the route type. A bodyless POST still 201s and a malformed
-  one still 400s.
-- **Validation errors (`400 {error}`) are worded differently and now name the field.** Two causes:
-  zod 4 rewrote its default messages (`Required` → `Invalid input: expected string, received
-  undefined`), and each issue is now prefixed with its path — `task: must be at most 100000
-  characters` where it used to be `task must be at most 100000 characters` for a handful of fields
-  and an unattributed sentence for the rest. **The `{ error: string }` shape and the 400 status are
-  unchanged**, and the message was never a pinned contract (BACKWARD_COMPATIBILITY.md §2 pins the
-  shape, not the text) — but a script matching on the exact wording will need updating, and the
-  cockpit shows the new text verbatim in its toasts.
-- Every mutating route now validates its body as route middleware rather than inside the handler,
-  and the query string / path params of 17 more routes are validated too. Behaviour is unchanged
-  by design, including the tolerant cases (a body sent without a JSON content-type, a malformed
-  body, and a repeated query key such as `?refresh=1&refresh=1`, which still takes the first
-  value). The point is that the typed client can now check request bodies, params and queries at
-  compile time.
+- 🔧 Every mutating route is now visible to the typed client, `POST /api/v1/todos/:id/start` included.
+- 🔧 Validation errors (`400 {error}`) are worded differently and now name the field; the `{ error: string }` shape and the 400 status are unchanged.
+- 🔧 Every mutating route validates its body as route middleware rather than inside the handler, and 17 more routes validate their query and path params — behaviour unchanged by design.
 
 ## 🐛 Fixes
-- 🐛 **Running the test suite no longer wipes your project registry.** A merge-write resolved
-  `~/.cezar/config.json` twice — once to read, once to write, after the `await` — and
-  `cezarHomeDir()` re-reads `CEZ_HOME` on every call, so a test that lost its sandbox pin
-  mid-flight (a timeout was enough) read the temp home and wrote the real one, replacing every
-  project with the fixture's. The path is now resolved once per merge-write, the whole server
-  suite runs with `CEZ_HOME` pinned to a per-worker sandbox, and a write into the real `~/.cezar`
-  from a vitest process is refused outright. The same one-path fix lands in the `ui-state.json` twin.
-- 🐛 **The registry survives a lost config file.** Every merge-write that leaves projects behind
-  also writes `~/.cezar/config.json.bak`, and cezar restores from that snapshot when the config
-  file is missing, empty, or corrupt. Removing `~/.cezar` still resets cezar completely; removing
-  only `config.json` no longer loses the project list. A config that parses and is simply empty is
-  left alone — that is a user who removed their last project, not a lost registry.
-- 🐛 **Structured questions render as a form, not raw JSON (#757).** When an agent asked a
-  structured question, the Ask card could fall back to printing the raw JSON payload; it now renders
-  the real question with its options, and long question text wraps instead of overflowing.
-- 🐛 **Subagent sessions render like the main thread (#756).** A subagent's transcript now goes
-  through the same session renderer as the top-level thread, so its messages, tools and reasoning
-  look identical instead of a stripped-down variant.
-- 🐛 **The task diff stat stops counting a repointed HEAD's branch (#751).** When a task's worktree
-  HEAD was repointed onto another branch, the ± diff stat folded in that branch's whole history; it
-  is now anchored at HEAD so it counts only the task's own changes, and the Changes tab says so when
-  a repointed HEAD has narrowed what it shows.
+- 🐛 Running the test suite no longer wipes your project registry.
+- 🐛 The registry survives a lost config file — a `config.json.bak` snapshot is restored when the config is missing, empty or corrupt.
+- 🐛 Structured questions render as a form, not raw JSON (fixes #754). (#757) *(@pkarw)*
+- 🐛 Subagent sessions render like the main thread (fixes #557). (#756) *(@pkarw)*
+- 🐛 The task diff stat stops counting a repointed HEAD's branch (fixes #751).
+
+## 👥 Contributors
+
+- @pkarw
+- @pat-lewczuk
+- @patzick
+- @andrzejewsky
+- @sheeerth
+- @wojciechszyjka
 
 # 0.9.1 (2026-07-24)
 
@@ -144,52 +222,15 @@ A stabilization release that hardens single-project mode and sharpens the cockpi
 - ✨ Project-aware browser page titles (fixes #543). (#592) *(@pkarw)*
 
 ## 🐛 Fixes
-- ⚡ **Settings → Agent accounts opens instantly.** The account listing used to probe every agent's
-  login while you waited — one CLI shell-out per agent plus one per account, 2.5s on a machine with
-  four accounts. Which login an agent uses is operating knowledge that changes only when you run
-  `claude auth login`, so cezar now warms every account — extra logins included — once at boot and
-  keeps it in memory instead of re-probing every few seconds; the listing serves what it holds and never spawns anything (the rule
-  `/api/v1/health` already follows). A *disconnected* answer is still re-checked within seconds,
-  because that one blocks starting a run — so logging in from a terminal is not punished with a
-  ten-minute wait. Same machine, same accounts: 2.5s → 12ms.
-- **An added agent account can now be signed in from cezar.** The account row grows Connect and
-  Check again; Connect opens a terminal aimed at that account's config dir rather than the default
-  one. Previously the pane pointed at a Connect button that did not exist.
-- **A task now says which agent, account and model produced it**, as text in the header
-  (`claude · Klaudiusz · opus`) rather than hidden behind an icon; the account is the one the step actually spawned under, so a resumed
-  task reports the login that owns its session rather than whatever the project is set to now.
-- ✨ **Settings → Agent accounts now sets the default agent, account and models once, not per repo.**
-  A project that has chosen nothing now follows the machine-wide default — and a project that HAS
-  chosen is never moved by changing it, so a global tweak cannot quietly re-point work you already
-  configured. Models merge per agent, so pinning one repo's Claude model keeps the machine's Codex
-  preset.
-- **Settings → Agents picks the default agent and its account in one click.** "Default runner" and
-  the separate account picker were two fields answering one question; they are now a single flat
-  list — `claude · Default`, `claude · Klaudiusz`, `codex` — matching the composer. The runner still
-  goes to the repo's committable config and the account to your machine only, so a teammate keeps
-  their own. With no extra logins it is the control it always was.
-- **The composer's runner pill now lists agents and logins as one flat list** — `claude · Default`,
-  `claude · Klaudiusz`, `codex` — instead of a separate account pill beside it. Every row is a
-  concrete thing that can run the task, so which subscription it will bill is readable without
-  opening anything. It starts on whatever the repo is set to and any row overrides it for that task
-  alone. An agent with one login stays one row, so a machine with no extra accounts sees the list it
-  always saw.
-- **fix(server): `GET /api/v1/providers/status` no longer stalls for ~1–3s whenever its cache
-  lapses.** It shares the same knowledge as the accounts listing and had the same problem from the
-  other side: any provider you are not signed into pulled the whole response onto a five-second
-  window, so one reader in every five seconds paid for three CLI spawns. Reads are now
-  stale-while-revalidate (what `/api/v1/health` already does) and the run gate re-checks a provider
-  before refusing to start a run, instead of the cache being kept young to protect it. Measured on
-  the built server: reads that alternated between 3ms and 817ms are now 1–7ms across every cache
-  window, while "Check again" (`?refresh=1`) still blocks for the real answer.
-- 🐛 **`CLAUDE_CONFIG_DIR` is honoured.** A host that relocates Claude Code's config folder was
-  invisible to the Agent config pane, which kept showing `~/.claude`. Related: the MCP listing read
-  `~/.claude.json` from the wrong place under an override — that file is a *sibling* of the default
-  folder but lives *inside* a relocated one.
-- 🐛 **`CEZ_CLAUDE_BIN` counts as "installed".** The environment probe hardcoded a bare `claude`,
-  unlike every other call site, so a host whose only install is at a custom path reported Claude as
-  missing — dropping it from the composer and the installer's dependency step even though runs
-  would have worked.
+- ⚡ Settings → Agent accounts opens instantly — logins are warmed once at boot instead of probed per listing (2.5s → 12ms), and a disconnected answer is still re-checked within seconds.
+- ✨ An added agent account can now be signed in from cezar — the row grows Connect and Check again, aimed at that account's own config dir.
+- ✨ A task now says which agent, account and model produced it (`claude · Klaudiusz · opus`), naming the account its step actually spawned under.
+- ✨ Settings → Agent accounts now sets the default agent, account and models once, not per repo — a project that has already chosen is never moved by it.
+- ✨ Settings → Agents picks the default agent and its account in one flat list — `claude · Default`, `claude · Klaudiusz`, `codex`.
+- ✨ The composer's runner pill now lists agents and logins as one flat list, so which subscription a task will bill is readable without opening anything.
+- ⚡ `GET /api/v1/providers/status` no longer stalls for ~1–3s whenever its cache lapses — reads are stale-while-revalidate and the run gate re-checks a provider before refusing to start (817ms → 1–7ms).
+- 🐛 `CLAUDE_CONFIG_DIR` is honoured by the Agent config pane, and the MCP listing reads `~/.claude.json` from the right place under an override.
+- 🐛 `CEZ_CLAUDE_BIN` counts as "installed", so a host whose only Claude install is at a custom path is no longer reported as missing it.
 - ⚡ Virtualize the diff and the task commit list. (#599) *(@patzick)*
 - 🐛 Repair concatenated task titles (fixes #623). (#627) *(@pkarw)*
 - 🐛 Prevent single-project registry leak (fixes #626). (#629) *(@pkarw)*
@@ -221,7 +262,7 @@ A stabilization release that hardens single-project mode and sharpens the cockpi
 # 0.9.0 (2026-07-21)
 
 ## Highlights
-<!-- TODO: Highlights — auto-update-changelog leaves this blank for the human author to fill in. -->
+The cockpit learns to delegate: a running task may now dispatch other tasks with `cez task` and they report back into its session, which replaces the missions experiment. Around that, what you attach and what you type stop being disposable — every attachment lands in a per-project library under its own name, an unsent reply survives leaving the task, and the conversation finally carries a clock. The left drawer takes the order you drag it into and keeps it across browsers, a task can switch runner, model or account mid-thread without a handoff file, and a question from a mid-workflow step now pauses the workflow instead of being ignored. The phone gets a smooth transcript while an agent works, the task view stops burning CPU while one streams, and cloning a repository behind organization SAML walks you through authorization instead of printing a raw token.
 
 ## ✨ Features
 - ✨ Edit the coding agents' own config files (global vs local, raw + highlighted). (#418) *(@pkarw)*

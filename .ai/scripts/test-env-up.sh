@@ -356,7 +356,7 @@ write_descriptor() {
   [ "${CEZ_SINGLE_PROJECT:-}" = 1 ] && SINGLE_PROJECT=true
   node -e '
     const fs = require("fs");
-    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, desc, singleProject] = process.argv.slice(1);
+    const [out, baseUrl, port, pid, cmd, bInstalled, bCmd, bVer, bNotes, desc, singleProject, platform] = process.argv.slice(1);
     fs.writeFileSync(out, JSON.stringify({
       version: 1,
       runId: "cezar-" + new Date().toISOString().slice(0, 10) + "-" + pid,
@@ -366,7 +366,7 @@ write_descriptor() {
       startedByThisRepo: true,
       startScript: ".ai/scripts/test-env-up.sh",
       stopScript: ".ai/scripts/test-env-down.sh",
-      app: { startCommand: cmd, port: Number(port), healthPath: "/api/health", pid: Number(pid) },
+      app: { startCommand: cmd, port: Number(port), healthPath: "/api/v1/health", pid: Number(pid) },
       services: [],
       credentials: [],
       environment: { singleProject: singleProject === "true" },
@@ -379,14 +379,14 @@ write_descriptor() {
         notes: bNotes,
       },
       testRunner: { name: "other", config: "packages/web/e2e/vitest.config.ts" },
-      platform: "wsl2",
+      platform,
       startedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
       notes: "Booted from a production build after npm ci with CEZ_DRY_RUN=1, so workspace links/runtime dependencies are present, the agent CLIs are mocked, and no agent login/network is needed. No backing services. Stop with .ai/scripts/test-env-down.sh. App log: .ai/qa/test-env-app.log.",
     }, null, 2) + "\n");
   ' "$ENV_DESCRIPTOR" "$BASE_URL" "$PORT" "$APP_PID" \
     "CEZ_DRY_RUN=1 CEZ_HOME=.ai/qa/cez-home node packages/cezar/dist/index.js --port $PORT --no-open" \
     "$BROWSER_INSTALLED" "$BROWSER_COMMAND" "$BROWSER_VERSION" "$BROWSER_NOTES" "$BROWSER_DESCRIPTOR" \
-    "$SINGLE_PROJECT"
+    "$SINGLE_PROJECT" "$(uname -s 2>/dev/null | grep -qi Linux && { grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null && echo wsl2 || echo linux; } || echo darwin)"
 }
 
 # ---- main -------------------------------------------------------------------

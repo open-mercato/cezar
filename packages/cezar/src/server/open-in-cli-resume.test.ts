@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthService, type ProviderId } from '../core/provider-auth.ts';
+import type { RunnerId } from '../core/agent-runner.ts';
 import { RunStore } from '../runs/store.ts';
 import { defaultWorkspaceConfig, type WorkspaceConfig } from '../workspace/config.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
@@ -21,11 +22,24 @@ const { createApp } = await import('./server.ts');
 const providerAuth = (disconnected: ProviderId[] = []) => new ProviderAuthService({
   platform: 'linux',
   runCommand: async (executable) => {
-    const provider = executable === 'claude' ? 'claude' : executable === 'codex' ? 'codex' : 'opencode';
+    const provider = executable === 'claude'
+      ? 'claude'
+      : executable === 'codex'
+        ? 'codex'
+        : executable === 'opencode'
+          ? 'opencode'
+          : 'pi';
     if (disconnected.includes(provider)) return { stdout: '', stderr: '', exitCode: 1 };
     if (provider === 'claude') return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
     if (provider === 'codex') return { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0 };
-    return { stdout: '┌  Credentials ~/.local/share/opencode/auth.json\n└  1 credential', stderr: '', exitCode: 0 };
+    if (provider === 'opencode') {
+      return { stdout: '┌  Credentials ~/.local/share/opencode/auth.json\n└  1 credential', stderr: '', exitCode: 0 };
+    }
+    return {
+      stdout: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
+      stderr: '',
+      exitCode: 0,
+    };
   },
 });
 
@@ -88,7 +102,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
 
   /** A FINISHED run by default — `createRun` parks new records at `queued`, which the engine still
    *  owns, and only a run the engine has let go of resumes at all (see the status cases below). */
-  const makeRun = (runner: 'claude' | 'codex' | 'opencode' | undefined, sessionId?: string) => {
+  const makeRun = (runner: RunnerId | undefined, sessionId?: string) => {
     const run = store.createRun({
       title: 't',
       workflow: 'quick-task',

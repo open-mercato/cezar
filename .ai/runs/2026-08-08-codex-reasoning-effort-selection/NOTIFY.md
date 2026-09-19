@@ -31,3 +31,11 @@
 - Added package-level CLI coverage using the shared Codex App Server fixture; it proves `--effort high` reaches only the task `turn/start` and not task naming.
 - All configured code/package gates pass; the final live browser check captured the labelled Effort control.
 - Full `npm run test:e2e` is red: 31 of 208 tests fail plus two cleanup suites. The report identifies a non-isolated global skill/config fixture as the leading concrete cause and records every failure in `final-validation.md`.
+
+## 2026-09-19T17:35:28Z — PR #815 merge and review follow-up
+
+- Synced `origin/main` at `4763447f` into the PR branch; 22 conflicts were resolved by retaining the upstream account, attachment, model-discovery and dispatch changes together with Codex effort support.
+- Removed the invalid workflow rejection when a valid run-level Codex effort is fully shadowed by step-level overrides.
+- A Continue model switch now sends the explicit native-default reset for Codex effort, aligning the visible picker with the resulting execution.
+- `npm run typecheck`, focused server/Codex tests (150), workflow effort tests (2), and New Task/Continue UI tests (140) pass.
+- The standalone GitHub test file cannot initialize in this shell because its global setup calls `localStorage.clear()` while this Node test runtime supplies no localStorage; this occurs before test rendering and is tracked as an environment limitation, not hidden as a feature result.
