@@ -107,6 +107,8 @@ const STANDALONE_TYPES = new Set([
   'image',
   'check-output',
   'ask.requested',
+  'permission.requested',
+  'permission.resolved',
   'provider-auth-required',
 ]);
 

@@ -14,6 +14,7 @@ import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } 
 import { parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
+import { mergePermissionSpecs, type PermissionMode, type PermissionSpec } from '../core/permission-map.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import {
@@ -345,6 +346,12 @@ interface ActiveRun {
    *  cannot answer (a disabled capability, a missing credential), and parks instead of burning
    *  the remaining nudges — the live-session lesson behind `tryAutonomousNudge`. */
   lastOverriddenAsk?: string;
+  /**
+   * Pending permission requestIds for this live session (#475). Idle-timeout
+   * is exempt while any remain; session end cancels them with
+   * `permission.resolved { cancelled: true }`.
+   */
+  pendingPermissionIds?: Set<string>;
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
@@ -553,6 +560,13 @@ export interface StartRunInput {
    *  dispatch tree with the user's limits. Persisted as `dispatch.intent`; a worktree opt-out is
    *  overridden, because children fork the root's commits and an in-place run has no branch. */
   dispatchIntent?: DispatchIntent;
+  /**
+   * Permission mode for this run (spec 2026-07-17-permission-modes, #475).
+   * Per-task override; merged with `config.json` (mode from the override, rules
+   * unioned). Absent = config, or the historical zero-config posture when
+   * config also has nothing set — never implicit skip-all.
+   */
+  permissions?: PermissionSpec;
   /** Attachments from the queued prompt stack (#472), re-encoded from disk by
    *  `hydrateQueuedInput` at dequeue. Kept separate from `images` because those
    *  are persisted into `taskImages` by `startRun()` — folding
@@ -1177,6 +1191,10 @@ export class RunManager {
       // Persist the explicit opt-out so queued-run restart recovery and the
       // session Git routes can distinguish it from a removed isolated worktree.
       worktree: !group && !input.dispatchIntent && input.worktree === false ? false : undefined,
+      // Persist the per-task permission override for display and resume (#475).
+      ...(input.permissions
+        ? { permissions: { mode: input.permissions.mode, ...(input.permissions.rules ? { rules: input.permissions.rules } : {}) } }
+        : {}),
       groupId: group?.groupId,
       variant: group?.variant,
       steps: workflow.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) })),
@@ -3661,6 +3679,13 @@ export class RunManager {
     const contextualOpeningPrompt = portableContext
       ? `${portableContext}\n\n---\n\n## New user instruction\n${openingPrompt}`
       : openingPrompt;
+    const continueConfig = await loadConfig(this.repoRoot);
+    const continuePermissions: PermissionSpec | undefined = record?.permissions?.mode
+      ? {
+          mode: record.permissions.mode as PermissionMode,
+          ...(record.permissions.rules ? { rules: record.permissions.rules } : {}),
+        }
+      : continueConfig.permissions;
     const session = runner.startSession(
       {
         // The Continue step is a fresh agent session on the same run — the
@@ -3689,6 +3714,9 @@ export class RunManager {
         model: continueModel,
         sessionId,
         resume: sessionId !== undefined,
+        // Snapshot from the run if it has one; otherwise the live config default.
+        // Never fall through to skip-all — a pre-#475 record has no key.
+        ...(continuePermissions ? { permissions: continuePermissions } : {}),
         timeoutMs: 0,
       },
       onEvent,
@@ -3729,6 +3757,7 @@ export class RunManager {
       });
       this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
     } finally {
+      this.cancelPendingPermissions(runId, state, sink);
       this.recordUsagePeaks(runId);
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
@@ -3764,6 +3793,9 @@ export class RunManager {
     // Extra system prompt (R2 2.3): POST override > config default; echoed on
     // the record so the UI/API can show what the run actually used.
     const extraSystemPrompt = resolveExtraSystemPrompt(input.systemPrompt, config.systemPrompt);
+    // Per-task override supplies the mode; config rules always merge in. Absent both =
+    // historical zero-config posture (not skip-all).
+    const effectivePermissions = mergePermissionSpecs(input.permissions, config.permissions);
     // Canonical provider/model identity (#405) — the normalised `provider/model`
     // the task ran with, persisted for cost attribution / reproducible replay
     // beside the free-text `model`. Best-effort here (a per-step `runner`/`model`
@@ -3786,6 +3818,9 @@ export class RunManager {
       runner: taskBackend,
       systemPrompt: extraSystemPrompt,
       modelIdentity,
+      permissions: effectivePermissions
+        ? { mode: effectivePermissions.mode, ...(effectivePermissions.rules ? { rules: effectivePermissions.rules } : {}) }
+        : undefined,
     });
     emit({ type: 'lifecycle', message: `run started — workflow "${workflow.name}" (runner: ${taskBackend})` });
 
@@ -3975,6 +4010,7 @@ export class RunManager {
           extraSystemPrompt,
           chainStepNote(workflow.steps, i),
           startAttachments,
+          effectivePermissions,
         );
         startImages = undefined;
         startAttachments = [];
@@ -4112,6 +4148,8 @@ export class RunManager {
      *  paths are appended to `userPrompt` so the agent can operate on the
      *  real files, not just view the inline image blocks. */
     attachments: PersistedAttachment[] = [],
+    /** Effective permission spec for this step (spec 2026-07-17-permission-modes, #475). */
+    permissions?: PermissionSpec,
   ): Promise<string | null> {
     let systemPrompt: string | undefined;
     if (step.skill) {
@@ -4468,6 +4506,8 @@ export class RunManager {
           env: stepProfile.env,
           model: backendModel,
           sessionId,
+          // Permission mode for this step. `undefined` = historical Claude dontAsk.
+          ...(permissions ? { permissions } : {}),
           // Interactive sessions have no wall clock — the idle timer rules.
           //
           // A non-final step keeps its wall clock (`DEFAULT_RUN_TIMEOUT_MS`)
@@ -4518,6 +4558,7 @@ export class RunManager {
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
       return message;
     } finally {
+      this.cancelPendingPermissions(runId, state, sink);
       this.recordUsagePeaks(runId);
       this.clearIdleTimer(state);
       this.leaveMonitoring(runId);
@@ -4545,12 +4586,44 @@ export class RunManager {
     });
   }
 
-  /** Native backend asks arrive before turn-end. Persist and park immediately
-   * so the cockpit shows attention and the run releases its workspace slot. */
+  /** Native backend asks / permission prompts arrive before turn-end. Persist
+   *  and park immediately so the cockpit shows attention and the run releases
+   *  its workspace slot. Pending permissions also exempt the idle timer. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
     this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
-    if (event.type !== 'ask.requested' || state.cancelled) return;
+    if (state.cancelled) return;
+
+    if (event.type === 'permission.requested') {
+      (state.pendingPermissionIds ??= new Set()).add(event.requestId);
+      this.clearIdleTimer(state);
+      this.leaveMonitoring(runId);
+      this.clearMonitoringWakeTimer(state, runId);
+      this.waiting.add(runId);
+      this.store.updateRun(runId, {
+        status: 'waiting',
+        activity: undefined,
+        awaitingPermission: true,
+      });
+      if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId: state.currentStepId,
+        message: 'waiting for permission — the agent paused until you allow or reject the tool',
+      });
+      this.releaseSlot();
+      return;
+    }
+
+    if (event.type === 'permission.resolved') {
+      state.pendingPermissionIds?.delete(event.requestId);
+      if (!state.pendingPermissionIds?.size) {
+        this.store.updateRun(runId, { awaitingPermission: undefined });
+      }
+      return;
+    }
+
+    if (event.type !== 'ask.requested') return;
     this.clearIdleTimer(state);
     this.leaveMonitoring(runId);
     this.clearMonitoringWakeTimer(state, runId);
@@ -4558,6 +4631,56 @@ export class RunManager {
     this.store.updateRun(runId, { status: 'waiting', activity: undefined });
     if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'waiting' });
     this.releaseSlot();
+  }
+
+  /**
+   * Answer a pending permission prompt (#475 Phase 2). Returns:
+   *  - `'ok'` — delivered to the backend
+   *  - `'not-found'` — unknown run or unknown requestId
+   *  - `'conflict'` — session closed or already resolved
+   */
+  async respondPermission(
+    runId: string,
+    requestId: string,
+    optionId: string,
+  ): Promise<'ok' | 'not-found' | 'conflict'> {
+    const run = this.store.getRun(runId);
+    if (!run) return 'not-found';
+    const state = this.active.get(runId);
+    if (!state?.session?.open || state.cancelled) return 'conflict';
+    if (!state.pendingPermissionIds?.has(requestId)) return 'not-found';
+    const respond = state.session.respondPermission;
+    if (!respond) return 'conflict';
+    const delivered = await respond.call(state.session, requestId, optionId);
+    if (!delivered) return 'conflict';
+    state.pendingPermissionIds.delete(requestId);
+    const sink = state.currentStepId ? this.makeUiSink(runId, state.currentStepId) : undefined;
+    const resolved = {
+      type: 'permission.resolved' as const,
+      requestId,
+      optionId,
+    };
+    if (sink) sink.handle(resolved);
+    else this.store.appendEvent(runId, { ...resolved, stepId: state.currentStepId });
+    if (!state.pendingPermissionIds.size) {
+      this.store.updateRun(runId, { awaitingPermission: undefined, status: 'running' });
+      this.waiting.delete(runId);
+      if (state.currentStepId) this.store.updateStep(runId, state.currentStepId, { status: 'running' });
+    }
+    return 'ok';
+  }
+
+  /** Cancel every unanswered permission when the session tears down (#475). */
+  private cancelPendingPermissions(runId: string, state: ActiveRun, sink?: UiEventSink): void {
+    const pending = state.pendingPermissionIds;
+    if (!pending?.size) return;
+    for (const requestId of [...pending]) {
+      pending.delete(requestId);
+      const event = { type: 'permission.resolved' as const, requestId, cancelled: true as const };
+      if (sink) sink.handle(event);
+      else this.store.appendEvent(runId, { ...event, stepId: state.currentStepId });
+    }
+    this.store.updateRun(runId, { awaitingPermission: undefined });
   }
 
   /** Persist the invocation checkpoint before launching a runner. A throw or

@@ -2,6 +2,7 @@ import type { RunEvent, RunStatus } from '@open-mercato/cezar-api-client'
 import { runItemKey } from '@/api/run-events'
 import {
   toolDisplay,
+  type PermissionOption,
   type PlanEntry,
   type PlanStatus,
   type StopReason,
@@ -66,6 +67,20 @@ export interface ThreadAsk {
   answer?: string
 }
 
+/**
+ * A backend permission prompt (#475, v2 `permission.requested`). Resolved by
+ * `permission.resolved` (user answer or `cancelled` on session death).
+ */
+export interface ThreadPermission {
+  kind: 'permission'
+  id: string
+  title: string
+  options: PermissionOption[]
+  resolved: boolean
+  optionId?: string
+  cancelled?: boolean
+}
+
 /** A persisted, cezar-owned recovery marker for a provider's runtime authentication failure. */
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
@@ -74,7 +89,13 @@ export interface ThreadProviderAuthRequired {
   authFailureId: string
 }
 
-export type ThreadEntry = UiItem | ThreadNote | ThreadImage | ThreadAsk | ThreadProviderAuthRequired
+export type ThreadEntry =
+  | UiItem
+  | ThreadNote
+  | ThreadImage
+  | ThreadAsk
+  | ThreadPermission
+  | ThreadProviderAuthRequired
 
 export interface ThreadTurn {
   /** Stable source-derived render key. The opening event sequence survives prepended pages;
@@ -222,6 +243,15 @@ function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | un
 const isAskQuestion = (value: unknown): value is UiAskQuestion =>
   isRecord(value) && typeof value.header === 'string' && Array.isArray(value.options)
 
+const PERMISSION_KINDS = new Set(['allow_once', 'allow_always', 'reject_once', 'reject_always'])
+
+const isPermissionOption = (value: unknown): value is PermissionOption =>
+  isRecord(value) &&
+  typeof value.id === 'string' &&
+  typeof value.label === 'string' &&
+  typeof value.kind === 'string' &&
+  PERMISSION_KINDS.has(value.kind)
+
 /** The engine's turn-end markers (`CEZ:DONE`, `CEZ:MONITORING` from #490) plus the in-band
  *  task-reference marker lines (`CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`, spec
  *  2026-07-18-task-ref-markers). v1 `text` lines arrive pre-stripped by the server; v2 message
@@ -349,6 +379,8 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
    *  it client-side (only one ask is ever pending — the agent asks once, then
    *  parks `waiting` until the user answers). */
   let pendingAsk: ThreadAsk | undefined
+  /** Unresolved permission prompts keyed by requestId (#475). */
+  const pendingPermissions = new Map<string, ThreadPermission>()
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
     turnSeq += 1
@@ -663,6 +695,35 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
         pendingAsk = ask
         break
       }
+      case 'permission.requested': {
+        const requestId = str(event.requestId)
+        const title = str(event.title)
+        if (requestId === undefined || title === undefined || !Array.isArray(event.options)) break
+        const options = (event.options as unknown[]).filter(isPermissionOption)
+        if (options.length === 0) break
+        const permission: ThreadPermission = {
+          kind: 'permission',
+          id: requestId,
+          title,
+          options,
+          resolved: false,
+        }
+        currentTurn().entries.push({ origin: 'meta', entry: permission })
+        pendingPermissions.set(requestId, permission)
+        break
+      }
+      case 'permission.resolved': {
+        const requestId = str(event.requestId)
+        if (requestId === undefined) break
+        const pending = pendingPermissions.get(requestId)
+        if (!pending || pending.resolved) break
+        pending.resolved = true
+        if (event.cancelled === true) pending.cancelled = true
+        const optionId = str(event.optionId)
+        if (optionId !== undefined) pending.optionId = optionId
+        pendingPermissions.delete(requestId)
+        break
+      }
 
       // ---- THE v1 VOCABULARY SWEEP (cezar-code-map §3.2) — deliberate suppressions ---------
       // Every persisted v1 type is either rendered above or named here with the surface that
@@ -683,7 +744,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       case 'session':
         break
 
-      // session.started, usage.updated, permission.* and anything future: header/telemetry
+      // session.started, usage.updated and anything future: header/telemetry
       // material or not yet rendered — never guessed at in the thread body. (Deliberate
       // divergence from the legacy raw-JSON-note fallback: an unknown type renders as
       // nothing rather than as debug output.)

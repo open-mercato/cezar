@@ -1527,6 +1527,25 @@ export async function sendMessage(id: string, message: MessageInput): Promise<Me
   )
 }
 
+/** Answer a pending permission prompt (#475). 404 unknown, 409 already resolved/closed. */
+export async function respondPermission(
+  id: string,
+  requestId: string,
+  optionId: string,
+): Promise<{ ok: true }> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].permissions[':requestId'].$post({
+      param: {
+        projectId: queryScope(),
+        id: encodeURIComponent(id),
+        requestId: encodeURIComponent(requestId),
+      },
+      json: { optionId },
+    }),
+    runPath(id, `/permissions/${encodeURIComponent(requestId)}`),
+  )
+}
+
 /** The same delivery by EXPLICIT project — see `archiveProjectRun`. What lets a chip on the
  *  global Tasks page speak to a run in a project this page is not standing in. */
 export async function sendProjectRunMessage(

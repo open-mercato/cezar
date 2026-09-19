@@ -41,10 +41,12 @@ import type {
   ToolStatus,
   UiEvent,
   UiMessageItem,
+  UiPermissionRequestedEvent,
   UiReasoningItem,
   UiToolItem,
   UiUsageUpdatedEvent,
 } from './ui-events.ts';
+import { PERMISSION_OPTIONS_OPENCODE, permissionTitle } from './permission-prompt.ts';
 import { toolDisplay } from './tool-display.ts';
 
 /** Per-message telemetry: `message.updated` snapshots (cumulative per
@@ -181,11 +183,38 @@ export function mapOpencodeEvent(evt: unknown, state: OpencodeUiMapperState): Op
       return mapIdle(props, state);
     case 'session.error':
       return mapSessionError(props, state);
+    case 'permission.updated':
+      return mapPermissionUpdated(props, state);
     default:
       // server.connected, session.updated, message.part.removed,
-      // permission.* (reserved for the permission.* events later), …
+      // permission.replied, …
       return { events: [], state };
   }
+}
+
+/** `permission.updated` → `permission.requested` (#475). */
+function mapPermissionUpdated(
+  props: Record<string, unknown>,
+  state: OpencodeUiMapperState,
+): OpencodeUiMapping {
+  // Wire shape: either the Permission object itself or `{ permission: Permission }`.
+  const perm = isRecord(props.permission) ? props.permission : props;
+  const requestId = str(perm.id);
+  if (requestId === undefined) return { events: [], state };
+  const toolName = str(perm.type) ?? str(perm.permission) ?? 'Tool';
+  const input: Record<string, unknown> = {};
+  if (typeof perm.pattern === 'string') input.pattern = perm.pattern;
+  if (typeof perm.title === 'string') input.description = perm.title;
+  if (isRecord(perm.metadata)) Object.assign(input, perm.metadata);
+  const event: UiPermissionRequestedEvent = {
+    type: 'permission.requested',
+    requestId,
+    title: str(perm.title) ?? permissionTitle(toolName, input),
+    options: [...PERMISSION_OPTIONS_OPENCODE],
+  };
+  const callId = str(perm.callID) ?? str(perm.callId);
+  if (callId !== undefined) event.itemId = callId;
+  return { events: [event], state };
 }
 
 // ---- message info → roles + usage.updated -----------------------------------

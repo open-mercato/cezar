@@ -214,7 +214,7 @@ export interface UiPlanUpdatedEvent {
   entries: PlanEntry[]
 }
 
-/** RESERVED — wired when auto-approve becomes optional. Types only for now. */
+/** A backend is asking the user to approve a tool call. */
 export interface UiPermissionRequestedEvent {
   type: 'permission.requested'
   requestId: string
@@ -223,11 +223,16 @@ export interface UiPermissionRequestedEvent {
   options: PermissionOption[]
 }
 
-/** RESERVED — the counterpart resolution (see `permission.requested`). */
+/**
+ * The user (or session teardown) resolved a permission prompt.
+ * `optionId` when the user picked; `cancelled: true` when the session died
+ * with the prompt still pending.
+ */
 export interface UiPermissionResolvedEvent {
   type: 'permission.resolved'
   requestId: string
-  optionId: string
+  optionId?: string
+  cancelled?: true
 }
 
 /** One option in an AskUser question — see the server `src/core/ask.ts`. */

@@ -116,7 +116,6 @@ describe('mapOpencodeEvent edge cases', () => {
       { type: 'server.connected' },
       { type: 'session.updated', properties: { info: { id: SESSION_ID } } },
       { type: 'message.part.removed', properties: { part: { id: 'prt_x' } } },
-      { type: 'permission.updated', properties: { id: 'perm_1' } }, // reserved for permission.*
       { type: 'message.part.updated' }, // no properties
       { type: 'message.part.updated', properties: { part: 'oops' } },
       { type: 'message.part.updated', properties: { part: { type: 'text' } } }, // no id
@@ -154,6 +153,35 @@ describe('mapOpencodeEvent edge cases', () => {
     expect(
       mapOpencodeEvent(part({ id: 'prt_q1', messageID: 'msg_unseen', type: 'text', text: 'early' }), state).events,
     ).toEqual([]);
+  });
+
+  it('permission.updated → permission.requested (#475)', () => {
+    const { events } = mapOpencodeEvent(
+      {
+        type: 'permission.updated',
+        properties: {
+          id: 'perm_1',
+          type: 'bash',
+          pattern: 'npm *',
+          title: 'Run npm test',
+          callID: 'call_1',
+        },
+      },
+      startedState(),
+    );
+    expect(events).toEqual([
+      {
+        type: 'permission.requested',
+        requestId: 'perm_1',
+        itemId: 'call_1',
+        title: 'Run npm test',
+        options: expect.arrayContaining([
+          expect.objectContaining({ id: 'allow_once' }),
+          expect.objectContaining({ id: 'allow_always' }),
+          expect.objectContaining({ id: 'reject_once' }),
+        ]),
+      },
+    ]);
   });
 
   it('cursor logic: full accumulated text diffs into true deltas; overlaps and retransmits emit nothing', () => {

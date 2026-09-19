@@ -237,8 +237,8 @@ type UiEvent =
   | UiItemUpdatedEvent       // 'item.updated'     — item (status flips, streamed snapshots)
   | UiItemCompletedEvent     // 'item.completed'   — item (final snapshot, safe to persist)
   | UiPlanUpdatedEvent       // 'plan.updated'     — entries: PlanEntry[] (FULL replacement, ACP semantics)
-  | UiPermissionRequestedEvent  // 'permission.requested' — RESERVED (types only; wired when approvals become optional)
-  | UiPermissionResolvedEvent   // 'permission.resolved'  — RESERVED
+  | UiPermissionRequestedEvent  // 'permission.requested' — requestId, title, options[], itemId? (#475)
+  | UiPermissionResolvedEvent   // 'permission.resolved'  — requestId, optionId?, cancelled? (#475)
   | UiAskRequestedEvent      // 'ask.requested'    — requestId, questions[] (AskUser; the cockpit renders option chips)
   | UiUsageUpdatedEvent      // 'usage.updated'    — usage: TokenUsage, costUsd? (cumulative-for-session)
   | UiImageEvent;            // 'image'            — itemId?, mediaType, data (base64; manager re-emits URL)

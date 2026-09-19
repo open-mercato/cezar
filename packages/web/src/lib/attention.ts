@@ -43,18 +43,13 @@ export interface Attention {
 }
 
 /**
- * Whether a run is blocked on a permission prompt.
+ * Whether a run is blocked on a permission prompt (#475).
  *
- * Always false today, on purpose. The `permission` bucket is in the ladder because the spec puts
- * it there and because R2 reserves the `permission.*` agent events that will feed it — but cezar
- * emits none of them yet, and `RunRecord` carries no field that means "a tool wants approval".
- * Inventing one (say, treating every `waiting` as a permission prompt) would put a bucket in the
- * UI that no data backs. So the slot stays, wired to the truth: nothing.
- *
- * When R2 lands the events, this is the only function that changes.
+ * Backed by `RunRecord.awaitingPermission`, set while a live
+ * `permission.requested` is unanswered and cleared on resolve/cancel.
  */
-function hasPendingPermission(_run: AttentionInput): boolean {
-  return false
+function hasPendingPermission(run: AttentionInput): boolean {
+  return run.awaitingPermission === true
 }
 
 /**
@@ -76,7 +71,7 @@ function isUnseen(_run: AttentionInput): boolean {
  *  surfaces that only have a status — the compare view's `GroupVariant` columns — can use the
  *  same canonical function instead of inventing a second status-to-tone mapping. `activity` is
  *  optional (#490), so status-only callers keep working unchanged. */
-export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt'>
+export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt' | 'awaitingPermission'>
 
 /**
  * `RunRecord` → attention.
