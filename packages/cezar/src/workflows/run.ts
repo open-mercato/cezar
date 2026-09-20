@@ -148,10 +148,12 @@ export function reasoningEffortIssue(
   }
   if (runReasoningEffort === undefined) return undefined;
   if (taskBackend !== 'codex') return REASONING_EFFORT_UNSUPPORTED_ERROR;
-  // A step-level choice is intentionally stronger than the task default. It is valid for every
-  // Codex step to shadow that default: the run selection may still be useful to a later
-  // continuation, and rejecting an otherwise executable workflow here would make the declared
-  // precedence rule unusable.
+  // A run-level effort that every Codex step happens to override is NOT an error: being
+  // overridable is what a default IS, and the documented precedence (step effort, then run
+  // effort, then Codex's own default) says exactly that. An earlier revision failed the run
+  // here, which killed a workflow whose steps each pinned their own valid effort — a legal
+  // configuration — before a single agent spawned. The two cases worth refusing are already
+  // above: a step whose backend cannot take an effort, and a non-Codex task backend.
   return undefined;
 }
 /** An interactive session that hears nothing from the user closes itself. */
