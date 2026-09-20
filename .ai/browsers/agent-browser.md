@@ -5,6 +5,15 @@ browser-provider contract in `TEMPLATE.md`. It uses native release binaries and
 Chrome for Testing. It never requires Node, a project package manager, a
 preinstalled browser, or a cloud-browser account.
 
+## Pinned release
+
+Installs are pinned to `agent-browser` **v0.34.0**; every downloaded binary is
+verified against the SHA-256 sums recorded in the install scripts below before
+it is executed. A binary that fails verification is deleted and the operation
+aborts. To bump the pin, update the version and the per-asset sums together —
+the sums are the asset `digest` fields the GitHub releases API reports at
+`/repos/vercel-labs/agent-browser/releases/tags/<tag>`.
+
 ## Prerequisites
 
 - Network access to GitHub Releases and the Chrome-for-Testing download host on
@@ -21,7 +30,8 @@ preinstalled browser, or a cloud-browser account.
 ### ensure-installed
 
 Use an existing healthy `agent-browser` from `PATH`; otherwise install the
-official native release in a per-user cache. Do not add binary files to the
+pinned official release in a per-user cache, verifying the SHA-256 sum of the
+downloaded binary before it is ever executed. Do not add binary files to the
 repository.
 
 POSIX shell (macOS, Linux, WSL2, Git Bash/MSYS):
@@ -30,8 +40,9 @@ POSIX shell (macOS, Linux, WSL2, Git Bash/MSYS):
 if command -v agent-browser >/dev/null 2>&1; then
   AGENT_BROWSER_BIN=$(command -v agent-browser)
 else
+  AGENT_BROWSER_VERSION=v0.34.0
   CACHE_ROOT=${XDG_CACHE_HOME:-"$HOME/.cache"}
-  TOOL_DIR="$CACHE_ROOT/agent-tools/agent-browser"
+  TOOL_DIR="$CACHE_ROOT/agent-tools/agent-browser/$AGENT_BROWSER_VERSION"
   mkdir -p "$TOOL_DIR"
   OS=$(uname -s 2>/dev/null || echo unknown)
   ARCH=$(uname -m 2>/dev/null || echo unknown)
@@ -47,13 +58,30 @@ else
     *) ASSET=unsupported ;;
   esac
   case "$ASSET" in *unsupported*) echo "Unsupported agent-browser target: $OS/$ARCH" >&2; exit 1 ;; esac
+  case "$ASSET" in
+    agent-browser-darwin-arm64) ASSET_SHA256=d680a7a96ab86e9ab9d2b571b12919b761e93682ad1de714bbd5ac849c8d7c9c ;;
+    agent-browser-darwin-x64) ASSET_SHA256=dad3c9f9e67791a44a768a98847510c61a7b568a0499c602632b8aee411101e7 ;;
+    agent-browser-linux-arm64) ASSET_SHA256=ca70bf7c2d269a152b3824cbb65befb7b8258b8aa1cf34767c64ada2abc3d7c8 ;;
+    agent-browser-linux-musl-arm64) ASSET_SHA256=c0864fb206e321af48a46fb8331cf08ae60b3fcc1046232c1d1c842db4fc40ca ;;
+    agent-browser-linux-musl-x64) ASSET_SHA256=dd4752ba1def81c7443504c284b6559d28dad8ecd02b5faeca6caf4fc1fb948e ;;
+    agent-browser-linux-x64) ASSET_SHA256=69eadf5d8d6003a06a5cd2f914ebb261c7754fe1335a9190122c334e91909789 ;;
+    agent-browser-win32-x64.exe) ASSET_SHA256=604820a9e86cdb8bba46da737fc0edb31bc92de6691c73dbc61d3673c370a6b5 ;;
+  esac
   AGENT_BROWSER_BIN="$TOOL_DIR/$ASSET"
   if [ ! -x "$AGENT_BROWSER_BIN" ]; then
-    URL="https://github.com/vercel-labs/agent-browser/releases/latest/download/$ASSET"
+    URL="https://github.com/vercel-labs/agent-browser/releases/download/$AGENT_BROWSER_VERSION/$ASSET"
     TMP="$AGENT_BROWSER_BIN.tmp.$$"
     if command -v curl >/dev/null 2>&1; then curl -fL --retry 3 --connect-timeout 30 --max-time 600 -o "$TMP" "$URL"
     elif command -v wget >/dev/null 2>&1; then wget -T 30 -t 3 -O "$TMP" "$URL"
     else echo "No built-in HTTP downloader is available" >&2; exit 1
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then GOT_SHA256=$(sha256sum "$TMP" | awk '{print $1}')
+    else GOT_SHA256=$(shasum -a 256 "$TMP" | awk '{print $1}')
+    fi
+    if [ "$GOT_SHA256" != "$ASSET_SHA256" ]; then
+      rm -f "$TMP"
+      echo "agent-browser $AGENT_BROWSER_VERSION $ASSET checksum mismatch: expected $ASSET_SHA256, got $GOT_SHA256" >&2
+      exit 1
     fi
     chmod 755 "$TMP"
     mv "$TMP" "$AGENT_BROWSER_BIN"
@@ -87,16 +115,23 @@ if ($onPath) { $AgentBrowser = $onPath.Source }
 else {
   $arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
   if ($arch -notin 'X64','Arm64') { throw "Unsupported agent-browser Windows architecture: $arch" }
-  $toolDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'agent-tools/agent-browser'
+  $pinnedVersion = 'v0.34.0'
+  $expectedSha256 = '604820a9e86cdb8bba46da737fc0edb31bc92de6691c73dbc61d3673c370a6b5'
+  $toolDir = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) "agent-tools/agent-browser/$pinnedVersion"
   New-Item -ItemType Directory -Force -Path $toolDir | Out-Null
   $AgentBrowser = Join-Path $toolDir 'agent-browser-win32-x64.exe'
   if (-not (Test-Path $AgentBrowser)) {
-    $url = 'https://github.com/vercel-labs/agent-browser/releases/latest/download/agent-browser-win32-x64.exe'
+    $url = "https://github.com/vercel-labs/agent-browser/releases/download/$pinnedVersion/agent-browser-win32-x64.exe"
     $tmp = "$AgentBrowser.tmp.$PID"
     if ($PSVersionTable.PSVersion.Major -lt 7) {
       [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     }
     Invoke-WebRequest -UseBasicParsing -TimeoutSec 600 -Uri $url -OutFile $tmp
+    $gotSha256 = (Get-FileHash -Algorithm SHA256 -Path $tmp).Hash.ToLowerInvariant()
+    if ($gotSha256 -ne $expectedSha256) {
+      Remove-Item -Force $tmp
+      throw "agent-browser $pinnedVersion checksum mismatch: expected $expectedSha256, got $gotSha256"
+    }
     Move-Item -Force $tmp $AgentBrowser
   }
 }

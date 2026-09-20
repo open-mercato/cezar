@@ -38,7 +38,8 @@
       "skip-qa",
       "qa-approved",
       "qa-self-verified",
-      "in-progress"
+      "in-progress",
+      "ci-monitoring"
     ],
     "priority": [
       "priority-low",
@@ -53,12 +54,22 @@
     ]
   },
   "qaGate": true,
+  "ci": {
+    "maxWaitMinutes": 40
+  },
+  "engine": {
+    "loopStepThreshold": 20,
+    "executorTier": "standard",
+    "stepReview": "final"
+  },
   "paths": {
     "runs": ".ai/runs",
     "analysis": ".ai/analysis",
     "specs": ".ai/specs",
+    "prototypes": ".ai/prototypes",
     "scripts": ".ai/scripts",
     "qa": ".ai/qa"
   },
-  "reviewChecklist": null
+  "reviewChecklist": null,
+  "closeKeywords": []
 }

@@ -19,6 +19,8 @@ skills-lock.json
 .ai/qa/artifacts_*/
 .ai/qa/test-env.json
 .ai/qa/test-env.lock/
+# Credentials the test env is handed; generated per run and never source.
+.ai/qa/test-env.env
 # Any app log an agent parks here, not just the generated test-env ones — a narrower
 # `test-env-*.log` let a hand-named boot log get swept into a commit by the autosave.
 .ai/qa/*.log
