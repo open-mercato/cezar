@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { dirname } from 'node:path';
 import { promisify } from 'node:util';
 
 const exec = promisify(execFile);
@@ -22,7 +23,11 @@ export interface LogEntry {
 }
 
 async function git(root: string, args: string[]): Promise<string> {
-  const { stdout } = await exec('git', args, { cwd: root, maxBuffer: 10 * 1024 * 1024 });
+  const { stdout } = await exec('git', args, {
+    cwd: root,
+    maxBuffer: 10 * 1024 * 1024,
+    env: { ...process.env, GIT_CEILING_DIRECTORIES: dirname(root) },
+  });
   return stdout;
 }
 

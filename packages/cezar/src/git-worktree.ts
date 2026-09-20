@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync, realpathSync, type Dirent } from 'node:fs';
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
 
@@ -36,7 +36,12 @@ function git(cwd: string, args: string[]): Promise<GitResult> {
     execFile(
       'git',
       args,
-      { cwd, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' },
+      {
+        cwd,
+        maxBuffer: 32 * 1024 * 1024,
+        encoding: 'utf8',
+        env: { ...process.env, GIT_CEILING_DIRECTORIES: dirname(cwd) },
+      },
       (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );
   });

@@ -46,6 +46,7 @@ import {
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
+  perRunner,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
@@ -3089,14 +3090,7 @@ export function createApp(deps: ServerDeps) {
     agentDefaults: z
       .object({
         runner: z.enum(PROVIDER_IDS).nullable().optional(),
-        models: z
-          .object({
-            claude: z.string().trim().min(1).max(200).nullable().optional(),
-            codex: z.string().trim().min(1).max(200).nullable().optional(),
-            opencode: z.string().trim().min(1).max(200).nullable().optional(),
-            pi: z.string().trim().min(1).max(200).nullable().optional(),
-          })
-          .optional(),
+        models: perRunner(z.string().trim().min(1).max(200).nullable().optional()).partial().optional(),
       })
       .optional(),
   });
@@ -5637,14 +5631,7 @@ export function createApp(deps: ServerDeps) {
     baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
     defaultRunner: z.enum(RUNNER_IDS).optional(),
     systemPrompt: z.string().trim().max(20_000, 'must be at most 20000 characters').nullable().optional(),
-    defaultModels: z
-      .object({
-        claude: modelPresetSchema,
-        codex: modelPresetSchema,
-        opencode: modelPresetSchema,
-        pi: modelPresetSchema,
-      })
-      .optional(),
+    defaultModels: perRunner(modelPresetSchema).partial().optional(),
     // Concurrency + memory guard (Settings → Resources). maxParallel clamps to
     // the schema's 1–16; memoryLimitMb null/0 clears the ceiling.
     maxParallel: z.number().int().min(1).max(16).optional(),
@@ -6229,14 +6216,20 @@ export function isSafeSessionId(sessionId: string): boolean {
  */
 export function resumeCommand(runner: string | undefined, sessionId: string): string | null {
   if (!isSafeSessionId(sessionId)) return null;
+  if (runner === undefined || runner === 'claude-cli') runner = 'claude';
   switch (runner) {
+    case 'claude':
+      return `claude --resume ${sessionId}`;
     case 'codex':
       return `codex resume ${sessionId}`;
     case 'opencode':
       return `opencode --session ${sessionId}`;
     case 'pi':
       return `pi --session ${sessionId}`;
+    case 'gemini':
+      // The ACP session id is the id of Gemini's own chat recording, which `--resume` accepts.
+      return `gemini --resume ${sessionId}`;
     default:
-      return `claude --resume ${sessionId}`;
+      return null;
   }
 }

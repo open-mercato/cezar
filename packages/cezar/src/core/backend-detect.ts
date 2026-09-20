@@ -1,10 +1,13 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import type { Runner } from '@open-mercato/cezar-contract';
+import { geminiHasCredentials } from './gemini-credentials.ts';
+import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 
 const exec = promisify(execFile);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'pi' | 'gh' | 'git';
+  name: Runner | 'gh' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -12,7 +15,7 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` / `pi` alternatives), `gh` (GitHub auth for
+ * the optional `codex` / `opencode` / `pi` / `gemini` alternatives), `gh` (GitHub auth for
  * PR creation) and `git`. Nothing is required except at least one agent CLI —
  * the GUI degrades gracefully, only offers the runners that are present, and
  * shows the hints for the rest.
@@ -23,6 +26,7 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probeCodex(),
     probeOpencode(),
     probePi(),
+    probeGemini(),
     probeGh(),
     probeGit(),
   ]);
@@ -123,6 +127,30 @@ async function probePi(): Promise<BackendCheck> {
       name: 'pi',
       available: false,
       hint: 'optional: install the pi CLI and log in to use the pi runner',
+    };
+  }
+}
+
+async function probeGemini(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the bundled ACP mock (`scripts/mock-gemini-acp.mjs`).
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'gemini', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_GEMINI_BIN ?? 'gemini';
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'gemini',
+      available: true,
+      version: stdout.trim(),
+      // Individuals need an API key: Google sign-in no longer works for Gemini CLI (spec U11).
+      ...(geminiHasCredentials() ? {} : { hint: GEMINI_AUTH_HINT }),
+    };
+  } catch {
+    return {
+      name: 'gemini',
+      available: false,
+      hint: `optional: install Gemini CLI (npm i -g @google/gemini-cli) to use the Gemini runner. ${GEMINI_AUTH_HINT}`,
     };
   }
 }

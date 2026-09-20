@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
 import { isSafeGitRef } from '../git-refs.ts';
 
@@ -37,7 +37,11 @@ function git(cwd: string, args: string[], env?: Record<string, string>): Promise
         cwd,
         maxBuffer: 32 * 1024 * 1024,
         encoding: 'utf8',
-        ...(env ? { env: { ...process.env, ...env } } : {}),
+        // Keep an arbitrary directory from accidentally discovering the
+        // checkout that contains it (the test harness may place temp dirs
+        // under the repository via TMPDIR). A repository rooted at `cwd`, or
+        // a git worktree whose metadata lives elsewhere, remains discoverable.
+        env: { ...process.env, GIT_CEILING_DIRECTORIES: dirname(cwd), ...env },
       },
       (err, stdout, stderr) => resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );

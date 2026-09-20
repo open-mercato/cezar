@@ -1,6 +1,7 @@
 import { ChevronDownIcon, SettingsIcon } from 'lucide-react'
 import { Link } from '@/lib/project-router'
 
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { BackendCheck, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
 import {
@@ -29,7 +30,9 @@ import {
  *  fifth runner joining it (as `pi` did, #470) must fail the typecheck here instead of quietly
  *  dropping out of the dot's idea of what can start a task. A type-level set, so no zod schema —
  *  and no zod — is pulled into the cockpit bundle for it. */
-const RUNNER_NAMES: Record<Runner, true> = { claude: true, codex: true, opencode: true, pi: true }
+const RUNNER_NAMES: Record<Runner, true> = Object.fromEntries(
+  RUNNER_IDS.map((runner) => [runner, true]),
+) as Record<Runner, true>
 
 const isRunner = (check: BackendCheck): boolean => Object.hasOwn(RUNNER_NAMES, check.name)
 

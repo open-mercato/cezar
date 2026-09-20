@@ -15,11 +15,19 @@ import { Switch } from '@/components/ui/switch'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
 
+/**
+ * `explainsUnknown`: for most agents `unknown` means the check itself failed, so the card offers a
+ * retry. Gemini CLI has no auth-status command: its `unknown` means "no credential cezar can see",
+ * and the server's hint (API key / Vertex / Workspace — Google sign-in no longer works) is the
+ * actionable part (#581), so the card shows it instead.
+ */
 const PROVIDERS = [
-  { id: 'claude', label: 'Claude Code', login: 'claude auth login' },
-  { id: 'codex', label: 'Codex', login: 'codex login' },
-  { id: 'opencode', label: 'OpenCode', login: 'opencode auth login' },
-  { id: 'pi', label: 'pi', login: 'pi /login' },
+  { id: 'claude', label: 'Claude Code', login: 'claude auth login', explainsUnknown: false },
+  { id: 'codex', label: 'Codex', login: 'codex login', explainsUnknown: false },
+  { id: 'opencode', label: 'OpenCode', login: 'opencode auth login', explainsUnknown: false },
+  { id: 'pi', label: 'pi', login: 'pi /login', explainsUnknown: false },
+  // No login subcommand: `/auth` inside the interactive CLI, or GEMINI_API_KEY in the environment.
+  { id: 'gemini', label: 'Gemini CLI', login: 'gemini', explainsUnknown: true },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
@@ -27,6 +35,7 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   codex: value,
   opencode: value,
   pi: value,
+  gemini: value,
 })
 
 const STATUS_PRESENTATION = {
@@ -235,6 +244,10 @@ export function ProviderSettings() {
                     {state === 'not-installed' ? (
                       <p className="mt-1.5 text-xs text-soft-foreground">
                         Install {provider.label}, then run <code>{provider.login}</code>.
+                      </p>
+                    ) : state === 'unknown' && provider.explainsUnknown && current?.hint ? (
+                      <p data-slot="provider-auth-hint" className="mt-1.5 text-xs text-soft-foreground">
+                        {current.hint}
                       </p>
                     ) : state === 'unknown' || (status.isError && !state) ? (
                       <p className="mt-1.5 text-xs text-soft-foreground">

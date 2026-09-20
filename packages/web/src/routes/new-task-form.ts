@@ -1,7 +1,7 @@
 // A contract VALUE, not a type: which runners cezar can interrogate for a live catalog is decided
 // once, by the schema `GET /api/v1/models` validates with, so the picker and the route cannot
 // disagree about who has discovery. It narrows `Runner` to `ModelDiscoveryRunner`.
-import { runnerDiscoversModels } from '@open-mercato/cezar-api-client'
+import { RUNNER_IDS, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import type {
   BackendCheck,
   CreateRunInput,
@@ -48,12 +48,14 @@ export interface RunnerOption {
 
 /** The agent-backend catalog (legacy `RUNNERS`). Installation-only compatibility surfaces use
  *  `availableRunners`; the new-task composer filters this catalog by connected provider status. */
-export const RUNNERS: readonly RunnerOption[] = [
-  { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
-  { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
-  { id: 'opencode', label: 'opencode', desc: 'OpenCode (serve)' },
-  { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
-]
+const RUNNER_DETAILS: Record<Runner, Omit<RunnerOption, 'id'>> = {
+  claude: { label: 'claude', desc: 'Claude Code CLI' },
+  codex: { label: 'codex', desc: 'OpenAI Codex (app-server)' },
+  opencode: { label: 'opencode', desc: 'OpenCode (serve)' },
+  pi: { label: 'pi', desc: 'pi CLI (provider/model)' },
+  gemini: { label: 'gemini', desc: 'Gemini CLI (ACP)' },
+}
+export const RUNNERS: readonly RunnerOption[] = RUNNER_IDS.map((id) => ({ id, ...RUNNER_DETAILS[id] }))
 
 export interface ModelPreset {
   id: string
@@ -92,6 +94,15 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
     { id: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', desc: 'via Anthropic' },
     { id: 'openai/gpt-5.1', label: 'gpt-5.1', desc: 'via OpenAI' },
   ],
+  // Gemini CLI has no host catalog in cezar: the ids its ACP `session/new` answer lists (0.60), the
+  // server's `KNOWN_PRESETS_BY_RUNNER.gemini`. A free API key serves the Flash models only.
+  gemini: [
+    { id: '', label: 'auto', desc: 'Use your Gemini CLI default model' },
+    { id: 'gemini-3.5-flash', label: 'gemini-3.5-flash', desc: 'Fast; available on a free API key' },
+    { id: 'gemini-3-flash-preview', label: 'gemini-3-flash-preview', desc: 'Preview Flash model' },
+    { id: 'gemini-3.1-flash-lite', label: 'gemini-3.1-flash-lite', desc: 'Fastest, cheapest' },
+    { id: 'gemini-2.5-pro', label: 'gemini-2.5-pro', desc: 'Deeper reasoning (paid tiers)' },
+  ],
 }
 
 /**
@@ -107,6 +118,7 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
 const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
   claude: /^claude[-.]/,
   codex: /^gpt[-.]/,
+  gemini: /^gemini[-.]/,
 }
 
 /** Runners that pick with the canonical `provider/model` convention and span every provider the
@@ -123,7 +135,7 @@ const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
  *  native id space (`claude-…`, `gpt-…`), which a `provider/model` runner cannot claim either
  *  way, so a bare vendor id stays a cross-runner mismatch on pi and OpenCode as much as it is
  *  on the other backends. */
-const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
+const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = RUNNER_IDS.slice(2, 4)
 
 /** Keep recognized presets from another backend out of a runner's custom-model escape hatch
  * (#480).

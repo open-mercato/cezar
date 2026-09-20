@@ -340,3 +340,51 @@ describe('looksSecret', () => {
     }
   });
 });
+
+describe('buildChildEnv — gemini (#581)', () => {
+  const HOST: NodeJS.ProcessEnv = {
+    PATH: '/usr/bin',
+    HOME: '/home/dev',
+    GEMINI_API_KEY: 'AIza-gemini',
+    GEMINI_MODEL: 'gemini-3-flash-preview',
+    GOOGLE_API_KEY: 'AIza-google',
+    GOOGLE_CLOUD_PROJECT: 'proj',
+    GOOGLE_CLOUD_LOCATION: 'us-central1',
+    GOOGLE_APPLICATION_CREDENTIALS: '/home/dev/sa.json',
+    GOOGLE_CLOUD_QUOTA_PROJECT: 'other',
+    ANTHROPIC_API_KEY: 'sk-ant',
+    OPENAI_API_KEY: 'sk-openai',
+  };
+
+  it('forwards the GEMINI_ family and the exact Google names Gemini CLI reads — nothing wider', () => {
+    const env = buildChildEnv({ backend: 'gemini', source: HOST });
+    expect(env.GEMINI_API_KEY).toBe('AIza-gemini');
+    expect(env.GEMINI_MODEL).toBe('gemini-3-flash-preview');
+    expect(env.GOOGLE_API_KEY).toBe('AIza-google');
+    expect(env.GOOGLE_CLOUD_PROJECT).toBe('proj');
+    expect(env.GOOGLE_CLOUD_LOCATION).toBe('us-central1');
+    // Exact names, not a GOOGLE_ / GOOGLE_CLOUD_ prefix.
+    expect(env.GOOGLE_CLOUD_QUOTA_PROJECT).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+  });
+
+  it('forwards the service-account file only while Gemini’s own Vertex selector is on', () => {
+    expect(buildChildEnv({ backend: 'gemini', source: HOST }).GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+    const vertex = buildChildEnv({ backend: 'gemini', source: { ...HOST, GOOGLE_GENAI_USE_VERTEXAI: 'true' } });
+    expect(vertex.GOOGLE_GENAI_USE_VERTEXAI).toBe('true');
+    expect(vertex.GOOGLE_APPLICATION_CREDENTIALS).toBe('/home/dev/sa.json');
+    // Claude's Vertex toggle is Claude's: it unlocks nothing for Gemini.
+    const claudeToggle = buildChildEnv({ backend: 'gemini', source: { ...HOST, CLAUDE_CODE_USE_VERTEX: '1' } });
+    expect(claudeToggle.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+  });
+
+  it('gives no other backend Gemini’s Google names', () => {
+    for (const backend of ['claude', 'codex', 'pi'] as const) {
+      const env = buildChildEnv({ backend, source: { ...HOST, GOOGLE_GENAI_USE_VERTEXAI: 'true' } });
+      expect(env.GOOGLE_API_KEY).toBeUndefined();
+      expect(env.GOOGLE_GENAI_USE_VERTEXAI).toBeUndefined();
+      expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+    }
+  });
+});

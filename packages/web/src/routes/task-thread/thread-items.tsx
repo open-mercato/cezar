@@ -322,6 +322,7 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   pi: 'pi',
+  gemini: 'Gemini CLI',
 }
 
 /** Persisted recovery guidance for an authoritative runtime authentication rejection. */

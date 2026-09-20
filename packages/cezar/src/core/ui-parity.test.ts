@@ -10,7 +10,8 @@
  * cover one — a named row fails here.
  *
  * `BACKENDS` lists every backend that owns a wire mapper. Pi uses its documented
- * RPC protocol and therefore has its own wire-faithful fixture set.
+ * RPC protocol and therefore has its own wire-faithful fixture set; gemini's
+ * fixtures are real `gemini --acp` transcripts (`__fixtures__/gemini/README.md`).
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -20,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'pi'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'pi', 'gemini'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -84,20 +85,52 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   ['turn.completed with a stopReason', (events) => events.some((e) => e.type === 'turn.completed' && e.stopReason !== undefined)],
 ] as const;
 
+/**
+ * A capability the upstream WIRE cannot carry — never one a mapper merely forgot. Each entry is
+ * pinned in both directions below: every other capability still applies to that backend, and the
+ * gap itself must still hold, so the fixture that one day carries the data fails here and forces
+ * the exemption out.
+ *
+ * gemini / plan: Gemini CLI 0.60.0 sends no plan on the ACP wire. It never emits a `plan` update;
+ * `write_todos` exists only for Gemini 2 models and its frames carry just the title "Set N todo(s)"
+ * (no `rawInput`, empty `content`); Gemini 3 — the default routing — has no plan tool at all
+ * (`__fixtures__/gemini/README.md`, `write-todos-quota.ndjson`). Spec 2026-09-19 Phase 2 assumed a
+ * `write_todos` input to read; the real CLI does not provide one. Decided for #581: accept the gap
+ * rather than read Gemini's private chat recording (Gemini-2-only, vendor-internal format) or add a
+ * new cezar plan marker. The dock stays empty for Gemini until Gemini sends plans over ACP; the
+ * shared mapper already maps an ACP `plan` update, so that day needs only this entry removed.
+ */
+const WIRE_GAPS: Partial<Record<(typeof BACKENDS)[number], readonly string[]>> = {
+  gemini: ['plan.updated with entries (TodoWrite / todoList / todowrite)'],
+};
+
 describe('protocol v2 backend parity (every mapper emits every matrix capability)', () => {
   for (const backend of BACKENDS) {
     const events = fixtureEvents(backend);
     for (const [name, produced] of CAPABILITIES) {
+      if (WIRE_GAPS[backend]?.includes(name)) {
+        it(`${backend} cannot produce ${name} — a documented upstream wire gap, still true`, () => {
+          expect(produced(events)).toBe(false);
+        });
+        continue;
+      }
       it(`${backend} produces ${name}`, () => {
         expect(produced(events)).toBe(true);
       });
     }
   }
 
+  it('every documented wire gap names a real capability', () => {
+    const names = CAPABILITIES.map(([name]) => name);
+    for (const gaps of Object.values(WIRE_GAPS)) for (const gap of gaps ?? []) expect(names).toContain(gap);
+  });
+
   // Sub-agent NESTING rides on parentItemId where the wire attributes work
   // to its parent: claude `parent_tool_use_id` and opencode child-session
   // parts under a `subtask`. Codex's wire has no parent attribution — its
-  // matrix cell is the review-mode task items asserted above.
+  // matrix cell is the review-mode task items asserted above. Gemini's ACP
+  // wire has none either: its cell is the `invoke_agent` task item (one per
+  // delegation, running → completed), asserted by the task row above.
   for (const backend of ['claude', 'opencode'] as const) {
     it(`${backend} nests sub-agent work via parentItemId`, () => {
       expect(items(fixtureEvents(backend)).some((item) => item.parentItemId !== undefined)).toBe(true);

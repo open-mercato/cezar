@@ -2,9 +2,12 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
+import { geminiHasCredentials } from './gemini-credentials.ts';
+import { GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 import { withEnvPrefix } from './shell-env.ts';
+import { RUNNER_IDS } from '@open-mercato/cezar-contract';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
+export const PROVIDER_IDS = RUNNER_IDS;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -67,6 +70,8 @@ interface ProviderDescriptor {
   loginArgs: readonly string[];
   installHint: string;
   parse: (result: ProviderCommandResult) => ProviderConnectionState | null;
+  /** What to tell the user when `parse` answers `unknown` on purpose (default: the generic hint). */
+  unknownHint?: string;
 }
 
 const COMMAND_TIMEOUT_MS = 10_000;
@@ -240,6 +245,17 @@ function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState |
   return null;
 }
 
+/**
+ * Gemini CLI has no `auth status` subcommand (#581): `--version` proves the CLI is there, and the
+ * credentials are read where the CLI itself reads them (`gemini-credentials.ts`). Evidence of a key,
+ * a gateway or a Vertex project is `connected`; its absence is `unknown`, never `disconnected` — a
+ * keychain-stored key or a Workspace login is invisible from outside — and carries the API-key hint.
+ */
+function parseGeminiStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0 || !/\d+\.\d+/.test(result.stdout)) return null;
+  return geminiHasCredentials() ? 'connected' : 'unknown';
+}
+
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -272,6 +288,16 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     loginArgs: ['/login'],
     installHint: 'Install pi, then run `pi /login`.',
     parse: parsePiStatus,
+  },
+  {
+    id: 'gemini',
+    executable: () => process.env.CEZ_GEMINI_BIN ?? 'gemini',
+    statusArgs: ['--version'],
+    // No login subcommand: the interactive CLI's `/auth` is where a key is entered.
+    loginArgs: [],
+    installHint: `Install Gemini CLI (npm i -g @google/gemini-cli). ${GEMINI_AUTH_HINT}`,
+    parse: parseGeminiStatus,
+    unknownHint: GEMINI_AUTH_HINT,
   },
 ];
 
@@ -702,6 +728,7 @@ export class ProviderAuthService {
       return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
     }
     const status = descriptor.parse(result);
+    if (status === 'unknown') return { provider: descriptor.id, status, hint: descriptor.unknownHint ?? UNKNOWN_HINT };
     if (status !== null) return { provider: descriptor.id, status };
     return { provider: descriptor.id, status: 'unknown', hint: UNKNOWN_HINT };
   }

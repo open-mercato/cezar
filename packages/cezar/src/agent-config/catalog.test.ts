@@ -5,6 +5,7 @@ const HOME: AgentHomePaths = {
   claude: '/home/u/.claude',
   codex: '/home/u/.codex',
   opencodeConfig: '/home/u/.config/opencode',
+  gemini: '/home/u/.gemini',
 };
 
 describe('agent-config catalog', () => {
@@ -60,6 +61,8 @@ describe('agent-config catalog', () => {
       'claude.project.mcp',
       'codex.project.config',
       'codex.user.config',
+      'gemini.project.settings',
+      'gemini.user.settings',
       'opencode.project.config',
       'opencode.user.config',
     ]);

@@ -163,6 +163,18 @@ describe('resolveModelIdentity — bare ids per backend', () => {
   });
 });
 
+describe('gemini model identity (#581)', () => {
+  it('a bare Gemini id is Google’s, and reaches --model bare', () => {
+    expect(resolveModelIdentity('gemini', 'gemini-3-flash-preview')).toEqual({ provider: 'google', model: 'gemini-3-flash-preview' });
+    expect(toBackendModel('gemini', { provider: 'google', model: 'gemini-3-flash-preview' })).toBe('gemini-3-flash-preview');
+    expect(resolveModelIdentity('gemini', 'google/gemini-2.5-pro')).toEqual({ provider: 'google', model: 'gemini-2.5-pro' });
+  });
+
+  it('refuses another provider’s model — Gemini CLI serves Google only', () => {
+    expect(() => resolveModelIdentity('gemini', 'anthropic/claude-sonnet-5')).toThrow(ModelIdentityError);
+  });
+});
+
 describe('toBackendModel — wire form per backend', () => {
   it('single-provider backends get the bare model id', () => {
     expect(toBackendModel('claude', { provider: 'anthropic', model: 'opus' })).toBe('opus');
@@ -194,6 +206,7 @@ describe('round-trip: composer preset → resolve → render back to the wire st
       backend: 'pi',
       presets: ['anthropic/claude-opus-4-8', 'anthropic/claude-sonnet-5', 'openai/gpt-5.1'],
     },
+    { backend: 'gemini', presets: ['gemini-3.5-flash', 'gemini-3-flash-preview', 'gemini-3.1-flash-lite', 'gemini-2.5-pro'] },
   ];
 
   for (const { backend, presets } of cases) {

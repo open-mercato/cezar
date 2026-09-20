@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { RunnerId } from './agent-runner.ts';
+import type { Runner } from '@open-mercato/cezar-contract';
 import type {
   PlanEntry,
   StopReason,
@@ -29,6 +30,7 @@ function assertType<_T extends true>(): void {}
 describe('UiEvent vocabulary (compile-time contract)', () => {
   it('UiBackend stays in lockstep with RunnerId (no drift with agent-runner.ts)', () => {
     assertType<Equal<UiBackend, RunnerId>>();
+    assertType<Equal<UiBackend, Runner>>();
     expect<UiBackend[]>(['claude', 'codex', 'opencode', 'pi']).toBeDefined();
   });
 

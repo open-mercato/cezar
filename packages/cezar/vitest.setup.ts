@@ -22,6 +22,19 @@ const pinSandboxHome = (): void => {
 
 pinSandboxHome()
 beforeEach(pinSandboxHome)
+
+// Gemini CLI has no `auth status`: cezar reads its credentials from the environment and from
+// `<GEMINI_CLI_HOME or ~>/.gemini/.env` (`src/core/gemini-credentials.ts`). Pin that home to the
+// sandbox and drop the host's Gemini credentials, so no case depends on whether the developer
+// running the suite has a Gemini key. A test that wants one sets it in its own body. The one
+// exception is the opt-in real-CLI smoke (`GEMINI_REAL_SMOKE=1`, `gemini-acp-runner.smoke.test.ts`),
+// which needs the real CLI to find the operator's own credentials.
+if (process.env.GEMINI_REAL_SMOKE !== '1') {
+  process.env.GEMINI_CLI_HOME = sandboxHome
+  for (const name of ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GEMINI_BASE_URL', 'GOOGLE_GENAI_USE_VERTEXAI']) {
+    delete process.env[name]
+  }
+}
 // Registered before any suite's own hooks, so vitest runs it last on the way out —
 // after a case's `afterEach` has deleted the pin.
 afterEach(pinSandboxHome)

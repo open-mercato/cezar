@@ -708,6 +708,8 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  /** Records newer than this cezar stay opaque so a downgrade cannot erase them on save. */
+  private unreadableRecords: unknown[] = [];
   private saveTimer: NodeJS.Timeout | null = null;
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
    *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
@@ -727,10 +729,19 @@ export class RunStore extends EventEmitter {
     if (existsSync(indexPath)) {
       try {
         const raw = JSON.parse(readFileSync(indexPath, 'utf8'));
-        const parsed = z.array(runRecordSchema).safeParse(raw);
-        if (parsed.success) {
-          for (const run of parsed.data) {
-            store.runs.set(run.id, reconcileLoadedRun(run, opts));
+        if (Array.isArray(raw)) {
+          let preserved = 0;
+          for (const record of raw) {
+            const parsed = runRecordSchema.safeParse(record);
+            if (parsed.success) {
+              store.runs.set(parsed.data.id, reconcileLoadedRun(parsed.data, opts));
+            } else {
+              store.unreadableRecords.push(record);
+              preserved += 1;
+            }
+          }
+          if (preserved > 0) {
+            console.warn(`[cez] preserved ${preserved} unreadable run record${preserved === 1 ? '' : 's'}`);
           }
         }
       } catch {
@@ -1443,7 +1454,7 @@ export class RunStore extends EventEmitter {
     const indexPath = join(this.dataDir, 'runs.json');
     const tmpPath = `${indexPath}.tmp`;
     try {
-      writeFileSync(tmpPath, JSON.stringify(this.listRuns(), null, 2), 'utf8');
+      writeFileSync(tmpPath, JSON.stringify([...this.listRuns(), ...this.unreadableRecords], null, 2), 'utf8');
       renameSync(tmpPath, indexPath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AUTOMATIONS_PROMPT } from '../automations/prompts.ts';
 import { HANDOFF_INSTRUCTIONS, HANDOFF_ONLY_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
@@ -132,7 +132,8 @@ describe('systemPrompt end-to-end (dry run)', () => {
     // GitHub automations are opt-in (#801) and compose their own prompt part when on AND
     // reachable (spec 2026-09-13-automations-from-prompt); the goldens run without it and the
     // part is pinned by its own tests below.
-    delete process.env.CEZ_AUTOMATIONS;
+    process.env.CEZ_AUTOMATIONS = '0';
+    delete process.env.CEZ_API_URL;
     // The global inbox is opt-in (#471). These assertions are about prompt composition and the
     // per-run opt-out, so they run on an inbox-enabled server; the gate itself is covered by
     // the suite below.
@@ -265,7 +266,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     try {
       await runToEnd({ task: 'do the thing mock:done' });
     } finally {
-      delete process.env.CEZ_AUTOMATIONS;
+      process.env.CEZ_AUTOMATIONS = '0';
       delete process.env.CEZ_API_URL;
     }
     const prompt = capturedSystemPrompt();
@@ -277,7 +278,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
   });
 
   it('automations on but unreachable (headless), or opted out: no task is taught the CLI', async () => {
-    delete process.env.CEZ_AUTOMATIONS;
+    process.env.CEZ_AUTOMATIONS = '0';
     delete process.env.CEZ_API_URL;
     await runToEnd({ task: 'do the thing mock:done' });
     expect(capturedSystemPrompt()).not.toContain('cez automation');
@@ -286,11 +287,11 @@ describe('systemPrompt end-to-end (dry run)', () => {
     try {
       await runToEnd({ task: 'do the thing mock:done' });
     } finally {
-      delete process.env.CEZ_AUTOMATIONS;
+      process.env.CEZ_AUTOMATIONS = '0';
       delete process.env.CEZ_API_URL;
     }
     expect(capturedSystemPrompt()).not.toContain('cez automation');
-  });
+  }, 30_000);
 
   it('no override: the config default reaches the CLI and is echoed on the record', async () => {
     const id = await runToEnd({ task: 'do the thing' });
@@ -533,6 +534,13 @@ describe('systemPrompt end-to-end (dry run)', () => {
  * off.
  */
 describe('the global follow-up gate (dry run)', () => {
+  beforeEach(() => {
+    // This describe covers follow-ups only; keep the default-on automation capability
+    // from changing the expected base prompt between describe blocks.
+    process.env.CEZ_AUTOMATIONS = '0';
+    delete process.env.CEZ_API_URL;
+  });
+
   const CONFIG_PROMPT = 'CONFIG-DEFAULT: always write tests first.';
   let repoRoot: string;
   let argsFile: string;

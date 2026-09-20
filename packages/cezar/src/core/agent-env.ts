@@ -229,6 +229,27 @@ const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // granting it here handed pi the whole `AWS_*` / `GOOGLE_CLOUD_*` family on any host that had
   // set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, plus Claude's own config dir.
   pi: ['PI_', ...MULTI_PROVIDER_PREFIXES],
+  // Gemini CLI (#581): its own `GEMINI_*` family (API key, model, home, trust). The Google names it
+  // also reads are exact names below — a `GOOGLE_` prefix would hand it every Google credential on
+  // the host.
+  gemini: ['GEMINI_'],
+};
+
+/**
+ * Per-backend auth/config the runner needs by EXACT name — where a prefix would over-grant
+ * (spec 2026-09-19-runner-seam-native-backends § Phase 1 "Credentials by name").
+ */
+const BACKEND_ALLOW_NAMES: Partial<Record<AgentBackend, ReadonlySet<string>>> = {
+  gemini: upperSet([
+    'GOOGLE_API_KEY',
+    'GOOGLE_CLOUD_PROJECT',
+    'GOOGLE_CLOUD_LOCATION',
+    // Gemini's own auth selectors (`getAuthTypeFromEnv` in the 0.60 bundle): Vertex AI, Google
+    // login for Workspace/Code Assist licenses, and a custom API gateway.
+    'GOOGLE_GENAI_USE_VERTEXAI',
+    'GOOGLE_GENAI_USE_GCA',
+    'GOOGLE_GEMINI_BASE_URL',
+  ]),
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the
@@ -264,6 +285,14 @@ const VERTEX_ALLOW_NAMES: ReadonlySet<string> = upperSet([
   // ANTHROPIC_VERTEX_PROJECT_ID already rides in on the `ANTHROPIC_` prefix.
 ]);
 const VERTEX_ALLOW_PREFIXES: readonly string[] = ['GOOGLE_CLOUD_'];
+/**
+ * Gemini CLI's own Vertex selector: `GOOGLE_GENAI_USE_VERTEXAI=true` switches it to Vertex AI, which
+ * authenticates through Application Default Credentials. Same toggle shape as Claude's above, keyed
+ * on the backend's OWN variable (the #850 direction): the service-account file is forwarded to
+ * Gemini only while Gemini is told to use Vertex.
+ */
+const GEMINI_VERTEX_TOGGLE = 'GOOGLE_GENAI_USE_VERTEXAI';
+const GEMINI_VERTEX_ALLOW_NAMES: ReadonlySet<string> = upperSet(['GOOGLE_APPLICATION_CREDENTIALS']);
 
 export function looksSecret(name: string): boolean {
   return SECRET_NAME_RE.test(name);
@@ -329,7 +358,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     return { ...full, ...extra };
   }
 
-  const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude;
+  const backendPrefixes = BACKEND_ALLOW_PREFIXES[opts.backend] ?? BACKEND_ALLOW_PREFIXES.claude ?? [];
   const passthrough = upperSet(
     (readVar(source, 'CEZ_ENV_PASSTHROUGH') ?? '')
       .split(',')
@@ -349,6 +378,10 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     cloudPrefixes.push(...VERTEX_ALLOW_PREFIXES);
     for (const n of VERTEX_ALLOW_NAMES) cloudNames.add(n);
   }
+  if (opts.backend === 'gemini' && isTruthy(readVar(source, GEMINI_VERTEX_TOGGLE))) {
+    for (const n of GEMINI_VERTEX_ALLOW_NAMES) cloudNames.add(n);
+  }
+  const backendNames = BACKEND_ALLOW_NAMES[opts.backend] ?? new Set<string>();
 
   const out: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(source)) {
@@ -371,6 +404,7 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     // reaches the on-disk NDJSON (see secret-redaction.ts).
     if (GH_ALLOW_NAMES.has(key)) return true;
     if (matchesPrefix(key, backendPrefixes)) return true;
+    if (backendNames.has(key)) return true;
     if (cloudNames.has(key) || matchesPrefix(key, cloudPrefixes)) return true;
     // Explicit opt-in passthrough.
     if (passthrough.has(key)) return true;

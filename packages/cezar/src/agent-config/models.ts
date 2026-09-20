@@ -2,6 +2,7 @@ import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
 import { claudeModelSettingsStrategy } from './model-settings/claude.ts';
 import { codexModelSettingsStrategy } from './model-settings/codex.ts';
 import { opencodeModelSettingsStrategy } from './model-settings/opencode.ts';
+import { geminiModelSettingsStrategy } from './model-settings/gemini.ts';
 import { piModelSettingsStrategy } from './model-settings/pi.ts';
 import type { AgentModelSettings, AgentModelSettingsStrategy } from './model-settings/types.ts';
 
@@ -18,6 +19,7 @@ const MODEL_SETTINGS_STRATEGIES: Record<RunnerId, AgentModelSettingsStrategy> = 
   codex: codexModelSettingsStrategy,
   opencode: opencodeModelSettingsStrategy,
   pi: piModelSettingsStrategy,
+  gemini: geminiModelSettingsStrategy,
 };
 
 export function readAgentModelSettings(

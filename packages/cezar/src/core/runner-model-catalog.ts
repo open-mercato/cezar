@@ -97,6 +97,11 @@ export class RunnerModelCatalog {
 }
 
 function unavailableReason(runner: RunnerId): string {
-  const name = runner === 'codex' ? 'Codex' : runner === 'claude' ? 'Claude' : 'OpenCode';
+  const nameByRunner: Partial<Record<RunnerId, string>> = {
+    claude: 'Claude',
+    codex: 'Codex',
+    opencode: 'OpenCode',
+  };
+  const name = nameByRunner[runner] ?? runner;
   return `${name} model discovery is temporarily unavailable`;
 }

@@ -41,13 +41,24 @@ const SAFE_SESSION_ID = /^[A-Za-z0-9._][A-Za-z0-9._-]{0,199}$/
  *  either. Fails closed: no hint beats a hint that runs `rm -rf ~` on paste. */
 export function resumeCommand(runner: Runner | undefined, sessionId: string): string | undefined {
   if (!SAFE_SESSION_ID.test(sessionId)) return undefined
-  switch (runner) {
+  // Exhaustive on purpose: a `default` that answered `claude --resume` handed a pi (and would hand
+  // a gemini) run the WRONG agent's command — the server-side bug Phase 0 of spec 2026-09-19 fixed.
+  const effective: Runner = runner ?? 'claude'
+  switch (effective) {
+    case 'claude':
+      return `claude --resume ${sessionId}`
     case 'codex':
       return `codex resume ${sessionId}`
     case 'opencode':
       return `opencode --session ${sessionId}`
-    default:
-      return `claude --resume ${sessionId}`
+    case 'pi':
+      return `pi --session ${sessionId}`
+    case 'gemini':
+      return `gemini --resume ${sessionId}`
+    default: {
+      const unreachable: never = effective
+      return unreachable
+    }
   }
 }
 

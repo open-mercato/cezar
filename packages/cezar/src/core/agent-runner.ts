@@ -14,6 +14,10 @@
  */
 
 import type { UiEvent } from './ui-events.ts';
+import { RUNNER_IDS } from '@open-mercato/cezar-contract';
+import type { Runner as RunnerId } from '@open-mercato/cezar-contract';
+export { RUNNER_IDS } from '@open-mercato/cezar-contract';
+export type { Runner as RunnerId } from '@open-mercato/cezar-contract';
 
 /**
  * The user-selectable runners (what config/GUI expose), in display order — the SINGLE source of
@@ -21,11 +25,6 @@ import type { UiEvent } from './ui-events.ts';
  * server-install "at least one agent CLI" gate, the CLI-handoff registry) rather than repeating
  * the literals, so adding runner #5 is a one-line change here and typecheck finds the rest.
  */
-export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
-
-/** The user-selectable runners (what config/GUI expose). */
-export type RunnerId = (typeof RUNNER_IDS)[number];
-
 /** `claude-cli` is the legacy id kept so old run records still parse. */
 export type AgentBackend = RunnerId | 'claude-cli';
 

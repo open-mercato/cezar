@@ -49,6 +49,8 @@ describe('agent profile resolution', () => {
       expect(defaultAgentProfile('claude', env).path).toBe('/home/u/.claude');
       expect(defaultAgentProfile('codex', env).path).toBe('/home/u/.codex');
       expect(defaultAgentProfile('opencode', env).path).toBe('/home/u/.config/opencode');
+      expect(defaultAgentProfile('gemini', env).path).toBe('/home/u/.gemini');
+      expect(defaultAgentProfile('gemini', { ...env, GEMINI_CLI_HOME: '/srv/g' }).path).toBe('/srv/g/.gemini');
     });
 
     it('follows the vendor env vars, so setting one moves the DEFAULT profile', () => {

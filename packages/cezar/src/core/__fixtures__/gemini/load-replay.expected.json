@@ -1,0 +1,55 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "a836aa63-e2f8-4e24-8a62-92ef0170a671",
+    "backend": "gemini",
+    "model": "gemini-3-flash-preview",
+    "cwd": "/tmp/claude-1000/acp/repo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "turn_1_msg_1",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_msg_1",
+    "field": "text",
+    "delta": "3"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "turn_1_msg_1",
+      "role": "assistant",
+      "text": "3"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 11890,
+      "output": 1,
+      "total": 11891
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 11890,
+      "output": 1,
+      "total": 11891
+    }
+  }
+]

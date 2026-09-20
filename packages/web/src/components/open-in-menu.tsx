@@ -24,6 +24,7 @@ import {
 } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { runnerSchema } from '@open-mercato/cezar-api-client'
 import type { OpenTarget, Runner } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import {
@@ -76,6 +77,7 @@ const OPEN_IN_ICONS: Record<string, LucideIcon> = {
   codex: SparklesIcon,
   opencode: BotIcon,
   pi: BotIcon,
+  gemini: BotIcon,
 }
 
 /** The icon component for a target — `target.icon` when it's one the UI knows, else the
@@ -88,8 +90,9 @@ export function openInIcon(target: OpenTarget): LucideIcon {
  *  target (editors, Finder, terminal) — mirrors the server's `agentCliRunner` (open-in-app.ts)
  *  without importing server code into the bundle. */
 export function cliTargetRunner(targetId: string): Runner | undefined {
-  const match = /^cli:(claude|codex|opencode|pi)$/.exec(targetId)
-  return match ? (match[1] as Runner) : undefined
+  const value = targetId.startsWith('cli:') ? targetId.slice(4) : ''
+  const parsed = runnerSchema.safeParse(value)
+  return parsed.success ? parsed.data : undefined
 }
 
 /** A target the caller has decided is applicable, plus how it should read in the menu. */

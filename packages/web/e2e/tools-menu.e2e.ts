@@ -2,6 +2,7 @@ import { resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
 import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 
 /**
  * The Tools dropdown (Step 4.2) against the shared dev env — a real `/api/v1/health` probing this
@@ -21,7 +22,7 @@ type Health = {
 
 /** The agent CLIs among `checks[]` — `gh` and `git` are rows too, but neither runs a task. Kept in
  *  step with the contract's runner enum (`packages/contract/src/health.ts`). */
-const RUNNERS = new Set(['claude', 'codex', 'opencode', 'pi'])
+const RUNNERS: ReadonlySet<string> = new Set(RUNNER_IDS)
 
 /** What (if anything) keeps the aggregate dot from green, derived from the live health answer the
  *  same way `toolsBlocker()` derives it: the dot is amber only when cez cannot start a task at all,

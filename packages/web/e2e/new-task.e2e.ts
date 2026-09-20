@@ -4,6 +4,7 @@ import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 
 import { AgentBrowser, bootProjectId, cezarCli, fixtureServeEnv, getJson } from './agent-browser'
 
@@ -147,7 +148,7 @@ describe('the full-screen /new against a live dry-run server', () => {
     const health = (await (await fetch(`${baseUrl}/api/v1/health`)).json()) as {
       checks: Array<{ name: string; available: boolean }>
     }
-    const runners = ['claude', 'codex', 'opencode'].filter((id) =>
+    const runners = RUNNER_IDS.filter((id) => id !== 'pi').filter((id) =>
       health.checks.some((c) => c.name === id && c.available),
     )
     if (runners.length > 1) {

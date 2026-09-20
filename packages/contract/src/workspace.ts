@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { type Runner, runnerSchema } from './health.ts';
+import { type Runner, runnerSchema, perRunner } from './runners.ts';
 
 /**
  * The workspace + settings families: `~/.cezar/config.json`'s settings slice, both GUI-pref bags
@@ -59,12 +59,7 @@ export const workspaceConfigResponseSchema = z.object({
    */
   agentDefaults: z.object({
     runner: runnerSchema.optional(),
-    models: z.object({
-      claude: z.string().optional(),
-      codex: z.string().optional(),
-      opencode: z.string().optional(),
-      pi: z.string().optional(),
-    }).optional(),
+    models: perRunner(z.string().optional()).partial().optional(),
   }),
 });
 export type WorkspaceConfigResponse = z.infer<typeof workspaceConfigResponseSchema>;
@@ -91,13 +86,7 @@ export const setWorkspaceConfigInputSchema = z.object({
   agentDefaults: z
     .object({
       runner: runnerSchema.nullable().optional(),
-      models: z
-        .object({
-          claude: z.string().trim().min(1).max(200).nullable().optional(),
-          codex: z.string().trim().min(1).max(200).nullable().optional(),
-          opencode: z.string().trim().min(1).max(200).nullable().optional(),
-          pi: z.string().trim().min(1).max(200).nullable().optional(),
-        })
+      models: perRunner(z.string().trim().min(1).max(200).nullable().optional()).partial()
         .optional(),
     })
     .optional(),
@@ -229,13 +218,7 @@ export const workspaceUiStateSchema = z.looseObject({
   /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until the
    *  provider reports a different incident, so this stays workspace-global with the browser
    *  rather than one project checkout. */
-  dismissedProviderAuthFailures: z
-    .object({
-      claude: z.string().optional(),
-      codex: z.string().optional(),
-      opencode: z.string().optional(),
-      pi: z.string().optional(),
-    })
+  dismissedProviderAuthFailures: perRunner(z.string().optional()).partial()
     .optional(),
   /** Settings → Appearance, GLOBAL since step 3.5: accent + density describe the person at the
    *  keyboard, not a repo. */
@@ -285,13 +268,9 @@ export const setWorkspaceUiStateInputSchema = z
           .optional(),
       })
       .optional(),
-    dismissedProviderAuthFailures: z
-      .strictObject({
-        claude: z.string().min(1).max(128).optional(),
-        codex: z.string().min(1).max(128).optional(),
-        opencode: z.string().min(1).max(128).optional(),
-        pi: z.string().min(1).max(128).optional(),
-      })
+    dismissedProviderAuthFailures: perRunner(z.string().min(1).max(128).optional())
+      .strict()
+      .partial()
       .optional(),
     importedSkills: z
       .array(z.string().min(1).max(200))
@@ -324,12 +303,7 @@ export type SetWorkspaceUiStateInput = z.infer<typeof setWorkspaceUiStateInputSc
  *  the runner. Absent = auto (the runner decides). Keyed by runner name rather than derived from
  *  `runnerSchema` because the server's own `defaultModels` object (src/config.ts:92) is spelled
  *  the same way — one key per runner, each independently optional. */
-export const runnerModelsSchema = z.object({
-  claude: z.string().optional(),
-  codex: z.string().optional(),
-  opencode: z.string().optional(),
-  pi: z.string().optional(),
-});
+export const runnerModelsSchema = perRunner(z.string().optional()).partial();
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
 
 /** `GET /api/v1/config` — every Settings → Agents knob in one read. */
@@ -370,14 +344,7 @@ export const setConfigInputSchema = z.object({
   baseBranch: z.string().trim().min(1).max(200).nullable().optional(),
   defaultRunner: runnerSchema.optional(),
   systemPrompt: z.string().trim().max(20_000).nullable().optional(),
-  defaultModels: z
-    .object({
-      claude: z.string().trim().max(200).nullable().optional(),
-      codex: z.string().trim().max(200).nullable().optional(),
-      opencode: z.string().trim().max(200).nullable().optional(),
-      pi: z.string().trim().max(200).nullable().optional(),
-    })
-    .optional(),
+  defaultModels: perRunner(z.string().trim().max(200).nullable().optional()).partial().optional(),
   maxParallel: z.number().int().min(1).max(16).optional(),
   /** null or 0 clears the ceiling back to "no limit". */
   memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
@@ -490,6 +457,7 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
  * 400s, so the client compiles against exactly what the route accepts. One definition, used by
  * the route's query validator and by the cockpit's picker.
  */
+// runner-union: deliberate subset — only runners with a host model-discovery path belong here.
 export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =

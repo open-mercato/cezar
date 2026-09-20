@@ -12,6 +12,7 @@ const LABEL: Record<ProviderId, string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   pi: 'pi',
+  gemini: 'Gemini CLI',
 };
 
 export function providersRequiredByWorkflow(

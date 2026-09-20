@@ -1,4 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { GEMINI_AUTH_FAILURE_MESSAGE, GEMINI_AUTH_HINT } from './gemini-ui-mapper.ts';
 import {
   ProviderAuthService,
   isRuntimeProviderAuthFailure,
@@ -26,6 +30,9 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  // `gemini --version`: Gemini CLI has no auth-status command, so this only proves the install; the
+  // credentials come from the environment (`gemini-credentials.ts`).
+  gemini: { stdout: '0.60.0\n', stderr: '', exitCode: 0 },
 };
 
 const originalEnv = {
@@ -35,6 +42,9 @@ const originalEnv = {
   CEZ_CODEX_BIN: process.env.CEZ_CODEX_BIN,
   CEZ_OPENCODE_BIN: process.env.CEZ_OPENCODE_BIN,
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
+  CEZ_GEMINI_BIN: process.env.CEZ_GEMINI_BIN,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  GEMINI_CLI_HOME: process.env.GEMINI_CLI_HOME,
 };
 
 beforeEach(() => {
@@ -44,6 +54,10 @@ beforeEach(() => {
   delete process.env.CEZ_CODEX_BIN;
   delete process.env.CEZ_OPENCODE_BIN;
   delete process.env.CEZ_PI_BIN;
+  delete process.env.CEZ_GEMINI_BIN;
+  // Gemini's connected-ness is an environment read (the setup file strips the host's): give every
+  // case a key so "all connected" still means all five. The gemini block below removes it.
+  process.env.GEMINI_API_KEY = 'AIza-test-key';
 });
 
 afterEach(() => {
@@ -57,6 +71,7 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'claude') return connectedResults.claude!;
   if (executable.includes('codex')) return connectedResults.codex!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
+  if (executable.includes('gemini')) return connectedResults.gemini!;
   return connectedResults.pi!;
 }
 
@@ -495,7 +510,7 @@ describe('provider auth parsers', () => {
 });
 
 describe('ProviderAuthService', () => {
-  it('always returns claude, codex, opencode, pi in descriptor order', async () => {
+  it('always returns claude, codex, opencode, pi, gemini in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
     await expect(service.status()).resolves.toMatchObject({
@@ -504,11 +519,12 @@ describe('ProviderAuthService', () => {
         { provider: 'codex' },
         { provider: 'opencode' },
         { provider: 'pi' },
+        { provider: 'gemini' },
       ],
     });
   });
 
-  it('runs the four status commands concurrently with a 10 second timeout', async () => {
+  it('runs the five status commands concurrently with a 10 second timeout', async () => {
     const calls: Array<{ executable: string; args: readonly string[]; timeoutMs: number }> = [];
     let release!: () => void;
     const waiting = new Promise<void>((resolve) => { release = resolve; });
@@ -520,12 +536,13 @@ describe('ProviderAuthService', () => {
     const service = new ProviderAuthService({ runCommand });
     const pending = service.status();
 
-    await vi.waitFor(() => expect(calls).toHaveLength(4));
+    await vi.waitFor(() => expect(calls).toHaveLength(5));
     expect(calls).toEqual([
       { executable: 'claude', args: ['auth', 'status', '--json'], timeoutMs: 10_000 },
       { executable: 'codex', args: ['login', 'status'], timeoutMs: 10_000 },
       { executable: 'opencode', args: ['auth', 'list'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
+      { executable: 'gemini', args: ['--version'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -571,8 +588,8 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 9 * 60_000;
       await service.status();
-      // Still four: one probe per provider, from the first call only.
-      expect(runCommand).toHaveBeenCalledTimes(4);
+      // Still five: one probe per provider, from the first call only.
+      expect(runCommand).toHaveBeenCalledTimes(5);
     });
 
     it('re-probes an all-connected answer once the long window passes', async () => {
@@ -583,7 +600,7 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 10 * 60_000 + 1;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(8);
+      expect(runCommand).toHaveBeenCalledTimes(10);
     });
 
     it('re-checks a NOT-connected answer sooner, so a terminal login is noticed on its own', async () => {
@@ -601,10 +618,10 @@ describe('ProviderAuthService', () => {
       await service.status();
       now += 59_999;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(4); // still inside the short window
+      expect(runCommand).toHaveBeenCalledTimes(5); // still inside the short window
       now += 2;
       await service.status();
-      expect(runCommand).toHaveBeenCalledTimes(8); // past it → re-probed
+      expect(runCommand).toHaveBeenCalledTimes(10); // past it → re-probed
     });
 
     it('serves the stale answer immediately and refreshes BEHIND it, never in front', async () => {
@@ -619,7 +636,7 @@ describe('ProviderAuthService', () => {
         now: () => now,
         runCommand: async (executable) => {
           probes += 1;
-          if (probes > 4) await gate; // only the SECOND round of probes hangs
+          if (probes > 5) await gate; // only the SECOND round of probes hangs
           return resultFor(executable);
         },
       });
@@ -633,11 +650,11 @@ describe('ProviderAuthService', () => {
           expect.objectContaining({ provider: 'claude', status: 'connected' }),
         ]),
       });
-      expect(probes).toBe(8); // …and it did kick the refresh off
+      expect(probes).toBe(10); // …and it did kick the refresh off
 
       // A reader arriving mid-revalidation is served from cache too, not attached to the probe.
       await expect(service.status()).resolves.toBeDefined();
-      expect(probes).toBe(8); // no second refresh piled on top
+      expect(probes).toBe(10); // no second refresh piled on top
       release();
     });
 
@@ -649,7 +666,7 @@ describe('ProviderAuthService', () => {
           expect.objectContaining({ provider: 'claude', status: 'connected' }),
         ]),
       });
-      expect(runCommand).toHaveBeenCalledTimes(4);
+      expect(runCommand).toHaveBeenCalledTimes(5);
     });
 
     it('applies the same asymmetry per account', async () => {
@@ -670,7 +687,7 @@ describe('ProviderAuthService', () => {
 
     await service.status();
     await service.status({ refresh: true });
-    expect(runCommand).toHaveBeenCalledTimes(8);
+    expect(runCommand).toHaveBeenCalledTimes(10);
   });
 
   it('keeps one incident id until an explicit matching clear and creates a new id afterward', async () => {
@@ -920,7 +937,7 @@ describe('ProviderAuthService', () => {
     const service = new ProviderAuthService({ runCommand });
 
     const pending = service.status();
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(5));
     service.reportRuntimeAuthFailure('claude');
     release();
 
@@ -979,6 +996,7 @@ describe('ProviderAuthService', () => {
         { provider: 'codex', status: 'connected' },
         { provider: 'opencode', status: 'connected' },
         { provider: 'pi', status: 'connected' },
+        { provider: 'gemini', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1005,10 +1023,10 @@ describe('ProviderAuthService', () => {
     const ordinary = service.status();
     const refresh = service.status({ refresh: true });
     expect(refresh).toBe(ordinary);
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(5));
     release();
     await expect(Promise.all([ordinary, refresh])).resolves.toHaveLength(2);
-    expect(runCommand).toHaveBeenCalledTimes(4);
+    expect(runCommand).toHaveBeenCalledTimes(5);
   });
 
   it('gives ordinary callers one shared visible promise for a fresh probe after a latch', async () => {
@@ -1025,7 +1043,7 @@ describe('ProviderAuthService', () => {
     const ordinary = service.status();
 
     expect(refresh).toBe(ordinary);
-    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(4));
+    await vi.waitFor(() => expect(runCommand).toHaveBeenCalledTimes(5));
     release();
     await expect(ordinary.then(({ providers }) => providers[0])).resolves.toMatchObject({
       provider: 'claude',
@@ -1078,7 +1096,7 @@ describe('ProviderAuthService', () => {
       .toBe('"C:\\Program Files\\op^%en^&co^!de^".exe" auth login');
   });
 
-  it('reports all four providers connected in CEZ_DRY_RUN without executing a command', async () => {
+  it('reports every provider connected in CEZ_DRY_RUN without executing a command', async () => {
     process.env.CEZ_DRY_RUN = '1';
     const runCommand = runner();
     const service = new ProviderAuthService({ runCommand });
@@ -1089,6 +1107,7 @@ describe('ProviderAuthService', () => {
         { provider: 'codex', status: 'connected' },
         { provider: 'opencode', status: 'connected' },
         { provider: 'pi', status: 'connected' },
+        { provider: 'gemini', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1143,7 +1162,7 @@ describe('ProviderAuthService', () => {
       const before = spawns;
       now += 60 * 60_000; // an hour later
 
-      expect(service.peekStatus()?.providers).toHaveLength(4);
+      expect(service.peekStatus()?.providers).toHaveLength(5);
       expect(service.peekProfileStatus('claude', 'work')).toBeDefined();
       expect(spawns).toBe(before); // …and still nothing spawned
     });
@@ -1166,7 +1185,7 @@ describe('ProviderAuthService', () => {
       await service.status();
       await service.profileStatus('claude', { id: 'work', configDir: '/work' });
       const before = spawns;
-      expect(service.peekStatus()?.providers).toHaveLength(4);
+      expect(service.peekStatus()?.providers).toHaveLength(5);
       expect(service.peekProfileStatus('claude', 'work')?.profileId).toBe('work');
       expect(spawns).toBe(before);
     });
@@ -1257,5 +1276,68 @@ describe('ProviderAuthService', () => {
       expect(new ProviderAuthService({ platform: 'linux' }).loginCommand('opencode', '/oc-work'))
         .toBe("'opencode' auth login");
     });
+  });
+});
+
+describe('gemini provider status (#581): an environment read, never a login probe', () => {
+  let geminiHome: string;
+  beforeEach(() => {
+    geminiHome = mkdtempSync(join(tmpdir(), 'cez-gemini-home-'));
+    process.env.GEMINI_CLI_HOME = geminiHome;
+    delete process.env.GEMINI_API_KEY;
+  });
+  afterEach(() => {
+    rmSync(geminiHome, { recursive: true, force: true });
+  });
+
+  it('is connected when GEMINI_API_KEY is in the environment', async () => {
+    process.env.GEMINI_API_KEY = 'AIza-test';
+    const runCommand = runner();
+    const rows = await statuses(new ProviderAuthService({ runCommand, platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'connected', hint: undefined });
+    expect(runCommand).toHaveBeenCalledWith('gemini', ['--version'], 10_000);
+  });
+
+  it('is connected when the .env Gemini CLI loads itself names a key (the value is never read out)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', '.env'), 'GEMINI_API_KEY=AIza-from-file\n');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini!.status).toBe('connected');
+  });
+
+  it('is connected when the CLI is configured for an auth method that still works (a keychain key is invisible)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', 'settings.json'), '{"security":{"auth":{"selectedType":"gemini-api-key"}}}');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini!.status).toBe('connected');
+  });
+
+  it('a host configured only for Google sign-in is not evidence of working credentials (UNSUPPORTED_CLIENT)', async () => {
+    mkdirSync(join(geminiHome, '.gemini'));
+    writeFileSync(join(geminiHome, '.gemini', 'settings.json'), '{"security":{"auth":{"selectedType":"oauth-personal"}}}');
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
+  });
+
+  it('is unknown — never disconnected — with the API-key hint when no credential is visible', async () => {
+    const rows = await statuses(new ProviderAuthService({ runCommand: runner(), platform: 'linux' }));
+    expect(rows.gemini).toEqual({ status: 'unknown', hint: GEMINI_AUTH_HINT });
+  });
+
+  it('is not-installed with an install hint when the CLI is absent, and honours CEZ_GEMINI_BIN', async () => {
+    process.env.CEZ_GEMINI_BIN = '/tools/gemini custom';
+    const runCommand = runner((executable) =>
+      executable === '/tools/gemini custom'
+        ? { stdout: '', stderr: '', exitCode: null, errorCode: 'ENOENT' }
+        : resultFor(executable));
+    const service = new ProviderAuthService({ runCommand, platform: 'linux' });
+    const rows = await statuses(service);
+    expect(rows.gemini!.status).toBe('not-installed');
+    expect(rows.gemini!.hint).toContain('npm i -g @google/gemini-cli');
+    expect(service.loginCommand('gemini')).toBe("'/tools/gemini custom'");
+  });
+
+  it('a runtime Gemini auth failure is recognized by the server-side latch', () => {
+    expect(isRuntimeProviderAuthFailure(GEMINI_AUTH_FAILURE_MESSAGE)).toBe(true);
   });
 });

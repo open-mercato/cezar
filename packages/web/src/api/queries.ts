@@ -299,7 +299,8 @@ export function useRunnerModelCatalogs(
   const codex = useRunnerModels('codex', enabled)
   const opencode = useRunnerModels('opencode', enabled)
   const pi = useRunnerModels('pi', enabled)
-  return { claude, codex, opencode, pi }
+  const gemini = useRunnerModels('gemini', enabled)
+  return { claude, codex, opencode, pi, gemini }
 }
 
 export function useProviderStatus() {

@@ -1,6 +1,7 @@
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 
-const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'opencode', 'pi']
+const RUNNER_ORDER: readonly Runner[] = RUNNER_IDS
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {

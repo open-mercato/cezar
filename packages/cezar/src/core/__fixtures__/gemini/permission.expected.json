@@ -1,0 +1,135 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "14d1ae01-703f-44df-9d5b-2574edba9da1",
+    "backend": "gemini",
+    "model": "gemini-3-flash-preview",
+    "cwd": "/tmp/claude-1000/acp/repo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "turn_1_reasoning_1",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_reasoning_1",
+    "field": "reasoning",
+    "delta": "**Considering the Execution**\nOkay, so I've considered the execution steps. First, run the shell command, then respond with \"ok\". There may not be much here, but I need to make sure the user doesn't need me to update the topic. It seems simple, so I can confirm for now."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "turn_1_reasoning_1",
+      "text": "**Considering the Execution**\nOkay, so I've considered the execution steps. First, run the shell command, then respond with \"ok\". There may not be much here, but I need to make sure the user doesn't need me to update the topic. It seems simple, so I can confirm for now."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "turn_1_msg_2",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_msg_2",
+    "field": "text",
+    "delta": "I"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_msg_2",
+    "field": "text",
+    "delta": " will run the command `echo hello > out.txt` to create a file named `out.txt` with the content \"hello\"."
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_msg_2",
+    "field": "text",
+    "delta": "\n\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "turn_1_msg_2",
+      "role": "assistant",
+      "text": "I will run the command `echo hello > out.txt` to create a file named `out.txt` with the content \"hello\".\n\n"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "run_shell_command__call_388517",
+      "name": "run_shell_command",
+      "toolKind": "execute",
+      "title": "echo hello > out.txt",
+      "status": "pending"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "run_shell_command__call_388517",
+      "name": "run_shell_command",
+      "toolKind": "execute",
+      "title": "echo hello > out.txt",
+      "status": "completed"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "turn_1_msg_3",
+      "role": "assistant",
+      "text": ""
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "turn_1_msg_3",
+    "field": "text",
+    "delta": "ok"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "turn_1_msg_3",
+      "role": "assistant",
+      "text": "ok"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 21437,
+      "output": 72,
+      "total": 21509
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 21437,
+      "output": 72,
+      "total": 21509
+    }
+  }
+]

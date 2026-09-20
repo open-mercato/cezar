@@ -4,6 +4,7 @@ import { posix, resolve, win32 } from 'node:path';
 import { z } from 'zod';
 import { DEFAULT_AGENT_ACCOUNT_ID } from '@open-mercato/cezar-contract';
 import { PROVIDER_IDS, type ProviderId } from '../core/provider-auth.ts';
+import { perRunner } from '@open-mercato/cezar-contract';
 import { supportsProfiles } from '../core/agent-profiles.ts';
 import { agentAccountsPath, workspaceConfigPath } from '../paths.ts';
 import { atomicWriteJsonSync } from './config.ts';
@@ -119,13 +120,8 @@ export type AgentAccount = z.infer<typeof agentAccountSchema>;
 
 /** One project's choice, per provider. Explicit keys so `PROVIDER_IDS` stays the one source of
  *  truth and the value is bounded. An absent key means the discovered default. */
-const selectionSchema = z
-  .object({
-    claude: z.string().max(64).optional().catch(undefined),
-    codex: z.string().max(64).optional().catch(undefined),
-    opencode: z.string().max(64).optional().catch(undefined),
-    pi: z.string().max(64).optional().catch(undefined),
-  })
+const selectionSchema = perRunner(z.string().max(64).optional().catch(undefined))
+  .partial()
   .passthrough();
 
 export type AgentAccountSelection = z.infer<typeof selectionSchema>;

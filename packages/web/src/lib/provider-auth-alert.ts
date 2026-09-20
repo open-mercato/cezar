@@ -3,13 +3,15 @@ import type {
   ProviderStatusResponse,
   WorkspaceUiState,
 } from '@open-mercato/cezar-api-client'
+import { RUNNER_IDS } from '@open-mercato/cezar-api-client'
 
-const PROVIDERS: readonly ProviderId[] = ['claude', 'codex', 'opencode', 'pi']
+const PROVIDERS: readonly ProviderId[] = RUNNER_IDS
 const LABELS: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
   pi: 'pi',
+  gemini: 'Gemini CLI',
 }
 
 export interface ProviderAuthIncident {

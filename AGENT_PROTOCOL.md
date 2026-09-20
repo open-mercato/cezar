@@ -35,7 +35,7 @@ id — that is the whole point of the seam.
 ### Identity
 
 ```ts
-const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;  // the source of truth
+const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi', 'gemini'] as const;  // the source of truth
 type RunnerId     = (typeof RUNNER_IDS)[number];                   // user-selectable
 type AgentBackend = RunnerId | 'claude-cli';                       // + legacy id, still parses
 ```
@@ -66,7 +66,10 @@ interface AgentRunner {
   `waiting`, interrupt and resume all work: claude = stream-json over
   stdin/stdout; codex = `codex app-server` JSON-RPC 2.0 (JSONL) over
   stdin/stdout; opencode = `opencode serve` over HTTP + SSE; pi =
-  `pi --mode rpc` over JSONL stdin/stdout.
+  `pi --mode rpc` over JSONL stdin/stdout; gemini = `gemini --acp`, the
+  Agent Client Protocol (JSON-RPC 2.0 over NDJSON stdio) through the shared
+  ACP layer (`acp-client.ts` + `acp-ui-mapper.ts`, spec
+  `2026-09-19-runner-seam-native-backends`).
 
 ### `AgentSession`
 
@@ -133,7 +136,7 @@ Use the shared helper so the mapping is uniform:
 ```ts
 prependSystemPrompt(spec.systemPrompt, spec.userPrompt)
 // claude:          --append-system-prompt   (native channel, do NOT prepend)
-// codex / opencode: prepended here
+// codex / opencode / gemini: prepended here
 ```
 
 `ContentBlock` mirrors the Anthropic wire format (`text` | `image` base64) so it
@@ -296,18 +299,25 @@ Each backend has a mapper (`packages/cezar/src/core/<backend>-ui-mapper.ts`) tur
 transport into `UiEvent`s. The authoritative table is
 `agent-event-protocols.md` §7.1; the load-bearing rows:
 
-| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) |
-|---|---|---|---|
-| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response |
-| `turn.started` | each stdin user message | `turn/started` | each prompt POST |
-| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) |
-| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts |
-| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts |
-| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) |
-| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata |
-| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool |
-| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` |
-| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` |
+| v2 event / field | claude (stream-json) | codex (app-server JSON-RPC) | opencode (serve HTTP+SSE) | ACP — gemini (`gemini --acp`) |
+|---|---|---|---|---|
+| `session.started` | `system/init` (model, tools, cwd) | `thread/started` / `thread/start` result | `POST /session` response | `session/new` result (`sessionId`, `models.currentModelId`); `session/load` result (the requested id) |
+| `turn.started` | each stdin user message | `turn/started` | each prompt POST | each outbound `session/prompt` |
+| `turn.completed` + `stopReason` | `result` subtype (`success→end_turn`, `error_max_turns→max_tokens`, `error_during_execution→error`) | `turn/completed→end_turn`, `turn/failed→error`, interrupt→`cancelled` | `session.idle→end_turn` (or `error` if a `session.error` preceded) | `session/prompt` result `stopReason` (`max_turn_requests→max_tokens`); a JSON-RPC error answer → `error` |
+| message item | `assistant` `text` blocks (deltas via `--include-partial-messages`) | `agentMessage` items | text parts | `agent_message_chunk` |
+| reasoning item | `thinking` blocks | `reasoning` items (+ `textDelta`) | `reasoning` parts | `agent_thought_chunk` |
+| tool item | `tool_use`→running, `tool_result`→completed/failed, `permission_denials`→`declined` | `commandExecution`→execute (+`exitCode`, `outputDelta`), `fileChange`→edit (`diffs`), `mcpToolCall`→other, `webSearch`→fetch, collaboration spawn→task | tool parts (state `pending/running/completed/error→failed`, `patch` parts→`diffs`) | `tool_call` → `tool_call_update` (`in_progress→running`, `completed`, `failed`); ACP `kind` is the v2 `ToolKind`; `{type:'diff'}` content → `diffs`. Gemini: name = `toolCallId` prefix (no `rawInput` on its wire) |
+| `item.delta` `output` (live terminal) | *(none — card fills on completion; per-capability degradation)* | `item/commandExecution/outputDelta` | running-state metadata | *(none — card fills on completion)* |
+| `plan.updated` | `TodoWrite` input | `todoList` / `plan` items | `todowrite` tool | ACP `plan` update (full replacement); dialect `planFromToolCall`. **Gemini 0.60: no plan on the wire** — a documented gap in `ui-parity.test.ts` (`WIRE_GAPS`) |
+| subagent nesting (`parentItemId`) | `parent_tool_use_id` | collaboration receiver thread id (review mode remains childless) | child-session parts under a `subtask` | none on the wire; substitute: one `task` item per delegation (Gemini `invoke_agent`) |
+| `usage.updated` | `result.usage` + `total_cost_usd` | `thread/tokenUsage/updated` (no USD) | `message.updated` tokens/cost + `step-finish` | `session/prompt` result: standard `usage`, or dialect `usageFromPromptResult` (Gemini `_meta.quota.token_count`), summed per session |
+
+The ACP column is one shared mapper (`acp-ui-mapper.ts`) with a per-agent dialect
+(`gemini-ui-mapper.ts`). It maps raw JSON-RPC frames in wire order, both directions, so a
+golden fixture is a captured transcript. Two ACP behaviors it owns: a `session/load` replay
+of old history renders nothing (until `available_commands_update`, or the runner's
+`endAcpReplay`), and a `session/request_permission` is answered by the runner — `auto`
+only today, `allow_always` plus a v1 `note` (spec Q15) — never parked.
 
 **Mapper robustness contract.** Inputs come off the wire and may be `null`,
 partial or malformed. A mapper **must never throw**: unparseable NDJSON lines are
@@ -357,7 +367,10 @@ or a new fixture set forgets one — a named row fails. The matrix:
 - sub-agent **nesting** via `parentItemId` where the upstream wire attributes
   child work to a parent
 
-A new backend is not "done" until it produces every row.
+A new backend is not "done" until it produces every row. The only exception is a capability
+the upstream **wire** cannot carry, listed in `WIRE_GAPS` with its evidence and pinned both
+ways (the gap must still hold) — never a capability a mapper merely forgot. Today there is
+one: gemini's plan (see §4).
 
 ## 7. The golden-fixture testing contract
 
@@ -411,7 +424,7 @@ To be first-class:
    `AgentSession` (persistent process; `pid`; `sendMessage`/`end`/`interrupt`;
    `result`). Honor `AgentRunSpec` uniformly — use `prependSystemPrompt` if the
    backend has no native system-prompt channel.
-2. **Factory** — add the id to `RunnerId` / `RUNNER_IDS` (`agent-runner.ts`) and
+2. **Factory** — add the id to `RunnerId` / `RUNNER_IDS` (`packages/contract/src/runners.ts`) and
    a `case` in `createRunner` (`runner-factory.ts`). Add `UiBackend` in
    `ui-events.ts` **and its mirror** `packages/api-client/src/protocol/ui-events.ts` (the
    type-exactness test guards drift).
@@ -431,7 +444,8 @@ To be first-class:
 7. **Parity** — add the id to `BACKENDS` in `ui-parity.test.ts`; every capability
    row must pass. (If the backend has no wire parent attribution, document the
    nesting cell's substitute the way codex's review-mode items are handled.)
-8. **Plumbing** — the run-store `runner` enum, workflow step schema, the
+8. **Plumbing** — add the id to `RUNNER_IDS` in `packages/contract/src/runners.ts`; typecheck and
+   `runner-union.test.ts` list the remaining plumbing sites: the run-store `runner` enum, workflow step schema, the
    `POST /api/runs` / `PUT /api/config` bodies, `resumeCommand()`, the web
    `Runner` type, composer pills/presets, and Settings → Agents. Keep additive
    so old `runs.json` records still parse (the `runner` enum keeps `claude-cli`
@@ -440,7 +454,9 @@ To be first-class:
    the existing inconsistencies (opencode drops a bare model silently) — do not
    reproduce a silent-drop. A backend with no default provider gets no entry in
    `BACKEND_MODEL_MAP`'s default column, so a bare id fails loud.
-10. **Credentials** — one entry in `BACKEND_ALLOW_PREFIXES` (`agent-env.ts`):
+10. **Credentials** — one entry in `BACKEND_ALLOW_PREFIXES` (`agent-env.ts`), and exact
+   names in `BACKEND_ALLOW_NAMES` where a prefix would over-grant (gemini's `GOOGLE_API_KEY`
+   rather than `GOOGLE_`):
    `buildChildEnv` is least-privilege per backend, so a multi-provider runner
    must receive credentials for every provider its own model ids can name
    without widening other backends.

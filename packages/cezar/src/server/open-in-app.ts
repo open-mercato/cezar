@@ -3,7 +3,7 @@ import { accessSync, constants, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import type { RunnerId } from '../core/agent-runner.ts';
+import { RUNNER_IDS, type RunnerId } from '../core/agent-runner.ts';
 import { openInTerminal, refuseSpawnUnderTest } from './open-in-terminal.ts';
 import { isWsl, translateToWindowsPath } from './wsl.ts';
 
@@ -126,12 +126,14 @@ function editorAvailable(editor: EditorDef): boolean {
 /** Coding-agent CLIs a session can be handed off to (#cli-handoff). Selecting one opens a
  *  terminal that resumes THIS run's session when the runner matches, or launches a fresh CLI in
  *  the worktree otherwise. The actual command is built server-side (needs the run's session). */
-const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: string; envBin?: string }> = [
-  { runner: 'claude', label: 'Claude CLI', icon: 'claude', bin: 'claude', envBin: process.env.CEZ_CLAUDE_BIN },
-  { runner: 'codex', label: 'Codex CLI', icon: 'codex', bin: 'codex', envBin: process.env.CEZ_CODEX_BIN },
-  { runner: 'opencode', label: 'OpenCode', icon: 'opencode', bin: 'opencode', envBin: process.env.CEZ_OPENCODE_BIN },
-  { runner: 'pi', label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: process.env.CEZ_PI_BIN },
-];
+const AGENT_CLI_DETAILS: Record<RunnerId, { label: string; icon: string; bin: string; envBin?: string }> = {
+  claude: { label: 'Claude CLI', icon: 'claude', bin: 'claude', envBin: process.env.CEZ_CLAUDE_BIN },
+  codex: { label: 'Codex CLI', icon: 'codex', bin: 'codex', envBin: process.env.CEZ_CODEX_BIN },
+  opencode: { label: 'OpenCode', icon: 'opencode', bin: 'opencode', envBin: process.env.CEZ_OPENCODE_BIN },
+  pi: { label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: process.env.CEZ_PI_BIN },
+  gemini: { label: 'Gemini CLI', icon: 'gemini', bin: 'gemini', envBin: process.env.CEZ_GEMINI_BIN },
+};
+const AGENT_CLIS = RUNNER_IDS.map((runner) => ({ runner, ...AGENT_CLI_DETAILS[runner] }));
 
 /** The runner behind a `cli:<runner>` open target, or null when the id isn't a CLI handoff. */
 export function agentCliRunner(targetId: string): RunnerId | null {

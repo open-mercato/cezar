@@ -329,6 +329,7 @@ export function depCheckStep(opts: DepStepOpts = {}): InstallStep {
 const NPM_GLOBAL: Record<string, string> = {
   claude: '@anthropic-ai/claude-code',
   codex: '@openai/codex',
+  gemini: '@google/gemini-cli',
 };
 
 /** Ubuntu/Debian installer: apt for gh, sudo npm -g for the agent CLIs (system node). */
