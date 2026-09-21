@@ -318,8 +318,8 @@ export class GithubPoller {
 /**
  * One launch per PR per poll for the review events: requesting four reviewers at once is four
  * timeline rows but one "this PR wants a review". The latest row of each PR wins — for a request,
- * that is also the narrower `rereview_requested` when both exist. The others need no receipt: the
- * next poll's overlap window re-collapses them onto the same winner, which is already receipted.
+ * that is also the narrower `rereview_requested` when both exist. `ProjectAutomationScheduler`
+ * repeats the same intent against durable receipts for rows that arrive just after a poll.
  */
 export function onePerPullRequest(candidates: GithubCandidate[]): GithubCandidate[] {
   const familyOf = (event: AutomationEvent) =>

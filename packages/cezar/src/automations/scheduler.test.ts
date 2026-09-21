@@ -15,6 +15,17 @@ async function setup() {
   return { store, definition };
 }
 const candidate = { eventId: 'event', event: 'issue.opened' as const, timestamp: '2026-07-26T02:00:00.000Z', tieBreaker: 'I', repo: 'acme/demo', nodeId: 'I', number: 7, title: 'Issue', url: 'https://github.com/acme/demo/issues/7', author: 'alice', assignees: [], labels: [] };
+const reviewCandidate = {
+  ...candidate,
+  repo: 'acme/demo',
+  nodeId: 'PR_one',
+  number: 8,
+  title: 'Review me',
+  url: 'https://github.com/acme/demo/pull/8',
+  author: 'alice',
+  assignees: [],
+  labels: [],
+};
 
 describe('ProjectAutomationScheduler', () => {
   it('previews without cursor, receipt, or launch mutation', async () => {
@@ -39,6 +50,113 @@ describe('ProjectAutomationScheduler', () => {
     await scheduler.check(definition);
     expect(launch).toHaveBeenCalledTimes(1);
     expect(store.latestReceipts().get('one:event')).toMatchObject({ status: 'launched', runId: 'run' });
+  });
+
+  it('deduplicates review-request bursts that straddle two polls', async () => {
+    const { store, definition } = await setup();
+    const reviewDefinition = {
+      ...definition,
+      events: ['pull_request.review_requested', 'pull_request.rereview_requested'],
+    } satisfies GithubAutomationDefinition;
+    const first = {
+      ...reviewCandidate,
+      eventId: 'acme/demo:PR_one:pull_request.rereview_requested:RRE_one',
+      event: 'pull_request.rereview_requested' as const,
+      timestamp: '2026-07-26T02:00:21.000Z',
+      tieBreaker: 'RRE_one:rereview',
+      reviewer: 'patzick',
+    };
+    const second = {
+      ...reviewCandidate,
+      eventId: 'acme/demo:PR_one:pull_request.review_requested:RRE_two',
+      event: 'pull_request.review_requested' as const,
+      timestamp: '2026-07-26T02:00:35.000Z',
+      tieBreaker: 'RRE_two',
+      reviewer: 'mkucmus',
+    };
+    const polls = [first, second];
+    const launch = vi.fn(async () => ({ runId: `run-${launch.mock.calls.length + 1}` }));
+    const scheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      timeZone: 'UTC',
+      store,
+      github: {
+        owner: 'acme',
+        repo: 'demo',
+        poller: {
+          poll: async () => {
+            const next = polls.shift()!;
+            return {
+              candidates: [next],
+              cursor: { timestamp: next.timestamp, tieBreaker: next.tieBreaker },
+              truncated: false,
+              pages: 1,
+            };
+          },
+        } as never,
+      },
+      launch,
+    });
+    await scheduler.check(reviewDefinition);
+    await scheduler.check(reviewDefinition);
+    expect(launch).toHaveBeenCalledTimes(1);
+    expect([...store.latestReceipts().values()]).toHaveLength(1);
+    expect(store.logs({ automationId: definition.id, result: 'duplicate' })[0]).toMatchObject({
+      event: 'pull_request.review_requested',
+      githubNumber: 8,
+      reason: 'A durable receipt already exists for this automation and pull request review-request burst.',
+    });
+  });
+
+  it('allows a later review request on the same PR after the poll interval window', async () => {
+    const { store, definition } = await setup();
+    const reviewDefinition = {
+      ...definition,
+      events: ['pull_request.review_requested'],
+    } satisfies GithubAutomationDefinition;
+    const first = {
+      ...reviewCandidate,
+      eventId: 'acme/demo:PR_one:pull_request.review_requested:RRE_one',
+      event: 'pull_request.review_requested' as const,
+      timestamp: '2026-07-26T02:00:00.000Z',
+      tieBreaker: 'RRE_one',
+      reviewer: 'patzick',
+    };
+    const second = {
+      ...reviewCandidate,
+      eventId: 'acme/demo:PR_one:pull_request.review_requested:RRE_two',
+      event: 'pull_request.review_requested' as const,
+      timestamp: '2026-07-26T02:06:00.000Z',
+      tieBreaker: 'RRE_two',
+      reviewer: 'mkucmus',
+    };
+    const polls = [first, second];
+    const launch = vi.fn(async () => ({ runId: `run-${launch.mock.calls.length + 1}` }));
+    const scheduler = new ProjectAutomationScheduler({
+      projectId: 'p',
+      timeZone: 'UTC',
+      store,
+      github: {
+        owner: 'acme',
+        repo: 'demo',
+        poller: {
+          poll: async () => {
+            const next = polls.shift()!;
+            return {
+              candidates: [next],
+              cursor: { timestamp: next.timestamp, tieBreaker: next.tieBreaker },
+              truncated: false,
+              pages: 1,
+            };
+          },
+        } as never,
+      },
+      launch,
+    });
+    await scheduler.check(reviewDefinition);
+    await scheduler.check(reviewDefinition);
+    expect(launch).toHaveBeenCalledTimes(2);
+    expect([...store.latestReceipts().values()]).toHaveLength(2);
   });
 
   it('does not advance the cursor on failure and applies bounded backoff', async () => {

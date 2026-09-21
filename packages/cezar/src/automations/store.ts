@@ -260,6 +260,7 @@ export class AutomationStore {
 
   /** Abandoned = the process that wrote the lock is gone, or nobody released it in `staleAfterMs`. */
   private isLeaseAbandoned(path: string, staleAfterMs: number): boolean {
+    if (staleAfterMs <= 0) return true;
     if (this.now().getTime() - statSync(path).mtimeMs > staleAfterMs) return true;
     const pid = readLeasePid(path);
     // An unreadable pid (an empty or half-written lock) leaves only the age rule above.
