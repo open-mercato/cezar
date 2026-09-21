@@ -11,7 +11,7 @@ import {
 
 import { useHealth, useProjects } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
-import { locationToRestore, readStoredLastLocation } from './lib/last-location'
+import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
@@ -254,6 +254,15 @@ function LegacyPathRedirect() {
       resolvedBoot,
     )
     if (restored !== null) return <Navigate to={restored} replace />
+
+    // Nothing remembered. The boot folder is the landing project only while the registry lists
+    // it: since `/api/v1/projects` stopped listing an unregistered boot folder once the user has
+    // projects (the seed-once rule), landing there would open the cockpit on a project with no
+    // sidebar row — the launch folder quietly taking over a workspace the user filled on purpose.
+    // The most recently opened registered project is what the sidebar leads with, so it is what
+    // a bare launch opens. `/p/<bootProject>/` and every legacy deep link below still resolve.
+    const landing = bareRootLanding(projects.data, boot)
+    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace />
   }
 
   // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than

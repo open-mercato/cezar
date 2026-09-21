@@ -104,12 +104,12 @@ the repo: per-project state stays exactly where it was, in that repo's
 
 **Your first run registers the repo you start it in** — that is the whole setup.
 After that the registry is yours to curate: starting cezar somewhere else serves
-that folder as usual (its own tasks, its own `.ai/cezar/`) but does not add it to
-the list behind your back. It shows up at the top of the sidebar marked **not
-saved**, and **Settings → Projects** lists it as *not registered* with an
-**Add project** button — so the folder you launched in is always one click from
-being kept, and never kept without the click. `cezar projects add` does the same
-from a terminal.
+that folder as usual (its own tasks, its own `.ai/cezar/`, reachable at
+`/p/<slug>/`) but neither adds it to the list nor shows it there — a launch
+folder is where you opened the cockpit from, not a project, so the sidebar keeps
+showing the projects you chose and a bare `/` opens the most recent of them.
+Keeping the folder is the explicit click: **Settings → Add project** (or
+`cezar projects add` from a terminal).
 
 Every view is project-scoped:
 
