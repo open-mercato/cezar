@@ -135,9 +135,10 @@ const RESULTS: readonly AutomationLogResult[] = [
   'manual', 'catch-up', 'skipped', 'failed',
 ]
 
-/** The four bounded polls a GitHub automation can watch. */
+/** The seven bounded polls a GitHub automation can watch. */
 const EVENTS: readonly AutomationEvent[] = [
   'pull_request.opened', 'issue.opened', 'issue.labeled', 'issue.unlabeled',
+  'pull_request.reviewed', 'pull_request.review_requested', 'pull_request.rereview_requested',
 ]
 
 /** The receipt of a `failed` row that never got a run: the launch itself threw, and the server's

@@ -42,6 +42,23 @@ describe('automation task templates', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('carries the automation\'s agent account onto the run it launches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'cezar-template-account-'));
+    try {
+      const store = RunStore.open(join(root, '.ai/cezar'));
+      const inputs: Array<{ agentProfile?: string }> = [];
+      const manager = {
+        startRun: (workflow: { name: string; steps: [] }, input: { task: string; agentProfile?: string }) => {
+          inputs.push({ agentProfile: input.agentProfile });
+          return store.createRun({ title: 'automation', workflow: workflow.name, task: input.task, steps: [] });
+        },
+      } as unknown as RunManager;
+      const task = { ...definition.task, workflow: 'quick-task', agentProfile: 'work' };
+      await launchAutomationRun({ root, manager, store, definition: { ...definition, task }, candidate, receiptId: 'receipt' });
+      expect(inputs).toEqual([{ agentProfile: 'work' }]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('reconciles a reserved receipt from persisted run provenance', async () => {
     const root = await mkdtemp(join(tmpdir(), 'cezar-reconcile-'));
     try {

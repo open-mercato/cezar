@@ -8,7 +8,9 @@ import {
   fromDefinition,
   needsChangedLabels,
   newDraft,
+  pickSource,
   scheduleBody,
+  sourceOf,
   splitList,
   templatePick,
   toBody,
@@ -112,6 +114,32 @@ describe('fromDefinition / toBody', () => {
     const body = toBody({ ...newDraft(), name: ' x ', prompt: 'p', model: '' })
     expect(body.name).toBe('x')
     expect(body.task).toEqual({ prompt: 'p', workflow: 'quick-task', autonomous: true })
+  })
+
+  it('reads a one-step skill chain back as the skill, and keeps other inline steps untouched', () => {
+    const skillSteps = [{ id: 'task', name: 'om-review', skill: 'om-review', prompt: '{{task}}' }]
+    const skill = fromDefinition({ ...SCHEDULE_DEF, task: { prompt: 'p', steps: skillSteps } })
+    expect(sourceOf(skill)).toEqual({ source: 'skill', ref: 'om-review' })
+    expect(toBody(skill).task).toEqual({ prompt: 'p', steps: skillSteps, autonomous: false })
+
+    const planSteps = [{ id: 'plan', prompt: 'Plan it' }, { id: 'do', skill: 'om-fix', prompt: '{{task}}' }]
+    const custom = fromDefinition({ ...SCHEDULE_DEF, task: { prompt: 'p', steps: planSteps } })
+    expect(sourceOf(custom)).toBeNull()
+    expect(toBody(custom).task.steps).toEqual(planSteps)
+    // A pick replaces the custom chain.
+    expect(toBody({ ...custom, ...pickSource({ source: 'workflow', ref: 'fix-and-verify' }) }).task)
+      .toEqual({ prompt: 'p', workflow: 'fix-and-verify', autonomous: false })
+  })
+
+  it('sends the picked agent account, and a template naming a runner drops it', () => {
+    const picked = { ...newDraft(), prompt: 'p', runner: 'claude' as const, account: 'work' }
+    expect(toBody(picked).task).toMatchObject({ runner: 'claude', agentProfile: 'work' })
+    expect(toBody({ ...picked, account: null }).task.agentProfile).toBeUndefined()
+    expect(fromDefinition({ ...SCHEDULE_DEF, task: { prompt: 'p', agentProfile: 'work' } }).account).toBe('work')
+    // An account belongs to one runner, so a template that names one must not inherit it.
+    const template = { name: 'Sweep', kind: 'schedule' as const, prompt: 'sweep' }
+    expect(applyTemplate(picked, { ...template, runner: 'codex' }).account).toBeNull()
+    expect(applyTemplate(picked, template).account).toBe('work')
   })
 
   it('clamps lookback and max records into the server bounds', () => {

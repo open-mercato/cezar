@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync, execSync } from 'node:child_process';
 import {
+  enableHttp2OnTlsListenerSed,
   isNpxExecStart,
   nginxVhost,
+  parseNginxVersion,
   refreshNpxCacheForRedeploy,
   serviceExecStart,
+  supportsHttp2Directive,
   systemdUnit,
   ubuntuVps,
 } from './ubuntu-vps.ts';
@@ -150,15 +154,189 @@ describe('nginxVhost', () => {
     expect(nginxVhost(4321, 'cezar.example.com')).toContain('server_name cezar.example.com;');
   });
 
-  it('enables HTTP/2 so long-lived SSE streams do not exhaust the browser connection pool', () => {
-    expect(nginxVhost(4321)).toContain('http2 on;');
-  });
-
   it('defaults to the legacy htpasswd path but accepts an instance-scoped one', () => {
     expect(nginxVhost(4321)).toContain('auth_basic_user_file /etc/cezar/htpasswd;');
     expect(nginxVhost(4322, 'shop.example.com', '/etc/cezar/htpasswd-shop-example-com')).toContain(
       'auth_basic_user_file /etc/cezar/htpasswd-shop-example-com;',
     );
+  });
+});
+
+/**
+ * Issue #910: the vhost carried a standalone `http2 on;`, a directive that only
+ * exists from nginx 1.25.1. Ubuntu 24.04 LTS ships 1.24.0, where it is a hard
+ * parse error — `nginx -t` failed and the certbot step could never complete.
+ * The old test pinned that exact string, which is why CI never noticed.
+ */
+describe('HTTP/2 syntax per nginx version (#910)', () => {
+  /** A `listen` line has no standalone `http2` directive on its own line. */
+  const standaloneHttp2 = /^\s*http2\s/m;
+
+  /** A runner that reports `version` from `nginx -v` and records sudo commands. */
+  function nginxRunner(version: string | null) {
+    const sudo: string[] = [];
+    const ran = (prefix: string) => sudo.some((c) => c.startsWith(prefix));
+    const runner: Runner = {
+      capture: async (program, args) => {
+        // `nginx -v` prints its banner on STDERR, not stdout.
+        if (program === 'nginx' && args[0] === '-v') {
+          return { code: 0, stdout: '', stderr: version ? `nginx version: nginx/${version} (Ubuntu)\n` : '' };
+        }
+        // The htpasswd step refuses to continue without a real apr1 hash.
+        if (program === 'openssl') return { code: 0, stdout: '$apr1$salt$hash\n', stderr: '' };
+        // The vhost only grows an `ssl_certificate` line once certbot has run…
+        if (args.some((a) => a.includes('ssl_certificate'))) {
+          return { code: ran('certbot') ? 0 : 1, stdout: '', stderr: '' };
+        }
+        // …and an `http2` listener parameter once the post-processing sed has.
+        if (args.some((a) => a.includes('443.*http2'))) {
+          return { code: ran('sed -i -E') ? 0 : 1, stdout: '', stderr: '' };
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      },
+      interactive: async (program, args) => {
+        if (program === 'sudo' && args[0] === 'bash') sudo.push(String(args[2]));
+        return 0;
+      },
+    };
+    return { runner, sudo };
+  }
+
+  /** The content a `writeFileStep` command carries (base64, so quoting survives). */
+  function writtenFile(sudo: string[], path: string): string {
+    const cmd = sudo.find((c) => c.includes(`base64 --decode > '${path}'`));
+    if (!cmd) throw new Error(`nothing wrote ${path}; ran:\n${sudo.join('\n')}`);
+    const b64 = /printf %s '([A-Za-z0-9+/=]+)'/.exec(cmd)?.[1];
+    if (!b64) throw new Error(`no base64 payload in: ${cmd}`);
+    return Buffer.from(b64, 'base64').toString('utf8');
+  }
+
+  function installerUi(): Ui {
+    return {
+      ...createAutoUi(),
+      text: async (o: { message: string }) =>
+        o.message.includes('Domain') ? 'cezar.example.com' : o.message.includes('Email') ? 'ops@example.com' : 'ops',
+      password: async () => 'longenough',
+    } as Ui;
+  }
+
+  it('reads the version out of the banner nginx -v prints on stderr', () => {
+    expect(parseNginxVersion('nginx version: nginx/1.24.0 (Ubuntu)\n')).toBe('1.24.0');
+    expect(parseNginxVersion('nginx version: nginx/1.27.3\n')).toBe('1.27.3');
+    expect(parseNginxVersion('sudo: nginx: command not found')).toBeNull();
+  });
+
+  it('allows the standalone directive only from 1.25.1, and never on an unknown version', () => {
+    expect(supportsHttp2Directive('1.24.0')).toBe(false); // Ubuntu 24.04 LTS
+    expect(supportsHttp2Directive('1.25.0')).toBe(false); // the release just before it landed
+    expect(supportsHttp2Directive('1.25.1')).toBe(true); // where the directive was introduced
+    expect(supportsHttp2Directive('1.26.2')).toBe(true);
+    expect(supportsHttp2Directive('2.0.0')).toBe(true);
+    // Unknown ⇒ the `listen` parameter, which every nginx since 1.9.5 parses.
+    expect(supportsHttp2Directive(null)).toBe(false);
+    expect(supportsHttp2Directive('')).toBe(false);
+    expect(supportsHttp2Directive('mainline')).toBe(false);
+  });
+
+  it('emits no standalone http2 directive for an nginx that cannot parse one', () => {
+    const v = nginxVhost(4321, 'cezar.example.com', '/etc/cezar/htpasswd', '1.24.0');
+    expect(v).not.toMatch(standaloneHttp2);
+    // …and nothing else in the pre-certbot :80 block that 1.24 rejects either:
+    // every directive it emits predates 1.24 by years.
+    expect(v).toContain('listen 80;');
+    expect(v).toContain('proxy_buffering off;');
+  });
+
+  it('emits the standalone http2 directive on nginx >= 1.25.1', () => {
+    expect(nginxVhost(4321, 'cezar.example.com', '/etc/cezar/htpasswd', '1.25.1')).toMatch(standaloneHttp2);
+    expect(nginxVhost(4321, 'cezar.example.com', '/etc/cezar/htpasswd', '1.26.0')).toContain('http2 on;');
+  });
+
+  it('defaults to the syntax every nginx understands when the version is unknown', () => {
+    expect(nginxVhost(4321)).not.toMatch(standaloneHttp2);
+  });
+
+  it('nginx-proxy writes the vhost in the syntax the installed nginx accepts', async () => {
+    for (const [version, wantsDirective] of [
+      ['1.24.0', false],
+      ['1.25.3', true],
+    ] as const) {
+      const { runner, sudo } = nginxRunner(version);
+      await stepById('nginx-proxy').run({ ...ctxWith({ ui: installerUi(), runner }), assumeYes: true });
+      const vhost = writtenFile(sudo, '/etc/nginx/sites-available/cezar');
+      expect(standaloneHttp2.test(vhost), `nginx ${version}`).toBe(wantsDirective);
+    }
+  });
+
+  it('ssl turns HTTP/2 on via certbot’s TLS listener when the directive is unavailable', async () => {
+    const { runner, sudo } = nginxRunner('1.24.0');
+    await stepById('ssl').run({ ...ctxWith({ ui: installerUi(), runner }), assumeYes: true });
+
+    // The pre-certbot vhost must still be parseable by 1.24 …
+    expect(writtenFile(sudo, '/etc/nginx/sites-available/cezar')).not.toMatch(standaloneHttp2);
+    // … and HTTP/2 is switched on afterwards, on the TLS listener certbot made.
+    const certbot = sudo.findIndex((c) => c.startsWith('certbot'));
+    const http2 = sudo.findIndex((c) => c.includes('http2;'));
+    expect(certbot).toBeGreaterThanOrEqual(0);
+    expect(http2).toBeGreaterThan(certbot);
+    expect(sudo[http2]).toContain('nginx -t && systemctl reload nginx');
+  });
+
+  it('ssl leaves the listener alone when the vhost already carries the directive', async () => {
+    const { runner, sudo } = nginxRunner('1.25.3');
+    await stepById('ssl').run({ ...ctxWith({ ui: installerUi(), runner }), assumeYes: true });
+
+    expect(writtenFile(sudo, '/etc/nginx/sites-available/cezar')).toMatch(standaloneHttp2);
+    expect(sudo.some((c) => c.startsWith('sed -i -E'))).toBe(false);
+  });
+});
+
+describe('the sed that adds http2 to certbot’s TLS listener (#910)', () => {
+  // The expression is GNU-sed syntax (`-E`, `!`, `{…}`) targeting Ubuntu/Debian.
+  // Run it for real where a GNU sed exists rather than asserting on its text —
+  // the property that matters is what it does to a certbot-shaped vhost.
+  const gnuSed = (() => {
+    try {
+      return /GNU sed/.test(execFileSync('sed', ['--version'], { encoding: 'utf8' }));
+    } catch {
+      return false;
+    }
+  })();
+
+  // Exactly what `certbot --nginx … --redirect` leaves behind.
+  const certbotVhost = `server {
+    server_name cezar.example.com;
+    listen [::]:443 ssl ipv6only=on; # managed by Certbot
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/cezar.example.com/fullchain.pem; # managed by Certbot
+}
+server {
+    listen 80;
+    listen [::]:80;
+    return 301 https://$host$request_uri; # managed by Certbot
+}
+`;
+
+  it.runIf(gnuSed)('adds http2 to the TLS listeners only, and stays idempotent', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-http2-'));
+    try {
+      const path = join(dir, 'vhost.conf');
+      writeFileSync(path, certbotVhost);
+      const sed = enableHttp2OnTlsListenerSed(path);
+      execSync(sed);
+      const once = readFileSync(path, 'utf8');
+      execSync(sed); // a --reconfigure ssl re-run must not double it up
+      const twice = readFileSync(path, 'utf8');
+
+      expect(once).toContain('listen 443 ssl http2; # managed by Certbot');
+      expect(once).toContain('listen [::]:443 ssl ipv6only=on http2; # managed by Certbot');
+      // certbot's plain-HTTP redirect block has no TLS listener — leave it be.
+      expect(once).toContain('    listen 80;\n');
+      expect(once).toContain('    listen [::]:80;\n');
+      expect(twice).toBe(once);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

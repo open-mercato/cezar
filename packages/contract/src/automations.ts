@@ -27,12 +27,15 @@ import { automationScheduleSchema } from './automation-schedule.ts';
 
 // ---- the definition ------------------------------------------------------------------------
 
-/** The GitHub activity an automation reacts to. Four events, all bounded polls — never a webhook. */
+/** The GitHub activity an automation reacts to. Seven events, all bounded polls — never a webhook. */
 export const automationEventSchema = z.enum([
   'pull_request.opened',
   'issue.opened',
   'issue.labeled',
   'issue.unlabeled',
+  'pull_request.reviewed',
+  'pull_request.review_requested',
+  'pull_request.rereview_requested',
 ]);
 export type AutomationEvent = z.infer<typeof automationEventSchema>;
 
@@ -51,6 +54,10 @@ export const automationFiltersSchema = z.object({
   excludeLabels: z.array(z.string()).optional(),
   /** Required for the two label events — the server rejects a definition without it. */
   changedLabels: z.array(z.string()).optional(),
+  /** The GitHub logins a review event must name — the reviewer for `pull_request.reviewed`, the
+   *  requested reviewer for the two `review_requested` events. Optional: an empty filter means
+   *  "any reviewer". */
+  reviewers: z.array(z.string()).optional(),
   lookbackDays: z.number(),
   maxRecords: z.number(),
 });

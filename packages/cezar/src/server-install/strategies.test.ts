@@ -25,8 +25,10 @@ describe('nginxVhost', () => {
     const v = nginxVhost(4321);
     expect(v).toContain('proxy_pass http://127.0.0.1:4321;');
     expect(v).toContain('proxy_buffering off;');
-    expect(v).toContain('http2 on;');
     expect(v).toContain('auth_basic_user_file /etc/cezar/htpasswd;');
+    // HTTP/2 is spelled per installed nginx version — ubuntu-vps.test.ts owns
+    // that (#910); with no version given the output must stay 1.24-parseable.
+    expect(v).not.toMatch(/^\s*http2\s/m);
   });
 });
 

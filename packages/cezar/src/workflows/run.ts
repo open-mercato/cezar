@@ -135,6 +135,51 @@ const DONE_MARKER_RE = /CEZ:DONE\s*$/;
  */
 const MONITORING_MARKER_RE = /CEZ:MONITORING\s*$/;
 /**
+ * Trailing task-reference marker lines — `CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`
+ * (spec 2026-07-18-task-ref-markers), whole lines, at the very end of the turn.
+ *
+ * #933: the handoff contract asks for those "as soon as you know which PR or issue
+ * this task is ABOUT", and until now said nothing about where they sit relative to
+ * the turn-end markers. An agent that declared its PR right AFTER `CEZ:MONITORING`
+ * buried the marker behind them, the `$`-anchored test below failed, and a turn that
+ * was only waiting on its own sub-agents parked as `waiting` — "needs you", the
+ * "paused, waiting for your reply" footer, and a browser notification for work
+ * nobody needs to look at. The contract now asks for the other order; this is the
+ * engine half, so an agent that gets it wrong is still read correctly.
+ *
+ * Deliberately NOT `/m`: with the multiline flag `$` matches every line end, so the
+ * pattern would also strip a task-reference line from the MIDDLE of a turn. `^|\n`
+ * pins each line's start and the unanchored `$` pins the run of them to the end.
+ *
+ * Looser than `stripTaskMarkers`'s `MARKER_LINE` on the VALUE (`=[^\n]*`, not `=\d+`)
+ * on purpose: a mistyped reference line is still the agent talking protocol, and the
+ * failure it must not cause is burying the turn-end marker behind it.
+ */
+const TRAILING_TASK_MARKER_LINES_RE = /(?:(?:^|\n)[ \t]*CEZ:(?:PR|ISSUE|TITLE)=[^\n]*)+$/;
+/**
+ * The text a turn-end marker is matched against: the accumulated turn text with
+ * trailing whitespace and trailing task-reference lines removed.
+ *
+ * ONE helper, because there are TWO near-identical turn-end handlers here
+ * (`runContinuation` and `runAgentStep`) and AGENTS.md is explicit about them:
+ * "a lifecycle change applied to one of them ships half a fix … route both sites
+ * through one helper". Exported so the detection can be unit-tested directly
+ * rather than only through a parked run.
+ */
+export function turnEndMarkerText(turnText: string): string {
+  return turnText.trimEnd().replace(TRAILING_TASK_MARKER_LINES_RE, '').trimEnd();
+}
+/**
+ * Did this turn end on the still-working marker? Strictly a SUPERSET of the old
+ * `MONITORING_MARKER_RE.test(turnText.trimEnd())` — anything that parked as
+ * `monitoring` before still does, which is what keeps #933 additive under
+ * `BACKWARD_COMPATIBILITY.md` §8 (an already-emitted `CEZ:MONITORING` keeps
+ * meaning exactly what it meant).
+ */
+export function endsWithMonitoringMarker(turnText: string): boolean {
+  return MONITORING_MARKER_RE.test(turnEndMarkerText(turnText));
+}
+/**
  * Preserve boundaries between complete assistant text blocks while a turn is
  * accumulated for marker parsing. The runners join these same v1 blocks with
  * newlines in `AgentRunResult`; matching that contract here prevents a
@@ -714,20 +759,26 @@ export interface FileBlock {
  *  will never see. Every RunManager entry point accepts this wider type. */
 export type PastedContent = ContentBlock | FileBlock;
 
-/** One wire attachment (`{mediaType, data}`) as the engine wants it: an image the model can view,
- *  or a file it will only ever be given the path of. The single mapping the four attachment-
- *  carrying routes share, so none of them can invent a different one. */
-export function toPastedContent(attachment: {
-  mediaType: string;
-  data: string;
-  name?: string;
-}): PastedContent {
+// Metadata belongs to the original in-memory block, never the vendor protocol. Queue
+// persistence files the library copy before serializing; deferred delivery retains the block.
+const imageLibraryNames = new WeakMap<ContentBlock, string>();
+
+/** Convert a wire attachment without writing files. Named images are filed only when
+ * RunManager persists an accepted user attachment, on the same terms as documents. */
+export function toPastedContent(
+  attachment: {
+    mediaType: string;
+    data: string;
+    name?: string;
+  },
+): PastedContent {
   if (isImageMediaType(attachment.mediaType)) {
-    // Deliberately unchanged, and deliberately NOT carrying the name: this branch produces a
-    // `ContentBlock`, which is the runner protocol (`AGENT_PROTOCOL.md`) and goes to a backend
-    // verbatim. An extra key here would survive `contentBlocksOf` and reach a vendor API that
-    // rejects unknown fields.
-    return { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } };
+    const block: ContentBlock = {
+      type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data },
+    };
+    const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
+    if (name) imageLibraryNames.set(block, name);
+    return block;
   }
   const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
   return { type: 'file', mediaType: attachment.mediaType, data: attachment.data, ...(name ? { name } : {}) };
@@ -752,13 +803,14 @@ export function pastedAttachmentsText(attachments: PersistedAttachment[], librar
   // user attached to some earlier task and now refers to only by name. Naming the folder also
   // keeps the note independent of per-attachment state, which does not survive the re-read at
   // dequeue (`readPersistedAttachments` reconstructs an attachment from its URL alone).
-  // Says "documents", not "files": images and uploads that arrived without a name of their own are
-  // deliberately never filed, so a note promising every attachment would send an agent hunting for
-  // last week's pasted screenshot in a folder that was never going to hold it.
+  // Says "documents and named images", not "attachments": an upload that arrived without a name of
+  // its own — a clipboard paste, typically — is never filed (#929, #960), so a note promising every
+  // attachment would send an agent hunting for last week's pasted screenshot in a folder that was
+  // never going to hold it.
   const library = libraryDir
-    ? `Documents (PDF, TXT, MD) attached anywhere in this project are also kept under their ` +
-      `original names in ${libraryDir} — look there for a document the user names but did not ` +
-      `attach to this message.\n`
+    ? `Documents and named images attached anywhere in this project are also kept under their ` +
+      `original names in ${libraryDir} — look there for a file the user names but did not attach ` +
+      `to this message.\n`
     : '';
   return (
     `The user attached ${attachments.length} pasted file${attachments.length > 1 ? 's' : ''}, ` +
@@ -3027,7 +3079,10 @@ export class RunManager {
     // Persist the attachments so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
-    const persisted = userAuthored ? this.persistPastedAttachments(runId, content) : [];
+    // The session can still refuse despite reporting open. Commit image library copies
+    // only after it accepts; the run-local paths are needed to build the message first.
+    const imageLibraryWrites: Array<() => void> = [];
+    const persisted = userAuthored ? this.persistPastedAttachments(runId, content, imageLibraryWrites) : [];
     const images = persisted.map((saved) => saved.url);
     if (userAuthored) {
       this.store.appendEvent(runId, {
@@ -3048,10 +3103,12 @@ export class RunManager {
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
     const deliverable = persisted.length
-      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted))]
+      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted) ??
+          (imageLibraryWrites.length ? attachmentLibraryDir(this.dataDir) : undefined))]
       : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
+      for (const write of imageLibraryWrites) write();
       this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
@@ -3378,7 +3435,11 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        // `stripTaskMarkers` runs INNERMOST (#933): it deletes whole `CEZ:PR=`/`CEZ:ISSUE=`/
+        // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
+        // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
+        // they saw those references and left the protocol marker in the transcript.
+        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -3429,7 +3490,7 @@ export class RunManager {
           !done &&
           !ask &&
           !dispatchTurn.overBudget &&
-          (dispatchTurn.dispatched || MONITORING_MARKER_RE.test(turnText.trimEnd()));
+          (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         if (done) {
@@ -4139,7 +4200,11 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        // `stripTaskMarkers` runs INNERMOST (#933): it deletes whole `CEZ:PR=`/`CEZ:ISSUE=`/
+        // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
+        // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
+        // they saw those references and left the protocol marker in the transcript.
+        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
@@ -4213,7 +4278,7 @@ export class RunManager {
           !done &&
           !ask &&
           !dispatchTurn.overBudget &&
-          (dispatchTurn.dispatched || MONITORING_MARKER_RE.test(turnText.trimEnd()));
+          (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
@@ -4763,7 +4828,7 @@ export class RunManager {
    * run's own attachment folder, in the order they were attached. The returned paths are what the
    * agent is told about; the caller decides which of them also ride along as viewable blocks.
    *
-   * A named FILE is additionally filed in the per-project attachment library (#929). This is the
+   * A named attachment is additionally filed in the per-project attachment library (#929). This is the
    * only caller that does so, which is what keeps the library to user uploads: `persistAttachment`
    * is also how the agent's own tool screenshots land, and a folder of those would be a log, not
    * a library.
@@ -4771,11 +4836,14 @@ export class RunManager {
   private persistPastedAttachments(
     runId: string,
     content: readonly PastedContent[],
+    imageLibraryWrites?: Array<() => void>,
   ): PersistedAttachment[] {
     return content
       .map((b) =>
         b.type === 'image'
-          ? this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted')
+          ? this.fileInAttachmentLibrary(
+              this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted'), imageLibraryNames.get(b), imageLibraryWrites,
+            )
           : b.type === 'file'
             ? this.fileInAttachmentLibrary(this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name)
             : null,
@@ -4795,8 +4863,13 @@ export class RunManager {
   private fileInAttachmentLibrary(
     saved: PersistedAttachment | null,
     name: string | undefined,
+    deferredWrites?: Array<() => void>,
   ): PersistedAttachment | null {
     if (!saved || !name) return saved;
+    if (deferredWrites) {
+      deferredWrites.push(() => this.fileInAttachmentLibrary(saved, name));
+      return saved;
+    }
     try {
       copyToAttachmentLibrary(this.dataDir, name, readFileSync(saved.path));
     } catch {
@@ -4818,13 +4891,13 @@ export class RunManager {
 
   /**
    * The attachment library to name in a message's note, or `undefined` when there is nothing to
-   * point at yet — no file attachment on this message, or a project where nothing has ever been
-   * filed. Derived from the persisted NAMES rather than from per-attachment state, so it survives
-   * the dequeue/restart re-read that reconstructs an attachment from its URL alone.
+   * point at yet — no attachment on this message, or a project where nothing has ever been filed.
+   *
+   * The name metadata is intentionally not serialized into PersistedAttachment. The
+   * directory hint therefore depends on persisted attachments and library existence.
    */
   private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
-    if (!attachments.some((a) => !isImageAttachmentName(a.name))) return undefined;
-    return this.grantableAttachmentLibrary();
+    return attachments.length ? this.grantableAttachmentLibrary() : undefined;
   }
 
   /**

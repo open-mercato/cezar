@@ -100,6 +100,7 @@ function startInput(definition: AutomationDefinition, task: string, dispatchEnab
     task,
     model: definition.task.model,
     runner: definition.task.runner,
+    agentProfile: definition.task.agentProfile,
     systemPrompt: definition.task.systemPrompt,
     worktree: definition.task.worktree,
     autonomous: definition.task.autonomous,

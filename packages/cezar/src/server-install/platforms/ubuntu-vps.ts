@@ -133,6 +133,69 @@ async function confirmCezarRunning(ctx: InstallContext, statusCmd: string, logsC
 }
 
 /**
+ * The first nginx that has a standalone `http2` directive. Before it, HTTP/2 is
+ * a `listen` parameter and `http2 on;` is not ignored — it is a hard parse
+ * error (`unknown directive "http2"`), so it takes `nginx -t`, and with it the
+ * whole certbot step, down (#910).
+ */
+export const HTTP2_DIRECTIVE_MIN_NGINX = [1, 25, 1] as const;
+
+/**
+ * The `x.y.z` in `nginx -v`'s `nginx version: nginx/1.24.0 (Ubuntu)` banner, or
+ * null when the output does not carry one (nginx absent, dry run, a build that
+ * prints something else entirely).
+ */
+export function parseNginxVersion(output: string): string | null {
+  const m = /nginx\/(\d+\.\d+\.\d+)/.exec(output);
+  return m?.[1] ?? null;
+}
+
+/**
+ * True when this nginx understands the standalone `http2 on;` directive. An
+ * unknown or unparseable version answers false: the `listen … http2` parameter
+ * every nginx since 1.9.5 accepts is the safe fallback, and being wrong there
+ * costs a deprecation warning rather than a config that will not load.
+ */
+export function supportsHttp2Directive(version: string | null | undefined): boolean {
+  if (!version) return false;
+  const parts = version.split('.').map((n) => Number.parseInt(n, 10));
+  if (parts.some((n) => !Number.isInteger(n))) return false;
+  for (const [i, floor] of HTTP2_DIRECTIVE_MIN_NGINX.entries()) {
+    const got = parts[i] ?? 0;
+    if (got !== floor) return got > floor;
+  }
+  return true;
+}
+
+/**
+ * The installed nginx's version, or null when it cannot be read. `nginx -v`
+ * prints its banner on STDERR, so both streams are searched.
+ *
+ * Deliberately NOT gated on `ctx.dryRun` like this file's other probes: it is
+ * read-only (no sudo, no package install, no network), and running it makes a
+ * dry run on a host that already has nginx preview the exact vhost a real run
+ * would write. With no nginx the runner resolves 127 rather than throwing, so
+ * the preview falls back to the conservative syntax.
+ */
+export async function detectNginxVersion(ctx: InstallContext): Promise<string | null> {
+  const r = await ctx.runner.capture('nginx', ['-v']);
+  return parseNginxVersion(`${r.stderr}\n${r.stdout}`);
+}
+
+/**
+ * Append the `http2` parameter to certbot's TLS listener — the only way to turn
+ * HTTP/2 on before nginx 1.25.1. Touches `listen` lines that name 443 and `ssl`
+ * and do not already say `http2`, inserting before the first `;` so certbot's
+ * trailing `# managed by Certbot` comment survives; the `:80` redirect block
+ * certbot adds has no 443 listener and is left alone. Idempotent, so a
+ * `--reconfigure ssl` re-run is a no-op.
+ */
+export function enableHttp2OnTlsListenerSed(vhostPath: string): string {
+  const program = `/^[[:space:]]*listen[[:space:]].*443.*[[:space:]]ssl([[:space:]]|;)/{/http2/!s/;/ http2;/;}`;
+  return `sed -i -E ${shquote(program)} ${vhostPath}`;
+}
+
+/**
  * Who is serving right now: the unit's main PID plus the monotonic timestamp
  * systemd recorded when it started. Two reads that agree on BOTH mean the same
  * process has been running the whole time — i.e. nothing restarted (#912).
@@ -235,21 +298,41 @@ async function confirmServiceRestarted(
  * The nginx server block: auth_basic identity + SSE-safe proxy to loopback.
  * `serverName` defaults to the catch-all `_`; the SSL step rewrites it to the
  * real domain so the `certbot --nginx` plugin can find this vhost to edit.
+ *
+ * `nginxVersion` is the installed nginx (`detectNginxVersion`) and decides how
+ * HTTP/2 is spelled; omitted, the output is the conservative one every nginx
+ * parses.
  */
-export function nginxVhost(port: number, serverName = '_', htpasswd = '/etc/cezar/htpasswd'): string {
+export function nginxVhost(
+  port: number,
+  serverName = '_',
+  htpasswd = '/etc/cezar/htpasswd',
+  nginxVersion?: string | null,
+): string {
+  // HTTP/2 multiplexes every request over ONE TCP connection. Without it the
+  // browser's ~6-connections-per-origin HTTP/1.1 cap is exhausted by cezar's
+  // long-lived SSE run streams, and further requests block until tabs close.
+  //
+  // How it is switched on depends on the version. From 1.25.1 the standalone
+  // directive below is the right spelling and survives certbot's edits. Older
+  // nginx — Ubuntu 24.04 LTS still ships 1.24.0 — has no such directive at all
+  // and refuses to load a config containing it (#910); there, the SSL step
+  // appends `http2` to certbot's `listen 443 ssl;` instead, so this block emits
+  // nothing. Either way HTTP/2 only ever applies to the TLS listener: a plain
+  // `:80` HTTP/2 needs a prior-knowledge client no browser is.
+  const http2Block = supportsHttp2Directive(nginxVersion)
+    ? '\n    # HTTP/2 for the SSE run streams: without it the browser\'s ~6-connections-\n' +
+      '    # per-origin HTTP/1.1 cap is exhausted and further requests block. Takes\n' +
+      '    # effect once the SSL step adds a 443 ssl listener (certbot preserves the\n' +
+      '    # directive). nginx >= 1.25.1 only — older nginx rejects it outright.\n' +
+      '    http2 on;\n'
+    : '';
   return `# Managed by cezar server-install — do not edit by hand.
 server {
     listen 80;
     listen [::]:80;
     server_name ${serverName};
-
-    # HTTP/2 multiplexes every request over ONE TCP connection. Without it the
-    # browser's ~6-connections-per-origin HTTP/1.1 cap is exhausted by cezar's
-    # long-lived SSE run streams, and further requests block until tabs close.
-    # Valid on the plain :80 block too; it only takes effect once the SSL step
-    # adds a 443 ssl listener (certbot preserves this directive).
-    http2 on;
-
+${http2Block}
     auth_basic "cezar";
     auth_basic_user_file ${htpasswd};
 
@@ -422,9 +505,13 @@ const nginxProxyStep: InstallStep = {
     //    stamp it into server_name from the start (Host-based routing works
     //    immediately and certbot --nginx can find the vhost later). The default
     //    instance keeps the catch-all `_` until the SSL step sets a domain.
+    //    The nginx just installed above decides how HTTP/2 is spelled, so read
+    //    its version now — emitting the wrong spelling makes `nginx -t` in the
+    //    very next command fail and takes the whole install down (#910).
     const vhostAvail = vhostAvailable(ctx);
     const vhostEnbl = vhostEnabled(ctx);
-    const vhost = nginxVhost(ctx.state.primaryPort, ctx.state.domain ?? '_', htpasswd);
+    const nginxVersion = await detectNginxVersion(ctx);
+    const vhost = nginxVhost(ctx.state.primaryPort, ctx.state.domain ?? '_', htpasswd, nginxVersion);
     await writeFileStep(ctx, {
       description: 'Write the cezar nginx site, enable it, and reload nginx.',
       path: vhostAvail,
@@ -573,6 +660,7 @@ const sslStep: InstallStep = {
     const vhostAvail = vhostAvailable(ctx);
     const vhostEnbl = vhostEnabled(ctx);
     const vhostHasTls = await verifyCommand(ctx, 'sh', ['-c', `grep -qs ssl_certificate ${vhostAvail}`]);
+    const nginxVersion = await detectNginxVersion(ctx);
     if (vhostHasTls) {
       await sudoStep(ctx, {
         description: `Update server_name to ${trimmedDomain} in the existing TLS-enabled nginx site (certbot config preserved).`,
@@ -581,7 +669,7 @@ const sslStep: InstallStep = {
           verifyCommand(c, 'sh', ['-c', `grep -qF ${shquote(`server_name ${trimmedDomain}`)} ${vhostAvail}`]),
       });
     } else {
-      const domainVhost = nginxVhost(ctx.state.primaryPort, trimmedDomain, htpasswdPath(ctx));
+      const domainVhost = nginxVhost(ctx.state.primaryPort, trimmedDomain, htpasswdPath(ctx), nginxVersion);
       await writeFileStep(ctx, {
         description: `Point the nginx site at ${trimmedDomain} so certbot can configure TLS for it.`,
         path: vhostAvail,
@@ -608,6 +696,31 @@ const sslStep: InstallStep = {
       // is world-readable, so grepping it works without root.
       verify: (c) => verifyCommand(c, 'sh', ['-c', `grep -qs ssl_certificate ${vhostAvail} ${vhostEnbl}`]),
     });
+
+    // The certificate is in place, so a TLS listener now exists. On nginx
+    // < 1.25.1 that listener's `http2` parameter is the ONLY way to enable
+    // HTTP/2 (the vhost above deliberately emits no standalone directive —
+    // that version cannot parse one), so switch it on here. Best effort: HTTP/2
+    // is a performance property, never worth failing a working HTTPS install
+    // over, so a skip only warns.
+    if (!supportsHttp2Directive(nginxVersion)) {
+      try {
+        await sudoStep(ctx, {
+          description: `Enable HTTP/2 on the new TLS listener (nginx ${nginxVersion ?? '< 1.25.1'} takes it as a "listen" parameter).`,
+          command: `${enableHttp2OnTlsListenerSed(vhostAvail)} && nginx -t && systemctl reload nginx`,
+          skippable: true,
+          skipHint: `add http2 to the "listen 443 ssl;" line in ${vhostAvail} yourself, then reload nginx`,
+          verify: (c) =>
+            verifyCommand(c, 'sh', ['-c', `grep -Eqs '^[[:space:]]*listen.*443.*http2' ${vhostAvail}`]),
+        });
+      } catch (err) {
+        if (!(err instanceof StepSkipped)) throw err;
+        ctx.ui.warn(
+          'HTTPS is up but HTTP/2 is not enabled — the cockpit works, yet several open run streams can exhaust ' +
+            "the browser's ~6-connections-per-origin HTTP/1.1 limit and later requests will stall.",
+        );
+      }
+    }
 
     ctx.state.publicUrl = `https://${trimmedDomain}`;
     // The cert + its auto-renewal timer are `shared`: uninstall lists them, it
