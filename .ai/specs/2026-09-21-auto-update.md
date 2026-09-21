@@ -18,7 +18,7 @@ npm resolves `npx cezar-cli` once and caches the result under `~/.npm/_npx/<hash
 
 The README sells the hosted setup as *"your agents keep working when your laptop is closed."* A cockpit installed by `server-install` is a `systemd` unit nobody looks at. Adopting a release means opening a terminal and running `cezar server-deploy` — precisely what the laptop-closed user is not doing. Two things make that worse than "manual":
 
-1. **`server-deploy` on a global-install unit is a silent no-op.** `serviceExecStart` (`ubuntu-vps.ts:827-839`) emits three ExecStart shapes. For the npx shape, `redeploy` clears the npx cache so the restart re-resolves `latest`. For the **`<node> <globalBin>`** shape it clears nothing and runs no `npm install -g` — it just restarts the unit, which re-execs the identical code. The deploy then reports *"complete — the service was reloaded and verified"*, because `confirmServiceRestarted` proves the **process** changed, not that the **version** did.
+1. **`server-deploy` on a global-install unit is a silent no-op.** `serviceExecStart` (`ubuntu-vps.ts:827-839`) emits three ExecStart shapes. For the npx shape, `redeploy` clears the npx cache so the restart re-resolves `latest`. For the **`<node> <globalBin>`** shape it clears nothing and runs no `npm install -g` — it just restarts the unit, which re-execs the identical code. The deploy then reports *"complete — the service was reloaded and verified"*, because `confirmServiceRestarted` proves the **process** changed, not that the **version** did. Confirmed by reading the whole deploy path: `runDeploy` (`engine.ts:352-386`) delegates to `strategy.redeploy` and nothing else, and ubuntu-vps's `redeploy` issues no install command of any kind. (Restart-only is *correct* for the checkout shape — the operator built that tree themselves. The defect is specific to the global shape.)
 2. **A stale hosted cockpit is invisible.** Locally the banner nags on every start. A service prints its banner into the journal once, at boot, and nobody reads it.
 
 ### What already exists, and must be reused rather than rebuilt
@@ -31,9 +31,19 @@ The README sells the hosted setup as *"your agents keep working when your laptop
 | `globalShimPaths` / `PACKAGE_NAME` | `src/install-as-command.ts:15-72` | where a global install's bins land, on POSIX and Windows |
 | `redeploy` + `confirmServiceRestarted` + `confirmCezarRunning` | `ubuntu-vps.ts` | restart a unit, prove the PID changed (#912), re-verify the cockpit answers |
 | `SkillsUpdateService` / `SkillsUpdateCoordinator` | `src/skills-update.ts` | the house pattern for a default-on background updater: TTL cache, `~/.cache/cez/` cross-process lock with stale recovery, bounded `npx` argument arrays, `shell: false`, silent degradation |
-| `openStore(root, { keepLive: true })` + `manager.recover()` | `src/index.ts:200-239` | re-queues or resumes every `queued` / `waiting` / `running` run across a process exit |
+| `openStore(root, { keepLive: true })` + `manager.recover()` | `src/index.ts:200-239`, `workflows/run.ts:1555-1665` | brings every `queued` / `waiting` / `running` run to a defined state across a process exit — see the table below, because "survives" is not uniform |
 
-The last row is the one that makes this feature possible at all: cezar already survives its own restart. Without it, an unattended restart would be an unacceptable way to lose work.
+The last row is what makes this feature possible at all — but it is **not** free, and the design depends on reading it exactly. `recover()` has five branches:
+
+| Prior status | What a restart does to it | Cost |
+|---|---|---|
+| `queued` | revived and re-queued | none |
+| `running`, no `sessionId` on any step yet | steps → `pending`, run → `queued`, revived | none |
+| `running` mid-turn | run marked **`failed`** (*"interrupted — cezar process exited during the run"*), then force-resumed via `continueRun` with `RESTART_CONTINUATION_PROMPT` | an extra continuation turn — model tokens, possibly repeated tool work |
+| `waiting`, **not** `askParked` | open steps forced `done`, run **settled as success** | the user never sees the final session |
+| `waiting` **and** `askParked` (a `CEZ:ASK` park, #917) | run marked **`failed`** — *"interrupted — cezar process exited while the task was waiting for an answer"*; only a human pressing Continue reopens it | the agent's question is stranded until someone returns |
+
+That last row is the sharp one, and it is aimed straight at this feature's target user: a hosted cockpit whose owner is asleep is exactly where an `askParked` run sits for hours. An updater that restarts through it converts "waiting for you" into "failed". The idle gate (§ Phase 2, Step 3) exists for this row first and the mid-turn row second — and § Edge Cases carries the consequence that a long-parked run must not defer the update *forever*.
 
 Success means: a cockpit on any of the four shapes reaches the newest published `latest` without a human running a command; a git checkout is never touched; and every failure mode — offline, registry 404, read-only `$HOME`, missing `npm`, a competing cockpit, a release that will not boot — degrades to a no-op or an automatic revert, never to a dead cockpit.
 
@@ -137,7 +147,9 @@ export function planUpdate(shape: InstallShape, latest: string): UpdateStep[];
 - `src/index.ts:242-250` — the existing fire-and-forget `checkForUpdate` call keeps its banner but gains the applied state, so the message becomes *"updated to X — restart to use it"* once the apply half has run.
 - `GET /api/v1/health` — `latestVersion` (`packages/contract/src/health.ts:86`) gains optional siblings `updateState` and `updateAppliedVersion`. Additive and optional; a cockpit that never updates sends neither.
 - `app-shell.tsx:827-840` — the version chip already renders `update available: vX`. It gains one more state, *"updated — restart to apply"*, and stays a chip; no new route, no new page.
-- `src/server-install/` — `refreshNpxCacheForRedeploy`, `isNpxExecStart` and `serviceExecStart` move from `platforms/ubuntu-vps.ts` into `src/server-install/launch-shape.ts`, re-exported from their old location so `ubuntu-vps.ts` and its 40 KB test file keep compiling unchanged. `macosx-ngrok` gets the same benefit for free.
+- `src/server-install/` — `refreshNpxCacheForRedeploy`, `isNpxExecStart` and `serviceExecStart` move from `platforms/ubuntu-vps.ts` into `src/server-install/launch-shape.ts`, re-exported from their old location so `ubuntu-vps.ts` and its 40 KB test file keep compiling unchanged.
+
+**`macosx-ngrok` is explicitly out of scope, and not because it was forgotten.** Its `redeploy` (`platforms/macosx-ngrok.ts:337-351`) `launchctl kickstart`s the two agents and re-runs the identity step. It has **no** npx-cache refresh — so it carries the #696 bug this spec closes everywhere else — and **no** PID-change proof, which is open issue **#1011** (*"macosx-ngrok redeploy reports success when launchctl kickstart failed"*). Auto-updating a platform whose manual deploy both fails to fetch and lies about restarting would automate a false success. #1011 is the prerequisite; extending `service` support to this platform is a follow-up, and until then `detectInstallShape` reports it as a service that plans zero mutating steps.
 
 ## 📝 Data Model
 
@@ -181,7 +193,8 @@ Nothing new to navigate to. The version chip in the sidebar footer (`app-shell.t
 | current | `v0.11.1` | `v0.11.1` |
 | available, not yet applied | `v0.11.1` + pending dot | `update available: v0.12.0` |
 | applied, pending restart | `v0.11.1` + pending dot | `updated to v0.12.0 — restart cezar to use it` |
-| deferred (service, runs active) | `v0.11.1` + pending dot | `v0.12.0 ready — will restart when no task is running` |
+| deferred, a run is mid-turn | `v0.11.1` + pending dot | `v0.12.0 ready — will restart when no task is running` |
+| deferred, a run is waiting on an answer | `v0.11.1` + pending dot | `v0.12.0 ready — deferred by a task waiting for your answer` |
 
 Settings → a toggle beside the existing *"Update Open Mercato skills automatically"* row in `settings/skills-section.tsx`, reusing that section's tri-state "On (default)" / explicit / *Reset to default* pattern verbatim. No mockups were rendered for this spec (§ Review limits) — every surface above is an added state on a component that exists.
 
@@ -194,9 +207,10 @@ Settings → a toggle beside the existing *"Update Open Mercato skills automatic
 | `npm`/`npx` absent (standalone node) | Shape resolves, apply reports `unsupported`, chip keeps saying *update available*. Boot unaffected. |
 | Two cockpits on one box | The `~/.cache/cez/update.lock` holder wins; the other skips this tick. Stale (>2 min, dead PID) locks are recovered. |
 | `npm i -g` fails (EACCES on a root-owned prefix) | `failed` state, one journal line naming the prefix, no retry until the next TTL. The old version keeps running. |
-| Service update, a run is `running`/`waiting` | Restart **deferred**; state is `deferred`, retried on the next tick. Never interrupts a turn. |
-| Service restarted but the new version will not boot | `Restart=on-failure`/`RestartSec=5` crash-loops it into systemd's start limit → cockpit down. This is the one genuinely dangerous path; see § Reversibility. |
-| Service restarted, new version boots | `manager.recover()` re-queues/resumes the runs that were `queued`/`waiting`/`running` (`index.ts:200-239`) — the mechanism that already survives an operator's own restart. |
+| Service update, a run is `running` mid-turn | Restart **deferred**, state `deferred`, retried next tick. Never interrupts a turn. |
+| Service update, a run is `waiting` on a `CEZ:ASK` | Also deferred — restarting would mark it `failed` (§ Problem Statement, `recover()` table). **But** an ASK park can last days, and a permanently-deferred updater is a broken updater for the one user this feature targets. So the deferral is *visible*, not silent: the chip reads *"v0.12.0 ready — deferred by a task waiting for your answer"*, the journal says the same once per transition, and answering the task (or an explicit `cezar update` / `POST /api/v1/update/apply`) proceeds immediately. No new knob, no time-based override that could restart through a live question. |
+| Service restarted but the new version will not boot | `Restart=on-failure`/`RestartSec=5` crash-loops it into systemd's start limit → cockpit down. The one genuinely dangerous path; see § Reversibility. |
+| Service restarted, new version boots | `recover()` brings every prior run to a defined state — with the per-branch costs in the § Problem Statement table. The gate above means the expensive branches should not be reachable via an *auto* update; they remain reachable via an operator's own `server-deploy`, unchanged. |
 | Git checkout / `npm link` | Never mutated. `cezar update` prints `git pull && npm run build`. |
 | Pinned launch (`cezar-cli@0.11.0`) | Never mutated; the pin is an instruction. |
 | A release is published mid-apply | The lock serializes; the next TTL picks up whatever is newest. |
@@ -215,7 +229,7 @@ Settings → a toggle beside the existing *"Update Open Mercato skills automatic
 
 **Protected surfaces** (`BACKWARD_COMPATIBILITY.md`): § 1 CLI (`cezar update` is a new command, additive), § 2 HTTP API (two new routes, two optional response fields), § 9 `~/.cezar/` (one optional nullable key). Absence of every addition reproduces today's behavior exactly, so no migration is required. If Q1 is answered *default-on*, the implementation PR **must** amend AGENTS.md § Zero config and `BACKWARD_COMPATIBILITY.md` in the same change to record the owner-approved exception, its off switch and its bounds — as #615 did for skills updates and #801/#1016 did for automations. Review treats omission of that documentation as blocking. Adding `CEZ_AUTO_UPDATE` also obliges `.env.example` and the `docs/reference.md` env table in the same commit (AGENTS.md env contract).
 
-**A direction call, not a defect:** this spec argues that fixing `server-deploy`'s global-install no-op (Phase 2, Step 2.1) is in scope because an automatic path built on a silently-lying manual path inherits the lie. Reading the code, `redeploy` restarts without fetching for the `<node> <globalBin>` ExecStart shape; that behavior has not been reproduced on a live host in this run, so it is a **code-derived inference**, not an observed defect, and Step 2.1 begins by pinning it with a test.
+**A direction call, not a defect:** this spec argues that fixing `server-deploy`'s global-install no-op (Phase 2, Step 1) is in scope because an automatic path built on a silently-lying manual path inherits the lie. The behavior itself is **confirmed at the code level** — `runDeploy` delegates to `strategy.redeploy` alone, and ubuntu-vps's `redeploy` issues no install command — but it has **not** been reproduced on a live host in this run, so Step 1 still begins by pinning it with a failing test rather than trusting the reading.
 
 ## 📋 Phasing
 
@@ -240,7 +254,7 @@ Settings → a toggle beside the existing *"Update Open Mercato skills automatic
 
 1. **Pin the `server-deploy` global-install gap with a failing test,** then fix `redeploy` to fetch before restarting on the `<node> <globalBin>` ExecStart shape. *Test:* `ubuntu-vps.test.ts` — global-shape redeploy issues the install step; npx-shape redeploy still only clears the cache; checkout-shape redeploy still mutates nothing. Prove it red first (AGENTS.md § *Prove the regression test fails without the fix*).
 2. **Teach `detectInstallShape` the service shape** from the `server-instances/` records. *Test:* fixture records for user-scope and system-scope units, and for a second instance on the same box (#1003/#913 territory) — the record matched must be **this** process's.
-3. **Add the idle gate** — no apply while any run is `running` or `waiting`; state `deferred`. *Test:* a store with one active run defers and retries on the next tick; an empty store proceeds.
+3. **Add the idle gate** — no apply while any run is `running` or `waiting`; state `deferred`, with the *reason* carried (mid-turn vs waiting-on-an-answer) so the chip and the journal can say which. *Test:* one `running` run defers and retries next tick; one `waiting` + `askParked` run defers with the answer-reason; an empty store proceeds; an explicit `apply` call overrides the deferral. Pin the underlying fact the gate exists for — a `recover()` test asserting an `askParked` run becomes `failed` — so a future change to `recover()` cannot silently make this gate look unnecessary.
 4. **Add the verified restart with revert.** Record `previousVersion`, delegate the restart to the existing engine path, then `confirmServiceRestarted` + `confirmCezarRunning`; on failure re-pin and restart. *Test:* fake runner — a failing health check triggers exactly one revert with the recorded version; a successful one clears `previousVersion` and never reverts.
 5. **Surface it in the journal** — one line per outcome (applied / deferred / reverted), because the journal is the hosted user's only channel. *Test:* asserts one line per outcome and none on a no-op tick.
 
@@ -253,6 +267,7 @@ Settings → a toggle beside the existing *"Update Open Mercato skills automatic
 ## 🔍 Review limits
 
 - **No network research was possible in this run** (the web-search tool was denied), so the market comparison is grounded only in the `claude` CLI installed on the development host and in `docs/publishing.md`. The Tailscale / node-exporter comparison is recollection and should be verified before it is cited as precedent in review.
-- Every in-repo claim (file, line, symbol, behavior) was read directly from the working tree at `4763447`.
-- Nothing was executed against a live VPS: the `server-deploy` global-install no-op is **inferred from the code** and is pinned by a test in Phase 2 Step 1 before it is fixed.
+- Every in-repo claim (file, line, symbol, behavior) was read directly from the working tree at `4763447`. A second verification pass re-read the whole deploy path and all five `recover()` branches and **corrected three claims in the first draft**: `recover()` is not uniform (an `askParked` run is marked `failed` by a restart, which is why the idle gate and its visible-deferral escape exist); `macosx-ngrok` does *not* inherit the fix for free and is now explicitly out of scope behind #1011; and the `server-deploy` global-install no-op is confirmed at the code level rather than merely inferred.
+- Nothing was executed against a live VPS or a live macOS host. The global-install no-op is code-confirmed but not reproduced, and Phase 2 Step 1 pins it with a failing test before fixing it.
 - No UI mockups were rendered; every UI change described is a new state on an existing component.
+- The scope-cohesion review that `om-spec-writing` delegates to a fresh-context subagent was performed by the author instead, because this session's tool policy forbids spawning subagents. An adversarial re-read by someone other than the author is still owed — the relevant question is Q5 (one spec, three phases) in the assumptions table.
