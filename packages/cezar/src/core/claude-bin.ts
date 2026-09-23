@@ -23,18 +23,21 @@ export function claudeInstallCandidates(
   platform: NodeJS.Platform = process.platform,
   nodeBinDir: string = dirname(execPath),
 ): string[] {
-  const name = platform === 'win32' ? 'claude.exe' : 'claude';
-  const npmGlobal = platform === 'win32'
-    // npm's global shims sit next to node.exe itself on Windows.
-    ? [join(nodeBinDir, 'claude.cmd'), join(nodeBinDir, 'claude.exe')]
-    : [join(nodeBinDir, 'claude'), join(home, '.npm-global', 'bin', 'claude')];
   if (platform === 'win32') {
-    return [join(home, '.local', 'bin', name), ...npmGlobal];
+    return [
+      join(home, '.local', 'bin', 'claude.exe'), // native installer
+      // npm's global shims sit next to node.exe itself, and `npm install -g` writes a `.cmd`.
+      join(nodeBinDir, 'claude.cmd'),
+      join(nodeBinDir, 'claude.exe'),
+    ];
   }
   return [
     join(home, '.local', 'bin', 'claude'), // native installer (install.sh)
     join(home, '.claude', 'local', 'claude'), // legacy `claude migrate-installer` local install
-    ...npmGlobal, // `npm install -g @anthropic-ai/claude-code`, incl. nvm/fnm/volta prefixes
+    // `npm install -g @anthropic-ai/claude-code`, incl. nvm/fnm/volta prefixes and the
+    // `npm config set prefix ~/.npm-global` convention.
+    join(nodeBinDir, 'claude'),
+    join(home, '.npm-global', 'bin', 'claude'),
     '/opt/homebrew/bin/claude', // Homebrew, Apple silicon
     '/usr/local/bin/claude', // Homebrew, Intel / manual symlink
   ];
@@ -94,7 +97,8 @@ export function claudeShellCommand(
   env: NodeJS.ProcessEnv = process.env,
   home: string = homedir(),
   platform: NodeJS.Platform = process.platform,
+  candidates: string[] = claudeInstallCandidates(home, platform),
 ): string | null {
-  const resolved = resolveClaudeBin(env, home, platform);
+  const resolved = resolveClaudeBin(env, home, platform, candidates);
   return resolved === 'claude' ? null : resolved;
 }

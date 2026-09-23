@@ -116,13 +116,26 @@ describe('claudeInstallCandidates', () => {
 });
 
 describe.skipIf(process.platform === 'win32')('claudeShellCommand', () => {
+  // Empty candidates, so a claude the developer really has at `/opt/homebrew/bin` cannot decide
+  // the outcome — the same hermeticity the `resolveClaudeBin` block above buys with a temp dir.
+  const NONE: string[] = [];
+
   it('is null when only a bare `claude` is known, so callers keep their own PATH fallback', () => {
-    // No CEZ_CLAUDE_BIN and an empty PATH: nothing to resolve beyond the bare name.
-    expect(claudeShellCommand({ PATH: '' }, '/nonexistent-home', 'linux')).toBeNull();
+    expect(claudeShellCommand({ PATH: '' }, '/nonexistent-home', 'linux', NONE)).toBeNull();
   });
 
   it('is the resolved path when one was found off PATH', () => {
-    expect(claudeShellCommand({ PATH: '', CEZ_CLAUDE_BIN: '/opt/x/claude' }, '/nonexistent-home', 'linux'))
+    expect(claudeShellCommand({ PATH: '', CEZ_CLAUDE_BIN: '/opt/x/claude' }, '/nonexistent-home', 'linux', NONE))
       .toBe('/opt/x/claude');
+  });
+
+  it('is null when claude is on PATH — the caller already has a working bare command there', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-claude-shell-'));
+    try {
+      writeExecutable(join(dir, 'claude'));
+      expect(claudeShellCommand({ PATH: dir }, '/nonexistent-home', 'linux', NONE)).toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
