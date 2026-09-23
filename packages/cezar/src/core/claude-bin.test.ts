@@ -97,6 +97,30 @@ describe.skipIf(process.platform === 'win32')('resolveClaudeBin', () => {
     // honouring them, and the real entries either side must still be probed.
     expect(resolveClaudeBin({ PATH: `::${pathDir}::` }, home, 'darwin', candidates)).toBe('claude');
   });
+
+  it('searches every PATH entry, split by the separator of the platform it was asked about', () => {
+    // Two REAL directories with the match in the second: a probe that stopped after the first
+    // non-empty segment, or that split on the HOST's delimiter instead of `platform`'s, fails here
+    // while the single-directory cases above would still pass.
+    const second = join(root, 'bin2');
+    writeExecutable(join(second, 'claude'));
+    expect(resolveClaudeBin({ PATH: `${pathDir}:${second}` }, home, 'linux', candidates)).toBe('claude');
+  });
+
+  it('ignores a DIRECTORY named claude, on PATH and at a known location alike', () => {
+    // Every directory carries the execute bit, so `X_OK` alone accepts a folder — and the spawn
+    // then dies with EACCES instead of the "not found" plus install hint the fallback exists for.
+    mkdirSync(join(pathDir, 'claude'), { recursive: true });
+    mkdirSync(join(home, '.local', 'bin', 'claude'), { recursive: true });
+    const npmGlobal = join(nodeBinDir, 'claude');
+    writeExecutable(npmGlobal);
+    expect(resolveClaudeBin({ PATH: pathDir }, home, 'darwin', candidates)).toBe(npmGlobal);
+  });
+
+  it('falls back to a bare `claude` when the only candidates are directories', () => {
+    mkdirSync(join(home, '.local', 'bin', 'claude'), { recursive: true });
+    expect(resolveClaudeBin({ PATH: pathDir }, home, 'darwin', candidates)).toBe('claude');
+  });
 });
 
 describe('claudeInstallCandidates', () => {
@@ -137,6 +161,22 @@ describe('claudeShellCandidates', () => {
   it('is identical to the spawn list on posix, where there is no shim to add', () => {
     expect(claudeShellCandidates('/home/u', 'linux', '/nvm/v22/bin'))
       .toEqual(claudeInstallCandidates('/home/u', 'linux', '/nvm/v22/bin'));
+  });
+
+  /**
+   * "Most specific LOCATION first" is the rule the whole module follows, so the shim belongs
+   * next to the `.exe` of the SAME directory rather than appended as a block — otherwise a host
+   * carrying both a native install and an npm one resolves the npm shim over the native binary.
+   */
+  it('tries each shim beside the .exe of its own directory, native installer first', () => {
+    const home = join('C:', 'Users', 'u');
+    const nodeBinDir = join('C:', 'Program Files', 'nodejs');
+    expect(claudeShellCandidates(home, 'win32', nodeBinDir)).toEqual([
+      join(home, '.local', 'bin', 'claude.exe'),
+      join(home, '.local', 'bin', 'claude.cmd'),
+      join(nodeBinDir, 'claude.exe'),
+      join(nodeBinDir, 'claude.cmd'),
+    ]);
   });
 });
 
@@ -181,6 +221,35 @@ describe.skipIf(process.platform === 'win32')('claudeShellCommand', () => {
   it('is null for a CEZ_CLAUDE_BIN that does not exist, so the bare `claude` still wins', () => {
     expect(claudeShellCommand({ PATH: '', CEZ_CLAUDE_BIN: '/nope/claude' }, '/nonexistent-home', 'linux', NONE))
       .toBeNull();
+  });
+
+  /**
+   * ...and the fallback must be the FULL resolution, not just the PATH half. Answering `null`
+   * straight from a bad override would discard the candidate list too, hiding a claude that is
+   * genuinely installed at a known off-PATH location — turning #469's broken menu entry into a
+   * missing one, which is a different bug rather than a fix for it.
+   */
+  it('falls through a bogus CEZ_CLAUDE_BIN to a real candidate instead of giving up', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-claude-shell-'));
+    try {
+      const bin = join(dir, 'claude');
+      writeExecutable(bin);
+      expect(claudeShellCommand({ PATH: '', CEZ_CLAUDE_BIN: '/nope/claude' }, '/nonexistent-home', 'linux', [bin]))
+        .toBe(bin);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('ignores a CEZ_CLAUDE_BIN that points at a directory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-claude-shell-'));
+    try {
+      mkdirSync(join(dir, 'claude'), { recursive: true });
+      expect(claudeShellCommand({ PATH: '', CEZ_CLAUDE_BIN: join(dir, 'claude') }, '/nonexistent-home', 'linux', NONE))
+        .toBeNull();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('is null when claude is on PATH — the caller already has a working bare command there', () => {

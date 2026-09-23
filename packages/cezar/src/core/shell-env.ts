@@ -20,8 +20,22 @@
  *  everywhere (they would break the line-based launch script and are never a real path). */
 const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
 /** `cmd.exe` has no escape inside a quoted `set` argument: `"` ends the quote and `%`/`!` expand.
- *  A path containing one is pathological, so refusing is honest rather than limiting. */
+ *  A path containing one is pathological, so refusing is honest rather than limiting.
+ *  Scope: {@link renderEnvPrefix}'s `set "NAME=value"` assignments only. Executable quoting has
+ *  its own, wider set — {@link WIN32_QUOTE_REWRITES_RE}, which adds `&`. */
 const WIN32_UNSAFE_RE = /["%!]/;
+
+/**
+ * Every character {@link quoteExecutable} rewrites on win32 — `"`, `%` and `!` because they stay
+ * live inside the quotes, and `&` which does not, so rewriting it only corrupts the value. None
+ * of them survives the round trip intact, which is what {@link isShellEmbeddable} reports.
+ *
+ * Single source of truth for both: `quoteExecutable` does the rewriting through the `g` variant
+ * derived below, `isShellEmbeddable` tests through this one, so the gate cannot drift from the
+ * behaviour it is gating.
+ */
+const WIN32_QUOTE_REWRITES_RE = /[%&!"]/;
+const WIN32_QUOTE_REWRITES_ALL_RE = new RegExp(WIN32_QUOTE_REWRITES_RE.source, 'g');
 
 /** POSIX single-quoting — the `'\''` dance, so any character but a control one is inert. */
 export function shellQuote(value: string): string {
@@ -41,14 +55,9 @@ export function shellQuote(value: string): string {
  * because `provider-auth`'s `loginCommand` pins it.
  */
 export function quoteExecutable(executable: string, platform: NodeJS.Platform): string {
-  if (platform === 'win32') return `"${executable.replace(/[%&!"]/g, '^$&')}"`;
+  if (platform === 'win32') return `"${executable.replace(WIN32_QUOTE_REWRITES_ALL_RE, '^$&')}"`;
   return shellQuote(executable);
 }
-
-/** Every character {@link quoteExecutable} rewrites on win32 — `"`, `%` and `!` because they
- *  stay live inside the quotes, and `&` which does not, so rewriting it only corrupts the
- *  value. None of them survives the round trip intact. */
-const WIN32_UNQUOTABLE_RE = /[%&!"]/;
 
 /**
  * Can `value` be embedded in a shell command on `platform` and come back out unchanged?
@@ -59,7 +68,7 @@ const WIN32_UNQUOTABLE_RE = /[%&!"]/;
  */
 export function isShellEmbeddable(value: string, platform: NodeJS.Platform): boolean {
   if (CONTROL_CHARS_RE.test(value)) return false;
-  return platform === 'win32' ? !WIN32_UNQUOTABLE_RE.test(value) : true;
+  return platform === 'win32' ? !WIN32_QUOTE_REWRITES_RE.test(value) : true;
 }
 
 /**

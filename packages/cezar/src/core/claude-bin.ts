@@ -1,4 +1,4 @@
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, statSync } from 'node:fs';
 import { execPath } from 'node:process';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -51,6 +51,11 @@ export function claudeInstallCandidates(
  * `claude.cmd` shim and no `.exe` at all, so the terminal handoff — which hands its command to
  * `cmd /K` — would otherwise miss the most common Windows install entirely. Safe here precisely
  * because there IS a shell: the hazard the spawn list avoids does not apply.
+ *
+ * Ordering follows the same "most specific LOCATION first" rule as {@link claudeInstallCandidates}
+ * — the native installer's dir outranks the npm-global one — with the shim tried after the
+ * `.exe` within each location rather than appended as a block, so a host carrying both never
+ * resolves the npm shim over the native install.
  */
 export function claudeShellCandidates(
   home: string = homedir(),
@@ -59,13 +64,25 @@ export function claudeShellCandidates(
 ): string[] {
   const spawnable = claudeInstallCandidates(home, platform, nodeBinDir);
   if (platform !== 'win32') return spawnable;
-  return [...spawnable, join(nodeBinDir, 'claude.cmd'), join(home, '.local', 'bin', 'claude.cmd')];
+  return spawnable.flatMap((candidate) =>
+    candidate.endsWith('.exe')
+      ? [candidate, `${candidate.slice(0, -'.exe'.length)}.cmd`]
+      : [candidate],
+  );
 }
 
+/** Windows extensions a `spawn`/`execFile` with no shell can be handed directly. */
+const SPAWNABLE_PATH_SUFFIXES: readonly string[] = ['.exe', '.com'];
+/** The above plus the shim extensions, which only a shell resolves — see
+ *  {@link claudeShellCandidates} for why the two lists must stay separate. */
+const SHELL_PATH_SUFFIXES: readonly string[] = ['.exe', '.com', '.cmd', '.bat'];
+
+/** A runnable FILE. Every directory carries the execute bit, so `X_OK` alone would accept a
+ *  folder named `claude` and turn the clean "not found" fallback into an `EACCES` at spawn time. */
 function isExecutable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);
-    return true;
+    return statSync(path).isFile();
   } catch {
     return false;
   }
@@ -81,7 +98,7 @@ function onSearchPath(
   bin: string,
   searchPath: string,
   platform: NodeJS.Platform,
-  suffixes: readonly string[] = ['.exe', '.com'],
+  suffixes: readonly string[] = SPAWNABLE_PATH_SUFFIXES,
 ): boolean {
   const names = platform === 'win32' ? suffixes.map((suffix) => `${bin}${suffix}`) : [bin];
   // `path.delimiter` describes the HOST, but `platform` may be an injected value under test;
@@ -122,8 +139,13 @@ export function resolveClaudeBin(
  * window saying `command not found`. A resolved absolute path works in every one of them.
  *
  * Unlike {@link resolveClaudeBin} this DOES validate: a path nobody can execute — including a
- * mistyped `CEZ_CLAUDE_BIN` — must not suppress the plain `claude` that a shell finding it on its
- * own PATH would run perfectly well, and must never turn a working menu entry into a broken one.
+ * mistyped `CEZ_CLAUDE_BIN` — must not turn a working menu entry into a broken one.
+ *
+ * An unexecutable override is therefore treated as NO override and falls through to the normal
+ * resolution rather than answering `null` outright. Answering `null` would also discard the
+ * candidate list, hiding a claude that is genuinely installed at a known off-PATH location — the
+ * native-installer layout this module exists for — and trading #469's broken affordance for a
+ * missing one is a different bug, not a fix for it.
  */
 export function claudeShellCommand(
   env: NodeJS.ProcessEnv = process.env,
@@ -131,7 +153,7 @@ export function claudeShellCommand(
   platform: NodeJS.Platform = process.platform,
   candidates: string[] = claudeShellCandidates(home, platform),
 ): string | null {
-  if (env.CEZ_CLAUDE_BIN) return isExecutable(env.CEZ_CLAUDE_BIN) ? env.CEZ_CLAUDE_BIN : null;
-  if (onSearchPath('claude', env.PATH ?? '', platform, ['.exe', '.cmd', '.bat', '.com'])) return null;
+  if (env.CEZ_CLAUDE_BIN && isExecutable(env.CEZ_CLAUDE_BIN)) return env.CEZ_CLAUDE_BIN;
+  if (onSearchPath('claude', env.PATH ?? '', platform, SHELL_PATH_SUFFIXES)) return null;
   return candidates.find(isExecutable) ?? null;
 }
