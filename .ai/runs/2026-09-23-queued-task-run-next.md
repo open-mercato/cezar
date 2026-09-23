@@ -48,10 +48,15 @@ A queued task can be promoted with one action, "Run next". It then takes the fir
 
 ## Risks
 
+- Validation limits on this machine: `system-prompt.test.ts › automations on but unreachable` times out here and fails identically on `origin/main`. npm 12's `pack --json` shape breaks `check:pack` on `main` too, so build and test:package were verified under npm 10. CI is green.
+- Review follow-up (b61ea260): non-recovering loads retire `promotedAt`. Accepted best-effort case: a held promoted head lets an unpromoted run in the same project take the slot.
+
 - `pump()` and `release()` are the scheduler's hot path. The change is additive: no promoted run means the exact old order, and tests pin that.
 - The `queued` record can re-enter the queue through several paths (`startRun`, `reviveQueuedRun`, `requeueWhileHeld`, deferred Continue). Only `reviveQueuedRun` can see a live `promotedAt` (restart / watchdog), so it goes through the rank-aware enqueue. Every other path follows a dequeue that has already cleared the mark.
 
 ## Progress
+
+PR: #1065
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
