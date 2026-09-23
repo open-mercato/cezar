@@ -29,7 +29,7 @@ A GitHub poll:
   "name": "Review every new pull request",          // required, 1-200 chars
   "description": "What this automation is for",      // optional, up to 2000 chars
   "kind": "github",                                  // optional here — omitted means a GitHub poll
-  "events": ["pull_request.opened"],                 // 1-4 of: pull_request.opened, issue.opened, issue.labeled, issue.unlabeled
+  "events": ["pull_request.opened"],                 // 1-7 of: pull_request.opened, issue.opened, issue.labeled, issue.unlabeled, pull_request.reviewed, pull_request.review_requested, pull_request.rereview_requested
   "intervalSeconds": 300,                            // required: how often GitHub is polled, in seconds, 60-86400 (300 is the usual choice)
   "filters": {                                       // required, may be {}; every key optional; a candidate must pass ALL given filters
     "authors": ["octocat"],                          //   GitHub logins that opened it
@@ -38,6 +38,7 @@ A GitHub poll:
     "anyLabels": ["bug", "regression"],              //   must carry at least one of these
     "excludeLabels": ["wontfix"],                    //   must carry none of these
     "changedLabels": ["needs-agent"],                //   REQUIRED for issue.labeled / issue.unlabeled: the label whose change fires it
+    "reviewers": ["octocat"],                        //   GitHub logins a review event must name — the reviewer for pull_request.reviewed, the requested one for the two review_requested events
     "lookbackDays": 7,                               //   1-90 (default 7): how far back one poll looks
     "maxRecords": 25                                 //   1-100 (default 25): the most candidates one poll considers
   },
@@ -46,6 +47,7 @@ A GitHub poll:
     "workflow": "quick-task",                        // a workflow name — OR inline "steps", never both
     "steps": [{ "id": "task", "skill": "om-auto-review-pr", "prompt": "{{task}}" }],  // to run a skill: one agent step naming it
     "runner": "claude",                              // optional: claude | codex | opencode | pi
+    "agentProfile": "work",                          // optional: an agent account id of that runner; omitted = the project's selection at launch
     "model": "sonnet",                               // optional
     "variants": 1,                                   // 1 | 2 | 3 competing runs per match
     "worktree": true,                                // isolate each run in its own git worktree (recommended)
@@ -72,7 +74,7 @@ Prompt placeholders, substituted per launch — GitHub poll: {{github.kind}} (is
 A new automation is PAUSED unless created with --enable. Enabling a GitHub poll establishes a current-time baseline: only pull requests and issues that appear AFTER it are ever launched, never the backlog. Enabling a schedule arms its next occurrence. Editing a definition never re-considers what an earlier revision already saw.`;
 
 /** The part composed into EVERY task's system prompt while automations are on and reachable. */
-export const AUTOMATIONS_PROMPT = `Automations. This cockpit can do recurring work for you without you doing it once: an automation is either a bounded GitHub poll — a new pull request, a new issue, a label added to or removed from an issue, optionally filtered by author, assignee or labels — or a schedule (every day at a time, weekdays, one weekday a week, every N hours), and it launches an ordinary cezar task for every match or occurrence, with a prompt template you write. When the user asks for something to happen "whenever", "every time" or "each time" a pull request or issue appears or is labelled, or "every day at", "on weekdays", "every Friday", "every 6 hours", they are asking for an automation: create one instead of doing the work once, and instead of polling GitHub or sleeping yourself.
+export const AUTOMATIONS_PROMPT = `Automations. This cockpit can do recurring work for you without you doing it once: an automation is either a bounded GitHub poll — a new pull request, a new issue, a label added to or removed from an issue, a review submitted on a pull request, a review requested (or re-requested from someone who already reviewed) — optionally filtered by author, assignee, labels or reviewer — or a schedule (every day at a time, weekdays, one weekday a week, every N hours), and it launches an ordinary cezar task for every match or occurrence, with a prompt template you write. When the user asks for something to happen "whenever", "every time" or "each time" a pull request or issue appears, is labelled, is reviewed or a review is (re-)requested, or "every day at", "on weekdays", "every Friday", "every 6 hours", they are asking for an automation: create one instead of doing the work once, and instead of polling GitHub or sleeping yourself.
 
 Always through the cockpit's own binary, node "$CEZ_BIN", because a cez on your PATH may be an older install without this command; every "cez automation …" below means node "$CEZ_BIN" automation …:
 
@@ -99,7 +101,7 @@ You turn the user's request into an automation on this cockpit: a bounded poll o
 
 Every automation answers two questions. Find both in the user's message before writing anything:
 
-- **Trigger** — either a GitHub event: a new pull request (\`pull_request.opened\`), a new issue (\`issue.opened\`), a label added to an issue (\`issue.labeled\`) or removed from one (\`issue.unlabeled\`), with the filters that narrow it — authors, assignees, labels it must or must not carry (a label event needs the label whose change fires it, \`filters.changedLabels\`); or a schedule: every day at a time, weekdays, one weekday a week, or every N hours (\`"kind": "schedule"\`, in the cockpit's own time zone).
+- **Trigger** — either a GitHub event: a new pull request (\`pull_request.opened\`), a new issue (\`issue.opened\`), a label added to an issue (\`issue.labeled\`) or removed from one (\`issue.unlabeled\`), a review submitted on a pull request (\`pull_request.reviewed\`), a review requested on one (\`pull_request.review_requested\`) or requested again from someone who already reviewed it (\`pull_request.rereview_requested\`), with the filters that narrow it — authors, assignees, labels it must or must not carry (a label event needs the label whose change fires it, \`filters.changedLabels\`), reviewers a review event must name (\`filters.reviewers\`); or a schedule: every day at a time, weekdays, one weekday a week, or every N hours (\`"kind": "schedule"\`, in the cockpit's own time zone).
 - **Task** — what the launched task must do for each match, as a prompt template. Write it the way you would brief a colleague who sees only that text plus the item's number, title, URL, author and labels: the goal, the checks to run, how to finish (a review comment, a draft PR, a report). Use \`{{github.number}}\`, \`{{github.title}}\`, \`{{github.url}}\` (GitHub) or \`{{date}}\`, \`{{project}}\` (schedule) and the other placeholders \`cez automation schema\` lists.
 
 If the user named a skill, workflow, runner or model for the launched tasks, use it (a skill is one inline step: \`"steps": [{ "id": "task", "skill": "<name>", "prompt": "{{task}}" }]\`). Otherwise leave those keys out so the cockpit's defaults apply. Default \`"worktree": true\` and \`"autonomous": true\` — an automation runs unattended, so a task that parks to ask a question waits forever. For a poll, pick an interval that matches how urgent a match is (300 seconds is the default; an hourly triage needs 3600). If the user named a time, use it as they said it — the cockpit's zone is theirs. If the request leaves the trigger or the task genuinely open, ask one precise question and stop; do not guess a filter that could launch tasks on the wrong items.

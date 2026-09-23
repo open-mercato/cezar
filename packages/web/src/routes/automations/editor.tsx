@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
 import type { AutomationListEntry, AutomationsResponse } from '@open-mercato/cezar-api-client'
 import { ApiError, createAutomation, updateAutomation } from '@/api/client'
-import { useHealth, useRepo, useUiState, useWorkflows } from '@/api/queries'
+import { useHealth, useRepo, useSkills, useUiState, useWorkflows } from '@/api/queries'
 import { Chip } from '@/components/chip'
 import { Pill } from '@/components/pill'
 import { Button } from '@/components/ui/button'
@@ -15,6 +15,7 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { useNavigate } from '@/lib/project-router'
 import { availablePromptTemplates, insertTemplate, normalizePromptTemplates } from '@/lib/prompt-templates'
+import { orderSkillsByUsage } from '@/lib/skills'
 import { cn } from '@/lib/utils'
 import { settingsSectionPath } from '@/routes/settings/settings-shell'
 
@@ -25,6 +26,8 @@ import {
   cliDefinitionOf,
   fromDefinition,
   newDraft,
+  pickSource,
+  sourceOf,
   toBody,
   type EditorDraft,
 } from './editor-draft'
@@ -75,6 +78,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
   const health = useHealth()
   const uiState = useUiState()
   const workflows = useWorkflows()
+  const skills = useSkills()
   const repo = useRepo()
 
   const [draft, setDraft] = useState<EditorDraft>(() => (automation ? fromDefinition(automation) : newDraft()))
@@ -104,7 +108,12 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
     () => availablePromptTemplates(normalizePromptTemplates(uiState.data?.promptTemplates), health.data?.capabilities),
     [uiState.data?.promptTemplates, health.data?.capabilities],
   )
-  const workflowNames = workflows.data?.workflows.map((workflow) => workflow.name) ?? []
+  const workflowList = workflows.data?.workflows ?? []
+  const workflowNames = workflowList.map((workflow) => workflow.name)
+  const skillsData = skills.data
+  const skillUsage = uiState.data?.skillUsage
+  const skillList = useMemo(() => orderSkillsByUsage(skillsData ?? [], skillUsage), [skillsData, skillUsage])
+  const sourcesReady = skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   const baseBranch = repo.data?.baseBranch ?? repo.data?.info?.branch ?? undefined
   const cli = useMemo(() => cliDefinitionOf(draft), [draft])
   const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0 && !saving
@@ -254,11 +263,14 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                 className="min-h-[104px] text-sm leading-[1.55] md:text-sm"
               />
               <EditorRunAs
-                workflow={draft.workflow}
-                workflows={workflowNames}
-                onWorkflow={(workflow) => patch({ workflow })}
-                pick={{ runner: draft.runner, model: draft.model, account: null }}
-                onPick={(pick) => patch({ runner: pick.runner, model: pick.model })}
+                source={sourceOf(draft)}
+                sourcesReady={sourcesReady}
+                skills={skillList}
+                skillUsage={skillUsage}
+                workflows={workflowList}
+                onSource={(source) => patch(pickSource(source))}
+                pick={{ runner: draft.runner, model: draft.model, account: draft.account }}
+                onPick={(pick) => patch({ runner: pick.runner, model: pick.model, account: pick.account })}
                 baseBranch={baseBranch}
                 autonomous={draft.autonomous}
                 onAutonomous={(autonomous) => patch({ autonomous })}

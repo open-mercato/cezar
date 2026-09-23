@@ -189,7 +189,13 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
+import {
+  agentCliRunner,
+  detectOpenTargets,
+  openFileInDefaultApp,
+  openInApp,
+  withResolvedClaudeBin,
+} from './open-in-app.ts';
 import { createDraftPr } from './pr.ts';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
@@ -369,7 +375,7 @@ const automationEditableSchema = z
     enabled: z.boolean().optional(),
     /** Omitted on create = `github`; omitted on update = the stored kind (spec 2026-09-14). */
     kind: z.enum(['github', 'schedule']).optional(),
-    events: z.array(automationEventSchema).min(1).max(4).optional(),
+    events: z.array(automationEventSchema).min(1).max(7).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
     schedule: automationScheduleSchema.optional(),
@@ -3393,6 +3399,19 @@ export function createApp(deps: ServerDeps) {
     return runs;
   };
 
+  /** An account named on save is checked like `POST /runs` checks one: the user just picked it, so
+   *  a stale id is a 400. At launch a since-deleted id falls back to the default, as any stored
+   *  reference does. */
+  const automationAccountIssue = async (
+    root: string,
+    task: { runner?: ProviderId; agentProfile?: string },
+  ): Promise<string | null> => {
+    if (task.agentProfile === undefined) return null;
+    const runner = task.runner ?? (await loadConfig(root)).defaultRunner;
+    const account = await resolveWorkspaceProfile(runner, task.agentProfile);
+    return 'error' in account ? account.error : null;
+  };
+
   const requireAutomations = async (c: Context, next: Next) => {
     if (!capabilities().automations) return c.json({ error: AUTOMATIONS_OFF }, 409);
     await next();
@@ -3414,10 +3433,12 @@ export function createApp(deps: ServerDeps) {
       // Annotated, so the two branches are ONE shape rather than a union of two: the fallback
       // literal always carries `reason`, the cached answer only sometimes does, and the route
       // type is what `contract/src/automations.ts` has to describe.
-      const availability: ForgeAvailability = forge?.detectCached() ?? {
-        available: false,
-        reason: forge ? 'GitHub availability is still being checked' : 'No GitHub remote is configured',
-      };
+      // A cold cache (first read after boot) waits for the probe instead of answering "still being
+      // checked": nothing re-reads this page when the background probe lands, so that answer
+      // would lock the editor's GitHub trigger off. Only `/api/health` has a latency budget.
+      const availability: ForgeAvailability = forge
+        ? forge.detectCached() ?? (await forge.detect())
+        : { available: false, reason: 'No GitHub remote is configured' };
       const definitions = automationStore.list();
       const logsById = new Map(definitions.map((definition) => [definition.id, automationStore.logs({ automationId: definition.id, limit: 100 })] as const));
       const timeZone = localTimeZone();
@@ -3478,6 +3499,8 @@ export function createApp(deps: ServerDeps) {
       if (kindIssue) return c.json({ error: kindIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
+      const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
+      if (accountIssue) return c.json({ error: accountIssue }, 400);
       const { enable, ...input } = parsed.data;
       try {
         const automation = automationStore.create({ ...input, kind, enabled: enable === true });
@@ -3516,6 +3539,8 @@ export function createApp(deps: ServerDeps) {
       if (kindIssue) return c.json({ error: kindIssue }, 400);
       const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
+      const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
+      if (accountIssue) return c.json({ error: accountIssue }, 400);
       const { expectedRevision, ...input } = parsed.data;
       try {
         const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, kind, enabled: input.enabled ?? false });
@@ -3526,6 +3551,9 @@ export function createApp(deps: ServerDeps) {
             automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
           }
         }
+        // Switched on from the editor: the same current-time baseline the Enable button sets, or
+        // the first poll would launch the whole lookback window's backlog.
+        if (automation.enabled && !current.enabled) armAutomation(automationStore, automation);
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation });
@@ -3847,7 +3875,21 @@ export function createApp(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(fallback, parsed.data.agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
-      const images = parsed.data.images?.map(toPastedContent);
+      const variants = parsed.data.variants ?? 1;
+      if (variants > 1) {
+        // Variants require git worktrees to isolate their changes.
+        const repo = await getRepoInfo(repoRoot);
+        if (!repo) {
+          return c.json(
+            {
+              error:
+                'parallel variants need a git repository (each variant runs in its own worktree) — run ×1 here, or start cezar inside a git repo',
+            },
+            400,
+          );
+        }
+      }
+      const images = parsed.data.images?.map((image) => toPastedContent(image));
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -3865,21 +3907,7 @@ export function createApp(deps: ServerDeps) {
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
         ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
       };
-      const variants = parsed.data.variants ?? 1;
       if (variants > 1) {
-        // Variants live in worktrees — without git there's nothing to isolate
-        // them with, so this degrades to a clear 400 instead of stepping on
-        // one shared working tree.
-        const repo = await getRepoInfo(repoRoot);
-        if (!repo) {
-          return c.json(
-            {
-              error:
-                'parallel variants need a git repository (each variant runs in its own worktree) — run ×1 here, or start cezar inside a git repo',
-            },
-            400,
-          );
-        }
         const runs = manager.startVariants(workflow, input, variants);
         // The entry points at the first variant — the thread the composer navigates to.
         const first = runs[0];
@@ -3993,7 +4021,7 @@ export function createApp(deps: ServerDeps) {
         if (blocked) return c.json({ error: blocked }, 409);
       }
       const content: PastedContent[] = [
-        ...parsed.data.images.map(toPastedContent),
+        ...parsed.data.images.map((image) => toPastedContent(image)),
         ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
       ];
       // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
@@ -4069,7 +4097,8 @@ export function createApp(deps: ServerDeps) {
         );
       }
 
-      const images: PastedContent[] | undefined = parsed.data.images?.map(toPastedContent);
+      if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
+      const images: PastedContent[] | undefined = parsed.data.images?.map((image) => toPastedContent(image));
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
@@ -4126,7 +4155,7 @@ export function createApp(deps: ServerDeps) {
       }
       const result = manager.continueRun(id, {
         text: parsed.data.text,
-        images: parsed.data.images?.map(toPastedContent),
+        images: parsed.data.images?.map((image) => toPastedContent(image)),
         runner: parsed.data.runner,
         model: parsed.data.model,
         agentProfile: parsed.data.agentProfile,
@@ -4266,7 +4295,10 @@ export function createApp(deps: ServerDeps) {
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
-        const command = resume ?? cliRunner;
+        // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
+        // claude found off PATH by detection has to be named by absolute path here too —
+        // otherwise the menu offers a handoff that opens on `command not found`.
+        const command = withResolvedClaudeBin(resume ?? cliRunner, cliRunner);
         // BOTH branches carry the account (spec 2026-07-29-agent-profiles): a resume needs the
         // config dir that holds its session, and a FRESH CLI in this worktree should still open
         // on the account the project works under — otherwise "Open in → Claude CLI" quietly

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { HANDOFF_INSTRUCTIONS } from '../handoff.ts';
 import { RunStore } from '../runs/store.ts';
@@ -105,10 +105,10 @@ describe('pastedAttachmentsText / pastedAttachmentsNote', () => {
     expect(text).toContain('The user attached 1 pasted file, also saved on disk at:');
     expect(text).toContain('- /abs/runs/r-images/pasted-1.md');
     expect(text).toContain('kept under their original names in /repo/.ai/cezar/attachments');
-    expect(text).toContain('a document the user names but did not attach to this message');
-    // "Documents", not "files": an image and a nameless upload are deliberately never filed, so a
-    // note promising every attachment would send the agent hunting in the wrong folder.
-    expect(text).toContain('Documents (PDF, TXT, MD) attached anywhere in this project');
+    expect(text).toContain('a file the user names but did not attach to this message');
+    // "Documents and named images", not "attachments": a nameless upload is deliberately never
+    // filed, so a note promising every attachment would send the agent hunting in the wrong folder.
+    expect(text).toContain('Documents and named images attached anywhere in this project');
     // The #950 closing instruction still lands after it, not before.
     expect(text.indexOf('/repo/.ai/cezar/attachments')).toBeLessThan(text.indexOf('operate on these files'));
   });
@@ -280,13 +280,42 @@ describe('attachment media types, extensions and blocks (#950)', () => {
   /**
    * The image branch produces a `ContentBlock`, which is the runner protocol and reaches a vendor
    * API verbatim. An extra key here would survive `contentBlocksOf` and be sent to a backend that
-   * rejects unknown fields — so a name offered for an image must be ignored, not carried.
+   * rejects unknown fields — so a name offered for an image must never be carried on the block
+   * itself, with or without a `dataDir` to file it under (below, #960).
    */
   it('never puts a name on an image block, even when the client sends one', () => {
     expect(toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' })).toEqual({
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
     });
+  });
+
+  // Conversion retains private name metadata but must not persist rejected requests.
+  it('keeps named image conversion free of filesystem side effects', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cez-image-library-'));
+    try {
+      const block = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' });
+      expect(block).toEqual({
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
+      });
+      expect(existsSync(attachmentLibraryDir(dataDir))).toBe(false);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  /** A clipboard paste has no name to file under — filing it would give the library the exact
+   *  `pasted-2.png` clutter #929 already refuses for files, so a nameless image is skipped even
+   *  when a `dataDir` is given. */
+  it('never files a pasted (nameless) image during conversion', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'cez-image-library-'));
+    try {
+      toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64 });
+      expect(existsSync(attachmentLibraryDir(dataDir))).toBe(false);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps file blocks out of what a session is handed — a backend never sees one', () => {
@@ -421,6 +450,41 @@ describe('sanitizeAttachmentName (#929)', () => {
     expect(sanitizeAttachmentName('   ', 'text/plain')).toBeNull();
     expect(sanitizeAttachmentName('\u0000\u0001', 'text/plain')).toBeNull();
     expect(sanitizeAttachmentName('...', 'text/plain')).toBeNull();
+  });
+
+  /**
+   * #960 — an image whose subtype `attachmentExtension` does not name individually (SVG, BMP,
+   * TIFF...) falls back to its `img` catch-all, which is not a real extension to enforce. Before
+   * this, a name that already carried a legitimate spelling of that subtype was treated as
+   * "wrong" and got `img` appended on top of it instead of validated.
+   */
+  it("accepts the media type's own subtype as a spelling for an image attachmentExtension does not name", () => {
+    expect(sanitizeAttachmentName('diagram.svg', 'image/svg+xml')).toBe('diagram.svg');
+    expect(sanitizeAttachmentName('photo.bmp', 'image/bmp')).toBe('photo.bmp');
+    expect(sanitizeAttachmentName('scan.TIFF', 'image/tiff')).toBe('scan.tiff');
+    expect(sanitizeAttachmentName('scan.tif', 'image/tiff')).toBe('scan.tif');
+    // A name whose extension does NOT match the media type still gets the canonical one appended —
+    // the anti-spoofing behavior above is unchanged, just no longer double-counted for `img`.
+    expect(sanitizeAttachmentName('diagram.png', 'image/svg+xml')).toBe('diagram.png.img');
+  });
+
+  /**
+   * #1012 review — the subtype spelling accepted above is a closed set of real image extensions,
+   * not `mediaType.split('/')[1]` validated by a character class: `isImageMediaType` is the bare
+   * regex `/^image\//`, so the subtype is a string the client chose. `image/sh` must still get the
+   * `img` catch-all appended, the same as any other unrecognized image subtype.
+   */
+  it('does not let an unrecognized image subtype keep the client-chosen extension', () => {
+    expect(sanitizeAttachmentName('deploy.sh', 'image/sh')).toBe('deploy.sh.img');
+  });
+
+  /** #960 — `attachmentExtension` canonicalizes `image/jpeg` to `jpg`, but `photo.jpeg` is at
+   *  least as common a name to arrive with; without an allowed alternate spelling (like `md` has
+   *  `markdown`) it would double up to `photo.jpeg.jpg`. */
+  it('keeps the .jpeg spelling instead of doubling it with the canonical .jpg', () => {
+    expect(sanitizeAttachmentName('photo.jpeg', 'image/jpeg')).toBe('photo.jpeg');
+    expect(sanitizeAttachmentName('photo.jpg', 'image/jpeg')).toBe('photo.jpg');
+    expect(sanitizeAttachmentName('photo.png', 'image/png')).toBe('photo.png');
   });
 });
 
@@ -679,6 +743,43 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     expect(granted).toContain(join(dataDir, 'runs'));
   }, 30_000);
 
+  // Accepted image-only messages must file their original name and mention the library.
+  it('a message with only a named image still gets the library mention', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    writeFileSync(argsFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'library-image-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const holder: WorkflowDef = {
+      name: 'hold-slot-library-image',
+      source: 'built-in',
+      steps: [{ id: 'hold', command: `${process.execPath} -e "setTimeout(() => {}, 500)"` }],
+    };
+    manager.startRun(holder, { task: 'occupy the only slot', worktree: false });
+    const image = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' });
+    expect(existsSync(join(attachmentLibraryDir(dataDir), 'diagram.png'))).toBe(false);
+    const record = manager.startRun(workflow, {
+      task: 'find the diagram',
+      images: [image],
+      worktree: false,
+    });
+
+    const libraryPath = join(attachmentLibraryDir(dataDir), 'diagram.png');
+    expect(readFileSync(libraryPath).equals(Buffer.from(TINY_PNG_B64, 'base64'))).toBe(true);
+
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+    const after = store.getRun(record.id);
+    expect(after?.status, after?.error).toMatch(/^(done|review)$/);
+
+    const lines = readStdinLines();
+    expect(lines[0]?.userText).toContain(`kept under their original names in ${attachmentLibraryDir(dataDir)}`);
+  }, 30_000);
+
   /** The agent's own tool screenshots share `persistAttachment` with user uploads. They must not
    *  share the library — a folder of the agent's screenshots is a log, not a library. */
   it('never files an agent screenshot or a user image in the library', async () => {
@@ -750,12 +851,24 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     const record = manager.startRun(workflow, { task: 'chat with me' });
     await waitForStatus(record.id, ['waiting']);
 
-    const image: ContentBlock = {
-      type: 'image',
-      source: { type: 'base64', media_type: 'image/jpeg', data: TINY_PNG_B64 },
-    };
+    const state = (manager as unknown as {
+      active: Map<string, { session: { sendMessage(content: ContentBlock[]): boolean } }>;
+    }).active.get(record.id)!;
+    const refusal = vi.spyOn(state.session, 'sendMessage').mockReturnValueOnce(false);
+    try {
+      expect(manager.sendMessage(record.id, [
+        toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'backend-refused.png' }),
+      ])).toBe(false);
+      expect(existsSync(join(attachmentLibraryDir(dataDir), 'backend-refused.png'))).toBe(false);
+    } finally {
+      refusal.mockRestore();
+    }
+    const image = toPastedContent({
+      mediaType: 'image/jpeg', data: TINY_PNG_B64, name: 'live-photo.jpeg',
+    });
     const delivered = manager.sendMessage(record.id, [{ type: 'text', text: 'here is a screenshot' }, image]);
     expect(delivered).toBe(true);
+    expect(readFileSync(join(attachmentLibraryDir(dataDir), 'live-photo.jpeg'))).toEqual(Buffer.from(TINY_PNG_B64, 'base64'));
 
     // Back to `waiting` once the mock's follow-up turn completes.
     await waitForStatus(record.id, ['waiting']);
@@ -795,10 +908,9 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     await waitForStatus(record.id, ['done', 'review']);
 
     writeFileSync(stdinFile, '', 'utf8');
-    const image: ContentBlock = {
-      type: 'image',
-      source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
-    };
+    const image = toPastedContent({
+      mediaType: 'image/png', data: TINY_PNG_B64, name: 'continued-diagram.png',
+    });
     expect(manager.continueRun(record.id, { text: 'fix what this shows', images: [image] })).toEqual({
       ok: true,
     });
@@ -806,6 +918,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
 
     const reopened = readStdinLines().find((line) => line.userText.includes('fix what this shows'));
     expect(reopened).toBeDefined();
+    expect(readFileSync(join(attachmentLibraryDir(dataDir), 'continued-diagram.png'))).toEqual(Buffer.from(TINY_PNG_B64, 'base64'));
     // Inline, so the model can view it…
     expect(reopened?.imageCount).toBe(1);
     // …and on disk, so it can operate on it.

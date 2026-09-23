@@ -110,7 +110,15 @@ async function respond(userText, imageCount) {
       : '';
   // `mock:monitoring` → the reply ends with CEZ:MONITORING, the "still working
   // on downstream work" marker (#490), so the monitoring-status path is testable dry.
-  const monitoringMarker = userText.includes('mock:monitoring') ? '\n\nCEZ:MONITORING' : '';
+  // `mock:monitoring-refs` → the same marker, but with task-reference marker lines AFTER it
+  // (#933): the handoff contract asks for those "as soon as you know", so an agent that opens
+  // its PR in the same turn it parks on its sub-agents emits exactly this shape. It used to
+  // bury the marker and park the run as `waiting` ("needs you").
+  const monitoringMarker = userText.includes('mock:monitoring')
+    ? userText.includes('mock:monitoring-refs')
+      ? '\n\nCEZ:MONITORING\nCEZ:PR=4242\nCEZ:TITLE=waiting on dispatched sub-agents'
+      : '\n\nCEZ:MONITORING'
+    : '';
   // `mock:ask` → the reply ends with a valid CEZ:ASK marker (#473), so the
   // AskUser card path (park `waiting` + emit `ask.requested`) is testable dry.
   // `mock:ask-bad` → a MALFORMED marker (invalid JSON), to prove graceful

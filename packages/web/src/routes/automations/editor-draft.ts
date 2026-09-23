@@ -11,6 +11,7 @@ import {
 } from '@open-mercato/cezar-api-client'
 
 import type { CliDefinition } from '@/lib/automation-cli'
+import { QUICK_TASK, type TaskSource } from '@/lib/task-source'
 import type { AutomationTemplateDraft } from '@/lib/automation-templates'
 
 /**
@@ -33,6 +34,8 @@ export interface DraftFilters {
   excludeLabels: string
   /** Required by the server for `issue.labeled` / `issue.unlabeled`. */
   changedLabels: string
+  /** GitHub logins the three review events narrow to — the reviewer, or the requested one. */
+  reviewers: string
   lookbackDays: number
   maxRecords: number
 }
@@ -46,8 +49,15 @@ export interface EditorDraft {
   filters: DraftFilters
   prompt: string
   workflow: string
+  /** A skill the runs execute, as `/new` sends one: a one-step inline chain. Wins over `workflow`. */
+  skill: string | null
+  /** Inline steps that are not a single skill (a stored plan, a CLI definition), carried through
+   *  untouched until the picker replaces them. */
+  customSteps: TaskSteps | null
   /** `null` = never touched: the project's default runner shows through the pill. */
   runner: Runner | null
+  /** `null` = follow the project's account selection; otherwise an agent account id of `runner`. */
+  account: string | null
   /** `null` = never touched; `''` = auto, explicitly. */
   model: string | null
   autonomous: boolean
@@ -57,13 +67,41 @@ export interface EditorDraft {
   enabled: boolean
 }
 
-/** The four events the poller reconstructs (Q6: nothing else is offered). */
+/** The seven events the poller reconstructs (Q6: nothing else is offered). */
 export const GITHUB_EVENTS: readonly AutomationEvent[] = [
   'pull_request.opened',
   'issue.opened',
   'issue.labeled',
   'issue.unlabeled',
+  'pull_request.reviewed',
+  'pull_request.review_requested',
+  'pull_request.rereview_requested',
 ]
+
+type TaskSteps = NonNullable<AutomationDefinition['task']['steps']>
+
+/** The one-step chain a picked skill runs as — `buildCreateRunBody`'s shape, verbatim. */
+function skillSteps(skill: string): TaskSteps {
+  return [{ id: 'task', name: skill, skill, prompt: '{{task}}' }]
+}
+
+/** A stored `steps` that IS a picked skill reads back as that skill; anything else stays custom. */
+function skillOfSteps(steps: TaskSteps | undefined): string | null {
+  const [only, ...rest] = steps ?? []
+  return only && rest.length === 0 && only.skill && only.prompt === '{{task}}' ? only.skill : null
+}
+
+/** What the source pill shows: the skill, a non-default workflow, or nothing (quick-task). */
+export function sourceOf(draft: Pick<EditorDraft, 'skill' | 'workflow'>): TaskSource | null {
+  if (draft.skill) return { source: 'skill', ref: draft.skill }
+  return draft.workflow && draft.workflow !== QUICK_TASK ? { source: 'workflow', ref: draft.workflow } : null
+}
+
+/** The draft keys a source-pill pick sets. */
+export function pickSource(source: TaskSource | null): Pick<EditorDraft, 'skill' | 'workflow' | 'customSteps'> {
+  if (source?.source === 'skill') return { skill: source.ref, workflow: QUICK_TASK, customSteps: null }
+  return { skill: null, workflow: source?.ref ?? QUICK_TASK, customSteps: null }
+}
 
 export const POLL_MINUTES = [2, 5, 10, 15, 30, 60] as const
 export const DISPATCH_SUBTASK_OPTIONS = [1, 2, 4, 6, 8] as const
@@ -75,6 +113,7 @@ export const DEFAULT_FILTERS: DraftFilters = {
   allLabels: '',
   excludeLabels: '',
   changedLabels: '',
+  reviewers: '',
   lookbackDays: 7,
   maxRecords: 25,
 }
@@ -91,8 +130,11 @@ export function newDraft(): EditorDraft {
     intervalSeconds: 300,
     filters: { ...DEFAULT_FILTERS },
     prompt: '',
-    workflow: 'quick-task',
+    workflow: QUICK_TASK,
+    skill: null,
+    customSteps: null,
     runner: null,
+    account: null,
     model: null,
     autonomous: true,
     dispatch: false,
@@ -112,6 +154,7 @@ export function splitList(text: string): string[] {
 export function fromDefinition(definition: AutomationDefinition): EditorDraft {
   const base = newDraft()
   const { task, filters } = definition
+  const skill = skillOfSteps(task.steps)
   return {
     ...base,
     name: definition.name,
@@ -127,13 +170,17 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
           allLabels: joinList(filters.allLabels),
           excludeLabels: joinList(filters.excludeLabels),
           changedLabels: joinList(filters.changedLabels),
+          reviewers: joinList(filters.reviewers),
           lookbackDays: filters.lookbackDays,
           maxRecords: filters.maxRecords,
         }
       : base.filters,
     prompt: task.prompt,
     workflow: task.workflow ?? base.workflow,
+    skill,
+    customSteps: task.steps && !skill ? task.steps : null,
     runner: task.runner ?? null,
+    account: task.agentProfile ?? null,
     model: task.model ?? null,
     autonomous: task.autonomous ?? false,
     dispatch: task.dispatch !== undefined,
@@ -179,8 +226,10 @@ export function applyTemplate(draft: EditorDraft, template: TemplatePick): Edito
     events: template.events?.length ? [...template.events] : draft.events,
     intervalSeconds: template.intervalSeconds ?? draft.intervalSeconds,
     prompt: template.prompt,
-    workflow: template.workflow ?? draft.workflow,
+    ...(template.workflow ? pickSource({ source: 'workflow', ref: template.workflow }) : {}),
     runner: template.runner !== undefined && isRunner(template.runner) ? template.runner : draft.runner,
+    // An account belongs to one runner; a template that names a runner must not inherit it.
+    account: template.runner !== undefined && isRunner(template.runner) ? null : draft.account,
     model: template.model ?? draft.model,
     autonomous: template.autonomous ?? draft.autonomous,
     dispatch: template.dispatch !== undefined,
@@ -205,8 +254,13 @@ export type AutomationBody = Omit<CreateAutomationInput, 'enable'>
 export function toBody(draft: EditorDraft): AutomationBody {
   const task: AutomationBody['task'] = {
     prompt: draft.prompt,
-    ...(draft.workflow ? { workflow: draft.workflow } : {}),
+    ...(draft.skill
+      ? { steps: skillSteps(draft.skill) }
+      : draft.customSteps
+        ? { steps: draft.customSteps }
+        : draft.workflow ? { workflow: draft.workflow } : {}),
     ...(draft.runner ? { runner: draft.runner } : {}),
+    ...(draft.account ? { agentProfile: draft.account } : {}),
     ...(draft.model ? { model: draft.model } : {}),
     autonomous: draft.autonomous,
     ...(draft.dispatch ? { dispatch: { maxSubtasks: draft.maxSubtasks, reviewChild: draft.reviewChild } } : {}),
@@ -231,6 +285,7 @@ export function toBody(draft: EditorDraft): AutomationBody {
       ...list(f.allLabels, 'allLabels'),
       ...list(f.excludeLabels, 'excludeLabels'),
       ...list(f.changedLabels, 'changedLabels'),
+      ...list(f.reviewers, 'reviewers'),
       lookbackDays: clamp(f.lookbackDays, 1, 90),
       maxRecords: clamp(f.maxRecords, 1, 100),
     },

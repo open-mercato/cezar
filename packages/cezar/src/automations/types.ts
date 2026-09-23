@@ -8,6 +8,9 @@ export const automationEventSchema = z.enum([
   'issue.opened',
   'issue.labeled',
   'issue.unlabeled',
+  'pull_request.reviewed',
+  'pull_request.review_requested',
+  'pull_request.rereview_requested',
 ]);
 
 const boundedString = z.string().trim().min(1).max(200);
@@ -21,6 +24,7 @@ export const automationFiltersSchema = z
     anyLabels: stringList,
     excludeLabels: stringList,
     changedLabels: stringList,
+    reviewers: stringList,
     lookbackDays: z.number().int().min(1).max(90).default(7),
     maxRecords: z.number().int().min(1).max(100).default(25),
   })
@@ -32,6 +36,9 @@ export const automationTaskSchema = z
     workflow: z.string().trim().min(1).max(200).optional(),
     steps: z.array(workflowStepSchema).min(1).max(100).optional(),
     runner: z.enum(RUNNER_IDS).optional(),
+    /** Agent account the launched runs use — `POST /runs`' own `agentProfile`. Omitted = the
+     *  project's selection at launch time. */
+    agentProfile: z.string().trim().min(1).max(64).optional(),
     model: z.string().trim().min(1).max(200).optional(),
     variants: z.union([z.literal(1), z.literal(2), z.literal(3)]).optional(),
     worktree: z.boolean().optional(),
@@ -78,7 +85,7 @@ export const automationDefinitionObjectSchema = z
     enabled: z.boolean().default(false),
     /** A definition written before schedules (spec 2026-09-14) has no `kind`: it is a poll. */
     kind: z.enum(['github', 'schedule']).default('github'),
-    events: z.array(automationEventSchema).min(1).max(4).optional(),
+    events: z.array(automationEventSchema).min(1).max(7).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
     schedule: automationScheduleSchema.optional(),
@@ -181,6 +188,7 @@ export const automationReceiptSchema = z
         title: z.string().max(500), url: z.string().url(), author: z.string().max(200),
         assignees: z.array(z.string().max(200)).max(100), labels: z.array(z.string().max(200)).max(100),
         changedLabel: z.string().max(200).optional(),
+        reviewer: z.string().max(200).optional(),
       })
       .passthrough()
       .optional(),

@@ -1,3 +1,33 @@
+# 0.11.1 (2026-09-18)
+
+## Highlights
+A patch release that makes the cockpit tell the truth about what it is doing. A reply typed into a task that looks finished, but is still running, now reaches the live session instead of bouncing into the draft, and a turn parked on its own dispatched subagents stops reading as "needs you". Starting cezar in a folder no longer adds it to the project list you curated. Three more failures that all looked like "nothing is happening" are fixed: a stale poll lock that silenced every project for ten minutes, an OpenCode turn over five minutes parked under Needs you, and a provider disabled by an auth rejection nobody verified. Automations gain a PR-review trigger with account and skill pickers, a picked or dropped image keeps a named copy in the attachment library so a later task can name the file it means, and the server install stops emitting an nginx directive older servers reject while `server-deploy` fails when the service did not actually restart. The README is a short front page again — demo video, screenshots, a reference doc beside it — and it reads correctly on a phone.
+
+## ✨ Features
+- ✨ Starting cezar in a folder registers it only while your project list is empty, so a worktree or scratch checkout is served without joining the list you curated (fixes #872). (#774) *(@patzick)*
+- ✨ Automations can trigger on PR reviews, and pick the agent account and skills a triggered run uses. (#1016) *(@patzick)*
+- ✨ A picked or dropped image keeps a named copy in the project's attachment library, so a later task can refer to `architecture-v2.png` — clipboard screenshots stay out of it (fixes #960). (#1012) *(@matwiatrzyk)*
+
+## 🐛 Fixes
+- 🐛 A reply typed into a task that looks done, but is running, lands in the live session instead of bouncing into the draft. (#986) *(@patzick)*
+- 🐛 A stale automations poll lock no longer silences every project for ten minutes (fixes #983). (#993) *(@pat-lewczuk)*
+- 🐛 An OpenCode turn longer than five minutes no longer parks the run under Needs you (fixes #897). (#1005) *(@pat-lewczuk)*
+- 🔐 A runtime auth rejection verifies itself before it sticks, so a provider is not disabled by a transient refusal. (#1014) *(@pat-lewczuk)*
+- 🐛 A dispatching parent is told `--budget` is optional, so uncapped task trees stop inventing caps for their children. (#1015) *(@patzick)*
+- 🐛 A turn parked on its own dispatched subagents stops reading as "needs you" (fixes #654, #933). (#995) *(@pat-lewczuk)*
+- 🔧 The ubuntu-vps vhost no longer emits a standalone `http2` directive that nginx older than 1.25.1 rejects (fixes #910). (#994) *(@pat-lewczuk)*
+- 🔧 `server-deploy` fails the deploy when the service did not actually restart (fixes #912). (#1009) *(@pat-lewczuk)*
+
+## 📝 Specs & Documentation
+- 📝 The README is a short front page again — demo video, screenshots and a mobile gallery — with the long reference moved to `docs/reference.md`. (#1013) *(@pat-lewczuk)*
+- 📝 The README's link row and screenshot gallery read correctly on a phone. (#1022) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @patzick
+- @pat-lewczuk
+- @matwiatrzyk
+
 # 0.11.0 (2026-09-15)
 
 ## Highlights
@@ -38,58 +68,6 @@ The cockpit learns to delegate: a running task may now dispatch other tasks with
 - @wojciechszyjka
 - @zawoj
 - @Damian-Szczepanski
-
-## 🔧 Changed
-
-- **Starting cezar in a folder only registers it while you have no projects yet.** The first run
-  still seeds the registry from the current repo, and booting a project you already have keeps
-  bumping it to the top of the sidebar — but once anything is registered, running `cezar` somewhere
-  else serves that folder without quietly adding it to your project list. Run it from a worktree or
-  a scratch checkout as often as you like; the list stays the one you curated. The folder you
-  started in is still fully usable: it leads the sidebar marked **not saved**, its tasks and panes
-  work exactly as a saved project's do, and both **Global settings → Projects** and the
-  project's own **Settings → General** show it as *not registered* with a one-click **Add project** —
-  the one place without Remove and a per-project task cap, because there is no registry entry to
-  edit. Adding is otherwise unchanged: `cezar projects add <dir>` or the **+** button.
-  `CEZ_SINGLE_PROJECT=1` deployments are exempt, since there the launch folder *is* the project.
-
-## 🐛 Fixes
-
-- 🐛 **Automations in the folder cezar is serving keep running when that folder is not one of your
-  saved projects.** The workspace scheduler compares its live handles against the project registry
-  and drops anything the registry does not name — which the folder you started cezar in is not,
-  now that starting somewhere new no longer registers it. Its automations stayed listed and
-  switched on in the cockpit while nothing polled GitHub for them, and nothing said so. The boot
-  project is now pinned against that sweep: cezar is demonstrably serving it, registered or not.
-  And saving that folder with **Add project** no longer splits its automations in two: the folder
-  briefly answered to both the boot alias and its new registry slug, which opened two independent
-  handles on one `.ai/cezar` — so switching an automation off in the cockpit left the copy the
-  scheduler polls untouched, and it went on launching runs until you restarted cezar. Automation
-  state is now keyed by folder, so a folder addressed twice is still one automation set, scheduled
-  once. Only affects deployments that opted into automations with `CEZ_AUTOMATIONS=1`. (#872)
-- 🐛 **A reply typed into a task that looks finished, but is running, now lands.** The thread reads
-  from two feeds — the run record for what the task *is*, the event stream for what it *said* — and
-  the record can go quietly out of date: a half-open workspace socket (TCP dead, `readyState` still
-  OPEN, so no error ever fires) stops delivering record updates while the transcript, which has had
-  its own liveness watchdog since #424, keeps flowing. Nothing else asked: the cockpit does not poll,
-  records stay fresh for five minutes, and window focus is deliberately not a refetch trigger — so
-  navigating to Tasks and back showed the same cached lie, and only a full page reload fixed it. A
-  task that had been continued or auto-resumed therefore sat there reading as done while it worked,
-  and the composer, aimed by that record at `POST /continue`, got "run is still active" back: the
-  prompt bounced into the draft with a toast, and re-sending it bounced again. Three changes, each
-  closing the hole at a different depth. The workspace stream gets the same watchdog the transcript
-  has — a silence spanning both data and the server's 15 s keep-alive is a dead socket, so it is
-  rebuilt and the reconnect reconciles everything missed. The thread's stale-record healer, which
-  already refetched a record still claiming `running` over a settled transcript, now works in the
-  other direction too: a session that has *opened* and not ended, under a record calling the run
-  done, refetches after the same two-second grace. And the composer no longer treats a 409 as the
-  end — it refetches the record authoritatively and, when the truth names the other endpoint,
-  delivers there instead, so the reply reaches the live session rather than the draft. A 409 the
-  fresh record agrees with (a disconnected provider, a session with nothing to resume) is still
-  reported as the server worded it, and an empty submit — the one-click Continue — is never turned
-  into an empty message. The run header's actions follow the same rule: a refused Continue or Cancel
-  refetches the record it was drawn from, so the bar redraws to the truth instead of offering the
-  same refusal. (#986)
 
 # 0.10.1 (2026-09-04)
 

@@ -145,15 +145,14 @@ describe('fileToPendingAttachment', () => {
 })
 
 /**
- * The single strip point between the composer's state and the request body (#929). Two things
- * must hold: the preview never leaves (it is a second full copy of the bytes), and the filename
- * leaves for files but not for images.
+ * The single strip point between the composer's state and the request body (#929, #960). Two
+ * things must hold: the preview never leaves (it is a second full copy of the bytes), and the
+ * filename leaves whenever the upload had one of its own — image or file alike — but never for a
+ * clipboard paste.
  */
 describe('toAttachmentInput', () => {
   it('drops the render-only fields, so a preview never doubles the request body', async () => {
-    const image = await fileToPendingAttachment(
-      new File([new Uint8Array([137, 80, 78, 71])], 'tiny.png', { type: 'image/png' }),
-    )
+    const image = await fileToPendingAttachment(new File([new Uint8Array([137])], '', { type: 'image/png' }))
     expect(image.preview).toBeDefined()
     const wire = toAttachmentInput(image)
     expect(Object.keys(wire).sort()).toEqual(['data', 'mediaType'])
@@ -169,8 +168,23 @@ describe('toAttachmentInput', () => {
     })
   })
 
+  /** #960 — a dragged or picked image has a filename exactly like a dragged file does
+   *  (`fileToPendingAttachment` sets `originalName` from `file.name` either way), so it is filed
+   *  in the library too now: the whole point of #960 is that `architecture-v2.png` should not
+   *  become unfindable clutter just because it happens to be an image. */
+  it('sends a picked or dragged image’s own name too, not just a file’s', async () => {
+    const image = await fileToPendingAttachment(
+      new File([new Uint8Array([137, 80, 78, 71])], 'diagram.png', { type: 'image/png' }),
+    )
+    expect(toAttachmentInput(image)).toEqual({
+      mediaType: 'image/png',
+      data: image.data,
+      name: 'diagram.png',
+    })
+  })
+
   /** A pasted screenshot has no filename — the chip falls back to a literal string, and sending
-   *  that would be noise the server has to ignore. Images are not filed in the library. */
+   *  that would be noise the server has to ignore. */
   it('never sends the placeholder name a pasted image falls back to', async () => {
     const pasted = await fileToPendingAttachment(new File([new Uint8Array([137])], '', { type: 'image/png' }))
     expect(pasted.name).toBe('pasted image')

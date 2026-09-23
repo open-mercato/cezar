@@ -6,7 +6,22 @@
 // quirk that motivates the v2 turn-end fix: the HTTP prompt response
 // resolves BEFORE the final SSE parts and the `session.idle` — so a correct
 // v2 stream must take `turn.completed` from `session.idle`, not from the
-// HTTP response (which is where v1 synthesizes its `turn-end`).
+// HTTP response.
+//
+// Four scripts, selected by a marker in the prompt text, so the #897 shapes
+// are reproducible without waiting five real minutes:
+//   (default)     the ordering quirk above — respond, then stream, then idle.
+//   `#drop-post`  destroy the message POST's socket mid-turn WITHOUT a
+//                 response, keep streaming parts, send `session.idle` later.
+//                 This is what undici's 300 s headersTimeout/bodyTimeout did to
+//                 a long turn, from the client's point of view: the request is
+//                 gone while the session is still working.
+//   `#no-idle`    respond and stream normally, but never send `session.idle` —
+//                 a server whose turn boundary the runner has to synthesize.
+//   `#drop-then-die` destroy the message POST's socket AND then close the event
+//                 bus: the drop was real, and the runner has to say so.
+// `MOCK_NO_EVENT_BUS=1` in the environment makes `GET /event` 404 instead, for
+// the no-event-bus fallback.
 import { createServer } from 'node:http';
 
 const args = process.argv.slice(2);
@@ -20,12 +35,18 @@ const port = Number(arg('--port', '0'));
 const SESSION_ID = 'ses_mock_1';
 const MESSAGE_ID = 'msg_mock_1';
 
+/** Turn 1 keeps the original ids (the golden wiring test pins them); later
+ *  turns get their own message and part ids, as a real server would. */
+let turn = 0;
+const suffix = () => (turn <= 1 ? '' : `_t${turn}`);
+const messageId = () => `${MESSAGE_ID}${suffix()}`;
+
 let sse = null;
 const send = (event) => {
   if (sse) sse.write(`data: ${JSON.stringify(event)}\n\n`);
 };
 const info = (extra) => ({
-  id: MESSAGE_ID,
+  id: messageId(),
   sessionID: SESSION_ID,
   role: 'assistant',
   time: { created: 1760000000000 },
@@ -41,6 +62,11 @@ const info = (extra) => ({
 const server = createServer((req, res) => {
   const url = req.url ?? '';
   if (req.method === 'GET' && url.startsWith('/event')) {
+    if (process.env.MOCK_NO_EVENT_BUS === '1') {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      res.end('no event bus');
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     sse = res;
     send({ type: 'server.connected', properties: {} });
@@ -55,18 +81,76 @@ const server = createServer((req, res) => {
       return;
     }
     if (req.method === 'POST' && url === `/session/${SESSION_ID}/message`) {
+      turn += 1;
+      const MESSAGE_ID = messageId();
+      const promptText = (() => {
+        try {
+          return JSON.parse(body).parts.map((p) => p.text ?? '').join('\n');
+        } catch {
+          return '';
+        }
+      })();
+      const script = promptText.includes('#drop-then-die')
+        ? 'drop-then-die'
+        : promptText.includes('#drop-post')
+          ? 'drop-post'
+          : promptText.includes('#no-idle')
+            ? 'no-idle'
+            : 'default';
+
+      // The other half of the #897 shape: the POST drops AND the session is
+      // really gone. Swallowing the drop must not swallow this.
+      if (script === 'drop-then-die') {
+        res.destroy();
+        setTimeout(() => {
+          if (sse) sse.end();
+          sse = null;
+        }, 40);
+        return;
+      }
+
+      // #897: the request vanishes mid-turn while the session keeps working —
+      // exactly what undici's 300 s cut looked like from the runner's side.
+      if (script === 'drop-post') {
+        send({ type: 'message.updated', properties: { info: info({}) } });
+        send({
+          type: 'message.part.updated',
+          properties: {
+            part: { id: `prt_drop_before${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: 'Watching CI.', time: { start: 1760000000100, end: 1760000000200 } },
+          },
+        });
+        res.destroy();
+        setTimeout(() => {
+          send({
+            type: 'message.part.updated',
+            properties: {
+              part: {
+                id: `prt_drop_after${suffix()}`,
+                messageID: MESSAGE_ID,
+                sessionID: SESSION_ID,
+                type: 'text',
+                text: 'Still working after the drop.',
+                time: { start: 1760000000300, end: 1760000000400 },
+              },
+            },
+          });
+        }, 40);
+        setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 120);
+        return;
+      }
+
       send({ type: 'message.updated', properties: { info: info({}) } });
       send({
         type: 'message.part.updated',
         properties: {
-          part: { id: 'prt_mock_t1', messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: 'Checking the working tree.' },
+          part: { id: `prt_mock_t1${suffix()}`, messageID: MESSAGE_ID, sessionID: SESSION_ID, type: 'text', text: 'Checking the working tree.' },
         },
       });
       send({
         type: 'message.part.updated',
         properties: {
           part: {
-            id: 'prt_mock_c1',
+            id: `prt_mock_c1${suffix()}`,
             messageID: MESSAGE_ID,
             sessionID: SESSION_ID,
             type: 'tool',
@@ -80,7 +164,7 @@ const server = createServer((req, res) => {
         type: 'message.part.updated',
         properties: {
           part: {
-            id: 'prt_mock_c1',
+            id: `prt_mock_c1${suffix()}`,
             messageID: MESSAGE_ID,
             sessionID: SESSION_ID,
             type: 'tool',
@@ -94,7 +178,7 @@ const server = createServer((req, res) => {
         type: 'message.part.updated',
         properties: {
           part: {
-            id: 'prt_mock_c1',
+            id: `prt_mock_c1${suffix()}`,
             messageID: MESSAGE_ID,
             sessionID: SESSION_ID,
             type: 'tool',
@@ -126,7 +210,7 @@ const server = createServer((req, res) => {
           type: 'message.part.updated',
           properties: {
             part: {
-              id: 'prt_mock_t2',
+              id: `prt_mock_t2${suffix()}`,
               messageID: MESSAGE_ID,
               sessionID: SESSION_ID,
               type: 'text',
@@ -136,7 +220,9 @@ const server = createServer((req, res) => {
           },
         });
       }, 30);
-      setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 90);
+      if (script !== 'no-idle') {
+        setTimeout(() => send({ type: 'session.idle', properties: { sessionID: SESSION_ID } }), 90);
+      }
       return;
     }
     res.writeHead(200, { 'content-type': 'application/json' });

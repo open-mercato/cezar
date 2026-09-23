@@ -35,6 +35,15 @@ describe('automation schemas', () => {
     ).toBe(false);
   });
 
+  it('accepts the review events and an optional reviewers filter', () => {
+    const parsed = automationDefinitionSchema.safeParse({
+      ...definition,
+      events: ['pull_request.reviewed', 'pull_request.review_requested', 'pull_request.rereview_requested'],
+      filters: { lookbackDays: 7, maxRecords: 25, reviewers: ['octocat'] },
+    });
+    expect(parsed.success, JSON.stringify(parsed.success ? null : parsed.error.issues)).toBe(true);
+  });
+
   it('preserves unknown fields at every persisted object layer', () => {
     const parsed = automationDefinitionSchema.parse({
       ...definition,

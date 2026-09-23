@@ -72,6 +72,33 @@ describe('GitHub automation API', () => {
     expect(((await detail.json()) as any).state).toMatchObject({ revision: 2, baselineAt: expect.any(String) });
   });
 
+  it('establishes a baseline when an edit switches a paused poll on, and not on a later edit', async () => {
+    const created = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
+    const updated = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...input, enabled: true, expectedRevision: 1 }, 'PUT'));
+    expect(updated.status).toBe(200);
+    const first = ((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(first).toMatchObject({ baselineAt: expect.any(String), cursor: { timestamp: first.baselineAt } });
+
+    await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...input, name: 'Renamed', enabled: true, expectedRevision: 2 }, 'PUT'));
+    const second = ((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(second.baselineAt).toBe(first.baselineAt);
+  });
+
+  it('refuses an unknown agent account on create and on update, like POST /runs does', async () => {
+    const withAccount = { ...input, task: { ...input.task, agentProfile: 'nope' } };
+    const created = await apiRequest(app(), '/api/v1/automations', json(withAccount));
+    expect(created.status).toBe(400);
+    expect(((await created.json()) as any).error).toContain('nope');
+
+    const ok = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
+    const updated = await apiRequest(app(), `/api/v1/automations/${ok.id}`, json({ ...withAccount, expectedRevision: 1 }, 'PUT'));
+    expect(updated.status).toBe(400);
+    // The default account is always resolvable, so it saves and round-trips.
+    const fine = await apiRequest(app(), `/api/v1/automations/${ok.id}`, json({ ...input, task: { ...input.task, agentProfile: 'default' }, expectedRevision: 1 }, 'PUT'));
+    expect(fine.status).toBe(200);
+    expect(((await fine.json()) as any).automation.task.agentProfile).toBe('default');
+  });
+
   it('runs preview checks asynchronously without writing receipts', async () => {
     const server = app();
     const created = ((await (await apiRequest(server, '/api/v1/automations', json(input))).json()) as any).automation;
