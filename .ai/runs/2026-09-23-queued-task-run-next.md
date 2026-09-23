@@ -72,4 +72,4 @@ A queued task can be promoted with one action, "Run next". It then takes the fir
 
 ### Phase 4: Docs
 
-- [ ] 4.1 Document the Run next behavior
+- [x] 4.1 Document the Run next behavior — 9aece72a
