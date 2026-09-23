@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
+import { resolveClaudeBin } from './claude-bin.ts';
 import { withEnvPrefix } from './shell-env.ts';
 
 export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
@@ -243,7 +244,7 @@ function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState |
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
-    executable: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
+    executable: () => resolveClaudeBin(),
     statusArgs: ['auth', 'status', '--json'],
     loginArgs: ['auth', 'login'],
     installHint: 'Install Claude Code, then run `claude auth login`.',
