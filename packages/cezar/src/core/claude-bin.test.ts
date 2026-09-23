@@ -86,6 +86,22 @@ describe.skipIf(process.platform === 'win32')('resolveClaudeBin', () => {
     expect(resolveClaudeBin({ PATH: pathDir }, home, 'darwin', candidates)).toBe('claude');
   });
 
+  it('ignores a DIRECTORY named claude, on PATH and at a known location alike', () => {
+    // Every directory carries the execute bit, so `X_OK` alone accepts a folder — and the spawn
+    // then dies with EACCES instead of the "not found" plus install hint the fallback exists for.
+    mkdirSync(join(pathDir, 'claude'), { recursive: true });
+    mkdirSync(join(home, '.local', 'bin', 'claude'), { recursive: true });
+    const npmGlobal = join(nodeBinDir, 'claude');
+    writeExecutable(npmGlobal);
+    expect(resolveClaudeBin({ PATH: pathDir }, home, 'darwin', candidates)).toBe(npmGlobal);
+  });
+
+  it('searches every PATH entry, split by the separator of the platform it was asked about', () => {
+    const second = join(root, 'bin2');
+    writeExecutable(join(second, 'claude'));
+    expect(resolveClaudeBin({ PATH: `${pathDir}:${second}` }, home, 'linux', candidates)).toBe('claude');
+  });
+
   it('ignores empty PATH entries instead of probing the working directory', () => {
     writeExecutable(join(home, '.local', 'bin', 'claude'));
     // A trailing/doubled `:` means "the cwd" to some shells; we must not honour that.

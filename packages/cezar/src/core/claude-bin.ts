@@ -1,7 +1,7 @@
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, statSync } from 'node:fs';
 import { execPath } from 'node:process';
 import { homedir } from 'node:os';
-import { delimiter, dirname, join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 /**
  * Where Claude Code's own installers put the binary, most specific first. cezar inherits the
@@ -43,10 +43,12 @@ export function claudeInstallCandidates(
   ];
 }
 
+/** A runnable FILE. Every directory carries the execute bit, so `X_OK` alone would accept a
+ *  folder named `claude` and turn the clean "not found" fallback into an `EACCES` at spawn time. */
 function isExecutable(path: string): boolean {
   try {
     accessSync(path, constants.X_OK);
-    return true;
+    return statSync(path).isFile();
   } catch {
     return false;
   }
