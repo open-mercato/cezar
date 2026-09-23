@@ -98,10 +98,11 @@ describe.skipIf(process.platform === 'win32')('resolveClaudeBin', () => {
     expect(resolveClaudeBin({ PATH: `::${pathDir}::` }, home, 'darwin', candidates)).toBe('claude');
   });
 
-  it('searches every PATH entry, split by the separator of the platform it was asked about', () => {
-    // Two REAL directories with the match in the second: a probe that stopped after the first
-    // non-empty segment, or that split on the HOST's delimiter instead of `platform`'s, fails here
-    // while the single-directory cases above would still pass.
+  it('searches every PATH entry, not just the first', () => {
+    // Two REAL directories with the match in the SECOND, which the single-directory cases above
+    // cannot distinguish: a probe that stopped after the first non-empty segment passes those and
+    // fails this. (It says nothing about deriving the separator from `platform` rather than the
+    // host — this block is skipped on win32, so the two always agree at `:`.)
     const second = join(root, 'bin2');
     writeExecutable(join(second, 'claude'));
     expect(resolveClaudeBin({ PATH: `${pathDir}:${second}` }, home, 'linux', candidates)).toBe('claude');

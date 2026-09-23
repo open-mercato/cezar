@@ -32,10 +32,14 @@ const WIN32_UNSAFE_RE = /["%!]/;
  *
  * Single source of truth for both: `quoteExecutable` does the rewriting through the `g` variant
  * derived below, `isShellEmbeddable` tests through this one, so the gate cannot drift from the
- * behaviour it is gating.
+ * behaviour it is gating. The derivation carries `flags` across as well as `source`, so adding a
+ * flag here cannot silently apply to only one of the two.
  */
 const WIN32_QUOTE_REWRITES_RE = /[%&!"]/;
-const WIN32_QUOTE_REWRITES_ALL_RE = new RegExp(WIN32_QUOTE_REWRITES_RE.source, 'g');
+const WIN32_QUOTE_REWRITES_ALL_RE = new RegExp(
+  WIN32_QUOTE_REWRITES_RE.source,
+  `${WIN32_QUOTE_REWRITES_RE.flags}g`,
+);
 
 /** POSIX single-quoting — the `'\''` dance, so any character but a control one is inert. */
 export function shellQuote(value: string): string {
@@ -50,9 +54,11 @@ export function shellQuote(value: string): string {
  * KNOWN LIMITATION on win32: the `^`-prefixing below is not actually an escape. Inside a
  * `cmd.exe` double-quoted argument `^` is inert, so a path containing `"`, `%` or `!` comes back
  * corrupted rather than protected — `C:\Users\R&D\claude.exe` becomes `C:\Users\R^&D\claude.exe`,
- * and `WIN32_UNSAFE_RE` above documents that there is no escape to reach for. Callers that can
- * degrade should gate on {@link isShellEmbeddable} first; this behaviour is preserved as-is
- * because `provider-auth`'s `loginCommand` pins it.
+ * and {@link WIN32_QUOTE_REWRITES_RE} above names every character with no escape to reach for.
+ * (That is the set this function rewrites, `&` included — the narrower `WIN32_UNSAFE_RE` covers
+ * only {@link renderEnvPrefix}'s `set` assignments.) Callers that can degrade should gate on
+ * {@link isShellEmbeddable} first; this behaviour is preserved as-is because `provider-auth`'s
+ * `loginCommand` pins it.
  */
 export function quoteExecutable(executable: string, platform: NodeJS.Platform): string {
   if (platform === 'win32') return `"${executable.replace(WIN32_QUOTE_REWRITES_ALL_RE, '^$&')}"`;

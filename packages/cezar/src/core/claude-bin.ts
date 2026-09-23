@@ -64,6 +64,9 @@ export function claudeShellCandidates(
 ): string[] {
   const spawnable = claudeInstallCandidates(home, platform, nodeBinDir);
   if (platform !== 'win32') return spawnable;
+  // Every win32 candidate is an `.exe` today, so this covers all of them. A future candidate with
+  // another extension would pass through WITHOUT a `.cmd` twin — add its shim explicitly then; the
+  // exact-order assertion in `claude-bin.test.ts` fails until someone does.
   return spawnable.flatMap((candidate) =>
     candidate.endsWith('.exe')
       ? [candidate, `${candidate.slice(0, -'.exe'.length)}.cmd`]
