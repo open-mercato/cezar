@@ -63,12 +63,12 @@ A queued task can be promoted with one action, "Run next". It then takes the fir
 
 ### Phase 2: API
 
-- [ ] 2.1 POST /runs/:id/promote route and contract
+- [x] 2.1 POST /runs/:id/promote route and contract — 08944df5
 
 ### Phase 3: Cockpit
 
-- [ ] 3.1 Shared queued-order comparator
-- [ ] 3.2 Run next action in the run header
+- [x] 3.1 Shared queued-order comparator — e04d602c
+- [x] 3.2 Run next action in the run header — 115a9182
 
 ### Phase 4: Docs
 
