@@ -61,7 +61,10 @@ async function probeClaude(): Promise<BackendCheck> {
     return {
       name: 'claude',
       available: false,
-      hint: 'install Claude Code (curl -fsSL https://claude.ai/install.sh | bash) and log in',
+      // npm, to match what cezar's own installer runs (`server-install/steps.ts`, `NPM_GLOBAL`)
+      // and what the cockpit's accounts panel tells users — and because it is the one route
+      // that works on every platform this runs on.
+      hint: 'install Claude Code (npm i -g @anthropic-ai/claude-code) and log in',
     };
   }
 }
