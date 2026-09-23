@@ -15,9 +15,9 @@ import type {
   RunStatus,
 } from '@open-mercato/cezar-api-client'
 
-import { TaskThreadRoute, ThreadView } from './task-thread'
+import { TaskThreadRoute, ThreadView, liveTurnStart } from './task-thread'
 import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
-import { reduceThread } from './thread-state'
+import { reduceThread, type ThreadTurn } from './thread-state'
 
 afterEach(() => {
   cleanup()
@@ -1338,5 +1338,29 @@ describe('TaskThreadRoute — read receipts', () => {
     visit('r1')
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
     expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
+  })
+})
+
+describe('liveTurnStart — where the Working… counter starts', () => {
+  const run = { startedAt: '2026-09-23T09:00:00.000Z' } as ApiRun
+  const turn = (extra: Partial<ThreadTurn>): ThreadTurn => ({ id: 't', items: [], ...extra })
+
+  it('uses the open turn’s start', () => {
+    expect(liveTurnStart(run, { turns: [turn({ startedAt: '2026-09-23T10:00:00.000Z' })] })).toBe(
+      '2026-09-23T10:00:00.000Z',
+    )
+  })
+
+  it('between turns, counts from when the last one closed', () => {
+    const closed = turn({
+      startedAt: '2026-09-23T10:00:00.000Z',
+      completed: { stopReason: 'end_turn', ts: '2026-09-23T10:05:00.000Z' },
+    })
+    expect(liveTurnStart(run, { turns: [closed] })).toBe('2026-09-23T10:05:00.000Z')
+  })
+
+  it('falls back to the run’s own start', () => {
+    expect(liveTurnStart(run, { turns: [] })).toBe(run.startedAt)
+    expect(liveTurnStart(run, { turns: [turn({})] })).toBe(run.startedAt)
   })
 })
