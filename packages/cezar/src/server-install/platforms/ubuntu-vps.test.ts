@@ -1,12 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync, execSync } from 'node:child_process';
 import {
+  enableHttp2OnTlsListenerSed,
   isNpxExecStart,
   nginxVhost,
+  parseNginxVersion,
   refreshNpxCacheForRedeploy,
   serviceExecStart,
+  supportsHttp2Directive,
   systemdUnit,
   ubuntuVps,
 } from './ubuntu-vps.ts';
@@ -150,15 +154,189 @@ describe('nginxVhost', () => {
     expect(nginxVhost(4321, 'cezar.example.com')).toContain('server_name cezar.example.com;');
   });
 
-  it('enables HTTP/2 so long-lived SSE streams do not exhaust the browser connection pool', () => {
-    expect(nginxVhost(4321)).toContain('http2 on;');
-  });
-
   it('defaults to the legacy htpasswd path but accepts an instance-scoped one', () => {
     expect(nginxVhost(4321)).toContain('auth_basic_user_file /etc/cezar/htpasswd;');
     expect(nginxVhost(4322, 'shop.example.com', '/etc/cezar/htpasswd-shop-example-com')).toContain(
       'auth_basic_user_file /etc/cezar/htpasswd-shop-example-com;',
     );
+  });
+});
+
+/**
+ * Issue #910: the vhost carried a standalone `http2 on;`, a directive that only
+ * exists from nginx 1.25.1. Ubuntu 24.04 LTS ships 1.24.0, where it is a hard
+ * parse error — `nginx -t` failed and the certbot step could never complete.
+ * The old test pinned that exact string, which is why CI never noticed.
+ */
+describe('HTTP/2 syntax per nginx version (#910)', () => {
+  /** A `listen` line has no standalone `http2` directive on its own line. */
+  const standaloneHttp2 = /^\s*http2\s/m;
+
+  /** A runner that reports `version` from `nginx -v` and records sudo commands. */
+  function nginxRunner(version: string | null) {
+    const sudo: string[] = [];
+    const ran = (prefix: string) => sudo.some((c) => c.startsWith(prefix));
+    const runner: Runner = {
+      capture: async (program, args) => {
+        // `nginx -v` prints its banner on STDERR, not stdout.
+        if (program === 'nginx' && args[0] === '-v') {
+          return { code: 0, stdout: '', stderr: version ? `nginx version: nginx/${version} (Ubuntu)\n` : '' };
+        }
+        // The htpasswd step refuses to continue without a real apr1 hash.
+        if (program === 'openssl') return { code: 0, stdout: '$apr1$salt$hash\n', stderr: '' };
+        // The vhost only grows an `ssl_certificate` line once certbot has run…
+        if (args.some((a) => a.includes('ssl_certificate'))) {
+          return { code: ran('certbot') ? 0 : 1, stdout: '', stderr: '' };
+        }
+        // …and an `http2` listener parameter once the post-processing sed has.
+        if (args.some((a) => a.includes('443.*http2'))) {
+          return { code: ran('sed -i -E') ? 0 : 1, stdout: '', stderr: '' };
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      },
+      interactive: async (program, args) => {
+        if (program === 'sudo' && args[0] === 'bash') sudo.push(String(args[2]));
+        return 0;
+      },
+    };
+    return { runner, sudo };
+  }
+
+  /** The content a `writeFileStep` command carries (base64, so quoting survives). */
+  function writtenFile(sudo: string[], path: string): string {
+    const cmd = sudo.find((c) => c.includes(`base64 --decode > '${path}'`));
+    if (!cmd) throw new Error(`nothing wrote ${path}; ran:\n${sudo.join('\n')}`);
+    const b64 = /printf %s '([A-Za-z0-9+/=]+)'/.exec(cmd)?.[1];
+    if (!b64) throw new Error(`no base64 payload in: ${cmd}`);
+    return Buffer.from(b64, 'base64').toString('utf8');
+  }
+
+  function installerUi(): Ui {
+    return {
+      ...createAutoUi(),
+      text: async (o: { message: string }) =>
+        o.message.includes('Domain') ? 'cezar.example.com' : o.message.includes('Email') ? 'ops@example.com' : 'ops',
+      password: async () => 'longenough',
+    } as Ui;
+  }
+
+  it('reads the version out of the banner nginx -v prints on stderr', () => {
+    expect(parseNginxVersion('nginx version: nginx/1.24.0 (Ubuntu)\n')).toBe('1.24.0');
+    expect(parseNginxVersion('nginx version: nginx/1.27.3\n')).toBe('1.27.3');
+    expect(parseNginxVersion('sudo: nginx: command not found')).toBeNull();
+  });
+
+  it('allows the standalone directive only from 1.25.1, and never on an unknown version', () => {
+    expect(supportsHttp2Directive('1.24.0')).toBe(false); // Ubuntu 24.04 LTS
+    expect(supportsHttp2Directive('1.25.0')).toBe(false); // the release just before it landed
+    expect(supportsHttp2Directive('1.25.1')).toBe(true); // where the directive was introduced
+    expect(supportsHttp2Directive('1.26.2')).toBe(true);
+    expect(supportsHttp2Directive('2.0.0')).toBe(true);
+    // Unknown ⇒ the `listen` parameter, which every nginx since 1.9.5 parses.
+    expect(supportsHttp2Directive(null)).toBe(false);
+    expect(supportsHttp2Directive('')).toBe(false);
+    expect(supportsHttp2Directive('mainline')).toBe(false);
+  });
+
+  it('emits no standalone http2 directive for an nginx that cannot parse one', () => {
+    const v = nginxVhost(4321, 'cezar.example.com', '/etc/cezar/htpasswd', '1.24.0');
+    expect(v).not.toMatch(standaloneHttp2);
+    // …and nothing else in the pre-certbot :80 block that 1.24 rejects either:
+    // every directive it emits predates 1.24 by years.
+    expect(v).toContain('listen 80;');
+    expect(v).toContain('proxy_buffering off;');
+  });
+
+  it('emits the standalone http2 directive on nginx >= 1.25.1', () => {
+    expect(nginxVhost(4321, 'cezar.example.com', '/etc/cezar/htpasswd', '1.25.1')).toMatch(standaloneHttp2);
+    expect(nginxVhost(4321, 'cezar.example.com', '/etc/cezar/htpasswd', '1.26.0')).toContain('http2 on;');
+  });
+
+  it('defaults to the syntax every nginx understands when the version is unknown', () => {
+    expect(nginxVhost(4321)).not.toMatch(standaloneHttp2);
+  });
+
+  it('nginx-proxy writes the vhost in the syntax the installed nginx accepts', async () => {
+    for (const [version, wantsDirective] of [
+      ['1.24.0', false],
+      ['1.25.3', true],
+    ] as const) {
+      const { runner, sudo } = nginxRunner(version);
+      await stepById('nginx-proxy').run({ ...ctxWith({ ui: installerUi(), runner }), assumeYes: true });
+      const vhost = writtenFile(sudo, '/etc/nginx/sites-available/cezar');
+      expect(standaloneHttp2.test(vhost), `nginx ${version}`).toBe(wantsDirective);
+    }
+  });
+
+  it('ssl turns HTTP/2 on via certbot’s TLS listener when the directive is unavailable', async () => {
+    const { runner, sudo } = nginxRunner('1.24.0');
+    await stepById('ssl').run({ ...ctxWith({ ui: installerUi(), runner }), assumeYes: true });
+
+    // The pre-certbot vhost must still be parseable by 1.24 …
+    expect(writtenFile(sudo, '/etc/nginx/sites-available/cezar')).not.toMatch(standaloneHttp2);
+    // … and HTTP/2 is switched on afterwards, on the TLS listener certbot made.
+    const certbot = sudo.findIndex((c) => c.startsWith('certbot'));
+    const http2 = sudo.findIndex((c) => c.includes('http2;'));
+    expect(certbot).toBeGreaterThanOrEqual(0);
+    expect(http2).toBeGreaterThan(certbot);
+    expect(sudo[http2]).toContain('nginx -t && systemctl reload nginx');
+  });
+
+  it('ssl leaves the listener alone when the vhost already carries the directive', async () => {
+    const { runner, sudo } = nginxRunner('1.25.3');
+    await stepById('ssl').run({ ...ctxWith({ ui: installerUi(), runner }), assumeYes: true });
+
+    expect(writtenFile(sudo, '/etc/nginx/sites-available/cezar')).toMatch(standaloneHttp2);
+    expect(sudo.some((c) => c.startsWith('sed -i -E'))).toBe(false);
+  });
+});
+
+describe('the sed that adds http2 to certbot’s TLS listener (#910)', () => {
+  // The expression is GNU-sed syntax (`-E`, `!`, `{…}`) targeting Ubuntu/Debian.
+  // Run it for real where a GNU sed exists rather than asserting on its text —
+  // the property that matters is what it does to a certbot-shaped vhost.
+  const gnuSed = (() => {
+    try {
+      return /GNU sed/.test(execFileSync('sed', ['--version'], { encoding: 'utf8' }));
+    } catch {
+      return false;
+    }
+  })();
+
+  // Exactly what `certbot --nginx … --redirect` leaves behind.
+  const certbotVhost = `server {
+    server_name cezar.example.com;
+    listen [::]:443 ssl ipv6only=on; # managed by Certbot
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/cezar.example.com/fullchain.pem; # managed by Certbot
+}
+server {
+    listen 80;
+    listen [::]:80;
+    return 301 https://$host$request_uri; # managed by Certbot
+}
+`;
+
+  it.runIf(gnuSed)('adds http2 to the TLS listeners only, and stays idempotent', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-http2-'));
+    try {
+      const path = join(dir, 'vhost.conf');
+      writeFileSync(path, certbotVhost);
+      const sed = enableHttp2OnTlsListenerSed(path);
+      execSync(sed);
+      const once = readFileSync(path, 'utf8');
+      execSync(sed); // a --reconfigure ssl re-run must not double it up
+      const twice = readFileSync(path, 'utf8');
+
+      expect(once).toContain('listen 443 ssl http2; # managed by Certbot');
+      expect(once).toContain('listen [::]:443 ssl ipv6only=on http2; # managed by Certbot');
+      // certbot's plain-HTTP redirect block has no TLS listener — leave it be.
+      expect(once).toContain('    listen 80;\n');
+      expect(once).toContain('    listen [::]:80;\n');
+      expect(twice).toBe(once);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -352,6 +530,129 @@ describe('ubuntu-vps redeploy npx-cache refresh (#696)', () => {
       else process.env.npm_config_cache = previousCache;
       rmSync(cache, { recursive: true, force: true });
     }
+  });
+});
+
+describe('ubuntu-vps redeploy restart verification (#912)', () => {
+  /** What `systemctl show -p MainPID -p ExecMainStartTimestampMonotonic` prints. */
+  const showOutput = (p: { pid: string; started: string } | null) =>
+    p ? `MainPID=${p.pid}\nExecMainStartTimestampMonotonic=${p.started}\n` : 'MainPID=0\nExecMainStartTimestampMonotonic=0\n';
+
+  /**
+   * A ctx modelling a real `--external-proxy` box: curl always answers 200 (the
+   * port is served — by the OLD process when the restart failed, which is exactly
+   * why "something answers" proves nothing), and `systemctl show` reports whoever
+   * is serving at that moment.
+   */
+  function deployCtx(over: {
+    restartCode?: number;
+    restartStderr?: string;
+    /** false ⇒ restart exits 0 but the process is untouched (the #912 stale process). */
+    restartReplacesProcess?: boolean;
+    /** non-zero ⇒ the identity can't be read at all (no user bus). */
+    showCode?: number;
+    /** non-zero ⇒ only the read AFTER the restart fails. */
+    showCodeAfterRestart?: number;
+    running?: { pid: string; started: string } | null;
+    /** The sudo-driven system unit instead of the rootless `--user` one. */
+    scope?: 'user' | 'system';
+  }) {
+    let current = over.running === undefined ? { pid: '1111', started: '1000' } : over.running;
+    let restarted = false;
+    const warns: string[] = [];
+    const runner: Runner = {
+      interactive: async () => 0,
+      capture: async (program, args) => {
+        if (program === 'curl') return { code: 0, stdout: '200', stderr: '' }; // the port always answers
+        if (program === 'systemctl' && args.includes('show')) {
+          if (args.includes('ExecStart')) return { code: 0, stdout: '/usr/bin/node /srv/dist/index.js', stderr: '' };
+          const failCode = over.showCode ?? (restarted ? over.showCodeAfterRestart : undefined);
+          if (failCode) return { code: failCode, stdout: '', stderr: 'Failed to connect to bus: No medium found\n' };
+          return { code: 0, stdout: showOutput(current), stderr: '' };
+        }
+        if (program === 'systemctl' && args.includes('restart')) {
+          const code = over.restartCode ?? 0;
+          if (code === 0 && (over.restartReplacesProcess ?? true)) current = { pid: '2222', started: '2000' };
+          restarted = true;
+          return { code, stdout: '', stderr: over.restartStderr ?? '' };
+        }
+        return { code: 0, stdout: '', stderr: '' };
+      },
+    };
+    const ui = { ...createAutoUi(), warn: (message: string) => warns.push(message) } as Ui;
+    const ctx = ctxWith({
+      runner,
+      ui,
+      state: {
+        installed: true,
+        externalProxy: true,
+        // Pin the scope the way a real install records it (otherwise it falls
+        // back to "does the unit file exist on this machine").
+        steps: { autostart: { status: 'done', created: { artifacts: [{ kind: 'owned', type: 'service', name: 'cezar.service', scope: over.scope ?? 'user', path: '/tmp/cezar.service' }] } } },
+      },
+    });
+    return { ctx, warns, pid: () => current?.pid ?? null };
+  }
+
+  it('a non-zero `systemctl --user restart` fails the deploy instead of warning', async () => {
+    const { ctx } = deployCtx({ restartCode: 1 });
+    // StepAborted ⇒ runDeploy reports `failed` ⇒ exit 1 and NO
+    // "complete — the service was reloaded and verified" banner.
+    await expect(ubuntuVps.redeploy!(ctx)).rejects.toBeInstanceOf(StepAborted);
+    await expect(ubuntuVps.redeploy!(deployCtx({ restartCode: 1 }).ctx)).rejects.toThrow(/was NOT restarted/);
+  });
+
+  it('names the missing D-Bus session when that is why the restart failed', async () => {
+    const bus = { restartCode: 1, restartStderr: 'Failed to connect to bus: No medium found\n' };
+    await expect(ubuntuVps.redeploy!(deployCtx(bus).ctx)).rejects.toThrow(/No D-Bus user session/);
+    // …echoing systemd's own line, and pointing at a way to get a real session.
+    await expect(ubuntuVps.redeploy!(deployCtx(bus).ctx)).rejects.toThrow(/Failed to connect to bus: No medium found/);
+    await expect(ubuntuVps.redeploy!(deployCtx(bus).ctx)).rejects.toThrow(/XDG_RUNTIME_DIR|machinectl shell/);
+  });
+
+  it('fails when the restart exits 0 but the OLD process is still serving', async () => {
+    // The exact stale-process shape: the port answers, `is-active` would pass, and
+    // nothing was deployed.
+    const { ctx, pid } = deployCtx({ restartReplacesProcess: false });
+    await expect(ubuntuVps.redeploy!(ctx)).rejects.toThrow(/did not actually restart/);
+    expect(pid()).toBe('1111');
+  });
+
+  it('succeeds when the process really was replaced', async () => {
+    const { ctx, pid } = deployCtx({});
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+    expect(pid()).toBe('2222');
+  });
+
+  it('degrades (no false failure) when the service identity cannot be read at all', async () => {
+    // `systemctl show` unavailable ⇒ nothing to compare; the restart's own exit
+    // code stays the gate, so a clean restart must still pass.
+    const { ctx } = deployCtx({ showCode: 1 });
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+  });
+
+  it('warns instead of failing when only the post-restart read is unavailable', async () => {
+    const { ctx, warns } = deployCtx({ showCodeAfterRestart: 1 });
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+    expect(warns.some((w) => /did-it-really-restart/.test(w))).toBe(true);
+  });
+
+  it('a unit that was not running before the deploy has nothing to compare against', async () => {
+    const { ctx } = deployCtx({ running: null });
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
+  });
+
+  it('the sudo-driven system unit is held to the same proof', async () => {
+    // `is-active` passes for the process that was already there, so the system
+    // scope needs the same before/after comparison the user scope gets.
+    const { ctx } = deployCtx({ scope: 'system' });
+    await expect(ubuntuVps.redeploy!(ctx)).rejects.toThrow(/did not actually restart/);
+  });
+
+  it('dry-run still stops before touching the service', async () => {
+    const { ctx } = deployCtx({ restartCode: 1 });
+    ctx.dryRun = true;
+    await expect(ubuntuVps.redeploy!(ctx)).resolves.toBeUndefined();
   });
 });
 

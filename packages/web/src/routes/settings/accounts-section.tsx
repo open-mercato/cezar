@@ -98,7 +98,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
 
 /** The vendor's own install/login instruction, shown when the CLI is not on this machine. */
 const PROVIDER_INSTALL: Record<ProviderId, string> = {
-  claude: 'npm i -g @anthropic-ai/claude-code',
+  claude: 'curl -fsSL https://claude.ai/install.sh | bash',
   codex: 'npm i -g @openai/codex',
   opencode: 'https://opencode.ai',
   cursor: 'curl https://cursor.com/install -fsS | bash',

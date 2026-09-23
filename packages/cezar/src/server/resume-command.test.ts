@@ -101,6 +101,10 @@ describe('resumeCommand — session id validation', () => {
       }
     });
 
+    it.each(['agent;id', 'agent&calc', 'agent|cat', 'agent>out', 'agent<input', 'agent(foo)', 'agent^x', '', '   ', 'agent\\'])('refuses unsafe executable override %j', (bin) => {
+      expect(quoteResumeBin(bin)).toBeNull();
+    });
+
     it('propagates the refusal through resumeCommand — no take-over, not a broken shell', () => {
       const previous = process.env.CEZ_CURSOR_AGENT_BIN;
       process.env.CEZ_CURSOR_AGENT_BIN = 'agent"; rm -rf ~ #';

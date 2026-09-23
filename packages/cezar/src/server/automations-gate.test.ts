@@ -10,10 +10,10 @@ import { createApp, startServer, type ServerDeps } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
 /**
- * GitHub automations are opt-in (#801): `CEZ_AUTOMATIONS=1` turns them on, off is the default.
- * Off, every route of the family answers `409` naming the flag — defense in depth behind the
- * cockpit's nav gate, so a bookmarked deep link or a script cannot drive a feature the operator
- * switched off.
+ * Automations are on by default and `CEZ_AUTOMATIONS=0` opts out (spec 2026-09-14, which flipped
+ * the #801 opt-in). Opted out, every route of the family answers `409` naming the flag — defense
+ * in depth behind the cockpit's nav gate, so a bookmarked deep link or a script cannot drive a
+ * feature the operator switched off.
  *
  * The twin of `inbox-gate.test.ts`, with one deliberate difference. The inbox READER degrades to
  * `200 []` because an inbox that is off is honestly empty; an automations reader cannot say the
@@ -32,7 +32,7 @@ const DEFINITION = {
   task: { prompt: 'Review {{github.url}}' },
 };
 
-describe('automations gate (#801)', () => {
+describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
   let repoRoot: string;
   let dataDir: string;
   let store: RunStore;
@@ -75,7 +75,10 @@ describe('automations gate (#801)', () => {
     body: JSON.stringify(body),
   });
 
-  describe('off (the default)', () => {
+  describe('off (CEZ_AUTOMATIONS=0)', () => {
+    beforeEach(() => {
+      process.env.CEZ_AUTOMATIONS = '0';
+    });
     /** Every route of the feature, in the spelling BACKWARD_COMPATIBILITY.md §2 inventories. */
     const routes = (id: string): Array<[label: string, path: string, init?: RequestInit]> => [
       ['GET /automations', '/api/v1/automations'],
@@ -122,7 +125,7 @@ describe('automations gate (#801)', () => {
     it('hides definitions without destroying them — flipping the flag brings them back', async () => {
       await apiRequest(app(), '/api/v1/automations');
       await apiRequest(app(), `/api/v1/automations/${automationId}`, { method: 'DELETE' });
-      process.env.CEZ_AUTOMATIONS = '1';
+      delete process.env.CEZ_AUTOMATIONS;
       const res = await apiRequest(app(), '/api/v1/automations');
       expect(res.status).toBe(200);
       const body = (await res.json()) as { automations: Array<{ id: string; name: string }> };
@@ -137,10 +140,7 @@ describe('automations gate (#801)', () => {
     });
   });
 
-  describe('on (CEZ_AUTOMATIONS=1)', () => {
-    beforeEach(() => {
-      process.env.CEZ_AUTOMATIONS = '1';
-    });
+  describe('on (the default)', () => {
 
     it('serves the real definitions', async () => {
       const res = await apiRequest(app(), '/api/v1/automations');
@@ -210,16 +210,74 @@ describe('automations gate (#801)', () => {
       } finally {
         server.close();
       }
-      expect(started).toHaveBeenCalledTimes(process.env.CEZ_AUTOMATIONS === '1' ? 1 : 0);
+      expect(started).toHaveBeenCalledTimes(process.env.CEZ_AUTOMATIONS === '0' ? 0 : 1);
     };
 
-    it('never starts polling while the flag is off', async () => {
+    it('never starts polling while opted out', async () => {
+      process.env.CEZ_AUTOMATIONS = '0';
       await boot();
     });
 
-    it('starts once the flag is on, so the gate is the only thing holding it back', async () => {
-      process.env.CEZ_AUTOMATIONS = '1';
+    it('starts by default, so the opt-out is the only thing holding it back', async () => {
       await boot();
+    });
+  });
+
+  /**
+   * The default-on flip's own brake (spec 2026-09-14 § Lifecycle, "Default-on re-baseline"):
+   * `rebaselineIdleAutomations` is unit-tested in isolation (`task-template.test.ts`), but the
+   * wiring that matters is that it actually RUNS, through the real boot sequence, before the
+   * scheduler arms any timer — otherwise every installation upgrading with a poll left
+   * `enabled: true` would resume from a stale cursor and could launch a backlog nobody asked for.
+   * This boots the real server (same pattern as "background scheduler" above) against a project
+   * carrying exactly that shape: an enabled poll that has never succeeded.
+   */
+  describe('default-on re-baseline (boot path)', () => {
+    const savedHome = process.env.CEZ_HOME;
+    const savedDryRun = process.env.CEZ_DRY_RUN;
+    let home: string;
+    let staleId: string;
+
+    beforeEach(() => {
+      home = mkdtempSync(join(tmpdir(), 'cez-automations-gate-rebaseline-home-'));
+      process.env.CEZ_HOME = home;
+      process.env.CEZ_DRY_RUN = '1';
+      const seed = AutomationStore.open(dataDir);
+      staleId = seed.create({ ...DEFINITION, name: 'Stale poll', enabled: true }).id;
+    });
+
+    afterEach(() => {
+      rmSync(home, { recursive: true, force: true });
+      if (savedHome === undefined) delete process.env.CEZ_HOME;
+      else process.env.CEZ_HOME = savedHome;
+      if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = savedDryRun;
+    });
+
+    it('re-baselines a stale enabled poll before the scheduler starts, so upgrading never launches a backlog', async () => {
+      const server = startServer(
+        { repoRoot, store, manager: { isActive: () => false } as unknown as RunManager, version: '0.0.0-test' },
+        0,
+      );
+      try {
+        await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+        // Same warm-up wait as "background scheduler" above: the re-baseline runs inside the
+        // `listProjects().then(...)` chain, strictly before `automationScheduler.start()`.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      } finally {
+        server.close();
+      }
+      const fresh = AutomationStore.open(dataDir);
+      const state = fresh.state(staleId);
+      expect(state?.baselineAt).toBeTruthy();
+      expect(state?.cursor?.timestamp).toBe(state?.baselineAt);
+      expect(state?.consecutiveFailures).toBe(0);
+      // Zero launches: the backlog this poll would otherwise have resumed was forgotten, not
+      // processed. No receipt exists for this automation.
+      expect([...fresh.latestReceipts().values()].filter((r) => r.automationId === staleId)).toHaveLength(0);
+      const baselineLogs = fresh.logs({ automationId: staleId, result: 'baseline' });
+      expect(baselineLogs).toHaveLength(1);
+      expect(baselineLogs[0]?.reason).toContain('never polled successfully');
     });
   });
 });

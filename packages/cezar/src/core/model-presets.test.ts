@@ -42,6 +42,23 @@ describe('modelConflictsWithRunner', () => {
     }
   });
 
+  it('recognizes a vendor by BARE id shape, so dropping the dated presets cost nothing (#784)', () => {
+    // `claude-opus-4-8` and friends left the preset list when Claude gained host discovery, so
+    // list membership can no longer tell whose id this is. The shape can — including for releases
+    // that do not exist yet, which is the drift the dated list used to suffer.
+    expect(modelConflictsWithRunner('claude-opus-9', 'codex')).toBe(true);
+    expect(modelConflictsWithRunner('claude-opus-9', 'opencode')).toBe(true);
+    expect(modelConflictsWithRunner('gpt-6', 'claude')).toBe(true);
+    // …while a runner's OWN vendor shape, and a gateway id naming its provider, stay usable.
+    expect(modelConflictsWithRunner('claude-opus-9', 'claude')).toBe(false);
+    expect(modelConflictsWithRunner('gpt-6', 'codex')).toBe(false);
+    expect(modelConflictsWithRunner('anthropic/claude-opus-9', 'claude')).toBe(false);
+  });
+
+  it('keeps no dated Claude release to drift, mirroring the picker (#784)', () => {
+    expect(KNOWN_PRESETS_BY_RUNNER.claude).toEqual(['opus', 'sonnet', 'haiku']);
+  });
+
   it('keeps no hard-coded OpenCode catalog to drift', () => {
     expect(KNOWN_PRESETS_BY_RUNNER.opencode).toEqual([]);
   });

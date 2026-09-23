@@ -159,7 +159,8 @@ describe('resolveCapabilities — followups (#471)', () => {
       localHandoff: false,
       followups: true,
       singleProject: false,
-      automations: false,
+      automations: true,
+      dispatch: true,
       tokenMetrics: true,
       tokenUsageMetrics: true,
       costMetrics: true,
@@ -184,26 +185,57 @@ describe('resolveCapabilities — singleProject', () => {
   );
 });
 
-describe('resolveCapabilities — automations (#801)', () => {
-  it('is OFF by default — GitHub automations are opt-in', () => {
-    expect(resolveCapabilities({}).automations).toBe(false);
+describe('resolveCapabilities — automations (spec 2026-09-14, default-on)', () => {
+  it('is ON by default — the redesign flipped the #801 opt-in', () => {
+    expect(resolveCapabilities({}).automations).toBe(true);
   });
 
-  it('is on with CEZ_AUTOMATIONS=1', () => {
-    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' }).automations).toBe(true);
+  it('is off only for an exact CEZ_AUTOMATIONS=0', () => {
+    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '0' }).automations).toBe(false);
   });
 
-  it.each(['0', 'true', 'yes', '', 'on'])(
-    'stays off for CEZ_AUTOMATIONS=%j — only an exact "1" opts in',
+  it.each(['1', 'true', 'yes', '', 'on', 'off', 'false'])(
+    'stays on for CEZ_AUTOMATIONS=%j — only an exact "0" opts out',
     (value) => {
-      expect(resolveCapabilities({ CEZ_AUTOMATIONS: value }).automations).toBe(false);
+      expect(resolveCapabilities({ CEZ_AUTOMATIONS: value }).automations).toBe(true);
     },
   );
 
-  // The three opt-in capabilities are independent switches; turning one on must never
-  // imply another, or a user enabling automations would silently get the inbox too.
+  // The opt-in capabilities are independent switches; automations being on must never
+  // imply another, or a default cockpit would silently get the inbox too.
   it('does not turn on any other opt-in capability', () => {
-    expect(resolveCapabilities({ CEZ_AUTOMATIONS: '1' })).toMatchObject({
+    expect(resolveCapabilities({})).toMatchObject({
+      automations: true,
+      followups: false,
+      singleProject: false,
+      dispatch: true,
+    });
+  });
+});
+
+describe('resolveCapabilities — dispatch (spec 2026-09-10-dispatch)', () => {
+  // The owner-approved default-on exception (AGENTS.md § Zero config, spec A2): the brakes are
+  // in the engine, and a default-off dispatch sent the agent through its own sub-agents instead.
+  it('is ON by default', () => {
+    expect(resolveCapabilities({}).dispatch).toBe(true);
+  });
+
+  it('is off with CEZ_DISPATCH=0', () => {
+    expect(resolveCapabilities({ CEZ_DISPATCH: '0' }).dispatch).toBe(false);
+  });
+
+  it.each(['1', 'true', 'yes', '', 'on', 'off', 'false'])(
+    'stays on for CEZ_DISPATCH=%j — only an exact "0" turns it off',
+    (value) => {
+      expect(resolveCapabilities({ CEZ_DISPATCH: value }).dispatch).toBe(true);
+    },
+  );
+
+  // Dispatch is the widest cost-widening capability in the app (one task can create four more
+  // runs), so it matters most here that it implies nothing else.
+  it('does not turn on any other opt-in capability', () => {
+    expect(resolveCapabilities({})).toMatchObject({
+      dispatch: true,
       automations: true,
       followups: false,
       singleProject: false,

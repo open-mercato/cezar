@@ -39,6 +39,8 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/automations', '$post'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id', '$put'>>,
     Assert<HasTypedBody<'/api/v1/automations/:id/check', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/dispatch', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/report', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/checkout', '$post'>>,
     Assert<HasTypedBody<'/api/v1/projects/:projectId', '$patch'>>,
@@ -59,11 +61,14 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedBody<'/api/v1/config', '$put'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id', '$patch'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/archive', '$post'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/pin', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/continue', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/messages', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/open-in', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/git/commit', '$post'>>,
     Assert<HasTypedBody<'/api/v1/runs/:id/queued-messages/:msgId', '$patch'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/drafts/:surface', '$put'>>,
+    Assert<HasTypedBody<'/api/v1/runs/:id/drafts/:surface/images', '$post'>>,
     Assert<HasTypedBody<'/api/v1/ui-state', '$put'>>,
     Assert<HasTypedBody<'/api/v1/workspace/config', '$put'>>,
     Assert<HasTypedBody<'/api/v1/workspace/ui-state', '$put'>>,
@@ -106,6 +111,13 @@ describe('every mutating route carries a typed body into AppType', () => {
     Assert<HasTypedInput<'/api/v1/github/prs/:number/changes', '$get', 'param'>>,
     Assert<HasTypedInput<'/api/v1/repo/commit/:sha', '$get', 'query'>>,
     Assert<HasTypedInput<'/api/v1/automation-log', '$get', 'query'>>,
+    // The draft surface reaches the filesystem as a path segment, so its validation must be
+    // middleware — a handler-side check would leave the route typed as taking any string (#939).
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface', '$put', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface', '$delete', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images', '$post', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images/:imageId', '$get', 'param'>>,
+    Assert<HasTypedInput<'/api/v1/runs/:id/drafts/:surface/images/:imageId', '$delete', 'param'>>,
   ];
 
   it('is enforced by tsc, not at runtime', () => {

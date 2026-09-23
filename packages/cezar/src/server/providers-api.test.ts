@@ -15,6 +15,15 @@ import { ProjectContexts } from './project-context.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { WorkspaceEventBus, createApp } from './server.ts';
 
+// `resolveClaudeBin` probes the real machine for an install that is off PATH, so the claude
+// executable these cases assert on would otherwise be whatever the DEVELOPER has. Pinned to the
+// env-only resolution so the suite reads the same on every host; `claude-bin.test.ts` tests
+// discovery for real.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/claude-bin.ts')>()),
+  resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
+}));
+
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
   codex: 'Logged in using ChatGPT',
@@ -385,7 +394,9 @@ describe('workspace provider API', () => {
   });
 
   it('changes API truth immediately after a runtime auth rejection', async () => {
-    const providerAuth = service({}, undefined, () => 'auth-incident-1');
+    // A CLI that agrees the credentials are gone, so the latch's self-check confirms the rejection
+    // and this case stays about its own subject: the API tells the truth the moment one is raised.
+    const providerAuth = service({ claude: 'disconnected' }, undefined, () => 'auth-incident-1');
     const bus = new WorkspaceEventBus();
     const seen: unknown[] = [];
     bus.on((event, data) => {
@@ -441,7 +452,9 @@ describe('workspace provider API', () => {
     const contexts = new ProjectContexts({
       listProjects: async () => [{ id: 'lazy', root: lazyRoot, status: 'not-git' }],
     });
-    const providerAuth = service();
+    // As above: the subject is that a lazily built project's store is observed at all, so the CLI
+    // must confirm the rejection rather than let the self-check clear it.
+    const providerAuth = service({ claude: 'disconnected' });
     const recover = vi.spyOn(RunManager.prototype, 'recover').mockImplementationOnce(
       async function recoveryFailure(this: RunManager) {
         const recoveringStore = (

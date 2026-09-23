@@ -13,7 +13,6 @@ import {
   useRun,
   useProjectRepoBase,
   useRuns,
-  useSendMessage,
 } from '@/api/queries'
 import { useRunHistory, type RunHistoryState } from '@/api/run-history'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
@@ -27,7 +26,9 @@ import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
 
 import { AutoResumeHint } from './auto-resume-hint'
+import { useDraft } from './thread-draft'
 import { WorkingIndicator } from './thread-items'
+import { useDeliverPrompt } from './deliver-prompt'
 import { useContinueAction } from './follow-up-engine'
 import { AgentsDock } from './agents-dock'
 import { PlanDock, planCounts } from './plan-dock'
@@ -66,7 +67,8 @@ import {
  * Data doctrine: `useRun` is authoritative for the record; `useRunHistory` hydrates a bounded
  * visible transcript plus compact current-state context and falls back to `useRunEvents` when
  * the optimized route is unavailable. The rendered rows go through the threshold-switched scroller
- * (thread-scroller.tsx — flat + content-visibility below ~300 rows, virtua above).
+ * (thread-scroller.tsx — flat, with content-visibility where scroll anchoring is available,
+ * below ~300 rows; virtua above).
  */
 export function TaskThreadRoute() {
   const { id } = useParams<{ id: string }>()
@@ -176,6 +178,7 @@ export function ThreadView({
   onMarkedUnread?: (runId: string) => void
 }) {
   const footer = threadFooter(run.status, run.error)
+  const markedUnread = useCallback(() => onMarkedUnread?.(run.id), [onMarkedUnread, run.id])
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
   const plan = latestPlanEntries(currentThread)
@@ -235,7 +238,13 @@ export function ThreadView({
     () => (openAgentId === undefined ? [] : subagentChildren(currentThread.turns, openAgentId)),
     [currentThread.turns, openAgentId],
   )
-  const sendMessage = useSendMessage(run.id)
+  // One delivery path for both modes, because the record that picks between them can be stale:
+  // a 409 refetches it and, when the truth names the other endpoint, delivers there instead
+  // (deliver-prompt.ts). Without that, a lost record update meant every send bounced until the
+  // page was reloaded.
+  const deliverPrompt = useDeliverPrompt(run, continueAction)
+  // The reply composer's unsent content (#939) — server-side, per run, restored on return.
+  const draft = useDraft(run.id, 'composer')
   const activeProvider = useActiveProviderAvailability(run)
   // A queued send only amends the persisted prompt; it invokes no provider and therefore
   // remains available even when provider discovery cannot authorize a live session. Once the
@@ -274,12 +283,17 @@ export function ThreadView({
   const messageActions = useMemo<Readonly<Record<string, TranscriptMessageActions>> | undefined>(() => {
     if (edit === undefined) return undefined
     const actions: Record<string, TranscriptMessageActions> = {
-      task: { onEdit: edit.onEditTask, editLabel: 'Edit the prompt' },
+      // `draftSurface` (#939) is what makes an unsaved edit survive leaving the task: the bubble
+      // writes it to the run's draft store and re-opens holding it on return.
+      task: { onEdit: edit.onEditTask, editLabel: 'Edit the prompt', draftSurface: 'task-prompt' },
     }
     for (const message of run.queuedMessages ?? []) {
       actions[`queued:${message.id}`] = {
         onEdit: (text) => edit.onEditMessage(message.id, text),
         onRemove: () => edit.onRemoveMessage(message.id),
+        // Per message, so editing one and switching tasks restores THAT editor and leaves its
+        // neighbours closed and empty.
+        draftSurface: `message:${message.id}`,
       }
     }
     return actions
@@ -300,11 +314,19 @@ export function ThreadView({
 
   return (
     <div data-route="task-thread" data-run-id={run.id} className="flex min-h-full flex-col">
-      <RunHeader run={run} planTally={planTally} onMarkedUnread={() => onMarkedUnread?.(run.id)} />
+      <RunHeader
+        run={run}
+        planTally={planTally}
+        onMarkedUnread={markedUnread}
+        // The badge the user already opens to inspect runner/account/model now edits the SAME
+        // continuation choice as the dock. One hook owns both renderings, so a header pick is
+        // exactly what the next composer submission sends — no second, drifting engine state.
+        continuationEngine={continuable ? continueAction.pills : undefined}
+      />
 
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
-      <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-3.5 px-4 py-5 md:px-6">
+      <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-2.5 px-3 py-3 md:gap-3.5 md:px-6 md:py-5">
         {history ? (
           <HistoryBoundary
             hasOlder={history.hasOlder}
@@ -324,6 +346,7 @@ export function ThreadView({
           messageActions={messageActions}
           scrollControls={scroll}
           renderMode={mode}
+          rowModels={rows}
         />
 
         {thread.turns.length === 0 ? (
@@ -406,7 +429,7 @@ export function ThreadView({
           publishes an inset. */}
       <div
         data-slot="thread-dock"
-        className="sticky bottom-[var(--kb,0px)] z-10 bg-background px-4 pt-1.5 pb-3 max-md:border-t max-md:border-border md:px-6 md:pb-4"
+        className="sticky bottom-[var(--kb,0px)] z-10 bg-background px-3 pt-1 pb-2 max-md:border-t max-md:border-border md:px-6 md:pt-1.5 md:pb-4"
       >
         {/* The jump pill floats over the thread, just above the dock, centered. */}
         {scroll.pillVisible ? (
@@ -414,7 +437,7 @@ export function ThreadView({
             <JumpToLatestPill onJump={scroll.jumpToLatest} />
           </div>
         ) : null}
-        <div className="mx-auto flex w-full max-w-[var(--measure)] flex-col gap-2.5">
+        <div className="mx-auto flex w-full max-w-[var(--measure)] flex-col gap-1.5 md:gap-2.5">
           {/* Agents above the plan: the fan-out is the more urgent "what is happening now",
               and it is transient — the plan outlives it. Keyed by run id like the plan dock. */}
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
@@ -449,11 +472,20 @@ export function ThreadView({
           ) : null}
 
           <Composer
-            onSubmit={
-              continuable
-                ? (text, images) => continueAction.continueWith(text, images)
-                : (text, images) => sendMessage.mutateAsync({ text, images })
-            }
+            // The draft store's first host (#939). The composer is controlled on BOTH seams here
+            // — text and attachments — so leaving the task mid-sentence and coming back restores
+            // the message exactly as it was left, screenshots included. `draft.submit` wraps the
+            // real send: the optimistic clear only becomes a cleared draft once the message has
+            // actually landed, and a rejection leaves the draft (and its blobs) intact.
+            value={draft.text}
+            onValueChange={draft.setText}
+            images={draft.images}
+            onImagesChange={draft.setImages}
+            // The send itself is `deliverPrompt`, not a branch on `continuable`: the record that
+            // would pick the endpoint can be stale, so the re-route on a 409 decides it from the
+            // truth instead. The two compose exactly as they read — the draft stays open until
+            // the message has actually landed, wherever it turned out to land.
+            onSubmit={(text, images) => draft.submit<unknown>(() => deliverPrompt(text, images))}
             disabled={providerBlocked || (!sessionOpen && !queued && !continuable)}
             // Only reachable now by a closed run with NO session to resume — which is exactly
             // the one case where Continue is not on offer either. Left honest rather than

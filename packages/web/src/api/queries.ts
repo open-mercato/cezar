@@ -9,6 +9,7 @@ import {
   checkoutProject,
   connectProvider,
   continueRun,
+  continueProjectRun,
   createAgentProfile,
   getAgentConfig,
   getAgentConfigFile,
@@ -18,6 +19,7 @@ import {
   getConfig,
   getGithub,
   getGithubChecks,
+  getGithubSearch,
   getGithubComments,
   getGithubPrChanges,
   getGithubRefStatus,
@@ -26,6 +28,7 @@ import {
   getLaunchKey,
   getOpenTargets,
   getProviderStatus,
+  getProjectRun,
   getProjectRuns,
   getProjects,
   getRunnerModels,
@@ -37,6 +40,7 @@ import {
   getRun,
   getRunChanges,
   getRunDiff,
+  getRunDrafts,
   getRunFile,
   getRunHandoff,
   getRuns,
@@ -58,6 +62,8 @@ import {
   markRunSeen,
   markRunUnseen,
   patchRun,
+  pinProjectRun,
+  pinRun,
   removeQueuedMessage,
   registerProject,
   openAgentAccountFile,
@@ -67,6 +73,7 @@ import {
   updateAgentProfile,
   updateProject,
   sendMessage,
+  sendProjectRunMessage,
   putAgentConfigFile,
   retryProviderAuth,
 } from './client'
@@ -79,6 +86,7 @@ import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
   CreateAgentProfileInput,
+  ApiRun,
   HealthResponse,
   MessageInput,
   Runner,
@@ -128,6 +136,9 @@ export const queryKeys = {
     changes: (id: string) => [queryScope(), 'runs', 'changes', id] as const,
     file: (id: string, path: string) => [queryScope(), 'runs', 'files', id, path] as const,
     handoff: (id: string) => [queryScope(), 'runs', 'handoff', id] as const,
+    /** Unsent drafts for one task (#939). Read once per visit and never refetched in the
+     *  background — see `useRunDrafts`. */
+    drafts: (id: string) => [queryScope(), 'runs', 'drafts', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
   },
@@ -186,6 +197,10 @@ export const queryKeys = {
    *  same visible window de-dupes to one cache entry. */
   githubChecks: (prNumbers: readonly number[]) =>
     [queryScope(), 'github', 'checks', [...prNumbers].sort((a, b) => a - b).join(',')] as const,
+  /** Cross-state search (`GET /api/github/search`, #730), keyed by kind + the exact query so each
+   *  distinct search caches on its own and re-typing a previous query is instant. */
+  githubSearch: (kind: 'issue' | 'pr', query: string) =>
+    [queryScope(), 'github', 'search', kind, query] as const,
   /** Batched PR/issue chip status. Led by the EXPLICIT project rather than `queryScope()` —
    *  the global Tasks page asks about several projects at once, and two of them may each have a
    *  PR #42. Keyed by the sorted numbers, so the same window de-dupes to one cache entry. */
@@ -249,11 +264,10 @@ export const workspaceQueryKeys = {
  * Codex, which is why OpenCode had nothing but stale presets to show). Cursor (#807) discovers
  * the same way — nothing runner-specific lives here, `runnerDiscoversModels` already knows it.
  *
- * A runner with no host catalog (claude) never fetches and never resolves data, so its picker
- * falls back to static presets exactly as before — callers can pass any runner and read
- * `data`/`isError` without checking first. Because each caller fetches only the runner it is
- * actually about to render, one runner's catalog failure can never mark another runner's picker
- * unavailable — there is no shared state left to poison.
+ * A runner with no host catalog never fetches and never resolves data, so its picker falls back
+ * to static presets — callers can pass any runner and read `data`/`isError` without checking
+ * first. Claude joined the discovering runners in #784; `pi` is the one that still takes the
+ * fallback path today.
  *
  * `enabled` lets a caller that only MIGHT render the model pills (the thread's Continue — hooks
  * cannot be called conditionally) skip the fetch when it definitely won't.
@@ -725,12 +739,23 @@ export function useHealth() {
  * `WORKSPACE_LEVEL`): the server always builds it from `bootRoot`, so its `repo.remote` names the
  * project cezar launched in, whichever project the URL is scoped to. Handing a non-boot project's
  * task a link built from the boot project's repo would point at a completely different repository
- * — the same wrong-link defect #526 exists to kill. Until a per-project remote is served, a
- * scoped view synthesizes nothing.
+ * — the same wrong-link defect #526 exists to kill.
+ *
+ * The per-project remote that guard was waiting for already exists: the registry serves each
+ * project's own `repoUrl` (rebuilt server-side from the parsed remote, credentials stripped), and
+ * it is what All tasks builds every cross-project chip from. Reading it here is what stops the
+ * SAME task from showing a linked chip on `/tasks` and inert text on its own page — which is how
+ * this was found: a declared PR was a dead `#901` in the task view and a working link one screen
+ * over. Health stays the fallback, and stays boot-only, so an unregistered boot folder (or a
+ * registry that has not loaded yet) keeps answering exactly as before.
  */
 export function useProjectRepoBase(): string | undefined {
   const health = useHealth().data
+  const projects = useProjects().data?.projects
   const { projectId } = useProjectScope()
+  const scopedId = projectId ?? health?.bootProject
+  const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
+  if (registered?.repoUrl) return registered.repoUrl
   const isBootProject = projectId === null || projectId === health?.bootProject
   return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
 }
@@ -746,10 +771,11 @@ export function useOpenTargets() {
 }
 
 /** The authoritative run list. */
-export function useRuns() {
+export function useRuns<TData = ApiRun[]>(select?: (runs: ApiRun[]) => TData) {
   return useQuery({
     queryKey: queryKeys.runs.list(),
     queryFn: ({ signal }) => getRuns({ signal }),
+    select,
   })
 }
 
@@ -805,20 +831,54 @@ export function useRunsIndex(enabled = true, refetchIntervalMs?: number) {
  * still goes to `/api/p/<bootId>/runs`, which the server answers byte-identically (the
  * route-parity contract).
  */
-export function useProjectRuns(projectId: string, enabled = true, boot = false) {
+export function useProjectRuns<TData = ApiRun[]>(
+  projectId: string,
+  enabled = true,
+  boot = false,
+  select?: (runs: ApiRun[]) => TData,
+) {
   return useQuery({
     queryKey: [boot ? 'default' : projectId, 'runs', 'list'] as const,
     queryFn: ({ signal }) => getProjectRuns(projectId, { signal }),
     enabled,
+    select,
   })
+}
+
+/**
+ * The authoritative single-run read, as options rather than a hook — so a caller that needs the
+ * record RIGHT NOW (`queryClient.fetchQuery`, with its own `staleTime: 0`) asks the same question
+ * at the same cache key as the thread's own `useRun`, and the answer lands in the cache every
+ * mounted view already reads. Spelling it twice would mean a refetch that heals nothing.
+ */
+export function runQueryOptions(id: string) {
+  return {
+    queryKey: queryKeys.runs.detail(id),
+    queryFn: ({ signal }: { signal: AbortSignal }) => getRun(id, { signal }),
+  }
 }
 
 /** One run, authoritative. `id` may be absent while a route param is still unresolved. */
 export function useRun(id: string | undefined) {
   return useQuery({
-    queryKey: queryKeys.runs.detail(id ?? ''),
-    queryFn: ({ signal }) => getRun(id as string, { signal }),
+    ...runQueryOptions(id ?? ''),
     enabled: Boolean(id),
+  })
+}
+
+/**
+ * One run of a NAMED project — what a surface outside `/p/:projectId` has to use.
+ *
+ * `enabled` is the point as much as the project: the only caller is a panel that opens on hover
+ * (the conflict chip's "Resolve conflicts"), and a table must not fetch a record per row for
+ * panels nobody has opened. Keyed by the project, so the global page and that project's own page
+ * share one cache entry rather than two spellings of the same run.
+ */
+export function useProjectRun(projectId: string | undefined, id: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: [projectId ?? 'default', 'runs', 'detail', id ?? ''] as const,
+    queryFn: ({ signal }) => getProjectRun(projectId as string, id as string, { signal }),
+    enabled: enabled && Boolean(projectId) && Boolean(id),
   })
 }
 
@@ -906,6 +966,28 @@ export function useRunHandoff(id: string | undefined, enabled = true) {
     queryKey: queryKeys.runs.handoff(id ?? ''),
     queryFn: ({ signal }) => getRunHandoff(id as string, { signal }),
     enabled: Boolean(id) && enabled,
+  })
+}
+
+/**
+ * The unsent drafts of one task's editable inputs (#939).
+ *
+ * `staleTime: Infinity` and no focus refetch, and both are load-bearing rather than tuning: this
+ * query seeds inputs the user is typing into, so a background refetch landing mid-sentence would
+ * overwrite live text with what the server last heard. The cockpit's own writes update the cache
+ * in place (`useDraft`), which is the only thing that ever changes it while a task is open.
+ */
+export function useRunDrafts(id: string | undefined) {
+  return useQuery({
+    queryKey: queryKeys.runs.drafts(id ?? ''),
+    queryFn: ({ signal }) => getRunDrafts(id as string, { signal }),
+    enabled: Boolean(id),
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    // A draft is a convenience, not the page: a task whose drafts cannot be read still opens,
+    // with an empty composer, exactly as it did before this feature existed.
+    retry: false,
   })
 }
 
@@ -1298,6 +1380,37 @@ function withoutReceipt(run: RunRecord): RunRecord {
   return rest
 }
 
+/**
+ * Pin one task to the top of its project's list, or unpin it (#935) — `POST /api/runs/:id/pin`.
+ *
+ * Invalidate rather than patch, like the header's archive and unlike the read receipt: the answer
+ * moves the row between buckets, so the list has to be re-bucketed from the authoritative record
+ * anyway, and a pin is not fired at the busy moment a run finishes (the race that makes the
+ * receipt hooks patch a single field instead).
+ *
+ * Both parameters exist for the multi-project sidebar, which paints a quick-list per REGISTERED
+ * project and therefore acts on rows outside the scope the URL names:
+ *  - `projectId` sends the request to the run's OWN project (`queryScope()` would name whichever
+ *    project the page is standing in, which 404s — or, with a colliding run id, pins the wrong
+ *    task). Absent is the ordinary case: the caller is already inside the run's project.
+ *  - `cacheScope` is the key that project's run list is cached under. It is NOT always the
+ *    project id: `useProjectRuns` caches the boot project under `'default'`, because that is the
+ *    scope it mounts unscoped under, and invalidating `[<bootId>, 'runs']` would leave the
+ *    sidebar's boot group showing the pre-pin order.
+ */
+export function usePinRun(projectId?: string, cacheScope?: string) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, pinned }: { id: string; pinned: boolean }) =>
+      projectId === undefined ? pinRun(id, pinned) : pinProjectRun(projectId, id, pinned),
+    // Hierarchical keys: this covers the list AND the open thread's own record.
+    onSuccess: () =>
+      queryClient.invalidateQueries({
+        queryKey: cacheScope === undefined ? queryKeys.runs.all : ([cacheScope, 'runs'] as const),
+      }),
+  })
+}
+
 /** Deliver a reply into a live session (`POST /api/runs/:id/messages`). The transcript itself
  *  grows over SSE (`user-message`, then the agent's turn); the invalidation refreshes the
  *  record (status flips waiting → running). Errors are the CALLER's to surface — the composer
@@ -1305,10 +1418,14 @@ function withoutReceipt(run: RunRecord): RunRecord {
  *  invalidates: it means the cached record claimed a live session the server no longer has, so
  *  the refetch flips the composer to its closed/Continue form instead of leaving it aimed at a
  *  session that will keep refusing. */
-export function useSendMessage(id: string) {
+export function useSendMessage(id: string, projectId?: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (message: MessageInput) => sendMessage(id, message),
+    // `projectId` only where the caller stands OUTSIDE the run's project — the global Tasks page,
+    // whose rows span the registry and where `queryScope()` would name the boot project. Absent
+    // is the ordinary case and keeps the scoped-by-context spelling.
+    mutationFn: (message: MessageInput) =>
+      projectId === undefined ? sendMessage(id, message) : sendProjectRunMessage(projectId, id, message),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) {
@@ -1324,10 +1441,11 @@ export function useSendMessage(id: string) {
  *  same contract that errors belong to the CALLER, so a refusal can be shown where the user
  *  acted. The thread composer keeps its own mutation (`useContinueAction`) because it also owns
  *  the runner/model pills; this hook is the plain "resume on the run's own engine" path. */
-export function useContinueRun(id: string) {
+export function useContinueRun(id: string, projectId?: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (opts: ContinueOptions = {}) => continueRun(id, opts),
+    mutationFn: (opts: ContinueOptions = {}) =>
+      projectId === undefined ? continueRun(id, opts) : continueProjectRun(projectId, id, opts),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 }
@@ -1377,6 +1495,21 @@ export function useGithubChecks(prNumbers: number[], enabled = true) {
     queryKey: queryKeys.githubChecks(prNumbers),
     queryFn: ({ signal }) => getGithubChecks(prNumbers, { signal }),
     enabled: enabled && prNumbers.length > 0,
+    staleTime: 60_000,
+  })
+}
+
+/** Cross-state search (`/api/github/search`, #730). The list only ever holds OPEN items, so this
+ *  is the only way the tab can surface a closed or merged issue/PR. `enabled` is what keeps it
+ *  cheap: the caller turns it on only for a non-empty query that the in-memory filter could not
+ *  satisfy, and only after debouncing — every call is a `gh` subprocess. `staleTime` matches the
+ *  tab's other GitHub queries so re-typing the same query does not re-shell. Degrade is silent:
+ *  an unavailable payload renders as "could not search", never an error boundary. */
+export function useGithubSearch(kind: 'issue' | 'pr', query: string, enabled = true) {
+  return useQuery({
+    queryKey: queryKeys.githubSearch(kind, query),
+    queryFn: ({ signal }) => getGithubSearch(kind, query, {}, { signal }),
+    enabled: enabled && query.trim() !== '',
     staleTime: 60_000,
   })
 }
@@ -1436,6 +1569,15 @@ export interface ReferenceStatusEntry {
   state: 'idle' | 'loading' | 'ready' | 'unknown' | 'unavailable'
   /** Only on `unavailable` — the server's human hint ("gh CLI not found…"). */
   reason?: string
+  /**
+   * Does this pull request's branch refuse to merge into its base? The second axis the status
+   * cannot carry (`conflicts` in the contract), remembered on exactly the same terms as `status`.
+   *
+   * `undefined` means NOTHING IS KNOWN — no answer yet, or a server from before the field existed
+   * — and is not the same as `false`, which is the forge having told us it merges cleanly. Only
+   * `true` may paint anything.
+   */
+  conflicting?: boolean
 }
 
 export type ReferenceStatusLookup = (ref: ReferenceStatusRequest) => ReferenceStatusEntry
@@ -1480,6 +1622,33 @@ function rememberStatus(key: string, status: ReferenceStatus): void {
 }
 
 /**
+ * The same memory, for the conflict axis — the numbers last seen as CONFLICTING.
+ *
+ * A set of keys rather than a second map, because only `true` is worth carrying: the interesting
+ * population is tiny (a conflicting PR is the exception), and a key's absence already means the
+ * one thing `undefined` has to mean everywhere else here — nothing is known. `rememberConflict`
+ * deletes on a `false` answer, so a resolved conflict stops painting on the very next response
+ * rather than lingering the way an un-cleared flag would.
+ */
+const rememberedConflicts = new Set<string>(restoreRememberedConflicts())
+
+function rememberConflict(key: string, conflicting: boolean): void {
+  if (rememberedConflicts.has(key) === conflicting) return
+  if (conflicting) {
+    rememberedConflicts.add(key)
+    // Bounded on the same terms as the statuses; insertion-ordered, so the oldest goes first.
+    while (rememberedConflicts.size > REMEMBERED_MAX) {
+      const oldest = rememberedConflicts.values().next().value
+      if (oldest === undefined) break
+      rememberedConflicts.delete(oldest)
+    }
+  } else {
+    rememberedConflicts.delete(key)
+  }
+  scheduleRememberedSave()
+}
+
+/**
  * …and the same memory across a RELOAD, in `sessionStorage`.
  *
  * Without it a refresh repaints every chip neutral and then colours them in a beat later, which is
@@ -1496,6 +1665,11 @@ function rememberStatus(key: string, status: ReferenceStatus): void {
  * future version — all degrade to the pre-persistence behaviour rather than breaking the cockpit.
  */
 const REMEMBERED_STORAGE_KEY = 'cez.reference-statuses.v1'
+/** The conflict axis, under its own key rather than inside the payload above: the status file's
+ *  format is read by every bundle that has ever run in this tab, and widening its entries would
+ *  make an older one discard every status it found there. A key it has never heard of it simply
+ *  never reads. */
+const REMEMBERED_CONFLICTS_STORAGE_KEY = 'cez.reference-conflicts.v1'
 
 /** Exported for tests: it runs once at module load, which is not a moment a test can observe. */
 export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
@@ -1518,6 +1692,20 @@ export function restoreRememberedStatuses(): [string, ReferenceStatus][] {
   }
 }
 
+/** Exported for tests, like its sibling. A key list, and anything else in the slot is ignored —
+ *  the file is best-effort in every direction. */
+export function restoreRememberedConflicts(): string[] {
+  try {
+    const raw = globalThis.sessionStorage?.getItem(REMEMBERED_CONFLICTS_STORAGE_KEY)
+    if (!raw) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((key): key is string => typeof key === 'string')
+  } catch {
+    return []
+  }
+}
+
 let rememberedSave: ReturnType<typeof setTimeout> | undefined
 function scheduleRememberedSave(): void {
   // Coalesced: a table's worth of statuses arrives as one response and would otherwise stringify
@@ -1527,6 +1715,12 @@ function scheduleRememberedSave(): void {
     rememberedSave = undefined
     try {
       globalThis.sessionStorage?.setItem(REMEMBERED_STORAGE_KEY, JSON.stringify([...rememberedStatuses]))
+      // One timer, two slots: both are written by the same responses, so a second scheduler would
+      // only mean a second stringify pass over the same arrival.
+      globalThis.sessionStorage?.setItem(
+        REMEMBERED_CONFLICTS_STORAGE_KEY,
+        JSON.stringify([...rememberedConflicts]),
+      )
     } catch {
       // Quota, private mode, storage disabled — the in-memory map still works.
     }
@@ -1582,10 +1776,12 @@ export function rememberReferenceStatuses(
  *  the next — and, without clearing the store, into the next run of the suite. */
 export function __clearRememberedStatusesForTests(): void {
   rememberedStatuses.clear()
+  rememberedConflicts.clear()
   clearTimeout(rememberedSave)
   rememberedSave = undefined
   try {
     globalThis.sessionStorage?.removeItem(REMEMBERED_STORAGE_KEY)
+    globalThis.sessionStorage?.removeItem(REMEMBERED_CONFLICTS_STORAGE_KEY)
   } catch {
     // Nothing to clear.
   }
@@ -1691,6 +1887,9 @@ export function useReferenceStatuses(
         // Whatever this request says, the last thing we learned about this reference stands until
         // a NEWER answer replaces it.
         const remembered = rememberedStatuses.get(key)
+        // Same rule as the status, one axis over: the last thing we were told stands until a
+        // newer answer replaces it, and `undefined` stays available to mean "never told".
+        const rememberedConflict = rememberedConflicts.has(key) ? true : undefined
         if (data?.available) {
           // Either bucket. A repository numbers its issues and pull requests from one sequence, so
           // #774 is exactly one of the two — and which one the cockpit GUESSED (`taskReferences`
@@ -1699,25 +1898,43 @@ export function useReferenceStatuses(
           // issue still gets that issue's status, which beats reporting "not found".
           const status = data.prs[ref.number] ?? data.issues[ref.number]
           if (status) {
+            // A server from before the field omits `conflicts` entirely, and that absence is not
+            // an answer: leave the memory alone rather than clearing it to "merges cleanly".
+            const conflicting = data.conflicts ? data.conflicts.includes(ref.number) : undefined
             // Written during render on purpose: this is a cache, not state — the write is
             // idempotent, derived solely from the response, and re-running it (StrictMode's
             // double invoke) lands on the same value.
             rememberStatus(key, status)
-            map.set(key, { state: 'ready', status })
+            if (conflicting !== undefined) rememberConflict(key, conflicting)
+            map.set(key, {
+              state: 'ready',
+              status,
+              ...((conflicting ?? rememberedConflict) ? { conflicting: true } : {}),
+            })
           } else {
             map.set(key, { state: 'unknown', ...(remembered ? { status: remembered } : {}) })
           }
         } else if (data) {
-          map.set(key, { state: 'unavailable', reason: data.reason, ...(remembered ? { status: remembered } : {}) })
+          map.set(key, {
+            state: 'unavailable',
+            reason: data.reason,
+            ...(remembered ? { status: remembered } : {}),
+            ...(rememberedConflict ? { conflicting: true } : {}),
+          })
         } else if (result.isError) {
           // A transport failure, as opposed to the server's own "I could not reach gh" payload.
           map.set(key, {
             state: 'unavailable',
             reason: result.error instanceof Error ? result.error.message : undefined,
             ...(remembered ? { status: remembered } : {}),
+            ...(rememberedConflict ? { conflicting: true } : {}),
           })
         } else {
-          map.set(key, { state: 'loading', ...(remembered ? { status: remembered } : {}) })
+          map.set(key, {
+            state: 'loading',
+            ...(remembered ? { status: remembered } : {}),
+            ...(rememberedConflict ? { conflicting: true } : {}),
+          })
         }
       }
     })
@@ -1733,7 +1950,11 @@ export function useReferenceStatuses(
       // Not in any batch on this surface — past the cap, or asked about by a different surface
       // that has since unmounted. Whatever was learned then is still the best answer there is.
       const remembered = rememberedStatuses.get(key)
-      return { state: 'idle', ...(remembered ? { status: remembered } : {}) }
+      return {
+        state: 'idle',
+        ...(remembered ? { status: remembered } : {}),
+        ...(rememberedConflicts.has(key) ? { conflicting: true } : {}),
+      }
     },
     [byRef],
   )

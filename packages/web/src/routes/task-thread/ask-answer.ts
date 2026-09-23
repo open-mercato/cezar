@@ -79,8 +79,14 @@ export interface AskAnswerDelivery {
   isPending: boolean
   /** The server's own words for the last failed delivery, cleared when a new one starts. */
   error?: string
-  /** Deliver the answer. Never rejects: a failure lands in `error` so the card can show it. */
-  send: (text: string) => Promise<void>
+  /**
+   * Deliver the answer. Never rejects: a failure lands in `error` AND comes back from the call,
+   * which is one fact offered two ways because two kinds of caller need it differently. The ask
+   * card renders `error` inline and ignores the return; a one-shot caller (the header's "Resolve
+   * conflicts" button) has closed its panel by then and needs the answer where it acted, to
+   * toast. `undefined` is success.
+   */
+  send: (text: string) => Promise<string | undefined>
 }
 
 /**
@@ -98,10 +104,17 @@ export interface AskAnswerDelivery {
  * has a session id to resume, the answer is retried as a resume rather than lost —
  * `useSendMessage` has already invalidated the record by then, so the card's next render
  * agrees.
+ *
+ * Not only the ask card's seam: this is the route for ANY text that has to reach a run whatever
+ * state the run is in, and the header's one-click prompts ("Resolve conflicts") ride it for the
+ * same reason the card does — a task parked at `review` has no live session, and a prompt that
+ * only worked on a running task would be offered exactly when it could not be taken.
  */
-export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
-  const sendMessage = useSendMessage(run.id)
-  const resume = useContinueRun(run.id)
+export function useAskAnswer(run: ApiRun, projectId?: string): AskAnswerDelivery {
+  // `projectId` only from a surface standing OUTSIDE the run's project — the global Tasks page.
+  // Everywhere else the scope is already the run's own and naming it would be noise.
+  const sendMessage = useSendMessage(run.id, projectId)
+  const resume = useContinueRun(run.id, projectId)
   const activeProvider = useActiveProviderAvailability(run)
   const existingProvider = useExistingProviderAvailability(run)
   const [error, setError] = useState<string | undefined>(undefined)
@@ -133,17 +146,18 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
     return resume.mutateAsync({ text })
   }
 
-  const send = async (text: string): Promise<void> => {
+  const send = async (text: string): Promise<string | undefined> => {
     // Defense in depth — every entry point is already disabled while blocked, and the card
     // renders `reason` on its own, so repeating it as an error would say the same thing twice.
-    if (blockedBy || deliveringRef.current) return
+    // The REASON still comes back, for the caller that has no `reason` on screen to repeat.
+    if (blockedBy || deliveringRef.current) return reason
     deliveringRef.current = true
     setDelivering(true)
     setError(undefined)
     try {
       if (mode === 'resume') {
         await resumeAfterIdleTeardown(() => resumeWith(text))
-        return
+        return undefined
       }
       try {
         await sendMessage.mutateAsync({ text })
@@ -157,12 +171,15 @@ export function useAskAnswer(run: ApiRun): AskAnswerDelivery {
           lastSessionId(run) !== undefined
         ) {
           await resumeAfterIdleTeardown(() => resumeWith(text))
-          return
+          return undefined
         }
         throw sendError
       }
+      return undefined
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
+      const message = err instanceof Error ? err.message : String(err)
+      setError(message)
+      return message
     } finally {
       deliveringRef.current = false
       setDelivering(false)

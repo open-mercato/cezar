@@ -133,10 +133,9 @@ function stubFetch(
       // The runner/model pills (#401) read the host's backends and the per-runner defaults.
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(backends))
       if (method === 'GET' && path === '/api/v1/providers/status') return jsonResponse(providers)
-      if (method === 'GET' && path.startsWith('/api/v1/models?runner=')) {
-        const runner = path.includes('cursor') ? 'cursor' : 'codex'
-        return jsonResponse({ runner, models: runner === 'codex' ? [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }] : [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
-      }
+      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (path === '/api/v1/models?runner=cursor') return jsonResponse({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (method === 'GET' && path === '/api/v1/config') {
         return jsonResponse({ defaultRunner: backends[0] ?? 'claude', defaultModels })
       }

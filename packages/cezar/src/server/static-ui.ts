@@ -112,3 +112,16 @@ export function assetContentType(file: string): string {
 /** Vite fingerprints every filename under `assets/`, so the bytes behind a URL
  *  can never change — cache them for a year. */
 export const ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutable';
+
+/** …and the shell that NAMES those filenames must never be cached, which is the
+ *  other half of the same rule. It went out with no cache header at all, so a
+ *  browser was free to reuse it on its own judgement — and since every bundle it
+ *  points at is `immutable`, a phone that kept one stale shell kept the whole
+ *  stale app, across reloads, with no way for a user to tell. That is a cockpit
+ *  that silently cannot be updated: `npm run build:web` changed the bytes on
+ *  disk and the device went on running last week's cockpit.
+ *
+ *  `no-cache` rather than `no-store`: the response may be held, it just may not
+ *  be reused without asking. The shell is ~5 KB and the assets beside it still
+ *  carry the year. */
+export const SHELL_CACHE_CONTROL = 'no-cache';

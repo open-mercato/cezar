@@ -10,6 +10,7 @@ import { __clearRememberedStatusesForTests, workspaceQueryKeys } from '@/api/que
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { GlobalTasksRoute } from './global-tasks'
+import { resolveConflictsPrompt } from './task-thread/run-actions'
 
 /**
  * The global Tasks page, wired to stubbed `/api/v1/projects` + `/api/v1/workspace/runs-index`.
@@ -123,7 +124,10 @@ function stubFetch({
   costMetrics?: boolean
   /** Per-project chip status, as the forge would answer it. Absent = the forge is unreachable,
    *  which is the only honest default here: no `gh`, no statuses, neutral chips. */
-  refStatus?: Record<string, { prs?: Record<number, string>; issues?: Record<number, string> }>
+  refStatus?: Record<
+    string,
+    { prs?: Record<number, string>; issues?: Record<number, string>; conflicts?: number[] }
+  >
   /** What the runs-index itself already knew — the free, no-round-trip path. */
   indexStatuses?: Record<string, { prs: Record<number, string>; issues: Record<number, string> }>
 } = {}) {
@@ -142,6 +146,20 @@ function stubFetch({
         path,
         body: init.body === undefined ? undefined : JSON.parse(String(init.body)),
       })
+      if (path === '/api/v1/providers/status') {
+        return jsonResponse({ providers: [{ provider: 'claude', status: 'connected', enabled: true }] })
+      }
+      // The FULL record, which this page's index row deliberately is not: the conflict panel's
+      // action fetches it (per project, on open) to learn whether the task can be spoken to.
+      const detail = /^\/api\/v1\/p\/([^/]+)\/runs\/([^/]+)$/.exec(path)
+      if (detail && method === 'GET') {
+        const [, projectId, id] = detail
+        const found = index.find((run) => run.projectId === projectId && run.id === id)
+        if (!found) return jsonResponse({ error: 'not found' }, 404)
+        return jsonResponse({ ...found, task: found.title, tokensUsed: 0, steps: [{ id: 'task', name: 'Do the task', kind: 'agent', status: 'done', iterations: 1, tokensUsed: 0, sessionId: 'sess-1' }] })
+      }
+      const message = /^\/api\/v1\/p\/([^/]+)\/runs\/([^/]+)\/(messages|continue)$/.exec(path)
+      if (message && method === 'POST') return jsonResponse({ ok: true })
       if (path === '/api/v1/health') {
         // Only the slice `usageMetricVisibility` reads — the host's cost/token gate.
         return jsonResponse({ capabilities: { costMetrics, tokenUsageMetrics: true } })
@@ -169,6 +187,7 @@ function stubFetch({
           available: true,
           prs: answer.prs ?? {},
           issues: answer.issues ?? {},
+          ...(answer.conflicts ? { conflicts: answer.conflicts } : {}),
           recheckAfterMs: null,
         })
       }
@@ -702,6 +721,37 @@ describe('global tasks page', () => {
     // Sorted, so re-sorting or re-filtering the table hits the same cache entry.
     expect(api.path).toContain('prs=40%2C42')
     expect(api.path).toContain('issues=12')
+  })
+
+  it('paints a conflict here exactly as the task’s own page does, and offers the same fix', async () => {
+    // The inconsistency this closes: the chip was already the shared component, but the ACTION
+    // was the task page's alone — so the same pull request offered a way out on one screen and
+    // not on the other. The record the delivery needs is fetched here, per project, and only once
+    // the panel is open: this page's index row is deliberately too slim to answer it.
+    stubFetch({ refStatus: { api: { prs: { 42: 'ready', 40: 'ready' }, conflicts: [42] } } })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    const chip = await waitFor(() => {
+      const found = document.querySelector('[data-slot="pr-chip"][data-conflicting="true"]')
+      if (!found) throw new Error('the chip has not learned about the conflict yet')
+      return found as HTMLElement
+    })
+    // Its own colour, not the green its `ready` status would have painted.
+    expect(chip.className).toContain('text-conflict')
+
+    fireEvent.focus(chip)
+    const button = await waitFor(() => screen.getByRole('button', { name: 'Resolve conflicts' }))
+    await waitFor(() => expect(button.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(button)
+
+    // Into the RUN'S OWN project — `queryScope()` would have named the boot project here, which
+    // is the whole reason this page sends through the project-explicit seam.
+    await waitFor(() => {
+      const posted = sent.find((request) => request.method === 'POST' && request.path.includes('/messages'))
+      expect(posted?.path).toBe('/api/v1/p/api/runs/a1/messages')
+      expect(posted?.body).toMatchObject({ text: resolveConflictsPrompt(42) })
+    })
   })
 
   it('leaves every chip neutral when the forge cannot be reached', async () => {

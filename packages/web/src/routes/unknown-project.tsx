@@ -32,7 +32,12 @@ export function UnknownProjectRoute({
         icon={<FolderSearchIcon />}
         tone="neutral"
         title={`“${projectId}” isn’t registered here`}
-        subtitle="This cezar doesn’t serve a project by that id. The link may come from another machine’s workspace — these are the projects registered on this one:"
+        // "can open", not "registered on this one": the list below is the
+        // `GET /api/v1/projects` payload, which since seed-once leads with the
+        // folder cezar is serving WITHOUT having registered it. Offering that row
+        // under a sentence calling it registered contradicts the "· not registered"
+        // marker the same folder carries in Settings.
+        subtitle="This cezar doesn’t serve a project by that id. The link may come from another machine’s workspace — these are the projects this one can open:"
       >
         <ul data-slot="registered-projects" className="mx-auto flex w-full max-w-xs flex-col gap-1.5 text-left">
           {projects.map((project) => (

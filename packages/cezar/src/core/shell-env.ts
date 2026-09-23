@@ -29,6 +29,16 @@ export function shellQuote(value: string): string {
 }
 
 /**
+ * Quote a binary PATH so a shell runs it as one word — the resolved `claude` can live under
+ * `/Users/Jane Doe/.local/bin`, and an unquoted space there would split into two arguments.
+ * `cmd.exe` needs its own escaping, which is why this is not just {@link shellQuote}.
+ */
+export function quoteExecutable(executable: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') return `"${executable.replace(/[%&!"]/g, '^$&')}"`;
+  return shellQuote(executable);
+}
+
+/**
  * Assignments that persist for the rest of the shell session, or `null` when any value cannot be
  * embedded safely on `platform`. An empty `env` renders `''` — the zero-config path adds nothing.
  *

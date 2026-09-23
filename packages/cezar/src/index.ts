@@ -11,10 +11,12 @@ import {
   providerAuthChecksDisabled,
 } from './core/provider-auth.ts';
 import { applyProviderEnablement } from './core/provider-availability.ts';
+import { ensureDataGitignore } from './data-gitignore.ts';
 import { pruneOrphans } from './git-worktree.ts';
 import { getRepoInfo } from './server/git.ts';
 import { DEFAULT_WORKTREE_RETENTION, loadConfig, resolveWorktreeRetention } from './config.ts';
 import { reclaimWorktrees } from './runs/retention.ts';
+import { armRepoHandle } from './runs/arm-repo-handle.ts';
 import { RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { loadWorkflows } from './workflows/load.ts';
@@ -29,17 +31,20 @@ import {
 } from './server/provider-action-gate.ts';
 import { checkForUpdate } from './update-check.ts';
 import { printSkillsBanner } from './skills-banner.ts';
+import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
-import { runMigrations } from './workspace/migrations.ts';
-import { registerProject, shouldRegisterProject } from './workspace/projects.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
+import { runTaskCommand } from './dispatch/task-cli.ts';
+import { runAutomationCommand } from './automations/automation-cli.ts';
 
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
 Usage:
   cezar                     start the cockpit (server + GUI) for the current repo
   cezar run "<task>"        run a task headless in the terminal
+  cezar task <create|report|list>  dispatch or report from inside a running task (CEZ_DISPATCH=0 turns it off)
+  cezar automation <add|create|check|run|list|…>  create and manage automations (GitHub polls, schedules) on a running cockpit
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
@@ -77,6 +82,17 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the
+  // cockpit's parser can refuse them. It only talks to an already-running cockpit.
+  if (process.argv[2] === 'task') {
+    process.exitCode = await runTaskCommand(process.argv.slice(3));
+    return;
+  }
+  // `cez automation …` (spec 2026-09-13-automations-from-prompt): same shape, same reason.
+  if (process.argv[2] === 'automation') {
+    process.exitCode = await runAutomationCommand(process.argv.slice(3));
+    return;
+  }
   const { values, positionals } = parseArgs({
     options: {
       port: { type: 'string', short: 'p', default: '4321' },
@@ -166,34 +182,6 @@ async function main(): Promise<void> {
   }
 }
 
-// ---- workspace boot ----------------------------------------------------------
-
-/**
- * Boot-time workspace bookkeeping (spec 2026-07-20-multi-project-workspace,
- * "Boot flow"): run pending `~/.cezar` migrations first, then register the
- * boot repo in the per-user project registry. Registration is suppressed for
- * task worktrees and `$HOME` itself (`shouldRegisterProject`) — the process
- * still serves those folders normally. Strictly non-fatal: the zero-config
- * law says a broken or read-only home degrades to a smaller cockpit, never a
- * failed boot, so any workspace error logs one warning and boot continues.
- *
- * Returns the boot project's registry id when registration happened —
- * `serveCommand` plumbs it into the server (`ServerDeps.bootProjectId`) so
- * `/api/projects` and `/api/v1/health` can name the boot project without a
- * lookup. Undefined when registration was suppressed or the workspace is
- * unavailable; the server then derives a fallback on its own.
- */
-async function initWorkspace(repoRoot: string): Promise<string | undefined> {
-  try {
-    await runMigrations({ bootRepoRoot: repoRoot });
-    if (await shouldRegisterProject(repoRoot)) return (await registerProject(repoRoot)).id;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[cez] workspace registry unavailable (${message}) — continuing without it`);
-  }
-  return undefined;
-}
-
 // ---- serve -----------------------------------------------------------------
 
 async function serveCommand(
@@ -212,7 +200,7 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore });
+  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
   const providerAuth = new ProviderAuthService();
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
@@ -273,6 +261,10 @@ async function serveCommand(
         `    and make sure this interface is not reachable from the internet.\n`,
     );
   }
+  // Where a dispatched agent's `cez task` CLI reaches this cockpit (spec 2026-09-10-dispatch).
+  // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
+  process.env.CEZ_API_URL = `http://127.0.0.1:${port}`;
+  process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
   startServer({
     repoRoot,
     store,
@@ -656,44 +648,11 @@ description: House rules the agent should follow in this repo.
 function openStore(repoRoot: string, opts?: { keepLive?: boolean }): RunStore {
   const dataDir = join(repoRoot, '.ai/cezar');
   const store = RunStore.open(dataDir, opts);
+  // Repo-scope the referenced tier (#945) — see `armRepoHandle`. Background, never awaited: a
+  // `gh`-less or offline machine keeps working exactly as it did, just unscoped.
+  armRepoHandle(store, repoRoot);
   ensureDataGitignore(repoRoot);
   return store;
-}
-
-/** Keep run data out of the user's repo history; workflows/skills stay committable. */
-function ensureDataGitignore(repoRoot: string): void {
-  const path = join(repoRoot, '.ai/cezar', '.gitignore');
-  const wanted = [
-    'runs.json',
-    'runs.json.tmp',
-    'runs/',
-    'worktrees/',
-    'tmp/', // per-run agent temp directories (#785)
-    'todos.json',
-    'todos.json.tmp',
-    'launch-key',
-    'automations.json',
-    'automations.json.tmp',
-    'automation-state.json',
-    'automation-state.json.tmp',
-    'automation-receipts.ndjson',
-    'automation-receipts.ndjson.tmp',
-    'automation-log.ndjson',
-    'automation-log.ndjson.tmp',
-    'automation-poll.lock',
-  ];
-  try {
-    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
-    const current = existsSync(path) ? readFileSync(path, 'utf8') : '';
-    const lines = current.split('\n');
-    const missing = wanted.filter((w) => !lines.includes(w));
-    if (missing.length > 0) {
-      const glue = current && !current.endsWith('\n') ? '\n' : '';
-      writeFileSync(path, `${current}${glue}${missing.join('\n')}\n`, 'utf8');
-    }
-  } catch {
-    // non-fatal
-  }
 }
 
 /** Own package name — for the npm-registry update check (#368). */

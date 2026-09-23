@@ -4,6 +4,10 @@ import { referenceStatusSchema } from './github.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
+// Same one-way direction: the dispatch family owns the `dispatch` object's shape, the run record embeds
+// one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
+// `contract-parity.runs.test.ts` cannot drift apart by construction.
+import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -109,7 +113,8 @@ export type DiffStat = z.infer<typeof diffStatSchema>;
 export const queuedMessageSchema = z.object({
   id: z.string(),
   text: z.string(),
-  /** `/api/v1/runs/:id/images/…` URLs — attachments are persisted, never inlined. */
+  /** `/api/v1/runs/:id/images/…` URLs — attachments are persisted, never inlined. Images and
+   *  files share this one list; read `isImageAttachmentName` on the file name to tell them apart. */
   images: z.array(z.string()).optional(),
   createdAt: z.string(),
 });
@@ -144,7 +149,8 @@ export const runRecordSchema = z.object({
   /** Prompt messages stacked onto the run while it waited for a free agent slot (#472). Folded
    *  into the prompt at dequeue — never delivered as their own turns. Absent on pre-#472 runs. */
   queuedMessages: z.array(queuedMessageSchema).optional(),
-  /** URLs of images attached to the initial task prompt (#image-display). */
+  /** URLs of the attachments on the initial task prompt (#image-display) — images and, since
+   *  #950, files. One list, one numbering space; branch on `isImageAttachmentName`. */
   taskImages: z.array(z.string()).optional(),
   model: z.string().optional(),
   /** Normalized provider/model identity used for attribution and reproducible replay. */
@@ -178,6 +184,28 @@ export const runRecordSchema = z.object({
       githubUrl: z.string(),
     })
     .optional(),
+  /**
+   * Provenance for a task a SCHEDULED automation launched (spec 2026-09-14-automations-redesign
+   * § Data Model). A separate optional key rather than a loosened `automation`: `runs.json` is
+   * parsed as one array, so a downgraded cezar meeting a record without `githubUrl` would drop
+   * every run — whereas an unknown key it simply strips.
+   */
+  automationTrigger: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number(),
+      receiptId: z.string(),
+      trigger: z.enum(['schedule', 'catch-up', 'manual']),
+      /** The scheduled wall-time instant (UTC ISO); for `manual`, the launch time. */
+      occurrenceAt: z.string(),
+    })
+    .optional(),
+  /**
+   * This run's place in a dispatch tree (spec `.ai/specs/2026-09-10-dispatch.md`): its root,
+   * its parent, its budget, its report. Absent on a plain task, which behaves exactly as it
+   * always has.
+   */
+  dispatch: dispatchSchema.optional(),
   status: runStatusSchema,
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
@@ -239,6 +267,17 @@ export const runRecordSchema = z.object({
   peakProcCount: z.number().optional(),
   archived: z.boolean(),
   archivedAt: z.string().optional(),
+  /** Pinned to the top of this project's task list (#935) — the `Pinned` group above
+   *  `Needs you`. Optional, unlike `archived`: absent IS "not pinned", which is what every
+   *  record written before this carries, and the store never writes `false`. Archiving
+   *  clears it, because archiving is how a user resigns from a task. */
+  pinned: z.boolean().optional(),
+  /** When the pin was set. Deliberately WRITE-ONLY today, like the `archivedAt` above it:
+   *  ordering inside `Pinned` uses the ordinary status/recency rules, so nothing reads this
+   *  yet. It is here because a field on a protected surface is far cheaper to add now than to
+   *  add later — "pinned oldest first" and "unpin what you pinned a month ago" both need it,
+   *  and neither can be reconstructed after the fact. */
+  pinnedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
    *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old
@@ -324,6 +363,10 @@ export const runIndexEntrySchema = z.object({
   /** The task's branch, when it has one — a column on the global page, and the one field that
    *  makes a cross-project row identifiable at a glance without opening it. */
   branch: z.string().optional(),
+  /** The run's place in a dispatch tree (spec 2026-09-10-dispatch): the two keys the global
+   *  page needs to nest a child under its parent, and the child's `kind` so a row can say
+   *  `review` or `implement` next to its title. Absent on a plain task. */
+  dispatch: dispatchSchema.pick({ rootRunId: true, parentRunId: true, kind: true }).optional(),
   /** When the agent actually started, as opposed to when the task was created. The global page's
    *  age column prefers it and falls back to `createdAt`, exactly as the per-project table does. */
   startedAt: z.string().optional(),
@@ -593,12 +636,229 @@ export type PickVariantResponse = z.infer<typeof pickVariantResponseSchema>;
 // defaults/transforms below (`text`, `images`, `systemPrompt`) mean the parsed output is not the
 // same shape. `z.infer` here would demand keys the server fills in for you.
 
-/** An inline image, base64 — ≤4 per request, ~5 MB each once decoded. */
-export const imageInputSchema = z.object({
-  mediaType: z.string().regex(/^image\//),
+/**
+ * Non-image attachment types the composer may send (#950). Deliberately an allowlist and
+ * deliberately short: cezar serves these files back from the cockpit's own origin, so every entry
+ * here is one more thing that must be safe to hand a browser. `image/*` stays a regex — narrowing
+ * what the route has always accepted would be the breaking half of this change.
+ *
+ * `text/x-markdown` is the spelling some browsers still report for a `.md`.
+ */
+export const FILE_ATTACHMENT_MEDIA_TYPES = [
+  'text/plain',
+  'text/markdown',
+  'text/x-markdown',
+  'application/pdf',
+] as const;
+
+/** Does this media type travel as an inline image block the model can look at? */
+export function isImageMediaType(mediaType: string): boolean {
+  return /^image\//.test(mediaType);
+}
+
+/** Is this something the composer may attach at all — an image, or one of the file types above? */
+export function isAttachmentMediaType(mediaType: string): boolean {
+  return (
+    isImageMediaType(mediaType) ||
+    (FILE_ATTACHMENT_MEDIA_TYPES as readonly string[]).includes(mediaType)
+  );
+}
+
+/**
+ * The on-disk extension for an attachment, derived from its media type ALONE — the user's own
+ * filename never reaches the wire, and therefore never reaches a path. `img` is the pre-existing
+ * catch-all for an image type cezar does not name (an SVG, a BMP), kept so those files land where
+ * they always did.
+ */
+export function attachmentExtension(mediaType: string): string {
+  return /png/.test(mediaType) ? 'png'
+    : /jpe?g/.test(mediaType) ? 'jpg'
+    : /webp/.test(mediaType) ? 'webp'
+    : /gif/.test(mediaType) ? 'gif'
+    : mediaType === 'application/pdf' ? 'pdf'
+    : mediaType === 'text/plain' ? 'txt'
+    : mediaType === 'text/markdown' || mediaType === 'text/x-markdown' ? 'md'
+    : 'img';
+}
+
+/** Extensions `attachmentExtension` produces for an inline image. */
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'img']);
+
+/**
+ * Does a persisted attachment name (`pasted-3.pdf`, `screenshot-1.png`) refer to an image?
+ *
+ * The one predicate every reader branches on — the engine deciding whether to re-encode a file as
+ * an image block, and the cockpit deciding between a thumbnail and a named chip. Branch on the
+ * NAME, never on the list an entry came from: images and files share one list and one numbering
+ * space on disk, and that is what keeps the orphan sweep, the restart re-read and the per-stack
+ * cap on a single code path.
+ */
+export function isImageAttachmentName(name: string): boolean {
+  const ext = name.split('.').pop()?.toLowerCase();
+  return ext !== undefined && IMAGE_ATTACHMENT_EXTENSIONS.has(ext);
+}
+
+/**
+ * Extensions a name may keep for a given media type, beyond the canonical one
+ * `attachmentExtension` produces. `.log` is here because it is the case the composer went out of
+ * its way to accept (a log the browser types as `text/plain`), and renaming `server.log` to
+ * `server.log.txt` in the library would throw away the only thing the user recognises it by.
+ * `.jpeg` is here for the same reason (#960's first caller to exercise this for images): the
+ * canonical spelling `attachmentExtension` picks for `image/jpeg` is `jpg`, but `photo.jpeg` is at
+ * least as common a name to arrive with, and renaming it to `photo.jpeg.jpg` would be the exact
+ * double-extension the canonical-extension rule exists to avoid, not enforce.
+ */
+const ALLOWED_NAME_EXTENSIONS: Record<string, readonly string[]> = {
+  'application/pdf': ['pdf'],
+  'text/plain': ['txt', 'text', 'log'],
+  'text/markdown': ['md', 'markdown'],
+  'text/x-markdown': ['md', 'markdown'],
+  'image/jpeg': ['jpg', 'jpeg'],
+  'image/tiff': ['tif', 'tiff'],
+};
+
+/** Real spellings of an image subtype `attachmentExtension` does not name individually. A closed
+ *  set rather than `mediaType.split('/')[1]`: `isImageMediaType` is the bare regex `/^image\//`,
+ *  so the subtype is a string the CLIENT chose, and accepting it wholesale would let
+ *  `image/sh` + `deploy.sh` keep `.sh` — the extension pin this function exists to apply. */
+const IMAGE_SUBTYPE_SPELLINGS = new Set(['svg', 'bmp', 'tiff', 'tif', 'avif', 'heic', 'heif', 'apng']);
+
+/** Longest stem the library will keep, in code POINTS and in UTF-8 bytes — `truncateToBounds`
+ *  applies both in one pass. Filesystems bound the entry in BYTES (255 on ext4/APFS/NTFS), and a
+ *  character bound alone is not one: 100 emoji are 400 bytes, and the write would fail with
+ *  `ENAMETOOLONG`. That failure is caught and degrades to no library entry, so the cost of getting
+ *  this wrong is silent absence rather than a crash — which is exactly why it is bounded here
+ *  instead. Both bounds leave room for the extension and the `-2`/`-99` collision suffix. */
+const MAX_ATTACHMENT_NAME_STEM = 100;
+const MAX_ATTACHMENT_NAME_STEM_BYTES = 180;
+
+/** Stems Windows reserves for devices regardless of the extension that follows (`CON.txt` is the
+ *  console, not a file). Matched case-insensitively, because the reservation is too. */
+const WINDOWS_DEVICE_NAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+/** UTF-8 width of one code point. Computed rather than measured: this package is Node-free AND
+ *  DOM-free by construction (`lib: ["ES2022"]`, `types: []` in its tsconfig), so neither `Buffer`
+ *  nor `TextEncoder` is in scope here — and that guard is load-bearing, because the module is
+ *  bundled into a browser and imported by the Node service. */
+function utf8Width(codePoint: number): number {
+  return codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+}
+
+/**
+ * Truncate to BOTH bounds at once, always on a code-POINT boundary. `for…of` yields whole code
+ * points, so a surrogate pair is never cut in half into a lone surrogate.
+ *
+ * The two bounds are applied in the same pass deliberately. Doing the character bound first with
+ * `String.prototype.slice` would count UTF-16 code UNITS, which is exactly the cut this loop
+ * exists to avoid: `'a'.repeat(97) + '😀😀'` sliced at 100 units ends on half of the second
+ * emoji, and the byte pass would then faithfully preserve the half. Node writes a lone surrogate
+ * to the filesystem as `U+FFFD`, so the cost is a library entry ending in `�` — cheap, and
+ * cheaper still to not produce.
+ */
+function truncateToBounds(value: string, maxChars: number, maxBytes: number): string {
+  let out = '';
+  let bytes = 0;
+  let chars = 0;
+  for (const char of value) {
+    bytes += utf8Width(char.codePointAt(0) ?? 0);
+    chars += 1;
+    if (bytes > maxBytes || chars > maxChars) return out;
+    out += char;
+  }
+  return out;
+}
+
+/**
+ * Turn the filename a browser reported into one that is safe to use as a path segment, or `null`
+ * when nothing usable survives.
+ *
+ * This is the load-bearing half of the attachment library (#929): the whole feature is "write a
+ * file under a name an untrusted client gave us", so the name is stripped to a bare segment —
+ * directory separators, `..`, control characters and the characters Windows refuses all go — and
+ * then the EXTENSION is pinned to the media type the schema already validated. That last part is
+ * the one that matters: without it a `text/plain` upload named `install.sh` would land as an
+ * executable-looking file inside the user's project, having passed a media-type allowlist that
+ * believed it was screening for exactly that.
+ *
+ * The user's own extension is kept when it is a spelling of the validated type
+ * (`notes.markdown`, `server.log`); anything else keeps the stem and gains the canonical
+ * extension, so `install.sh` becomes `install.sh.txt` — still recognisable, no longer a lie.
+ */
+export function sanitizeAttachmentName(name: string, mediaType: string): string | null {
+  // Basename on both separator conventions: the client is a browser on an unknown OS, and a
+  // Windows `C:\Users\me\notes.md` must not survive as a nested path.
+  const base = name.split(/[/\\]/).pop() ?? '';
+  const cleaned = base
+    // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .replace(/[<>:"|?*]/g, '-')
+    .replace(/\s+/g, ' ')
+    // Leading dots would make the copy a hidden file (and `.`/`..` a path operation).
+    .replace(/^\.+/, '')
+    .trim();
+  if (cleaned === '') return null;
+
+  const canonical = attachmentExtension(mediaType);
+  // `img` is `attachmentExtension`'s catch-all for an image subtype it does not name individually
+  // (SVG, BMP, TIFF...) — not a real extension to enforce. Without this, a name that already
+  // carries a legitimate spelling of that subtype (`diagram.svg`) would get `img` appended on top
+  // of the real one instead of validated (`diagram.svg.img`), so the subtype itself is accepted
+  // here as an additional spelling — still tied to the media type the schema already validated,
+  // not to whatever extension the name happened to have.
+  //
+  // `isImageMediaType` is the bare regex `/^image\//`, so everything after `image/` is a string the
+  // client chose, not a validated value — a character class here would let `{mediaType:'image/sh',
+  // name:'deploy.sh'}` keep the `.sh` extension. A closed set of real image subtype spellings keeps
+  // the pin applying to anything else.
+  const subtypeExt = canonical === 'img' ? mediaType.split('/')[1]?.split('+')[0]?.toLowerCase() : undefined;
+  const allowed =
+    ALLOWED_NAME_EXTENSIONS[mediaType] ??
+    (subtypeExt && IMAGE_SUBTYPE_SPELLINGS.has(subtypeExt) ? [canonical, subtypeExt] : [canonical]);
+  const dot = cleaned.lastIndexOf('.');
+  const ext = dot > 0 ? cleaned.slice(dot + 1).toLowerCase() : '';
+  const keepsExtension = allowed.includes(ext);
+  const rawStem = keepsExtension ? cleaned.slice(0, dot) : cleaned;
+  const stem = truncateToBounds(rawStem, MAX_ATTACHMENT_NAME_STEM, MAX_ATTACHMENT_NAME_STEM_BYTES)
+    // Trailing dots and spaces last, after truncation could have exposed one: Windows refuses an
+    // entry that ends in either, and `notes.` would otherwise become `notes..txt`.
+    .replace(/[. ]+$/, '')
+    .trim();
+  if (stem === '') return null;
+  // The last Windows filename rule, and the only one that is not about characters: these stems
+  // name DEVICES whatever extension follows, so `CON.txt` is the console rather than a file and a
+  // write to it would go somewhere no one can read back. The write is best-effort and would
+  // degrade quietly, which is exactly why it is worth the one line here.
+  const safeStem = WINDOWS_DEVICE_NAMES.test(stem) ? `${stem}-` : stem;
+  return `${safeStem}.${keepsExtension ? ext : canonical}`;
+}
+
+/**
+ * One inline attachment, base64 — ≤4 per request, ~5 MB each once decoded.
+ *
+ * An image rides along as a block the model can view; a file (#950) is written to the run's
+ * attachment folder and reaches the agent as a PATH only, which is the form its file tools want,
+ * the only form that survives the codex/opencode backends (they drop image blocks before the
+ * model sees them), and the one that keeps a multi-megabyte PDF out of the prompt bounds.
+ *
+ * `name` is the user's own filename, additive and optional (#929). It never names the file in the
+ * RUN folder — that keeps its `pasted-<n>.<ext>` numbering, which several readers depend on — it
+ * is what the per-project attachment library files the copy under, and it is bounded here only
+ * loosely because `sanitizeAttachmentName` is what actually decides whether it may touch a path.
+ * A client that omits it behaves exactly as it did before this key existed.
+ */
+export const attachmentInputSchema = z.object({
+  mediaType: z.string().refine(isAttachmentMediaType, {
+    message: 'unsupported attachment type — images, plain text, markdown and PDF only',
+  }),
   data: z.string().min(1).max(7_000_000),
+  name: z.string().max(255).optional(),
 });
-export type ImageInput = z.input<typeof imageInputSchema>;
+export type AttachmentInput = z.input<typeof attachmentInputSchema>;
+
+/** @deprecated Attachments are no longer images only — use `attachmentInputSchema`. Kept because
+ *  the `images` key it validates is the wire contract and did not change name. */
+export const imageInputSchema = attachmentInputSchema;
+export type ImageInput = AttachmentInput;
 
 /**
  * The KEYS of `POST /runs`' body, before the XOR refinement that `createRunInputSchema` adds.
@@ -638,11 +898,17 @@ export const createRunInputBaseSchema = z
       .max(20_000, 'must be at most 20000 characters')
       .optional()
       .transform((s) => (s ? s : undefined)),
-    /** Screenshots pasted into the new-task form; delivered with the first agent step. */
-    images: z.array(imageInputSchema).max(4).optional(),
+    /** Attachments pasted into the new-task form — screenshots, and since #950 PDF/TXT/MD files
+     *  too; delivered with the first agent step. The key keeps its name: the wire contract widened
+     *  in place rather than growing a second list. */
+    images: z.array(attachmentInputSchema).max(4).optional(),
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    /** The composer's Dispatch toggle (spec 2026-09-10-dispatch): start this task as the root of
+     *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
+     *  still created — on a server with `capabilities.dispatch` off. */
+    dispatch: dispatchIntentSchema.optional(),
   });
 
 /**
@@ -658,17 +924,17 @@ export const createRunInputSchema = createRunInputBaseSchema.refine(
 export type CreateRunInput = z.input<typeof createRunInputSchema>;
 
 /**
- * `POST /runs/:id/messages` — text and/or pasted screenshots for a live session. Both keys have
+ * `POST /runs/:id/messages` — text and/or pasted attachments for a live session. Both keys have
  * server-side defaults, so an omitted `text` is `''` and an omitted `images` is `[]`; the refine
  * is what rejects a message that is empty in both.
  */
 export const messageInputSchema = z
   .object({
     text: z.string().max(100_000).default(''),
-    images: z.array(imageInputSchema).max(4).default([]),
+    images: z.array(attachmentInputSchema).max(4).default([]),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+    message: 'message needs text or at least one attachment',
   });
 export type MessageInput = z.input<typeof messageInputSchema>;
 

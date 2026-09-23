@@ -3,15 +3,21 @@ import { randomUUID } from 'node:crypto';
 import { AutomationStore } from '../automations/store.ts';
 import { AutomationCoordinator } from '../automations/coordinator.ts';
 import { GithubPoller } from '../automations/github-poller.ts';
-import { ProjectAutomationScheduler, WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
-import { launchAutomationRun, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
+import { ProjectAutomationScheduler, WorkspaceAutomationScheduler, type ProjectAutomationHandle } from '../automations/scheduler.ts';
+import { ScheduleRunner } from '../automations/schedule-runner.ts';
+import { automationStats } from '../automations/stats.ts';
+import { automationTemplatesOf } from '../automations/templates.ts';
+import { launchAutomationRun, launchScheduledRun, rebaselineIdleAutomations, reconcileAutomationReceipts, validateAutomationPrompt } from '../automations/task-template.ts';
 import {
   automationEventSchema,
   automationFiltersSchema,
   automationLogResultSchema,
   automationTaskSchema,
+  isGithubAutomation,
+  isScheduleAutomation,
   type AutomationDefinition,
 } from '../automations/types.ts';
+import { automationScheduleSchema, localTimeZone, nextOccurrence } from '@open-mercato/cezar-contract';
 import type { IncomingMessage } from 'node:http';
 import { access, constants as fsConstants, mkdir, readFile, realpath, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -36,14 +42,17 @@ import {
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
 import {
+  attachmentInputSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
+import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
+import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
@@ -85,11 +94,26 @@ import {
 import { readRunIndexFromDisk } from '../runs/run-index.ts';
 import { isV2WireEventType } from '../runs/ui-event-sink.ts';
 import {
+  countRunDraftImages,
+  deleteRunDraftImage,
+  deleteRunDraftSurface,
+  readRunDraftImage,
+  readRunDrafts,
+  writeRunDraftImage,
+  writeRunDraftSurface,
+} from '../runs/drafts.ts';
+import {
+  draftImageInputSchema,
+  draftImageParamSchema,
+  draftSurfaceParamSchema,
+  DRAFT_MAX_IMAGES,
   runEventsQuerySchema,
   runHistoryQuerySchema,
   runIdParamSchema,
+  setRunDraftInputSchema,
+  type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
-import type { RunManager } from '../workflows/run.ts';
+import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
@@ -163,10 +187,16 @@ import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
-import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, GithubPrNotFoundError, GH_CHECKS_MAX, GH_REF_STATUS_MAX } from './github.ts';
+import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
+import {
+  agentCliRunner,
+  detectOpenTargets,
+  openFileInDefaultApp,
+  openInApp,
+  withResolvedClaudeBin,
+} from './open-in-app.ts';
 import { createDraftPr } from './pr.ts';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
@@ -177,6 +207,7 @@ import {
 } from './provider-action-gate.ts';
 import {
   ASSET_CACHE_CONTROL,
+  SHELL_CACHE_CONTROL,
   BUILD_HINT_HTML,
   assetContentType,
   isSafeAssetFilename,
@@ -343,12 +374,34 @@ const automationEditableSchema = z
     name: z.string().trim().min(1).max(200),
     description: z.string().max(2_000).optional(),
     enabled: z.boolean().optional(),
-    events: z.array(automationEventSchema).min(1).max(4),
-    intervalSeconds: z.number().int().min(60).max(86_400),
-    filters: automationFiltersSchema,
+    /** Omitted on create = `github`; omitted on update = the stored kind (spec 2026-09-14). */
+    kind: z.enum(['github', 'schedule']).optional(),
+    events: z.array(automationEventSchema).min(1).max(7).optional(),
+    intervalSeconds: z.number().int().min(60).max(86_400).optional(),
+    filters: automationFiltersSchema.optional(),
+    schedule: automationScheduleSchema.optional(),
     task: automationTaskSchema,
   })
   .strict();
+type AutomationEditableBody = z.infer<typeof automationEditableSchema>;
+
+/**
+ * The kind rules the storage schema also enforces, answered as a 400 message rather than a zod
+ * issue path (spec 2026-09-14 § Data Model): a poll needs its three keys; a schedule needs its
+ * schedule and carries no GitHub filter.
+ */
+function automationKindIssue(body: AutomationEditableBody, kind: 'github' | 'schedule'): string | null {
+  if (kind === 'schedule') {
+    if (!body.schedule) return 'a scheduled automation needs a schedule';
+    if (body.events || body.filters || body.intervalSeconds !== undefined) return 'a scheduled automation has no GitHub filter';
+    return null;
+  }
+  if (!body.events?.length) return 'a GitHub automation needs at least one event';
+  if (body.intervalSeconds === undefined) return 'a GitHub automation needs a poll interval';
+  if (!body.filters) return 'a GitHub automation needs its bounded filter';
+  if (body.schedule) return 'a GitHub automation has no schedule';
+  return null;
+}
 const automationCreateSchema = automationEditableSchema.extend({ enable: z.boolean().optional() });
 const automationUpdateSchema = automationEditableSchema.extend({ expectedRevision: z.number().int().positive() });
 const automationCheckRequestSchema = z.object({ mode: z.enum(['preview', 'execute']) }).strict();
@@ -371,9 +424,11 @@ function editableAutomation(definition: AutomationDefinition) {
     name: definition.name,
     description: definition.description,
     enabled: definition.enabled,
+    kind: definition.kind,
     events: definition.events,
     intervalSeconds: definition.intervalSeconds,
     filters: definition.filters,
+    schedule: definition.schedule,
     task: definition.task,
   };
 }
@@ -424,7 +479,11 @@ export function projectRouteManifest(app: Hono): ProjectRouteInfo[] {
 const FOLLOWUPS_OFF = 'the follow-up inbox is disabled — set CEZ_FOLLOWUPS=1 to enable it';
 
 /** 409 body for every automations route while GitHub automations are off (#801). */
-const AUTOMATIONS_OFF = 'GitHub automations are disabled — set CEZ_AUTOMATIONS=1 to enable them';
+const AUTOMATIONS_OFF = 'Automations are off — this cockpit was started with CEZ_AUTOMATIONS=0';
+
+/** 409 body for every dispatch route while task dispatch is off (spec 2026-09-10-dispatch). */
+const DISPATCH_OFF =
+  'dispatch is disabled on this cockpit (CEZ_DISPATCH=0) — the operator turned it off. Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is disabled.';
 
 // ---- variant-compare response shapes (spec 010) ----------------------------
 // Named and exported so `api-types.test.ts` can drift-guard the cockpit's
@@ -594,24 +653,19 @@ const startRunSchema = z
       .max(20_000, 'must be at most 20000 characters')
       .optional()
       .transform((s) => (s ? s : undefined)),
-    // Screenshots pasted into the new-task form — same shape and limits as a
+    // Attachments pasted into the new-task form — same shape and limits as a
     // live-session message; delivered with the first agent step's opening.
-    images: z
-      .array(
-        z.object({
-          mediaType: z.string().regex(/^image\//),
-          // ~5 MB per image once base64-decoded.
-          data: z.string().min(1).max(7_000_000),
-        }),
-      )
-      .max(4)
-      .optional(),
+    images: z.array(attachmentInputSchema).max(4).optional(),
     // Inbox follow-up (#374): the todo the composer was prefilled from
     // (`/new?skill=&ref=&todo=t1`). On a successful start the entry is marked
     // started — the same bookkeeping POST /api/todos/:id/start does, so the
     // audit trail survives the composer detour. Bounded like every other
     // string here; a todo id is a short generated key.
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    // The composer's Dispatch toggle (spec 2026-09-10-dispatch): this task is the root of a
+    // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
+    // off: the task itself is still perfectly valid as an ordinary run.
+    dispatch: dispatchIntentSchema.optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -684,11 +738,15 @@ const appearanceSchema = z.object({
 
 const uiStateSchema = z
   .object({
+    // `null` clears the recorded choice — the composer's "no skill, no workflow" state,
+    // which is a plain quick-task run. Written through to the file like any other value, so an
+    // older cockpit reading it falls back to its own default instead of restoring a stale skill.
     lastTask: z
       .object({
         source: z.enum(['workflow', 'skill']),
         ref: z.string().min(1).max(200),
       })
+      .nullable()
       .optional(),
     // Composer picker recency (newest first, capped) + the remembered worktree
     // choice for single-skill runs. Additive prefs, like the rest of ui-state.
@@ -780,19 +838,16 @@ const openInSchema = z.object({
   path: z.string().max(1_000).optional(),
 });
 
-const imageInputSchema = z.object({
-  mediaType: z.string().regex(/^image\//),
-  // ~5 MB per image once base64-decoded.
-  data: z.string().min(1).max(7_000_000),
-});
-
+// Attachment-carrying bodies validate with the CONTRACT's `attachmentInputSchema` (#950) —
+// images plus the short PDF/TXT/MD allowlist, ~5 MB each once base64-decoded. Imported rather
+// than mirrored here, so the wire cannot drift from what the cockpit compiles against.
 const messageSchema = z
   .object({
     text: z.string().max(100_000).default(''),
-    images: z.array(imageInputSchema).max(4).default([]),
+    images: z.array(attachmentInputSchema).max(4).default([]),
   })
   .refine((m) => m.text.trim().length > 0 || m.images.length > 0, {
-    message: 'message needs text or at least one image',
+    message: 'message needs text or at least one attachment',
   });
 
 // PATCH semantics are load-bearing here: an omitted field keeps its current value.
@@ -800,17 +855,17 @@ const messageSchema = z
 const queuedMessagePatchSchema = z
   .object({
     text: z.string().max(100_000).optional(),
-    images: z.array(imageInputSchema).max(4).optional(),
+    images: z.array(attachmentInputSchema).max(4).optional(),
   })
   .refine((m) => m.text !== undefined || m.images !== undefined, {
-    message: 'message edit needs text or images',
+    message: 'message edit needs text or attachments',
   });
 
 // Queued prompt stack bounds (#472). The per-message bounds mirror `messageSchema`
 // above; the one that actually matters is the FOLDED total, because 20 messages of
 // 100 000 chars each would otherwise compose a ~2 M-character {{task}}.
 const MAX_QUEUED_MESSAGES = 20;
-const MAX_QUEUED_IMAGES = 8;
+const MAX_QUEUED_ATTACHMENTS = 8;
 const MAX_FOLDED_TASK_CHARS = 200_000;
 
 /** Length of the prompt a run would execute with — `task` plus its whole stack,
@@ -825,16 +880,19 @@ function foldedLength(task: string, stack: Array<{ text: string }>): number {
 }
 
 // "Continue"/"Send back" body (spec 003 / #401): every field optional, so an empty POST reopens
-// the last session on the run's current backend (backward compat). A runner/model override lets
-// the follow-up composer choose which engine handles the continuation. `text` stays bounded like
-// the live-session message `text` (#429), and `images` like a live-session message's — the
+// the last session on the run's current backend (backward compat). A runner/model/account override
+// lets the follow-up composer choose which engine handles the continuation. `text` stays bounded
+// like the live-session message `text` (#429), and `images` like a live-session message's — the
 // follow-up composer is a full composer, so a screenshot pasted into it must reach the reopened
 // session rather than being silently dropped.
 const continueSchema = z.object({
   text: z.string().max(100_000, 'must be at most 100000 characters').optional(),
-  images: z.array(imageInputSchema).max(4).optional(),
+  images: z.array(attachmentInputSchema).max(4).optional(),
   runner: z.enum(RUNNER_IDS).optional(),
   model: z.string().max(200).optional(),
+  /** Agent account for the reopened session (spec 2026-07-29-agent-profiles). Bound mirrors
+   *  `POST /runs`' own `agentProfile`. Omitted = keep the account the run is already on. */
+  agentProfile: z.string().max(64).optional(),
 });
 
 // Inbox "▶ Run" body (spec 007 / #401 / #413): every field optional, and the whole body is
@@ -865,6 +923,13 @@ type TodoStartEnv = ProjectApiEnv & { Variables: { todo: TodoItem } };
 // un-archives. A tiny schema so the route follows the safeParse convention.
 const archiveSchema = z.object({
   archived: z.boolean().optional(),
+});
+
+// `POST /api/v1/runs/:id/pin` (#935) — no body pins; `{pinned:false}` unpins. The archive
+// route's shape, deliberately: it is the same kind of per-task flag, and a second spelling for
+// "absent means do the thing" would be one more rule for a client to remember.
+const pinSchema = z.object({
+  pinned: z.boolean().optional(),
 });
 
 // Request-body size guards (#429). A generous global cap keeps a single
@@ -1041,6 +1106,7 @@ export function createApp(deps: ServerDeps) {
   const bootDataDir = join(bootRoot, '.ai/cezar');
   const modelCatalog = deps.modelCatalog ?? new RunnerModelCatalog({
     adapters: {
+      claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
@@ -1104,12 +1170,33 @@ export function createApp(deps: ServerDeps) {
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
   // and plumbs its registry id in via `deps.bootProjectId`. Legacy callers and
   // tests construct the app without one — then it is derived lazily from the
-  // registry by realpath and cached on a hit. A boot repo that is legitimately
-  // unregistered (task worktree, `$HOME` itself, unreadable workspace) falls
-  // back to its would-be slug, so `bootProject` always names the repo this
-  // server was started in. Strictly non-fatal, zero-config: every failure path
-  // degrades to the slug fallback, never an error.
+  // registry by realpath and cached on a hit. A boot repo that is not in the
+  // registry — a task worktree, `$HOME`, an unreadable workspace, or (since
+  // boot registration became seed-once) any folder started in while the user
+  // already has projects — falls back to its would-be slug, so `bootProject`
+  // always names the repo this server was started in. Strictly non-fatal,
+  // zero-config: every failure path degrades to the slug fallback, never an
+  // error.
+  //
+  // BOTH answers are sticky for the process. The registry hit caches for the
+  // obvious reason; the FALLBACK caches because it is a live URL the cockpit
+  // is showing, and it is derived from a file the user edits while the server
+  // runs — recomputing it per call let an unrelated `Add project` with the
+  // same basename take the slug and silently move the boot project to
+  // `<slug>-2` under an open tab. The registry lookup still runs first, so the
+  // day the boot folder IS registered (its own "Add project"), its real id
+  // takes over from the fallback rather than the two disagreeing; the reserved
+  // slug below is what keeps those two the same string.
+  //
+  // Sticky, but never at the cost of correctness: a pinned fallback that some
+  // OTHER root has since taken (an out-of-band `cezar projects add ~/other/beta`
+  // from a second process, where the reservation cannot reach) is dropped and
+  // re-allocated. That gives back the visible `<slug>-2` move instead of
+  // shadowing — the scope resolver binds `/p/<bootProject>/` to the boot
+  // context before it consults the registry, so keeping the stolen slug would
+  // quietly serve the boot folder under a sidebar row pointing somewhere else.
   let bootProjectCache = bootProjectId;
+  let bootProjectFallback: string | undefined;
   const resolveBootProject = async (projects?: readonly WorkspaceProject[]): Promise<string> => {
     if (bootProjectCache) return bootProjectCache;
     let registry = projects ?? [];
@@ -1118,10 +1205,16 @@ export function createApp(deps: ServerDeps) {
       const real = await realpath(bootRoot).catch(() => bootRoot);
       const match = registry.find((p) => p.root === real || p.root === bootRoot);
       if (match) bootProjectCache = match.id;
+      else if (bootProjectFallback !== undefined
+        && registry.some((project) => project.id === bootProjectFallback)) {
+        bootProjectFallback = undefined;
+      }
     } catch {
       // unreadable workspace — fall through to the slug fallback below
     }
-    return bootProjectCache ?? allocateProjectSlug(bootRoot, registry.map((project) => project.id));
+    if (bootProjectCache) return bootProjectCache;
+    bootProjectFallback ??= allocateProjectSlug(bootRoot, registry.map((project) => project.id));
+    return bootProjectFallback;
   };
   // Health's workspace garnish: id+name ONLY — never `root` (#431, see the
   // health route). Reads only the registry file; no per-root status probes,
@@ -1382,7 +1475,11 @@ export function createApp(deps: ServerDeps) {
   const serveShell = (c: Context): Response | undefined => {
     const distIndex = join(distDir, 'index.html');
     // existsSync per request, like the reads below: `npm run build:web` in a
-    // running cockpit takes effect on the next reload, no restart.
+    // running cockpit takes effect on the next reload, no restart. That promise
+    // only reaches a DEVICE if the shell says it may not be reused without
+    // asking (SHELL_CACHE_CONTROL) — the assets it names are immutable, so one
+    // cached shell pins an entire stale cockpit. Both responses carry it: the
+    // hint page becomes the app the moment the build lands.
     const target = resolveGetRequest({
       path: c.req.path,
       distExists: existsSync(distIndex),
@@ -1396,11 +1493,11 @@ export function createApp(deps: ServerDeps) {
         console.log('cezar: web/dist is missing — run `npm run build:web` to build the cockpit');
       }
       return new Response(BUILD_HINT_HTML, {
-        headers: { 'content-type': HTML_TYPE },
+        headers: { 'content-type': HTML_TYPE, 'cache-control': SHELL_CACHE_CONTROL },
       });
     }
     return new Response(readFileSync(distIndex), {
-      headers: { 'content-type': HTML_TYPE },
+      headers: { 'content-type': HTML_TYPE, 'cache-control': SHELL_CACHE_CONTROL },
     });
   };
 
@@ -1633,9 +1730,9 @@ export function createApp(deps: ServerDeps) {
   // ---- chained family: host model catalog (workspace-level) ----
   const modelsRoutes = new Hono<ProjectApiEnv>()
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
-    // authoritative host-local catalog (#794), so the client compiles against exactly what this
-    // validates. Claude has no such source: its picker stays on static presets and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be codex, opencode, or cursor' }), async (c) => {
+    // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
+    // this validates. A runner absent from it has no discovery path and this 400s.
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, or cursor' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -2342,11 +2439,39 @@ export function createApp(deps: ServerDeps) {
       } catch {
         // unreadable workspace — degrade to the empty registry + defaults
       }
-      const body: ProjectsResponse = {
-        projects,
-        bootProject: await resolveBootProject(projects),
-        projectsDir,
-      };
+      const bootProject = await resolveBootProject(projects);
+      // The folder this server was started in, when the registry does not hold
+      // it — the ordinary state since boot registration became seed-once, and
+      // before that the task-worktree/`$HOME` case. The server serves it (the
+      // boot context answers `/p/<bootProject>/…` and the unscoped alias), so
+      // leaving it out of this list made it unreachable: no sidebar row, no
+      // `lastLocation` (the cockpit only saves registry-known ids), and the
+      // repo chip naming a folder the navigation could not open. It is marked
+      // `unregistered` rather than merged in silently, so Settings offers to
+      // add it instead of offering Remove/Max parallel it cannot honour.
+      //
+      // Also the honest answer when the workspace is unreadable: nothing IS
+      // registered as far as this process can tell, and a cockpit showing the
+      // one folder it can definitely serve beats an empty sidebar.
+      if (!projects.some((project) => project.id === bootProject)) {
+        const root = await realpath(bootRoot).catch(() => bootRoot);
+        projects = [
+          {
+            id: bootProject,
+            root,
+            name: basename(root),
+            // Never registered, so it has no registry timestamps to report —
+            // empty rather than invented, and Settings renders "—" for them.
+            addedAt: '',
+            lastOpenedAt: '',
+            source: 'local',
+            unregistered: true,
+            ...(await probeProjectStatus(root)),
+          },
+          ...projects,
+        ];
+      }
+      const body: ProjectsResponse = { projects, bootProject, projectsDir };
       return c.json(body);
     })
 
@@ -2381,14 +2506,16 @@ export function createApp(deps: ServerDeps) {
       }
       if (!entry) return c.json({ error: `unknown project: ${id}` }, 404);
 
-      // The boot project is refused, not removed: `cezar serve` re-registers the
-      // repo it was started in on every boot, so "removing" it would undo itself
-      // at the next restart while breaking this session's sidebar in the
-      // meantime. The pane disables the button and says the same thing.
+      // The boot project is refused, not removed: this server is serving that
+      // repo right now, and dropping its registry row would break the session's
+      // own sidebar while the process keeps running out of it. Offline removal
+      // is the honest gesture — `cezar projects remove` has no such refusal
+      // because it runs with no server. The pane disables the button and says
+      // the same thing.
       if (id === bootId) {
         return c.json(
           {
-            error: `cezar is serving ${entry.name} right now — it re-registers itself at every start, so it cannot be removed from here`,
+            error: `cezar is serving ${entry.name} right now — stop it and run \`cezar projects remove ${id}\` to drop the registry entry`,
           },
           409,
         );
@@ -2648,9 +2775,16 @@ export function createApp(deps: ServerDeps) {
     } catch {
       // unreadable workspace — treat as unknown; the write below will fail loudly
     }
+    // The boot project's id is reserved even when the registry does not hold
+    // it: an unregistered boot folder is still being served under that slug,
+    // so letting a same-basename folder take it would point a live URL at the
+    // wrong repo. Reserved against OTHER roots only — adding the boot folder
+    // itself is the one registration that should get exactly that slug.
+    const bootReal = await realpath(bootRoot).catch(() => bootRoot);
+    const reserved = real === bootReal ? [] : [await resolveBootProject()];
     let project: ProjectListEntry;
     try {
-      const entry = await registerProject(requested, source);
+      const entry = await registerProject(requested, source, reserved);
       project = { ...entry, ...(await probeProjectStatus(entry.root)) };
     } catch (err) {
       // e.g. a read-only home — nothing was persisted (atomic tmp+rename).
@@ -3204,6 +3338,84 @@ export function createApp(deps: ServerDeps) {
    * including `/health`. The two-line pairing (`/automations` and `/automations/*`) is what makes
    * a path match both the collection and everything under it.
    */
+  /**
+   * Enabling arms the kind (spec 2026-09-14): a poll establishes its current-time baseline
+   * (existing records never launch); a schedule gets its next occurrence. Shared by create-with-
+   * enable and the enable route.
+   */
+  const armAutomation = (store: AutomationStore, automation: AutomationDefinition): void => {
+    const now = Date.now();
+    if (isScheduleAutomation(automation)) {
+      const next = nextOccurrence(automation.schedule, now, localTimeZone());
+      store.setState(automation.id, (current) => ({
+        ...current,
+        revision: automation.revision,
+        ...(next !== null ? { nextRunAt: new Date(next).toISOString() } : {}),
+      }));
+      return;
+    }
+    const baselineAt = new Date(now).toISOString();
+    store.setState(automation.id, (current) => ({
+      ...current,
+      revision: automation.revision,
+      baselineAt,
+      cursor: { timestamp: baselineAt },
+      nextCheckAt: new Date(now + (automation.intervalSeconds ?? 300) * 1_000).toISOString(),
+    }));
+    store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+  };
+
+  /** The schedule runner's view of a project: the store, the zone, and a launcher onto its RunManager. */
+  const scheduleHandle = (project: Parameters<typeof emitAutomationChange>[0]) => ({
+    projectId: project.id,
+    store: project.automationStore,
+    timeZone: localTimeZone(),
+    launch: (definition: Parameters<typeof launchScheduledRun>[0]['definition'], occurrence: Parameters<typeof launchScheduledRun>[0]['occurrence'], receiptId: string) =>
+      launchScheduledRun({ root: project.root, manager: project.manager, store: project.store, definition, occurrence, receiptId, projectName: basename(project.root), timeZone: localTimeZone(), dispatchEnabled: capabilities().dispatch }),
+    onChange: (automationId: string, revision: number) => emitAutomationChange(project, automationId, revision),
+  });
+
+  /** The runs the log rows name, with their dispatch children (spec 2026-09-14 § API). */
+  const logRunsOf = (runStore: RunStore, records: ReadonlyArray<{ runId?: string }>) => {
+    const runs: Record<string, { title: string; status: RunRecord['status']; costUsd?: number; children: Array<{ runId: string; kind?: NonNullable<RunRecord['dispatch']>['kind']; title: string; status: RunRecord['status']; costUsd?: number }> }> = {};
+    const wanted = new Set(records.map((row) => row.runId).filter((id): id is string => typeof id === 'string'));
+    if (!wanted.size) return runs;
+    const all = runStore.listRuns();
+    const showCost = capabilities().costMetrics;
+    for (const run of all) {
+      if (!wanted.has(run.id)) continue;
+      const children = all
+        .filter((child) => child.id !== run.id && child.dispatch?.rootRunId === run.id)
+        .map((child) => ({
+          runId: child.id,
+          ...(child.dispatch?.kind ? { kind: child.dispatch.kind } : {}),
+          title: child.title,
+          status: child.status,
+          ...(showCost && typeof child.costUsd === 'number' ? { costUsd: child.costUsd } : {}),
+        }));
+      runs[run.id] = {
+        title: run.title,
+        status: run.status,
+        ...(showCost && typeof run.costUsd === 'number' ? { costUsd: run.costUsd } : {}),
+        children,
+      };
+    }
+    return runs;
+  };
+
+  /** An account named on save is checked like `POST /runs` checks one: the user just picked it, so
+   *  a stale id is a 400. At launch a since-deleted id falls back to the default, as any stored
+   *  reference does. */
+  const automationAccountIssue = async (
+    root: string,
+    task: { runner?: ProviderId; agentProfile?: string },
+  ): Promise<string | null> => {
+    if (task.agentProfile === undefined) return null;
+    const runner = task.runner ?? (await loadConfig(root)).defaultRunner;
+    const account = await resolveWorkspaceProfile(runner, task.agentProfile);
+    return 'error' in account ? account.error : null;
+  };
+
   const requireAutomations = async (c: Context, next: Next) => {
     if (!capabilities().automations) return c.json({ error: AUTOMATIONS_OFF }, 409);
     await next();
@@ -3225,14 +3437,30 @@ export function createApp(deps: ServerDeps) {
       // Annotated, so the two branches are ONE shape rather than a union of two: the fallback
       // literal always carries `reason`, the cached answer only sometimes does, and the route
       // type is what `contract/src/automations.ts` has to describe.
-      const availability: ForgeAvailability = forge?.detectCached() ?? {
-        available: false,
-        reason: forge ? 'GitHub availability is still being checked' : 'No GitHub remote is configured',
-      };
-      const automations = automationStore.list().map((automation) => {
-        const logs = automationStore.logs({ automationId: automation.id, limit: 100 });
+      // A cold cache (first read after boot) waits for the probe instead of answering "still being
+      // checked": nothing re-reads this page when the background probe lands, so that answer
+      // would lock the editor's GitHub trigger off. Only `/api/health` has a latency budget.
+      const availability: ForgeAvailability = forge
+        ? forge.detectCached() ?? (await forge.detect())
+        : { available: false, reason: 'No GitHub remote is configured' };
+      const definitions = automationStore.list();
+      const logsById = new Map(definitions.map((definition) => [definition.id, automationStore.logs({ automationId: definition.id, limit: 100 })] as const));
+      const timeZone = localTimeZone();
+      // Derived, never stored (spec 2026-09-14 § Proposed Solution 4).
+      const stats = automationStats({
+        definitions,
+        logs: [...logsById.values()].flat(),
+        runs: c.get('project').store.listRuns(),
+        now: Date.now(),
+        timeZone,
+        costMetrics: capabilities().costMetrics,
+      });
+      const automations = definitions.map((automation) => {
+        const logs = logsById.get(automation.id) ?? [];
         const state = automationStore.state(automation.id);
         const latestLog = logs[0];
+        const row = stats.rows.get(automation.id);
+        const nextRunAt = automation.enabled ? (automation.kind === 'schedule' ? state?.nextRunAt : state?.nextCheckAt) : undefined;
         return {
           ...automation,
           // Spread conditionally, never `state: maybeUndefined`: the latter types the key as
@@ -3242,13 +3470,17 @@ export function createApp(deps: ServerDeps) {
           ...(latestLog ? { latestLog } : {}),
           counts: {
             matches: logs.filter((row) => row.result === 'launched' || row.result === 'duplicate').length,
-            launched: logs.filter((row) => row.result === 'launched').length,
+            launched: logs.filter((row) => row.result === 'launched' || row.result === 'manual' || row.result === 'catch-up').length,
             duplicates: logs.filter((row) => row.result === 'duplicate').length,
-            errors: logs.filter((row) => row.result === 'error' || row.result === 'rate-limited').length,
+            errors: logs.filter((row) => row.result === 'error' || row.result === 'rate-limited' || row.result === 'failed').length,
           },
+          ...(nextRunAt ? { nextRunAt } : {}),
+          ...(row?.lastRun ? { lastRun: row.lastRun } : {}),
+          runs7d: row?.runs7d ?? 0,
+          ...(row?.costUsd7d !== undefined ? { costUsd7d: row.costUsd7d } : {}),
         };
       });
-      const nextDue = automations.map((item) => item.state?.nextCheckAt).filter(Boolean).sort()[0];
+      const nextDue = automations.map((item) => item.nextRunAt).filter(Boolean).sort()[0];
       return c.json({
         ...availability,
         scheduler: {
@@ -3257,6 +3489,8 @@ export function createApp(deps: ServerDeps) {
           state: automations.some((item) => item.enabled) ? ('scheduled' as const) : ('idle' as const),
           ...(nextDue ? { nextDue } : {}),
         },
+        timeZone,
+        stats: stats.week,
         automations,
       });
     })
@@ -3264,20 +3498,17 @@ export function createApp(deps: ServerDeps) {
     .post('/automations', jsonZodValidator(() => automationCreateSchema), async (c) => {
       const { automationStore } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+      const kind = parsed.data.kind ?? 'github';
+      const kindIssue = automationKindIssue(parsed.data, kind);
+      if (kindIssue) return c.json({ error: kindIssue }, 400);
+      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
+      const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
+      if (accountIssue) return c.json({ error: accountIssue }, 400);
       const { enable, ...input } = parsed.data;
       try {
-        const automation = automationStore.create({ ...input, enabled: enable === true });
-        if (enable) {
-          const baselineAt = new Date().toISOString();
-          automationStore.setState(automation.id, {
-            revision: automation.revision,
-            baselineAt,
-            cursor: { timestamp: baselineAt },
-            nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
-          });
-        }
+        const automation = automationStore.create({ ...input, kind, enabled: enable === true });
+        if (enable) armAutomation(automationStore, automation);
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation }, 201);
@@ -3302,12 +3533,31 @@ export function createApp(deps: ServerDeps) {
     .put('/automations/:id', jsonZodValidator(() => automationUpdateSchema), async (c) => {
       const { automationStore } = c.get('project');
       const parsed = { data: c.req.valid('json') };
-      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt);
+      const current = automationStore.get(c.req.param('id'));
+      if (!current) return c.json({ error: 'not found' }, 404);
+      // The stored kind unless the body names one; a switch is refused — receipts and cursors
+      // are kind-specific, and a silent swap would orphan them (spec 2026-09-14 § Edge cases).
+      const kind = parsed.data.kind ?? current.kind;
+      if (kind !== current.kind) return c.json({ error: 'change the kind by creating a new automation' }, 409);
+      const kindIssue = automationKindIssue(parsed.data, kind);
+      if (kindIssue) return c.json({ error: kindIssue }, 400);
+      const promptIssue = validateAutomationPrompt(parsed.data.task.prompt, kind);
       if (promptIssue) return c.json({ error: promptIssue }, 400);
+      const accountIssue = await automationAccountIssue(c.get('project').root, parsed.data.task);
+      if (accountIssue) return c.json({ error: accountIssue }, 400);
       const { expectedRevision, ...input } = parsed.data;
-      if (!automationStore.get(c.req.param('id'))) return c.json({ error: 'not found' }, 404);
       try {
-        const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, enabled: input.enabled ?? false });
+        const automation = automationStore.update(c.req.param('id'), expectedRevision, { ...input, kind, enabled: input.enabled ?? false });
+        // An edited schedule recomputes its next occurrence; `store.update` carried the old
+        // `nextRunAt` forward, so clear it and let the timer's `dueAt` persist the new one.
+        if (kind === 'schedule' && JSON.stringify(current.schedule) !== JSON.stringify(automation.schedule)) {
+          if (automationStore.state(automation.id)?.nextRunAt) {
+            automationStore.setState(automation.id, (state) => ({ ...state, nextRunAt: undefined }));
+          }
+        }
+        // Switched on from the editor: the same current-time baseline the Enable button sets, or
+        // the first poll would launch the whole lookback window's backlog.
+        if (automation.enabled && !current.enabled) armAutomation(automationStore, automation);
         emitAutomationChange(c.get('project'), automation.id, automation.revision);
         automationsChanged();
         return c.json({ automation });
@@ -3332,15 +3582,7 @@ export function createApp(deps: ServerDeps) {
       const current = store.get(c.req.param('id'));
       if (!current) return c.json({ error: 'not found' }, 404);
       const automation = store.update(current.id, current.revision, { ...editableAutomation(current), enabled: true });
-      const baselineAt = new Date().toISOString();
-      store.setState(automation.id, {
-        ...store.state(automation.id),
-        revision: automation.revision,
-        baselineAt,
-        cursor: { timestamp: baselineAt },
-        nextCheckAt: new Date(Date.now() + automation.intervalSeconds * 1_000).toISOString(),
-      });
-      store.appendLog({ automationId: automation.id, revision: automation.revision, result: 'baseline', reason: 'Enabled from a current-time baseline; existing records were not launched.' });
+      armAutomation(store, automation);
       emitAutomationChange(c.get('project'), automation.id, automation.revision);
       automationsChanged();
       return c.json({ automation });
@@ -3364,6 +3606,7 @@ export function createApp(deps: ServerDeps) {
       const store = project.automationStore;
       const automation = store.get(c.req.param('id'));
       if (!automation) return c.json({ error: 'not found' }, 404);
+      if (!isGithubAutomation(automation)) return c.json({ error: 'a schedule has nothing to preview; use run' }, 409);
       const parsed = { data: c.req.valid('json') };
       // `string`, not `randomUUID`'s template-literal type: the wire carries an opaque id, and
       // leaking `${string}-${string}-…` into the route type would make the contract describe the
@@ -3379,12 +3622,11 @@ export function createApp(deps: ServerDeps) {
           if (!remote || remote.host !== 'github.com') throw new Error('No GitHub remote is configured');
           const scheduler = new ProjectAutomationScheduler({
             projectId: project.id,
-            owner: remote.owner,
-            repo: remote.repo,
+            timeZone: localTimeZone(),
             store,
-            poller: new GithubPoller(),
+            github: { owner: remote.owner, repo: remote.repo, poller: new GithubPoller() },
             launch: parsed.data.mode === 'execute'
-              ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId })
+              ? (definition, candidate, receiptId) => launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate, receiptId, dispatchEnabled: capabilities().dispatch })
               : undefined,
             onChange: (automationId, revision) => emitAutomationChange(project, automationId, revision),
           });
@@ -3397,8 +3639,27 @@ export function createApp(deps: ServerDeps) {
       return c.json({ checkId: id }, 202);
     })
 
+    // A scheduled automation fired NOW, by hand (spec 2026-09-14 Q10): paused or not, the
+    // definition's `enabled` and `nextRunAt` are untouched — this is a launch, not an arm.
+    .post('/automations/:id/run', async (c) => {
+      const project = c.get('project');
+      const store = project.automationStore;
+      const automation = store.get(c.req.param('id'));
+      if (!automation) return c.json({ error: 'not found' }, 404);
+      if (!isScheduleAutomation(automation)) return c.json({ error: 'a GitHub automation is run through check with mode execute' }, 409);
+      const runner = new ScheduleRunner(scheduleHandle(project));
+      const outcome = await runner.runNow(automation);
+      if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
+      if (outcome.result === 'duplicate') return c.json({ error: 'this instant was already launched' }, 409);
+      if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+      automationsChanged();
+      return c.json({ runId: outcome.runId }, 202);
+    })
+
     .get('/automation-log', queryZodValidator(automationLogQuerySchema), (c) => {
-      return c.json({ records: c.get('project').automationStore.logs(c.req.valid('query')) });
+      const project = c.get('project');
+      const records = project.automationStore.logs(c.req.valid('query'));
+      return c.json({ records, runs: logRunsOf(project.store, records) });
     })
 
     .post('/automation-log/:receiptId/retry', async (c) => {
@@ -3407,15 +3668,24 @@ export function createApp(deps: ServerDeps) {
       const receipt = [...store.latestReceipts().values()].find((row) => row.receiptId === c.req.param('receiptId'));
       if (!receipt) return c.json({ error: 'not found' }, 404);
       if (receipt.status !== 'launch-error' || receipt.runId) return c.json({ error: 'receipt is not retryable' }, 409);
-      if (!receipt.candidate) return c.json({ error: 'receipt predates retry context and cannot be retried safely' }, 409);
       const definition = store.get(receipt.automationId);
       if (!definition) return c.json({ error: 'automation not found' }, 404);
+      // A schedule receipt retries as a by-hand launch of the same occurrence, under the same
+      // receipt (spec 2026-09-14 § API).
+      if (isScheduleAutomation(definition)) {
+        const outcome = await new ScheduleRunner(scheduleHandle(project)).retry(definition, receipt);
+        if (outcome.result === 'lease-held') return c.json({ error: 'automation polling lease is held by another process' }, 409);
+        if (!('runId' in outcome)) return c.json({ error: 'the launch failed — see the execution log' }, 409);
+        return c.json({ receiptId: receipt.receiptId, runId: outcome.runId }, 202);
+      }
+      if (!isGithubAutomation(definition)) return c.json({ error: 'automation kind cannot be retried' }, 409);
+      if (!receipt.candidate) return c.json({ error: 'receipt predates retry context and cannot be retried safely' }, 409);
       const lease = store.acquireLease();
       if (!lease) return c.json({ error: 'automation polling lease is held by another process' }, 409);
       const reserved = { ...receipt, status: 'reserved' as const, error: undefined, updatedAt: new Date().toISOString() };
       store.appendReceipt(reserved);
       try {
-        const launched = await launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate: receipt.candidate, receiptId: receipt.receiptId });
+        const launched = await launchAutomationRun({ root: project.root, manager: project.manager, store: project.store, definition, candidate: receipt.candidate, receiptId: receipt.receiptId, dispatchEnabled: capabilities().dispatch });
         store.appendReceipt({ ...reserved, status: 'launched', runId: launched.runId, updatedAt: new Date().toISOString() });
         emitAutomationChange(project, definition.id, definition.revision);
         return c.json({ receiptId: receipt.receiptId, runId: launched.runId }, 202);
@@ -3433,9 +3703,57 @@ export function createApp(deps: ServerDeps) {
   // `/api/v1/p/:projectId` too would be a second spelling of a lookup that consults no project.
   const automationChecksRoutes = new Hono()
     .use('/automation-checks/*', requireAutomations)
+    .use('/workspace/automation-templates', requireAutomations)
+    // The editor's "From your other projects" palette (spec 2026-09-14 Q7): every OTHER
+    // registered project's definitions, read-only, from their own stores. Workspace-level
+    // because it reads the registry, not the calling project.
+    .get('/workspace/automation-templates', queryZodValidator(z.object({ exclude: z.string().optional() })), async (c) => {
+      const exclude = c.req.valid('query').exclude;
+      // The registry, not the calling project; an unreadable workspace answers an empty palette.
+      const projects = await listProjects().catch(() => []);
+      return c.json({ templates: automationTemplatesOf(projects, exclude) });
+    })
     .get('/automation-checks/:checkId', (c) => {
       const check = manualChecks.get(c.req.param('checkId'));
       return check ? c.json(check) : c.json({ error: 'not found' }, 404);
+    });
+
+  /**
+   * The dispatch gate (spec `.ai/specs/2026-09-10-dispatch.md`) — the automations gate, one flag
+   * over: with `CEZ_DISPATCH=0`, both routes answer 409 before touching the manager.
+   *
+   * Middleware on EXPLICIT paths, never `use('*')`, for the reason `requireAutomations` spells
+   * out above: this family is mounted with `.route('/', …)` alongside a dozen unrelated sub-apps,
+   * and `route()` re-registers a sub-app's middleware under the mount prefix.
+   */
+  const requireDispatch = async (c: Context, next: Next) => {
+    if (!capabilities().dispatch) return c.json({ error: DISPATCH_OFF }, 409);
+    await next();
+  };
+
+  // ---- chained family: dispatch (project-scoped) ----
+  // A task dispatching other tasks (spec 2026-09-10-dispatch). Both routes are what the `cez task`
+  // CLI calls from inside a running agent, with CEZ_API_URL / CEZ_PROJECT_ID / CEZ_TASK_ID from
+  // its environment; nothing stops a human or a script from calling them too.
+  const dispatchRoutes = new Hono<ProjectApiEnv>()
+    .use('/runs/:id/dispatch', requireDispatch)
+    .use('/runs/:id/report', requireDispatch)
+
+    /** Create ONE child of run `:id`. Refusals (cap, budget, settled parent) are 409 with the
+     *  reason — the same text the parent's transcript notes. */
+    .post('/runs/:id/dispatch', jsonZodValidator(dispatchInputSchema), (c) => {
+      const { manager } = c.get('project');
+      const outcome = manager.dispatch(c.req.param('id'), c.req.valid('json'));
+      if ('refused' in outcome) return c.json({ error: outcome.refused }, 409);
+      return c.json(outcome, 201);
+    })
+
+    /** Record run `:id`'s own report. 404 when the run is not in a dispatch tree. */
+    .post('/runs/:id/report', jsonZodValidator(dispatchReportSchema), (c) => {
+      const { manager } = c.get('project');
+      const recorded = manager.recordReport(c.req.param('id'), c.req.valid('json'));
+      if (!recorded) return c.json({ error: 'run is not part of a dispatch tree' }, 404);
+      return c.json({ ok: true as const });
     });
 
   // ---- runs ----------------------------------------------------------------
@@ -3490,6 +3808,16 @@ export function createApp(deps: ServerDeps) {
       // 2026-08-03-auto-resume-after-usage-limit).
       const parsed = { data: c.req.valid('json') };
       const run = store.setArchived(id, parsed.data.archived !== false);
+      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
+    // Pin one task to the top of this project's list, or unpin it (#935). The archive route's
+    // twin in every respect: an absent body pins (the common case), the answer is the updated
+    // record, and the change rides the existing `run` SSE because `setPinned` touches. No new
+    // event and no new response shape.
+    .post('/runs/:id/pin', jsonZodValidator(pinSchema, { absent: ({}) }), (c) => {
+      const { store } = c.get('project');
+      const run = store.setPinned(c.req.param('id'), c.req.valid('json').pinned !== false);
       return run ? c.json(run) : c.json({ error: 'not found' }, 404);
     })
 
@@ -3551,10 +3879,21 @@ export function createApp(deps: ServerDeps) {
         const account = await resolveWorkspaceProfile(fallback, parsed.data.agentProfile);
         if ('error' in account) return c.json({ error: account.error }, 400);
       }
-      const images = parsed.data.images?.map((img): ContentBlock => ({
-        type: 'image',
-        source: { type: 'base64', media_type: img.mediaType, data: img.data },
-      }));
+      const variants = parsed.data.variants ?? 1;
+      if (variants > 1) {
+        // Variants require git worktrees to isolate their changes.
+        const repo = await getRepoInfo(repoRoot);
+        if (!repo) {
+          return c.json(
+            {
+              error:
+                'parallel variants need a git repository (each variant runs in its own worktree) — run ×1 here, or start cezar inside a git repo',
+            },
+            400,
+          );
+        }
+      }
+      const images = parsed.data.images?.map((image) => toPastedContent(image));
       const input = {
         task: parsed.data.task,
         model: parsed.data.model,
@@ -3570,22 +3909,9 @@ export function createApp(deps: ServerDeps) {
         // One decision here feeds the run record, the system prompt and
         // CEZ_TODOS_FILE alike (RunManager.agentEnv).
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
+        ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
       };
-      const variants = parsed.data.variants ?? 1;
       if (variants > 1) {
-        // Variants live in worktrees — without git there's nothing to isolate
-        // them with, so this degrades to a clear 400 instead of stepping on
-        // one shared working tree.
-        const repo = await getRepoInfo(repoRoot);
-        if (!repo) {
-          return c.json(
-            {
-              error:
-                'parallel variants need a git repository (each variant runs in its own worktree) — run ×1 here, or start cezar inside a git repo',
-            },
-            400,
-          );
-        }
         const runs = manager.startVariants(workflow, input, variants);
         // The entry points at the first variant — the thread the composer navigates to.
         const first = runs[0];
@@ -3698,11 +4024,8 @@ export function createApp(deps: ServerDeps) {
         const blocked = await providerActionError([providerForActiveRun(run)]);
         if (blocked) return c.json({ error: blocked }, 409);
       }
-      const content: ContentBlock[] = [
-        ...parsed.data.images.map((img): ContentBlock => ({
-          type: 'image',
-          source: { type: 'base64', media_type: img.mediaType, data: img.data },
-        })),
+      const content: PastedContent[] = [
+        ...parsed.data.images.map((image) => toPastedContent(image)),
         ...(parsed.data.text.trim() ? [{ type: 'text', text: parsed.data.text } satisfies ContentBlock] : []),
       ];
       // Three-rung delivery ladder (#472). Branch on the ENGINE's answer rather
@@ -3724,8 +4047,8 @@ export function createApp(deps: ServerDeps) {
           return c.json({ error: `too many queued messages — ${MAX_QUEUED_MESSAGES} message limit` }, 400);
         }
         const stackedImages = stack.reduce((n, m) => n + (m.images?.length ?? 0), 0);
-        if (stackedImages + parsed.data.images.length > MAX_QUEUED_IMAGES) {
-          return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
+        if (stackedImages + parsed.data.images.length > MAX_QUEUED_ATTACHMENTS) {
+          return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
         }
         const prospective = foldedLength(currentRun.task, [...stack, { text: parsed.data.text }]);
         if (prospective > MAX_FOLDED_TASK_CHARS) {
@@ -3760,13 +4083,13 @@ export function createApp(deps: ServerDeps) {
       const effectiveText = parsed.data.text ?? existing.text;
       const effectiveImageCount = parsed.data.images?.length ?? existing.images?.length ?? 0;
       if (!effectiveText.trim() && effectiveImageCount === 0) {
-        return c.json({ error: 'message needs text or at least one image' }, 400);
+        return c.json({ error: 'message needs text or at least one attachment' }, 400);
       }
 
       const others = stack.filter((m) => m.id !== msgId);
       const stackedImages = others.reduce((n, m) => n + (m.images?.length ?? 0), 0);
-      if (stackedImages + effectiveImageCount > MAX_QUEUED_IMAGES) {
-        return c.json({ error: `too many queued images — ${MAX_QUEUED_IMAGES} image limit across the stack` }, 400);
+      if (stackedImages + effectiveImageCount > MAX_QUEUED_ATTACHMENTS) {
+        return c.json({ error: `too many queued attachments — ${MAX_QUEUED_ATTACHMENTS} attachment limit across the stack` }, 400);
       }
       const prospective = foldedLength(run.task, [...others, { text: effectiveText }]);
       if (prospective > MAX_FOLDED_TASK_CHARS) {
@@ -3778,12 +4101,8 @@ export function createApp(deps: ServerDeps) {
         );
       }
 
-      const images: ContentBlock[] | undefined = parsed.data.images?.map(
-          (img): ContentBlock => ({
-            type: 'image',
-            source: { type: 'base64', media_type: img.mediaType, data: img.data },
-          }),
-        );
+      if (run.status !== 'queued') return c.json({ error: 'run already started' }, 409);
+      const images: PastedContent[] | undefined = parsed.data.images?.map((image) => toPastedContent(image));
       const message = manager.editQueuedMessage(id, msgId, {
         ...(parsed.data.text !== undefined ? { text: parsed.data.text } : {}),
         ...(images !== undefined ? { images } : {}),
@@ -3829,14 +4148,21 @@ export function createApp(deps: ServerDeps) {
       }
       const blocked = await providerActionError([providerForExistingRun(run, parsed.data.runner)]);
       if (blocked) return c.json({ error: blocked }, 409);
+      // The follow-up pill names an account the user just picked, so an id that has been deleted
+      // since the thread loaded is answered honestly — the same asymmetry `POST /runs` keeps: a
+      // USER can act on "unknown account", and reopening the session on another login silently
+      // would cross the very billing boundary accounts exist to draw.
+      if (parsed.data.agentProfile !== undefined) {
+        const provider = providerForExistingRun(run, parsed.data.runner);
+        const account = await resolveWorkspaceProfile(provider, parsed.data.agentProfile);
+        if ('error' in account) return c.json({ error: account.error }, 400);
+      }
       const result = manager.continueRun(id, {
         text: parsed.data.text,
-        images: parsed.data.images?.map((img): ContentBlock => ({
-          type: 'image',
-          source: { type: 'base64', media_type: img.mediaType, data: img.data },
-        })),
+        images: parsed.data.images?.map((image) => toPastedContent(image)),
         runner: parsed.data.runner,
         model: parsed.data.model,
+        agentProfile: parsed.data.agentProfile,
       });
       if (!result.ok) return c.json({ error: result.error }, 409);
       return c.json({ continued: true });
@@ -3973,7 +4299,10 @@ export function createApp(deps: ServerDeps) {
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
-        const command = resume ?? cliRunner;
+        // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
+        // claude found off PATH by detection has to be named by absolute path here too —
+        // otherwise the menu offers a handoff that opens on `command not found`.
+        const command = withResolvedClaudeBin(resume ?? cliRunner, cliRunner);
         // BOTH branches carry the account (spec 2026-07-29-agent-profiles): a resume needs the
         // config dir that holds its session, and a FRESH CLI in this worktree should still open
         // on the account the project works under — otherwise "Open in → Claude CLI" quietly
@@ -4016,11 +4345,24 @@ export function createApp(deps: ServerDeps) {
       const file = basename(c.req.param('file'));
       const path = join(dataDir, 'runs', `${run.id}-images`, file);
       if (!existsSync(path)) return c.json({ error: 'not found' }, 404);
-      const type = IMAGE_TYPES[file.split('.').pop() ?? ''] ?? 'application/octet-stream';
+      const ext = file.split('.').pop() ?? '';
+      const image = IMAGE_TYPES[ext];
+      // An image answers exactly as it always has — the cockpit renders it in an `<img>`.
+      // Everything else is a user-supplied file (#950) and leaves under the download headers.
+      const type = image ?? FILE_TYPES[ext] ?? 'application/octet-stream';
       return new Response(readFileSync(path), {
         headers: {
           'content-type': type,
           'cache-control': 'private, max-age=31536000, immutable',
+          ...(image
+            ? {}
+            : {
+                'x-content-type-options': 'nosniff',
+                // Engine-generated names are `pasted-3.pdf`-shaped, but a header value is not the
+                // place to find out otherwise: anything exotic degrades to an underscore rather
+                // than to a quote that could split the header.
+                'content-disposition': `attachment; filename="${file.replace(/[^A-Za-z0-9._-]/g, '_')}"`,
+              }),
         },
       });
     })
@@ -4159,13 +4501,19 @@ export function createApp(deps: ServerDeps) {
     })
 
     .post('/runs/:id/git/push', async (c) => {
-      const { store } = c.get('project');
+      const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
       if (!run) return c.json({ error: 'not found' }, 404);
       const worktree = worktreeOf(run);
       if (!worktree) return c.json({ error: NO_WORKTREE }, 409);
       const result = await pushCurrentBranch(worktree);
       if (!result.ok) return c.json({ error: result.error }, 409);
+      // A push is the event that changes what the chips say about this task's pull requests —
+      // its checks start again, and its MERGEABILITY is recomputed from scratch. Both are cached
+      // per number, so without this the cockpit would keep showing the pre-push answer (up to a
+      // minute of "Ready to merge" for a branch that has just been rewritten) about a push the
+      // user watched this server make.
+      for (const number of runPrNumbers(run)) forgetRefStatus(repoRoot, number);
       return c.json({
         pushed: true,
         branch: result.branch,
@@ -4240,6 +4588,114 @@ export function createApp(deps: ServerDeps) {
       if (run.worktreePath) await removeWorktree(repoRoot, run.worktreePath, run.branch);
       return store.deleteRun(id) ? c.json({ deleted: true }) : c.json({ error: 'not found' }, 404);
     });
+
+  // ---- chained family: in-task drafts (project-scoped) ----------------------
+  /**
+   * Unsent composer text and attachments, per run and per surface (#939, spec
+   * `.ai/specs/2026-08-30-thread-composer-draft-persistence.md`).
+   *
+   * Its own family and its own files (`.ai/cezar/drafts/`) rather than a key in `ui-state.json`:
+   * that PUT is capped at 128 KiB, merges shallowly, and is read whole on every cockpit load —
+   * none of which survives a 20 MB attachment draft. `runs/drafts.ts` owns the files; this owns
+   * the status codes. Every route 404s on an unknown run, so a draft can never outlive its task
+   * through this surface.
+   *
+   * The `:surface` param is validated as MIDDLEWARE (`draftSurfaceParamSchema`), not interpolated:
+   * it reaches the filesystem as a path segment.
+   */
+  const draftRoutes = new Hono<ProjectApiEnv>()
+    .get('/runs/:id/drafts', paramZodValidator(runIdParamSchema), (c) => {
+      const { dataDir, store } = c.get('project');
+      const run = store.getRun(c.req.param('id'));
+      if (!run) return c.json({ error: 'not found' }, 404);
+      return c.json(readRunDrafts(dataDir, run.id));
+    })
+
+    .put(
+      '/runs/:id/drafts/:surface',
+      paramZodValidator(draftSurfaceParamSchema),
+      jsonZodValidator(setRunDraftInputSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, surface } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const body = c.req.valid('json');
+        // An empty write DELETES — the "cleared when emptied" policy is the store's, so a
+        // non-cockpit client obeys it too.
+        const result = writeRunDraftSurface(dataDir, run.id, surface, body);
+        if (!result.ok) return c.json({ error: result.error }, 400);
+        return c.json(result.entry);
+      },
+    )
+
+    .delete('/runs/:id/drafts/:surface', paramZodValidator(draftSurfaceParamSchema), (c) => {
+      const { dataDir, store } = c.get('project');
+      const { id, surface } = c.req.valid('param');
+      const run = store.getRun(id);
+      if (!run) return c.json({ error: 'not found' }, 404);
+      deleteRunDraftSurface(dataDir, run.id, surface);
+      const body: DeleteDraftResponse = { deleted: true };
+      return c.json(body);
+    })
+
+    // Attachments upload when they are ATTACHED, not when the message is sent (the Slack move) —
+    // which is what makes images-in-drafts cheap: the bytes cross the wire once, on paste, and
+    // the draft record only ever references them. Rides the global 32 MiB body limit like
+    // `POST /runs/:id/messages`; `UI_STATE_BODY_LIMIT` is deliberately not in this path.
+    .post(
+      '/runs/:id/drafts/:surface/images',
+      paramZodValidator(draftSurfaceParamSchema),
+      jsonZodValidator(draftImageInputSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, surface } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        // The composer screens this before it ever reaches here; the route re-checks so a client
+        // that is not the composer cannot bypass the cap.
+        const held = countRunDraftImages(dataDir, run.id, surface);
+        if (held >= DRAFT_MAX_IMAGES) {
+          return c.json({ error: `at most ${DRAFT_MAX_IMAGES} images per draft` }, 400);
+        }
+        const body = c.req.valid('json');
+        const result = writeRunDraftImage(dataDir, run.id, body);
+        if (!result.ok) return c.json({ error: result.error }, 400);
+        return c.json(result.image);
+      },
+    )
+
+    // `:surface` is validated (it is a path segment) but deliberately NOT used to scope the
+    // lookup on these two: a blob is minted before any draft record names it, so scoping by
+    // surface would 404 the thumbnail the user just pasted and orphan its bytes when they remove
+    // it again. The run id is what scopes an attachment; the surface is here for URL symmetry.
+    .get(
+      '/runs/:id/drafts/:surface/images/:imageId',
+      paramZodValidator(draftImageParamSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, imageId } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        const image = readRunDraftImage(dataDir, run.id, imageId);
+        if (!image) return c.json({ error: 'not found' }, 404);
+        return c.json(image);
+      },
+    )
+
+    .delete(
+      '/runs/:id/drafts/:surface/images/:imageId',
+      paramZodValidator(draftImageParamSchema),
+      (c) => {
+        const { dataDir, store } = c.get('project');
+        const { id, imageId } = c.req.valid('param');
+        const run = store.getRun(id);
+        if (!run) return c.json({ error: 'not found' }, 404);
+        deleteRunDraftImage(dataDir, run.id, imageId);
+        const body: DeleteDraftResponse = { deleted: true };
+        return c.json(body);
+      },
+    );
 
   // ---- parallel variants (spec 010) -----------------------------------------
 
@@ -4365,13 +4821,26 @@ export function createApp(deps: ServerDeps) {
       return c.json({ opened: true as const, path: root });
     });
 
-  // Agent screenshots — image blocks the run manager persisted out of tool
-  // results (persistImage). `basename` pins reads inside the run's own dir.
+  // Agent screenshots and user attachments — what the run manager persisted out of tool
+  // results and pasted messages (`persistAttachment`). `basename` pins reads inside the
+  // run's own dir.
   const IMAGE_TYPES: Record<string, string> = {
     png: 'image/png',
     jpg: 'image/jpeg',
     webp: 'image/webp',
     gif: 'image/gif',
+  };
+  /**
+   * What a NON-image attachment is served as (#950). These are user-supplied bytes coming back
+   * from the cockpit's own origin, so the content type is the narrowest true one and it never
+   * travels alone: `nosniff` stops a browser from upgrading it to something executable, and an
+   * attachment disposition stops it from being rendered as a document in the cockpit's origin at
+   * all. Anything not named here keeps the pre-existing `application/octet-stream` default.
+   */
+  const FILE_TYPES: Record<string, string> = {
+    pdf: 'application/pdf',
+    txt: 'text/plain; charset=utf-8',
+    md: 'text/plain; charset=utf-8',
   };
   // ---- session git view (redesign R5 Step 1.2 — §"Git/session API additions").
   // Structured sibling of the text-blob /diff above (which stays untouched —
@@ -4385,6 +4854,20 @@ export function createApp(deps: ServerDeps) {
       ? repoRoot
       : worktreeOf(run);
   const NO_WORKTREE = 'no worktree — this task ran directly in the repo working tree';
+
+  /** Every pull request number this run points at — the one it created and the one it is about
+   *  (#901), from whichever field carries it. Used to invalidate what the forge told us about
+   *  them when this server does something that changes the answer. Deliberately tolerant: an
+   *  unrecognized URL shape yields nothing rather than a guessed number. */
+  const runPrNumbers = (run: RunRecord): number[] => {
+    const numbers = [
+      run.prNumber,
+      ...[run.pullRequestUrl, run.referencedPullRequestUrl].map((url) =>
+        url ? refNumberFromUrl(url) : null,
+      ),
+    ];
+    return [...new Set(numbers.filter((n): n is number => typeof n === 'number'))];
+  };
 
   // ---- chained family: worktrees (project-scoped) ----
   const worktreesRoutes = new Hono<ProjectApiEnv>()
@@ -4834,6 +5317,28 @@ export function createApp(deps: ServerDeps) {
       return c.json(await fetchGithubChecks(repoRoot, numbers));
     })
 
+    // Search across ALL states (#730). Additive sibling of `/github`, which lists the OPEN set
+    // only (`gh issue/pr list` defaults to `--state open`) — so the tab's in-memory filter can
+    // never match a closed or merged item, and this is the path it falls back to. Same in-payload
+    // availability degrade as the list (never a 5xx); malformed params are a 400. Deliberately
+    // uncached: it is typed-into, not polled, and the driver's own cap bounds the work.
+    .get(
+      '/github/search',
+      queryZodValidator(
+        z.object({
+          kind: z.enum(['issue', 'pr']),
+          q: z.string().trim().min(1).max(256),
+          limit: z.coerce.number().int().positive().max(GH_SEARCH_MAX).optional(),
+        }),
+        { message: 'invalid search query' },
+      ),
+      async (c) => {
+        const { root: repoRoot } = c.get('project');
+        const { kind, q, limit } = c.req.valid('query');
+        return c.json(await searchGithubItems(repoRoot, kind, q, limit));
+      },
+    )
+
     // Batched status for the PR/issue chips a task table paints. Additive sibling of
     // /github/checks and shaped like it: comma-separated positive integers, capped at
     // GH_REF_STATUS_MAX per kind, malformed input is a 400, and an unreachable forge degrades in
@@ -5253,7 +5758,9 @@ export function createApp(deps: ServerDeps) {
     .route('/', workflowsRoutes)
     .route('/', planRoutes)
     .route('/', automationsRoutes)
+    .route('/', dispatchRoutes)
     .route('/', runsRoutes)
+    .route('/', draftRoutes)
     .route('/', groupsRoutes)
     .route('/', openTargetsRoutes)
     .route('/', worktreesRoutes)
@@ -5314,6 +5821,15 @@ export function createApp(deps: ServerDeps) {
     ...(run.autoResumeAt !== undefined ? { autoResumeAt: run.autoResumeAt } : {}),
     workflow: run.workflow,
     ...(run.branch !== undefined ? { branch: run.branch } : {}),
+    ...(run.dispatch !== undefined
+      ? {
+          dispatch: {
+            rootRunId: run.dispatch.rootRunId,
+            ...(run.dispatch.parentRunId !== undefined ? { parentRunId: run.dispatch.parentRunId } : {}),
+            ...(run.dispatch.kind !== undefined ? { kind: run.dispatch.kind } : {}),
+          },
+        }
+      : {}),
     ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
     // The tracker-reference inputs, verbatim — the cockpit's `taskReference()` owns the rule
     // that picks between them (see the schema's note).
@@ -5455,8 +5971,15 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // The subscription hub rides the same HTTP server (one port, zero config):
   // createApp registers the topics, the `upgrade` hook below owns the socket.
   const socketHub = deps.socketHub ?? createSocketHub();
-  const automationCoordinator = new AutomationCoordinator({ listProjects });
   const bootProjectId = deps.bootProjectId ?? 'default';
+  // `pinned`: the boot project is served whether or not the registry holds it,
+  // and since boot registration became seed-once it usually does NOT — then
+  // `bootProjectId` is the `'default'` alias, which `listProjects()` can never
+  // name, so the coordinator's own refresh sweep would evict the store opened
+  // one line below and the boot folder's automations would silently stop being
+  // scheduled while the cockpit kept showing them enabled. Registered or not,
+  // pinning is the same statement: this process is serving that project.
+  const automationCoordinator = new AutomationCoordinator({ listProjects, pinned: bootProjectId });
   const bootAutomationStore = automationCoordinator.store(bootProjectId, deps.repoRoot)!;
   const sharedContexts = deps.contexts ?? new ProjectContexts({
     listProjects,
@@ -5490,33 +6013,39 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   });
   const coordinator = new SkillsUpdateCoordinator(skillsUpdate, async () =>
     effectiveSkillsAutoUpdate(await loadWorkspaceConfig()));
-  const automationProjects = new Map<string, { root: string; owner: string; repo: string }>();
+  // Every registered project gets a handle (spec 2026-09-14): `github` only when the remote is
+  // on github.com — a project without one still fires its scheduled automations.
+  const automationProjects = new Map<string, { root: string; github?: { owner: string; repo: string } }>();
+  const registerAutomationProject = async (id: string, root: string): Promise<void> => {
+    const parsed = parseRemote((await getRepoInfo(root))?.remote ?? '');
+    automationProjects.set(id, { root, ...(parsed?.host === 'github.com' ? { github: { owner: parsed.owner, repo: parsed.repo } } : {}) });
+  };
   const automationScheduler = new WorkspaceAutomationScheduler({
     coordinator: automationCoordinator,
-    handle: (projectId, store) => {
+    handle: (projectId, store): ProjectAutomationHandle | undefined => {
       const project = automationProjects.get(projectId);
       if (!project) return undefined;
+      const contextOf = async () => {
+        const bootId = deps.bootProjectId ?? 'default';
+        return projectId === bootId
+          ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
+          : await sharedContexts.context(projectId);
+      };
+      const dispatchEnabled = resolveCapabilities(process.env, deps.bindHost).dispatch;
       return {
         projectId,
-        owner: project.owner,
-        repo: project.repo,
         store,
-        poller: new GithubPoller(),
+        timeZone: localTimeZone(),
+        ...(project.github ? { github: { ...project.github, poller: new GithubPoller() } } : {}),
         onChange: (automationId, revision) =>
           workspaceEvents.emit('automation-change', { project: projectId, automationId, revision }),
         launch: async (definition, candidate, receiptId) => {
-          const bootId = deps.bootProjectId ?? 'default';
-          const context = projectId === bootId
-            ? { root: deps.repoRoot, manager: deps.manager, store: deps.store }
-            : await sharedContexts.context(projectId);
-          return launchAutomationRun({
-            root: context.root,
-            manager: context.manager,
-            store: context.store,
-            definition,
-            candidate,
-            receiptId,
-          });
+          const context = await contextOf();
+          return launchAutomationRun({ root: context.root, manager: context.manager, store: context.store, definition, candidate, receiptId, dispatchEnabled });
+        },
+        launchSchedule: async (definition, occurrence, receiptId) => {
+          const context = await contextOf();
+          return launchScheduledRun({ root: context.root, manager: context.manager, store: context.store, definition, occurrence, receiptId, projectName: basename(context.root), timeZone: localTimeZone(), dispatchEnabled });
         },
       };
     },
@@ -5533,11 +6062,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       const project = (data as { project?: { id?: unknown; root?: unknown; status?: unknown } }).project;
       if (project && typeof project.id === 'string' && typeof project.root === 'string' && project.status !== 'missing') {
         coordinator.add(project.id, project.root);
-        void getRepoInfo(project.root).then((info) => {
-          const parsed = parseRemote(info?.remote ?? '');
-          if (parsed?.host === 'github.com') automationProjects.set(project.id as string, { root: project.root as string, owner: parsed.owner, repo: parsed.repo });
-          return rescheduleAutomations();
-        });
+        void registerAutomationProject(project.id, project.root).then(() => rescheduleAutomations());
       }
     } else if (event === 'project-removed') {
       const id = (data as { id?: unknown }).id;
@@ -5559,13 +6084,13 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       // a separate feature and starts either way.
       if (!automationsEnabled()) return;
       void Promise.all(all.map(async (project) => {
-        const parsed = parseRemote((await getRepoInfo(project.root))?.remote ?? '');
-        if (parsed?.host === 'github.com') automationProjects.set(project.id, { root: project.root, owner: parsed.owner, repo: parsed.repo });
+        await registerAutomationProject(project.id, project.root);
         const automationStore = automationCoordinator.store(project.id, project.root);
         const runStore = project.id === (deps.bootProjectId ?? 'default')
           ? deps.store
           : sharedContexts.peek(project.id)?.store;
         if (automationStore && runStore) reconcileAutomationReceipts(automationStore, runStore);
+        if (automationStore) rebaselineIdleAutomations(automationStore, (automationId, revision) => workspaceEvents.emit('automation-change', { project: project.id, automationId, revision }));
       })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });
@@ -5700,31 +6225,12 @@ export function isSafeSessionId(sessionId: string): boolean {
   return SAFE_SESSION_ID.test(sessionId);
 }
 
-/** Characters unsafe to embed in the resumed CLI binary path under EITHER shell
- *  `openInTerminal` targets: control characters, and the quote/expansion characters
- *  that mean something different (or nothing safe) to bash vs. cmd.exe. A path
- *  carrying one of these cannot be made safe by quoting, so {@link quoteResumeBin}
- *  refuses it outright rather than guess. */
-const EXECUTABLE_UNSAFE_RE = /[\u0000-\u001f\u007f"'$`%!]/;
-
-/**
- * The resumed CLI's binary, ready to splice into the take-over command — unchanged
- * when it needs no quoting, double-quoted when it contains whitespace, or `null`
- * when it cannot be embedded safely on either shell `openInTerminal` targets.
- *
- * Unlike the session id (validated, never quoted — see {@link resumeCommand}'s
- * docstring), a binary override is a real filesystem path and legitimately
- * contains spaces (`C:\Program Files\Cursor\agent.exe` is the common shape), so
- * refusing every space-carrying value would break the override this exists to
- * support. Double quotes are the one wrapping both shells agree on for a plain
- * path: bash's `\` is only special before `$`/`` ` ``/`"`/`\`/newline, none of
- * which a Windows path spells, so a backslash-heavy path stays literal inside
- * them; cmd.exe's own quoting uses the same character. `EXECUTABLE_UNSAFE_RE`
- * rules out anything either shell would treat specially inside that wrapping.
- */
+/** Only plain executable paths can cross both bash and cmd.exe safely. Refuse shell
+ * operators, expansions, controls and a trailing backslash (which can escape the closing
+ * quote). Paths with spaces remain supported, including Windows install directories. */
 export function quoteResumeBin(bin: string): string | null {
-  if (EXECUTABLE_UNSAFE_RE.test(bin)) return null;
-  return /\s/.test(bin) ? `"${bin}"` : bin;
+  if (!bin.trim() || !/^[a-zA-Z0-9_./:\\ -]+$/.test(bin) || bin.endsWith('\\')) return null;
+  return /[\s\\]/.test(bin) ? `"${bin}"` : bin;
 }
 
 /**

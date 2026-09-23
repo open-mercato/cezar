@@ -145,8 +145,13 @@ const taskTableUiStateSchema = z.looseObject({
  * listed it, which made it wider than the route.
  */
 export const uiStateSchema = z.looseObject({
+  /** What the last started run used. `null` is a VALUE, not an absence: it records a run that
+   *  chose neither a skill nor a workflow (the plain built-in `quick-task`), which the composer
+   *  can now express since the source picker grew an empty state. Absent still means "no
+   *  run has been recorded here" — a cockpit reading either one selects nothing. */
   lastTask: z
     .object({ source: z.enum(['workflow', 'skill']), ref: z.string() })
+    .nullable()
     .optional(),
   /** Most-recently-run sources, newest first (deduped, capped). Feeds the composer picker's
    *  recency sort. */
@@ -202,13 +207,26 @@ export const workspaceLastLocationSchema = z.strictObject({
 export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
 
 export const workspaceUiStateSchema = z.looseObject({
-  /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
-   *  round-tripped so an older cockpit sharing this home keeps working, but the current cockpit
-   *  neither reads nor writes it: which groups are shut describes the WINDOW, not the workspace,
-   *  so it lives in that browser's localStorage (`packages/web/src/lib/sidebar-collapse.ts`).
-   *  One shared answer meant a phone collapsing a group collapsed it on the desktop too. */
   sidebar: z
-    .looseObject({ collapsed: z.record(z.string(), z.boolean()).optional() })
+    .looseObject({
+      /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
+       *  round-tripped so an older cockpit sharing this home keeps working, but the current
+       *  cockpit neither reads nor writes it: which groups are shut describes the WINDOW, not the
+       *  workspace, so it lives in that browser's localStorage
+       *  (`packages/web/src/lib/sidebar-collapse.ts`). One shared answer meant a phone collapsing
+       *  a group collapsed it on the desktop too. */
+      collapsed: z.record(z.string(), z.boolean()).optional(),
+      /** The user's hand-picked project-group order (#952), most-wanted first — WORKSPACE state
+       *  on purpose, unlike `collapsed` above. Which order your repos sit in is a considered
+       *  choice made once, so redoing it on the phone is the annoyance; which groups are shut
+       *  changes many times an hour and belongs to the window.
+       *
+       *  Absent (or `[]`) means "never reordered" and the sidebar keeps its `lastOpenedAt` sort.
+       *  Ids that are no longer registered are ignored on read; registered projects missing from
+       *  the list are not dropped — they sort in by `lastOpenedAt` ahead of the picked ones
+       *  (`packages/web/src/lib/project-order.ts`). */
+      projectOrder: z.array(z.string()).optional(),
+    })
     .optional(),
   /** Dismissed runtime-auth incident IDs, keyed by provider. An ID is only dismissed until the
    *  provider reports a different incident, so this stays workspace-global with the browser
@@ -260,6 +278,13 @@ export const setWorkspaceUiStateInputSchema = z
           .refine((map) => Object.keys(map).length <= WORKSPACE_UI_STATE_MAX_KEYS, {
             message: `sidebar.collapsed must have at most ${WORKSPACE_UI_STATE_MAX_KEYS} entries`,
           })
+          .optional(),
+        // Project ids, so the same 64-char bound the registry's slug rule and `collapsed`'s keys
+        // already use. Duplicates are not rejected — the cockpit dedupes on read, and a 400 on a
+        // sidebar drag would be a worse answer than a self-healing one.
+        projectOrder: z
+          .array(z.string().min(1).max(64))
+          .max(WORKSPACE_UI_STATE_MAX_KEYS)
           .optional(),
       })
       .optional(),
@@ -464,13 +489,13 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
 // ---- host model catalog (`GET /api/v1/models`) -----------------------------------------------
 
 /**
- * The runners whose model list is discovered from the host rather than hard-coded: Codex
- * through its app-server protocol, OpenCode through its own `models` listing (#794), Cursor
- * through its CLI's model listing. Claude has no equivalent local source, so its picker keeps
- * static presets and `GET /api/v1/models` rejects it. One definition, used by the route's query
- * validator and by the cockpit's picker.
+ * The runners whose model list is discovered from the host rather than hard-coded: Codex through
+ * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
+ * CLI's `list_models` control request (#784), and Cursor through its CLI model listing. A runner absent here has no discovery path and
+ * 400s, so the client compiles against exactly what the route accepts. One definition, used by
+ * the route's query validator and by the cockpit's picker.
  */
-export const modelDiscoveryRunnerSchema = z.enum(['codex', 'opencode', 'cursor']);
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;
@@ -487,10 +512,9 @@ export const runnerModelOptionSchema = z.object({
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
-/** `GET /api/v1/models?runner=codex|opencode|cursor` — the models discovered from that runner's
+/** `GET /api/v1/models?runner=claude|codex|opencode|cursor` — the models discovered from that runner's
  *  own host installation, plus how fresh the answer is. Never an error: an unavailable CLI
- *  degrades to `source: 'unavailable'` with a `reason`. Claude has no host-local catalog and is
- *  rejected. */
+ *  degrades to `source: 'unavailable'` with a `reason`. */
 export const runnerModelCatalogResponseSchema = z.object({
   runner: runnerSchema,
   models: z.array(runnerModelOptionSchema),

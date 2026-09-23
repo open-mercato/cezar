@@ -11,6 +11,7 @@ import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
 import {
   refStatusRecheckAfter,
   useReferenceProjectId,
+  useProjectRepoBase,
   queryKeys,
   useProviderStatus,
   useRefreshProviderStatus,
@@ -121,12 +122,18 @@ class FakeHealthSocket {
 }
 
 describe('useRunnerModels', () => {
-  it('loads the workspace Codex catalog', async () => {
-    fetchMock.mockResolvedValue(json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false }))
-    const { result } = renderHook(() => useRunnerModels('codex'), { wrapper: wrapper() })
+  // One cache entry per runner (#794 for OpenCode, #784 for Claude): every runner cezar ships is
+  // read from its own host catalog, so the fetch must follow the pick rather than name one CLI.
+  it.each([
+    ['codex', 'gpt-future'],
+    ['claude', 'opus[1m]'],
+    ['opencode', 'openai/gpt-5.4'],
+  ] as const)('loads the workspace %s catalog from its own cache entry', async (runner, id) => {
+    fetchMock.mockResolvedValue(json({ runner, models: [{ id, label: 'Future', description: '' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels(runner), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data?.models[0]?.id).toBe('gpt-future')
-    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=codex')
+    expect(result.current.data?.models[0]?.id).toBe(id)
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(`/api/v1/models?runner=${runner}`)
   })
 
   it('loads the OpenCode catalog from its own cache entry (#794)', async () => {
@@ -145,8 +152,10 @@ describe('useRunnerModels', () => {
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=cursor')
   })
 
-  it('never asks the server about claude, which has no host catalog', async () => {
-    const { result } = renderHook(() => useRunnerModels('claude'), { wrapper: wrapper() })
+  // The other half of the `enabled` guard: a caller that only MIGHT render the pills (the
+  // thread's Continue) must not fetch a catalog it will never show.
+  it('never fetches while disabled', async () => {
+    const { result } = renderHook(() => useRunnerModels('claude', false), { wrapper: wrapper() })
     await waitFor(() => expect(result.current.fetchStatus).toBe('idle'))
     expect(result.current.data).toBeUndefined()
     expect(fetchMock).not.toHaveBeenCalled()
@@ -1049,6 +1058,55 @@ describe('useReferenceProjectId', () => {
     // Better a neutral chip for a moment than an entry written under a name nothing else uses.
     const { result } = renderHook(() => useReferenceProjectId(), { wrapper: mounted(null) })
     expect(result.current).toBeUndefined()
+  })
+})
+
+describe('useProjectRepoBase', () => {
+  const mounted = (scope: string | null, health?: unknown, projects?: unknown) => {
+    const client = createQueryClient()
+    if (health !== undefined) client.setQueryData(queryKeys.health, health)
+    if (projects !== undefined) client.setQueryData(workspaceQueryKeys.projects, { projects })
+    return function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <QueryClientProvider client={client}>
+          <ProjectScopeContext.Provider value={{ projectId: scope, apiBase: '/api/v1' }}>
+            {children}
+          </ProjectScopeContext.Provider>
+        </QueryClientProvider>
+      )
+    }
+  }
+
+  const REGISTRY = [
+    { id: 'boot-id', name: 'boot', root: '/home/me/cezar', repoUrl: 'https://github.com/o/boot' },
+    { id: 'proj-a', name: 'a', root: '/home/me/a', repoUrl: 'https://github.com/o/a' },
+    { id: 'proj-b', name: 'b', root: '/home/me/b' },
+  ]
+
+  // The defect this was found through: the SAME task showed a linked chip on All tasks (which
+  // reads the registry) and inert text on its own page (which read health, and health only names
+  // the boot project's repo).
+  it('answers a NON-boot project from the registry, where All tasks reads it', () => {
+    const { result } = renderHook(() => useProjectRepoBase(), {
+      wrapper: mounted('proj-a', { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, REGISTRY),
+    })
+    expect(result.current).toBe('https://github.com/o/a')
+  })
+
+  it('never hands a project the boot repo — #526', () => {
+    // `proj-b` has no forge remote of its own; health's is the boot project's and would be a link
+    // into a completely different repository.
+    const { result } = renderHook(() => useProjectRepoBase(), {
+      wrapper: mounted('proj-b', { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, REGISTRY),
+    })
+    expect(result.current).toBeUndefined()
+  })
+
+  it('falls back to health for the boot project — an unregistered boot folder still links', () => {
+    const { result } = renderHook(() => useProjectRepoBase(), {
+      wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, []),
+    })
+    expect(result.current).toBe('https://github.com/o/boot')
   })
 })
 
