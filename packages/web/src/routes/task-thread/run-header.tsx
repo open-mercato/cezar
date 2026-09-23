@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   ArchiveIcon,
   ArchiveRestoreIcon,
+  ArrowUpToLineIcon,
   BotIcon,
   CheckIcon,
   ChevronDownIcon,
@@ -20,7 +21,7 @@ import {
 import { Fragment, memo, useEffect, useId, useMemo, useReducer, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli } from '@/api/client'
+import { ApiError, archiveRun, cancelRun, continueRun, deleteRun, openRunIn, openRunInCli, promoteRun } from '@/api/client'
 import {
   queryKeys,
   useAgentProfiles,
@@ -309,6 +310,19 @@ function RunHeaderView({
                 Mark unread
               </Button>
             ) : null}
+            {flags.promote ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                data-slot="promote-run"
+                title="Start this task in the next free slot, ahead of the rest of the queue"
+                disabled={actions.promote.isPending}
+                onClick={() => actions.promote.mutate()}
+              >
+                <ArrowUpToLineIcon aria-hidden="true" />
+                Run next
+              </Button>
+            ) : null}
             {flags.pin ? (
               <Button
                 variant="ghost"
@@ -510,6 +524,9 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
       markUnreadMutation.mutate(run.id, { onError })
     },
   }
+  // "Run next" — the answer is the record, and the list re-sorts from the invalidation (the
+  // `run` SSE would get there too); a 409 means the run left the queue meanwhile.
+  const promote = useMutation({ mutationFn: () => promoteRun(run.id), onSuccess: invalidate, onError })
   const cancel = useMutation({ mutationFn: () => cancelRun(run.id), onSuccess: invalidate, onError })
   const deleteMutation = useMutation({
     mutationFn: () => deleteRun(run.id),
@@ -540,6 +557,7 @@ function useRunActions(run: ApiRun, onMarkedUnread?: () => void) {
     archive,
     pin,
     markUnread,
+    promote,
     cancel,
     delete: deleteMutation,
     terminal,
@@ -1134,6 +1152,15 @@ function ActionsKebab({
             onSelect={() => actions.markUnread.mutate()}
           >
             <MailIcon aria-hidden="true" /> Mark unread
+          </DropdownMenuItem>
+        ) : null}
+        {flags.promote ? (
+          <DropdownMenuItem
+            data-slot="promote-run"
+            disabled={actions.promote.isPending}
+            onSelect={() => actions.promote.mutate()}
+          >
+            <ArrowUpToLineIcon aria-hidden="true" /> Run next
           </DropdownMenuItem>
         ) : null}
         {flags.pin ? (

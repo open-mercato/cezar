@@ -104,6 +104,10 @@ export interface RunActionFlags {
    *  read. Both halves come from `lib/read-state.ts` so the header can never offer an action
    *  whose result the marker rule would ignore. */
   markUnread: boolean
+  /** "Run next" — move a queued task to the front of its queue, so it takes the first free
+   *  slot (brief 2026-09-23-queued-task-run-next). Only while the run is actually waiting in the
+   *  queue; offered again on a promoted run, because promoting again re-stamps it to the top. */
+  promote: boolean
   /** Stop an active run. Mutually exclusive with delete, by construction below. */
   cancel: boolean
   /** Remove the run, its transcript, worktree and branch. Terminal runs only. */
@@ -121,6 +125,7 @@ export function runActionFlags(run: RunRecord): RunActionFlags {
     archive: !active,
     pin: !run.archived,
     markUnread: canBeUnread(run) && !isUnread(run),
+    promote: run.status === 'queued' && !run.archived,
     cancel: active,
     deleteRun: !active,
   }
