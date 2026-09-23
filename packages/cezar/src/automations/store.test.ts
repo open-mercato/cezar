@@ -130,7 +130,8 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     const dir = await lockedDirectory('{half-writ');
     const store = AutomationStore.open(dir, { processAlive: () => false });
     expect(store.acquireLease()).toBeUndefined();
-    // Same unreadable lock, once it is old enough: reclaimed on age alone.
+    // Same unreadable lock, now with staleAfterMs of 0: "stale regardless of age" is
+    // deterministic and does not depend on any real time having passed since it was written.
     expect(store.acquireLease(0)).toBeDefined();
   });
 
