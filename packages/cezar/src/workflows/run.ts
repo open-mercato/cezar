@@ -1294,10 +1294,12 @@ export class RunManager {
     this.unitParents.delete(runId);
   }
 
-  /** Epoch ms of this manager's oldest queued run (the semaphore's fairness
-   *  key when a freed slot is broadcast), or null when nothing is queued.
-   *  `queue` is FIFO — `startRun` pushes and `recover()` re-queues by
-   *  `createdAt` — so the head is the oldest. */
+  /** Epoch ms of this manager's queue head (the semaphore's fairness key when a
+   *  freed slot is broadcast), or null when nothing is queued. Without a "Run
+   *  next" promotion the queue is FIFO — `startRun` pushes and `recover()`
+   *  re-queues by `createdAt` — so the head is the oldest; with one, the head is
+   *  the promoted run, and this is only the tie-breaker behind
+   *  `newestPromotionAt()`. */
   private oldestQueuedAt(): number | null {
     const head = this.queue[0];
     if (!head) return null;
@@ -1355,7 +1357,9 @@ export class RunManager {
 
   /** Epoch ms of the newest "Run next" promotion in this manager's queue (the semaphore's
    *  cross-project preference), or null. `enqueue()` keeps promotions at the head, newest
-   *  first, so the head answers for the whole queue. */
+   *  first, so the head answers for the whole queue. Best-effort like the rest of `release()`:
+   *  when that head cannot start (its account is held), `pump()` starts the next run that can,
+   *  which may be an unpromoted one here rather than a promoted one in another project. */
   private newestPromotionAt(): number | null {
     const head = this.queue[0];
     const promotedAt = head ? this.store.getRun(head)?.promotedAt : undefined;

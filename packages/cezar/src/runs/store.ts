@@ -675,6 +675,10 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
   // A mid-workflow ask park (#917) means nothing off a `waiting` run — including
   // the `failed` written just above for readers that do not recover.
   if (run.status !== 'waiting') run.askParked = undefined;
+  // A "Run next" place is a place in the QUEUE — the `failed` written above for readers that do
+  // not recover gives it up, exactly as `updateRun` retires it on any other status. Left behind,
+  // a later Continue would re-queue the run carrying a mark the user never renewed.
+  if (run.status !== 'queued') run.promotedAt = undefined;
   // Heal a record written before `referencedPrDeclaration` existed: a task that re-declared
   // `CEZ:PR` with the PR it had just CREATED cleared the PR it was ABOUT, because no candidate
   // could match the created number. The evidence is all still on the record — only the

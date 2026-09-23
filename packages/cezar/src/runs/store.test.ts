@@ -1891,7 +1891,8 @@ describe('RunStore — promotedAt ("Run next")', () => {
     store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
     store.updateRun(id, { title: 'renamed' });
     store.flush();
-    expect(RunStore.open(dataDir).getRun(id)?.promotedAt).toBe('2026-09-23T10:00:00.000Z');
+    // `keepLive` — the recovering open RunManager uses; a plain reader fails queued runs.
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.promotedAt).toBe('2026-09-23T10:00:00.000Z');
   });
 
   it.each(['running', 'cancelled', 'failed', 'waiting', 'review', 'done'] as const)(
@@ -1911,6 +1912,31 @@ describe('RunStore — promotedAt ("Run next")', () => {
       expect(persisted.find((entry) => entry.id === id)).not.toHaveProperty('promotedAt');
     },
   );
+});
+
+describe('RunStore — promotedAt across a non-recovering load', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  it('a reader that fails interrupted queued runs also retires their "Run next" mark', () => {
+    const store = RunStore.open(dataDir);
+    const id = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+    store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+    store.flush();
+
+    const reader = RunStore.open(dataDir);
+    expect(reader.getRun(id)?.status).toBe('failed');
+    expect(reader.getRun(id)?.promotedAt).toBeUndefined();
+    // …while the recovering open keeps it for RunManager.recover to honor.
+    expect(RunStore.open(dataDir, { keepLive: true }).getRun(id)?.promotedAt).toBe('2026-09-23T10:00:00.000Z');
+  });
 });
 
 describe('RunStore — pinned tasks (#935)', () => {
