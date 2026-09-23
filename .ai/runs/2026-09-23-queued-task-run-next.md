@@ -57,9 +57,9 @@ A queued task can be promoted with one action, "Run next". It then takes the fir
 
 ### Phase 1: Engine
 
-- [ ] 1.1 Add optional promotedAt to the run record schemas
-- [ ] 1.2 RunManager.promote with rank-aware enqueue and clearing
-- [ ] 1.3 Semaphore queue rank for cross-project ordering
+- [x] 1.1 Add optional promotedAt to the run record schemas — edfef1ee
+- [x] 1.2 RunManager.promote with rank-aware enqueue and clearing — f34f24a6
+- [x] 1.3 Semaphore queue rank for cross-project ordering — bbdf5358
 
 ### Phase 2: API
 
