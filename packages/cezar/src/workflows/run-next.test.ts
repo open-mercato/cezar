@@ -168,6 +168,25 @@ describe('RunManager.promote — "Run next"', () => {
     expect(store.getRun(id)?.promotedAt).toBeUndefined();
   });
 
+  it('across projects, a freed slot goes to the promoted run before an older unpromoted one', async () => {
+    const gate = gatedSemaphore();
+    const a = project(gate.semaphore);
+    const b = project(gate.semaphore);
+    const older = a.manager.startRun(HOLD, { task: 'older, in A' }).id;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const newer = b.manager.startRun(HOLD, { task: 'newer, in B' }).id;
+    b.manager.promote(newer);
+    // Let the pumps `startRun`/`promote` kicked off finish first. A pump still awaiting
+    // `getRepoInfo` when the cap opens reads the NEW cap and starts its own head — the
+    // documented best-effort fairness of the sweep, not what this test is about.
+    const idle = (manager: RunManager) => !(manager as unknown as { pumping: boolean }).pumping;
+    await waitFor(() => idle(a.manager) && idle(b.manager), 'both managers to finish pumping');
+
+    await gate.open(1);
+    await waitFor(() => b.store.getRun(newer)?.status !== 'queued', 'the promoted run in B to start');
+    expect(a.store.getRun(older)?.status).toBe('queued');
+  });
+
   it('survives a restart: recovery re-queues the promoted run ahead of older ones', async () => {
     const first = gatedSemaphore();
     const { store, manager, root } = project(first.semaphore);

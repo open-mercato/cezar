@@ -98,6 +98,14 @@ export interface SemaphoreParticipant {
    *  have registered first. */
   oldestQueuedAt(): number | null;
   /**
+   * Epoch ms of this manager's newest "Run next" promotion still waiting in its queue, or null
+   * when none is (brief 2026-09-23-queued-task-run-next). `release()` hands a freed slot to a
+   * promoted queue before any FIFO one, so a promoted task in project B is preferred over an
+   * older unpromoted task in project A. Optional so a stub participant — and any caller that
+   * predates promotion — keeps the plain longest-waiting order.
+   */
+  newestPromotionAt?(): number | null;
+  /**
    * Agent accounts this participant is holding, by KIND (spec
    * 2026-08-03-auto-resume-after-usage-limit, `RunManager.accountHolds`).
    *
@@ -231,7 +239,8 @@ export class WorkspaceSemaphore {
 
   /**
    * A slot came free somewhere in the workspace: pump EVERY manager,
-   * longest-waiting-queue first.
+   * longest-waiting-queue first — except that a queue holding a "Run next"
+   * promotion goes ahead of every queue that does not (newest promotion first).
    *
    * This is the counterpart to `busy()` being workspace-wide. A `RunManager`
    * only ever pumps itself, so before this existed a freed slot reached
@@ -260,10 +269,19 @@ export class WorkspaceSemaphore {
         const ordered = [...this.participants]
           .map((participant) => ({
             participant,
+            // A promoted queue ("Run next") goes before every FIFO one, newest promotion first.
+            promoted: participant.newestPromotionAt?.() ?? null,
             // Empty queues sort last — they have nothing to claim the slot with.
             since: participant.oldestQueuedAt() ?? Number.MAX_SAFE_INTEGER,
           }))
-          .sort((a, b) => a.since - b.since);
+          .sort((a, b) => {
+            if (a.promoted !== null || b.promoted !== null) {
+              if (a.promoted === null) return 1;
+              if (b.promoted === null) return -1;
+              if (a.promoted !== b.promoted) return b.promoted - a.promoted;
+            }
+            return a.since - b.since;
+          });
         for (const { participant } of ordered) await participant.pump();
       } while (this.pendingRelease);
     } finally {

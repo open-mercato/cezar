@@ -151,6 +151,25 @@ describe('WorkspaceSemaphore', () => {
     expect(order).toEqual(['older', 'newer', 'idle']);
   });
 
+  it('release() pumps a queue holding a "Run next" promotion first, newest promotion first', async () => {
+    const order: string[] = [];
+    const named = (name: string, queuedAt: number | null, promotedAt?: number | null): SemaphoreParticipant => ({
+      busySlots: () => 0,
+      oldestQueuedAt: () => queuedAt,
+      ...(promotedAt === undefined ? {} : { newestPromotionAt: () => promotedAt }),
+      pump: () => {
+        order.push(name);
+      },
+    });
+    const sem = new WorkspaceSemaphore();
+    sem.register(named('oldest-fifo', 1000));
+    sem.register(named('promoted-early', 3000, 5000));
+    sem.register(named('no-promotion', 2000, null));
+    sem.register(named('promoted-late', 4000, 6000));
+    await sem.release();
+    expect(order).toEqual(['promoted-late', 'promoted-early', 'oldest-fifo', 'no-promotion']);
+  });
+
   it('a release landing mid-sweep re-runs the sweep instead of being dropped', async () => {
     const sem = new WorkspaceSemaphore();
     let reentered = false;

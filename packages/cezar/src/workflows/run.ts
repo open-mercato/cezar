@@ -982,6 +982,7 @@ export class RunManager {
       busySlots: () => this.busySlots(),
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
+      newestPromotionAt: () => this.newestPromotionAt(),
       accountHolds: () => this.accountHolds(),
     });
     // Memory guard (#memory-guard): the shared process-tree sampler already ticks ~every 2 s for
@@ -1350,6 +1351,16 @@ export class RunManager {
     // idempotent way to make sure a slot that is somehow free right now is not left idle.
     void this.pump();
     return true;
+  }
+
+  /** Epoch ms of the newest "Run next" promotion in this manager's queue (the semaphore's
+   *  cross-project preference), or null. `enqueue()` keeps promotions at the head, newest
+   *  first, so the head answers for the whole queue. */
+  private newestPromotionAt(): number | null {
+    const head = this.queue[0];
+    const promotedAt = head ? this.store.getRun(head)?.promotedAt : undefined;
+    const ms = promotedAt ? Date.parse(promotedAt) : Number.NaN;
+    return Number.isNaN(ms) ? null : ms;
   }
 
   /**
