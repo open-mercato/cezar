@@ -31,11 +31,35 @@ export function shellQuote(value: string): string {
 /**
  * Quote a binary PATH so a shell runs it as one word — the resolved `claude` can live under
  * `/Users/Jane Doe/.local/bin`, and an unquoted space there would split into two arguments.
- * `cmd.exe` needs its own escaping, which is why this is not just {@link shellQuote}.
+ * `cmd.exe` needs its own handling, which is why this is not just {@link shellQuote}.
+ *
+ * KNOWN LIMITATION on win32: the `^`-prefixing below is not actually an escape. Inside a
+ * `cmd.exe` double-quoted argument `^` is inert, so a path containing `"`, `%` or `!` comes back
+ * corrupted rather than protected — `C:\Users\R&D\claude.exe` becomes `C:\Users\R^&D\claude.exe`,
+ * and `WIN32_UNSAFE_RE` above documents that there is no escape to reach for. Callers that can
+ * degrade should gate on {@link isShellEmbeddable} first; this behaviour is preserved as-is
+ * because `provider-auth`'s `loginCommand` pins it.
  */
 export function quoteExecutable(executable: string, platform: NodeJS.Platform): string {
   if (platform === 'win32') return `"${executable.replace(/[%&!"]/g, '^$&')}"`;
   return shellQuote(executable);
+}
+
+/** Every character {@link quoteExecutable} rewrites on win32 — `"`, `%` and `!` because they
+ *  stay live inside the quotes, and `&` which does not, so rewriting it only corrupts the
+ *  value. None of them survives the round trip intact. */
+const WIN32_UNQUOTABLE_RE = /[%&!"]/;
+
+/**
+ * Can `value` be embedded in a shell command on `platform` and come back out unchanged?
+ *
+ * The gate {@link quoteExecutable} cannot apply to itself: `provider-auth`'s `loginCommand`
+ * pins its current (lossy) win32 output, so new callers opt in to correctness here instead of
+ * emitting a path the shell would read differently than intended.
+ */
+export function isShellEmbeddable(value: string, platform: NodeJS.Platform): boolean {
+  if (CONTROL_CHARS_RE.test(value)) return false;
+  return platform === 'win32' ? !WIN32_UNQUOTABLE_RE.test(value) : true;
 }
 
 /**
