@@ -27,12 +27,16 @@ import { lastSessionId } from './run-actions'
  * has healed the cache every other view reads, so the thread stops lying in the same beat.
  *
  * What it deliberately does NOT do:
- *  - retry when the fresh record agrees with the path already tried. That 409 is the server's
- *    considered answer (a disconnected provider, a locked model, a session with nothing to
- *    resume), and re-posting it would only turn one honest error into two;
+ *  - retry when the fresh record agrees with the path already tried — with one exception. That
+ *    409 is normally the server's considered answer (a disconnected provider, a locked model, a
+ *    session with nothing to resume), and re-posting it would only turn one honest error into
+ *    two. The exception is the exact `run is still active` refusal on the Continue path: a fresh
+ *    record that still reads closed is what PROVES a teardown race rather than a stale route, so
+ *    that one refusal is handed to ContinueAction's bounded retry (ask-answer.ts) instead;
  *  - reopen a session for an EMPTY draft. Submitting nothing is the one-click Continue, and a
  *    run that turns out to be live has nothing to continue — there is no message to deliver;
- *  - retry more than once. The second answer is reported as it comes.
+ *  - re-route more than once. One refetch picks the path, and the answer that path gives is
+ *    reported as it comes.
  */
 
 /** Which endpoint a record's status calls for. `queued` is `live`: the message is folded into
