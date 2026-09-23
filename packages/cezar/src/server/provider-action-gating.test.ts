@@ -11,6 +11,12 @@ import type { WorkflowDef } from '../workflows/types.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 
+// This suite asserts the claude executable literally — see `claude-bin.testkit.ts`.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => {
+  const { pinClaudeBin } = await import('../core/claude-bin.testkit.ts');
+  return pinClaudeBin(await importOriginal<typeof import('../core/claude-bin.ts')>());
+});
+
 const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents → Providers.';
 
 const memoryWorkspaceConfig = (disabledProviders: ProviderId[] = ['codex']) => {

@@ -2,7 +2,12 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { claudeInstallCandidates, claudeShellCommand, resolveClaudeBin } from './claude-bin.ts';
+import {
+  claudeInstallCandidates,
+  claudeShellCandidates,
+  claudeShellCommand,
+  resolveClaudeBin,
+} from './claude-bin.ts';
 
 function writeExecutable(path: string): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -86,11 +91,11 @@ describe.skipIf(process.platform === 'win32')('resolveClaudeBin', () => {
     expect(resolveClaudeBin({ PATH: pathDir }, home, 'darwin', candidates)).toBe('claude');
   });
 
-  it('ignores empty PATH entries instead of probing the working directory', () => {
-    writeExecutable(join(home, '.local', 'bin', 'claude'));
-    // A trailing/doubled `:` means "the cwd" to some shells; we must not honour that.
-    expect(resolveClaudeBin({ PATH: `${pathDir}::` }, home, 'darwin', candidates))
-      .toBe(join(home, '.local', 'bin', 'claude'));
+  it('still finds a PATH entry when the PATH has empty segments around it', () => {
+    writeExecutable(join(pathDir, 'claude'));
+    // A doubled/trailing `:` means "the cwd" to some shells. We skip those segments rather than
+    // honouring them, and the real entries either side must still be probed.
+    expect(resolveClaudeBin({ PATH: `::${pathDir}::` }, home, 'darwin', candidates)).toBe('claude');
   });
 });
 
@@ -103,15 +108,35 @@ describe('claudeInstallCandidates', () => {
       '/home/u/.npm-global/bin/claude',
       '/opt/homebrew/bin/claude',
       '/usr/local/bin/claude',
+      '/usr/bin/claude',
     ]);
   });
 
-  it('offers the .cmd shim on win32, because that is what `npm install -g` writes there', () => {
+  /**
+   * The spawn list must never name a `.cmd`/`.bat`: `resolveClaudeBin` feeds `spawn`/`execFile`
+   * with no shell (claude-cli-runner, provider-auth, backend-detect), modern Node refuses to
+   * spawn those, and routing them through a shell would reopen the BatBadBut hole closed in
+   * #459 — the same rule `resolveOnPath` follows in `server/open-in-app.ts`.
+   */
+  it('never offers a shell-only .cmd/.bat shim to the spawn callers', () => {
+    const candidates = claudeInstallCandidates(join('C:', 'Users', 'u'), 'win32', join('C:', 'nodejs'));
+    expect(candidates.some((c) => c.endsWith('.cmd') || c.endsWith('.bat'))).toBe(false);
+    expect(candidates).toContain(join('C:', 'nodejs', 'claude.exe'));
+  });
+});
+
+describe('claudeShellCandidates', () => {
+  it('adds the win32 .cmd shim, because that is all `npm install -g` writes there', () => {
     // `join` renders with the HOST's separator, so build the expectation the same way rather
     // than hard-coding backslashes that only appear when the suite runs on Windows.
     const nodeBinDir = join('C:', 'Program Files', 'nodejs');
-    expect(claudeInstallCandidates(join('C:', 'Users', 'u'), 'win32', nodeBinDir))
+    expect(claudeShellCandidates(join('C:', 'Users', 'u'), 'win32', nodeBinDir))
       .toContain(join(nodeBinDir, 'claude.cmd'));
+  });
+
+  it('is identical to the spawn list on posix, where there is no shim to add', () => {
+    expect(claudeShellCandidates('/home/u', 'linux', '/nvm/v22/bin'))
+      .toEqual(claudeInstallCandidates('/home/u', 'linux', '/nvm/v22/bin'));
   });
 });
 
@@ -125,8 +150,37 @@ describe.skipIf(process.platform === 'win32')('claudeShellCommand', () => {
   });
 
   it('is the resolved path when one was found off PATH', () => {
-    expect(claudeShellCommand({ PATH: '', CEZ_CLAUDE_BIN: '/opt/x/claude' }, '/nonexistent-home', 'linux', NONE))
-      .toBe('/opt/x/claude');
+    const dir = mkdtempSync(join(tmpdir(), 'cez-claude-shell-'));
+    try {
+      const bin = join(dir, 'claude');
+      writeExecutable(bin);
+      expect(claudeShellCommand({ PATH: '' }, '/nonexistent-home', 'linux', [bin])).toBe(bin);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('honours an executable CEZ_CLAUDE_BIN', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-claude-shell-'));
+    try {
+      const bin = join(dir, 'claude');
+      writeExecutable(bin);
+      expect(claudeShellCommand({ PATH: '', CEZ_CLAUDE_BIN: bin }, '/nonexistent-home', 'linux', NONE))
+        .toBe(bin);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Regression: detection gates the menu entry on `existsSync`, so a bogus override fell back to
+   * `onPath` and the entry still worked. If the handoff rewrote the command to that same bogus
+   * path anyway, the entry would open a terminal on `command not found` — the #469 broken
+   * affordance, newly introduced. An override nobody can execute must resolve to "no rewrite".
+   */
+  it('is null for a CEZ_CLAUDE_BIN that does not exist, so the bare `claude` still wins', () => {
+    expect(claudeShellCommand({ PATH: '', CEZ_CLAUDE_BIN: '/nope/claude' }, '/nonexistent-home', 'linux', NONE))
+      .toBeNull();
   });
 
   it('is null when claude is on PATH — the caller already has a working bare command there', () => {

@@ -14,6 +14,12 @@ import {
   watchProviderRuntimeAuthFailures,
 } from './provider-auth-runtime.ts';
 
+// This suite asserts the claude executable literally — see `claude-bin.testkit.ts`.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => {
+  const { pinClaudeBin } = await import('../core/claude-bin.testkit.ts');
+  return pinClaudeBin(await importOriginal<typeof import('../core/claude-bin.ts')>());
+});
+
 const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   claude: '{"loggedIn":true}',
   codex: 'Logged in using ChatGPT',

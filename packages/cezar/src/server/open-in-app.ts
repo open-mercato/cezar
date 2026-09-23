@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import type { RunnerId } from '../core/agent-runner.ts';
 import { claudeShellCommand } from '../core/claude-bin.ts';
-import { quoteExecutable } from '../core/shell-env.ts';
+import { isShellEmbeddable, quoteExecutable } from '../core/shell-env.ts';
 import { openInTerminal, refuseSpawnUnderTest } from './open-in-terminal.ts';
 import { isWsl, translateToWindowsPath } from './wsl.ts';
 
@@ -161,6 +161,9 @@ export function withResolvedClaudeBin(
   if (runner !== 'claude' || resolved === null) return command;
   // `command` is `claude` or `claude --resume <id>` (`resumeCommand`); leave anything else alone.
   if (command !== 'claude' && !command.startsWith('claude ')) return command;
+  // A path this shell cannot be given without mangling (see `quoteExecutable`'s win32 caveat):
+  // keep the bare `claude`, which still works wherever the opened terminal finds one itself.
+  if (!isShellEmbeddable(resolved, platform)) return command;
   return quoteExecutable(resolved, platform) + command.slice('claude'.length);
 }
 

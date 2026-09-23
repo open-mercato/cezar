@@ -11,6 +11,12 @@ import type { RunManager } from '../workflows/run.ts';
 import { openInTerminal } from './open-in-terminal.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 
+// This suite asserts the claude executable literally — see `claude-bin.testkit.ts`.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => {
+  const { pinClaudeBin } = await import('../core/claude-bin.testkit.ts');
+  return pinClaudeBin(await importOriginal<typeof import('../core/claude-bin.ts')>());
+});
+
 // The terminal launcher actually spawns a process (osascript/cmd/x-terminal-emulator) — mocked
 // so this suite exercises only the command construction, never a real terminal window.
 vi.mock('./open-in-terminal.js', () => ({ openInTerminal: vi.fn(async () => true) }));
