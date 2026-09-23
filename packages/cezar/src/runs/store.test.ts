@@ -1871,6 +1871,48 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
   });
 });
 
+describe('RunStore — promotedAt ("Run next")', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newRun = (store: RunStore): string =>
+    store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] }).id;
+
+  it('round-trips while the run stays queued', () => {
+    const store = RunStore.open(dataDir);
+    const id = newRun(store);
+    store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+    store.updateRun(id, { title: 'renamed' });
+    store.flush();
+    expect(RunStore.open(dataDir).getRun(id)?.promotedAt).toBe('2026-09-23T10:00:00.000Z');
+  });
+
+  it.each(['running', 'cancelled', 'failed', 'waiting', 'review', 'done'] as const)(
+    'is retired when the run leaves the queue (%s), so a later re-queue lands at the tail',
+    (status) => {
+      const store = RunStore.open(dataDir);
+      const id = newRun(store);
+      store.updateRun(id, { status: 'queued', promotedAt: '2026-09-23T10:00:00.000Z' });
+      store.updateRun(id, { status });
+      expect(store.getRun(id)?.promotedAt).toBeUndefined();
+      store.updateRun(id, { status: 'queued' });
+      expect(store.getRun(id)?.promotedAt).toBeUndefined();
+      store.flush();
+      const persisted = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as Array<
+        Record<string, unknown>
+      >;
+      expect(persisted.find((entry) => entry.id === id)).not.toHaveProperty('promotedAt');
+    },
+  );
+});
+
 describe('RunStore — pinned tasks (#935)', () => {
   let dataDir: string;
 
