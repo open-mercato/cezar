@@ -1,6 +1,7 @@
 import type { RunRecord, RunStatus, Runner } from '@open-mercato/cezar-api-client'
 import { cliTargetRunner } from '@/components/open-in-menu'
 import { canBeUnread, isUnread } from '@/lib/read-state'
+import { queuePositions } from '@/lib/task-groups'
 
 export { cliTargetRunner }
 
@@ -151,14 +152,11 @@ export function finishTitle(status: RunStatus): string {
 }
 
 /**
- * 1-based position among the queued, unarchived runs, FIFO by `createdAt` — the legacy
- * queued-placeholder math (web/app.js `queuePosition`, spec 006). Undefined when the run is
- * not itself queued (or the list doesn't know it yet — SSE races the detail fetch).
+ * 1-based position among the queued, unarchived runs, in the engine's start order — the legacy
+ * queued-placeholder math (web/app.js `queuePosition`, spec 006), now `queuePositions` itself so
+ * a "Run next" promotion moves this number and the list's in the same render. Undefined when the
+ * run is not itself queued (or the list doesn't know it yet — SSE races the detail fetch).
  */
 export function queuePosition(runs: RunRecord[], runId: string): number | undefined {
-  const queued = runs
-    .filter((run) => !run.archived && run.status === 'queued')
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
-  const index = queued.findIndex((run) => run.id === runId)
-  return index >= 0 ? index + 1 : undefined
+  return queuePositions(runs).get(runId)
 }
