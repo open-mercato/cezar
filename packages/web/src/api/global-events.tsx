@@ -322,6 +322,10 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
     queryKeys.worktrees,
     workspaceQueryKeys.providerStatus,
+    // Host totals (spec 2026-09-20-host-resource-telemetry): a remote cockpit's only refresh is
+    // this reconcile, so the Machine card must be in the list — the local cockpit ignores it
+    // because its frames arrive over the `host` topic.
+    workspaceQueryKeys.hostUsage,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const

@@ -240,6 +240,11 @@ export const workspaceQueryKeys = {
   /** `~/.cezar/config.json`'s settings slice via `GET/PUT /api/workspace/config` (step 2.7):
    *  the global Resources knobs and the checkout root. */
   config: ['workspace', 'config'] as const,
+  /** Live host totals (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`). One cache for
+   *  both transports: local cockpits fold pushed `host` frames into it, remote ones refetch it
+   *  on mount and on the visibility/reconnect reconcile. Workspace-led because the machine is
+   *  the machine, whichever project is on screen. */
+  hostUsage: ['workspace', 'host-usage'] as const,
   /** Agent accounts via `GET /api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles).
    *  Workspace-led like the registry: an account describes the machine, not a repo. */
   agentProfiles: ['workspace', 'agent-profiles'] as const,

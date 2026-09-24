@@ -9,6 +9,7 @@ import type { SetWorkspaceConfigInput, WorkspaceConfigResponse } from '@open-mer
 import { CenteredState } from '@/components/centered-state'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
+import { MachineCard } from './machine-card'
 import { SettingsField } from './settings-field'
 
 /**
@@ -131,6 +132,11 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
       data-slot="resources-section"
       className="mx-auto flex w-full max-w-2xl flex-col gap-7 p-4 pb-[calc(90px+env(safe-area-inset-bottom))] md:p-6 md:pb-6"
     >
+      {/* Live host totals first: they answer "how is the machine" before the knobs below answer
+          "how hard may cezar push it" (spec 2026-09-20-host-resource-telemetry, §UI/UX). The
+          card owns its own subscription, so this screen is what keeps the sampler alive. */}
+      <MachineCard />
+
       <SettingsField
         title="Max parallel tasks"
         hint="How many tasks run at once across every project. The rest wait in the queue. A non-git directory always runs one at a time."
