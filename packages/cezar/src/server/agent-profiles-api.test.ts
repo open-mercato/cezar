@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -32,6 +32,8 @@ describe('agent profiles API', () => {
   const saved = {
     home: process.env.CEZ_HOME,
     remote: process.env.CEZ_REMOTE,
+    remoteAgentAccounts: process.env.CEZ_REMOTE_AGENT_ACCOUNTS,
+    browseRoot: process.env.CEZ_BROWSE_ROOT,
     dryRun: process.env.CEZ_DRY_RUN,
   };
   let home: string;
@@ -42,7 +44,9 @@ describe('agent profiles API', () => {
     home = mkdtempSync(join(realpathSync(tmpdir()), 'cez-profiles-home-'));
     repoRoot = mkdtempSync(join(realpathSync(tmpdir()), 'cez-profiles-repo-'));
     process.env.CEZ_HOME = home;
+    process.env.CEZ_BROWSE_ROOT = home;
     delete process.env.CEZ_REMOTE;
+    delete process.env.CEZ_REMOTE_AGENT_ACCOUNTS;
     // Deterministic on any machine: no real agent CLIs are probed.
     process.env.CEZ_DRY_RUN = '1';
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -55,6 +59,8 @@ describe('agent profiles API', () => {
     for (const [key, value] of [
       ['CEZ_HOME', saved.home],
       ['CEZ_REMOTE', saved.remote],
+      ['CEZ_REMOTE_AGENT_ACCOUNTS', saved.remoteAgentAccounts],
+      ['CEZ_BROWSE_ROOT', saved.browseRoot],
       ['CEZ_DRY_RUN', saved.dryRun],
     ] as const) {
       if (value === undefined) delete process.env[key];
@@ -505,12 +511,19 @@ describe('agent profiles API', () => {
      * `refreshHealth` uses, which is why no other suite here spawns anything. Without this the
      * first reader of each row still paid a shell-out; it had only moved off the listing.
      */
-    it('warms every account at boot, extra accounts included, so the FIRST listing is complete', async () => {
+    it.each([
+      { mode: 'local', remote: false },
+      { mode: 'opted-in hosted', remote: true },
+    ])('warms every account at boot in $mode mode, extra accounts included', async ({ remote }) => {
       await send('POST', '/api/v1/workspace/agent-profiles', {
         provider: 'claude',
         label: 'work',
         configDir: claudeDir('claude-klaudiusz'),
       });
+      if (remote) {
+        process.env.CEZ_REMOTE = '1';
+        process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      }
       const spawns: string[] = [];
       const app = makeApp({
         socketHub: { registerTopic: () => undefined, attach: () => undefined, close: () => undefined },
@@ -750,6 +763,95 @@ describe('agent profiles API', () => {
       }
       expect((await loadAgentAccounts()).accounts).toEqual([]);
     });
+
+    it('allows account management when the authenticated deployment explicitly opts in', async () => {
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const { status, body } = await send('POST', '/api/v1/workspace/agent-profiles', {
+        provider: 'claude', label: 'Work', configDir: claudeDir('claude-work'),
+      });
+      expect(status).toBe(201);
+      expect(await list()).toMatchObject({
+        editable: true,
+        profiles: expect.arrayContaining([
+          expect.objectContaining({ id: body.profile.id, label: 'Work' }),
+        ]),
+      });
+
+      const selected = await send('PUT', '/api/v1/workspace/agent-profiles/selection', {
+        projectId: null, provider: 'claude', profileId: body.profile.id,
+      });
+      expect(selected.status).toBe(200);
+      expect((selected.body as unknown as { defaults: Record<string, string> }).defaults)
+        .toEqual({ claude: body.profile.id });
+
+      const opened = await send('POST', `/api/v1/workspace/agent-profiles/${body.profile.id}/open`, {
+        file: 'folder',
+      });
+      expect(opened.status).toBe(409);
+      expect(opened.body.error).toContain('opening account files is disabled');
+
+      const details = await apiRequest(
+        makeApp(),
+        `/api/v1/workspace/agent-profiles/${body.profile.id}/details`,
+      );
+      expect(details.status).toBe(200);
+    });
+
+    it.each(['POST', 'PATCH'])('rejects live, dead and ancestor symlink escapes through %s', async (method) => {
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const created = await send('POST', '/api/v1/workspace/agent-profiles', {
+        provider: 'claude', configDir: claudeDir('safe'),
+      });
+      expect(created.status).toBe(201);
+      const before = await loadAgentAccounts();
+      const live = join(home, 'live');
+      const dead = join(home, 'dead');
+      symlinkSync(repoRoot, live, 'dir');
+      symlinkSync(join(repoRoot, 'absent'), dead, 'dir');
+      for (const configDir of [live, dead, join(live, 'new', 'account'), join(dead, 'new')]) {
+        const result = await send(method, method === 'POST'
+          ? '/api/v1/workspace/agent-profiles'
+          : `/api/v1/workspace/agent-profiles/${created.body.profile.id}`, {
+          ...(method === 'POST' ? { provider: 'claude' } : {}), configDir,
+        });
+        expect(result).toEqual({ status: 400, body: { error: 'folder is outside the browsable root' } });
+      }
+      expect(await loadAgentAccounts()).toEqual(before);
+    });
+
+    it('allows new remote folders and symlinks whose existing ancestor stays inside the root', async () => {
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const safe = claudeDir('safe-target');
+      const link = join(home, 'safe-link');
+      symlinkSync(safe, link, 'dir');
+      for (const configDir of [join(home, 'new', 'account'), join(link, 'new', 'account')]) {
+        const result = await send('POST', '/api/v1/workspace/agent-profiles', {
+          provider: 'claude', configDir,
+        });
+        expect(result.status).toBe(201);
+      }
+    });
+
+    it('confines remotely supplied folders to CEZ_BROWSE_ROOT without probing outside paths', async () => {
+      process.env.CEZ_REMOTE_AGENT_ACCOUNTS = '1';
+      const outside = join(realpathSync(tmpdir()), `outside-${Date.now()}`);
+      mkdirSync(outside);
+      try {
+        const missing = `${outside}-missing`;
+        const presentResult = await send('POST', '/api/v1/workspace/agent-profiles', {
+          provider: 'claude', configDir: outside,
+        });
+        const missingResult = await send('POST', '/api/v1/workspace/agent-profiles', {
+          provider: 'claude', configDir: missing,
+        });
+        expect(presentResult).toMatchObject({ status: 400 });
+        expect(missingResult).toMatchObject({ status: 400 });
+        expect(presentResult.body.error).toBe(missingResult.body.error);
+        expect((await loadAgentAccounts()).accounts).toEqual([]);
+      } finally {
+        rmSync(outside, { recursive: true, force: true });
+      }
+    });
   });
 
   /**
@@ -887,7 +989,7 @@ describe('agent profiles API', () => {
         const answer = (await res.json()) as { error: string; command?: string };
         // No host path, and the same words whether or not the id exists.
         expect(answer.command).toBeUndefined();
-        expect(answer.error).toContain('managed from the machine that owns the checkout');
+        expect(answer.error).toContain('CEZ_REMOTE_AGENT_ACCOUNTS=1');
         expect(JSON.stringify(answer)).not.toContain(home);
       }
     });
