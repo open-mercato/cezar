@@ -708,6 +708,8 @@ export function reconcileLoadedRun(run: RunRecord, opts?: { keepLive?: boolean }
  */
 export class RunStore extends EventEmitter {
   private runs = new Map<string, RunRecord>();
+  /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
+  private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
    *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
@@ -1339,7 +1341,7 @@ export class RunStore extends EventEmitter {
   }
 
   deleteRun(id: string): boolean {
-    const existed = this.runs.delete(id);
+    const existed = this.forget(id);
     if (existed) {
       try {
         rmSync(this.eventsPath(id), { force: true });
@@ -1410,6 +1412,16 @@ export class RunStore extends EventEmitter {
     this.emit('run', run);
   }
 
+  /** Forget a run, and remember that we did. Dropping it from the map is no longer enough on its
+   *  own: `saveNow` unions the on-disk index back in, and the copy it re-reads is one THIS process
+   *  wrote moments ago — so a plain `delete` would come straight back as a record whose event file
+   *  `deleteRun` has already removed. A set of uuid strings that lives as long as the process,
+   *  which is exactly how long a deletion has to outlive its own index entry. */
+  private forget(id: string): boolean {
+    this.forgotten.add(id);
+    return this.runs.delete(id);
+  }
+
   private pruneOldRuns(): void {
     const all = this.listRuns();
     const stalePool = [
@@ -1417,7 +1429,7 @@ export class RunStore extends EventEmitter {
       ...all.filter((r) => r.archived).slice(MAX_ARCHIVED_KEPT),
     ];
     for (const stale of stalePool) {
-      this.runs.delete(stale.id);
+      this.forget(stale.id);
       try {
         rmSync(this.eventsPath(stale.id), { force: true });
         rmSync(this.handoffPath(stale.id), { force: true });
@@ -1443,11 +1455,75 @@ export class RunStore extends EventEmitter {
     const indexPath = join(this.dataDir, 'runs.json');
     const tmpPath = `${indexPath}.tmp`;
     try {
-      writeFileSync(tmpPath, JSON.stringify(this.listRuns(), null, 2), 'utf8');
+      writeFileSync(tmpPath, JSON.stringify(this.mergeWithIndexOnDisk(indexPath), null, 2), 'utf8');
       renameSync(tmpPath, indexPath);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[cez] failed to save runs.json: ${message}`);
     }
+  }
+
+  /**
+   * What `saveNow` writes: our own records, plus every record on disk we have never seen.
+   *
+   * `serve` and headless `run` each open their own store over the same data directory — a shared
+   * index is the whole intent — but `open()` reads `runs.json` exactly once and nothing re-reads
+   * it. Serializing a process-local map over the entire file therefore DELETED every run the other
+   * process had started: the cockpit, open before a `cezar run`, wiped that run from the index on
+   * its next save and left an orphaned `.ndjson` behind.
+   *
+   * Ours wins for an id we hold (we know more about it than the file does), an unknown id is
+   * adopted verbatim, and one `forget` recorded is never re-adopted. Best-effort, not a lock: two
+   * writers can still interleave between this read and the `rename`, so a foreign record updated
+   * inside the same debounce window can still lose that update. That residual race costs a field;
+   * the overwrite it replaces cost the whole record.
+   *
+   * Adopted records are written back but deliberately NOT loaded into `this.runs` — showing a
+   * foreign run in an already-live cockpit is a separate change. They are equally deliberately not
+   * passed through `reconcileLoadedRun` (and so not read via `readRunIndexFromDisk`, which looks
+   * like the right helper and is not): demoting a live-looking row to `interrupted` is correct when
+   * opening a store and wrong here, where that row may be a run still executing in the process that
+   * owns it. An index that cannot be read contributes nothing rather than costing us our own runs,
+   * exactly as in `open()`.
+   */
+  private mergeWithIndexOnDisk(indexPath: string): RunRecord[] {
+    const mine = this.listRuns();
+    const foreign = this.foreignRecordsOnDisk(indexPath);
+    if (foreign.length === 0) return mine;
+    // Same ordering rule `listRuns` applies, so the file's shape is unchanged.
+    return [...mine, ...foreign].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /**
+   * The records in `runs.json` this process knows nothing about — the ones a save has to carry
+   * over rather than overwrite.
+   *
+   * Validated one record at a time, and only for the ids we are actually adopting, which is the
+   * difference between this and `open()`'s whole-array parse. `saveNow` runs on a 300 ms debounce
+   * for as long as an agent is streaming, so this runs several times a second on the main thread of
+   * the process also serving the cockpit's SSE, while retention lets the index reach
+   * `MAX_RUNS_KEPT + MAX_ARCHIVED_KEPT` records — and in the ordinary single-process case every one
+   * of them is ours, so a `z.array(...)` parse would spend all of its time validating records the
+   * next line throws away. The id check is cheap and rejects nearly everything; zod sees what is
+   * left, which is normally nothing. Per-record also degrades better than `open()` can afford to:
+   * one unreadable row costs only itself instead of every foreign record in the file.
+   */
+  private foreignRecordsOnDisk(indexPath: string): RunRecord[] {
+    if (!existsSync(indexPath)) return [];
+    let raw: unknown;
+    try {
+      raw = JSON.parse(readFileSync(indexPath, 'utf8'));
+    } catch {
+      return []; // not JSON — an index we cannot read contributes nothing, and costs us nothing
+    }
+    if (!Array.isArray(raw)) return [];
+    const foreign: RunRecord[] = [];
+    for (const entry of raw) {
+      const id: unknown = (entry as { id?: unknown } | null)?.id;
+      if (typeof id !== 'string' || this.runs.has(id) || this.forgotten.has(id)) continue;
+      const parsed = runRecordSchema.safeParse(entry);
+      if (parsed.success) foreign.push(parsed.data);
+    }
+    return foreign;
   }
 }
