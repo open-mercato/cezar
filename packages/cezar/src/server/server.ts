@@ -4010,6 +4010,18 @@ export function createApp(deps: ServerDeps) {
       return c.json({ cancelled });
     })
 
+    // "Run next" (brief 2026-09-23-queued-task-run-next): move a queued run to the front of its
+    // queue so it takes the first free slot — never past a cap. Answers the updated record, like
+    // pin; the change rides the existing `run` SSE. 409 when the run is not waiting in the queue.
+    .post('/runs/:id/promote', (c) => {
+      const { store, manager } = c.get('project');
+      const id = c.req.param('id');
+      if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+      if (!manager.promote(id)) return c.json({ error: 'run is not queued' }, 409);
+      const run = store.getRun(id);
+      return run ? c.json(run) : c.json({ error: 'not found' }, 404);
+    })
+
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
     .post('/runs/:id/messages', jsonZodValidator(messageSchema), async (c) => {

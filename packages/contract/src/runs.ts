@@ -278,6 +278,10 @@ export const runRecordSchema = z.object({
    *  add later — "pinned oldest first" and "unpin what you pinned a month ago" both need it,
    *  and neither can be reconstructed after the fact. */
   pinnedAt: z.string().optional(),
+  /** "Run next": when this queued run was promoted to the front of its queue. Present only
+   *  while `status === 'queued'`; the newest promotion starts first, before every unpromoted
+   *  queued run. Never bypasses a parallel cap. */
+  promotedAt: z.string().optional(),
   /** Read receipt (#unread-done-items): ISO time the cockpit last opened this run's
    *  thread. A finished (`done`/`failed`) run reads as *unread* until seen since it
    *  finished — see `isUnread()` in the cockpit's `lib/read-state.ts`. Absent on old

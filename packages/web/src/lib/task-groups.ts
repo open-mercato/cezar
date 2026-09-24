@@ -173,17 +173,36 @@ export function groupTitle(run: Pick<RunRecord, 'title'>): string {
 }
 
 /**
+ * The order the engine starts queued runs in (brief 2026-09-23-queued-task-run-next): "Run
+ * next" promotions first, newest promotion first, then everyone else by creation — FIFO. The
+ * ONE comparator for every surface that shows queue order (the list sort, both `#N in queue`
+ * numbers), so they can never disagree with each other or with the engine's `enqueue()`.
+ */
+export function compareQueued(
+  a: Pick<RunRecord, 'createdAt' | 'promotedAt'>,
+  b: Pick<RunRecord, 'createdAt' | 'promotedAt'>,
+): number {
+  if (a.promotedAt || b.promotedAt) {
+    if (!a.promotedAt) return 1
+    if (!b.promotedAt) return -1
+    const promoted = b.promotedAt.localeCompare(a.promotedAt)
+    if (promoted !== 0) return promoted
+  }
+  return a.createdAt.localeCompare(b.createdAt)
+}
+
+/**
  * Queue positions: the `#2` a queued row shows instead of an age.
  *
- * Computed over the *active* queued runs by creation order, which is the order the engine will
- * actually start them in — never over the filtered/sorted view, or the number would change as
+ * Computed over the *active* queued runs in `compareQueued` order, which is the order the engine
+ * will actually start them in — never over the filtered/sorted view, or the number would change as
  * the sidebar re-sorted underneath it. Archived runs are excluded for the same reason: they are
  * not in the queue.
  */
 export function queuePositions(runs: readonly RunRecord[]): Map<string, number> {
   const queued = runs
     .filter((run) => !run.archived && run.status === 'queued')
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    .sort(compareQueued)
   return new Map(queued.map((run, index) => [run.id, index + 1]))
 }
 
@@ -196,8 +215,9 @@ export function queuePositions(runs: readonly RunRecord[]): Map<string, number> 
  *
  *  - `scheduled` — soonest appointment on top. A task resuming at 11:14 sits above one resuming
  *    at 11:40, whichever was created first.
- *  - `queued` — oldest first, which is FIFO and therefore exactly the `#1 in queue` position the
- *    row already prints beside itself. Newest-first rendered those positions backwards.
+ *  - `queued` — the engine's start order (`compareQueued`: "Run next" promotions, then oldest
+ *    first), which is exactly the `#1 in queue` position the row already prints beside itself.
+ *    Newest-first rendered those positions backwards.
  *
  * ISO-8601 strings compare lexicographically because every timestamp cezar writes is UTC
  * (`toISOString()` → trailing `Z`), the same reason `read-state.ts` compares them directly.
@@ -227,7 +247,7 @@ export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[
         if (order !== 0) return order
       }
       if (a.status === 'queued' && b.status === 'queued') {
-        return a.createdAt.localeCompare(b.createdAt)
+        return compareQueued(a, b)
       }
       return b.createdAt.localeCompare(a.createdAt)
     })

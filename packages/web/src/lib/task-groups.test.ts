@@ -5,6 +5,7 @@ import {
   BUCKET_ORDER,
   bucketOf,
   capBuckets,
+  compareQueued,
   groupRuns,
   groupTitle,
   listCounts,
@@ -219,6 +220,33 @@ describe('queuePositions', () => {
     ]
     // The archived one is not in the engine's queue, so it must not push the real one to #2.
     expect(queuePositions(runs)).toEqual(new Map([['queued', 1]]))
+  })
+
+  it('numbers "Run next" promotions first, newest promotion first — the engine\'s start order', () => {
+    const runs = [
+      run({ id: 'oldest', status: 'queued', createdAt: '2026-07-14T09:00:00.000Z' }),
+      run({ id: 'promoted-early', status: 'queued', createdAt: '2026-07-14T12:00:00.000Z', promotedAt: '2026-07-14T13:00:00.000Z' }),
+      run({ id: 'middle', status: 'queued', createdAt: '2026-07-14T10:00:00.000Z' }),
+      run({ id: 'promoted-late', status: 'queued', createdAt: '2026-07-14T11:00:00.000Z', promotedAt: '2026-07-14T14:00:00.000Z' }),
+    ]
+    expect([...queuePositions(runs)]).toEqual([
+      ['promoted-late', 1],
+      ['promoted-early', 2],
+      ['oldest', 3],
+      ['middle', 4],
+    ])
+    // The list sort and the numbers it prints agree.
+    const sorted = sortRuns(runs, 'active')
+    expect(sorted.map((r) => r.id)).toEqual(['promoted-late', 'promoted-early', 'oldest', 'middle'])
+  })
+})
+
+describe('compareQueued', () => {
+  it('is plain FIFO when nothing is promoted', () => {
+    const a = { createdAt: '2026-07-14T09:00:00.000Z' }
+    const b = { createdAt: '2026-07-14T10:00:00.000Z' }
+    expect(compareQueued(a, b)).toBeLessThan(0)
+    expect(compareQueued(b, a)).toBeGreaterThan(0)
   })
 })
 

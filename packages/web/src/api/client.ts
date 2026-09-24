@@ -1131,6 +1131,19 @@ export async function cancelRun(id: string): Promise<CancelResponse> {
   )
 }
 
+/**
+ * "Run next": move a queued task to the front of its queue so it takes the first free slot
+ * (never past a cap). Answers the updated record; a run that is no longer queued is a 409.
+ */
+export async function promoteRun(id: string): Promise<RunRecord> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id'].promote.$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+    }),
+    runPath(id, '/promote'),
+  )
+}
+
 /** Archives by default; pass `false` to bring a run back into the live list. */
 export async function archiveRun(id: string, archived = true): Promise<RunRecord> {
   return unwrap(
