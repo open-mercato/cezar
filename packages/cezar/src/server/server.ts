@@ -189,7 +189,13 @@ import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index
 import { fetchGithub, fetchGithubChecks, fetchGithubComments, fetchGithubPrDiff, fetchGithubRefStatus, forgetRefStatus, readCachedRefStatuses, refNumberFromUrl, searchGithubItems, GithubPrNotFoundError, GH_CHECKS_MAX, GH_SEARCH_MAX, GH_REF_STATUS_MAX } from './github.ts';
 import { ensureLaunchKey } from './launch-key.ts';
 import { openInTerminal } from './open-in-terminal.ts';
-import { agentCliRunner, detectOpenTargets, openFileInDefaultApp, openInApp } from './open-in-app.ts';
+import {
+  agentCliRunner,
+  detectOpenTargets,
+  openFileInDefaultApp,
+  openInApp,
+  withResolvedClaudeBin,
+} from './open-in-app.ts';
 import { createDraftPr } from './pr.ts';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
@@ -4289,7 +4295,10 @@ export function createApp(deps: ServerDeps) {
         // An id resumeCommand refuses (#431) degrades to a fresh CLI in the worktree,
         // exactly like a run that never recorded a session.
         const resume = sessionId && cliRunner === (run.runner ?? 'claude') ? resumeCommand(cliRunner, sessionId) : null;
-        const command = resume ?? cliRunner;
+        // The terminal this opens does not share our PATH (see `withResolvedClaudeBin`), so a
+        // claude found off PATH by detection has to be named by absolute path here too —
+        // otherwise the menu offers a handoff that opens on `command not found`.
+        const command = withResolvedClaudeBin(resume ?? cliRunner, cliRunner);
         // BOTH branches carry the account (spec 2026-07-29-agent-profiles): a resume needs the
         // config dir that holds its session, and a FRESH CLI in this worktree should still open
         // on the account the project works under — otherwise "Open in → Claude CLI" quietly
