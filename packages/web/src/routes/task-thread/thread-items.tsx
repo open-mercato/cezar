@@ -415,7 +415,8 @@ export function WorkingIndicator({ since, lastActivityAt }: { since?: string; la
   return (
     <div
       data-slot="working-indicator"
-      className="flex items-center gap-2 py-1 text-[13px] text-soft-foreground"
+      // Wraps rather than overflows: with both stamps the line outgrows a 320px phone column.
+      className="flex flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-[13px] text-soft-foreground"
     >
       <LoaderCircleIcon role="status" aria-label="Working" className="size-3.5 shrink-0 animate-spin" />
       <span className="shimmer font-medium">Working…</span>

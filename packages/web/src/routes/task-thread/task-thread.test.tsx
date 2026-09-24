@@ -120,6 +120,32 @@ describe('ThreadView', () => {
     )
   })
 
+  it('a running run clocks its open turn and last activity on the Working… line; a closed run shows none', () => {
+    // Only `Date` is faked: the header's queries and the indicator's interval keep real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-07-14T12:01:00.000Z'))
+      const events = [
+        { ...line(1, 'turn.started', { turnId: 'turn_1' }), ts: '2026-07-14T12:00:00.000Z' },
+        {
+          ...line(2, 'item.completed', {
+            item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'Working on it.' },
+          }),
+          ts: '2026-07-14T12:00:40.000Z',
+        },
+      ]
+      renderView(<ThreadView run={run('running')} thread={reduceThread(events, { activeTurn: true })} />)
+      expect(document.querySelector('[data-slot="working-elapsed"]')?.textContent).toBe('1m 00s')
+      expect(document.querySelector('[data-slot="working-last-activity"]')?.textContent).toContain('(20s ago)')
+
+      cleanup()
+      renderView(<ThreadView run={run('done')} thread={reduceThread(events)} />)
+      expect(document.querySelector('[data-slot="working-indicator"]')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('an issue-subject closed run links its DISCOVERED issue URL, never the incidental PR (#526)', () => {
     const issueRun = run('done', {
       markerRefs: { issue: 524 },
