@@ -196,6 +196,17 @@ export function mapCodexNotification(frame: unknown, state: CodexUiMapperState):
   }
 }
 
+/**
+ * Codex has emitted both `turn/failed` and `turn/completed` frames for failed turns across
+ * app-server versions. Treat the status on the turn as authoritative too; otherwise a failed
+ * `turn/completed` is interpreted as a normal end turn and the RunManager parks it as waiting
+ * without preserving the provider error (#783).
+ */
+export function codexTurnFailed(params: Record<string, unknown>): boolean {
+  const turn = isRecord(params.turn) ? params.turn : undefined;
+  return turn?.status === 'failed' || turn?.status === 'error' || isRecord(params.error);
+}
+
 // ---- turn lifecycle ---------------------------------------------------------
 
 function mapTurnStarted(params: Record<string, unknown>, state: CodexUiMapperState): CodexUiMapping {
