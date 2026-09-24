@@ -187,6 +187,12 @@ rl.on('line', (line) => {
       return;
     }
     if (turnText.includes('mock:turn-failed')) {
+      if (turnText.includes('mock:usage-limit')) {
+        emit({ method: 'error', params: {
+          error: { message: "You've hit your usage limit. Try again in 60 minutes." },
+          codexErrorInfo: 'usageLimitExceeded',
+        } });
+      }
       emit({ method: turnText.includes('mock:turn-completed-failed') ? 'turn/completed' : 'turn/failed', params: {
         turn: { id: 'turn_mock_1', status: 'failed' },
         error: { message: 'model unavailable' },
