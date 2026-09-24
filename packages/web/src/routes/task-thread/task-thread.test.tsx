@@ -1113,6 +1113,31 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
   })
 
+  // Regression (run 4eb1a980): codex ended its last turn at "1/4" without a final
+  // `plan.updated`, and the finished run kept pulsing "in progress" above a closed session.
+  it.each([
+    ['running', false],
+    ['done', true],
+    ['review', true],
+  ] as const)('a %s run → the plan dock settled=%s', (status, settled) => {
+    const withPlan: RunEvent[] = [
+      ...EVENTS,
+      line(8, 'plan.updated', {
+        entries: [
+          { content: 'Merge main', status: 'completed' },
+          { content: 'Resolve conflicts', status: 'in_progress' },
+          { content: 'Push', status: 'pending' },
+        ],
+      }),
+    ]
+    renderView(<ThreadView run={run(status)} thread={reduceThread(withPlan)} />)
+    const dock = document.querySelector('[data-slot="plan-dock"]')!
+    expect(dock.getAttribute('data-settled')).toBe(settled ? 'true' : null)
+    expect(dock.querySelector('[data-slot="plan-tag"]') === null).toBe(settled)
+    expect(dock.querySelector('.animate-pulse') === null).toBe(settled)
+    expect(dock.querySelector('[data-slot="plan-unfinished"]') !== null).toBe(settled)
+  })
+
   it('plan-kind tool cards stay out of the thread — the dock is their surface (#382)', () => {
     const todoInput = {
       todos: [
