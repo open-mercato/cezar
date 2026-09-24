@@ -30,6 +30,7 @@ import {
 } from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
+  codexTurnFailed,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
@@ -586,12 +587,11 @@ class CodexSession implements AgentSession {
         // An interrupted/failed item never sees item/completed — surface its
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
-        // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
-        // boundary carries it: a `turn/failed` already emits an authoritative error, and
-        // stacking a "keep going" reason on top of it would be two verdicts for one turn.
-        const compacted = method === 'turn/completed' && this.compactionEndedTurn;
+        // Only a clean completion may request a continuation after compaction.
+        const failed = method === 'turn/failed' || codexTurnFailed(params);
+        const compacted = !failed && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
-        if (method === 'turn/failed' && !this.terminatedByCezar) {
+        if (failed && !this.terminatedByCezar) {
           const error = params.error as Record<string, unknown> | undefined;
           const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
           this.emit({ type: 'error', message });
