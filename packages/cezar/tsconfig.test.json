@@ -1,0 +1,16 @@
+{
+  // Typecheck-only view of the server: the build config plus the test files it excludes,
+  // plus the vitest workspace root config. Never emits.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node"],
+    // The api-client drift guards (api-types.test.ts, tool-display-mirror.test.ts) read that
+    // package's SOURCE, so they name the real `.ts` files. Safe only here: this config never
+    // emits, and nothing under `src/` that ships is allowed to import a `.ts` path.
+    "allowImportingTsExtensions": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"],
+  "exclude": []
+}

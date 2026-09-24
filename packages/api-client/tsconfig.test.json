@@ -1,0 +1,9 @@
+{
+  // Typecheck-only view: the build config plus the test files it excludes. Never emits.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": []
+}

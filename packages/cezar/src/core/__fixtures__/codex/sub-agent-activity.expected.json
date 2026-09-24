@@ -1,0 +1,21 @@
+[
+  {
+    "type": "turn.started",
+    "turnId": "turn_activity"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "activity_started",
+      "name": "spawnAgent",
+      "toolKind": "task",
+      "title": "Task: scope review",
+      "status": "running",
+      "input": {
+        "agentPath": "/root/scope_review",
+        "agentThreadId": "th_child"
+      }
+    }
+  }
+]

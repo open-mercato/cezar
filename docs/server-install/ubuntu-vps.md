@@ -26,6 +26,9 @@ command is verified before the installer moves on.
 - At least one logged-in agent CLI on that user — `claude`, `codex`, or
   OpenCode (experimental). (The installer can install `gh` and the npm-based CLIs for you.)
 - For HTTPS: a domain with a DNS `A`/`AAAA` record pointing at the box.
+- **Ports 80/443 free.** If another reverse proxy already owns them (Dokploy,
+  Coolify, Caddy…), don't run the default install — see
+  [The box already has a reverse proxy](#the-box-already-has-a-reverse-proxy-dokploy-coolify-caddy).
 
 > Tools installed in `~/.local/bin` or via nvm are found automatically — the
 > installer merges your **login-shell PATH** before probing, so `claude`/`gh`
@@ -46,7 +49,7 @@ Or from a git checkout on the box:
 ```bash
 git clone https://github.com/open-mercato/cezar && cd cezar
 npm install && npm run build
-node dist/index.js server-install --platform ubuntu-vps
+node packages/cezar/dist/index.js server-install --platform ubuntu-vps
 ```
 
 ### What each step does
@@ -79,6 +82,69 @@ Your choice is remembered for the rest of the run.
 
 ---
 
+## The box already has a reverse proxy (Dokploy, Coolify, Caddy…)
+
+The default install above assumes cezar owns the HTTP front. If something else
+already serves **:80/:443** — Dokploy/Coolify (which run **Traefik** in Docker),
+a hand-rolled nginx, Caddy — installing cezar's nginx would fight it for those
+ports. Use `--external-proxy`:
+
+```bash
+npx cezar-cli server-install --platform ubuntu-vps \
+  --external-proxy --domain cezar.example.com --bind-host 172.17.0.1
+```
+
+That installs **the service only** — no nginx, no certbot. Steps run:
+`deps → autostart → identity`. Your proxy terminates TLS and enforces auth.
+
+```
+internet ──HTTPS──► your proxy (Traefik/Caddy/nginx) ──► cezar (172.17.0.1:4321)
+                    TLS + auth are YOURS to configure          systemd service
+```
+
+> ⚠️ **cezar has no built-in authentication.** In the default install nginx's
+> basic-auth is that gate; with `--external-proxy` there is none, and anyone who
+> can reach the bound host:port can run agents on your box. Put auth on the proxy
+> and keep the port off the public internet (ufw / cloud firewall).
+
+### Which `--bind-host`?
+
+| Your proxy runs… | `--bind-host` | Why |
+|---|---|---|
+| **in a container** (Dokploy/Coolify → Traefik) | `172.17.0.1` (docker bridge) | a container cannot dial the host's `127.0.0.1` |
+| **on the host** (nginx, Caddy, HAProxy) | omit (defaults to `127.0.0.1`) | loopback is reachable and stays private |
+
+Check your bridge address with `ip -brief addr show docker0`.
+
+### Wiring it to Dokploy / Traefik
+
+Traefik needs a route to a **host** address, so use a file-provider config
+(the installer prints this snippet, filled in, at the end of the run):
+
+```yaml
+http:
+  routers:
+    cezar:
+      rule: "Host(`cezar.example.com`)"
+      entryPoints: [websecure]
+      middlewares: [cezar-auth]
+      service: cezar
+      tls: { certResolver: letsencrypt }
+  services:
+    cezar:
+      loadBalancer:
+        servers: [{ url: "http://172.17.0.1:4321" }]
+  middlewares:
+    cezar-auth:
+      basicAuth:
+        users: ["me:$$apr1$$...."]   # htpasswd -nb me 'pass' — double every $
+```
+
+`server-deploy` and `server-uninstall` work the same in this mode (uninstall
+only removes the service — it never touches the proxy it doesn't own).
+
+---
+
 ## Updating / redeploying a new version
 
 Once a new cezar is available (a fresh local build, or a newly published
@@ -86,7 +152,7 @@ Once a new cezar is available (a fresh local build, or a newly published
 
 ```bash
 npx cezar-cli server-deploy --platform ubuntu-vps
-#   from a checkout:  node dist/index.js server-deploy --platform ubuntu-vps
+#   from a checkout:  node packages/cezar/dist/index.js server-deploy --platform ubuntu-vps
 #   npm script:       npm run server-deploy -- --platform ubuntu-vps
 ```
 
@@ -94,10 +160,18 @@ npx cezar-cli server-deploy --platform ubuntu-vps
 answer, and re-runs the same authenticated end-to-end check as install — so a
 green deploy means the cockpit is actually serving the new version.
 
-- **From a checkout** the service runs `<node> <repo>/dist/index.js` — so build
+- **From a checkout** the service runs `<node> <repo>/packages/cezar/dist/index.js` — so build
   first, then deploy: `git pull && npm run build && npx cezar-cli server-deploy --platform ubuntu-vps`.
-- **Via npx** the service runs `npx --yes cezar-cli` — a restart pulls the latest
-  published version, so `server-deploy` alone is enough.
+- **Via npx** the service runs `npx --yes cezar-cli`. npx caches the resolved
+  package under `~/.npm/_npx` and reuses it on restart, so `server-deploy` first
+  **clears that cached `cezar-cli` build** and then restarts — the next launch
+  re-resolves the latest published version. (Before this, a restart silently
+  kept running the cached version — see #696.) `server-deploy` alone is enough.
+- **A restart that fails, fails the deploy.** A non-zero `systemctl restart`, or a
+  restart that leaves the *same* process serving (same PID and start time), exits
+  non-zero with no "complete" line instead of reporting success over stale code —
+  so cron/CI can trust the exit status. (Before this, the port answering was the
+  whole check, and the old process answered it too — see #912.)
 
 The installer is also **idempotent** if you need to change the setup itself:
 
@@ -165,7 +239,7 @@ What differs per instance:
 ## Uninstall
 
 ```bash
-node dist/index.js server-uninstall --platform ubuntu-vps
+node packages/cezar/dist/index.js server-uninstall --platform ubuntu-vps
 ```
 
 Removes what cezar **owns**: the nginx vhost, htpasswd, systemd unit, and boot
@@ -186,5 +260,11 @@ break other vhosts).
 | "no gh / claude installed" but you have them | Launched from a non-login shell without `~/.local/bin`/nvm on PATH. The current installer merges your login-shell PATH; update and re-run. |
 | certbot "verification failed" but it succeeded | Fixed — verification now reads the world-readable nginx vhost, not root-only `/etc/letsencrypt/live`. |
 | Cockpit unreachable, nginx fine | Ports 80/443 blocked. Check `ufw status` **and** any cloud firewall (Hetzner/AWS security groups). |
+| nginx won't start: `Address already in use` | Another proxy (Dokploy/Coolify → Traefik, Caddy) owns :80/:443. Re-run with `--external-proxy` (see above). `sudo ss -ltnp \| grep -E ':80\|:443'` shows who holds them. |
+| `run server-install as a normal sudo-capable user, not root` | You're `root`. `adduser cezar && usermod -aG sudo cezar`, `su - cezar`, log your agent CLI in **as that user**, then re-run. |
+| External-proxy install: proxy returns 502 | Traefik runs in a container and can't reach `127.0.0.1`. Reinstall with `--bind-host 172.17.0.1` (or your `docker0` address). |
+| `server-deploy` fails with `Failed to connect to bus: No medium found` | `systemctl --user` has no D-Bus session — the deploy ran through `sudo -u <user>`, cron or an SSH root script, which give no login session. Use `sudo -i -u <user> …` (or `machinectl shell <user>@`), or export `XDG_RUNTIME_DIR=/run/user/$(id -u <user>)` and `DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus` first. Until #912 this was only a warning and the deploy still reported success. |
+| `cezar.service did not actually restart — PID … is still serving` | The restart command returned but the process never changed, so the cockpit is still on the old code. `systemctl --user status cezar` / `journalctl --user -u cezar -n 50` shows why; restart it by hand to see the real error. |
+| Cockpit stuck on an old version after `server-deploy` | npx-based unit whose cache wasn't refreshed (fixed in #696 — `server-deploy` now clears it). Manual: `rm -rf ~/.npm/_npx` as the service user, then `sudo systemctl restart cezar-<instance>`. |
 
 ← Back to [Remote access overview](./README.md)

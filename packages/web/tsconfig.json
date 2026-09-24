@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "node"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "resolveJsonModule": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    // The api-client is consumed from source (see `paths` below) and its own imports name
+    // real `.ts` files. Harmless here — this config never emits, and Vite resolves the same
+    // specifiers when it bundles.
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    // No `baseUrl` — it was removed in TypeScript 7. `paths` now resolves relative to this
+    // file's directory, which is what the mapping below already assumed.
+    "paths": {
+      "@/*": ["./src/*"],
+      // Source, not `dist` — see the matching alias in vite.config.ts. Typechecking the web
+      // app must not depend on the api-client having been built.
+      "@open-mercato/cezar-api-client": ["../api-client/src/index.ts"]
+    }
+  },
+  // `e2e/**` is Node code, not bundled DOM code, but it lives under this tsconfig so it is
+  // typechecked by `npm run typecheck:web` rather than by nothing at all.
+  "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "vitest.config.ts", "e2e/**/*.ts"]
+}

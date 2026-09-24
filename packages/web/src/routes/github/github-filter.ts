@@ -1,0 +1,79 @@
+import type { CSSProperties } from 'react'
+
+import type { GithubItem } from '@open-mercato/cezar-api-client'
+
+/**
+ * Pure filtering + label-color helpers for the GitHub tab (#gh-filter). Kept apart from the
+ * component so the "search by #id or text, narrow by labels" rules are table-testable and match
+ * GitHub's own semantics: multiple selected labels AND together (an item must carry them all).
+ */
+
+/** Every distinct label across the items, case-insensitively sorted — the filter dropdown's list. */
+export function allLabels(items: readonly GithubItem[]): string[] {
+  const set = new Set<string>()
+  for (const item of items) for (const label of item.labels) set.add(label)
+  return [...set].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()))
+}
+
+/**
+ * Filter by a free-text query and a set of required labels.
+ *  - `query`: `#123`/`123` matches the number; anything else is a case-insensitive substring
+ *    over the number, title, author and body.
+ *  - `labels`: the item must carry EVERY selected label (AND, like GitHub's label filter).
+ */
+export function filterGithubItems(
+  items: readonly GithubItem[],
+  opts: { query?: string; labels?: readonly string[] } = {},
+): GithubItem[] {
+  const query = (opts.query ?? '').trim().toLowerCase()
+  const required = opts.labels ?? []
+  const numeric = query.replace(/^#/, '')
+  const idOnly = numeric !== '' && /^\d+$/.test(numeric)
+  return items.filter((item) => {
+    if (required.length > 0 && !required.every((label) => item.labels.includes(label))) return false
+    if (query === '') return true
+    if (idOnly) return String(item.number).includes(numeric)
+    const haystack = `#${item.number} ${item.title} ${item.author} ${item.body}`.toLowerCase()
+    return haystack.includes(query)
+  })
+}
+
+/**
+ * Should the tab stop re-filtering what it already holds and ask the forge instead (#730)?
+ *
+ * `filterGithubItems` can only ever match the OPEN set the list fetched, so "zero local matches
+ * for a non-empty query" is exactly the state where the answer may still exist on GitHub —
+ * closed, merged, or simply outside the fetched window. A blank query is never a search (that is
+ * the unfiltered list), and a query that already found something locally is not worth a `gh`
+ * subprocess.
+ *
+ * The label filter takes part in this decision, by way of the caller: `github.tsx` derives
+ * `localMatches` from `filterGithubItems(openItems, { query, labels })`, so a label filter that
+ * narrows the open matches to zero DOES reach for the forge. It can only ever force the fallback,
+ * never suppress it — filtering removes matches, it never adds any. That is deliberate: the hits
+ * come back re-narrowed by the same label filter before rendering, so a label-filtered empty view
+ * is just as legitimate a reason to ask GitHub as an unfiltered one (#837).
+ */
+export function shouldSearchForge(query: string, localMatches: number): boolean {
+  return query.trim() !== '' && localMatches === 0
+}
+
+/** Inline style for a label chip tinted like GitHub: the label color as a translucent fill with a
+ *  matching border, and readable text. Falls back to neutral tokens when no color is known. */
+export function labelChipStyle(color: string | undefined): CSSProperties {
+  if (!color || !/^[0-9a-fA-F]{6}$/.test(color)) {
+    // `--muted-foreground`, not `--soft-foreground`: the softer token is near-invisible against
+    // the pale chip fill in light mode (the #gh-list low-contrast finding).
+    return { borderColor: 'var(--border)', color: 'var(--muted-foreground)' }
+  }
+  const solid = `#${color}`
+  return {
+    backgroundColor: `${solid}22`, // ~13% opacity fill, like GitHub's label pills
+    borderColor: `${solid}66`,
+    // Blend the label color toward the theme's foreground so the text is legible in BOTH themes:
+    // `--foreground` is near-black in light mode (darkens the ink against the pale tint) and
+    // near-white in dark mode (lifts it against the dark tint). One formula, no luminance branch —
+    // the previous JS-computed color only ever targeted dark chips, which washed out in light mode.
+    color: `color-mix(in srgb, ${solid} 50%, var(--foreground))`,
+  }
+}

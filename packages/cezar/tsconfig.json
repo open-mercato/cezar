@@ -1,0 +1,31 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    // TypeScript 7 defaults `types` to `[]` rather than "every package under @types",
+    // so this Node CLI has to ask for the Node globals by name.
+    "types": ["node"],
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    // Imports name the real `.ts` file; `rewriteRelativeImportExtensions` emits `.js` into
+    // `dist` (and into the `.d.ts`), so the published package is still plain resolvable ESM.
+    // Same pair the api-client already uses — and what lets `src/contract/` be copied between
+    // the two packages without rewriting a single specifier.
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "declaration": true,
+    "sourceMap": true,
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  // Build config: tests and their `*.testkit.ts` helpers are excluded so they never reach
+  // `dist` (and the published tarball).
+  // They are still typechecked — tsconfig.test.json adds them back, and `npm run typecheck` runs both.
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.testkit.ts"]
+}

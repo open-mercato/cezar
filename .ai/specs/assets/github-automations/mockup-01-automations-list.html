@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GitHub Automations — list mockup</title>
+<style>
+  *{box-sizing:border-box}body{margin:0;font:14px Inter,ui-sans-serif,system-ui;color:#172033;background:#f6f7f9}.app{display:grid;grid-template-columns:236px 1fr;min-height:100vh}.side{background:#fff;border-right:1px solid #e5e8ee;padding:18px 12px}.brand{display:flex;gap:10px;align-items:center;font-weight:750;font-size:16px;padding:2px 10px 20px}.logo{width:29px;height:29px;border-radius:8px;background:linear-gradient(135deg,#ff7a59,#7a5cff)}.repo{padding:10px;border:1px solid #e5e8ee;border-radius:9px;margin:0 4px 16px;font-size:12px}.repo b{display:block;font-size:13px;margin-bottom:3px}.nav{display:grid;gap:3px}.nav div{padding:9px 10px;border-radius:7px;color:#515d70}.nav .active{background:#fff1ed;color:#b83f1e;font-weight:650}.nav .sep{height:1px;background:#eef0f3;margin:7px 3px}.ico{display:inline-block;width:20px}.main{padding:29px 34px 60px}.top{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:23px}.eyebrow{font-size:12px;color:#788396;text-transform:uppercase;letter-spacing:.08em}.top h1{margin:4px 0 5px;font-size:24px}.sub{color:#667085}.button{background:#e9572d;color:#fff;border-radius:8px;padding:10px 14px;font-weight:700;box-shadow:0 1px 2px #0001}.status{display:flex;gap:22px;align-items:center;background:#fff;border:1px solid #e1e5ea;border-radius:10px;padding:13px 15px;margin-bottom:18px}.dot{width:8px;height:8px;border-radius:50%;display:inline-block;background:#23a56f;margin-right:7px}.status small{color:#788396}.cards{display:grid;gap:12px}.card{background:#fff;border:1px solid #e1e5ea;border-radius:11px;padding:17px 18px;display:grid;grid-template-columns:1fr 245px 124px;gap:20px;align-items:center}.name{font-size:15px;font-weight:750;margin-bottom:7px}.pill{font-size:11px;padding:3px 7px;border-radius:999px;background:#eaf8f2;color:#147351;margin-left:7px}.paused{background:#f0f1f3;color:#667085}.meta{color:#667085;font-size:12px;line-height:1.7}.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.stat{border-left:1px solid #e7e9ee;padding-left:11px}.stat b{display:block;font-size:16px}.stat small{color:#788396}.actions{text-align:right;color:#536072}.actions b{color:#c14725}.notice{margin-top:20px;padding:14px;border:1px dashed #d7dce3;border-radius:9px;color:#667085;background:#fafbfc}.illus{position:fixed;right:14px;bottom:9px;font-size:10px;color:#9aa2af}
+</style>
+<div class="app">
+  <aside class="side">
+    <div class="brand"><span class="logo"></span>cezar</div>
+    <div class="repo"><b>open-mercato / cezar</b>main</div>
+    <div class="nav">
+      <div><span class="ico">⌂</span>Tasks</div><div><span class="ico">＋</span>New task</div>
+      <div class="sep"></div><div><span class="ico">⑂</span>Git</div><div><span class="ico">◉</span>GitHub</div>
+      <div class="active"><span class="ico">⚡</span>Automations</div>
+      <div><span class="ico">◇</span>Skills</div><div><span class="ico">▤</span>Workflows</div>
+      <div class="sep"></div><div><span class="ico">⚙</span>Settings</div>
+    </div>
+  </aside>
+  <main class="main">
+    <div class="top"><div><div class="eyebrow">Project tools</div><h1>GitHub Automations</h1><div class="sub">Turn bounded GitHub events into ordinary cezar tasks while this server is running.</div></div><div class="button">＋ New automation</div></div>
+    <div class="status"><span><span class="dot"></span><b>Scheduler ready</b></span><span><small>GitHub</small><br>Authenticated as pkarw</span><span><small>Next check</small><br>in 2 minutes</span><span><small>Last success</small><br>Today, 14:32</span><span><small>Rate limit</small><br>4,812 remaining</span></div>
+    <div class="cards">
+      <div class="card"><div><div class="name">Review new pull requests <span class="pill">Enabled</span></div><div class="meta">New pull request · every 5 min · label: ready-for-review · last 7 days · max 25<br>Runs <b>Code review</b> autonomously in an isolated worktree</div></div><div class="stats"><div class="stat"><b>18</b><small>launched</small></div><div class="stat"><b>4</b><small>duplicate</small></div><div class="stat"><b>0</b><small>errors</small></div></div><div class="actions"><b>View log</b><br><span>Check now · Edit · Pause</span></div></div>
+      <div class="card"><div><div class="name">Triage customer issues <span class="pill">Enabled</span></div><div class="meta">New issue + issue label added · every 15 min · label: customer · max 20<br>Runs <b>Prepare issue</b> with Codex</div></div><div class="stats"><div class="stat"><b>7</b><small>launched</small></div><div class="stat"><b>1</b><small>duplicate</small></div><div class="stat"><b>1</b><small>errors</small></div></div><div class="actions"><b>View log</b><br><span>Check now · Edit · Pause</span></div></div>
+      <div class="card"><div><div class="name">Security label follow-up <span class="pill paused">Paused</span></div><div class="meta">Issue label added: security · every hour · assigned to @pkarw · max 10<br>Saved safely; paused automations make no GitHub requests</div></div><div class="stats"><div class="stat"><b>3</b><small>launched</small></div><div class="stat"><b>0</b><small>duplicate</small></div><div class="stat"><b>0</b><small>errors</small></div></div><div class="actions"><b>Edit</b><br><span>Enable · Delete</span></div></div>
+    </div>
+    <div class="notice"><b>Local polling, deliberately bounded.</b> No webhook or public URL is required. Every check honors each automation’s date window, filters, record cap, receipts, and GitHub rate-limit backoff.</div>
+  </main>
+</div><div class="illus">Illustrative static mockup</div>

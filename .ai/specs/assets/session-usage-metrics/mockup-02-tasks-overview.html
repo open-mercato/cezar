@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Proposed Cezar task overview usage</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #09090b; color: #f4f4f5; font-size: 14px; }
+    .shell { display: grid; grid-template-columns: 264px 1fr; min-height: 100vh; }
+    aside { padding: 20px 14px; border-right: 1px solid #252529; background: #0d0d0f; }
+    .brand { padding: 0 10px 19px; font-size: 19px; font-weight: 720; letter-spacing: -.03em; }
+    .new { display: block; margin-bottom: 14px; padding: 10px 12px; border: 1px solid #343439; border-radius: 7px; background: #171719; color: #fafafa; text-align: center; text-decoration: none; }
+    nav a { display: block; padding: 9px 11px; border-radius: 6px; color: #a1a1aa; text-decoration: none; }
+    nav a.active { background: #202024; color: #fff; }
+    .notice { display: flex; justify-content: space-between; align-items: center; padding: 9px 30px; border-bottom: 1px solid #342c16; background: #19150b; color: #d6b766; font-size: 11px; }
+    .pill { padding: 4px 8px; border: 1px solid #685321; border-radius: 999px; color: #f8d477; font-weight: 650; }
+    main { min-width: 0; }
+    .content { padding: 31px 34px; }
+    .top { display: flex; justify-content: space-between; align-items: end; margin-bottom: 25px; }
+    h1 { margin: 0 0 7px; font-size: 26px; letter-spacing: -.025em; }
+    .sub { color: #71717a; font-size: 12px; }
+    .actions { display: flex; gap: 8px; }
+    button { padding: 8px 12px; border: 1px solid #35353a; border-radius: 6px; background: #171719; color: #d4d4d8; }
+    .primary { background: #f4f4f5; color: #18181b; font-weight: 650; }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; border: 1px solid #29292d; border-radius: 8px; background: #101012; }
+    th { padding: 11px 14px; border-bottom: 1px solid #2b2b2f; background: #151517; color: #8b8b94; text-align: left; font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+    td { padding: 15px 14px; border-bottom: 1px solid #242428; color: #d4d4d8; font-size: 12px; }
+    tr:last-child td { border-bottom: 0; }
+    td:first-child { color: #f4f4f5; font-weight: 560; }
+    .state { display: inline-block; padding: 3px 7px; border-radius: 999px; background: #3c2d12; color: #f5c65a; font-size: 10px; }
+    .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .direction { display: inline-grid; grid-template-columns: 34px 11px 34px; gap: 3px; align-items: baseline; }
+    .direction b { color: #fafafa; font-weight: 600; text-align: right; }
+    .direction span { color: #5f5f67; text-align: center; }
+    .matrix-title { margin: 29px 0 10px; color: #d4d4d8; font-size: 13px; font-weight: 650; }
+    .matrix { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+    .case { min-height: 104px; padding: 13px; border: 1px solid #2b2b2f; border-radius: 8px; background: #121214; }
+    .case code { display: block; min-height: 31px; color: #8b8b94; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 9px; line-height: 1.4; }
+    .sample { margin-top: 10px; color: #e4e4e7; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .hidden { color: #62626b; font-style: italic; }
+    .legacy { color: #a88b45; }
+    @media (max-width: 900px) { .matrix { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 700px) { .shell { grid-template-columns: 1fr; } aside { display: none; } .content { padding: 24px 18px; } th:nth-child(3), td:nth-child(3) { display: none; } .matrix { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <div class="brand">cezar</div>
+      <a class="new" href="#">New task</a>
+      <nav aria-label="Main"><a class="active" href="#">Tasks</a><a href="#">Git</a><a href="#">GitHub</a><a href="#">Automations</a><a href="#">Skills</a><a href="#">Workflows</a><a href="#">Settings</a></nav>
+    </aside>
+    <main>
+      <div class="notice"><span>Proposed state based on the real Cezar dry-run cockpit</span><span class="pill">Illustrative mockup</span></div>
+      <section class="content">
+        <div class="top">
+          <div><h1>Tasks</h1><div class="sub">Three active sessions in this project</div></div>
+          <div class="actions"><button>Filter</button><button class="primary">New task</button></div>
+        </div>
+        <table aria-label="Tasks with directional token usage and cost">
+          <thead><tr><th>Task</th><th>Status</th><th>Workflow</th><th>IN / OUT</th><th>Cost</th></tr></thead>
+          <tbody>
+            <tr><td>Refine session usage display</td><td><span class="state">needs you</span></td><td>quick-task</td><td class="num"><span class="direction" aria-label="Input 1.3 thousand tokens, output 185 tokens"><b>1.3k</b><span>/</span><b>185</b></span></td><td class="num">$0.03</td></tr>
+            <tr><td>Review independent cost visibility</td><td><span class="state">needs you</span></td><td>quick-task</td><td class="num"><span class="direction" aria-label="Input 2.1 thousand tokens, output 403 tokens"><b>2.1k</b><span>/</span><b>403</b></span></td><td class="num">$0.05</td></tr>
+            <tr><td>Document embedded accounting policy</td><td><span class="state">needs you</span></td><td>quick-task</td><td class="num"><span class="direction" aria-label="Input unavailable, output unavailable"><b>—</b><span>/</span><b>—</b></span></td><td class="num">$0.03</td></tr>
+          </tbody>
+        </table>
+
+        <div class="matrix-title">Independent environment controls</div>
+        <div class="matrix">
+          <div class="case"><code>Default<br />no flags</code><div class="sample">IN 1.3k · OUT 185 · $0.03</div></div>
+          <div class="case"><code>CEZ_HIDE_TOKEN_USAGE=1</code><div class="sample">$0.03</div></div>
+          <div class="case"><code>CEZ_HIDE_COST=1</code><div class="sample">IN 1.3k · OUT 185</div></div>
+          <div class="case"><code>CEZ_HIDE_TOKEN_METRICS=1<br /><span class="legacy">legacy hide-all</span></code><div class="sample hidden">usage metadata hidden</div></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

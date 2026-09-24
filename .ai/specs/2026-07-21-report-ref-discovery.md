@@ -56,11 +56,24 @@ pretty distinguished"):
 - Same resolution rule via the now-shared `resolveReferencedRef`: a declared
   issue number filters candidates outright; otherwise one distinct URL is the
   subject; several resolve only when the task prompt names exactly one;
-  ambiguity clears the chip.
+  ambiguity clears the chip; and the winner is **repo-scoped** — a foreign
+  `owner/repo` resolves only when the task prompt names it.
+- **Amendment — the issue tier is repo-scoped too (#945).** Sharing
+  `resolveReferencedRef` meant sharing its hole: an issue link to another
+  repository, spotted once in a transcript, became the task's subject. It now
+  shares the repo-scope guard as well — see the amendment in
+  `2026-07-16-pr-autodiscovery.md` for the rule, the corroboration source, and
+  why an unknown repository keeps the pre-#945 behavior. The issue side had
+  one extra edge the PR side does not: a vetoed URL must not seed
+  `issueNumber` either. It cannot — the seed below is gated on a resolution
+  existing — and when the heal drops a stored foreign URL it revokes the
+  number alongside it, but only when `referencedIssueNumberSeeded` says the
+  janitor is the one who wrote it.
 - An unambiguous resolution seeds `issueNumber` when nothing owns that field;
-  ambiguity takes the janitor's own seed back. Marker and namer outrank the
-  janitor and overwrite freely (a namer-written number equal to a revoked
-  seed being cleared alongside it is the documented residual).
+  the persisted `referencedIssueNumberSeeded` provenance bit lets ambiguity
+  take back only the janitor's own seed, including after a restart. Prompt,
+  marker, and namer writes clear that provenance and are never revoked merely
+  because their number equals the previous fuzzy resolution.
 - Issue tracking runs regardless of the created-PR state — a task that opened
   a PR can still be *about* an issue.
 
@@ -84,6 +97,7 @@ pretty distinguished"):
   markers, decorated/suffixed lines, skill-doc placeholders are inert);
   CRLF tolerance; strip leaves report lines visible.
 - Store: single-link adoption + `issueNumber` seed; independence from the
-  created-PR tier; ambiguity clearing chip and seeded number; task-prompt
+  created-PR tier; ambiguity clearing the chip and a persisted janitor seed;
+  ambiguity preserving an equal prompt-owned number; task-prompt
   disambiguation; declared-issue candidate filtering; marker-owned
   `issueNumber` never overwritten by stray links.

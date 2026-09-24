@@ -5,9 +5,14 @@
 // UI had, now with HMR.
 //
 // The API port is probed here and pinned into BOTH processes (server via -p,
-// Vite proxy via CEZ_API_PORT — see web/app/vite.config.ts). Without that, a
-// cockpit already sitting on 4321 (another repo, an older npm install) would
+// Vite proxy via CEZ_API_PORT — see packages/web/vite.config.ts). Without that,
+// a cockpit already sitting on 4321 (another repo, an older npm install) would
 // silently answer the proxy with stale endpoints — 404s all over the UI.
+//
+// This stays at the repo root rather than inside a package: it is the one script
+// that spans two workspaces. Both halves are reached through the root's
+// `dev:server`/`dev:web` scripts, which forward into the workspaces, so the
+// package that owns each process also owns how it starts.
 
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';

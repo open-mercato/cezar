@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Illustrative single-project cezar shell</title>
+<style>
+  :root { color-scheme: dark; font: 14px Inter, ui-sans-serif, system-ui; background: #09090b; color: #fafafa; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; grid-template-columns: 260px 1fr; }
+  aside { border-right: 1px solid #27272a; padding: 18px 14px; background: #111113; }
+  .brand { display: flex; align-items: center; gap: 9px; font-weight: 700; margin: 2px 8px 24px; }
+  .mark { width: 20px; height: 20px; border-radius: 6px; background: #7c3aed; display: grid; place-items: center; }
+  .new { width: 100%; border: 0; border-radius: 8px; padding: 10px; background: #fafafa; color: #18181b; font-weight: 650; margin-bottom: 18px; }
+  nav { display: grid; gap: 4px; }
+  nav div { padding: 9px 10px; border-radius: 7px; color: #a1a1aa; }
+  nav .active { background: #27272a; color: #fff; }
+  .footer { position: absolute; bottom: 18px; color: #71717a; padding-left: 10px; }
+  main { padding: 54px 64px; }
+  .eyebrow { color: #8b5cf6; font-size: 12px; text-transform: uppercase; letter-spacing: .14em; }
+  h1 { font-size: 30px; margin: 10px 0; }
+  p { color: #a1a1aa; max-width: 680px; line-height: 1.6; }
+  .card { margin-top: 34px; border: 1px solid #27272a; background: #111113; border-radius: 12px; padding: 22px; max-width: 760px; }
+  .note { margin-top: 18px; color: #71717a; font-size: 12px; }
+</style>
+<body>
+  <aside>
+    <div class="brand"><span class="mark">c</span> cezar</div>
+    <button class="new">＋ New task</button>
+    <nav aria-label="Project navigation">
+      <div class="active">Tasks</div><div>Git</div><div>GitHub</div><div>Skills</div><div>Workflows</div><div>Settings</div>
+    </nav>
+    <div class="footer">Theme · Tools · v0.8</div>
+  </aside>
+  <main>
+    <div class="eyebrow">Illustrative mockup · single-project mode</div>
+    <h1>Tasks</h1>
+    <p>The cockpit stays scoped to the launch repository. Multi-project affordances are absent: there is no Add project control, project group switcher, or project selector.</p>
+    <section class="card">
+      <strong>Start a task</strong>
+      <p>Describe the change you want an agent to make in this repository.</p>
+      <div class="note">Global Settings omits the Projects pane while CEZ_SINGLE_PROJECT=1.</div>
+    </section>
+  </main>
+</body>
+</html>

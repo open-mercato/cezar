@@ -2,7 +2,7 @@
 
 High-fidelity static HTML mockups for the cockpit UI redesign — spec: [`.ai/specs/2026-07-14-cockpit-ui-redesign.md`](../../.ai/specs/2026-07-14-cockpit-ui-redesign.md).
 
-Built on real cezar data (run `2d012907`'s actual NDJSON events, real skill names, real `src/server/git.ts` content) and a shared token sheet ([`tokens.css`](tokens.css)) implementing the Mercato design system (neutral ramp, lime/violet accents, Inter + JetBrains Mono, shadcn-style primitives). No JavaScript, no external assets besides the fonts import — open any file directly in a browser. Dark is default; add `class="light"` to `<html>` for the light theme.
+Built on real cezar data (run `2d012907`'s actual NDJSON events, real skill names, real `packages/cezar/src/server/git.ts` content) and a shared token sheet ([`tokens.css`](tokens.css)) implementing the Mercato design system (neutral ramp, lime/violet accents, Inter + JetBrains Mono, shadcn-style primitives). No JavaScript, no external assets besides the fonts import — open any file directly in a browser. Dark is default; add `class="light"` to `<html>` for the light theme.
 
 | Page | Shows | Issues |
 |---|---|---|

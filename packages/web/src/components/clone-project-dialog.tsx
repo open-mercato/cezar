@@ -1,0 +1,293 @@
+import { SettingsIcon } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link as RouterLink, useNavigate } from 'react-router'
+
+import { onWorkspaceEvent } from '@/api/global-events'
+import { useCheckoutProject, useProjects } from '@/api/queries'
+import type { CheckoutProgressEvent } from '@open-mercato/cezar-api-client'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+
+/**
+ * GitHub prints this URL when an otherwise-valid OAuth token still needs SAML
+ * authorization for the repository's organization. The failed `gh` process
+ * cannot resume after the browser flow, so the dialog turns the URL into a
+ * trusted link and makes the required retry explicit.
+ *
+ * Keep this deliberately narrower than "find a URL": clone errors include
+ * output influenced by the remote, and rendering arbitrary output as a link
+ * would make the local cockpit an excellent phishing surface.
+ *
+ * Anchored at the END too, which matters as much as the `https://github.com/orgs/`
+ * prefix: the token charset cannot spell `%2F` or `=` padding, and an unanchored
+ * match would silently CUT such a token short and hand back a link
+ * indistinguishable from a good one. Refusing is the better failure — the caller
+ * then shows the raw error, which still contains the real URL to open by hand.
+ */
+export function githubSsoUrl(error: unknown): string | null {
+  if (!(error instanceof Error)) return null
+  const match = error.message.match(
+    /https:\/\/github\.com\/orgs\/[A-Za-z0-9._-]+\/sso\?authorization_request=[A-Za-z0-9._~-]+(?![^\s'"<>])/,
+  )
+  return match?.[0] ?? null
+}
+
+/**
+ * "Add project → Clone from GitHub" (multi-project spec, "Add project" option B / step 4.3).
+ *
+ * The mockup's three parts, and what each one is faithful to:
+ *
+ * - **The repo input** takes `owner/repo` or any GitHub URL spelling. It is NOT validated here
+ *   beyond "non-empty": the server parses it with the one parser that also decides what `gh`
+ *   is handed, and a second, looser copy in the browser would only disagree with it.
+ * - **The target preview** (`<projectsDir>/<name>`) is assembled from the registry response's
+ *   `projectsDir` plus the editable name. It is a preview of the server's own composition rule,
+ *   which is why the name defaults to the repo half of whatever was typed.
+ * - **Progress** is the `checkout-progress` stream, filtered to THIS dialog's `checkoutId`.
+ *   Without it a clone of a large repo is an indistinguishable-from-hung spinner for minutes.
+ *
+ * Errors are shown verbatim (`{ error }`): a clone fails for reasons — `gh` missing, not
+ * authenticated, no such repo, target folder exists, DNS down — that only the server can name,
+ * and paraphrasing them into "could not clone" is exactly the silent-spinner failure this
+ * dialog exists to avoid. SAML errors add an authorization link and keep the original
+ * message available under Error details.
+ */
+export function CloneProjectDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const [url, setUrl] = useState('')
+  const [name, setName] = useState('')
+  const [progress, setProgress] = useState<string | null>(null)
+  const [awaitingSso, setAwaitingSso] = useState(false)
+  const ssoRetryArmed = useRef(false)
+  const projects = useProjects()
+  const checkout = useCheckoutProject()
+  const { mutate, isPending } = checkout
+  const navigate = useNavigate()
+  const ssoUrl = githubSsoUrl(checkout.error)
+
+  // One id per mounted dialog. The dialog is mounted only while open (AddProjectMenu), so a
+  // second clone attempt in a second opening is a second id — which is the point: a stale
+  // event from an abandoned clone must never drive this one's progress line.
+  const checkoutId = useMemo(() => `co-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`, [])
+
+  // Kept in a ref, not state: the listener below must read the CURRENT id without re-subscribing
+  // (a resubscribe per render would drop events between teardown and setup).
+  const idRef = useRef(checkoutId)
+  idRef.current = checkoutId
+
+  useEffect(() => {
+    return onWorkspaceEvent((eventName, payload) => {
+      if (eventName !== 'checkout-progress') return
+      const event = payload as CheckoutProgressEvent
+      if (event?.checkoutId !== idRef.current) return
+      // `error` is surfaced through the mutation's own rejection (the response carries it too),
+      // so the terminal phases only stop the progress line rather than racing it.
+      if (event.phase === 'cloning' && event.line) setProgress(event.line)
+      else if (event.phase !== 'cloning') setProgress(null)
+    })
+  }, [])
+
+  /** The repo half of whatever was typed, used as the default folder name. Deliberately naive —
+   *  it mirrors the server's default, and the server re-derives it anyway when `name` is blank. */
+  const derivedName = useMemo(() => {
+    const cleaned = url.trim().replace(/\/+$/, '').replace(/\.git$/, '')
+    const last = cleaned.split('/').pop() ?? ''
+    return last.includes(':') ? (last.split(':').pop() ?? '') : last
+  }, [url])
+  const effectiveName = name.trim() === '' ? derivedName : name.trim()
+
+  const projectsDir = projects.data?.projectsDir ?? ''
+  const target = effectiveName === '' ? '' : `${projectsDir.replace(/\/+$/, '')}/${effectiveName}`
+
+  const clone = useCallback(() => {
+    if (url.trim() === '' || isPending) return
+    ssoRetryArmed.current = false
+    setAwaitingSso(false)
+    setProgress(null)
+    mutate(
+      { url: url.trim(), checkoutId, ...(name.trim() === '' ? {} : { name: name.trim() }) },
+      {
+        onSuccess: ({ project }) => {
+          onOpenChange(false)
+          // Raw react-router `useNavigate`, not the scope-aware wrapper — a deliberate
+          // cross-project jump, exactly as the folder-browser dialog does.
+          navigate(`/p/${encodeURIComponent(project.id)}/`)
+        },
+      },
+    )
+  }, [mutate, isPending, checkoutId, name, navigate, onOpenChange, url])
+
+  // Authorizing an existing OAuth token changes GitHub's server-side token
+  // grant; it cannot wake the `gh repo clone` process that already exited.
+  // Returning to this tab is the only browser signal available to the local
+  // cockpit, so retry once on focus/visibility after the user follows the SSO
+  // link. The ref prevents browsers that emit both events from cloning twice.
+  useEffect(() => {
+    if (!awaitingSso) return
+    const retry = (): void => {
+      if (!ssoRetryArmed.current) return
+      ssoRetryArmed.current = false
+      setAwaitingSso(false)
+      clone()
+    }
+    const retryWhenVisible = (): void => {
+      if (document.visibilityState === 'visible') retry()
+    }
+    window.addEventListener('focus', retry)
+    document.addEventListener('visibilitychange', retryWhenVisible)
+    return () => {
+      window.removeEventListener('focus', retry)
+      document.removeEventListener('visibilitychange', retryWhenVisible)
+    }
+  }, [awaitingSso, clone])
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => (checkout.isPending ? undefined : onOpenChange(next))}>
+      <DialogContent
+        data-slot="clone-project-dialog"
+        className="min-w-0 max-h-[calc(100dvh-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-lg"
+      >
+        <DialogHeader>
+          <DialogTitle>Clone from GitHub</DialogTitle>
+          <DialogDescription>
+            cezar clones with <code>gh</code> into your checkout root and adds the result as a project.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid gap-1.5">
+          <Label htmlFor="clone-url">Repository</Label>
+          <Input
+            id="clone-url"
+            data-slot="clone-url"
+            autoFocus
+            placeholder="owner/repo or https://github.com/owner/repo"
+            value={url}
+            disabled={checkout.isPending}
+            onChange={(event) => setUrl(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') clone()
+            }}
+          />
+        </div>
+
+        <div className="grid gap-1.5">
+          <Label htmlFor="clone-name">Folder name</Label>
+          <Input
+            id="clone-name"
+            data-slot="clone-name"
+            placeholder={derivedName === '' ? 'repo' : derivedName}
+            value={name}
+            disabled={checkout.isPending}
+            onChange={(event) => setName(event.target.value)}
+          />
+          <div className="flex min-w-0 items-center gap-1">
+            <p
+              data-slot="clone-target"
+              className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-soft-foreground"
+              title={target}
+            >
+              {target}
+            </p>
+            {checkout.isPending ? (
+              <Button
+                data-slot="clone-root-settings"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                aria-label="Edit checkout root"
+                title="Edit checkout root"
+                disabled
+              >
+                <SettingsIcon className="size-3.5" aria-hidden="true" />
+              </Button>
+            ) : (
+              <Button asChild variant="ghost" size="icon-sm" className="size-7">
+                <RouterLink
+                  to="/settings/global/projects"
+                  data-slot="clone-root-settings"
+                  aria-label="Edit checkout root"
+                  title="Edit checkout root"
+                >
+                  <SettingsIcon className="size-3.5" aria-hidden="true" />
+                </RouterLink>
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* One line, replaced in place: `git clone` emits a counter update every few hundred ms,
+            and a growing log would scroll a dialog that is otherwise a form. */}
+        {checkout.isPending ? (
+          <p data-slot="clone-progress" className="truncate font-mono text-[11.5px] text-muted-foreground">
+            {progress ?? 'Starting the clone…'}
+          </p>
+        ) : null}
+
+        {checkout.isError ? (
+          <div data-slot="clone-error" className="grid min-w-0 gap-1.5 text-[13px] text-danger">
+            {ssoUrl ? (
+              <>
+                <p>GitHub requires SAML authorization for this organization.</p>
+                <p>
+                  <a
+                    data-slot="clone-sso-link"
+                    className="font-medium underline underline-offset-2"
+                    href={ssoUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    onClick={() => {
+                      ssoRetryArmed.current = true
+                      setAwaitingSso(true)
+                    }}
+                  >
+                    Authorize this GitHub organization
+                  </a>
+                  {awaitingSso
+                    ? ' — return here after authorizing, or choose Retry clone.'
+                    : ' — return to this tab to retry, or choose Retry clone.'}
+                </p>
+                <details className="min-w-0">
+                  <summary>Error details</summary>
+                  <p className="whitespace-pre-wrap break-all">
+                    {checkout.error instanceof Error ? checkout.error.message : null}
+                  </p>
+                </details>
+              </>
+            ) : (
+              <p className="min-w-0 whitespace-pre-wrap break-all">
+                {checkout.error instanceof Error ? checkout.error.message : 'could not clone that repository'}
+              </p>
+            )}
+          </div>
+        ) : null}
+
+        <DialogFooter>
+          <Button variant="outline" disabled={checkout.isPending} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            data-slot="clone-confirm"
+            disabled={url.trim() === '' || effectiveName === '' || checkout.isPending}
+            onClick={clone}
+          >
+            {checkout.isPending ? 'Cloning…' : checkout.isError ? 'Retry clone' : 'Clone'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

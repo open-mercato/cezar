@@ -1,0 +1,114 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "th_01J8ZC0V6KQ2PXG7",
+    "backend": "codex"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_01J8ZC0WXP"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_msg_1",
+      "role": "assistant",
+      "text": "",
+      "phase": "commentary"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_msg_1",
+    "field": "text",
+    "delta": "Looking into the login redirect"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_msg_1",
+    "field": "text",
+    "delta": " issue now."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_msg_1",
+      "role": "assistant",
+      "text": "Looking into the login redirect issue now.",
+      "phase": "commentary"
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "reasoning",
+      "id": "item_rsn_1",
+      "text": "Tracing the redirect"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_rsn_1",
+    "field": "reasoning",
+    "delta": "The session cookie is dropped on refresh."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "item_rsn_1",
+      "text": "The session cookie is dropped on refresh."
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_msg_2",
+      "role": "assistant",
+      "text": "",
+      "phase": "final"
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_msg_2",
+    "field": "text",
+    "delta": "The redirect loses the session cookie — fixing it in src/auth.ts."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_msg_2",
+      "role": "assistant",
+      "text": "The redirect loses the session cookie — fixing it in src/auth.ts.",
+      "phase": "final"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 1800,
+      "output": 410,
+      "total": 2210,
+      "cacheRead": 900,
+      "reasoning": 120,
+      "contextWindow": 272000
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_01J8ZC0WXP",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 1800,
+      "output": 410,
+      "total": 2210,
+      "cacheRead": 900,
+      "reasoning": 120
+    }
+  }
+]

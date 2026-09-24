@@ -1,0 +1,125 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "th_01J8ZCMD2QW4RT",
+    "backend": "codex"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_01J8ZCMD9A"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "item_cmd_1",
+      "name": "commandExecution",
+      "toolKind": "execute",
+      "title": "Ran bash -lc npm test",
+      "status": "running",
+      "input": {
+        "command": [
+          "bash",
+          "-lc",
+          "npm test"
+        ]
+      }
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_cmd_1",
+    "field": "output",
+    "delta": "> cezar@0.1.0 test\n> vitest run\n"
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_cmd_1",
+    "field": "output",
+    "delta": "Test Files  4 passed (4)\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "item_cmd_1",
+      "name": "commandExecution",
+      "toolKind": "execute",
+      "title": "Ran bash -lc npm test",
+      "status": "completed",
+      "input": {
+        "command": [
+          "bash",
+          "-lc",
+          "npm test"
+        ]
+      },
+      "output": "> cezar@0.1.0 test\n> vitest run\nTest Files  4 passed (4)\n",
+      "exitCode": 0
+    }
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "item_cmd_2",
+      "name": "commandExecution",
+      "toolKind": "execute",
+      "title": "Ran bash -lc npm run lint",
+      "status": "running",
+      "input": {
+        "command": [
+          "bash",
+          "-lc",
+          "npm run lint"
+        ]
+      }
+    }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "item_cmd_2",
+    "field": "output",
+    "delta": "npm error Missing script: \"lint\"\n"
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "item_cmd_2",
+      "name": "commandExecution",
+      "toolKind": "execute",
+      "title": "Ran bash -lc npm run lint",
+      "status": "failed",
+      "input": {
+        "command": [
+          "bash",
+          "-lc",
+          "npm run lint"
+        ]
+      },
+      "output": "npm error Missing script: \"lint\"\n",
+      "exitCode": 1
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 4700,
+      "output": 700,
+      "total": 5400,
+      "cacheRead": 2100
+    }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_01J8ZCMD9A",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 1600,
+      "output": 300,
+      "total": 1900,
+      "cacheRead": 800
+    }
+  }
+]
