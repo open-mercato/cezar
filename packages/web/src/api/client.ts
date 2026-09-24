@@ -61,6 +61,7 @@ import type {
   GithubPrChangesData,
   GroupResponse,
   HealthResponse,
+  HostUsage,
   AttachmentInput,
   LaunchKeyResponse,
   MessageInput,
@@ -1933,6 +1934,20 @@ export async function getWorkspaceConfig(opts?: ReadOptions): Promise<WorkspaceC
     '/workspace/config',
   )
   return { ...answer, agentDefaults: answer.agentDefaults ?? {} }
+}
+
+/**
+ * Live host totals (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`) — the REMOTE
+ * cockpit's snapshot of the machine's CPU/memory/swap/load. A local cockpit reads the same
+ * sample pushed over the `host` WS topic and never calls this; a remote one cannot open that
+ * socket (browser WebSocket carries no proxy credentials), so it reads here instead, on mount
+ * and on the existing visibility/reconnect reconcile.
+ */
+export async function getWorkspaceHostUsage(opts?: ReadOptions): Promise<HostUsage> {
+  return unwrap(
+    await cez.api.v1.workspace['host-usage'].$get({}, init(opts)),
+    '/workspace/host-usage',
+  )
 }
 
 /**

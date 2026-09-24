@@ -210,8 +210,10 @@ describe('AppShell', () => {
 
   /* The footer used to be one wrapping row that overflowed the 264px column, so the theme toggle
    * silently fell onto a line of its own (#702). jsdom cannot measure that — but it can pin the
-   * structure that makes the wrap impossible: two rows, by construction, not by luck. */
-  describe('sidebar footer is two intentional rows (#702)', () => {
+   * structure that makes the wrap impossible: deliberate rows, by construction, not by luck. The
+   * machine glance is one more of them when it is mounted, which is why it is passed as a slot and
+   * asserted first in the list below. */
+  describe('sidebar footer rows are intentional (#702)', () => {
     const controls = () =>
       document.querySelector('[data-slot="sidebar-footer-controls"]') as HTMLElement
 
@@ -221,10 +223,20 @@ describe('AppShell', () => {
       expect(footer().className).not.toContain('flex-wrap')
     })
 
-    it('has exactly two children: the search bar, then the controls row', () => {
+    it('has exactly two children without the machine glance: the search bar, then the controls', () => {
       renderShell('/', { version: '1.2.3' })
       const children = Array.from(footer().children) as HTMLElement[]
       expect(children.map((child) => child.dataset.slot)).toEqual([
+        'command-palette-hint',
+        'sidebar-footer-controls',
+      ])
+    })
+
+    it('puts the machine glance above both, as its own row', () => {
+      renderShell('/', { version: '1.2.3', hostWidget: <span data-slot="host-widget-stub" /> })
+      const children = Array.from(footer().children) as HTMLElement[]
+      expect(children.map((child) => child.dataset.slot)).toEqual([
+        'host-widget-stub',
         'command-palette-hint',
         'sidebar-footer-controls',
       ])

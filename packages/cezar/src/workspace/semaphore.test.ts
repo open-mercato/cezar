@@ -2,7 +2,14 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { WorkspaceSemaphore, type SemaphoreParticipant } from './semaphore.ts';
+import { createAdmissionGovernor, type AdmissionGovernor } from '../core/admission-governor.ts';
+import { admissionStatusSnapshot } from '../core/admission-status.ts';
+import type { PressureSample } from '../core/cgroup-pressure.ts';
+import {
+  WorkspaceSemaphore,
+  type SemaphoreParticipant,
+  type WorkspaceResourceLimits,
+} from './semaphore.ts';
 
 /** Unit surface of the shared workspace semaphore (spec 2026-07-20, step 2.5).
  *  The cross-manager scheduling behavior (cap across projects, the #347
@@ -30,6 +37,174 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.memoryLimitMb()).toBeNull();
     expect(sem.monitoringWakeIntervalMinutes()).toBe(5); // #810 — monitoring must self-resume
     expect(sem.busy()).toBe(0);
+    expect(sem.dispatchMaxConcurrent()).toBeNull(); // no cap — today's behavior
+    expect(sem.dispatchBusy()).toBe(0);
+  });
+
+  /**
+   * The dispatch admission cap rides the same cache as `maxParallel` (spec
+   * 2026-09-20-dispatch-admission-scheduler): additive, answered from the snapshot, and summed
+   * across every manager so a fan-out in one project cannot spend another project's budget.
+   * Absent and `null` both mean "no cap"; an explicit `0` is the operator having chosen it and
+   * must survive as a number rather than collapsing into the absent case.
+   */
+  it('answers the cached dispatch cap, keeping an explicit 0 distinct from an absent key', () => {
+    expect(new WorkspaceSemaphore({ initial: { dispatchMaxConcurrent: 3 } }).dispatchMaxConcurrent()).toBe(3);
+    expect(new WorkspaceSemaphore({ initial: { dispatchMaxConcurrent: 0 } }).dispatchMaxConcurrent()).toBe(0);
+    expect(new WorkspaceSemaphore({ initial: { dispatchMaxConcurrent: null } }).dispatchMaxConcurrent()).toBeNull();
+    // A loader that predates the key (its `WorkspaceResourceLimits` omits it) reads as "no cap".
+    expect(new WorkspaceSemaphore({ initial: { maxParallel: 2, memoryLimitMb: null } }).dispatchMaxConcurrent()).toBeNull();
+  });
+
+  /**
+   * The adaptive admission governor (spec 2026-09-20-adaptive-admission-governor): a REDUCTION
+   * layer under the configured dispatch ceiling. `dispatchMaxConcurrent()` keeps answering the
+   * CONFIGURED value - the settings API reads the user's own number back - while
+   * `dispatchAdmissionCeiling()` is the effective one the per-candidate gate in `workflows/run.ts`
+   * enforces, and `admissionStatus()` is the readout the telemetry sampler reports.
+   *
+   * With no ceiling there is nothing to reduce, so the ceiling and the status both stay absent and
+   * the zero-config path does not change. The levels below are produced by the SHIPPED policy
+   * (`createAdmissionGovernor`) with an injected sample and clock, so this suite pins the wiring
+   * rather than restating the thresholds.
+   */
+  describe('adaptive admission ceiling (governor wiring)', () => {
+    /** The real governor, driven by a mutable sample and clock: `intervalMs: 0` re-evaluates on
+     *  every read and `enterStreak: 1` makes a level observable immediately. */
+    const governorAt = (
+      sample: () => PressureSample | undefined,
+      clock: { now: number },
+    ): AdmissionGovernor =>
+      createAdmissionGovernor({ sample, now: () => clock.now, intervalMs: 0, enterStreak: 1 });
+
+    const governed = (
+      initial: Partial<WorkspaceResourceLimits>,
+      governor: AdmissionGovernor,
+    ): WorkspaceSemaphore => new WorkspaceSemaphore({ initial, governor });
+
+    it('no configured ceiling (absent, null, or the explicit 0): no reduction, no status', () => {
+      // Absent key: the zero-config workspace, and any loader that predates the ceiling.
+      const bare = new WorkspaceSemaphore();
+      expect(bare.dispatchMaxConcurrent()).toBeNull();
+      expect(bare.dispatchAdmissionCeiling()).toBeNull();
+      expect(bare.admissionStatus()).toBeUndefined();
+      expect(admissionStatusSnapshot()).toBeUndefined();
+
+      // `0` is the operator's own "no cap" spelling and must survive as a number here - it also
+      // must NOT reach the governor, which would answer a ceiling of 1 for it.
+      for (const dispatchMaxConcurrent of [null, 0]) {
+        const sem = new WorkspaceSemaphore({ initial: { maxParallel: 4, dispatchMaxConcurrent } });
+        expect(sem.dispatchMaxConcurrent()).toBe(dispatchMaxConcurrent);
+        expect(sem.dispatchAdmissionCeiling()).toBeNull();
+        expect(sem.admissionStatus()).toBeUndefined();
+        expect(admissionStatusSnapshot()).toBeUndefined();
+      }
+    });
+
+    it('reduces the CONFIGURED ceiling by the governor level: 4 -> 4 / 2 / 1, with a status per level', () => {
+      const clock = { now: 1_700_000_000_000 };
+      let sample: PressureSample | undefined = { memoryUsedRatio: 0.2 };
+      const sem = governed(
+        { maxParallel: 8, dispatchMaxConcurrent: 4 },
+        governorAt(() => sample, clock),
+      );
+
+      // Calm: the ceiling is the configured one, and a normal state has no `since`.
+      expect(sem.dispatchMaxConcurrent()).toBe(4);
+      expect(sem.dispatchAdmissionCeiling()).toBe(4);
+      expect(sem.admissionStatus()).toEqual({ state: 'normal', configured: 4, effective: 4 });
+
+      // Elevated (>= 85 % of the memory limit): half the ceiling...
+      clock.now += 5_000;
+      sample = { memoryUsedRatio: 0.9 };
+      expect(sem.dispatchAdmissionCeiling()).toBe(2);
+      expect(sem.admissionStatus()).toEqual({
+        state: 'elevated',
+        configured: 4,
+        effective: 2,
+        since: new Date(1_700_000_005_000).toISOString(),
+      });
+      // ...and the telemetry read (the provider registered in the constructor) is the same readout.
+      expect(admissionStatusSnapshot()).toEqual(sem.admissionStatus());
+
+      // Critical (>= 95 %): a quarter, floored at one child.
+      clock.now += 5_000;
+      sample = { memoryUsedRatio: 0.99 };
+      expect(sem.dispatchAdmissionCeiling()).toBe(1);
+      expect(sem.admissionStatus()).toEqual({
+        state: 'critical',
+        configured: 4,
+        effective: 1,
+        since: new Date(1_700_000_010_000).toISOString(),
+      });
+
+      // The settings value never moves with the machine - the split #1034's API depends on.
+      expect(sem.dispatchMaxConcurrent()).toBe(4);
+    });
+
+    it('a ceiling of 1 stays 1 under critical - a dispatch child is never starved to zero', () => {
+      const sem = governed(
+        { maxParallel: 4, dispatchMaxConcurrent: 1 },
+        governorAt(() => ({ memoryUsedRatio: 0.99 }), { now: 1_700_000_000_000 }),
+      );
+      expect(sem.dispatchMaxConcurrent()).toBe(1);
+      expect(sem.dispatchAdmissionCeiling()).toBe(1);
+      expect(sem.admissionStatus()).toMatchObject({ state: 'critical', configured: 1, effective: 1 });
+    });
+
+    it('a per-manager fallback never blanks the readout of the semaphore that is enforcing', () => {
+      const real = governed(
+        { maxParallel: 8, dispatchMaxConcurrent: 4 },
+        governorAt(() => ({ memoryUsedRatio: 0.99 }), { now: 1_700_000_000_000 }),
+      );
+      expect(admissionStatusSnapshot()).toMatchObject({ state: 'critical', configured: 4 });
+
+      // `RunManager` without an injected semaphore constructs its own. It has no workspace ceiling
+      // to report, and the registration slot is last-writer-wins - so it must not register at all,
+      // or the `admission` key would vanish from telemetry while the real governor keeps reducing.
+      const fallback = new WorkspaceSemaphore({ registersAdmissionStatus: false });
+      expect(fallback.admissionStatus()).toBeUndefined();
+      expect(admissionStatusSnapshot()).toMatchObject({ state: 'critical', configured: 4 });
+      expect(real.dispatchAdmissionCeiling()).toBe(1);
+    });
+
+    it('clearing the ceiling mid-reduction drops the reduction with it; a new ceiling re-bases', async () => {
+      const clock = { now: 1_700_000_000_000 };
+      let configured: number | null = 4;
+      const sem = new WorkspaceSemaphore({
+        load: () =>
+          Promise.resolve({ maxParallel: 8, memoryLimitMb: null, dispatchMaxConcurrent: configured }),
+        initial: { maxParallel: 8, dispatchMaxConcurrent: 4 },
+        governor: governorAt(() => ({ memoryUsedRatio: 0.99 }), clock),
+      });
+      expect(sem.dispatchAdmissionCeiling()).toBe(1); // configured 4, critical
+
+      // The operator clears the ceiling while the governor is still critical (the PUT
+      // /workspace/config path): the reduction must be DROPPED, not held without a ceiling.
+      configured = null;
+      await sem.refresh();
+      expect(sem.dispatchMaxConcurrent()).toBeNull();
+      expect(sem.dispatchAdmissionCeiling()).toBeNull();
+      expect(sem.admissionStatus()).toBeUndefined();
+      expect(admissionStatusSnapshot()).toBeUndefined();
+
+      // A new ceiling is the base immediately - still critical, so 8 reduces to 2 - never the old
+      // one's effective value.
+      configured = 8;
+      await sem.refresh();
+      expect(sem.dispatchAdmissionCeiling()).toBe(2);
+      expect(sem.admissionStatus()).toMatchObject({ state: 'critical', configured: 8, effective: 2 });
+    });
+  });
+
+  it('sums dispatchBusy across participants and tolerates stubs without the member', () => {
+    const sem = new WorkspaceSemaphore({ initial: { dispatchMaxConcurrent: 3 } });
+    // A participant from before the key existed — `dispatchBusy` simply absent.
+    sem.register(participant(1));
+    sem.register({ ...participant(1), dispatchBusy: () => 2 });
+    sem.register({ ...participant(1), dispatchBusy: () => 1 });
+    expect(sem.dispatchBusy()).toBe(3);
+    expect(sem.busy()).toBe(3); // the two counters stay independent
   });
 
   /** #810 — the getter used to be `?? null`. Flipping the default to 5 made that a trap:

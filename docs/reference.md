@@ -44,7 +44,18 @@ Five moves that make the cockpit worth the browser tab:
   holds the rest in a FIFO queue with visible positions (`#1`, `#2`, …). Cancel a
   queued task before it starts; the queue even survives a cockpit restart —
   everything still `queued` is re-enqueued in order. It's the orchestration layer
-  that turns "one agent at a time" into a backlog that drains itself.
+  that turns "one agent at a time" into a backlog that drains itself. Tasks that
+  dispatch other tasks can be bounded separately: **Settings → Resources → Max
+  dispatched tasks started at once** (`dispatchMaxConcurrent`, default *no limit*) admits a
+  dispatched child **from the queue** only while fewer than N dispatch children
+  hold a slot workspace-wide. It is an admission ceiling rather than a running
+  one: a parked child woken back into its own session (a delivered child report,
+  the monitoring wake) is never re-gated — the same #347 exemption `maxParallel`
+  carries — so the running count may transiently exceed N. An auto-resume after a
+  usage limit is the exception: it goes through the ordinary queued-continuation
+  path, so it obeys the cap like any other queued work. Ordinary tasks keep their
+  normal share of `maxParallel` and a capped child simply waits in the queue, and lowering
+  the value never stops a child that is already running.
 - 🧠 **Memory-aware runs.** Each run's whole process tree is sampled (~2 s) for CPU
   and RSS, and its **peak memory** is recorded and shown in the task table. Set an
   optional per-task **memory ceiling** (`memoryLimitMb`) and a run that crosses it
@@ -504,6 +515,40 @@ root — live once in `~/.cezar/config.json`, alongside the
 **Settings → Resources** and **Settings → Projects**. A `maxParallel` left over
 in a repo's `.ai/cezar/config.json` is imported into the workspace file the
 first time cezar boots there, and ignored afterwards.
+
+**Settings → Resources** opens on a live **Machine** card, and the sidebar carries
+the same numbers as a one-row **glance** (CPU, its 60 s sparkline, compact RAM)
+that links here. Samples arrive every ~2 s: a local cockpit gets them pushed over
+the `host` WebSocket topic, a remote one reads `GET /api/v1/workspace/host-usage`
+on mount, on a reconnect and when the tab becomes visible again - and follows a
+first answer that carries no CPU figure with exactly **one** warm-up read ~2.5 s
+later. That gap is honest, not a bug: CPU utilization is a delta between two
+samples, so the first read after an idle period has no window to measure and the
+readout shows `sampling…` instead of a number it cannot back. A metric the OS
+does not expose (swap outside Linux, load on Windows) is omitted rather than
+printed as a zero. While a dispatch ceiling is configured (**Max dispatched tasks
+started at once**), that same payload also reports the dispatch admission state
+and the ceiling the gate was enforcing when the sample was taken (a cached route read can be up to
+the sampler's freshness window behind), which the card prints as
+`Dispatch admission: elevated · 2 of 4`.
+
+**Which numbers are effective.** The plain process reads **host totals**. When
+cezar runs inside a cgroup with a real limit - a Docker `--cpus`/`--cpuset-cpus`,
+a systemd scope, a sandbox - the same payload carries an optional `container`
+object with the process's OWN cgroup limits and usage, and the card and the
+glance show those as the effective values, labelled, with the host totals kept as
+context (`host 64 CPU · 755 GB`). A usage-only cgroup emits no `container` at
+all, so a normal host reads exactly as it always did. A limit whose value cannot
+be read shows `—`; the host figure is never substituted for it. When one is
+present, cpu/memory labels say `(effective)` and the load chip pairs with the host
+core count.
+
+**When the sampler runs.** Below `md` the card's own subscription is the demand
+(sampling lasts while the card is on screen, exactly as before). On a local
+desktop the topic is held for the session, because the sidebar glance is always
+there; the sidebar's machine row carries the staleness clock (`stale` after ~10 s
+without a frame). A remote cockpit never opens a socket and keeps reading the
+route.
 
 ### Editing the agents' own config (Settings → Agent config)
 

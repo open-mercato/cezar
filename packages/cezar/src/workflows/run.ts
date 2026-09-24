@@ -976,9 +976,13 @@ export class RunManager {
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.projectId = options.projectId;
-    this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
+    // A fallback for headless/tests only; boot always injects the shared workspace semaphore. It
+    // must not register as the telemetry readout's provider: the slot is last-writer-wins, and a
+    // per-manager fallback with no ceiling would blank the real semaphore's `admission` key.
+    this.semaphore = options.semaphore ?? new WorkspaceSemaphore({ registersAdmissionStatus: false });
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
+      dispatchBusy: () => this.dispatchBusy(),
       pump: () => this.pump(),
       oldestQueuedAt: () => this.oldestQueuedAt(),
       accountHolds: () => this.accountHolds(),
@@ -1266,6 +1270,30 @@ export class RunManager {
   }
 
   /**
+   * Dispatch children THIS manager holds that actually occupy a compute slot — the local
+   * contribution to `WorkspaceSemaphore.dispatchBusy()` (spec
+   * 2026-09-20-dispatch-admission-scheduler). The per-run rule is the `busySlots()` rule applied
+   * to one run: a `starting` run holds a slot, and so does an `active` run that is not `waiting`
+   * (#347 — a parked child consumes no agent turn). The monitoring/watcher exemptions above are
+   * deliberately NOT mirrored here: they widen the HOST's parallel budget for parents parked on
+   * their own children, while this counter answers a different question — how many children are
+   * running right now.
+   */
+  private dispatchBusy(): number {
+    // `starting` and `active` overlap only inside the synchronous hand-off in `execute`
+    // (`active.set` immediately followed by `starting.delete`), so collapse both into one set
+    // rather than risking a double count of a child that is mid-hand-off.
+    const slotHolders = new Set<string>([...this.starting, ...this.active.keys()]);
+    let count = 0;
+    for (const runId of slotHolders) {
+      if (this.waiting.has(runId)) continue;
+      if (this.store.getRun(runId)?.dispatch?.parentRunId === undefined) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
    * Park a run in the monitoring set — the ONE entry, so `unitParents ⊆ monitoring` cannot be
    * half-applied across the two near-identical turn-end handlers (AGENTS.md § "Find every
    * construction site of a shared in-memory object").
@@ -1343,6 +1371,12 @@ export class RunManager {
         this.pumpAgain = false;
         const repo = await getRepoInfo(this.repoRoot);
         const maxParallel = this.semaphore.maxParallel();
+        // Cached dispatch-admission ceiling (null/0 = no cap) — read once per sweep, like the
+        // workspace cap above; `startable()` is the only consumer. The GOVERNED ceiling: the
+        // configured one reduced by the adaptive admission governor while the machine is under
+        // pressure (spec 2026-09-20-adaptive-admission-governor). `dispatchMaxConcurrent()` still
+        // answers the configured value for the settings API.
+        const dispatchCap = this.semaphore.dispatchAdmissionCeiling();
         // Per-project ceiling (spec 2026-07-22-per-project-concurrency): this
         // project never runs more than its own configured `maxParallel`; absent
         // an override it equals the workspace cap, so behavior is unchanged.
@@ -1379,6 +1413,23 @@ export class RunManager {
         const startable = (id: string): boolean => {
           const queued = this.store.getRun(id);
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
+          // Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): a dispatch
+          // child waits in the queue while the workspace already RUNS `dispatchMaxConcurrent`
+          // children. Deliberately per-candidate rather than inside `capacity()` — ordinary runs
+          // must keep starting while a fan-out is capped, which is the whole point of a
+          // dispatch-specific ceiling. `dispatchBusy()` reads the live slot sets, so a child this
+          // sweep already moved into `starting` is counted on the next candidate, and the sweep
+          // can therefore never overshoot the cap. `findIndex(startable)` leaves the blocked child
+          // in place and considers the next queued run, exactly like the usage-limit hold above.
+          if (
+            queued &&
+            dispatchCap !== null &&
+            dispatchCap > 0 &&
+            queued.dispatch?.parentRunId !== undefined &&
+            this.semaphore.dispatchBusy() >= dispatchCap
+          ) {
+            return false;
+          }
           return capacity();
         };
         while (this.queue.length > 0) {

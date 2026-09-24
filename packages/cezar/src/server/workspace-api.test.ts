@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { hostUsageSchema } from '@open-mercato/cezar-contract';
 import { workspaceConfigPath, workspaceUiStatePath } from '../paths.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { RunStore } from '../runs/store.ts';
@@ -105,6 +106,7 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: true,
         memoryLimitMb: null,
+        dispatchMaxConcurrent: null,
         worktreeRetentionDefault: 10,
       },
       // Machine-wide agent defaults (spec 2026-07-29-agent-profiles). EMPTY, not populated: absent
@@ -123,6 +125,27 @@ describe('the workspace settings API (step 2.7)', () => {
     process.env.CEZ_PROJECTS_DIR = '~/clones';
     const body = (await (await getConfig()).json()) as WorkspaceConfigResponse;
     expect(body).toMatchObject({ browseRoot: '~/source', projectsDir: '~/clones' });
+  });
+
+  // ---- GET /api/v1/workspace/host-usage ---------------------------------------
+
+  it('GET host-usage answers a contract-valid sample from read-only OS facts', async () => {
+    const res = await apiRequest(app, '/api/v1/workspace/host-usage');
+    expect(res.status).toBe(200);
+    const body: unknown = await res.json();
+    // The schema is the whole contract: required facts always present, optional ones absent
+    // rather than zeroed (a CI container may legitimately have no swap and no /proc load).
+    expect(hostUsageSchema.safeParse(body).success).toBe(true);
+    const sample = hostUsageSchema.parse(body);
+    expect(sample.memTotalBytes).toBeGreaterThan(0);
+    expect(sample.memUsedBytes).toBeLessThanOrEqual(sample.memTotalBytes);
+    expect(sample.cpuCount).toBeGreaterThanOrEqual(1);
+    expect(Number.isNaN(Date.parse(sample.sampledAt))).toBe(false);
+    // cpuPct is a delta: it may be absent on a cold sampler, but it is never out of range.
+    if (sample.cpuPct !== undefined) {
+      expect(sample.cpuPct).toBeGreaterThanOrEqual(0);
+      expect(sample.cpuPct).toBeLessThanOrEqual(100);
+    }
   });
 
   it('PUT resources round-trips, persists to disk, and refreshes the semaphore cache', async () => {
@@ -154,6 +177,7 @@ describe('the workspace settings API (step 2.7)', () => {
         monitoringWakeIntervalMinutes: 5,
         autoResumeOnUsageLimit: false,
         memoryLimitMb: 2048,
+        dispatchMaxConcurrent: null,
         worktreeRetentionDefault: 10,
       },
       // Untouched by a resources write, and still empty — the two live in the same file but answer
@@ -177,6 +201,22 @@ describe('the workspace settings API (step 2.7)', () => {
   /** #810 — the cadence now ships ON, so the write worth pinning is the one that turns it
    *  OFF. `null` must survive the round-trip and reach the semaphore as `null`; re-defaulting
    *  it to 5 would silently overrule an operator who chose "Park until resumed". */
+  /** Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): a write must reach
+   *  the shared semaphore cache the engine's `pump()` asks — no restart — and `null` must clear
+   *  it back to "no cap" rather than persisting a stale ceiling. */
+  it('PUT dispatchMaxConcurrent round-trips through the semaphore and clears with null', async () => {
+    const res = await putConfig({ resources: { dispatchMaxConcurrent: 2 } });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBe(2);
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBe(2);
+    expect((rawConfig().resources as Record<string, unknown>).dispatchMaxConcurrent).toBe(2);
+    expect(semaphore.dispatchMaxConcurrent()).toBe(2);
+
+    await putConfig({ resources: { dispatchMaxConcurrent: null } });
+    expect(((await (await getConfig()).json()) as WorkspaceConfigResponse).resources.dispatchMaxConcurrent).toBeNull();
+    expect(semaphore.dispatchMaxConcurrent()).toBeNull();
+  });
+
   it('PUT null parks monitoring and is never re-defaulted back to the shipped cadence', async () => {
     expect(semaphore.monitoringWakeIntervalMinutes()).toBe(5); // the zero-config default
     const res = await putConfig({ resources: { monitoringWakeIntervalMinutes: null } });
@@ -198,6 +238,7 @@ describe('the workspace settings API (step 2.7)', () => {
       monitoringWakeIntervalMinutes: 5,
       autoResumeOnUsageLimit: true,
       memoryLimitMb: null,
+      dispatchMaxConcurrent: null,
       worktreeRetentionDefault: 3,
     });
   });
@@ -245,7 +286,7 @@ describe('the workspace settings API (step 2.7)', () => {
   });
 
   it('rejects out-of-bounds resources with 400 and writes nothing', async () => {
-    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }]) {
+    for (const resources of [{ maxParallel: 0 }, { maxParallel: 17 }, { memoryLimitMb: -1 }, { dispatchMaxConcurrent: 17 }]) {
       const res = await putConfig({ resources });
       expect(res.status, JSON.stringify(resources)).toBe(400);
       expect((await res.json()) as { error: string }).toHaveProperty('error');
