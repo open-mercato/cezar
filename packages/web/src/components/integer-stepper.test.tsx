@@ -130,6 +130,22 @@ describe('IntegerStepper', () => {
     expect(field().value).toBe('2')
   })
 
+  it('sends a value once while its save is in flight, even when Enter is followed by a blur', async () => {
+    let resolve: () => void = () => {}
+    const onCommit = vi.fn(() => new Promise<void>((r) => { resolve = r }))
+    render(<IntegerStepper value={2} min={0} max={16} onCommit={onCommit} aria-label="Limit" />)
+    fireEvent.change(field(), { target: { value: '3' } })
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    fireEvent.blur(field())
+    expect(onCommit).toHaveBeenCalledTimes(1)
+
+    await act(async () => resolve())
+    // Settled but the parent never re-rendered with 3 (say the save was a no-op): a new commit
+    // of the same value is allowed again.
+    fireEvent.blur(field())
+    expect(onCommit).toHaveBeenCalledTimes(2)
+  })
+
   it('follows a new saved value, and falls back to it when a save is rejected', async () => {
     const onCommit = vi.fn(() => Promise.reject(new Error('nope')))
     const { rerender } = render(

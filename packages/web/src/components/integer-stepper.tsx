@@ -21,6 +21,8 @@ import { cn } from '@/lib/utils'
  */
 
 const STEP_COMMIT_DELAY_MS = 400
+/** No save in flight (distinct from `null`, which is a real value when `allowEmpty`). */
+const NONE = Symbol('none')
 
 export interface IntegerStepperProps {
   value: number | null
@@ -57,6 +59,7 @@ export function IntegerStepper({
   const draftRef = useRef(draft)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
   // A stepped commit fires from a timer, after later renders — read the props it needs live.
+  const inFlight = useRef<number | null | typeof NONE>(NONE)
   const latest = useRef({ value, onCommit })
   latest.current = { value, onCommit }
 
@@ -95,9 +98,18 @@ export function IntegerStepper({
     }
     const { value: saved, onCommit: save } = latest.current
     const next = parse(draftRef.current)
-    if (next === 'invalid' || next === saved) return
+    // Enter followed by a blur must not send the same value twice while the first save is still
+    // in flight — the duplicate keeps the caller's mutation pending for no reason.
+    if (next === 'invalid' || next === saved || (inFlight.current !== NONE && next === inFlight.current)) return
     const result = save(next)
-    if (result instanceof Promise) result.catch(() => updateDraft(format(latest.current.value)))
+    if (result instanceof Promise) {
+      inFlight.current = next
+      result
+        .catch(() => updateDraft(format(latest.current.value)))
+        .finally(() => {
+          if (inFlight.current === next) inFlight.current = NONE
+        })
+    }
   }
 
   flush.current = commit
