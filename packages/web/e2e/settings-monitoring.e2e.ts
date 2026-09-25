@@ -74,7 +74,8 @@ afterAll(async () => {
 describe('global Resources monitoring controls', () => {
   it('persists capacity and interval mode through a cold reload', async () => {
     gotoResources()
-    choose('[data-slot="resources-max-monitoring"]', '3')
+    browser.fill('[data-slot="resources-max-monitoring"]', '3')
+    browser.press('Enter')
     await waitForResources((resources) => resources.maxMonitoringSessions === 3)
 
     choose('[data-slot="resources-monitoring-wake-mode"]', 'interval')
