@@ -77,6 +77,9 @@ describe('global Resources monitoring controls', () => {
     browser.fill('[data-slot="resources-max-monitoring"]', '3')
     browser.press('Enter')
     await waitForResources((resources) => resources.maxMonitoringSessions === 3)
+    // The server can answer that poll before the cockpit has its own reply, and the wake controls
+    // stay disabled while the shared save is pending — a fill in that gap is silently dropped.
+    browser.waitForFunction(`document.querySelector('[data-slot="resources-monitoring-wake-mode"]')?.disabled === false`)
 
     choose('[data-slot="resources-monitoring-wake-mode"]', 'interval')
     browser.fill('[data-slot="resources-monitoring-wake-interval"]', '7')
