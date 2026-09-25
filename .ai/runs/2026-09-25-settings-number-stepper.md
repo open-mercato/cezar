@@ -30,9 +30,14 @@ Replace the three concurrency `<select>`s in Settings with one reusable integer 
 
 ## Risks
 
+- Found during e2e: Enter followed by blur re-sent the same value while the first save was in flight, keeping the shared save pending (fixed in 21e3ff9d / 8e29748a). The monitoring e2e spec also had a pre-existing race (it fails 3/3 on origin/main): it filled the wake interval while that input was disabled by the pending capacity save; fixed in 1da97508.
+- `settings-resources.e2e.ts` "cold load renders the persisted count" fails on origin/main as well — pre-existing, untouched here.
+
 - Saves are no longer instant-on-change: typing commits on blur/Enter, arrows commit after a short debounce so a burst of clicks is one PUT.
 
 ## Progress
+
+PR: #1075
 
 PR: #1075
 
