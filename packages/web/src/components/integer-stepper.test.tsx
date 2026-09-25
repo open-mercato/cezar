@@ -86,6 +86,14 @@ describe('IntegerStepper', () => {
     expect(onCommit).toHaveBeenLastCalledWith(5)
   })
 
+  it('saves a stepped value when it unmounts before the pause ends', () => {
+    const onCommit = vi.fn()
+    const { unmount } = render(<IntegerStepper value={4} min={1} max={16} onCommit={onCommit} aria-label="Limit" />)
+    fireEvent.click(up())
+    unmount()
+    expect(onCommit).toHaveBeenCalledWith(5)
+  })
+
   it('clamps stepping to the range and disables the arrow at each end', () => {
     const { rerender } = render(
       <IntegerStepper value={16} min={0} max={16} onCommit={vi.fn()} aria-label="Limit" />,

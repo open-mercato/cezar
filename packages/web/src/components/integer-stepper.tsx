@@ -71,8 +71,10 @@ export function IntegerStepper({
     if (timer.current === null) updateDraft(format(value))
   }, [value])
 
+  // Leaving the page within the step pause still saves what the arrows showed.
+  const flush = useRef(() => {})
   useEffect(() => () => {
-    if (timer.current !== null) clearTimeout(timer.current)
+    if (timer.current !== null) flush.current()
   }, [])
 
   const parse = (text: string): number | null | 'invalid' => {
@@ -97,6 +99,8 @@ export function IntegerStepper({
     const result = save(next)
     if (result instanceof Promise) result.catch(() => updateDraft(format(latest.current.value)))
   }
+
+  flush.current = commit
 
   const step = (direction: 1 | -1) => {
     const current = parse(draftRef.current)
