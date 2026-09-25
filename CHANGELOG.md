@@ -69,6 +69,26 @@ The cockpit learns to delegate: a running task may now dispatch other tasks with
 - @zawoj
 - @Damian-Szczepanski
 
+## 🐛 Fixes
+
+- 🐛 **A task that crashed before its agent started is no longer a dead end.** Continue used to
+  need a recorded session id, so a run killed in the window between "accepted" and "spawned" —
+  most often a cezar restart while it queued for the repository working tree — came back as
+  `cezar restarted — could not resume the interrupted task (no agent session to resume)` above a
+  read-only composer saying `Session closed — no session to resume.` Nothing about the task was
+  broken: the worktree, the branch, the handoff file and the prompt were all still there. The only
+  action left was Delete. Continue now covers that case the way a runner switch has been covered
+  since #954: it opens a **new** session handed the previous one's record — the original task, the
+  run's state and error, and a bounded replay of the conversation, oldest messages dropped first
+  so a long thread cannot fill the context window with history before the agent reads its
+  instruction. The thread says when it did that rather than resuming, and the composer promises
+  the weaker thing honestly — *Continue in a new session — the previous conversation is replayed
+  to the agent*, never "pick up where you left off". A run that DOES have a session still resumes
+  it, unchanged and without a summary of a conversation it is already in. An ask card on such a
+  task can be answered again too, since there is no longer a closed run whose answer has nowhere
+  to go. Terminal ("Open in CLI") deliberately still needs a real session id — it hands one to a
+  shell. Spec: `.ai/specs/2026-09-11-continue-without-a-session.md`.
+
 # 0.10.1 (2026-09-04)
 
 ## Highlights

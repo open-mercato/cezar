@@ -1483,9 +1483,9 @@ export class RunManager {
    * silently never going to happen.
    *
    * A continuation is reconstructed first: its executable details are gone, but the pending
-   * `continue-N` step and the session before it are durable, which is enough. Otherwise the
-   * workflow is revived from the record. A run that can be neither is failed loudly rather than
-   * left in the queue as a ghost.
+   * `continue-N` step is durable, which is enough — the session before it is reattached when it
+   * exists and replayed as a briefing when it does not. Otherwise the workflow is revived from the
+   * record. A run that can be neither is failed loudly rather than left in the queue as a ghost.
    */
   private async reviveQueuedRun(run: RunRecord, reason: string): Promise<void> {
     const queuedContinuation = [...run.steps]
@@ -1494,12 +1494,16 @@ export class RunManager {
     const sessionStep = queuedContinuation
       ? [...run.steps].reverse().find((step) => step.id !== queuedContinuation.id && step.sessionId)
       : undefined;
-    if (queuedContinuation && sessionStep?.sessionId) {
+    if (queuedContinuation) {
       const backend = run.runner ?? 'claude';
-      const sessionBackend = sessionStep.backend ?? backend;
+      const sessionBackend = sessionStep?.backend ?? backend;
+      // A continuation with no reattachable session is still a continuation — it opens a fresh
+      // session on the previous one's briefing (`freshContinuationContext`). Re-running the WORKFLOW from
+      // step one instead, which is what this used to fall through to, would throw away everything
+      // the task had already done and redo it against a worktree that now holds the results.
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
-        sessionId: sessionBackend === backend ? sessionStep.sessionId : undefined,
+        sessionId: sessionBackend === backend ? sessionStep?.sessionId : undefined,
         backend,
         prompt: RESTART_CONTINUATION_PROMPT,
         images: [],
@@ -1668,6 +1672,8 @@ export class RunManager {
         finishedAt,
         currentStepId: undefined,
       });
+      // Reaching here means the record DOES carry a session — the branch above took every run
+      // that never got one — so the message has only the one thing it can say.
       const resumed = this.continueRun(
         run.id,
         {
@@ -2270,7 +2276,13 @@ export class RunManager {
     const limit = parseUsageLimit(run.error);
     if (!limit) return;
     if (!this.semaphore.autoResumeOnUsageLimit()) return;
-    // No session to resume = nothing this feature can do; `continueRun` would refuse anyway.
+    // An UNATTENDED resume stays session-only. `continueRun` no longer refuses without one — it
+    // opens a fresh session briefed with the old transcript (spec
+    // 2026-09-11-continue-without-a-session) — and that is right for a user pressing Continue,
+    // who is present and asked for it. Restarting a conversation from a summary hours later with
+    // nobody watching is a different promise, and this feature never made it. Enforced again at
+    // fire time (`fireAutoResume`), because `reconcileAutoResumes` arms from the RECORD and would
+    // otherwise walk straight past this gate after a restart.
     if (!run.steps.some((step) => step.sessionId)) return;
     const attempts = run.autoResumeAttempts ?? 0;
     if (attempts >= MAX_AUTO_RESUMES) {
@@ -2309,6 +2321,19 @@ export class RunManager {
     // off in the window between the last pump and this tick.
     if (!this.semaphore.autoResumeOnUsageLimit()) {
       this.clearAutoResume(runId);
+      return;
+    }
+    // The session gate again, because this is the moment it has to hold: `reconcileAutoResumes`
+    // arms from the RECORD, so a deadline that survived a restart never passes back through
+    // `scheduleAutoResumeIfLimited`. Without this, a limit-stopped run whose session id was lost
+    // would be restarted from a transcript summary with nobody watching — which is a thing a user
+    // may ask Continue for, and not a thing an unattended timer may decide.
+    if (!run.steps.some((step) => step.sessionId)) {
+      this.clearAutoResume(runId);
+      this.store.appendEvent(runId, {
+        type: 'note',
+        message: 'automatic resume could not start — no agent session to resume; continue this task manually',
+      });
       return;
     }
     const attempts = (run.autoResumeAttempts ?? 0) + 1;
@@ -3186,6 +3211,11 @@ export class RunManager {
    * (`claude --resume <sessionId>`) as a new synthetic step. The session then
    * behaves exactly like an interactive step: `waiting` after each turn,
    * messages via sendMessage, closed by finish/idle/cancel.
+   *
+   * When the session cannot be reattached — none was ever recorded, or the user switched
+   * runner/account — the step opens a NEW session briefed with the old one's transcript
+   * (`freshContinuationContext`, #954) rather than refusing. Continue is the only way forward a terminal run
+   * has, so it must not be the thing that fails.
    */
   continueRun(
     runId: string,
@@ -3212,21 +3242,30 @@ export class RunManager {
     if (!['done', 'failed', 'cancelled', 'review'].includes(run.status)) {
       return { ok: false, error: `cannot continue a ${run.status} run` };
     }
+    // The session a continuation would REATTACH to, when there is one. Its absence is no longer a
+    // refusal: a run whose backend never minted an id (it crashed before the first spawn — the
+    // queue-for-the-worktree-lock window is the common shape) used to answer "no agent session to
+    // resume" and offer the user nothing but Delete. It continues in a FRESH session instead,
+    // opened on `freshContinuationContext`'s briefing — the same road a runner/account switch has always
+    // taken (`resumeSessionId` below), which is why one branch covers both.
     const sessionStep = [...run.steps].reverse().find((s) => s.sessionId);
-    if (!sessionStep?.sessionId) return { ok: false, error: 'no agent session to resume' };
+    const lastSessionId = sessionStep?.sessionId;
     const targetRunner = opts.runner ?? run.runner ?? 'claude';
     // Session ids are provider-owned opaque values. New records carry explicit
     // affinity; for legacy records, the run's current runner is the conservative
     // owner until a continuation emits a new, attributed session id (#562).
-    const sessionBackend = sessionStep.backend ?? run.runner ?? 'claude';
+    const sessionBackend = sessionStep?.backend ?? run.runner ?? 'claude';
     // A session id only resolves inside the config dir that created it (spec
     // 2026-07-29-agent-profiles), so switching ACCOUNT ends the session exactly like switching
     // backend does: `claude --resume <id>` under another login finds nothing and would silently
     // open a fresh conversation while the thread claimed it had resumed. A step that recorded no
     // account predates the feature and therefore ran under the discovered one.
-    const sessionAccount = sessionStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
+    const sessionAccount = sessionStep?.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
     const accountSwitched = opts.agentProfile !== undefined && opts.agentProfile !== sessionAccount;
-    const resume = sessionBackend === targetRunner && !accountSwitched;
+    // Undefined = open a new session. Both reasons land here: nothing to reattach to, or an id
+    // this runner/account cannot resolve.
+    const resumeSessionId =
+      sessionBackend === targetRunner && !accountSwitched ? lastSessionId : undefined;
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
     // lets the user pick which backend, model and login handle this continuation — the same flat
@@ -3292,7 +3331,7 @@ export class RunManager {
     if (deferForCapacity) {
       this.pendingContinuations.set(runId, {
         stepId,
-        sessionId: resume ? sessionStep.sessionId : undefined,
+        sessionId: resumeSessionId,
         backend: targetRunner,
         prompt,
         images,
@@ -3309,7 +3348,7 @@ export class RunManager {
     void this.runContinuation(
       runId,
       stepId,
-      resume ? sessionStep.sessionId : undefined,
+      resumeSessionId,
       targetRunner,
       prompt,
       images,
@@ -3432,6 +3471,20 @@ export class RunManager {
       backend,
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
+    // Say so in the thread. "Continue" that silently means "start over from a summary" would be a
+    // lie by omission: the agent's memory of the earlier turns is a hand-off now, not the real
+    // thing, and that is worth knowing before reading its next answer. Worded for BOTH reasons a
+    // continuation lands here — nothing was ever recorded, or a runner/account switch stranded
+    // the id in another config dir — because the note cannot tell them apart and neither reason
+    // changes what the user is being told.
+    if (portableContext) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message:
+          'the previous session could not be resumed — continuing in a fresh session, seeded with the task and conversation so far',
+      });
+    }
     // Attachments pasted into the follow-up composer, on the same terms as a live-session
     // message (#357): persisted to the run's own attachment store so the thread renders the
     // bubble's images rather than a bare count, and handed to the agent as absolute paths

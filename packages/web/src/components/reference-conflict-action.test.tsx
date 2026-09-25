@@ -116,15 +116,18 @@ describe('ResolveConflictsButton', () => {
     await waitFor(() => expect(screen.getByText(/Task reopened — resolving conflicts in PR #864/)).not.toBeNull())
   })
 
-  it('says why instead of pretending, when there is no session to reach', async () => {
-    // A closed run that never recorded a session has nothing to reopen. A button that looked
-    // pressable and then quietly did nothing would be worse than one that explains itself.
+  it('still reaches a closed task that never recorded a session', async () => {
+    // This used to be the one dead end: nothing to reopen, so the button explained itself and
+    // stayed shut. `/continue` covers that case now by opening a fresh session briefed with the
+    // previous one's transcript (spec 2026-09-11-continue-without-a-session), so the prompt goes
+    // out on the same seam every other closed task uses.
     renderButton(run('done', { steps: [step()] }))
 
-    expect(button().hasAttribute('disabled')).toBe(true)
-    expect(screen.getByText(/no agent session was recorded/)).not.toBeNull()
+    await waitFor(() => expect(button().hasAttribute('disabled')).toBe(false))
     fireEvent.click(button())
-    expect(posted()).toBeUndefined()
+
+    await waitFor(() => expect(posted()?.path).toContain('/continue'))
+    expect(posted()?.body).toMatchObject({ text: resolveConflictsPrompt(864) })
   })
 
   it('surfaces a refusal where the user pressed, because the panel is gone by then', async () => {
