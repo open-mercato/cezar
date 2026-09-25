@@ -90,13 +90,13 @@ function renderResources() {
 }
 
 const parallelSelect = () =>
-  document.querySelector<HTMLSelectElement>('[data-slot="resources-max-parallel"]')
+  document.querySelector<HTMLInputElement>('[data-slot="resources-max-parallel"]')
 const memoryInput = () =>
   document.querySelector<HTMLInputElement>('[data-slot="resources-memory-limit"]')
 const saveMemory = () =>
   document.querySelector<HTMLButtonElement>('[data-action="resources-save-memory"]')
 const puts = () => requests.filter((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/config')
-const monitoringSelect = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-max-monitoring"]')
+const monitoringSelect = () => document.querySelector<HTMLInputElement>('[data-slot="resources-max-monitoring"]')
 const wakeMode = () => document.querySelector<HTMLSelectElement>('[data-slot="resources-monitoring-wake-mode"]')
 const wakeInterval = () => document.querySelector<HTMLInputElement>('[data-slot="resources-monitoring-wake-interval"]')
 const saveWake = () => document.querySelector<HTMLButtonElement>('[data-action="resources-save-monitoring-wake"]')
@@ -125,6 +125,7 @@ describe('Global settings → Resources', () => {
     await waitFor(() => expect(parallelSelect()).not.toBeNull())
 
     fireEvent.change(parallelSelect()!, { target: { value: '6' } })
+    fireEvent.keyDown(parallelSelect()!, { key: 'Enter' })
 
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { maxParallel: 6 } })
@@ -146,8 +147,34 @@ describe('Global settings → Resources', () => {
     await waitFor(() => expect(monitoringSelect()).not.toBeNull())
     expect(screen.getByText(/Capacity: 4 active \+ 2 monitoring/)).not.toBeNull()
     fireEvent.change(monitoringSelect()!, { target: { value: '3' } })
+    fireEvent.blur(monitoringSelect()!)
     await waitFor(() => expect(puts()).toHaveLength(1))
     expect(puts()[0]?.body).toEqual({ resources: { maxMonitoringSessions: 3 } })
+  })
+
+  it('is a typed integer field with arrows, not a dropdown — stepping saves once', async () => {
+    serve({ maxParallel: 2, maxMonitoringSessions: 2 })
+    renderResources()
+    await waitFor(() => expect(parallelSelect()).not.toBeNull())
+    expect(parallelSelect()!.tagName).toBe('INPUT')
+    expect(monitoringSelect()!.tagName).toBe('INPUT')
+
+    const increase = screen.getByRole('button', { name: 'Increase Max parallel tasks' })
+    fireEvent.click(increase)
+    fireEvent.click(increase)
+    expect(parallelSelect()!.value).toBe('4')
+    await waitFor(() => expect(puts()).toHaveLength(1))
+    expect(puts()[0]?.body).toEqual({ resources: { maxParallel: 4 } })
+  })
+
+  it('refuses a limit outside the range the server accepts', async () => {
+    serve({ maxParallel: 2 })
+    renderResources()
+    await waitFor(() => expect(parallelSelect()).not.toBeNull())
+    fireEvent.change(parallelSelect()!, { target: { value: '40' } })
+    fireEvent.blur(parallelSelect()!)
+    expect(screen.getByText('Enter a whole number from 1 to 16.')).not.toBeNull()
+    expect(puts()).toHaveLength(0)
   })
 
   it('keeps wake-ups parked by default and saves an explicit interval', async () => {
