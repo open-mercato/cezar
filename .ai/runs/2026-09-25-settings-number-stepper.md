@@ -39,8 +39,6 @@ Replace the three concurrency `<select>`s in Settings with one reusable integer 
 
 PR: #1075
 
-PR: #1075
-
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Stepper component
