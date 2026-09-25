@@ -34,6 +34,8 @@ Replace the three concurrency `<select>`s in Settings with one reusable integer 
 
 ## Progress
 
+PR: #1075
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Stepper component
@@ -45,3 +47,7 @@ Replace the three concurrency `<select>`s in Settings with one reusable integer 
 - [x] 2.1 Global Resources: max parallel + extra monitoring sessions — 7348f043
 - [x] 2.2 Project scope: per-project max parallel — 63cd0ed2
 - [x] 2.3 Update unit tests and the monitoring e2e spec — 9e4ce23d
+
+### Phase 3: Review
+
+- [x] 3.1 Self-review fix: flush a pending stepped save on unmount — 5f9f983e
