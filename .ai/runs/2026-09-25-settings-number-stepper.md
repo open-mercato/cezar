@@ -38,10 +38,10 @@ Replace the three concurrency `<select>`s in Settings with one reusable integer 
 
 ### Phase 1: Stepper component
 
-- [ ] 1.1 Add IntegerStepper component
+- [x] 1.1 Add IntegerStepper component — 22eed8a3
 
 ### Phase 2: Adopt it
 
-- [ ] 2.1 Global Resources: max parallel + extra monitoring sessions
-- [ ] 2.2 Project scope: per-project max parallel
-- [ ] 2.3 Update unit tests and the monitoring e2e spec
+- [x] 2.1 Global Resources: max parallel + extra monitoring sessions — 7348f043
+- [x] 2.2 Project scope: per-project max parallel — 63cd0ed2
+- [x] 2.3 Update unit tests and the monitoring e2e spec — 9e4ce23d
