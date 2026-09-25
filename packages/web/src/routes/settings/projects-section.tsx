@@ -18,6 +18,7 @@ import {
   type WorkspaceConfigResponse,
 } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import { IntegerStepper } from '@/components/integer-stepper'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { toast } from '@/components/ui/toaster'
@@ -268,7 +269,7 @@ function RegistryTable({
   return (
     <SettingsField
       title="Registered projects"
-      hint={`The folders you have added. While this list is empty the folder cezar is serving is listed as “not registered” with an Add button; once you have projects, starting cezar somewhere new neither registers nor lists that folder — use “Add project” when you want to keep it. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
+      hint={`The folders you have added. While this list is empty the folder cezar is serving is listed as “not registered” with an Add button; once you have projects, starting cezar somewhere new neither registers nor lists that folder — use “Add project” when you want to keep it. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once (leave it empty to inherit the workspace limit); the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
     >
       {/* Defensive: `GET /api/v1/projects` names at least the folder this server is serving
           whenever the registry is empty (the unregistered row), and the registry's own rows
@@ -386,7 +387,7 @@ function ProjectRow({
         {project.unregistered ? (
           <span className="text-[12px] text-soft-foreground">—</span>
         ) : (
-          <MaxParallelSelect project={project} workspaceMax={workspaceMax} />
+          <MaxParallelStepper project={project} workspaceMax={workspaceMax} />
         )}
       </td>
       <td className="px-3 py-2 tabular-nums text-soft-foreground">
@@ -428,7 +429,7 @@ function ProjectRow({
  * pre-judging which folders qualify.
  *
  * Exported for the project's own General page, which faces the same row and must not invent a
- * second way to say this — the same reason `MaxParallelSelect` and `STATUS_LABEL` are shared.
+ * second way to say this — the same reason `MaxParallelStepper` and `STATUS_LABEL` are shared.
  */
 export function AddBootProjectButton({
   root,
@@ -707,15 +708,16 @@ export function ProjectTagsEditor({
 }
 
 /**
- * Per-project "Max parallel tasks" selector (spec 2026-07-22). `Inherit
- * workspace (N)` is the unset default; `1..16` pins a per-project ceiling.
- * Bound directly to the server value (`project.maxParallel`) and saved on
- * change, mirroring the workspace `Max parallel` control (resources-section.tsx)
- * — a failed save reverts because the value never leaves the server's, and the
- * hook invalidates the projects query so a success re-renders the row. The
- * workspace cap still clamps at runtime, which the section hint explains.
+ * Per-project "Max parallel tasks" stepper (spec 2026-07-22). An empty field is
+ * the unset default — it inherits the workspace limit, which the placeholder
+ * names; `1..16` pins a per-project ceiling. Bound to the server value
+ * (`project.maxParallel`) and saved on commit, mirroring the workspace
+ * `Max parallel` control (resources-section.tsx) — a failed save reverts to the
+ * server's value, and the hook invalidates the projects query so a success
+ * re-renders the row. The workspace cap still clamps at runtime, which the
+ * section hint explains.
  */
-export function MaxParallelSelect({
+export function MaxParallelStepper({
   project,
   workspaceMax,
 }: {
@@ -723,18 +725,19 @@ export function MaxParallelSelect({
   workspaceMax: number
 }) {
   const update = useUpdateProject()
-  // `''` is the inherit sentinel; a number is an explicit per-project ceiling.
-  const value = project.maxParallel === undefined ? '' : String(project.maxParallel)
   return (
-    <select
+    <IntegerStepper
       aria-label={`Max parallel tasks for ${project.name}`}
       data-slot="project-max-parallel"
-      value={value}
-      disabled={update.isPending}
-      onChange={(event) => {
-        const raw = event.target.value
-        const next = raw === '' ? null : Number(raw)
-        update.mutate(
+      value={project.maxParallel ?? null}
+      min={MAX_PARALLEL_MIN}
+      max={MAX_PARALLEL_MAX}
+      allowEmpty
+      emptyStepFrom={Math.min(MAX_PARALLEL_MAX, Math.max(MAX_PARALLEL_MIN, workspaceMax))}
+      placeholder={`Inherit (${workspaceMax})`}
+      className="w-40"
+      onCommit={(next) =>
+        update.mutateAsync(
           { id: project.id, maxParallel: next },
           {
             onSuccess: () =>
@@ -746,18 +749,7 @@ export function MaxParallelSelect({
             onError: (error: Error) => toast(error.message, { tone: 'danger' }),
           },
         )
-      }}
-      className="block w-44 rounded-md border border-input bg-card px-2 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-    >
-      <option value="">Inherit workspace ({workspaceMax})</option>
-      {Array.from(
-        { length: MAX_PARALLEL_MAX - MAX_PARALLEL_MIN + 1 },
-        (_, i) => i + MAX_PARALLEL_MIN,
-      ).map((n) => (
-        <option key={n} value={n}>
-          {n}
-        </option>
-      ))}
-    </select>
+      }
+    />
   )
 }
