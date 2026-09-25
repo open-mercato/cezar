@@ -130,19 +130,38 @@ describe('IntegerStepper', () => {
     expect(field().value).toBe('2')
   })
 
-  it('sends a value once while its save is in flight, even when Enter is followed by a blur', async () => {
+  it('sends a value once until it comes back as the saved value, even when Enter is followed by a blur', async () => {
     let resolve: () => void = () => {}
     const onCommit = vi.fn(() => new Promise<void>((r) => { resolve = r }))
-    render(<IntegerStepper value={2} min={0} max={16} onCommit={onCommit} aria-label="Limit" />)
+    const { rerender } = render(
+      <IntegerStepper value={2} min={0} max={16} onCommit={onCommit} aria-label="Limit" />,
+    )
     fireEvent.change(field(), { target: { value: '3' } })
     fireEvent.keyDown(field(), { key: 'Enter' })
     fireEvent.blur(field())
     expect(onCommit).toHaveBeenCalledTimes(1)
 
+    // The save resolves a render before the parent passes 3 down — a blur in that gap must not
+    // send 3 again.
     await act(async () => resolve())
-    // Settled but the parent never re-rendered with 3 (say the save was a no-op): a new commit
-    // of the same value is allowed again.
     fireEvent.blur(field())
+    expect(onCommit).toHaveBeenCalledTimes(1)
+
+    rerender(<IntegerStepper value={3} min={0} max={16} onCommit={onCommit} aria-label="Limit" />)
+    fireEvent.change(field(), { target: { value: '4' } })
+    fireEvent.blur(field())
+    expect(onCommit).toHaveBeenCalledTimes(2)
+    expect(onCommit).toHaveBeenLastCalledWith(4)
+  })
+
+  it('a rejected save can be retried with the same value', async () => {
+    const onCommit = vi.fn(() => Promise.reject(new Error('nope')))
+    render(<IntegerStepper value={2} min={0} max={16} onCommit={onCommit} aria-label="Limit" />)
+    fireEvent.change(field(), { target: { value: '3' } })
+    fireEvent.keyDown(field(), { key: 'Enter' })
+    await act(async () => {})
+    fireEvent.change(field(), { target: { value: '3' } })
+    fireEvent.keyDown(field(), { key: 'Enter' })
     expect(onCommit).toHaveBeenCalledTimes(2)
   })
 

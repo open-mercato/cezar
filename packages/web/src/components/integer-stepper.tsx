@@ -71,6 +71,9 @@ export function IntegerStepper({
   // The saved value moved (our own save landing, or another tab's) — show it, unless a stepped
   // value is still waiting to commit.
   useEffect(() => {
+    // A save is "in flight" until the value it sent comes back as `value` — not merely until its
+    // promise settles, which happens a render BEFORE the parent passes the new value down.
+    inFlight.current = NONE
     if (timer.current === null) updateDraft(format(value))
   }, [value])
 
@@ -99,16 +102,16 @@ export function IntegerStepper({
     const { value: saved, onCommit: save } = latest.current
     const next = parse(draftRef.current)
     // Enter followed by a blur must not send the same value twice while the first save is still
-    // in flight — the duplicate keeps the caller's mutation pending for no reason.
+    // in flight — the duplicate keeps the caller's mutation pending (and its form busy) for no
+    // reason.
     if (next === 'invalid' || next === saved || (inFlight.current !== NONE && next === inFlight.current)) return
     const result = save(next)
     if (result instanceof Promise) {
       inFlight.current = next
-      result
-        .catch(() => updateDraft(format(latest.current.value)))
-        .finally(() => {
-          if (inFlight.current === next) inFlight.current = NONE
-        })
+      result.catch(() => {
+        if (inFlight.current === next) inFlight.current = NONE
+        updateDraft(format(latest.current.value))
+      })
     }
   }
 
