@@ -568,6 +568,7 @@ export interface WorkspaceConfigResponse {
     monitoringWakeIntervalMinutes: number | null;
     autoResumeOnUsageLimit: boolean;
     memoryLimitMb: number | null;
+    dispatchMaxConcurrent: number | null;
     worktreeRetentionDefault: number;
   };
   /** What a repo that has set none of its own runs (spec 2026-07-29-agent-profiles). Both keys
@@ -2969,6 +2970,7 @@ export function createApp(deps: ServerDeps) {
       monitoringWakeIntervalMinutes: config.resources.monitoringWakeIntervalMinutes,
       autoResumeOnUsageLimit: config.resources.autoResumeOnUsageLimit,
       memoryLimitMb: config.resources.memoryLimitMb,
+      dispatchMaxConcurrent: config.resources.dispatchMaxConcurrent,
       worktreeRetentionDefault: config.resources.worktreeRetentionDefault,
     },
     // SPREAD, never `runner: maybeUndefined`: hono would type the key as always-present while
@@ -3040,6 +3042,9 @@ export function createApp(deps: ServerDeps) {
             config.resources.autoResumeOnUsageLimit = resources.autoResumeOnUsageLimit;
           }
           if (resources?.memoryLimitMb !== undefined) config.resources.memoryLimitMb = resources.memoryLimitMb;
+          if (resources?.dispatchMaxConcurrent !== undefined) {
+            config.resources.dispatchMaxConcurrent = resources.dispatchMaxConcurrent;
+          }
           if (resources?.worktreeRetentionDefault !== undefined) {
             config.resources.worktreeRetentionDefault = resources.worktreeRetentionDefault;
           }
@@ -3115,6 +3120,7 @@ export function createApp(deps: ServerDeps) {
         monitoringWakeIntervalMinutes: z.number().int().min(1).max(60).nullable().optional(),
         autoResumeOnUsageLimit: z.boolean().optional(),
         memoryLimitMb: z.number().int().min(0).max(1_048_576).nullable().optional(),
+        dispatchMaxConcurrent: z.number().int().min(0).max(16).nullable().optional(),
         worktreeRetentionDefault: z.number().int().min(0).max(1000).optional(),
       })
       .optional(),

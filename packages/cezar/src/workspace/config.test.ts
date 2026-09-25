@@ -68,7 +68,7 @@ describe('workspace config', () => {
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, dispatchMaxConcurrent: null, worktreeRetentionDefault: 10 });
     expect(config.composerDefaults).toEqual({});
     expect(config.projects).toEqual([]);
     expect(warn).not.toHaveBeenCalled();
@@ -243,15 +243,35 @@ describe('workspace config', () => {
       schemaVersion: 'two',
       browseRoot: 42,
       projectsDir: 42,
-      resources: { maxParallel: 99, maxMonitoringSessions: 99, monitoringWakeIntervalMinutes: 0, memoryLimitMb: 'lots', worktreeRetentionDefault: -1 },
+      resources: { maxParallel: 99, maxMonitoringSessions: 99, monitoringWakeIntervalMinutes: 0, memoryLimitMb: 'lots', dispatchMaxConcurrent: 'many', worktreeRetentionDefault: -1 },
       projects: [project('good')],
     });
     const config = await loadWorkspaceConfig();
     expect(config.schemaVersion).toBe(0);
     expect(config.browseRoot).toBe('~/');
     expect(config.projectsDir).toBe('~/cezar/projects');
-    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, worktreeRetentionDefault: 10 });
+    expect(config.resources).toEqual({ maxParallel: 2, maxMonitoringSessions: 2, monitoringWakeIntervalMinutes: 5, autoResumeOnUsageLimit: true, memoryLimitMb: null, dispatchMaxConcurrent: null, worktreeRetentionDefault: 10 });
     expect(config.projects).toEqual([project('good')]);
+  });
+
+  /**
+   * Dispatch admission cap (spec 2026-09-20-dispatch-admission-scheduler): one additive
+   * nullable key whose default — and only safe default — is `null`, i.e. today's behavior
+   * byte-for-byte. `0` is a real operator answer ("no cap, explicitly") and must stay
+   * distinguishable from absent exactly like `monitoringWakeIntervalMinutes`' null, while an
+   * out-of-window value degrades to `null` instead of discarding the file.
+   */
+  it('keeps the dispatch admission cap additive, nullable and bounded', async () => {
+    expect((await loadWorkspaceConfig()).resources.dispatchMaxConcurrent).toBeNull();
+
+    write({ resources: { dispatchMaxConcurrent: 3 } });
+    expect((await loadWorkspaceConfig()).resources.dispatchMaxConcurrent).toBe(3);
+
+    write({ resources: { dispatchMaxConcurrent: 0 } });
+    expect((await loadWorkspaceConfig()).resources.dispatchMaxConcurrent).toBe(0);
+
+    write({ resources: { dispatchMaxConcurrent: 17 } });
+    expect((await loadWorkspaceConfig()).resources.dispatchMaxConcurrent).toBeNull();
   });
 
   /**

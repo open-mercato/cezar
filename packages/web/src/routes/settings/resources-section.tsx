@@ -15,10 +15,13 @@ import { SettingsField } from './settings-field'
  * Global settings → Resources: how hard the MACHINE works. `maxParallel` caps concurrent tasks
  * across every project (the workspace semaphore holds the rest); `memoryLimitMb` is the
  * per-task ceiling the engine enforces by pausing a task that crosses it and letting the queue
- * advance (#memory-guard).
+ * advance (#memory-guard); `dispatchMaxConcurrent` is an ADMISSION ceiling — how many dispatch
+ * children are started from the queue at a time — without touching ordinary tasks' share of
+ * `maxParallel`; a parked child woken back into its session is never re-gated (spec
+ * 2026-09-20-dispatch-admission-scheduler).
  *
- * Both are workspace-level since the multi-project split (spec §"Resource governance"): they
- * protect the host, not a repo, so they live in `~/.cezar/config.json` and persist through
+ * All three are workspace-level since the multi-project split (spec §"Resource governance"):
+ * they protect the host, not a repo, so they live in `~/.cezar/config.json` and persist through
  * `PUT /api/workspace/config` — the merged answer lands straight in the workspace config query,
  * and the server refreshes the shared semaphore so a change takes effect without a restart.
  * Leftover per-repo `maxParallel`/`memoryLimitMb` keys were imported once by Migration 001 and
@@ -31,6 +34,9 @@ import { SettingsField } from './settings-field'
 const MAX_PARALLEL_MIN = 1
 const MAX_PARALLEL_MAX = 16
 const MAX_MONITORING_MAX = 16
+/** Dispatch admission cap bounds (spec 2026-09-20-dispatch-admission-scheduler). */
+const DISPATCH_MIN = 1
+const DISPATCH_MAX = 16
 const WAKE_INTERVAL_MIN = 1
 const WAKE_INTERVAL_MAX = 60
 /** Below this a limit would pause almost any real agent immediately — reject it as a footgun. */
@@ -101,6 +107,28 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
   const memoryNum = memory.trim() === '' ? 0 : Number(memory)
   const memoryInvalid =
     memory.trim() !== '' && (!Number.isInteger(memoryNum) || memoryNum < MEMORY_MIN_MB)
+  // Dispatch edits locally and saves explicitly too — an empty field means "no cap".
+  const [dispatchCap, setDispatchCap] = useState(
+    config.resources.dispatchMaxConcurrent ? String(config.resources.dispatchMaxConcurrent) : '',
+  )
+  const dispatchNum = dispatchCap.trim() === '' ? 0 : Number(dispatchCap)
+  const dispatchInvalid =
+    dispatchCap.trim() !== '' &&
+    (!Number.isInteger(dispatchNum) || dispatchNum < DISPATCH_MIN || dispatchNum > DISPATCH_MAX)
+  const dispatchSaved =
+    (config.resources.dispatchMaxConcurrent ?? 0) === (dispatchInvalid ? -1 : dispatchNum)
+  const saveDispatchCap = () =>
+    save.mutate(
+      { resources: { dispatchMaxConcurrent: dispatchNum === 0 ? null : dispatchNum } },
+      {
+        onSuccess: () =>
+          toast(
+            dispatchNum === 0
+              ? 'Dispatched-task limit cleared'
+              : `At most ${dispatchNum} dispatched task${dispatchNum === 1 ? '' : 's'} will be started at a time`,
+          ),
+      },
+    )
   const memorySaved = (config.resources.memoryLimitMb ?? 0) === (memoryInvalid ? -1 : memoryNum)
   const saveMemory = () =>
     save.mutate(
@@ -162,6 +190,46 @@ function ResourcesForm({ config }: { config: WorkspaceConfigResponse }) {
           </Link>
           .
         </p>
+      </SettingsField>
+
+      <SettingsField
+        title="Max dispatched tasks started at once"
+        hint="At most this many dispatched tasks will be started at a time; others wait in the queue. Ordinary tasks are not affected. Leave empty for no limit."
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            inputMode="numeric"
+            min={DISPATCH_MIN}
+            max={DISPATCH_MAX}
+            aria-label="Max dispatched tasks started at once"
+            data-slot="resources-dispatch-max-concurrent"
+            value={dispatchCap}
+            disabled={save.isPending}
+            placeholder="no limit"
+            onChange={(event) => setDispatchCap(event.target.value)}
+            className="block w-32 rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-action="resources-save-dispatch"
+            disabled={dispatchSaved || dispatchInvalid || save.isPending}
+            onClick={saveDispatchCap}
+          >
+            Save
+          </Button>
+        </div>
+        {dispatchInvalid ? (
+          <p data-slot="resources-dispatch-invalid" className="text-[11px] text-danger">
+            Enter a whole number from {DISPATCH_MIN} to {DISPATCH_MAX}, or leave empty for no limit.
+          </p>
+        ) : (
+          <p className="text-[11px] text-soft-foreground">
+            Counts every project in this workspace. Lowering it never stops a child that is already running.
+          </p>
+        )}
       </SettingsField>
 
       <SettingsField

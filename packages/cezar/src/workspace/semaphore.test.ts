@@ -30,6 +30,33 @@ describe('WorkspaceSemaphore', () => {
     expect(sem.memoryLimitMb()).toBeNull();
     expect(sem.monitoringWakeIntervalMinutes()).toBe(5); // #810 — monitoring must self-resume
     expect(sem.busy()).toBe(0);
+    expect(sem.dispatchMaxConcurrent()).toBeNull(); // no cap — today's behavior
+    expect(sem.dispatchBusy()).toBe(0);
+  });
+
+  /**
+   * The dispatch admission cap rides the same cache as `maxParallel` (spec
+   * 2026-09-20-dispatch-admission-scheduler): additive, answered from the snapshot, and summed
+   * across every manager so a fan-out in one project cannot spend another project's budget.
+   * Absent and `null` both mean "no cap"; an explicit `0` is the operator having chosen it and
+   * must survive as a number rather than collapsing into the absent case.
+   */
+  it('answers the cached dispatch cap, keeping an explicit 0 distinct from an absent key', () => {
+    expect(new WorkspaceSemaphore({ initial: { dispatchMaxConcurrent: 3 } }).dispatchMaxConcurrent()).toBe(3);
+    expect(new WorkspaceSemaphore({ initial: { dispatchMaxConcurrent: 0 } }).dispatchMaxConcurrent()).toBe(0);
+    expect(new WorkspaceSemaphore({ initial: { dispatchMaxConcurrent: null } }).dispatchMaxConcurrent()).toBeNull();
+    // A loader that predates the key (its `WorkspaceResourceLimits` omits it) reads as "no cap".
+    expect(new WorkspaceSemaphore({ initial: { maxParallel: 2, memoryLimitMb: null } }).dispatchMaxConcurrent()).toBeNull();
+  });
+
+  it('sums dispatchBusy across participants and tolerates stubs without the member', () => {
+    const sem = new WorkspaceSemaphore({ initial: { dispatchMaxConcurrent: 3 } });
+    // A participant from before the key existed — `dispatchBusy` simply absent.
+    sem.register(participant(1));
+    sem.register({ ...participant(1), dispatchBusy: () => 2 });
+    sem.register({ ...participant(1), dispatchBusy: () => 1 });
+    expect(sem.dispatchBusy()).toBe(3);
+    expect(sem.busy()).toBe(3); // the two counters stay independent
   });
 
   /** #810 — the getter used to be `?? null`. Flipping the default to 5 made that a trap:
