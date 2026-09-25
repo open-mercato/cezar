@@ -1,3 +1,34 @@
+# 0.12.0 (2026-09-25)
+
+## Highlights
+<!-- TODO: Highlights — auto-update-changelog leaves this blank for the human author to fill in. -->
+
+## ✨ Features
+- ✨ Connect Jira or Linear in Settings: browse issues, launch tasks with the issue's context, and trigger automations on tracker events. (#1045) *(@matwiatrzyk)*
+- ✨ The Working… indicator carries a live clock — elapsed time on the current turn, and when the agent was last active. (#1069) *(@patzick)*
+
+## 🐛 Fixes
+- 🐛 A cezar started without `~/.local/bin` on its PATH finds a natively installed claude instead of reporting it not installed. (#1061) *(@patzick)*
+- 🔧 `.cmd` shims stay away from the no-shell spawn sites, and a mistyped `CEZ_CLAUDE_BIN` no longer breaks the terminal handoff. (#1064) *(@patzick)*
+- 🐛 The launch folder is no longer listed as a project once the registry holds one — it is still served, so deep links keep resolving. (#1057) *(@patzick)*
+- 🐛 A review-request burst spanning two poll boundaries launches one automation run instead of several. (#1056) *(@patzick)*
+- 🐛 A cockpit save no longer drops the `cezar run` tasks another process wrote to the run index. (#1025) *(@matkowalski)*
+
+## 📝 Specs & Documentation
+- 📝 Browse Jira and Linear tasks alongside GitHub. (#1026) *(@matwiatrzyk)*
+- 📝 A dispatch admission cap — an opt-in ceiling on how many children a dispatching task may admit. (#1033) *(@michal-codes)*
+- 📝 Runner seam native backends — seam de-dup, codex providers, Gemini and Copilot over ACP. (#1030) *(@aleksanderw1992)*
+- 📝 The README carries an Open Mercato Cloud banner. (#1063) *(@pat-lewczuk)*
+
+## 👥 Contributors
+
+- @matwiatrzyk
+- @patzick
+- @matkowalski
+- @michal-codes
+- @aleksanderw1992
+- @pat-lewczuk
+
 # 0.11.1 (2026-09-18)
 
 ## Highlights
