@@ -14,6 +14,9 @@
  */
 
 import type { UiEvent } from './ui-events.ts';
+import type { PermissionSpec } from './permission-map.ts';
+
+export type { PermissionSpec } from './permission-map.ts';
 
 /**
  * The user-selectable runners (what config/GUI expose), in display order — the SINGLE source of
@@ -68,6 +71,13 @@ export interface AgentRunSpec {
    * picks up the on-disk conversation (used by "Continue" after a run ends).
    */
   resume?: boolean;
+  /**
+   * Permission mode for this run (spec 2026-07-17-permission-modes, #475).
+   * Absent = each backend's historical zero-config posture (Claude: dontAsk +
+   * coding-tool allowlist; Codex/OpenCode: unrestricted). Explicit `{ mode: 'auto' }`
+   * is skip-all. Each runner translates this via `permission-map.ts`.
+   */
+  permissions?: PermissionSpec;
 }
 
 /**
@@ -195,6 +205,12 @@ export interface AgentSession {
   interrupt(): void;
   /** True while the session still accepts messages. */
   readonly open: boolean;
+  /**
+   * Answer a pending permission prompt (#475 Phase 2). Returns `true` when the
+   * answer was delivered to the backend; `false` when the session is closed or
+   * the requestId is unknown / already resolved (route maps that to 409).
+   */
+  respondPermission?(requestId: string, optionId: string): Promise<boolean> | boolean;
 }
 
 export interface AgentRunner {
@@ -205,5 +221,11 @@ export interface AgentRunner {
     onEvent?: (event: AgentEvent) => void,
     opts?: SessionOptions,
   ): AgentSession;
+  /**
+   * Optional pre-spawn warmup (e.g. async `claude --help` permission-mode
+   * probe). Callers await this before `startSession` so the hot path never
+   * blocks the event loop on a sync exec.
+   */
+  prepare?(): Promise<void>;
   interrupt(): Promise<void>;
 }

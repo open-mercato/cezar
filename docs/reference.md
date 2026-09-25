@@ -274,9 +274,13 @@ unapproved tools denied without prompting (`--permission-mode dontAsk`) inside
 the task's worktree — but note the zero-config default list (`Read`, `Edit`,
 `Write`, `Grep`, `Glob`, `Bash`) grants unrestricted `Bash` unless a step sets
 `bashAllowlist`, so treat a run as having full shell access in its worktree,
-not a sandboxed allowlist. Set `CEZ_APPROVAL_GATE=1` to opt into Claude's
-interactive approval UI. Codex and OpenCode are driven through their own
-native protocols and don't honor `allowedTools` at all — see
+not a sandboxed allowlist. **Settings → Agents → Permissions** can opt a
+workspace into skip-all (`Auto` → `--dangerously-skip-permissions`) or into
+prompted modes (`Guarded` / `Read-only` / `Manual`, which use
+`--permission-prompt-tool stdio` so the cockpit can Allow/Deny). Set
+`CEZ_APPROVAL_GATE=1` to force Claude's `acceptEdits` regardless of Settings.
+Codex and OpenCode are driven through their own native protocols and don't
+honor `allowedTools` at all — see
 [Coding agent backends](#coding-agent-backends) for what each one actually
 locks down. Nothing runs on a server you don't own.
 
@@ -355,7 +359,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
-| **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` → `acceptEdits` + approval UI). |
+| **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); zero-config `dontAsk` denies unapproved tools without prompting. Settings `Auto` is skip-all; `Guarded`/`Manual` use `--permission-prompt-tool stdio` so the cockpit can answer. `CEZ_APPROVAL_GATE=1` forces `acceptEdits`. |
 | **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
 | **pi** _(experimental)_ | [`pi`](https://github.com/badlogic/pi-mono) | Persistent `--mode rpc` over JSONL; models are picked with the `provider/model` convention. | Maps `allowedTools` onto pi's `--tools` allowlist; a configured `bashAllowlist` disables Bash because pi cannot express command-prefix rules. |

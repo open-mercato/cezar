@@ -38,6 +38,7 @@ export function PickerPill({
   disabledHint,
   status,
   searchPlaceholder,
+  className,
 }: {
   slot: string
   ariaLabel: string
@@ -55,6 +56,8 @@ export function PickerPill({
   status?: string
   /** Add a name filter above longer option catalogs. */
   searchPlaceholder?: string
+  /** Extra classes on the trigger chip (e.g. amber when a non-default setting conflicts). */
+  className?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -76,7 +79,7 @@ export function PickerPill({
         data-slot={slot}
         aria-label={ariaLabel}
         title={disabledHint ?? hint}
-        className={`${chipClass} cursor-default hover:bg-card hover:text-muted-foreground`}
+        className={`${chipClass} cursor-default hover:bg-card hover:text-muted-foreground ${className ?? ''}`}
       >
         {label}
       </span>
@@ -89,7 +92,7 @@ export function PickerPill({
       aria-label={ariaLabel}
       disabled={disabled}
       title={disabled ? disabledHint : hint}
-      className={chipClass}
+      className={`${chipClass}${className ? ` ${className}` : ''}`}
     >
       {label}
       {chevron}

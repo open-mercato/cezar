@@ -308,7 +308,7 @@ export interface UiPlanUpdatedEvent {
 }
 
 /**
- * RESERVED — wired when auto-approve becomes optional. Types only for now.
+ * A backend is asking the user to approve a tool call.
  * claude: `control_request can_use_tool`; codex: the per-item
  * `requestApproval` JSON-RPC requests; opencode: `permission.updated`.
  */
@@ -320,11 +320,16 @@ export interface UiPermissionRequestedEvent {
   options: PermissionOption[];
 }
 
-/** RESERVED — the counterpart resolution (see `permission.requested`). */
+/**
+ * The user (or session teardown) resolved a permission prompt.
+ * `optionId` is set when the user picked an option; `cancelled: true` when
+ * the session died / was interrupted with the prompt still pending.
+ */
 export interface UiPermissionResolvedEvent {
   type: 'permission.resolved';
   requestId: string;
-  optionId: string;
+  optionId?: string;
+  cancelled?: true;
 }
 
 /** One option in an AskUser question — see `src/core/ask.ts`. */

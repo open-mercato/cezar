@@ -105,6 +105,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      permissionMode: null,
       dispatch: null,
     })
   })
@@ -121,6 +122,7 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      permissionMode: null,
       dispatch: null,
     })
     const first = readDraft()
@@ -143,6 +145,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      permissionMode: null,
       dispatch: null,
     })
     clearStartedDraft()
@@ -159,6 +162,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      permissionMode: null,
       dispatch: null,
     })
   })
@@ -175,6 +179,7 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      permissionMode: null,
       dispatch: null,
     })
     // A fresh page has no in-memory cache but keeps localStorage: resetDraft removes storage, so
@@ -186,6 +191,7 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      permissionMode: null,
       dispatch: null,
       planFirst: true,
     })
@@ -206,6 +212,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      permissionMode: null,
       dispatch: null,
     })
 
@@ -222,6 +229,7 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      permissionMode: null,
       dispatch: null,
     })
   })

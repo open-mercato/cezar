@@ -8,6 +8,7 @@ import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
 // one. `src/runs/store.ts` imports the SAME value for its persistence twin, so the two halves of
 // `contract-parity.runs.test.ts` cannot drift apart by construction.
 import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
+import { permissionSpecSchema } from './permissions.ts';
 
 /**
  * The RUNS family of `/api/v1` — a task's record, its lifecycle mutations, and the artifacts
@@ -210,6 +211,8 @@ export const runRecordSchema = z.object({
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
   activity: runActivitySchema.optional(),
+  /** True while a live permission prompt is unanswered (#475). */
+  awaitingPermission: z.boolean().optional(),
   /** Exact ISO-8601 deadline for the next automatic monitoring check. */
   monitoringWakeAt: z.string().optional(),
   /** The current live monitoring epoch exhausted its 40 automatic checks. */
@@ -341,6 +344,8 @@ export const runIndexEntrySchema = z.object({
   titleOrigin: z.enum(['user', 'auto', 'marker']).optional(),
   status: runStatusSchema,
   activity: runActivitySchema.optional(),
+  /** True while a live permission prompt is unanswered (#475). Feeds `deriveAttention`. */
+  awaitingPermission: z.boolean().optional(),
   createdAt: z.string(),
   finishedAt: z.string().optional(),
   /** With `status`/`finishedAt`/`archived`, the four inputs `isUnread` reads — what lets the
@@ -909,6 +914,10 @@ export const createRunInputBaseSchema = z
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */
     dispatch: dispatchIntentSchema.optional(),
+    /** Per-task permission mode override (spec 2026-07-17-permission-modes, #475). Merged with
+     *  the config.json default (mode from the body, rules unioned). Absent = config, or the
+     *  historical zero-config posture when config has no key. */
+    permissions: permissionSpecSchema.optional(),
   });
 
 /**

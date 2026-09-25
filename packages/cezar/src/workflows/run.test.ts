@@ -1769,6 +1769,37 @@ describe('recover() over a mid-workflow ask park (#917)', () => {
     expect(raw.find((r) => r.id === id)).not.toHaveProperty('askParked');
     expect(RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true }).getRun(id)?.status).toBe('waiting');
   });
+
+  /** Permission park (#475): `awaitingPermission` is the durable marker — without
+   *  it, recover would settle the blocked step as `done` / run as success. */
+  it('fails a waiting run that was parked on a permission prompt', async () => {
+    const { id } = store.createRun({
+      title: 't',
+      workflow: 'implement-verify',
+      task: 'mock:bash',
+      steps: [
+        { id: 'implement', name: 'Implement', kind: 'agent' },
+        { id: 'verify', name: 'Verify', kind: 'check' },
+      ],
+    });
+    store.updateStep(id, 'implement', { status: 'waiting' });
+    store.updateRun(id, {
+      status: 'waiting',
+      currentStepId: 'implement',
+      awaitingPermission: true,
+    });
+    store.flush();
+
+    const reopened = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    expect(reopened.getRun(id)?.awaitingPermission).toBe(true);
+    await recover(reopened);
+
+    const recovered = reopened.getRun(id);
+    expect(recovered?.status).toBe('failed');
+    expect(recovered?.error).toContain('permission prompt');
+    expect(recovered?.awaitingPermission).toBeUndefined();
+    expect(recovered?.steps.map((s) => s.status)).toEqual(['failed', 'pending']);
+  });
 });
 
 /**

@@ -5,6 +5,8 @@ import {
   type Runner,
 } from '@open-mercato/cezar-api-client'
 import { RUNNERS, type TaskSource } from './new-task-form'
+import type { PermissionMode } from '@/lib/permission-modes'
+import { isPermissionMode } from '@/lib/permission-modes'
 
 /**
  * The new-task draft store (spec: "Queued form state survives navigation (draft store)").
@@ -39,6 +41,9 @@ export interface NewTaskDraft {
   autonomous: boolean | null
   /** Follow-up generation is default-on. null → remembered value / on. */
   generateFollowups: boolean | null
+  /** Per-task permission mode override (spec 2026-07-17-permission-modes, #475).
+   *  `null` = follow the Settings → Agents default (or `auto`). */
+  permissionMode: PermissionMode | null
   /** The Dispatch toggle (spec 2026-09-10-dispatch): this task fans work out to subtasks.
    *  `null` = off; `{}` = on with the engine's defaults; the keys are the limits the settings
    *  surface (long-press) set. Sticky like the other pills — it is a way of working. */
@@ -134,6 +139,7 @@ const EMPTY: NewTaskDraft = {
   worktree: null,
   autonomous: null,
   generateFollowups: null,
+  permissionMode: null,
   dispatch: null,
 }
 
@@ -170,6 +176,10 @@ function normalize(raw: unknown): NewTaskDraft {
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
+    permissionMode:
+      typeof obj.permissionMode === 'string' && isPermissionMode(obj.permissionMode)
+        ? obj.permissionMode
+        : null,
     dispatch: normalizeDispatchIntent(obj.dispatch),
   }
 }

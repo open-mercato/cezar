@@ -331,6 +331,9 @@ export function buildCreateRunBody(opts: {
    *  stays off the wire: its PRESENCE is what makes the server compose the dispatch-mode prompt
    *  and force the worktree. */
   dispatch?: DispatchIntent | null
+  /** Per-task permission mode override (spec 2026-07-17-permission-modes, #475). Sent only when
+   *  the composer picked a non-default (or an explicit override of the config default). */
+  permissions?: CreateRunInput['permissions']
 }): CreateRunInput {
   const {
     task,
@@ -348,6 +351,7 @@ export function buildCreateRunBody(opts: {
     generateFollowups,
     todoId,
     dispatch,
+    permissions,
   } = opts
   return {
     task,
@@ -367,6 +371,7 @@ export function buildCreateRunBody(opts: {
     generateFollowups: generateFollowups === false ? false : undefined,
     todoId: todoId || undefined,
     dispatch: dispatch ?? undefined,
+    permissions: permissions ?? undefined,
   }
 }
 

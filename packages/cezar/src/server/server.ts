@@ -55,6 +55,7 @@ import {
   attachmentInputSchema,
   modelDiscoveryRunnerSchema,
   openProjectInSchema,
+  permissionSpecSchema,
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
@@ -683,6 +684,10 @@ const startRunSchema = z
     // dispatch tree, within the user's limits. Dropped — not refused — when the capability is
     // off: the task itself is still perfectly valid as an ordinary run.
     dispatch: dispatchIntentSchema.optional(),
+    // Per-task permission mode override (spec 2026-07-17-permission-modes, #475).
+    // Merged with the config default (mode from the body; rules unioned). Absent = config
+    // or the historical zero-config posture.
+    permissions: permissionSpecSchema.optional(),
   })
   .refine((b) => Boolean(b.workflow) !== Boolean(b.steps), {
     message: 'provide either "workflow" or "steps", not both',
@@ -779,6 +784,9 @@ const uiStateSchema = z
     lastWorktree: z.boolean().optional(),
     lastAutonomous: z.boolean().optional(),
     lastGenerateFollowups: z.boolean().optional(),
+    // Last-used permission mode in the composer (spec 2026-07-17-permission-modes, #475).
+    // Stored as a string to stay additive-safe when new modes are added.
+    lastPermissionMode: z.string().optional(),
     // Skill selection frequency (#408): name → times chosen, incremented on a successful run
     // start from EITHER composer (`/new`'s SourcePill and the follow-up `SkillsPicker`). Drives
     // the shared `orderSkillsByUsage` sort (web/app/src/lib/skills.ts) so both pickers float the
@@ -4040,6 +4048,8 @@ export function createApp(deps: ServerDeps) {
         // CEZ_TODOS_FILE alike (RunManager.agentEnv).
         generateFollowups: capabilities().followups ? parsed.data.generateFollowups : false,
         ...(parsed.data.dispatch && capabilities().dispatch ? { dispatchIntent: parsed.data.dispatch } : {}),
+        // Per-task permission override (spec 2026-07-17-permission-modes, #475).
+        ...(parsed.data.permissions ? { permissions: parsed.data.permissions } : {}),
       };
       if (variants > 1) {
         const runs = manager.startVariants(workflow, input, variants);
@@ -4136,6 +4146,32 @@ export function createApp(deps: ServerDeps) {
       const cancelled = manager.cancel(id);
       return c.json({ cancelled });
     })
+
+    // Answer a pending permission prompt (#475 Phase 2).
+    .post(
+      '/runs/:id/permissions/:requestId',
+      paramZodValidator(
+        z.object({
+          id: z.string().min(1),
+          requestId: z.string().min(1).max(200).regex(/^[^\s/]+$/, 'invalid requestId'),
+        }),
+        { message: 'invalid requestId' },
+      ),
+      jsonZodValidator(
+        z.object({ optionId: z.string().min(1).max(64) }).strict(),
+        { message: 'optionId is required' },
+      ),
+      async (c) => {
+        const { store, manager } = c.get('project');
+        const { id, requestId } = c.req.valid('param');
+        if (!store.getRun(id)) return c.json({ error: 'not found' }, 404);
+        const { optionId } = c.req.valid('json');
+        const result = await manager.respondPermission(id, requestId, optionId);
+        if (result === 'not-found') return c.json({ error: 'not found' }, 404);
+        if (result === 'conflict') return c.json({ error: 'already resolved or session closed' }, 409);
+        return c.json({ ok: true });
+      },
+    )
 
     // Live-session participation (spec 002): deliver a user message (text +
     // pasted screenshots) into the run's open claude session.
@@ -5825,6 +5861,9 @@ export function createApp(deps: ServerDeps) {
       // Optional review gate (#489): tri-state — null means "no config key, the
       // CEZ_REVIEW_GATE env default (OFF) decides".
       reviewGate: config.reviewGate ?? null,
+      // Permission mode (spec 2026-07-17-permission-modes, #475): null means
+      // no key set — the client treats it as `auto`.
+      permissions: config.permissions ?? null,
     };
   };
   // ---- chained family: per-repo config (project-scoped) ----
@@ -5875,6 +5914,11 @@ export function createApp(deps: ServerDeps) {
       if (parsed.data.reviewGate !== undefined) {
         if (parsed.data.reviewGate === null) delete raw.reviewGate;
         else raw.reviewGate = parsed.data.reviewGate;
+      }
+      if (parsed.data.permissions !== undefined) {
+        // null clears back to the default (auto).
+        if (parsed.data.permissions === null) delete raw.permissions;
+        else raw.permissions = parsed.data.permissions;
       }
       if (parsed.data.memoryLimitMb !== undefined) {
         // null or 0 both mean "no ceiling" — drop the key back to the default.
@@ -5940,6 +5984,10 @@ export function createApp(deps: ServerDeps) {
     // Optional review gate toggle (Settings → Agents, #489): null clears the key
     // back to the env-default behavior (OFF).
     reviewGate: z.boolean().nullable().optional(),
+    // Permission mode (spec 2026-07-17-permission-modes, #475): null clears the key
+    // back to the historical workspace default. Same shape as the config key; rules
+    // use the specifier regex so a bad line 400s instead of fail-opening.
+    permissions: permissionSpecSchema.nullable().optional(),
   });
   const setAgentConfigSchema = z.object({
     content: z.string().max(2_000_000),
@@ -6082,6 +6130,7 @@ export function createApp(deps: ServerDeps) {
     ...(run.titleOrigin !== undefined ? { titleOrigin: run.titleOrigin } : {}),
     status: run.status,
     ...(run.activity !== undefined ? { activity: run.activity } : {}),
+    ...(run.awaitingPermission !== undefined ? { awaitingPermission: run.awaitingPermission } : {}),
     createdAt: run.createdAt,
     ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
     ...(run.seenAt !== undefined ? { seenAt: run.seenAt } : {}),

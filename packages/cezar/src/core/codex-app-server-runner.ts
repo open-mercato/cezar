@@ -10,6 +10,12 @@ import type {
   SessionOptions,
 } from './agent-runner.ts';
 import { isSignalTerminationExit, prependSystemPrompt, trackChildExit } from './agent-runner.ts';
+import { translateCodexPermissions, type PermissionSpec } from './permission-map.ts';
+import {
+  PERMISSION_OPTIONS_CODEX,
+  codexApprovalDecision,
+  permissionTitle,
+} from './permission-prompt.ts';
 import {
   AUTO_END_DELAY_MS,
   DEFAULT_RUN_TIMEOUT_MS,
@@ -93,6 +99,10 @@ interface PendingUserInput {
   readonly questions: AskQuestion[];
 }
 
+interface PendingPermission {
+  readonly rpcId: number | string;
+}
+
 /** One live `codex app-server` process driving a single thread. */
 class CodexSession implements AgentSession {
   readonly result: Promise<AgentRunResult>;
@@ -103,6 +113,7 @@ class CodexSession implements AgentSession {
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
   private pendingUserInput: PendingUserInput | undefined;
+  private pendingPermissions = new Map<string, PendingPermission>();
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
   /** Streamed agentMessage deltas buffered per item — v1 `text` is emitted
@@ -304,6 +315,7 @@ class CodexSession implements AgentSession {
   end(): void {
     if (!this.stdinOpen) return;
     this.rejectPendingUserInput('session ended');
+    this.rejectPendingPermissions('session ended');
     this.stdinOpen = false;
     try {
       endCodexAppServer(
@@ -324,6 +336,7 @@ class CodexSession implements AgentSession {
   interrupt(): void {
     this.stdinOpen = false;
     this.rejectPendingUserInput('turn interrupted');
+    this.rejectPendingPermissions('turn interrupted');
     // Best-effort graceful cancel of the in-flight turn, then hard stop.
     if (this.threadId && this.activeTurnId) {
       void this.rpc.request('turn/interrupt', { threadId: this.threadId, turnId: this.activeTurnId }).catch(
@@ -341,14 +354,24 @@ class CodexSession implements AgentSession {
   private async bootstrap(): Promise<void> {
     await this.rpc.initialize();
 
+    // Translate permissions. CEZ_CODEX_NETWORK=0 overrides to workspace-write for the
+    // backwards-compatible network-blocked sandbox opt-out (#563), but only on auto mode
+    // (the user's explicit mode choice takes precedence over the env var).
+    const effectivePermSpec: PermissionSpec = this.spec.permissions ?? { mode: 'auto' };
+    const codexPerm = translateCodexPermissions(effectivePermSpec);
+    if (codexPerm.engineNote) {
+      this.emit({ type: 'note', message: codexPerm.engineNote });
+    }
+    const sandbox =
+      effectivePermSpec.mode === 'auto' && process.env.CEZ_CODEX_NETWORK === '0'
+        ? 'workspace-write'
+        : codexPerm.sandbox;
+    const approvalPolicy = codexPerm.approvalPolicy;
     const overrides = {
       model: this.spec.model,
       cwd: this.spec.cwd,
-      // Full access is the `auto` preset shared by all backends. Besides avoiding prompts, this
-      // keeps container installs working when bubblewrap cannot create a UID map (#563).
-      // CEZ_CODEX_NETWORK=0 remains the backwards-compatible explicit sandbox opt-out.
-      sandbox: process.env.CEZ_CODEX_NETWORK === '0' ? 'workspace-write' : 'danger-full-access',
-      approvalPolicy: 'never',
+      sandbox,
+      approvalPolicy,
     };
     if (this.spec.resume && this.spec.sessionId) {
       await this.rpc.request('thread/resume', { threadId: this.spec.sessionId, ...clean(overrides) });
@@ -401,7 +424,54 @@ class CodexSession implements AgentSession {
       this.handleUserInputRequest(msg.id, msg.params ?? {});
       return;
     }
+    if (
+      (msg.method === 'item/commandExecution/requestApproval' ||
+        msg.method === 'item/fileChange/requestApproval') &&
+      (typeof msg.id === 'number' || typeof msg.id === 'string')
+    ) {
+      this.handleApprovalRequest(msg.id, msg.method, msg.params ?? {});
+      return;
+    }
     if (typeof msg.method === 'string') this.handleNotification(msg.method, msg.params ?? {});
+  }
+
+  private handleApprovalRequest(
+    rpcId: number | string,
+    method: string,
+    params: Record<string, unknown>,
+  ): void {
+    const requestId = `codex-perm-${String(rpcId)}`;
+    this.pendingPermissions.set(requestId, { rpcId });
+    const itemId = stringField(params, 'itemId');
+    const toolName = method.includes('fileChange') ? 'fileChange' : 'commandExecution';
+    const input = method.includes('fileChange')
+      ? { changes: params.changes }
+      : { command: params.command };
+    this.opts.onUiEvent?.({
+      type: 'permission.requested',
+      requestId,
+      ...(itemId !== undefined ? { itemId } : {}),
+      title: permissionTitle(toolName, input),
+      options: [...PERMISSION_OPTIONS_CODEX],
+    });
+  }
+
+  respondPermission(requestId: string, optionId: string): boolean {
+    if (!this.stdinOpen) return false;
+    const pending = this.pendingPermissions.get(requestId);
+    if (!pending) return false;
+    const decision = codexApprovalDecision(optionId);
+    if (decision === undefined) return false;
+    this.pendingPermissions.delete(requestId);
+    this.rpc.respond({ id: pending.rpcId, result: { decision } });
+    return true;
+  }
+
+  private rejectPendingPermissions(message: string): void {
+    for (const [requestId, pending] of this.pendingPermissions) {
+      this.pendingPermissions.delete(requestId);
+      this.rpc.respond({ id: pending.rpcId, error: { code: -32000, message } });
+    }
   }
 
   private handleUserInputRequest(rpcId: number | string, params: Record<string, unknown>): void {
