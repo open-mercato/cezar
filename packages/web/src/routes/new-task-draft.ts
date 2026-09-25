@@ -27,6 +27,8 @@ export interface NewTaskDraft {
    *  other pickers — which login a repo's work runs under is a way of working, not a whim. */
   agentProfile: string | null
   model: string | null
+  /** Per-task Codex effort. `null` means leave the native default untouched. */
+  reasoningEffort: string | null
   variants: number
   /** The `Start | Plan first` toggle (#383). Sticky like the pickers: plan-first is a way of
    *  working, not a per-task whim — it survives navigation with the rest of the draft. */
@@ -129,6 +131,7 @@ const EMPTY: NewTaskDraft = {
   runner: null,
   agentProfile: null,
   model: null,
+  reasoningEffort: null,
   variants: 1,
   planFirst: false,
   worktree: null,
@@ -164,6 +167,7 @@ function normalize(raw: unknown): NewTaskDraft {
     runner: typeof obj.runner === 'string' ? (obj.runner as Runner) : null,
     agentProfile: typeof obj.agentProfile === 'string' ? obj.agentProfile : null,
     model: typeof obj.model === 'string' ? obj.model : null,
+    reasoningEffort: typeof obj.reasoningEffort === 'string' ? obj.reasoningEffort : null,
     variants: obj.variants === 2 || obj.variants === 3 ? obj.variants : 1,
     planFirst: obj.planFirst === true,
     worktree: typeof obj.worktree === 'boolean' ? obj.worktree : null,

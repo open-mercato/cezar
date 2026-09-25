@@ -1,9 +1,18 @@
 import type { RunnerId } from './agent-runner.ts';
 
+export interface ReasoningEffortOption {
+  id: string;
+  description: string;
+}
+
 export interface ModelOption {
   id: string;
   label: string;
   description: string;
+  /** Capabilities from the native runner catalog, absent when the runner has none. */
+  reasoningEfforts?: ReasoningEffortOption[];
+  /** Native runner's suggested value; never a cezar-generated default. */
+  defaultReasoningEffort?: string;
 }
 
 export type ModelCatalogSource = 'live' | 'cache' | 'unavailable';

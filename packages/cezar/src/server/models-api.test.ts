@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
+import type { ModelOption } from '../core/runner-model-catalog.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -22,7 +23,7 @@ describe('workspace model catalog API', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  type Discover = () => Promise<Array<{ id: string; label: string; description: string }>>;
+  type Discover = () => Promise<ModelOption[]>;
 
   /** Claude and Codex share one adapter here — the route contract is what is under test, and each
    *  adapter's own wire handling lives in its `*-model-catalog.test.ts`. OpenCode takes its own so
@@ -49,17 +50,34 @@ describe('workspace model catalog API', () => {
     let calls = 0;
     const server = app(async () => {
       calls += 1;
-      return [{ id, label: 'Newest', description: 'Newly available' }];
+      return runner === 'codex'
+        ? [{
+          id,
+          label: 'Newest',
+          description: 'Newly available',
+          defaultReasoningEffort: 'medium',
+          reasoningEfforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+        }]
+        : [{ id, label: 'Newest', description: 'Newly available' }];
     });
     for (let i = 0; i < 2; i += 1) {
       const response = await apiRequest(server, `/api/v1/models?runner=${runner}`);
       expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({
+      const body = await response.json();
+      expect(body).toMatchObject({
         runner,
         models: [{ id }],
         source: i === 0 ? 'live' : 'cache',
         stale: false,
       });
+      if (runner === 'codex') {
+        expect(body).toMatchObject({
+          models: [{
+            defaultReasoningEffort: 'medium',
+            reasoningEfforts: [{ id: 'medium', description: 'Balanced reasoning' }],
+          }],
+        });
+      }
     }
     expect(calls).toBe(1);
   });
