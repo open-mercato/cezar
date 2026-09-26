@@ -31,6 +31,9 @@ import {
   unavailableProviderMessage,
 } from './server/provider-action-gate.ts';
 import { checkForUpdate } from './update-check.ts';
+import { printPrivateFrontBanner } from './cli/qr.ts';
+import { resolveCapabilities } from './server/capabilities.ts';
+import { trustedHosts } from './server/trusted-hosts.ts';
 import { printSkillsBanner } from './skills-banner.ts';
 import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
@@ -273,7 +276,7 @@ async function serveCommand(
   // Set before the first run can start, read by every manager's `agentEnv` while dispatch is on.
   process.env.CEZ_API_URL = `http://127.0.0.1:${port}`;
   process.env.CEZ_BIN = resolve(process.argv[1] ?? fileURLToPath(import.meta.url));
-  startServer({
+  const server = startServer({
     repoRoot,
     store,
     manager,
@@ -297,6 +300,19 @@ async function serveCommand(
   }
   if (port !== preferredPort) console.log(`  (port ${preferredPort} was busy — using ${port})`);
   console.log(`\n  cockpit → ${url}\n`);
+  // Printed only once the listener is actually up: a bind that fails
+  // (EADDRNOTAVAIL) must not hand out a QR for a cockpit nobody can reach.
+  const emitPrivateFrontBanner = () => {
+    printPrivateFrontBanner({
+      publicUrl: process.env.CEZ_PUBLIC_URL,
+      bindHost,
+      port,
+      trusted: trustedHosts(),
+      hosted: !resolveCapabilities(process.env, bindHost).localHandoff,
+    });
+  };
+  if (server.listening) emitPrivateFrontBanner();
+  else server.once('listening', emitPrivateFrontBanner);
   // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
   await printSkillsBanner(repoRoot);
 

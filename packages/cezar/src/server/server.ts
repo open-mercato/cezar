@@ -194,6 +194,7 @@ import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, expandTilde } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
+import { isTrustedHostHeader, trustedHosts } from './trusted-hosts.ts';
 import { createSocketHub, type SocketHub, type WsUpgradeVerdict } from './ws.ts';
 import { browseDirectory, isInsideBrowseRoot, isLexicallyInsideBrowseRoot, resolveBrowseRoot } from './fs-browse.ts';
 import { parseRemote, resolveForge, type ForgeAvailability } from './forge/index.ts';
@@ -1371,7 +1372,11 @@ export function createApp(deps: ServerDeps) {
     // Strict twin of `isLoopbackHost`: a *missing* Host is untrusted here (an
     // absent header is not the "we defaulted to the loopback bind" case), and
     // the loopback match is anchored so `127.0.0.1.evil.com` does not pass.
-    if (!isHostedMode() && !isLoopbackHostHeader(hostName)) {
+    if (
+      !isHostedMode() &&
+      !isLoopbackHostHeader(hostName) &&
+      !isTrustedHostHeader(c.req.header('host'), trustedHosts())
+    ) {
       return c.json(
         {
           error: 'forbidden: unexpected Host header — this request did not originate from this machine (see #426)',
@@ -6420,7 +6425,7 @@ export function verifyWsUpgrade(req: IncomingMessage, bindHost?: string): WsUpgr
   const host = req.headers.host;
   const hostName = hostnameOfHost(host);
   const hosted = !resolveCapabilities(process.env, bindHost).localHandoff;
-  if (!hosted && !isLoopbackHostHeader(hostName)) return false;
+  if (!hosted && !isLoopbackHostHeader(hostName) && !isTrustedHostHeader(host, trustedHosts())) return false;
   const origin = req.headers.origin;
   if (origin === undefined) return { trusted: true }; // non-browser client — no Origin to spoof
   // Scheme-checked, like the HTTP guard's comparison: `authorityOfOrigin` is

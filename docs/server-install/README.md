@@ -84,3 +84,8 @@ or track a branch with `npx cezar-cli@develop server-deploy --platform <id>`.
 ---
 
 Guides: **[Ubuntu / Debian VPS](./ubuntu-vps.md)** · **[macOS + ngrok](./macosx-ngrok.md)**
+
+> **A private front instead?** A tailnet (or any network that already authenticates devices) can
+> reach a cockpit that stays in **local mode** — full features, no public URL, no login layer of our
+> own — with `CEZ_TRUSTED_HOSTS` and a QR code in the terminal banner.
+> See **[Private tailnet front](./tailnet.md)**.

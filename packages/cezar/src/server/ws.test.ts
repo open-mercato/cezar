@@ -296,6 +296,29 @@ describe('createSocketHub', () => {
 describe('verifyWsUpgrade', () => {
   const req = (headers: Record<string, string | undefined>) => ({ headers }) as IncomingMessage;
 
+  it('admits a trusted Host only with a matching Origin, and never a look-alike', () => {
+    const savedTrusted = process.env.CEZ_TRUSTED_HOSTS;
+    process.env.CEZ_TRUSTED_HOSTS = 'cockpit.tailnet.ts.net:8445';
+    try {
+      expect(
+        verifyWsUpgrade(
+          req({ host: 'cockpit.tailnet.ts.net:8445', origin: 'http://cockpit.tailnet.ts.net:8445' }),
+        ),
+      ).toEqual({ trusted: true });
+      // No Origin at all is a non-browser client — same stance as the HTTP guard.
+      expect(verifyWsUpgrade(req({ host: 'cockpit.tailnet.ts.net:8445' }))).toEqual({ trusted: true });
+      expect(
+        verifyWsUpgrade(req({ host: 'cockpit.tailnet.ts.net:8445', origin: 'https://evil.example' })),
+      ).toBe(false);
+      // The allowlist is by exact authority: the port-less spelling is a different host.
+      expect(verifyWsUpgrade(req({ host: 'cockpit.tailnet.ts.net' }))).toBe(false);
+      expect(verifyWsUpgrade(req({ host: 'evil.tailnet.ts.net:8445' }))).toBe(false);
+    } finally {
+      if (savedTrusted === undefined) delete process.env.CEZ_TRUSTED_HOSTS;
+      else process.env.CEZ_TRUSTED_HOSTS = savedTrusted;
+    }
+  });
+
   // The guard reads deployment mode off the environment, and its whole Host half is SKIPPED in
   // hosted mode (a reverse proxy forwards the real public Host there). An ambient CEZ_REMOTE on
   // the dev box must not decide what this table sees — without this the suite passes only when

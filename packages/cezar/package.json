@@ -46,6 +46,7 @@
     "@hono/node-server": "^1.13.0",
     "dotenv": "^16.6.1",
     "hono": "^4.6.0",
+    "qrcode-generator": "^2.0.4",
     "smol-toml": "^1.7.0",
     "ws": "^8.21.1",
     "yaml": "^2.5.0",
