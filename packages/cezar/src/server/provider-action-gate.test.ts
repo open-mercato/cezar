@@ -43,6 +43,7 @@ describe('provider action gate', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: false },
         { provider: 'opencode', status: 'not-installed', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     })).toBe('Codex is disabled. Enable it in Settings → Agents → Providers.');
   });

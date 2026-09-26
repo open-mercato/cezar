@@ -144,6 +144,10 @@ function serve(
       if (url === '/api/v1/projects' && method === 'GET') {
         return json({ projects: [], bootProject: 'boot', projectsDir: '~/cezar/projects' })
       }
+      if (String(input).startsWith('/api/v1/models?runner=')) {
+        const runner = String(input).includes('cursor') ? 'cursor' : 'codex'
+        return json({ runner, models: [], source: 'unavailable', stale: false })
+      }
       return new Promise<never>(() => {})
     }),
   )
@@ -745,13 +749,13 @@ describe('the agent accounts section', () => {
     renderAccounts()
 
     await waitFor(() => expect(rows()).toHaveLength(1))
-    // OpenCode and pi get a tab too: it is where "is this agent installed?" is answered, and
-    // hiding the ones that cannot carry a second login would only move that question elsewhere.
+    // OpenCode, Cursor and pi get a tab too: it is where "is this agent installed?" is answered,
+    // and hiding the ones that cannot carry a second login would only move that question elsewhere.
     expect(
       [...document.querySelectorAll('[data-slot="accounts-tabs"] [data-provider]')].map((el) =>
         el.getAttribute('data-provider'),
       ),
-    ).toEqual(['claude', 'codex', 'opencode', 'pi'])
+    ).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi'])
   })
 
   it('offers no Add on an agent that cannot carry a second account, and says why', async () => {

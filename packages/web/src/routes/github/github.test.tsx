@@ -148,7 +148,8 @@ const PROVIDERS_CONNECTED: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'not-installed', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
-  ],
+    { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
 }
 
 const PROVIDERS_MULTI: ProviderStatusResponse = {
@@ -156,7 +157,8 @@ const PROVIDERS_MULTI: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'opencode', status: 'disconnected', enabled: true },
-  ],
+    { provider: 'cursor', status: 'connected', enabled: true },
+        ],
 }
 
 const PROVIDERS_NONE: ProviderStatusResponse = {
@@ -164,7 +166,8 @@ const PROVIDERS_NONE: ProviderStatusResponse = {
     { provider: 'claude', status: 'disconnected', enabled: true },
     { provider: 'codex', status: 'unknown', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
-  ],
+    { provider: 'cursor', status: 'disconnected', enabled: true },
+        ],
 }
 
 interface SentRequest {
@@ -224,6 +227,7 @@ function stubFetch(
       }
       if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (path === '/api/v1/models?runner=cursor') return jsonResponse({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (method === 'POST' && path === '/api/v1/runs') {
         return jsonResponse({
           id: 'run-1',
@@ -1309,7 +1313,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
             { provider: 'claude', status: 'disconnected', enabled: true },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
-          ],
+            { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
         } satisfies ProviderStatusResponse),
     })
     await openDetail()
@@ -1334,7 +1339,8 @@ describe('the hand-to-agent backend pills (#401)', () => {
             { provider: 'claude', status: 'connected', enabled: false },
             { provider: 'codex', status: 'connected', enabled: true },
             { provider: 'opencode', status: 'not-installed', enabled: true },
-          ],
+            { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
         } satisfies ProviderStatusResponse),
     })
     await openDetail()

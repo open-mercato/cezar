@@ -64,6 +64,7 @@ import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
+import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import {
   PROVIDER_IDS,
@@ -1126,6 +1127,7 @@ export function createApp(deps: ServerDeps) {
       claude: { discover: () => discoverClaudeModels({ cwd: bootRoot }) },
       codex: { discover: () => discoverCodexModels({ cwd: bootRoot }) },
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
+      cursor: { discover: () => discoverCursorModels() },
     },
   });
   const providerAuth = deps.providerAuth ?? new ProviderAuthService();
@@ -1750,7 +1752,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex or opencode' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, or cursor' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -1874,7 +1876,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, or pi' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, or pi' }), async (c) => {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
@@ -1971,6 +1973,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'claude' ? { claude: profile.path } : {}),
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
+      ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
       (def) => def.scope === 'user' && def.runners.includes(profile.provider),
@@ -3128,6 +3131,7 @@ export function createApp(deps: ServerDeps) {
             claude: z.string().trim().min(1).max(200).nullable().optional(),
             codex: z.string().trim().min(1).max(200).nullable().optional(),
             opencode: z.string().trim().min(1).max(200).nullable().optional(),
+            cursor: z.string().trim().min(1).max(200).nullable().optional(),
             pi: z.string().trim().min(1).max(200).nullable().optional(),
           })
           .optional(),
@@ -5923,6 +5927,7 @@ export function createApp(deps: ServerDeps) {
         claude: modelPresetSchema,
         codex: modelPresetSchema,
         opencode: modelPresetSchema,
+        cursor: modelPresetSchema,
         pi: modelPresetSchema,
       })
       .optional(),
@@ -6509,11 +6514,20 @@ export function isSafeSessionId(sessionId: string): boolean {
   return SAFE_SESSION_ID.test(sessionId);
 }
 
+/** Only plain executable paths can cross both bash and cmd.exe safely. Refuse shell
+ * operators, expansions, controls and a trailing backslash (which can escape the closing
+ * quote). Paths with spaces remain supported, including Windows install directories. */
+export function quoteResumeBin(bin: string): string | null {
+  if (!bin.trim() || !/^[a-zA-Z0-9_./:\\ -]+$/.test(bin) || bin.endsWith('\\')) return null;
+  return /[\s\\]/.test(bin) ? `"${bin}"` : bin;
+}
+
 /**
  * The CLI command that reopens a run's session for interactive take-over, per
  * backend. Legacy/undefined records default to Claude. Returns null when the id
- * is not a shape we recognise — callers degrade (no take-over) rather than
- * splice it into a shell.
+ * is not a shape we recognise, or when a runner's overridable binary cannot be
+ * embedded safely (see {@link quoteResumeBin}) — callers degrade (no take-over)
+ * rather than splice either one into a shell.
  *
  * Validate, don't quote (#431): the session id is the only variable spliced
  * into the command string, and `openInTerminal` runs that string through bash
@@ -6532,6 +6546,10 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
       return `codex resume ${sessionId}`;
     case 'opencode':
       return `opencode --session ${sessionId}`;
+    case 'cursor': {
+      const bin = quoteResumeBin(process.env.CEZ_CURSOR_AGENT_BIN ?? 'agent');
+      return bin === null ? null : `${bin} --resume ${sessionId}`;
+    }
     case 'pi':
       return `pi --session ${sessionId}`;
     default:

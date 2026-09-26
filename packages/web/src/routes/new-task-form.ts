@@ -52,6 +52,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'claude', label: 'claude', desc: 'Claude Code CLI' },
   { id: 'codex', label: 'codex', desc: 'OpenAI Codex (app-server)' },
   { id: 'opencode', label: 'opencode', desc: 'OpenCode (serve)' },
+  { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
 ]
 
@@ -64,12 +65,12 @@ export interface ModelPreset {
 /**
  * Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner decides.
  *
- * For a runner that discovers (`MODEL_DISCOVERY_RUNNERS` — claude, codex, opencode) this list is
+ * For a runner that discovers (`MODEL_DISCOVERY_RUNNERS` — claude, codex, opencode, cursor) this list is
  * only the FALLBACK, used when the host catalog has nothing to offer; a live catalog replaces it.
  * Nothing dated may be listed for those — pinned ids (`claude-opus-4-8`, `gpt-5.1-codex`) are
  * exactly the drift discovery exists to end (#794 for OpenCode, #784 for Claude). Claude
  * therefore keeps only its tier aliases, which stay true across every rollout because the CLI
- * resolves them itself; Codex and OpenCode list `auto` alone. pi has no host catalog yet, so its
+ * resolves them itself; Codex, OpenCode and Cursor list `auto` alone. pi has no host catalog yet, so its
  * entries are the real picker contents rather than a fallback.
  */
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
@@ -84,6 +85,9 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   ],
   opencode: [
     { id: '', label: 'auto', desc: 'Use your OpenCode default model' },
+  ],
+  cursor: [
+    { id: '', label: 'auto', desc: 'Use your Cursor default model' },
   ],
   // pi selects a model with the same `provider/model` convention as opencode.
   pi: [
@@ -183,11 +187,12 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   claude: 'Claude',
   codex: 'Codex',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
 }
 
 export function modelCatalogStatus(
   runner: Runner,
-  catalog: RunnerModelCatalogResponse | undefined,
+  catalog?: RunnerModelCatalogResponse,
   failed = false,
 ): string | undefined {
   if (!runnerDiscoversModels(runner)) return undefined

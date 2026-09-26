@@ -109,9 +109,32 @@ describe('model option resolution', () => {
     expect(modelsForRunner('codex', catalog, ['legacy-id']).at(-1)?.desc).toBe('Custom or legacy model')
   })
 
+  it('cursor: auto alone until the host catalog answers, plus host-discovered ids once it does', () => {
+    expect(modelsForRunner('cursor').map((m) => m.id)).toEqual([''])
+    expect(
+      modelsForRunner('cursor', {
+        runner: 'cursor',
+        models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }],
+        source: 'live',
+        stale: false,
+      }).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
+  it('a pinned Cursor id the host no longer offers stays selectable', () => {
+    expect(
+      modelsForRunner(
+        'cursor',
+        { runner: 'cursor', models: [], source: 'unavailable', stale: false },
+        ['composer-2.5'],
+      ).map((m) => m.id),
+    ).toEqual(['', 'composer-2.5'])
+  })
+
   it.each([
     ['codex', 'Codex'],
     ['claude', 'Claude'],
+    ['cursor', 'Cursor'],
   ] as const)('names %s in its stale/unavailable rows without exposing raw reasons', (runner, label) => {
     expect(modelCatalogStatus(runner, { runner, models: [], source: 'cache', stale: true, reason: 'raw' })).toBe(`Using cached ${label} model list`)
     expect(modelCatalogStatus(runner, { runner, models: [], source: 'unavailable', stale: false, reason: 'raw' })).toBe(`Latest ${label} models unavailable`)
@@ -135,8 +158,13 @@ describe('model option resolution', () => {
     // #794 gave OpenCode a catalog and #784 gave Claude one, so the picker no longer has a
     // preset-only runner. The contract's list is the single source both the route and the picker
     // compile against — this asserts they still agree on who discovers.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode'])
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
+  })
+
+  it('reports Cursor catalog status the same way', () => {
+    expect(modelCatalogStatus('cursor', { runner: 'cursor', models: [], source: 'unavailable', stale: false })).toBe('Latest Cursor models unavailable')
+    expect(modelCatalogStatus('cursor', undefined, true)).toBe('Latest Cursor models unavailable')
   })
 
   it('opencode: auto alone until the host catalog answers (#794)', () => {

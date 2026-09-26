@@ -34,15 +34,20 @@ export interface ResolvedAgentProfile {
 
 /**
  * The implicit account for a provider: whatever `agentHomePaths()` discovers, which already
- * honours the vendors' own `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `XDG_CONFIG_HOME`. Setting one of
- * those on the cezar process therefore moves the DEFAULT account rather than being ignored.
+ * honours the vendors' own `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `CURSOR_CONFIG_DIR` /
+ * `XDG_CONFIG_HOME`. Setting one of those on the cezar process therefore moves the DEFAULT
+ * account rather than being ignored.
  */
 export function defaultAgentProfile(
   provider: ProviderId,
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedAgentProfile {
   const home = agentHomePaths(env);
-  const path = provider === 'codex' ? home.codex : provider === 'opencode' ? home.opencodeConfig : home.claude;
+  const path =
+    provider === 'codex' ? home.codex
+    : provider === 'opencode' ? home.opencodeConfig
+    : provider === 'cursor' ? home.cursor
+    : home.claude;
   return {
     id: DEFAULT_AGENT_ACCOUNT_ID,
     provider,

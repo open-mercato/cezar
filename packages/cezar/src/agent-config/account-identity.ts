@@ -1,5 +1,7 @@
+import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { resolveCursorAgentBin } from '../core/cursor-agent-runner.ts';
 import type { ProviderId } from '../core/provider-auth.ts';
 import { claudeStateFilePath } from '../paths.ts';
 
@@ -152,16 +154,123 @@ function decodeJwtClaims(token: string): Record<string, unknown> | null {
  * Never throws. OpenCode answers "unsupported": its credentials live in a SQLite DB outside the
  * config dir (see `core/agent-profiles.ts`), so there is nothing in a config folder to read — and
  * guessing from the default login would attribute one account's identity to another.
+ *
+ * Cursor stores tokens outside a readable JSON identity file (often the OS keychain), so its
+ * details come from `agent status` / `agent about` JSON — same named-fields-only rule, never a
+ * pass-through of the CLI payload.
  */
 export async function readAccountIdentity(
   provider: ProviderId,
   configDir: string,
+  opts: { runCommand?: RunCursorIdentityCommand } = {},
 ): Promise<AccountIdentity> {
   if (provider === 'claude') return readClaudeIdentity(configDir);
   if (provider === 'codex') return readCodexIdentity(configDir);
+  if (provider === 'cursor') return readCursorIdentity(configDir, opts.runCommand);
   return {
     available: false,
     reason: 'OpenCode keeps its login outside its config folder, so cezar cannot read it.',
     fields: [],
   };
+}
+
+export type RunCursorIdentityCommand = (
+  args: readonly string[],
+  env: Record<string, string>,
+) => Promise<{ stdout: string; stderr: string; exitCode: number | null; errorCode?: string }>;
+
+async function defaultRunCursorCommand(
+  args: readonly string[],
+  env: Record<string, string>,
+): Promise<{ stdout: string; stderr: string; exitCode: number | null; errorCode?: string }> {
+  const executable = resolveCursorAgentBin();
+  return new Promise((resolve) => {
+    execFile(
+      executable,
+      [...args],
+      {
+        timeout: 10_000,
+        windowsHide: true,
+        maxBuffer: 256 * 1024,
+        env: { ...process.env, ...env },
+      },
+      (error, stdout, stderr) => {
+        const commandError = error as (NodeJS.ErrnoException & { code?: string | number }) | null;
+        const code = commandError?.code;
+        resolve({
+          stdout: String(stdout),
+          stderr: String(stderr),
+          exitCode: typeof code === 'number' ? code : error ? null : 0,
+          errorCode: typeof code === 'string' ? code : undefined,
+        });
+      },
+    );
+  });
+}
+
+function parseJsonObject(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cursor Agent CLI — `agent status --format json` + `agent about --format json`.
+ *
+ * Verified against CLI 2026.08: status carries `userInfo.{email,firstName,lastName}`; about
+ * carries `subscriptionTier` / `userEmail`. No Organization / Role fields in either payload.
+ */
+async function readCursorIdentity(
+  configDir: string,
+  runCommand: RunCursorIdentityCommand = defaultRunCursorCommand,
+): Promise<AccountIdentity> {
+  const env = { CURSOR_CONFIG_DIR: configDir };
+  const statusResult = await runCommand(['status', '--format', 'json'], env);
+  if (statusResult.errorCode === 'ENOENT') {
+    return {
+      available: false,
+      reason: 'Cursor Agent CLI (`agent`) is not installed on this machine.',
+      fields: [],
+    };
+  }
+
+  const status = parseJsonObject(statusResult.stdout);
+  const fields: AccountIdentityField[] = [];
+  const userInfo = status?.userInfo;
+  if (userInfo && typeof userInfo === 'object') {
+    const u = userInfo as Record<string, unknown>;
+    push(fields, 'Email', u.email);
+    const name = [text(u.firstName), text(u.lastName)].filter(Boolean).join(' ');
+    if (name) fields.push({ label: 'Name', value: name });
+  } else {
+    push(fields, 'Email', status?.userEmail);
+  }
+
+  const aboutResult = await runCommand(['about', '--format', 'json'], env);
+  const about = parseJsonObject(aboutResult.stdout);
+  if (about) {
+    push(fields, 'Plan', about.subscriptionTier);
+    if (fields.every((f) => f.label !== 'Email')) push(fields, 'Email', about.userEmail);
+  }
+
+  // An explicit unauthenticated status takes precedence over `about` supplying display fields
+  // (e.g. a stale cached email) — only the documented CURSOR_API_KEY fallback below may still
+  // report a login in that case.
+  const explicitlyUnauthenticated = status?.isAuthenticated === false || status?.status === 'unauthenticated';
+  const authenticated = !explicitlyUnauthenticated
+    && (status?.isAuthenticated === true
+      || status?.status === 'authenticated'
+      || fields.some((f) => f.label === 'Email'));
+  if (!authenticated && process.env.CURSOR_API_KEY?.trim()) {
+    return { available: true, fields: [{ label: 'Login', value: 'API key (CURSOR_API_KEY)' }] };
+  }
+  if (!authenticated) {
+    return { available: false, reason: NOT_SIGNED_IN, fields: [] };
+  }
+  return { available: true, fields };
 }

@@ -390,7 +390,8 @@ export const workspaceQueryKeys = {
 
 /**
  * One runner's host-discovered catalog, cached per runner (#794 — this used to be hard-wired to
- * Codex, which is why OpenCode had nothing but stale presets to show).
+ * Codex, which is why OpenCode had nothing but stale presets to show). Cursor (#807) discovers
+ * the same way — nothing runner-specific lives here, `runnerDiscoversModels` already knows it.
  *
  * A runner with no host catalog never fetches and never resolves data, so its picker falls back
  * to static presets — callers can pass any runner and read `data`/`isError` without checking
@@ -427,8 +428,9 @@ export function useRunnerModelCatalogs(
   const claude = useRunnerModels('claude', enabled)
   const codex = useRunnerModels('codex', enabled)
   const opencode = useRunnerModels('opencode', enabled)
+  const cursor = useRunnerModels('cursor', enabled)
   const pi = useRunnerModels('pi', enabled)
-  return { claude, codex, opencode, pi }
+  return { claude, codex, opencode, cursor, pi }
 }
 
 export function useProviderStatus() {

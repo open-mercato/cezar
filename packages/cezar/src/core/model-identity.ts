@@ -94,6 +94,10 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // opencode selects across providers, so a bare model is ambiguous: reject it
   // loudly rather than let the server pick a default the user never asked for.
   opencode: {},
+  // Cursor Agent CLI takes bare catalog ids on `--model` (`kimi-k3-low`,
+  // `composer-2.5`). Discovery fills the picker; the default provider is only
+  // the canonical-identity namespace (stripped again in toBackendModel).
+  cursor: { defaultProvider: 'cursor' },
   // pi selects across providers with the same `provider/model` convention as
   // opencode (#387) — no default provider, so a bare model is rejected loudly
   // and `toBackendModel` hands pi the full `provider/model` on its `--model`.
@@ -127,8 +131,11 @@ export function parseModelIdentity(raw: string | undefined | null): ModelIdentit
  * explicit `provider/model` — as supplied for `backend`, into a canonical
  * identity. Fail-loud (#405 item 3): a real model is never silently swapped
  * for the backend default.
- *  - empty / whitespace ("auto") → `undefined` (the backend picks — an
- *    explicit choice, not a silent fallback);
+ *  - empty / whitespace → `undefined` (the backend picks — an explicit
+ *    choice, not a silent fallback); on `cursor`, the literal label "auto"
+ *    (its own native-settings sentinel for "no --model flag") is treated the
+ *    same way — scoped to `cursor` only, since another backend could have a
+ *    legitimately named custom/gateway model literally called "auto";
  *  - an explicit `provider/model` → that identity, for a multi-provider backend
  *    or when the provider is the single-provider backend's own;
  *  - an explicit `provider/model` naming a FOREIGN provider is preserved when
@@ -143,10 +150,15 @@ export function resolveModelIdentity(
   options: { configuredProvider?: string } = {},
 ): ModelIdentity | undefined {
   if (!raw || !raw.trim()) return undefined;
+  const trimmed = raw.trim();
+  // Cursor surfaces the literal label "auto" from native settings/cli-config as its own
+  // "no --model flag" sentinel; treat it like empty so the CLI picks its default. Scoped to
+  // cursor only — another backend could have a legitimately named model called "auto".
+  if (backend === 'cursor' && trimmed.toLowerCase() === 'auto') return undefined;
   const map = BACKEND_MODEL_MAP[backend] ?? {};
   const configuredProvider = options.configuredProvider?.trim().toLowerCase() || undefined;
   const effectiveProvider = configuredProvider ?? map.defaultProvider;
-  const explicit = parseModelIdentity(raw);
+  const explicit = parseModelIdentity(trimmed);
   if (explicit) {
     // Most single-provider backends need their bare wire form, but Claude Code
     // also accepts explicit gateway/custom provider ids. Keep rejecting foreign
@@ -164,7 +176,7 @@ export function resolveModelIdentity(
     }
     return explicit;
   }
-  const model = raw.trim();
+  const model = trimmed;
   const provider = map.providerByModel?.[model] ?? effectiveProvider;
   if (!provider) {
     throw new ModelIdentityError(

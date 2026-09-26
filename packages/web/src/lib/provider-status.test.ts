@@ -15,6 +15,7 @@ const CONNECTED: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'opencode', status: 'connected', enabled: true },
+    { provider: 'cursor', status: 'connected', enabled: true },
   ],
 }
 
@@ -61,6 +62,7 @@ describe('provider-status SSE rows', () => {
         { provider: 'claude', status: 'disconnected', enabled: true },
         CONNECTED.providers[1],
         CONNECTED.providers[2],
+        CONNECTED.providers[3],
       ],
     })
   })
@@ -112,6 +114,7 @@ describe('complete provider-status responses', () => {
       { provider: 'claude', status: 'connected', enabled: false },
       { provider: 'codex', status: 'connected', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   }
 
@@ -126,6 +129,7 @@ describe('complete provider-status responses', () => {
       },
       { provider: 'codex', status: 'connected', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   }
 
@@ -148,6 +152,7 @@ describe('complete provider-status responses', () => {
         { provider: 'claude' as const, status: 'connected' as const, enabled: true },
         INCIDENT.providers[1]!,
         INCIDENT.providers[2]!,
+        INCIDENT.providers[3]!,
       ],
     }
     const staleIncident = {
@@ -156,6 +161,7 @@ describe('complete provider-status responses', () => {
         { ...INCIDENT.providers[0]! },
         INCIDENT.providers[1]!,
         INCIDENT.providers[2]!,
+        INCIDENT.providers[3]!,
       ],
     }
 
@@ -173,6 +179,7 @@ describe('complete provider-status responses', () => {
         { ...INCIDENT.providers[0]!, authFailureId: 'incident-b' },
         INCIDENT.providers[1]!,
         INCIDENT.providers[2]!,
+        INCIDENT.providers[3]!,
       ],
     }
 
@@ -186,6 +193,7 @@ describe('complete provider-status responses', () => {
         { ...INCIDENT.providers[0]!, authFailureId: 'incident-b' },
         INCIDENT.providers[1]!,
         INCIDENT.providers[2]!,
+        INCIDENT.providers[3]!,
       ],
     }
 
@@ -202,6 +210,7 @@ describe('parseProviderStatusResponse', () => {
           { provider: 'opencode', status: 'unknown', enabled: true, hint: 'Try again.', raw: 'private' },
           { provider: 'claude', status: 'connected', enabled: true, account: 'private@example.test' },
           { provider: 'codex', status: 'disconnected', enabled: false },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       }),
     ).toEqual({
@@ -209,6 +218,7 @@ describe('parseProviderStatusResponse', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'disconnected', enabled: false },
         { provider: 'opencode', status: 'unknown', enabled: true, hint: 'Try again.' },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     })
   })
@@ -234,6 +244,7 @@ describe('parseProviderStatusResponse', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'codex', status: 'ready' },
           { provider: 'opencode', status: 'connected' },
+        { provider: 'cursor', status: 'connected' },
         ],
       },
     ],
@@ -244,6 +255,7 @@ describe('parseProviderStatusResponse', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'claude', status: 'disconnected' },
           { provider: 'opencode', status: 'connected' },
+        { provider: 'cursor', status: 'connected' },
         ],
       },
     ],
@@ -263,6 +275,7 @@ describe('parseProviderStatusResponse', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'codex', status: 'connected', hint: { raw: 'private' } },
           { provider: 'opencode', status: 'connected' },
+        { provider: 'cursor', status: 'connected' },
         ],
       },
     ],
@@ -276,6 +289,7 @@ describe('parseProviderStatusResponse', () => {
         { provider: 'claude', status: 'connected' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'connected', enabled: true },
       ],
     })).toThrow('Invalid provider status response')
   })
@@ -288,6 +302,7 @@ describe('usableRunners', () => {
         { provider: 'opencode', status: 'connected', enabled: false },
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: false },
+        { provider: 'cursor', status: 'connected', enabled: false },
       ],
     }
 
@@ -316,6 +331,7 @@ describe('usableRunners', () => {
         { provider: 'claude', status: 'disconnected', enabled: true },
         { provider: 'codex', status: 'not-installed', enabled: true },
         { provider: 'opencode', status: 'unknown', enabled: true },
+      { provider: 'cursor', status: 'unknown', enabled: true },
       ],
     }
 
@@ -331,6 +347,7 @@ describe('providerStatusFor', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         codex,
         { provider: 'opencode', status: 'not-installed', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
 

@@ -94,7 +94,7 @@
 
 You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
-[OpenCode](https://opencode.ai) or [pi](https://github.com/badlogic/pi-mono).
+[OpenCode](https://opencode.ai), [Cursor Agent](https://cursor.com/docs/cli/overview) or [pi](https://github.com/badlogic/pi-mono).
 `git` and `gh` are optional.
 
 ```bash
