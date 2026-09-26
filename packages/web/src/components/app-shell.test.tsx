@@ -57,6 +57,13 @@ describe('AppShell', () => {
     expect(within(screen.getByRole('main')).getByText('route content')).toBeTruthy()
   })
 
+  it('renders the brand tile from the shared /icon.svg asset', () => {
+    renderShell('/')
+    const tile = document.querySelector('[data-slot="brand-tile"]') as HTMLImageElement | null
+    expect(tile).toBeTruthy()
+    expect(tile!.getAttribute('src')).toBe('/icon.svg')
+  })
+
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
     renderShell('/')
     const main = screen.getByRole('main')
