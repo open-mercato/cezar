@@ -26,6 +26,7 @@ function stubHub() {
   const hub: SocketHub = {
     registerTopic: (name, publisher) => {
       topics.set(name, publisher);
+      return () => { topics.delete(name); };
     },
     attach: () => undefined,
     close: () => undefined,

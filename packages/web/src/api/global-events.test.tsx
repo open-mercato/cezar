@@ -1,4 +1,4 @@
-import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
+import { QueryClientProvider, QueryObserver, type QueryClient } from '@tanstack/react-query'
 import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -1119,4 +1119,26 @@ describe('GlobalEventsProvider', () => {
     const view = render(<Probe />)
     expect(view.getByTestId('probe').textContent).toBe('0')
   })
+})
+
+
+it.each(['event', 'reconnect', 'visibility'])('discards old project/tracker requests after %s', async trigger => {
+  const keys = [workspaceQueryKeys.projects, ['tracker', BOOT, 'association']] as const
+  const controls = keys.map((queryKey) => {
+    let resolveOld!: (value: string) => void
+    const old = new Promise<string>((resolve) => { resolveOld = resolve })
+    const read = vi.fn().mockReturnValueOnce(old).mockResolvedValue('new')
+    const observer = new QueryObserver(client, { queryKey, queryFn: read })
+    const unsubscribe = observer.subscribe(() => {})
+    return { queryKey, read, resolveOld, unsubscribe }
+  })
+  try {
+    const { source } = mount()
+    if (trigger === 'event') source.emit('tracker-changed', JSON.stringify({ project: BOOT }))
+    else if (trigger === 'reconnect') { source.open(); source.drop(); source.open() }
+    else { setVisibility('hidden'); setVisibility('visible') }
+    await waitFor(() => controls.forEach(({ read }) => expect(read).toHaveBeenCalledTimes(2)))
+    await act(async () => controls.forEach(({ resolveOld }) => resolveOld('old')))
+    controls.forEach(({ queryKey }) => expect(client.getQueryData(queryKey)).toBe('new'))
+  } finally { controls.forEach(({ unsubscribe }) => unsubscribe()) }
 })

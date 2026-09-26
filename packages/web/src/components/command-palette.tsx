@@ -456,6 +456,7 @@ function PaletteContent({ close }: { close: () => void }) {
             forge: health.data?.forge?.available === true,
             inbox: health.data?.capabilities.followups === true,
             automations: health.data?.capabilities.automations === true,
+            tracker: registry?.projects.find((project) => project.id === (activeProjectId ?? registry.bootProject))?.tracker,
           }).map((item) => {
             const Icon = item.icon
             return (

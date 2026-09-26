@@ -382,3 +382,122 @@ describe('reasoning text survives persist → replay (#528)', () => {
     expect(reasoning?.kind !== 'tool' && reasoning?.text).toBe('The session cookie is dropped on refresh.');
   });
 });
+
+describe('streaming credentials across real store flush boundaries', () => {
+  const secret = 'run-secret-1234567890-private';
+  function withStore(check: (sink: UiEventSink, wire: Wire[], store: RunStore, id: string) => void) {
+    vi.useFakeTimers();
+    const dir = mkdtempSync(join(tmpdir(), 'cez-stream-secret-'));
+    try {
+      const store = RunStore.open(dir);
+      const run = store.createRun({ title: 'test', workflow: 'w', task: 'test', steps: [] });
+      store.registerRunSecrets(run.id, [secret]);
+      const wire: Wire[] = [];
+      store.on('event', ({ event }) => wire.push(event));
+      const sink = new UiEventSink({
+        persist: (e) => store.appendEvent(run.id, { ...e, stepId: 's' }),
+        emitLive: (e) => store.emitEphemeral(run.id, { ...e, stepId: 's' }),
+      });
+      check(sink, wire, store, run.id);
+      sink.sessionEnded('end_turn');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  const chunks = (wire: Wire[], id = 'a') => wire.filter(e => e.type === 'item.delta' && e.itemId === id).map(e => e.delta).join('');
+
+  it('never exposes a known secret reconstructed from separate timed flushes', () => withStore((sink, wire, store, id) => {
+    sink.handle(delta('a', 'hello ' + secret.slice(0, 9)));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    expect(chunks(wire)).toBe('hello ');
+    sink.handle(delta('b', 'other output'));
+    sink.handle(delta('a', secret.slice(9) + ' world'));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    expect(chunks(wire)).toBe('hello [REDACTED] world');
+    expect(chunks(wire, 'b')).toBe('other output');
+    sink.handle({ type: 'item.completed', item: { id: 'a', kind: 'message', role: 'assistant', text: 'hello ' + secret + ' world' } });
+    expect(JSON.stringify(wire)).not.toContain(secret);
+    expect(store.readEvents(id).some(e => e.type === 'item.delta')).toBe(false);
+    expect((store.readEvents(id).at(-1)?.item as UiItem & {text: string}).text).toBe('hello [REDACTED] world');
+  }));
+
+  it.each(['turn', 'session'])('drains an ordinary partial prefix before %s end', (end) => withStore((sink, wire) => {
+    sink.handle(delta('a', 'ordinary run-sec'));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    expect(chunks(wire)).toBe('ordinary ');
+    if (end === 'turn') sink.handle({ type: 'turn.completed', turnId: 't', stopReason: 'end_turn' });
+    else sink.sessionEnded('end_turn');
+    expect(chunks(wire)).toBe('ordinary run-sec');
+    expect(wire.at(-1)?.type).toBe(end === 'turn' ? 'turn.completed' : 'session.ended');
+  }));
+
+  it('synchronizes a partial snapshot with the following delta', () => withStore((sink, wire) => {
+    sink.handle({type: 'item.started', item: {id: 'a', kind: 'message', role: 'assistant', text: ''}});
+    sink.handle({type: 'item.updated', item: {id: 'a', kind: 'message', role: 'assistant', text: 'hello ' + secret.slice(0, 9)}});
+    const snapshot = wire.at(-1)?.item as {text: string};
+    expect(snapshot.text).toBe('hello ');
+    sink.handle(delta('a', secret.slice(9)));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    expect(snapshot.text + chunks(wire)).toBe('hello [REDACTED]');
+  }));
+
+  it.each(Array.from({ length: secret.length - 1 }, (_, index) => index + 1))(
+    'redacts a known secret split at offset %i, including an immediate size flush', (offset) => withStore((sink, wire) => {
+      sink.handle(delta('a', 'z'.repeat(64_000) + secret.slice(0, offset)));
+      expect(chunks(wire)).toBe('z'.repeat(64_000));
+      sink.handle(delta('a', secret.slice(offset)));
+      vi.advanceTimersByTime(DELTA_FLUSH_MS);
+      expect(chunks(wire)).toBe('z'.repeat(64_000) + '[REDACTED]');
+    }),
+  );
+
+  it('isolates streamed fields and steps and releases a mismatching ordinary prefix', () => withStore((sink, wire, store, id) => {
+    sink.handle(delta('a', secret.slice(0, 9), 'text'));
+    sink.handle(delta('a', 'plain output', 'output'));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    store.emitEphemeral(id, { type: 'item.delta', stepId: 'other', itemId: 'a', field: 'text', delta: 'unrelated' });
+    sink.handle(delta('a', ' is ordinary', 'text'));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    const fieldText = wire.filter(e => e.type === 'item.delta' && e.stepId === 's' && e.field === 'text').map(e => e.delta).join('');
+    expect(fieldText).toBe(secret.slice(0, 9) + ' is ordinary');
+    expect(wire.find(e => e.type === 'item.delta' && e.field === 'output')?.delta).toBe('plain output');
+    expect(wire.find(e => e.stepId === 'other')?.delta).toBe('unrelated');
+  }));
+
+  it('drains before completion with increasing sequence numbers, then clears run state', () => withStore((sink, wire, store, id) => {
+    sink.handle(delta('a', 'ordinary run-sec'));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    sink.handle({type: 'item.completed', item: {id: 'a', kind: 'message', role: 'assistant', text: 'ordinary run-sec'}});
+    expect(chunks(wire)).toBe('ordinary run-sec');
+    expect(wire.at(-1)?.type).toBe('item.completed');
+    for (let index = 1; index < wire.length; index++) expect(wire[index]!.seq).toBeGreaterThan(wire[index - 1]!.seq as number);
+    sink.handle(delta('b', secret.slice(0, 9)));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    sink.sessionEnded('end_turn');
+    expect(chunks(wire, 'b')).toBe(secret.slice(0, 9));
+    store.clearRunSecrets(id);
+    store.emitEphemeral(id, {type: 'item.delta', stepId: 's', itemId: 'b', field: 'text', delta: 'new session'});
+    expect(wire.at(-1)?.delta).toBe('new session');
+  }));
+
+  it('redacts every field of terminal drain events too', () => withStore((sink, wire) => {
+    sink.handle(delta(secret, 'ordinary run-sec'));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    sink.sessionEnded('end_turn');
+    expect(JSON.stringify(wire)).not.toContain(secret);
+    expect(wire.filter(e => e.type === 'item.delta').map(e => e.delta).join('')).toBe('ordinary run-sec');
+  }));
+
+  it('keeps the redaction opt-out and large-buffer immediate flush', () => withStore((sink, wire) => {
+    vi.stubEnv('CEZ_REDACT_SECRETS', '0');
+    sink.handle(delta('a', secret.slice(0, 9)));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    expect(chunks(wire)).toBe(secret.slice(0, 9));
+    sink.handle(delta('a', secret.slice(9)));
+    vi.advanceTimersByTime(DELTA_FLUSH_MS);
+    expect(chunks(wire)).toBe(secret);
+    sink.handle(delta('b', 'z'.repeat(64_000)));
+    expect(chunks(wire, 'b')).toHaveLength(64_000);
+  }));
+});

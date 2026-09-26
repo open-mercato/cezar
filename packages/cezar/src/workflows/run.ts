@@ -1,3 +1,5 @@
+import type { TrackerAssociation } from '@open-mercato/cezar-contract';
+import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -969,13 +971,26 @@ export class RunManager {
    *  CLI needs to address the right project over the API (spec 2026-09-10-dispatch). */
   private readonly projectId: string | undefined;
 
+  /** See the constructor option of the same name. */
+  private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
+
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
-    options: { semaphore?: WorkspaceSemaphore; projectId?: string } = {},
+    options: {
+      semaphore?: WorkspaceSemaphore;
+      projectId?: string;
+      /**
+       * Revalidate the tracker association captured by the run before every spawn,
+       * including Continue and recovery. A mismatch fails the step before credentials
+       * reach an agent. Secrets are registered with RunStore before any output arrives.
+       */
+      resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
+    } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.projectId = options.projectId;
+    this.resolveTrackerEnv = options.resolveTrackerEnv;
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
@@ -1136,8 +1151,17 @@ export class RunManager {
     const profileId = options.recordedProfileId
       ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
+    const association = run?.automationTracker?.association;
+    const trackerEnv = association && this.resolveTrackerEnv && process.env.CEZ_DRY_RUN !== '1'
+      ? await this.resolveTrackerEnv(this.repoRoot, association)
+      : {};
+    const secrets = [trackerEnv.JIRA_API_TOKEN, trackerEnv.LINEAR_API_KEY].filter((value): value is string => Boolean(value));
+    if (trackerEnv.JIRA_EMAIL && trackerEnv.JIRA_API_TOKEN) {
+      secrets.push(Buffer.from(`${trackerEnv.JIRA_EMAIL}:${trackerEnv.JIRA_API_TOKEN}`).toString('base64'));
+    }
+    this.store.registerRunSecrets(runId, secrets);
     return {
-      env: { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env },
+      env: { ...this.agentEnv(runId, options.generateFollowups), ...trackerEnv, ...resolved.env },
       profileId: resolved.profile.id,
     };
   }
@@ -1686,6 +1710,8 @@ export class RunManager {
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
+    // Session result has settled and its sink has flushed before terminal cleanup.
+    this.store.clearRunSecrets(runId);
     this.memoryPausing.delete(runId);
     this.lastNamerKey.delete(runId);
     this.forceStarted.delete(runId);
@@ -3465,6 +3491,7 @@ export class RunManager {
         // coalescers; the v1 turn boundary flushes again (idempotent) so no
         // buffered delta can outlive its turn.
         sink.flushAll();
+        turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
@@ -3635,7 +3662,7 @@ export class RunManager {
         recordedProfileId: resumedProfileId,
       });
     } catch (err) {
-      if (!(err instanceof AgentTempDirError)) throw err;
+      if (!(err instanceof AgentTempDirError) && !(err instanceof TrackerAgentBindingError)) throw err;
       failBeforeSpawn(err.message);
       return;
     }
@@ -4230,6 +4257,7 @@ export class RunManager {
         // v2 `turn.completed` already flushed the coalescers; the v1 turn
         // boundary flushes again (idempotent) as a backstop.
         sink.flushAll();
+        turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
@@ -4428,7 +4456,7 @@ export class RunManager {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
       });
     } catch (err) {
-      if (err instanceof AgentTempDirError) return err.message;
+      if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;
       throw err;
     }
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
@@ -4666,6 +4694,8 @@ export class RunManager {
     // CEZ_AUTONAME=0 kills all LLM naming; dry-run skips it too unless
     // CEZ_AUTONAME=1 forces the mock path — see autoNamingActive.
     if (!autoNamingActive()) return;
+    task = this.store.redactRunText(runId, task);
+    if (live?.turnText) live = { ...live, turnText: this.store.redactRunText(runId, live.turnText) };
     try {
       let skillDescription: string | undefined;
       if (skillName) {
@@ -4695,6 +4725,8 @@ export class RunManager {
   }
 
   async recordTurnEnd(runId: string, turnText: string): Promise<void> {
+    // The namer can finish after session cleanup removes its in-memory secrets.
+    turnText = this.store.redactRunText(runId, turnText);
     try {
       const run = this.store.getRun(runId);
       if (!run) return;

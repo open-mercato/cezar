@@ -1,3 +1,4 @@
+import { EditorTrackerFields } from './editor-tracker-fields'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeftIcon, FileTextIcon, LayoutTemplateIcon, Settings2Icon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -55,6 +56,7 @@ function sectionOf(message: string): ErrorSection {
 }
 
 const PLACEHOLDER = {
+  tracker: 'Implement {{tracker.key}} and prepare a pull request.',
   schedule: 'Describe the task the agent should do each time. Placeholders: {{date}}, {{project}}',
   github: 'Describe the task the agent should do for each match. Placeholders: {{github.url}}, {{github.title}}, {{github.number}}, {{github.labels}}',
 } as const
@@ -83,6 +85,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
 
   const [draft, setDraft] = useState<EditorDraft>(() => (automation ? fromDefinition(automation) : newDraft()))
   const [showTemplates, setShowTemplates] = useState(!automation)
+  const [trackerValid, setTrackerValid] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<SaveError | null>(null)
   const [conflict, setConflict] = useState(false)
@@ -116,7 +119,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
   const sourcesReady = skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   const baseBranch = repo.data?.baseBranch ?? repo.data?.info?.branch ?? undefined
   const cli = useMemo(() => cliDefinitionOf(draft), [draft])
-  const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0 && !saving
+  const canSave = draft.name.trim().length > 0 && draft.prompt.trim().length > 0 && !saving && (draft.kind !== 'tracker' || trackerValid)
 
   const insertPrompt = (snippet: string) => {
     const box = promptRef.current
@@ -157,6 +160,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
 
   const reload = () => void queryClient.invalidateQueries({ queryKey: automationsQueryKey() })
   const saveLabel = automation ? 'Save changes' : draft.enabled ? 'Save and enable' : 'Save paused'
+
 
   return (
     <div data-route="automations" data-slot="automation-editor" className="flex min-h-full flex-col">
@@ -220,10 +224,12 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
                 editing={!!automation}
                 githubAvailable={githubAvailable}
                 githubReason={data?.reason}
-                onChange={(kind) => patch({ kind })}
+                onChange={(kind) => patch({ kind, ...(kind === 'tracker' ? { intervalSeconds: 1800, enabled: false } : {}) })}
               />
               {draft.kind === 'schedule' ? (
                 <EditorScheduleFields schedule={draft.schedule} timeZone={timeZone} onChange={(schedule) => patch({ schedule })} />
+              ) : draft.kind === 'tracker' ? (
+                <EditorTrackerFields trigger={draft.trackerTrigger} intervalSeconds={draft.intervalSeconds} onChange={patch} onValid={setTrackerValid} />
               ) : (
                 <EditorGithubFields
                   events={draft.events}
@@ -292,7 +298,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
               <Label className="text-[13px] font-medium">
                 <Switch aria-label="Enabled" checked={draft.enabled} onCheckedChange={(enabled) => patch({ enabled })} />
                 Enabled
-                {draft.kind === 'github' ? (
+                {draft.kind !== 'schedule' ? (
                   <span className="text-xs font-normal text-muted-foreground">— from a current-time baseline; existing matches will not launch</span>
                 ) : null}
               </Label>
@@ -302,6 +308,7 @@ export function AutomationEditor({ data, automation, actions, onBack, onSaved, o
           <div className="flex flex-col gap-3 lg:sticky lg:top-[76px]">
             <NextRunsPreview kind={draft.kind} schedule={draft.schedule} intervalSeconds={draft.intervalSeconds} timeZone={timeZone} />
             <CopyAsCliCard definition={cli} />
+            {automation && automation.kind !== 'schedule' && actions ? <Button variant="outline" disabled={actions.busy} onClick={() => void actions.preview(automation)}>Preview saved matches</Button> : null}
             {automation?.lastRun ? (
               <LastRunCard
                 lastRun={automation.lastRun}
@@ -342,14 +349,14 @@ function InlineAlert({ children }: { children: ReactNode }) {
  * (receipts and cursors are kind-specific), so the editor says so before the round trip.
  */
 function KindSegment({ value, editing, githubAvailable, githubReason, onChange }: {
-  value: 'schedule' | 'github'
+  value: 'schedule' | 'github' | 'tracker'
   editing: boolean
   githubAvailable: boolean
   githubReason: string | undefined
-  onChange: (kind: 'schedule' | 'github') => void
+  onChange: (kind: 'schedule' | 'github' | 'tracker') => void
 }) {
   const kindLocked = 'Change the kind by creating a new automation'
-  const options: ReadonlyArray<{ value: 'schedule' | 'github'; label: string; disabled: boolean; title?: string }> = [
+  const options: ReadonlyArray<{ value: 'schedule' | 'github' | 'tracker'; label: string; disabled: boolean; title?: string }> = [
     {
       value: 'schedule',
       label: 'On a schedule',
@@ -366,9 +373,10 @@ function KindSegment({ value, editing, githubAvailable, githubReason, onChange }
           ? { title: kindLocked }
           : {}),
     },
+    { value: 'tracker', label: 'When Jira / Linear changes', disabled: editing && value !== 'tracker', ...(editing && value !== 'tracker' ? { title: kindLocked } : {}) },
   ]
   return (
-    <div data-slot="editor-kind" role="group" aria-label="Trigger" className="inline-flex gap-0.5 self-start rounded-md bg-muted p-[3px]">
+    <div data-slot="editor-kind" role="group" aria-label="Trigger" className="inline-flex flex-wrap gap-0.5 self-start rounded-md bg-muted p-[3px]">
       {options.map((option) => (
         <button
           key={option.value}

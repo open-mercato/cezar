@@ -120,8 +120,9 @@ function renderEditor(props: Partial<Parameters<typeof AutomationEditor>[0]> = {
   const onBack = vi.fn()
   const onSaved = vi.fn()
   const onLog = vi.fn()
+  const client = createQueryClient()
   render(
-    <QueryClientProvider client={createQueryClient()}>
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/automations/new']}>
         <Routes>
           <Route path="*" element={<><AutomationEditor data={DATA} onBack={onBack} onSaved={onSaved} onLog={onLog} {...props} /><LocationProbe /><Toaster /></>} />
@@ -129,7 +130,7 @@ function renderEditor(props: Partial<Parameters<typeof AutomationEditor>[0]> = {
       </MemoryRouter>
     </QueryClientProvider>,
   )
-  return { onBack, onSaved, onLog }
+  return { onBack, onSaved, onLog, client }
 }
 
 const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
@@ -310,7 +311,7 @@ describe('AutomationEditor — edit', () => {
     const runNow = vi.fn(async () => undefined)
     const { onSaved, onLog } = renderEditor({
       automation: EXISTING,
-      actions: { runNow, toggleEnabled: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
+      actions: { preview: vi.fn(), runNow, toggleEnabled: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
     })
     expect(screen.getByRole('heading', { name: 'Edit automation' })).not.toBeNull()
     expect(screen.getByText('enabled').getAttribute('data-slot')).toBe('pill')
@@ -352,4 +353,41 @@ describe('AutomationEditor — edit', () => {
     expect(screen.getByRole('button', { name: 'Reload' })).not.toBeNull()
     expect(onSaved).not.toHaveBeenCalled()
   })
+})
+
+describe('tracker automation editor', () => {
+  const association = { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: 'Team', connectionId: '11111111-1111-4111-8111-111111111111' }
+  it('saves the selected historical event and status ID with the shared form', async () => {
+    const sent = stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association, events: ['issue.opened', 'issue.status_changed'], statuses: [{ id: 'todo-id', name: 'To Do' }], labels: [], limitations: [] }) })
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Jira work' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Implement {{tracker.key}}' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'issue.status_changed' }))
+    expect((screen.getByRole('button', { name: 'Save paused' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'To Do' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Save paused' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Save paused' }))
+    await waitFor(() => expect(sent.find(request => request.method === 'POST' && request.path === '/api/v1/automations')?.body).toMatchObject({ kind: 'tracker', enable: false, intervalSeconds: 1800, trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo-id'] } }))
+  })
+  it('does not offer unadvertised Linear history events', async () => {
+    stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association: { ...association, kind: 'linear' }, events: ['issue.opened'], statuses: [], labels: [], limitations: ['Early changes are not fully recorded.'] }) })
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    await screen.findByText('Early changes are not fully recorded.')
+    expect(screen.queryByRole('button', { name: 'issue.status_changed' })).toBeNull()
+  })
+})
+
+it('invalidates tracker event options on the existing tracker cache prefix', async () => {
+  let connectionId = '11111111-1111-4111-8111-111111111111'
+  stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true,
+    association: { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: connectionId, connectionId },
+    events: ['issue.opened'], statuses: [], labels: [], limitations: [] }) })
+  const { client } = renderEditor()
+  fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'issue.opened' }))
+  connectionId = '22222222-2222-4222-8222-222222222222'
+  await act(async () => { await client.invalidateQueries({ queryKey: ['tracker'] }) })
+  await screen.findByText('The tracker connection changed. Select an event again before saving.')
 })

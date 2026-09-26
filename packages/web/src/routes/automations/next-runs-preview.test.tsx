@@ -36,3 +36,10 @@ describe('NextRunsPreview', () => {
     expect(screen.getByText(/Checks GitHub every 10 min while cezar is open/)).not.toBeNull()
   })
 })
+
+it('describes tracker polling without claiming gh authentication', () => {
+  const { container } = render(<NextRunsPreview kind="tracker" schedule={{ type: 'daily' }} intervalSeconds={1800} timeZone="UTC" now={NOW} />)
+  expect(container.textContent).toContain('Checks the project tracker every 30 min')
+  expect(container.textContent).not.toContain('GitHub')
+  expect(container.textContent).not.toContain('through your')
+})

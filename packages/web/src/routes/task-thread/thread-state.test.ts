@@ -987,3 +987,18 @@ describe('reduceThread — turn timestamps (#941)', () => {
     expect(turns[0]!.startedAt).toBe('2026-07-14T12:00:00.400Z')
   })
 })
+
+describe('reduceThread — lastEventAt (the Working… indicator\'s last activity)', () => {
+  it('is the newest stamped event of any kind, and skips unstamped ones', () => {
+    const state = reduceThread([
+      { ...line(1, 'turn.started', { turnId: 't1' }), ts: '2026-07-14T12:00:00.000Z' },
+      { ...line(2, 'item.delta', { itemId: 'i1', delta: { text: 'hi' } }), ts: '2026-07-14T12:00:09.000Z' },
+      { ...line(3, 'item.delta', { itemId: 'i1', delta: { text: '!' } }), ts: 'garbage' },
+    ] as RunEvent[])
+    expect(state.lastEventAt).toBe('2026-07-14T12:00:09.000Z')
+  })
+
+  it('is absent for an empty stream', () => {
+    expect(reduceThread([]).lastEventAt).toBeUndefined()
+  })
+})

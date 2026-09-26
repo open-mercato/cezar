@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>cezar ⚡</h1>
+  <h1>Cezar - orchestrate hundreds of AI coding agents, 24/7.</h1>
 </div>
 
 <h4 align="center">
@@ -11,8 +11,9 @@
 
 <div align="center">
   <h2>
-    Run coding agents in parallel, right in your repo.<br />
-    Local, zero config, no accounts.
+    One control center for Claude Code, Codex, OpenCode and other coding agents.<br />
+    Run agents locally or on a VPS, automate multi-step workflows,<br />
+    and let them keep working while you're away.
   </h2>
 </div>
 
@@ -24,6 +25,11 @@
   <img alt="Node 20+" src="https://img.shields.io/badge/node-20%2B-339933" />
   <a href="https://github.com/open-mercato/cezar/pulls">
     <img alt="PRs welcome!" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat" /></a>
+</p>
+
+<p align="center">
+  <a href="https://openmercatocloud.com/247agentic-cear" target="_blank" rel="noopener">
+    <img src="docs/screenshots/cloud-banner.svg" alt="Use cezar on a cloud sandbox for 24/7 coding. Start for free." width="720" /></a>
 </p>
 
 <div align="center">
@@ -162,3 +168,7 @@ npm run dev
 ## License
 
 **MIT** © Patryk Lewczuk. Full text in [LICENSE](LICENSE).
+
+## Jira and Linear
+
+Connect a project issue tracker in Settings to browse issues, launch workflows and configure event automations. See [setup, permissions and recovery](docs/issue-trackers.md).

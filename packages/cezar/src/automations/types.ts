@@ -1,5 +1,12 @@
 import { z } from 'zod';
-import { DISPATCH_MAX_SUBTASKS, automationScheduleSchema, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import {
+  DISPATCH_MAX_SUBTASKS,
+  trackerTriggerSchema,
+  trackerAutomationEventSchema,
+  trackerAssociationSchema,
+  automationScheduleSchema,
+  type AutomationSchedule,
+} from '@open-mercato/cezar-contract';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import { workflowStepSchema } from '../workflows/types.ts';
 
@@ -27,6 +34,9 @@ export const automationFiltersSchema = z
     reviewers: stringList,
     lookbackDays: z.number().int().min(1).max(90).default(7),
     maxRecords: z.number().int().min(1).max(100).default(25),
+    /** Tracker kind only: the vendor workflow status a matching item must currently be in
+     *  (e.g. "To Do"). Case-insensitive match against the item's own `status` field. */
+    status: z.string().trim().min(1).max(200).optional(),
   })
   .passthrough();
 
@@ -60,9 +70,10 @@ export const automationTaskSchema = z
   });
 
 /**
- * A poll's two defaulted keys are filled BEFORE parsing, and only for the poll kind: `.default()`
- * on the keys themselves would also stamp `intervalSeconds: 300` and an empty filter onto every
- * scheduled definition, and the routes then read those as a GitHub filter on a schedule.
+ * A poll's two defaulted keys are filled BEFORE parsing, and only for a poll kind (`github` or
+ * `tracker`): `.default()` on the keys themselves would also stamp `intervalSeconds: 300` and an
+ * empty filter onto every scheduled definition, and the routes then read those as a poll filter
+ * on a schedule.
  */
 const fillGithubDefaults = (raw: unknown): unknown => {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
@@ -70,7 +81,7 @@ const fillGithubDefaults = (raw: unknown): unknown => {
   if (record.kind === 'schedule') return raw;
   return {
     ...record,
-    intervalSeconds: record.intervalSeconds ?? 300,
+    intervalSeconds: record.intervalSeconds ?? (record.kind === 'tracker' ? 1800 : 300),
     filters: record.filters ?? {},
   };
 };
@@ -84,10 +95,11 @@ export const automationDefinitionObjectSchema = z
     description: z.string().max(2_000).optional(),
     enabled: z.boolean().default(false),
     /** A definition written before schedules (spec 2026-09-14) has no `kind`: it is a poll. */
-    kind: z.enum(['github', 'schedule']).default('github'),
+    kind: z.enum(['github', 'schedule', 'tracker']).default('github'),
     events: z.array(automationEventSchema).min(1).max(7).optional(),
     intervalSeconds: z.number().int().min(60).max(86_400).optional(),
     filters: automationFiltersSchema.optional(),
+    trackerTrigger: trackerTriggerSchema.optional(),
     schedule: automationScheduleSchema.optional(),
     task: automationTaskSchema,
     createdAt: z.string().datetime(),
@@ -98,6 +110,15 @@ export const automationDefinitionObjectSchema = z
     if (definition.kind === 'schedule') {
       if (!definition.schedule) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['schedule'], message: 'a scheduled automation needs a schedule' });
+      }
+      return;
+    }
+    if (definition.kind === 'tracker') {
+      if (definition.intervalSeconds === undefined) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['intervalSeconds'], message: 'a tracker automation needs a poll interval' });
+      }
+      if (!definition.trackerTrigger && !definition.filters?.status) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['filters', 'status'], message: 'a tracker automation needs a target status' });
       }
       return;
     }
@@ -145,6 +166,7 @@ export const automationRuntimeStateSchema = z
     revision: z.number().int().positive().optional(),
     baselineAt: z.string().datetime().optional(),
     cursor: automationCursorSchema.optional(),
+    checkpoint: z.string().optional(),
     frozenHighWatermark: automationCursorSchema
       .extend({ tieBreaker: z.string() })
       .optional(),
@@ -198,6 +220,26 @@ export const automationReceiptSchema = z
       })
       .passthrough()
       .optional(),
+    /** tracker kind: its own key, same reason `automationTrigger` has one on the run record —
+     *  a github-shaped reader strips it instead of failing on the missing github-only fields. */
+    trackerCandidate: z
+      .object({
+        eventId: z.string(), timestamp: z.string().datetime(), tieBreaker: z.string(),
+        provider: z.enum(['jira', 'linear']), key: z.string().min(1),
+        event: trackerAutomationEventSchema.optional(),
+        association: trackerAssociationSchema.optional(),
+        issueId: z.string().optional(),
+        change: z.object({
+          fromId: z.string().optional(),
+          toId: z.string().optional(),
+          labelId: z.string().optional(),
+          labelName: z.string().optional(),
+        }).optional(),
+        title: z.string().max(500), url: z.string().url(), status: z.string().max(200),
+        labels: z.array(z.string().max(200)).max(100),
+      })
+      .passthrough()
+      .optional(),
   })
   .passthrough();
 
@@ -222,7 +264,7 @@ export const automationLogRecordSchema = z
     ts: z.string().datetime(),
     automationId: z.string().min(1),
     revision: z.number().int().positive(),
-    event: automationEventSchema.optional(),
+    event: z.union([automationEventSchema, trackerAutomationEventSchema]).optional(),
     result: automationLogResultSchema,
     reason: z.string().max(2_000).optional(),
     durationMs: z.number().int().nonnegative().optional(),
@@ -231,6 +273,9 @@ export const automationLogRecordSchema = z
     githubNumber: z.number().int().positive().optional(),
     githubTitle: z.string().max(500).optional(),
     githubUrl: z.string().url().optional(),
+    trackerKey: z.string().optional(),
+    trackerTitle: z.string().max(500).optional(),
+    trackerUrl: z.string().url().optional(),
     rateLimit: z
       .object({
         bucket: z.enum(['core', 'search']),
@@ -264,6 +309,13 @@ export type ScheduleAutomationDefinition = AutomationDefinition & {
   kind: 'schedule';
   schedule: AutomationSchedule;
 };
+/** A configured tracker history trigger; legacy snapshot definitions deliberately do not narrow. */
+export type TrackerAutomationDefinition = AutomationDefinition & {
+  kind: 'tracker';
+  intervalSeconds: number;
+  filters: NonNullable<AutomationDefinition['filters']>;
+  trackerTrigger: NonNullable<AutomationDefinition['trackerTrigger']>;
+};
 
 export function isGithubAutomation(definition: AutomationDefinition): definition is GithubAutomationDefinition {
   return definition.kind === 'github'
@@ -274,4 +326,11 @@ export function isGithubAutomation(definition: AutomationDefinition): definition
 
 export function isScheduleAutomation(definition: AutomationDefinition): definition is ScheduleAutomationDefinition {
   return definition.kind === 'schedule' && definition.schedule !== undefined;
+}
+
+export function isTrackerAutomation(definition: AutomationDefinition): definition is TrackerAutomationDefinition {
+  return definition.kind === 'tracker'
+    && definition.intervalSeconds !== undefined
+    && definition.filters !== undefined
+    && definition.trackerTrigger !== undefined;
 }

@@ -40,9 +40,13 @@ export interface DraftFilters {
   maxRecords: number
 }
 
+/** Shared editor kinds; each serializes only its own trigger. */
+export type EditableAutomationKind = AutomationKind
+
 export interface EditorDraft {
   name: string
-  kind: AutomationKind
+  kind: EditableAutomationKind
+  trackerTrigger?: AutomationDefinition['trackerTrigger']
   schedule: AutomationSchedule
   events: AutomationEvent[]
   intervalSeconds: number
@@ -159,6 +163,7 @@ export function fromDefinition(definition: AutomationDefinition): EditorDraft {
     ...base,
     name: definition.name,
     kind: definition.kind,
+    trackerTrigger: definition.trackerTrigger,
     schedule: definition.schedule ? { ...definition.schedule } : base.schedule,
     events: definition.events?.length ? [...definition.events] : base.events,
     intervalSeconds: definition.intervalSeconds ?? base.intervalSeconds,
@@ -268,6 +273,10 @@ export function toBody(draft: EditorDraft): AutomationBody {
   if (draft.kind === 'schedule') {
     return { name: draft.name.trim(), kind: 'schedule', schedule: scheduleBody(draft.schedule), task }
   }
+  if (draft.kind === 'tracker') {
+    return { name: draft.name.trim(), kind: 'tracker', trackerTrigger: draft.trackerTrigger,
+      intervalSeconds: draft.intervalSeconds, filters: { lookbackDays: clamp(draft.filters.lookbackDays, 1, 90), maxRecords: clamp(draft.filters.maxRecords, 1, 100) }, task }
+  }
   const f = draft.filters
   const list = (text: string, key: keyof AutomationBodyFilters) => {
     const values = splitList(text)
@@ -306,6 +315,7 @@ export function cliDefinitionOf(draft: EditorDraft): CliDefinition {
   return {
     name: body.name,
     kind: draft.kind,
+    ...(body.trackerTrigger ? { trackerTrigger: body.trackerTrigger } : {}),
     ...(body.schedule ? { schedule: body.schedule } : {}),
     ...(body.events ? { events: body.events } : {}),
     ...(body.intervalSeconds !== undefined ? { intervalSeconds: body.intervalSeconds } : {}),
