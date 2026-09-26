@@ -1,20 +1,30 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { createServer, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { serverStatePath } from '../paths.ts';
 import {
   acquireLock,
+  canBindPort,
   deleteServerState,
   firstIncompleteStep,
+  instancePortConflict,
+  INSTANCE_PORT_SCAN_WINDOW,
   isResolved,
   listServerInstances,
   loadServerState,
   LockHeldError,
   nextFreeInstancePort,
   saveServerState,
+  type PortProbe,
 } from './state.ts';
 import { freshServerState } from './types.ts';
+
+/** A probe that answers from a fixed set of "already bound on this host" ports. */
+function probeWithBound(...bound: number[]): PortProbe {
+  return async (port) => !bound.includes(port);
+}
 
 describe('server state', () => {
   let home: string;
@@ -102,9 +112,10 @@ describe('server state', () => {
     expect(loadServerState('nope').installed).toBe(false);
   });
 
-  it('listServerInstances enumerates default + named; nextFreeInstancePort skips used ports', () => {
+  it('listServerInstances enumerates default + named; nextFreeInstancePort skips used ports', async () => {
+    const free = probeWithBound(); // nothing bound on the host
     expect(listServerInstances()).toHaveLength(0);
-    expect(nextFreeInstancePort()).toBe(4321); // nothing recorded yet
+    expect(await nextFreeInstancePort(4321, { probe: free })).toBe(4321); // nothing recorded yet
 
     const def = freshServerState();
     def.primaryPort = 4321;
@@ -115,7 +126,61 @@ describe('server state', () => {
 
     const names = listServerInstances().map((i) => i.instance).sort();
     expect(names).toEqual(['a-example-com', 'default']);
-    expect(nextFreeInstancePort()).toBe(4323); // 4321 + 4322 both taken
+    expect(await nextFreeInstancePort(4321, { probe: free })).toBe(4323); // 4321 + 4322 both taken
+  });
+
+  // #913: `~/.cezar` is per-user, a loopback port is machine-wide. A second unix
+  // user's registry is EMPTY while the first user's cezar holds 4321, so the
+  // recorded-state scan alone hands out a port the new instance cannot bind —
+  // and the vhost rendered from it proxies that user into the first user's
+  // cockpit, run history and coding-agent subscription.
+  it('nextFreeInstancePort skips a port that is bound but not recorded (the cross-user case)', async () => {
+    expect(listServerInstances()).toHaveLength(0); // a second unix user's fresh home
+    expect(await nextFreeInstancePort(4321, { probe: probeWithBound(4321) })).toBe(4322);
+    // and it keeps walking past a run of foreign processes
+    expect(await nextFreeInstancePort(4321, { probe: probeWithBound(4321, 4322, 4323) })).toBe(4324);
+  });
+
+  it('nextFreeInstancePort refuses rather than returning a port it could not verify', async () => {
+    const everythingBound: PortProbe = async () => false;
+    await expect(nextFreeInstancePort(4321, { probe: everythingBound })).rejects.toThrow(/--port/);
+    await expect(nextFreeInstancePort(4321, { probe: everythingBound })).rejects.toThrow(
+      new RegExp(String(4321 + INSTANCE_PORT_SCAN_WINDOW - 1)),
+    );
+  });
+
+  it('canBindPort tells the truth about a really-bound port', async () => {
+    const held = createServer();
+    await new Promise<void>((done) => held.listen(0, '127.0.0.1', done));
+    const port = (held.address() as AddressInfo).port;
+    try {
+      expect(await canBindPort(port)).toBe(false);
+    } finally {
+      await new Promise<void>((done) => held.close(() => done()));
+    }
+    expect(await canBindPort(port)).toBe(true); // released again
+    // Not-in-use failures are not evidence about the port — fail open rather
+    // than refuse an install over an unroutable --bind-host.
+    expect(await canBindPort(port, '203.0.113.7')).toBe(true);
+  });
+
+  it('instancePortConflict names the other instance, the foreign process, or nothing', async () => {
+    const free = probeWithBound();
+    expect(await instancePortConflict(4321, { instance: 'b-example-com', probe: free })).toBeNull();
+
+    const a = freshServerState();
+    a.primaryPort = 4321;
+    saveServerState(a, 'a-example-com');
+    expect(await instancePortConflict(4321, { instance: 'b-example-com', probe: free })).toMatch(
+      /recorded as instance "a-example-com"/,
+    );
+    // an instance is never in conflict with its own recorded port (resume/reinstall)
+    expect(await instancePortConflict(4321, { instance: 'a-example-com', probe: free })).toBeNull();
+
+    // Nothing recorded, but somebody on the host holds it — the #913 shape.
+    expect(await instancePortConflict(4400, { instance: 'b-example-com', probe: probeWithBound(4400) })).toMatch(
+      /in use on 127\.0\.0\.1 by a process this install does not own/,
+    );
   });
 
   it('deleteServerState drops a named record but leaves the default in place', () => {

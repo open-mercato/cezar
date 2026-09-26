@@ -1,5 +1,13 @@
 import { loadWorkspaceConfig } from '../workspace/config.ts';
-import { acquireLock, deleteServerState, isResolved, loadServerState, saveServerState } from './state.ts';
+import {
+  acquireLock,
+  deleteServerState,
+  instancePortConflict,
+  isResolved,
+  loadServerState,
+  saveServerState,
+  type PortProbe,
+} from './state.ts';
 import { StepAborted, StepCancelled, StepSkipped, defaultRunner } from './steps.ts';
 import { createAutoUi, createClackUi } from './ui.ts';
 import {
@@ -49,6 +57,10 @@ export interface RunOptions {
   externalProxy?: boolean;
   /** `--bind-host`: interface the cockpit binds so that proxy can reach it. */
   bindHost?: string;
+  /** Seam for "is this port bindable on this host" — a real socket by default.
+   * Unit tests stub it rather than dropping the check, which is the check that
+   * keeps an install off a port another unix user's cezar already holds (#913). */
+  portProbe?: PortProbe;
 }
 
 export type RunStatus = 'complete' | 'cancelled' | 'failed';
@@ -66,6 +78,16 @@ export interface RunResult {
  */
 function recordOutcome(state: ServerState, id: string, status: StepOutcome['status']): void {
   state.steps[id] = { status, created: state.steps[id]?.created ?? null };
+}
+
+/**
+ * True when nothing has been installed for this instance yet — no step has run,
+ * so no artifact names its port and no service of ours is holding it. The port
+ * conflict check is scoped to exactly this case: a resume or a `--reinstall`
+ * finds its OWN service on the port, which must not be reported as a collision.
+ */
+function isFirstInstallAttempt(state: ServerState): boolean {
+  return !state.installed && Object.keys(state.steps).length === 0;
 }
 
 /** An outcome uninstall must reverse: completed, failed mid-run, or anything
@@ -161,6 +183,32 @@ export async function runInstall(strategy: PlatformStrategy, opts: RunOptions): 
     state.updatedAt = opts.now;
 
     await strategy.preflight(ctx); // throws PreflightError to refuse politely
+
+    // The port is settled and nothing has rendered it yet — the last moment to
+    // refuse one this install cannot own. Every artifact downstream is that same
+    // number (the nginx `proxy_pass`, the unit's `--port`, the printed plan), so
+    // a port somebody else holds means a front end aimed at THEIR process, which
+    // is how a second unix user ended up inside the first user's cockpit (#913).
+    //
+    // Only a first attempt is checked. Past that, the process on the port is
+    // usually this instance's own service, and refusing a resume the operator
+    // needs would be a worse failure than the narrow case it would catch (an
+    // install that died before it ever started a service, whose port was taken
+    // in the meantime — which still surfaces, loudly, at the "cezar is not
+    // answering on 127.0.0.1:<port>" wait). A dry run touches no sockets.
+    if (!opts.dryRun && isFirstInstallAttempt(state)) {
+      const conflict = await instancePortConflict(state.primaryPort, {
+        instance: state.instance,
+        host: state.bindHost,
+        probe: opts.portProbe,
+      });
+      if (conflict) {
+        throw new PreflightError(
+          `${conflict}. Re-run with --port <free port>, or stop whatever holds it first ` +
+            `(\`sudo ss -ltnp | grep :${state.primaryPort}\` names the process).`,
+        );
+      }
+    }
 
     const steps = strategy.steps(ctx);
     const knownIds = new Set(steps.map((s) => s.id));
