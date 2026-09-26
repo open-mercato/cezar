@@ -399,6 +399,23 @@ describe('picker data flows', () => {
     expect(document.querySelector('[data-slot="model-pill"]')).not.toBeNull()
   })
 
+  it('filters the model pill by name — discovery catalogs can run to hundreds', async () => {
+    serve()
+    renderNewTask()
+    await pillReady()
+
+    fireEvent.pointerDown(document.querySelector('[data-slot="model-pill"]') as HTMLElement)
+    const search = await screen.findByRole('searchbox', { name: 'Search models…' })
+    fireEvent.change(search, { target: { value: 'sonnet' } })
+    expect(screen.getAllByRole('menuitemradio').map((option) => option.textContent)).toEqual([
+      expect.stringContaining('sonnet'),
+    ])
+
+    fireEvent.change(search, { target: { value: 'no-such-model' } })
+    expect(screen.queryAllByRole('menuitemradio')).toHaveLength(0)
+    expect(screen.getByText('No models found.')).not.toBeNull()
+  })
+
   it('shows the runner pill with >1 backend, and switching runner swaps the model presets', async () => {
     serve({ health: HEALTH_MULTI, providerStatus: PROVIDERS_MULTI })
     renderNewTask()

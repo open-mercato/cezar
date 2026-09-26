@@ -678,6 +678,8 @@ export function NewTaskRoute() {
                 onPick={(next) => update({ model: next })}
                 options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
                 status={modelCatalogStatus(displayRunner, catalog.data, catalog.isError)}
+                searchPlaceholder="Search models…"
+                emptyLabel="No models found."
               />
               <PickerPill
                 slot="variants-pill"
@@ -1092,6 +1094,7 @@ function BaseBranchPill({ repo }: { repo: RepoResponse }) {
       value={repo.baseBranch ?? ''}
       onPick={(value) => mutation.mutate(value === '' ? null : value)}
       searchPlaceholder="Search branches…"
+      emptyLabel="No branches found."
       options={[
         { value: '', label: `follow checked-out branch (${repo.info.branch})`, desc: 'New task worktrees fork from whatever branch is checked out' },
         ...repo.branches.map((branch) => ({ value: branch, label: branch })),
