@@ -16,6 +16,8 @@
  *    editable files, and a thread must never print `Invalid Date` beside a message.
  */
 
+import { useEffect, useState } from 'react'
+
 /** One formatter per shape, built once: hundreds of thread rows format on every paint. */
 const CLOCK = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' })
 const EXACT = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'medium' })
@@ -87,12 +89,37 @@ export function turnDuration(startedAt: string | undefined, completedAt: string 
   const start = parse(startedAt)
   const end = parse(completedAt)
   if (start === undefined || end === undefined) return undefined
-  const seconds = Math.round((end.getTime() - start.getTime()) / 1000)
+  return formatSeconds(Math.round((end.getTime() - start.getTime()) / 1000))
+}
+
+/** The same `12s` / `4m 12s` / `1h 04m` shape, from a live `now` — the Working… counter. Floors
+ *  rather than rounds so a ticking counter never shows a second that has not passed yet. */
+export function elapsedSince(startedAt: string | undefined, now: number): string | undefined {
+  const start = parse(startedAt)
+  if (start === undefined) return undefined
+  return formatSeconds(Math.floor((now - start.getTime()) / 1000))
+}
+
+function formatSeconds(seconds: number): string | undefined {
   if (seconds < 0) return undefined
   if (seconds < 60) return `${seconds}s`
   const minutes = Math.floor(seconds / 60)
   if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, '0')}s`
   return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m`
+}
+
+/**
+ * A wall clock that ticks every `intervalMs`, for the ONE live surface that wants it — the
+ * Working… indicator, which sits outside the virtualized rows, so the "nothing ticks" rule above
+ * still holds for every transcript row. Only mounted while a session is live.
+ */
+export function useNow(intervalMs = 1000): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs)
+    return () => clearInterval(id)
+  }, [intervalMs])
+  return now
 }
 
 /** The stamp on a user bubble: short local time, exact instant on hover. */

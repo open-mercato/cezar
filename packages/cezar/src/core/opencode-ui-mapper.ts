@@ -2,8 +2,10 @@
  * Pure opencode SSE-bus → protocol-v2 mapper. `mapOpencodeEvent` folds one
  * parsed `{type, properties}` bus event into `UiEvent`s plus the next mapper
  * state; the runner calls it ALONGSIDE the v1 path (v1 events keep flowing
- * unchanged — including v1's HTTP-response-synthesized `turn-end`; only the
- * v2 stream uses the correct `session.idle` signal, fixing gap §5.9).
+ * unchanged). v2 took its `turn.completed` from the wire `session.idle` from
+ * the start, fixing gap §5.9; v1's `turn-end` used to be synthesized from the
+ * prompt POST's HTTP response and now comes from the same `session.idle`,
+ * because that response is neither a timely nor a reliable boundary (#897).
  *
  * Contract: `.ai/analysis/cockpit-ui-redesign/agent-event-protocols.md` §4
  * (wire format: Message/Part model, ToolState lifecycle) and §7.1

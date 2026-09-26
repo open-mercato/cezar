@@ -30,6 +30,10 @@ export const DATA_GITIGNORE_ENTRIES = [
   'drafts/', // unsent composer text + pasted screenshots (#939) — never in git history
   'todos.json',
   'todos.json.tmp',
+  'tracker.json',
+  'tracker.json.tmp',
+  'tracker.json.*.tmp',
+  'tracker-association.lock/',
   'launch-key',
   'automations.json',
   'automations.json.tmp',
@@ -40,6 +44,7 @@ export const DATA_GITIGNORE_ENTRIES = [
   'automation-log.ndjson',
   'automation-log.ndjson.tmp',
   'automation-poll.lock',
+  'automation-mutation.lock',
 ] as const;
 
 export function ensureDataGitignore(repoRoot: string): void {

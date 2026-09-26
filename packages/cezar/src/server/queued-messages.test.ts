@@ -1,11 +1,11 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderAuthService } from '../core/provider-auth.ts';
 import { RunStore, type QueuedMessage, type RunRecord } from '../runs/store.ts';
-import type { RunManager } from '../workflows/run.ts';
+import { attachmentLibraryDir, type RunManager } from '../workflows/run.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { connectedProviderAuth } from './provider-auth.testkit.ts';
 import { createApp } from './server.ts';
@@ -315,6 +315,24 @@ describe('queued prompt stack routes (#472)', () => {
     const removed = await deleteMsg('msg-1');
     expect(removed.status).toBe(409);
     expect(await removed.json()).toEqual({ error: 'run already started' });
+  });
+
+  /**
+   * A named image is filed as a side effect of building `images` (#960) — before this, editing a
+   * queued message already past `status: 'queued'` still built it ahead of the 409, leaving an
+   * orphan copy in the library for an edit that never took effect. `editQueuedMessage` is not
+   * reached at all here (`rung` stays `'queued'`), so a regression would show up as the fake's
+   * `null` fallback instead — an equally correct 409, but only after filing the image first.
+   */
+  it('409s before filing a named image once the run has already started', async () => {
+    seed('too late');
+    store.updateRun(record.id, { status: 'running' });
+    const res = await patchMsg('msg-1', {
+      images: [{ mediaType: 'image/png', data: Buffer.from('fake-png').toString('base64'), name: 'diagram.png' }],
+    });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: 'run already started' });
+    expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
   });
 
   it('applies the folded bound to an edit too', async () => {

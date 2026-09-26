@@ -268,12 +268,12 @@ function RegistryTable({
   return (
     <SettingsField
       title="Registered projects"
-      hint={`The folders you have added, plus the one cezar first ran in. A folder cezar is serving but has not saved is listed as “not registered” with an Add button — starting cezar somewhere new never registers it for you. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
+      hint={`The folders you have added. While this list is empty the folder cezar is serving is listed as “not registered” with an Add button; once you have projects, starting cezar somewhere new neither registers nor lists that folder — use “Add project” when you want to keep it. “Tags” group connected repositories — give the API, the web app and the design system a shared “storefront” tag and the global Tasks page can show all three as one piece of work. “Max parallel” caps how many of that project's tasks run at once; the workspace limit (${workspaceMax}) still applies as an overall ceiling, so a per-project value above it has no extra effect until the workspace limit is raised. Removing a project only unregisters it — no files on disk are deleted.`}
     >
-      {/* Defensive: `GET /api/v1/projects` always names at least the folder this server is
-          serving (as a registry row or as the unregistered one), so today this branch cannot
-          render. Kept because an empty table with headers and no rows would be a worse answer
-          than a sentence if that ever changes. */}
+      {/* Defensive: `GET /api/v1/projects` names at least the folder this server is serving
+          whenever the registry is empty (the unregistered row), and the registry's own rows
+          otherwise — so today this branch cannot render. Kept because an empty table with
+          headers and no rows would be a worse answer than a sentence if that ever changes. */}
       {registry.projects.length === 0 ? (
         <p data-slot="projects-empty" className="text-[13px] text-soft-foreground">
           No projects registered yet.

@@ -18,7 +18,7 @@ import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
-import { appendTurnText, RunManager } from './run.ts';
+import { appendTurnText, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 type UsageAccountingHarness = {
@@ -1072,6 +1072,173 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
     expect(manager.sendMessage(record.id, [{ type: 'text', text: 'thanks, carry on' }])).toBe(true);
     await waitFor(record.id, (r) => r?.status === 'waiting');
     expect(store.getRun(record.id)?.activity).toBeUndefined();
+  }, 30_000);
+});
+
+/**
+ * #933 — a task that had fanned work out to its own sub-agents showed as "needs you",
+ * with the "paused, waiting for your reply" footer and a browser notification.
+ *
+ * The handoff contract asks the agent to declare its subject PR/issue "as soon as you
+ * know", and said nothing about ordering, so `CEZ:MONITORING` followed by `CEZ:PR=…`
+ * is a shape agents really emit. The `$`-anchored test then missed the marker and the
+ * turn fell through to the `waiting` default — indistinguishable in the cockpit from a
+ * genuine user-blocking pause.
+ *
+ * Unit-level here rather than only through a parked run, because the property that
+ * matters is a SUPERSET claim (`BACKWARD_COMPATIBILITY.md` §8: an already-emitted
+ * `CEZ:MONITORING` must keep meaning what it meant), and that is a claim about the
+ * predicate, not about one transcript.
+ */
+describe('endsWithMonitoringMarker tolerates trailing task-reference lines (#933)', () => {
+  /** The pre-#933 predicate, kept verbatim as the baseline the new one must not shrink. */
+  const oldPredicate = (turnText: string) => /CEZ:MONITORING\s*$/.test(turnText.trimEnd());
+
+  const PARKS_MONITORING = [
+    ['the plain marker', 'dispatched 3 sub-agents; waiting on them\nCEZ:MONITORING'],
+    ['the marker with trailing whitespace', 'still working\nCEZ:MONITORING   \n\n'],
+    ['the marker followed by a PR declaration', 'opened the PR\nCEZ:MONITORING\nCEZ:PR=4242'],
+    [
+      'the marker followed by every task-reference marker',
+      'fanned out\n\nCEZ:MONITORING\nCEZ:PR=42\nCEZ:ISSUE=9\nCEZ:TITLE=waiting on sub-agents',
+    ],
+    ['a blank line between the marker and the references', 'x\nCEZ:MONITORING\n\nCEZ:PR=42'],
+  ] as const;
+
+  const PARKS_WAITING = [
+    ['a markerless turn', 'Which of these two should I do first?'],
+    ['task references with no marker at all', 'Opened the PR.\nCEZ:PR=42'],
+    ['a marker with prose after it', 'CEZ:MONITORING\nactually, one question first: which branch?'],
+    ['the marker merely mentioned in prose', 'I will emit CEZ:MONITORING next time, but now I need you.'],
+  ] as const;
+
+  it.each(PARKS_MONITORING)('detects %s', (_name, turnText) => {
+    expect(endsWithMonitoringMarker(turnText)).toBe(true);
+  });
+
+  it.each(PARKS_WAITING)('still parks waiting for %s', (_name, turnText) => {
+    expect(endsWithMonitoringMarker(turnText)).toBe(false);
+  });
+
+  it('is a strict superset of the pre-#933 predicate', () => {
+    for (const [, turnText] of [...PARKS_MONITORING, ...PARKS_WAITING]) {
+      if (oldPredicate(turnText)) expect(endsWithMonitoringMarker(turnText)).toBe(true);
+    }
+  });
+
+  /**
+   * The widening is deliberately narrow: only whole `CEZ:(PR|ISSUE|TITLE)=` lines are
+   * peeled off the end. A reference line in the MIDDLE of a turn is prose as far as the
+   * turn-end decision is concerned and must survive — which is why the pattern carries no
+   * `/m` flag (with it, `$` matches every line end).
+   */
+  it('only peels task-reference lines off the END of the turn', () => {
+    expect(turnEndMarkerText('CEZ:PR=42\nand then I kept working')).toBe(
+      'CEZ:PR=42\nand then I kept working',
+    );
+    expect(turnEndMarkerText('done\nCEZ:PR=42')).toBe('done');
+  });
+});
+
+/**
+ * The same regression driven end-to-end, at BOTH turn-end call sites — `runAgentStep`
+ * (a run's first session) and `runContinuation` (every Continue after it). AGENTS.md is
+ * explicit that these two near-identical handlers are where "a lifecycle change applied
+ * to one of them ships half a fix", so both are pinned.
+ */
+describe('a turn that parks on its sub-agents while declaring its PR is not "needs you" (#933)', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let currentId: string | undefined;
+  const savedEnv: Record<string, string | undefined> = {};
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task',
+    source: 'built-in',
+    steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-933-'));
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    currentId = undefined;
+  });
+
+  afterEach(() => {
+    if (currentId) manager.cancel(currentId);
+    manager.dispose();
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const waitFor = async (id: string, pred: (r: RunRecord | undefined) => boolean, ms = 15_000) => {
+    const deadline = Date.now() + ms;
+    while (!pred(store.getRun(id))) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  };
+
+  /** Either park is terminal for this turn, so waiting on "parked at all" makes the
+   *  pre-fix failure an assertion on `waiting` rather than a 15-second timeout. */
+  const hasParked = (r: RunRecord | undefined) => r?.activity === 'monitoring' || r?.status === 'waiting';
+
+  it('parks running/monitoring at the first-session turn-end (runAgentStep)', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:monitoring-refs fan the work out',
+      worktree: false,
+    });
+    currentId = record.id;
+    await waitFor(record.id, hasParked);
+    const parked = store.getRun(record.id);
+    expect(parked?.status).toBe('running'); // NOT 'waiting' — no "needs you", no notification
+    expect(parked?.activity).toBe('monitoring');
+    // …and the references that used to bury the marker are still consumed, not swallowed:
+    // the widening peels them off the DETECTION text only, never off the parsed turn text.
+    expect(parked?.prNumber).toBe(4242);
+  }, 30_000);
+
+  it('parks running/monitoring at the continuation turn-end (runContinuation)', async () => {
+    const record = manager.startRun(SINGLE_STEP, { task: 'just do the thing', worktree: false });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'waiting'); // a markerless first turn: unchanged
+    expect(manager.sendMessage(record.id, [{ type: 'text', text: 'mock:monitoring-refs keep going' }])).toBe(true);
+    // The declared PR is recorded by the SECOND turn's `recordTurnEnd`, which the handler
+    // fires before the park decision — so this settles the turn without waiting on the
+    // outcome under test, and the pre-fix failure is an assertion, not a timeout.
+    await waitFor(record.id, (r) => r?.prNumber === 4242);
+    const parked = store.getRun(record.id);
+    expect(parked?.status).toBe('running');
+    expect(parked?.activity).toBe('monitoring');
+    expect(parked?.prNumber).toBe(4242);
+  }, 30_000);
+
+  it('keeps the marker out of the v1 transcript when references follow it', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:monitoring-refs fan the work out',
+      worktree: false,
+    });
+    currentId = record.id;
+    await waitFor(record.id, hasParked);
+    const v1Text = readFileSync(join(repoRoot, '.ai/cezar/runs', `${record.id}.ndjson`), 'utf8')
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { type: string; text?: string })
+      .filter((event) => event.type === 'text');
+    expect(v1Text.length).toBeGreaterThan(0);
+    expect(v1Text.some((event) => String(event.text).includes('CEZ:MONITORING'))).toBe(false);
+    expect(v1Text.some((event) => String(event.text).includes('CEZ:PR='))).toBe(false);
   }, 30_000);
 });
 

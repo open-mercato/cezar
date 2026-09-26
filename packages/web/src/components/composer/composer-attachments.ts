@@ -80,7 +80,7 @@ export function fallbackAttachmentName(mediaType: string, isImage: boolean): str
 }
 
 /** File → base64 (chunked — `String.fromCharCode(...5MB)` would blow the arg limit). */
-export async function fileToPendingAttachment(file: File): Promise<PendingAttachment> {
+export async function fileToPendingAttachment(file: File, source: 'file' | 'clipboard' = 'file'): Promise<PendingAttachment> {
   const bytes = new Uint8Array(await file.arrayBuffer())
   let binary = ''
   for (let i = 0; i < bytes.length; i += 0x8000) {
@@ -89,12 +89,14 @@ export async function fileToPendingAttachment(file: File): Promise<PendingAttach
   const data = btoa(binary)
   const mediaType = attachmentMediaType(file) ?? 'application/octet-stream'
   const isImage = isImageMediaType(mediaType)
+  // Clipboard image names may be synthesized by the browser (for example image.png).
+  const originalName = source === 'clipboard' && isImage ? undefined : file.name
   return {
     mediaType,
     data,
     ...(isImage ? { preview: `data:${mediaType};base64,${data}` } : {}),
-    name: file.name || fallbackAttachmentName(mediaType, isImage),
-    ...(file.name ? { originalName: file.name } : {}),
+    name: originalName || fallbackAttachmentName(mediaType, isImage),
+    ...(originalName ? { originalName } : {}),
     isImage,
   }
 }
@@ -103,14 +105,12 @@ export async function fileToPendingAttachment(file: File): Promise<PendingAttach
  * Strip a pending attachment down to what goes on the wire — the single place that decides it, so
  * a second composer surface cannot start sending `preview` (a whole second copy of the bytes).
  *
- * The filename rides along for a FILE THAT HAD ONE (#929). Two exclusions, for the same reason:
- * an image is almost always a clipboard paste and is not filed in the library at all, and a file
- * that arrived nameless has only the chip's `pasted.<ext>` fallback to offer — which the library
- * would dutifully file as `pasted.md`, then `pasted-2.md`, then `pasted-3.md`, reproducing exactly
- * the numbering the library exists to answer. A name the user did not choose is not a name.
+ * Picked and dropped files carry their original filename, including images (#960).
+ * Clipboard images carry only a fallback display label, even when the browser supplied a
+ * filename. Sending that label would clutter the library with numbered pasted images.
  */
-export function toAttachmentInput({ mediaType, data, originalName, isImage }: PendingAttachment): AttachmentInput {
-  return { mediaType, data, ...(isImage || !originalName ? {} : { name: originalName }) }
+export function toAttachmentInput({ mediaType, data, originalName }: PendingAttachment): AttachmentInput {
+  return { mediaType, data, ...(originalName ? { name: originalName } : {}) }
 }
 
 export interface AttachmentIntake {

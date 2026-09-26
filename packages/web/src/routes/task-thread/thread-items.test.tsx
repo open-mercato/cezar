@@ -1,8 +1,8 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import { MemoryRouter } from 'react-router'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { RunEvent } from '@open-mercato/cezar-api-client'
 import type { UiToolItem } from '@open-mercato/cezar-api-client'
@@ -23,6 +23,7 @@ import {
   ToolCard,
   ToolStreak,
   UserBubble,
+  WorkingIndicator,
 } from './thread-items'
 import { reduceThread } from './thread-state'
 import { SessionTranscript } from './session-transcript'
@@ -352,5 +353,33 @@ describe('UserBubble attachments', () => {
     expect(screen.queryAllByAltText('attached')).toHaveLength(0)
     expect(screen.getByText('pasted-1.md')).toBeTruthy()
     expect(screen.getByText('pasted-2.txt')).toBeTruthy()
+  })
+})
+
+describe('WorkingIndicator — live clock', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('ticks the elapsed time and names the last activity', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-23T10:01:30.000Z'))
+    render(<WorkingIndicator since="2026-09-23T10:00:00.000Z" lastActivityAt="2026-09-23T10:01:18.000Z" />)
+    const elapsed = () => document.querySelector('[data-slot="working-elapsed"]')?.textContent
+    const last = () => document.querySelector('[data-slot="working-last-activity"]')?.textContent
+    expect(elapsed()).toBe('1m 30s')
+    expect(last()).toContain('(12s ago)')
+    act(() => {
+      vi.advanceTimersByTime(5000)
+    })
+    expect(elapsed()).toBe('1m 35s')
+    expect(last()).toContain('(17s ago)')
+  })
+
+  it('stays a bare spinner when there are no stamps', () => {
+    render(<WorkingIndicator />)
+    expect(screen.getByRole('status', { name: 'Working' })).toBeTruthy()
+    expect(document.querySelector('[data-slot="working-elapsed"]')).toBeNull()
+    expect(document.querySelector('[data-slot="working-last-activity"]')).toBeNull()
   })
 })

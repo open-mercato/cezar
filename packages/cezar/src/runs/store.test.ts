@@ -1969,3 +1969,149 @@ describe('RunStore — pinned tasks (#935)', () => {
     expect(store.getRun('hand-pinned')?.pinned).toBe(true);
   });
 });
+
+describe('RunStore — a save never drops another process’s runs', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newRun = (store: RunStore, title: string): string =>
+    store.createRun({ title, workflow: 'quick-task', task: title, steps: [] }).id;
+
+  const idsOnDisk = (): string[] =>
+    (JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[]).map((r) => r.id);
+
+  const recordOnDisk = (id: string): RunRecord | undefined =>
+    (JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[]).find(
+      (r) => r.id === id,
+    );
+
+  it('keeps the run a second process started — the cockpit-plus-`cezar run` case', () => {
+    // The reported symptom exactly: a cockpit is already open (store A) when a headless
+    // `cezar run` (store B) opens the same data directory and starts a task. A's next save
+    // used to serialize its own map over the whole file, so B's run left an .ndjson behind
+    // with nothing in the index pointing at it.
+    const cockpit = RunStore.open(dataDir);
+    const fromCockpit = newRun(cockpit, 'started in the cockpit');
+    cockpit.flush();
+
+    const headless = RunStore.open(dataDir);
+    const fromHeadless = newRun(headless, 'started by cezar run');
+    headless.flush();
+
+    cockpit.updateRun(fromCockpit, { status: 'running' });
+    cockpit.flush();
+
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([fromCockpit, fromHeadless]));
+  });
+
+  it('adopts an id it has never seen and keeps its own version of one it holds', () => {
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    // Another process rewrote the index: a staler copy of a run we hold, plus one we have
+    // never heard of.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: mine, title: 'a staler copy from the other process' },
+        { ...LEGACY_RUN, id: 'foreign-1', title: 'only the other process knows this one' },
+      ]),
+      'utf8',
+    );
+    store.flush();
+
+    expect(recordOnDisk(mine)?.title).toBe('mine');
+    expect(recordOnDisk('foreign-1')?.title).toBe('only the other process knows this one');
+  });
+
+  it('does not lose our runs to an index it cannot parse', () => {
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    writeFileSync(join(dataDir, 'runs.json'), '{ this is not json', 'utf8');
+    store.flush();
+
+    expect(idsOnDisk()).toContain(mine);
+  });
+
+  it('keeps an adopted run across later saves, not only the save that adopted it', () => {
+    // `saveNow` skips re-reading an index it recognizes as its own last write, so what it
+    // remembered has to include the records it adopted — otherwise the second save drops the
+    // foreign run again and the bug comes back one tick later.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, id: 'foreign-1' }]),
+      'utf8',
+    );
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+
+    store.updateRun(mine, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+  });
+
+  it('picks up a write that lands after our own save', () => {
+    // The other half of that cache: a signature that no longer matches must force the re-read.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    const onDisk = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[];
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([...onDisk, { ...LEGACY_RUN, id: 'arrived-later' }]),
+      'utf8',
+    );
+
+    store.updateRun(mine, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'arrived-later']));
+  });
+
+  it('one unreadable row on disk costs only itself', () => {
+    // Records are validated one at a time here, unlike `open()`'s whole-array parse, so a single
+    // hand-mangled row does not take the other process's good records down with it.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ id: 'garbage', title: 42 }, { ...LEGACY_RUN, id: 'foreign-1' }]),
+      'utf8',
+    );
+    store.flush();
+
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+    expect(idsOnDisk()).not.toContain('garbage');
+  });
+
+  it('a deleted run stays deleted — the merge never resurrects it', () => {
+    // The one way this merge could be worse than the bug it fixes: the index we re-read is
+    // the one WE wrote a moment ago, so a deletion would come straight back as a record
+    // whose event file `deleteRun` has already removed.
+    const store = RunStore.open(dataDir);
+    const kept = newRun(store, 'kept');
+    const doomed = newRun(store, 'doomed');
+    store.flush();
+
+    expect(store.deleteRun(doomed)).toBe(true);
+    store.flush();
+    expect(idsOnDisk()).toEqual([kept]);
+
+    // And it stays gone on every later save, not just the one that removed it.
+    store.updateRun(kept, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual([kept]);
+  });
+});

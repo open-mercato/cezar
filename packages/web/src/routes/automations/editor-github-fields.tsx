@@ -13,7 +13,7 @@ import { GITHUB_EVENTS, POLL_MINUTES, clamp, needsChangedLabels, type DraftFilte
 
 /**
  * The "When GitHub changes" half of the When section (spec 2026-09-14-automations-redesign
- * § UI/UX 4.3): the four event chips (multi-select — the contract is `events[]`), the poll line,
+ * § UI/UX 4.3): the seven event chips (multi-select — the contract is `events[]`), the poll line,
  * and the shipped feature's filters under a Collapsible the export does not draw.
  */
 export function EditorGithubFields({
@@ -27,7 +27,7 @@ export function EditorGithubFields({
   filters: DraftFilters
   onChange: (patch: { events?: AutomationEvent[]; intervalSeconds?: number; filters?: DraftFilters }) => void
 }) {
-  const hasList = (['authors', 'assignees', 'anyLabels', 'allLabels', 'excludeLabels', 'changedLabels'] as const)
+  const hasList = (['authors', 'assignees', 'anyLabels', 'allLabels', 'excludeLabels', 'changedLabels', 'reviewers'] as const)
     .some((key) => filters[key].trim().length > 0)
   const [open, setOpen] = useState(hasList || filters.lookbackDays !== 7 || filters.maxRecords !== 25)
   const setFilter = <K extends keyof DraftFilters>(key: K, value: DraftFilters[K]) =>
@@ -93,6 +93,7 @@ export function EditorGithubFields({
               invalid={changedMissing}
               onChange={(value) => setFilter('changedLabels', value)}
             />
+            <FilterField id="filter-reviewers" label="Reviewers" value={filters.reviewers} onChange={(value) => setFilter('reviewers', value)} />
             <NumberField id="filter-lookback" label="Lookback days (1–90)" value={filters.lookbackDays} min={1} max={90} onChange={(value) => setFilter('lookbackDays', value)} />
             <NumberField id="filter-max-records" label="Max records (1–100)" value={filters.maxRecords} min={1} max={100} onChange={(value) => setFilter('maxRecords', value)} />
           </div>

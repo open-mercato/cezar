@@ -45,6 +45,10 @@ const WORKFLOWS = {
   issues: [],
 }
 
+const SKILLS = [
+  { name: 'om-review', description: 'Review a pull request', path: '/repo/.claude/skills/om-review/SKILL.md', source: 'project' },
+]
+
 const REPO = { info: { root: '/repo', branch: 'main' }, status: [], log: [], branches: ['main', 'develop'], baseBranch: 'develop' }
 
 const DATA: AutomationsResponse = {
@@ -96,6 +100,7 @@ function stubFetch(
     if (method === 'GET' && path === '/api/v1/config') return jsonResponse({ defaultRunner: 'claude', defaultModels: {}, modelsLocked: false })
     if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus' }, { id: 'sonnet', label: 'sonnet' }], source: 'live', stale: false })
     if (method === 'GET' && path === '/api/v1/workflows') return jsonResponse(WORKFLOWS)
+    if (method === 'GET' && path.startsWith('/api/v1/skills')) return jsonResponse(SKILLS)
     if (method === 'GET' && path === '/api/v1/repo') return jsonResponse(REPO)
     if (method === 'GET' && path === '/api/v1/ui-state') return jsonResponse({})
     if (method === 'GET' && path === '/api/v1/workspace/automation-templates') return jsonResponse({ templates: [] })
@@ -115,8 +120,9 @@ function renderEditor(props: Partial<Parameters<typeof AutomationEditor>[0]> = {
   const onBack = vi.fn()
   const onSaved = vi.fn()
   const onLog = vi.fn()
+  const client = createQueryClient()
   render(
-    <QueryClientProvider client={createQueryClient()}>
+    <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={['/automations/new']}>
         <Routes>
           <Route path="*" element={<><AutomationEditor data={DATA} onBack={onBack} onSaved={onSaved} onLog={onLog} {...props} /><LocationProbe /><Toaster /></>} />
@@ -124,9 +130,10 @@ function renderEditor(props: Partial<Parameters<typeof AutomationEditor>[0]> = {
       </MemoryRouter>
     </QueryClientProvider>,
   )
-  return { onBack, onSaved, onLog }
+  return { onBack, onSaved, onLog, client }
 }
 
+const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
 const saveButton = () => screen.getByRole('button', { name: /^Save/ })
 const fillRequired = (name = 'Nightly bump', prompt = 'Bump the deps.') => {
   fireEvent.change(screen.getByLabelText('Name'), { target: { value: name } })
@@ -176,6 +183,28 @@ describe('AutomationEditor — new', () => {
     })
   })
 
+  it('runs a picked skill as a one-step inline chain, as /new sends it', async () => {
+    // cmdk's dropdown needs what jsdom lacks — the same stubs /new's picker tests use.
+    Element.prototype.scrollIntoView = vi.fn()
+    vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} })
+    const sent = stubFetch()
+    const { onSaved } = renderEditor()
+    fillRequired()
+    await waitFor(() => expect((sourcePill() as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(sourcePill())
+    await screen.findByPlaceholderText('search skills & workflows…')
+    fireEvent.click(document.querySelector('[data-source-ref="om-review"]')!)
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('skill')
+    fireEvent.click(saveButton())
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1))
+    const post = sent.find((request) => request.method === 'POST' && request.path === '/api/v1/automations')
+    expect((post?.body as { task: unknown }).task).toEqual({
+      prompt: 'Bump the deps.',
+      steps: [{ id: 'task', name: 'om-review', skill: 'om-review', prompt: '{{task}}' }],
+      autonomous: true,
+    })
+  })
+
   it('posts a github body with the events, interval and filters', async () => {
     const sent = stubFetch()
     const { onSaved } = renderEditor()
@@ -214,8 +243,8 @@ describe('AutomationEditor — new', () => {
     expect(document.querySelector('[data-slot="editor-cron"]')?.textContent).toBe('0 2 * * 2')
     expect(screen.getByRole('switch', { name: 'Dispatch' }).getAttribute('aria-checked')).toBe('true')
     expect(document.querySelector('[data-slot="editor-dispatch-hint"]')?.textContent).toBe('≤ 9 agents')
-    // Built-in templates name no workflow, so the cockpit default stays.
-    expect(screen.getByLabelText('Workflow').textContent).toContain('quick-task')
+    // Built-in templates name no workflow, so the cockpit default (no skill = quick-task) stays.
+    expect(sourcePill().getAttribute('data-source-kind')).toBe('none')
     expect((saveButton() as HTMLButtonElement).disabled).toBe(false)
   })
 
@@ -233,7 +262,7 @@ describe('AutomationEditor — new', () => {
   it('hides the dispatch row when the cockpit has dispatch off', async () => {
     stubFetch({}, { dispatch: false })
     renderEditor()
-    await waitFor(() => expect(screen.getByLabelText('Workflow')).not.toBeNull())
+    await waitFor(() => expect((sourcePill() as HTMLButtonElement).disabled).toBe(false))
     expect(document.querySelector('[data-slot="editor-dispatch"]')).toBeNull()
     expect(screen.queryByRole('button', { name: 'Review open PRs' })).toBeNull()
   })
@@ -282,7 +311,7 @@ describe('AutomationEditor — edit', () => {
     const runNow = vi.fn(async () => undefined)
     const { onSaved, onLog } = renderEditor({
       automation: EXISTING,
-      actions: { runNow, toggleEnabled: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
+      actions: { preview: vi.fn(), runNow, toggleEnabled: vi.fn(), duplicate: vi.fn(), remove: vi.fn(), copyCli: vi.fn(), busy: false },
     })
     expect(screen.getByRole('heading', { name: 'Edit automation' })).not.toBeNull()
     expect(screen.getByText('enabled').getAttribute('data-slot')).toBe('pill')
@@ -324,4 +353,41 @@ describe('AutomationEditor — edit', () => {
     expect(screen.getByRole('button', { name: 'Reload' })).not.toBeNull()
     expect(onSaved).not.toHaveBeenCalled()
   })
+})
+
+describe('tracker automation editor', () => {
+  const association = { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: 'Team', connectionId: '11111111-1111-4111-8111-111111111111' }
+  it('saves the selected historical event and status ID with the shared form', async () => {
+    const sent = stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association, events: ['issue.opened', 'issue.status_changed'], statuses: [{ id: 'todo-id', name: 'To Do' }], labels: [], limitations: [] }) })
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'Jira work' } })
+    fireEvent.change(screen.getByRole('textbox', { name: 'Prompt' }), { target: { value: 'Implement {{tracker.key}}' } })
+    fireEvent.click(await screen.findByRole('button', { name: 'issue.status_changed' }))
+    expect((screen.getByRole('button', { name: 'Save paused' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'To Do' }))
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Save paused' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Save paused' }))
+    await waitFor(() => expect(sent.find(request => request.method === 'POST' && request.path === '/api/v1/automations')?.body).toMatchObject({ kind: 'tracker', enable: false, intervalSeconds: 1800, trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo-id'] } }))
+  })
+  it('does not offer unadvertised Linear history events', async () => {
+    stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true, association: { ...association, kind: 'linear' }, events: ['issue.opened'], statuses: [], labels: [], limitations: ['Early changes are not fully recorded.'] }) })
+    renderEditor()
+    fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+    await screen.findByText('Early changes are not fully recorded.')
+    expect(screen.queryByRole('button', { name: 'issue.status_changed' })).toBeNull()
+  })
+})
+
+it('invalidates tracker event options on the existing tracker cache prefix', async () => {
+  let connectionId = '11111111-1111-4111-8111-111111111111'
+  stubFetch({ 'GET /api/v1/tracker/automation-options': () => jsonResponse({ available: true,
+    association: { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: connectionId, connectionId },
+    events: ['issue.opened'], statuses: [], labels: [], limitations: [] }) })
+  const { client } = renderEditor()
+  fireEvent.click(screen.getByRole('button', { name: 'When Jira / Linear changes' }))
+  fireEvent.click(await screen.findByRole('button', { name: 'issue.opened' }))
+  connectionId = '22222222-2222-4222-8222-222222222222'
+  await act(async () => { await client.invalidateQueries({ queryKey: ['tracker'] }) })
+  await screen.findByText('The tracker connection changed. Select an event again before saving.')
 })
