@@ -450,3 +450,17 @@ export const automationCheckInputSchema = z.object({
   mode: z.enum(['preview', 'execute']),
 });
 export type AutomationCheckInput = z.input<typeof automationCheckInputSchema>;
+
+/** Dashboard-only projection: stored timing, no scheduler activation or forge probe. */
+export const dashboardAutomationsQuerySchema = z.object({ projectId: z.string().min(1).max(200) });
+export const dashboardAutomationSchema = automationListEntrySchema.pick({
+  id: true, name: true, kind: true, enabled: true, nextRunAt: true,
+}).extend({
+  state: automationRuntimeStateSchema.pick({ backoffUntil: true, consecutiveFailures: true }).optional(),
+});
+export type DashboardAutomation = z.infer<typeof dashboardAutomationSchema>;
+export const dashboardAutomationsSchema = z.object({
+  timeZone: z.string(),
+  automations: z.array(dashboardAutomationSchema),
+});
+export type DashboardAutomations = z.infer<typeof dashboardAutomationsSchema>;

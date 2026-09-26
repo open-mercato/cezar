@@ -254,8 +254,21 @@ export interface DraftPrInput {
   handoffText: string;
 }
 
+/** Purpose-specific creation feed; independent of open lists and relevance search. */
+export interface ForgeRecentCreatedData {
+  available: boolean;
+  reason?: string;
+  items: Array<{ number: number; title: string; createdAt: string; url: string }>;
+  truncated?: boolean;
+}
+
 export interface ForgeDriver {
   readonly kind: ForgeKind;
+  /** Workspace dashboard's Recent results feed (optional, same rationale as `searchItems`): a
+   *  driver without it simply has no creation feed, and callers must go through `resolveForge`
+   *  to reach one — never construct a driver directly, or a future forge silently bypasses the
+   *  host allowlist that keeps this feed from mistaking a non-GitHub remote for GitHub. */
+  recentCreated?(kind: 'issue' | 'pr', sinceDate: string): Promise<ForgeRecentCreatedData>;
   /** Cheap, cached availability probe. May shell out (used by the GitHub tab). */
   detect(): Promise<ForgeAvailability>;
   /** Non-blocking availability for the health path: cached result, or null while warming — never

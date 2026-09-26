@@ -74,7 +74,9 @@ import {
 } from '../core/provider-auth.ts';
 import { applyProviderEnablement } from '../core/provider-availability.ts';
 import { RunnerModelCatalog } from '../core/runner-model-catalog.ts';
-import { currentUsage, onUsage } from '../core/process-usage.ts';
+import { currentUsage, currentTimedUsage, onUsage } from '../core/process-usage.ts';
+import { DashboardReader } from '../workspace/dashboard.ts';
+import { dashboardRoutes } from './dashboard.ts';
 import { WORKFLOWS_DIR, loadWorkflows } from '../workflows/load.ts';
 import {
   QUICK_TASK_WORKFLOW,
@@ -225,6 +227,8 @@ import {
 } from './static-ui.ts';
 
 export interface ServerDeps {
+  /** Register app-owned cleanup for the hosting server lifecycle. */
+  onDispose?: (cleanup: () => void) => void;
   repoRoot: string;
   store: RunStore;
   manager: RunManager;
@@ -5340,7 +5344,15 @@ export function createApp(deps: ServerDeps) {
             if (Object.keys(owned).length > 0) {
               void stream.writeSSE({
                 event: 'usage',
-                data: JSON.stringify({ project, usage: owned }),
+                data: JSON.stringify({
+                  project, usage: owned, sentAt: new Date().toISOString(),
+                  samples: Object.keys(owned).flatMap((runId) => {
+                    const run = store.getRun(runId);
+                    const timed = currentTimedUsage(runId);
+                    return timed && run?.status === 'running' && !run.archived
+                      ? [{ projectId: project, runId, ...timed }] : [];
+                  }),
+                }),
               });
             }
           }
@@ -6190,6 +6202,45 @@ export function createApp(deps: ServerDeps) {
       return c.json(body);
     });
 
+  const dashboard = new DashboardReader({
+    projects: async () => {
+      const selector = capabilities().singleProject ? { projectId: await resolveBootProject() } : undefined;
+      const projects = await listProjects(selector);
+      const bootId = await resolveBootProject(projects);
+      const summaries = projects.map((project) => {
+        const owned = project.status === 'missing' ? undefined
+          : project.id === bootId ? bootContext : contexts.peek(project.id);
+        return { id: project.id, root: project.root, ...(owned ? { store: owned.store } : {}) };
+      });
+      // Dashboard observability includes the folder this server actually serves even
+      // when the sidebar omits this unregistered launch folder (including task worktrees).
+      // Its existing context is authoritative; a dashboard read never registers it.
+      if (!summaries.some(project => project.id === bootId)) {
+        summaries.unshift({ id: bootId, root: bootRoot, store: bootContext.store });
+      }
+      return summaries;
+    },
+    telemetryProjects: async () => {
+      // Registry-only: no per-project probing, disk summaries, recovery, or new sampler.
+      const registry = (await loadWorkspaceConfig()).projects;
+      const bootId = await resolveBootProject(registry);
+      const boot = { id: bootId, root: bootRoot, store: bootContext.store };
+      if (capabilities().singleProject) return [boot];
+      return [boot, ...registry.filter(p => p.id !== bootId).flatMap(p => {
+        const owned = contexts.peek(p.id);
+        return owned ? [{ id: p.id, root: p.root, store: owned.store }] : [];
+      })];
+    },
+  });
+
+  const offDashboardRegistry = workspaceEvents.on((event, data) => {
+    if (event === 'project-removed') {
+      const id = (data as { id?: unknown }).id;
+      if (typeof id === 'string') dashboard.invalidateProject(id);
+    }
+  });
+  deps.onDispose?.(() => { offDashboardRegistry(); dashboard.dispose(); });
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
@@ -6203,6 +6254,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
+    .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
     .route('/', workspaceEventsRoutes);
 
   // ---- mount ---------------------------------------------------------------
@@ -6261,8 +6313,10 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
   // reason `capabilities()` is inside `createApp`: tests flip the variable between apps.
   const automationsEnabled = () => resolveCapabilities(process.env, deps.bindHost).automations;
   let rescheduleAutomations = () => {};
+  const appCleanups: Array<() => void> = [];
   const app = createApp({
     ...deps,
+    onDispose: (cleanup) => { appCleanups.push(cleanup); deps.onDispose?.(cleanup); },
     contexts: sharedContexts,
     automationStore: bootAutomationStore,
     workspaceEvents,
@@ -6378,7 +6432,7 @@ export function startServer(deps: ServerDeps, port: number): ServerType {
       })).then(() => automationScheduler.start()).catch(() => undefined);
     }).catch(() => undefined);
   });
-  server.once('close', () => { unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
+  server.once('close', () => { for (const cleanup of appCleanups) cleanup(); unsubscribe(); coordinator.stop(); automationScheduler.stop(); });
   socketHub.attach(server, (req) => verifyWsUpgrade(req, deps.bindHost));
   return server;
 }

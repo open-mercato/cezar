@@ -867,3 +867,19 @@ describe('AppShell', () => {
     })
   })
 })
+
+
+describe('Dashboard active navigation', () => {
+  it.each(['/dashboard', '/dashboard?view=costs', '/dashboard?period=30d'])('highlights %s beyond hover', entry => {
+    renderShell(entry)
+    const link = screen.getByRole('link', { name: 'Dashboard' })
+    expect(link.getAttribute('aria-current')).toBe('page')
+    expect(link.classList.contains('bg-muted')).toBe(true)
+  })
+  it('does not remain highlighted on another page', () => {
+    renderShell('/tasks')
+    const link = screen.getByRole('link', { name: 'Dashboard' })
+    expect(link.getAttribute('aria-current')).toBeNull()
+    expect(link.classList.contains('bg-muted')).toBe(false)
+  })
+})

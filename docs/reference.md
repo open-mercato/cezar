@@ -73,10 +73,11 @@ Five moves that make the cockpit worth the browser tab:
 
 ## Cockpit tour
 
-Eight views, one browser window, all live over Server-Sent Events (seven until you opt into the Inbox):
+One browser window, with live task updates over Server-Sent Events:
 
 | View | What's in it |
 |---|---|
+| **Dashboard** | **Overview** shows attention, completed/failed outcomes, median cycle time, project comparisons, live work, enabled automations with next run/check times, and recent results; **Usage & cost** shows reported usage and trends. Counters open matching tasks. Drag widgets to reorder them, customize optional tiles and export the current view to PDF/CSV; saved layout is shared by browsers using this workspace. |
 | **Tasks** | Every task with its status, live event stream (agent text · tool calls · tool results · pasted/generated screenshots and file attachments), tokens and cost. Continue, cancel, open in terminal (`claude --resume`), review the diff, or push a draft PR. |
 | **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
@@ -111,7 +112,7 @@ showing the projects you chose and a bare `/` opens the most recent of them.
 Keeping the folder is the explicit click: **Settings → Add project** (or
 `cezar projects add` from a terminal).
 
-Every view is project-scoped:
+Project views are scoped to their repository; **Dashboard** at `/dashboard`, **All tasks**, and global settings span the workspace:
 
 ```
 /p/<projectId>/            tasks · git · github · skills · workflows · settings

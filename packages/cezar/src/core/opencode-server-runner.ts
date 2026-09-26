@@ -129,7 +129,7 @@ class OpencodeSession implements AgentSession {
    *  (the user's own message also streams as parts over the same SSE feed). */
   private readonly msgRole = new Map<string, string>();
   private tokensUsed = 0;
-  private lastCost = 0;
+  private lastCost: number | undefined;
   private turnInFlight = false;
   /** Has this turn's prompt POST settled (either way)? Until it has, nothing
    *  synthesizes a turn end — only the wire does. */
@@ -619,9 +619,9 @@ class OpencodeSession implements AgentSession {
         this.emit({ type: 'token-usage', tokensUsed: this.tokensUsed });
       }
     }
-    const cost = numField(info, 'cost');
-    if (cost > this.lastCost) {
-      this.emit({ type: 'cost', usd: cost - this.lastCost });
+    const cost = info.cost;
+    if (typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 && (this.lastCost === undefined || cost > this.lastCost)) {
+      this.emit({ type: 'cost', usd: cost - (this.lastCost ?? 0) });
       this.lastCost = cost;
     }
   }

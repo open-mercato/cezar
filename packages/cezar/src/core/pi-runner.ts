@@ -187,7 +187,7 @@ export class PiRunner implements AgentRunner {
             if (usage) {
               tokensUsed += usage.weighted;
               onEvent?.({ type: 'token-usage', tokensUsed });
-              if (usage.cost > 0) onEvent?.({ type: 'cost', usd: usage.cost });
+              if (usage.cost !== undefined && usage.cost >= 0) onEvent?.({ type: 'cost', usd: usage.cost });
             }
           } else if (value.type === 'tool_execution_start') {
             const id = string(value.toolCallId);
@@ -307,13 +307,13 @@ function toPiPrompt(content: ContentBlock[]): {
   return { message: text.join('\n'), images };
 }
 
-function usageValues(value: unknown): { weighted: number; cost: number } | undefined {
+function usageValues(value: unknown): { weighted: number; cost: number | undefined } | undefined {
   if (!isRecord(value)) return undefined;
   const input = number(value.input) ?? 0;
   const output = number(value.output) ?? 0;
   const cacheRead = number(value.cacheRead) ?? 0;
   const cacheWrite = number(value.cacheWrite) ?? 0;
-  const cost = isRecord(value.cost) ? number(value.cost.total) ?? 0 : 0;
+  const cost = isRecord(value.cost) ? number(value.cost.total) : undefined;
   return { weighted: Math.round(input + output + cacheRead * 0.1 + cacheWrite * 1.25), cost };
 }
 

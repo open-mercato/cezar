@@ -52,6 +52,28 @@ afterEach(() => {
 });
 
 describe('RunManager repository-root isolation', () => {
+  it('runs the first task in place with the root lease before a repository has a commit', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cez-unborn-isolation-'));
+    roots.push(root);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: root });
+    const store = RunStore.open(join(root, '.ai/cezar'));
+    const manager = new RunManager(store, root);
+    try {
+      const record = manager.startRun({
+        name: 'first-task', source: 'built-in',
+        steps: [{ id: 'check', command: 'node -e "process.exit(0)"' }],
+      }, { task: 'first task' });
+      await waitForRuns(store, [record.id]);
+      expect(store.getRun(record.id)?.status).toBe('done');
+      expect(store.getRun(record.id)?.worktreePath).toBeUndefined();
+      const notes = store.readEvents(record.id).filter((event) => event.type === 'note');
+      expect(notes.some((event) => String(event.message).includes('exclusive access'))).toBe(true);
+    } finally {
+      manager.dispose();
+      store.flush();
+    }
+  });
+
   it('fails closed without executing a workflow step when worktree creation fails', async () => {
     const root = fixtureRepo();
     const store = RunStore.open(join(root, '.ai/cezar'));

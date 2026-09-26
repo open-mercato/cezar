@@ -1,3 +1,4 @@
+import { LayoutDashboardIcon } from 'lucide-react'
 import {
   FolderIcon,
   FolderOpenIcon,
@@ -10,7 +11,7 @@ import {
 } from 'lucide-react'
 import * as React from 'react'
 import type { ReactNode } from 'react'
-import { Link as RouterLink, matchPath, useLocation } from 'react-router'
+import { Link as RouterLink, NavLink, matchPath, useLocation } from 'react-router'
 
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { AddProjectDialog } from '@/components/add-project-dialog'
@@ -552,6 +553,7 @@ function SidebarContent({
         {singleProject ? null : <AddProjectMenu />}
       </div>
 
+      <div className="shrink-0 px-1.5"><NavLink to="/dashboard" onClick={onNavigate} className={({ isActive }) => cn('flex min-h-11 items-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors hover:bg-muted', isActive && 'bg-muted text-foreground')}><LayoutDashboardIcon className="size-4 shrink-0" aria-hidden="true" />Dashboard</NavLink></div>
       {projectGroups ? (
         <>
           {/* PINNED above the scroller, not the first row inside it. It is about every group

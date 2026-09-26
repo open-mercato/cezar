@@ -20,6 +20,7 @@ import type {
   ForgePrStatus,
   ForgePrDiffResult,
   ForgeRefKind,
+  ForgeRecentCreatedData,
   ForgeSearchData,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,
@@ -2879,6 +2880,7 @@ export function mergePreflightAllowed(current: ForgePrMergeState, overrideRules 
 
 /** owner/repo parsed out of the origin remote — feeds `viewUrl`. */
 export interface GithubRepoRef {
+  host?: string;
   owner: string;
   repo: string;
 }
@@ -2891,6 +2893,8 @@ const GH_PR_STATES: Record<string, ForgePrStatus['state']> = {
 export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | null): ForgeDriver {
   return {
     kind: 'github',
+
+    recentCreated: (kind, sinceDate) => recentGithubCreated(repoRoot, repoRef, kind, sinceDate),
 
     detect: () => detectGithub(repoRoot),
     detectCached: () => detectGithubCached(repoRoot),
@@ -2949,4 +2953,46 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
       }
     },
   };
+}
+
+
+const ghCreatedSchema = z.object({
+  number: z.number().int().positive(), title: z.string(), created_at: z.iso.datetime(),
+  html_url: z.url().refine((url) => /^https?:\/\//.test(url)),
+});
+
+/** Search's explicit created ordering includes subsequently closed issues and merged PRs.
+ * No user query reaches this operation; every qualifier is validated before building argv. */
+async function recentGithubCreated(
+  root: string, ref: GithubRepoRef | null, kind: 'issue' | 'pr', sinceDate: string,
+): Promise<ForgeRecentCreatedData> {
+  if (!ref || !/^[a-zA-Z0-9.-]+$/.test(ref.host ?? 'github.com') ||
+      !/^[a-zA-Z0-9_.-]+$/.test(ref.owner) || !/^[a-zA-Z0-9_.-]+$/.test(ref.repo) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(sinceDate) || !Number.isFinite(Date.parse(sinceDate))) {
+    return { available: false, reason: 'GitHub repository or creation date is invalid', items: [] };
+  }
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { available: true, truncated: false, items: [{
+      number: kind === 'issue' ? 101 : 102,
+      title: kind === 'issue' ? 'Dashboard example issue' : 'Dashboard example pull request',
+      createdAt: new Date().toISOString(),
+      url: `https://${ref.host ?? 'github.com'}/${ref.owner}/${ref.repo}/${kind === 'issue' ? 'issues' : 'pull'}/${kind === 'issue' ? 101 : 102}`,
+    }] };
+  }
+  try {
+    const output = await gh(root, [
+      'api', '--hostname', ref.host ?? 'github.com', '--method', 'GET', 'search/issues',
+      '-f', `q=repo:${ref.owner}/${ref.repo} is:${kind} created:>=${sinceDate}`,
+      '-f', 'sort=created', '-f', 'order=desc', '-f', 'per_page=30',
+    ]);
+    const parsed = z.object({ items: z.array(ghCreatedSchema), incomplete_results: z.boolean().optional() }).parse(JSON.parse(output));
+    const items = parsed.items.slice(0, 30).map((item) => ({
+      number: item.number, title: item.title, createdAt: item.created_at, url: item.html_url,
+    }));
+    return { available: true, items, truncated: parsed.items.length >= 30 || parsed.incomplete_results === true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { available: false, items: [], reason: /ENOENT/.test(message)
+      ? 'gh CLI not found — install it and run `gh auth login`' : firstLine(message) };
+  }
 }
