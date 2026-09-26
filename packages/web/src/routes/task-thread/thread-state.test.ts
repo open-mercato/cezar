@@ -258,6 +258,24 @@ describe('reduceThread — mixed v1+v2 files (the dedup rule)', () => {
     expect(sessionEnded).toEqual({ reason: 'end_turn' })
   })
 
+  it('does not render a provider failure twice when v1 error and v2 settle are both present', () => {
+    const { turns, sessionEnded } = reduceThread([
+      line(1, 'error', { message: "You've hit your usage limit. [usageLimitExceeded]" }),
+      line(2, 'session.ended', { reason: 'error' }),
+    ])
+
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.items).toEqual([
+      {
+        kind: 'note',
+        id: 'v1:1',
+        text: "You've hit your usage limit. [usageLimitExceeded]",
+        tone: 'danger',
+      },
+    ])
+    expect(sessionEnded).toEqual({ reason: 'error' })
+  })
+
   it('the drop also works when a v1 line slips in BEFORE its v2 twin', () => {
     const reordered = [...mixed]
     // Swap the v1 text (index 7) ahead of the two item events (indices 5,6).
