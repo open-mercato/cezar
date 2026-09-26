@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>cezar ⚡</h1>
+  <h1>Cezar - orchestrate hundreds of AI coding agents, 24/7.</h1>
 </div>
 
 <h4 align="center">
@@ -11,8 +11,9 @@
 
 <div align="center">
   <h2>
-    Run coding agents in parallel, right in your repo.<br />
-    Local, zero config, no accounts.
+    One control center for Claude Code, Codex, OpenCode and other coding agents.<br />
+    Run agents locally or on a VPS, automate multi-step workflows,<br />
+    and let them keep working while you're away.
   </h2>
 </div>
 
