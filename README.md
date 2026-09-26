@@ -9,6 +9,10 @@
   <a href="https://github.com/open-mercato/cezar/issues">Issues</a>
 </h4>
 
+<p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a>
+</p>
+
 <div align="center">
   <h2>
     One control center for Claude Code, Codex, OpenCode and other coding agents.<br />
