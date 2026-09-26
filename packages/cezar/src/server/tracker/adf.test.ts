@@ -35,6 +35,19 @@ describe('Jira context conversion', () => {
     const columns = (line: string) => line.slice(1, -1).split(/(?<=(?:^|[^\\])(?:\\\\)*)\|/).length;
     for (const line of rows) expect(columns(line)).toBe(2);
   });
+  // The escape itself must not become the next ReDoS: `/(\\*)\|/g` re-scanned the whole run from
+  // every position inside it, so a hostile cell of 64k backslashes held the event loop ~3.9 s.
+  it('escapes a cell of nothing but backslashes in linear time', () => {
+    const cell = (s: string) => ({ type: 'tableCell', content: [{ type: 'text', text: s }] });
+    const document = { type: 'doc', content: [{ type: 'table', content: [
+      { type: 'tableRow', content: [cell('\\'.repeat(64_000))] },
+    ] }] };
+    const started = performance.now();
+    const { body } = adfMarkdown(document);
+    expect(performance.now() - started).toBeLessThan(1000);
+    // Untouched: not one of those backslashes stands in front of a pipe.
+    expect(body).toContain('| ' + '\\'.repeat(64_000) + ' |');
+  });
   it('flags unsupported nodes and marks while retaining readable text', () => {
     const result = adfMarkdown({ type: 'doc', content: [{ type: 'unknown', content: [{ type: 'text', text: 'keep this', marks: [null, { type: 'unknown' }] }] }, { type: 'media', attrs: { id: 'private' } }] });
     expect(result.unsupportedContent).toBe(true);
