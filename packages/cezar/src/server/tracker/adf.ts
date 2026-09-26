@@ -46,7 +46,11 @@ export function adfMarkdown(document: unknown): { body: string; unsupportedConte
         if (rows.length) rows.splice(1, 0, '| ' + (first?.content ?? []).map(() => '---').join(' | ') + ' |');
         return rows.join('\n') + '\n\n';
       }
-      case 'tableRow': return '| ' + children.map(child => render(child, depth + 1).trim().replace(/\|/g, '\\|').replace(/\n/g, '<br>')).join(' | ') + ' |\n';
+      // A pipe inside a cell is escaped as `\|`, and so is every backslash already in front of
+      // one: escaping only the pipe turned a cell's own `a\|b` into `a\\|b` — an escaped
+      // backslash, then a live delimiter that split the cell (CodeQL js/incomplete-sanitization,
+      // #12). Backslashes elsewhere stay as written so inline code keeps its literal text.
+      case 'tableRow': return '| ' + children.map(child => render(child, depth + 1).trim().replace(/(\\*)\|/g, (_, slashes: string) => `${slashes}${slashes}\\|`).replace(/\n/g, '<br>')).join(' | ') + ' |\n';
       case 'tableCell': case 'tableHeader': return content();
       default: {
         unsupportedContent = true;

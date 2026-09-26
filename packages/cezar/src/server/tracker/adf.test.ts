@@ -19,6 +19,22 @@ describe('Jira context conversion', () => {
     expect(converted.body).toContain('| Key | Value |');
     expect(converted.body).toContain('| --- | --- |');
   });
+  it('escapes a pipe in a table cell without letting a preceding backslash re-open it', () => {
+    const cell = (s: string) => ({ type: 'tableCell', content: [{ type: 'text', text: s }] });
+    const row = (...cells: string[]) => ({ type: 'tableRow', content: cells.map(cell) });
+    const { body } = adfMarkdown({ type: 'doc', content: [{ type: 'table', content: [
+      row('Key', 'Value'),
+      row('a|b', String.raw`c\|d`),
+      row(String.raw`C:\dir`, String.raw`e\\|`),
+    ] }] });
+    const rows = body.trim().split('\n');
+    expect(rows[2]).toBe(String.raw`| a\|b | c\\\|d |`);
+    // A backslash away from any pipe is left alone, so `C:\dir` keeps its literal text in code.
+    expect(rows[3]).toBe(String.raw`| C:\dir | e\\\\\| |`);
+    // GFM's cell split: a pipe is a delimiter only after an EVEN run of backslashes.
+    const columns = (line: string) => line.slice(1, -1).split(/(?<=(?:^|[^\\])(?:\\\\)*)\|/).length;
+    for (const line of rows) expect(columns(line)).toBe(2);
+  });
   it('flags unsupported nodes and marks while retaining readable text', () => {
     const result = adfMarkdown({ type: 'doc', content: [{ type: 'unknown', content: [{ type: 'text', text: 'keep this', marks: [null, { type: 'unknown' }] }] }, { type: 'media', attrs: { id: 'private' } }] });
     expect(result.unsupportedContent).toBe(true);
