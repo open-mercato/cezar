@@ -43,9 +43,9 @@ Replace the cockpit brand mark (`packages/web/public/open-mercato.svg`) used as 
 
 ### Phase 1: Brand asset
 
-- [ ] 1.1 Replace open-mercato.svg with the new mark
-- [ ] 1.2 Update brand-tile comments for the new tile
-- [ ] 1.3 Add unit test for favicon + asset contract
+- [x] 1.1 Replace open-mercato.svg with the new mark — 32d47873
+- [x] 1.2 Update brand-tile comments for the new tile — 32d47873
+- [x] 1.3 Add unit test for favicon + asset contract — 32d47873
 
 ### Phase 2: Validate
 
