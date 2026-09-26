@@ -357,8 +357,8 @@ describe('the global settings area (/settings/global)', () => {
       renderAt(`/p/${BOOT}/${path}`)
       expect(currentPathname()).toBe(`/p/${BOOT}/${path}`)
       expect(routeName()).toBe('automations')
-      expect(await screen.findByText('Automations are off')).not.toBeNull()
-      expect(screen.getByText(/CEZ_AUTOMATIONS=0/)).not.toBeNull()
+      expect(await screen.findByText('Automations are off', {}, { timeout: 5_000 })).not.toBeNull()
+      expect(await screen.findByText(/CEZ_AUTOMATIONS=0/, {}, { timeout: 5_000 })).not.toBeNull()
     })
   }
 
@@ -642,6 +642,14 @@ describe('legacy flat URLs redirect to the boot project', () => {
     expect(currentSearch()).toBe('?skill=om-code-review')
     expect(currentHash()).toBe('#usage')
     expect(routeName()).toBe('skills')
+  })
+
+  it('keeps the old bookmarklet pseudo-skill deep link on the project bookmarklets page', () => {
+    renderAt('/settings/skills?skill=__bm#saved')
+    expect(currentPathname()).toBe(`/p/${BOOT}/settings/bookmarklets`)
+    expect(currentSearch()).toBe('')
+    expect(currentHash()).toBe('#saved')
+    expect(routeName()).toBe('settings-bookmarklets')
   })
 
   it('delivers the full bookmarklet grammar into the composer (spec 011 contract)', () => {

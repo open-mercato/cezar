@@ -99,6 +99,10 @@ const AutomationsRoute = lazy(() =>
  *  still land. The scoped Navigate keeps the redirect inside the active project. */
 function SettingsSkillsRedirect() {
   const location = useLocation()
+  const legacySkill = new URLSearchParams(location.search).get('skill')
+  if (legacySkill === '__bm') {
+    return <ScopedNavigate to={{ pathname: '/settings/bookmarklets', hash: location.hash }} replace />
+  }
   return (
     <ScopedNavigate
       to={{ pathname: '/skills', search: location.search, hash: location.hash }}

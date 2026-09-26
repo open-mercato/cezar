@@ -779,6 +779,8 @@ const uiStateSchema = z
     lastWorktree: z.boolean().optional(),
     lastAutonomous: z.boolean().optional(),
     lastGenerateFollowups: z.boolean().optional(),
+    // Default team-skill curation belongs to this repo's ui-state, never the workspace state.
+    importedSkills: z.array(z.string().min(1).max(200)).max(UI_STATE_MAX_KEYS).optional(),
     // Skill selection frequency (#408): name → times chosen, incremented on a successful run
     // start from EITHER composer (`/new`'s SourcePill and the follow-up `SkillsPicker`). Drives
     // the shared `orderSkillsByUsage` sort (web/app/src/lib/skills.ts) so both pickers float the
@@ -826,8 +828,7 @@ const uiStateSchema = z
       .optional(),
     // Skills promo banner (#391): set once the cockpit banner is dismissed, never unset.
     // Server-persisted (not a cookie) so the "shown once" promise holds across browsers.
-    // Retained for backward compatibility — the banner is gone, replaced by the workspace-level
-    // `importedSkills` curation (see `workspaceUiStateSchema`); `.passthrough()` would preserve
+    // Retained for backward compatibility — the banner is gone; `.passthrough()` would preserve
     // the key regardless, but keep it typed.
     dismissedSkillsBanner: z.boolean().optional(),
   })
@@ -3170,26 +3171,16 @@ export function createApp(deps: ServerDeps) {
       return c.json(await discoverSkills(repoRoot));
     })
 
-    // The opt-in catalog for the "Import skills" panel: every skill a default
-    // (vendor) repo offers — `open-mercato/skills` — regardless of import state,
-    // so the panel can present them all with a per-skill toggle. Empty once a repo
-    // configures its own `skillsRepos` (nothing is gated then). `wait=1` lets the
-    // panel wait out a cold team-skill cache, same as `GET /skills` (spec 005).
+    // Every skill a default (vendor) repo offers — `open-mercato/skills` — regardless of
+    // enabled state, so the Skills catalog can list and preview disabled entries. Empty once a
+    // repo configures its own `skillsRepos` (nothing is gated then). `wait=1` lets the page wait
+    // out a cold team-skill cache, same as `GET /skills` (spec 005).
     .get('/skills/importable', queryZodValidator(waitQuery), async (c) => {
       const repoRoot = c.get('project').root;
       const gated = await gatedSkillsRepos(repoRoot);
       if (gated.size === 0) return c.json([]);
       if (c.req.valid('query').wait === '1') await waitForTeamSkills(repoRoot);
-      const importable = getTeamSkillsCached(repoRoot)
-        .filter((skill) => skill.team && gated.has(skill.team.repo))
-        // Spread `description` rather than writing it unconditionally: an undefined VALUE is
-        // dropped by JSON.stringify, so the key is absent on the wire, and writing it always
-        // typed the route as sending a key it does not. contract/skills.ts says `.optional()`,
-        // which is what the client actually receives.
-        .map((skill) => ({
-          name: skill.name,
-          ...(skill.description !== undefined ? { description: skill.description } : {}),
-        }));
+      const importable = getTeamSkillsCached(repoRoot).filter((skill) => skill.team && gated.has(skill.team.repo));
       return c.json(importable);
     })
 

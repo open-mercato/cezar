@@ -630,8 +630,8 @@ export async function refreshSkills(): Promise<Skill[]> {
   )
 }
 
-/** The default (vendor) repo's full skill list — every skill the "Import skills" panel can
- *  offer, regardless of import state. Empty once a repo configures its own `skillsRepos`. */
+/** Full definitions from the default (vendor) repo — every skill the catalog can preview,
+ *  regardless of enabled state. Empty once a repo configures its own `skillsRepos`. */
 export async function getImportableSkills(opts?: ReadOptions): Promise<ImportableSkill[]> {
   return unwrap(
     await cez.api.v1.p[':projectId'].skills.importable.$get(
@@ -2020,10 +2020,10 @@ export async function deleteWorkflow(name: string): Promise<DeleteWorkflowRespon
 // ---- prefs ---------------------------------------------------------------------------------
 
 /** Merges server-side (the stored object spread under the patch) and answers the merged state. */
-export async function putUiState(patch: UiState): Promise<UiState> {
+export async function putUiState(patch: UiState, projectId = queryScope()): Promise<UiState> {
   return unwrap(
     await cez.api.v1.p[':projectId']['ui-state'].$put({
-      param: { projectId: queryScope() },
+      param: { projectId },
       json: patch,
     }),
     '/ui-state',

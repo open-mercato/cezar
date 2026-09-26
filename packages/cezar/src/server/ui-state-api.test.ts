@@ -1,8 +1,9 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { workspaceUiStatePath } from '../paths.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import { createApp } from './server.ts';
@@ -20,8 +21,10 @@ describe('the ui-state API — skillUsage (#408)', () => {
   let repoRoot: string;
   let store: RunStore;
   let app: Hono;
+  const legacyWorkspaceStatePath = workspaceUiStatePath();
 
   beforeEach(() => {
+    rmSync(legacyWorkspaceStatePath, { force: true });
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-uistateapi-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -32,6 +35,7 @@ describe('the ui-state API — skillUsage (#408)', () => {
   afterEach(() => {
     store.flush();
     rmSync(repoRoot, { recursive: true, force: true });
+    rmSync(legacyWorkspaceStatePath, { force: true });
   });
 
   const uiStatePath = () => join(repoRoot, '.ai/cezar', 'ui-state.json');
@@ -51,11 +55,37 @@ describe('the ui-state API — skillUsage (#408)', () => {
     expect(await res.json()).toEqual({});
   });
 
+  it('keeps a legacy workspace skill selection until this project saves its own', async () => {
+    mkdirSync(dirname(legacyWorkspaceStatePath), { recursive: true });
+    writeFileSync(legacyWorkspaceStatePath, JSON.stringify({ importedSkills: ['om-fix'] }));
+
+    const res = await get();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ importedSkills: ['om-fix'] });
+    expect(() => readFileSync(uiStatePath(), 'utf8')).toThrow();
+  });
+
+  it('uses this project selection, including an empty one, over the legacy workspace value', async () => {
+    mkdirSync(dirname(legacyWorkspaceStatePath), { recursive: true });
+    writeFileSync(legacyWorkspaceStatePath, JSON.stringify({ importedSkills: ['om-fix'] }));
+    await put({ importedSkills: [] });
+
+    expect(await (await get()).json()).toMatchObject({ importedSkills: [] });
+    expect(rawFile().importedSkills).toEqual([]);
+  });
+
   it('PUT skillUsage persists and round-trips through GET', async () => {
     const res = await put({ skillUsage: { 'om-fix': 1, 'om-review': 3 } });
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ skillUsage: { 'om-fix': 1, 'om-review': 3 } });
     expect(rawFile().skillUsage).toEqual({ 'om-fix': 1, 'om-review': 3 });
+  });
+
+  it('persists team-skill selection in this project ui-state', async () => {
+    const res = await put({ importedSkills: ['om-fix'] });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ importedSkills: ['om-fix'] });
+    expect(rawFile().importedSkills).toEqual(['om-fix']);
   });
 
   it('a later PUT replaces the whole map (shallow merge) — clients must send the FULL map', async () => {

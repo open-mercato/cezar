@@ -9,9 +9,11 @@ import { atomicWriteJsonSync } from './config.ts';
  * Data Model). Same split as `src/ui-state.ts`: this module owns the tolerant
  * read and the atomic write; the schema and key cap live at the route boundary
  * (`GET/PUT /api/workspace/ui-state`, step 2.7). The state is an opaque
- * `.passthrough()`-style bag — cross-project prefs (appearance, notifications,
- * curated skills) live here; project-scoped prefs stay in each repo's own file,
- * and prefs that describe the BROWSER rather than the workspace (sidebar
+ * `.passthrough()`-style bag — cross-project prefs (appearance, notifications)
+ * live here; project-scoped prefs stay in each repo's own file. The legacy
+ * `importedSkills` key remains available as a fallback for projects that have
+ * not saved a project-level selection yet. Prefs that describe the BROWSER
+ * rather than the workspace (sidebar
  * collapse, the last visited location) stay in that browser's localStorage.
  */
 

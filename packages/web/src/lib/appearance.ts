@@ -25,9 +25,9 @@ export type Accent = 'lime' | 'violet'
  *  `ultra` ("Compact for real") → 3px (~25%). See the `:root[data-density]` blocks in index.css. */
 export type Density = 'comfortable' | 'compact' | 'ultra'
 
-/** Reading width flips the one `--measure` token that caps the task-view column (index.css
- *  `:root[data-width="wide"]`): `narrow` is the shipped 820px reading column; `wide` opens it
- *  to 1180px so long transcripts use more of the screen. Type size and spacing stay untouched. */
+/** Reading width flips the shared `--measure` token (index.css `:root[data-width="wide"]`):
+ *  `narrow` caps reading content at 820px and `wide` raises it to 1180px. Used by task and skill
+ *  detail views; type size and spacing stay untouched. */
 export type Width = 'narrow' | 'wide'
 
 export const DEFAULT_ACCENT: Accent = 'lime'
