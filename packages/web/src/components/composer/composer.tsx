@@ -64,9 +64,11 @@ export interface ComposerProps {
   onValueChange?: (text: string) => void
   /**
    * Controlled attachments (pass BOTH or neither) — the exact mirror of the text seam above, and
-   * it must stay that way: the thread host (#939) needs the images to survive navigation with the
-   * text, while `/new` deliberately keeps ITS images uncontrolled (multi-MB base64 has no business
-   * in localStorage). Every internal change — paste, drop, the paperclip, a thumbnail click, the
+   * it must stay that way: both hosts need the images to survive navigation with the text — the
+   * thread host since #939, `/new` since #1018, where swapping the project pill remounts the route
+   * and used to drop the pasted screenshot with the prompt. What `/new` still does NOT do is
+   * persist them: its store is per-project and in-memory, because multi-MB base64 has no business
+   * in localStorage. Every internal change — paste, drop, the paperclip, a thumbnail click, the
    * optimistic clear, the on-error restore — flows through `onImagesChange`.
    */
   images?: PendingAttachment[]

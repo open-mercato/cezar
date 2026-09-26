@@ -526,7 +526,11 @@ function ProjectGroup({
           <span
             aria-hidden="true"
             data-slot="project-group-selected"
-            className="absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary"
+            // `pointer-events-none` is load-bearing, not tidiness: an absolutely positioned
+            // element paints above its non-positioned siblings, so without it these 3px sit on
+            // top of the reorder grip's left edge and eat the drag that starts there — on the
+            // ACTIVE group, the only one that has this marker at all.
+            className="pointer-events-none absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary"
           />
         ) : null}
         {grip}

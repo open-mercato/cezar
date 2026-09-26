@@ -568,6 +568,11 @@ describe('ProjectGroups', () => {
     expect(header('cezar').getAttribute('aria-current')).toBeNull()
     expect(group('shop').querySelector('[data-slot="project-group-selected"]')).not.toBeNull()
     expect(group('cezar').querySelector('[data-slot="project-group-selected"]')).toBeNull()
+    // The marker is absolutely positioned, so it paints ABOVE the reorder grip it overlaps —
+    // it must not be able to eat a drag that starts on the grip's left edge.
+    expect(
+      group('shop').querySelector('[data-slot="project-group-selected"]')!.className,
+    ).toContain('pointer-events-none')
     // …and the nav row for the URL's own area is the current page inside that group only.
     expect(
       within(group('shop')).getByRole('link', { name: 'Git' }).getAttribute('aria-current'),

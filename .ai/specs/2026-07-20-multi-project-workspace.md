@@ -492,9 +492,12 @@ leading `projectId` segment.
   which project was active: the sidebar painted no project as selected, and the
   **New task** CTA — a `/new` link scoped through `project-router` — kept starting
   tasks in whichever project the URL still named, with that project preselected in
-  the composer's project pill. Selecting also pins the group open (an explicit
-  `false` in the collapse map), because a project cannot be the one you are
-  standing in and shut at the same time; and the selected group carries a
+  the composer's project pill. Selecting also opens the group, because a project
+  cannot be the one you are standing in and shut at the same time — by DROPPING
+  any stored collapse answer for it rather than pinning an explicit `false`, so
+  the group returns to the "the project you are looking at is open, the rest are
+  shut" default and a click-through of ten projects does not leave ten groups
+  expanded, each fetching its own runs list; and the selected group carries a
   primary-accent marker, since `bg-muted` alone cannot say "selected" in a sidebar
   where every row is `hover:bg-muted`. Expanded, a group shows:
   - its nav — Tasks, Inbox (the existing `capabilities.followups`-gated item,
