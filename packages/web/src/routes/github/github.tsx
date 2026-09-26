@@ -33,6 +33,7 @@ import type {
   GithubPrMergeState,
   UiState,
 } from '@open-mercato/cezar-api-client'
+import { IssueBrowserLayout } from '@/components/issue-browser-layout'
 import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffFileChange } from '@/components/diff'
 import type { EnginePick } from '@/components/engine-pills'
@@ -450,20 +451,7 @@ export function GithubRoute({
   )
 
   return (
-    // Bounded to the viewport (`h-full min-h-0`) so the PAGE never scrolls — each pane owns its
-    // own scroll (`overflow-y-auto`), so scrolling starts inside the issues/PR list (and the
-    // detail), and the list header stays pinned. `overscroll-contain` keeps a pane's scroll from
-    // chaining out to the shell.
-    <div data-route="github" className="flex h-full min-h-0 items-stretch">
-      {/* List pane. Below md it IS the page when no item is in the URL, and yields entirely
-          to the detail when one is — the same two-surfaces-one-URL rule the git tabs use. */}
-      <section
-        data-slot="gh-list"
-        className={cn(
-          'w-full min-h-0 flex-col overflow-y-auto overscroll-contain border-border md:flex md:w-[360px] md:shrink-0 md:border-r',
-          n === undefined ? 'flex' : 'hidden',
-        )}
-      >
+    <IssueBrowserLayout name="gh" route="github" selected={n !== undefined} list={<>
         <header data-slot="gh-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
           <div className="flex min-w-0 items-center gap-2.5">
             <h1 className="text-lg font-semibold">GitHub</h1>
@@ -581,16 +569,7 @@ export function GithubRoute({
             </ul>
           </div>
         ) : null}
-      </section>
-
-      {/* Detail pane. Hidden below md until an item is in the URL. */}
-      <section
-        data-slot="gh-detail"
-        className={cn(
-          'min-w-0 min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain',
-          n === undefined ? 'hidden md:flex' : 'flex',
-        )}
-      >
+    </>} detail={<>
         {selected ? (
           <GithubDetail
             item={selected}
@@ -630,8 +609,7 @@ export function GithubRoute({
             }
           />
         )}
-      </section>
-    </div>
+    </>} />
   )
 }
 

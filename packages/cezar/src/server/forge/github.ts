@@ -2571,14 +2571,30 @@ function execTool(args: string[], cwd: string, bin: string, timeoutMs = 30_000):
 
 // ---- the driver -------------------------------------------------------------
 
-/** Cached availability probe so `GET /api/health` never pays a full listing. */
-let detectCache: { at: number; repoRoot: string; result: ForgeAvailability } | null = null;
+/** Cached availability probe so `GET /api/health` never pays a full listing. One entry per
+ *  project, `listCache`'s own pattern: a single shared slot would let one project's probe evict
+ *  another's, and a project whose GitHub is perfectly reachable would still read as unavailable
+ *  in `GET /automations` (and `/api/health`'s `forge` field) whenever a DIFFERENT project's probe
+ *  ran more recently — the toggle going dark for reasons that have nothing to do with that
+ *  project's own GitHub reachability. */
+const detectCache = new Map<string, { at: number; result: ForgeAvailability }>();
+/** Probes in flight, keyed by repo root: a cold read joins the revalidation the previous line of
+ *  the same request already started, rather than shelling out to `gh repo view` a second time. */
+const detectInflight = new Map<string, Promise<ForgeAvailability>>();
+const DETECT_CACHE_MAX = 50;
 
-async function detectGithub(repoRoot: string): Promise<ForgeAvailability> {
-  if (process.env.CEZ_DRY_RUN === '1') return { available: true };
-  if (detectCache && detectCache.repoRoot === repoRoot && Date.now() - detectCache.at < CACHE_MS) {
-    return detectCache.result;
-  }
+function detectGithub(repoRoot: string): Promise<ForgeAvailability> {
+  if (process.env.CEZ_DRY_RUN === '1') return Promise.resolve({ available: true });
+  const hit = detectCache.get(repoRoot);
+  if (hit && Date.now() - hit.at < CACHE_MS) return Promise.resolve(hit.result);
+  const inflight = detectInflight.get(repoRoot);
+  if (inflight) return inflight;
+  const probe = probeGithub(repoRoot).finally(() => detectInflight.delete(repoRoot));
+  detectInflight.set(repoRoot, probe);
+  return probe;
+}
+
+async function probeGithub(repoRoot: string): Promise<ForgeAvailability> {
   let result: ForgeAvailability;
   try {
     await gh(repoRoot, ['repo', 'view', '--json', 'nameWithOwner'], 5_000);
@@ -2592,7 +2608,13 @@ async function detectGithub(repoRoot: string): Promise<ForgeAvailability> {
         : firstLine(message),
     };
   }
-  detectCache = { at: Date.now(), repoRoot, result };
+  detectCache.delete(repoRoot); // re-insert so this key becomes the newest
+  detectCache.set(repoRoot, { at: Date.now(), result });
+  while (detectCache.size > DETECT_CACHE_MAX) {
+    const oldest = detectCache.keys().next().value;
+    if (oldest === undefined) break;
+    detectCache.delete(oldest);
+  }
   return result;
 }
 
@@ -2610,14 +2632,12 @@ async function detectGithub(repoRoot: string): Promise<ForgeAvailability> {
  */
 export function detectGithubCached(repoRoot: string): ForgeAvailability | null {
   if (process.env.CEZ_DRY_RUN === '1') return { available: true };
-  const cached =
-    detectCache && detectCache.repoRoot === repoRoot ? detectCache.result : null;
-  const fresh =
-    detectCache && detectCache.repoRoot === repoRoot && Date.now() - detectCache.at < CACHE_MS;
+  const hit = detectCache.get(repoRoot);
+  const fresh = hit && Date.now() - hit.at < CACHE_MS;
   if (!fresh) {
     void detectGithub(repoRoot).catch(() => {}); // revalidate off the request path
   }
-  return cached; // last-known value while revalidating; null only until the first probe warms
+  return hit?.result ?? null; // last-known value while revalidating; null only until the first probe warms
 }
 
 const mergeStateCache = new Map<string, { at: number; value: ForgePrMergeStateResult }>();

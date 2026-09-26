@@ -12,7 +12,6 @@ import type {
   Runner,
   RunnerModelCatalogResponse,
   Skill,
-  UiState,
   WorkflowDef,
 } from '@open-mercato/cezar-api-client'
 
@@ -23,14 +22,12 @@ import type {
  * table-testable and so drift from legacy is a diff in ONE file, not a scavenger hunt.
  */
 
-/** What the composer runs: a named workflow or a single skill. The same shape the server's
- *  `ui-state.json` stores as `lastTask`, so persistence needs no mapping. */
-export type TaskSource = NonNullable<UiState['lastTask']>
+// Both live in `@/lib/task-source` — the shared picker and the automations editor read them, and
+// a `components/` module must not import from `routes/`. Re-exported so every existing caller of
+// this module keeps working.
+import { QUICK_TASK, type TaskSource } from '@/lib/task-source'
 
-/** The zero-config built-in: one agent step that runs the prompt. It is what a task with NO
- *  source picked runs as, which is why the composer's picker does not also offer it as a
- *  workflow row — "No skill" and "quick-task" would be two names for one run. */
-export const QUICK_TASK = 'quick-task'
+export { QUICK_TASK, type TaskSource }
 
 /** Prepend `source` to the recency list (newest first), dropping any earlier occurrence of the
  *  same source+ref, and cap the length. Pure so the picker's recency sort is table-testable. */

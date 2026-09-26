@@ -1,5 +1,5 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -24,6 +24,8 @@ beforeEach(() => {
     'matchMedia',
     () => ({ matches: false, addEventListener: () => {}, removeEventListener: () => {} }),
   )
+  vi.stubGlobal('ResizeObserver', class { observe() {}; unobserve() {}; disconnect() {} })
+  Element.prototype.scrollIntoView = vi.fn()
 })
 
 afterEach(() => {
@@ -162,6 +164,26 @@ describe('skillsUpdateMarkerOf', () => {
 })
 
 describe('sidebar wiring', () => {
+  it.each([
+    ['/settings/global', false],
+    ['/tasks', true],
+  ] as const)('keeps the boot tracker across global navigation on %s (singleProject=%s)', async (entry, singleProject) => {
+    serve({
+      '/api/v1/health': { ...HEALTH, capabilities: { ...HEALTH.capabilities, singleProject, followups: false } },
+      '/api/v1/projects': { projects: [{ ...PROJECT, tracker: 'linear' }], bootProject: PROJECT.id, projectsDir: '/repos' },
+    })
+    renderShell(entry)
+
+    expect(await screen.findByRole('link', { name: 'Linear' })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Open menu' }))
+    const drawer = await screen.findByRole('dialog', { name: 'Navigation' })
+    expect(within(drawer).getByRole('link', { name: 'Linear' })).toBeTruthy()
+    fireEvent.click(within(drawer).getByRole('button', { name: 'Close menu' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Navigation' })).toBeNull())
+    fireEvent.keyDown(window, { key: 'k', metaKey: true })
+    await waitFor(() => expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear'))
+  })
+
   it('renders the repo and version chips from /api/v1/health', async () => {
     serve({ '/api/v1/health': HEALTH, '/api/v1/todos': [] })
     renderShell()

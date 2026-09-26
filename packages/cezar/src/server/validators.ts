@@ -157,9 +157,11 @@ export function paramZodValidator<S extends z.ZodType>(schema: S, { message }: E
 }
 
 /** Query string, on the same terms as {@link paramZodValidator}. */
-export function queryZodValidator<S extends z.ZodType>(schema: S, { message }: ErrorOptions = {}) {
+export function queryZodValidator<S extends z.ZodType, E extends Env = Env, P extends string = string>(
+  schema: S, { message }: ErrorOptions = {},
+): MiddlewareHandler<E, P, { in: { query: z.input<S> }; out: { query: z.output<S> } }> {
   return validator('query', (value, c) => {
     const parsed = schema.safeParse(value);
     return parsed.success ? (parsed.data as z.infer<S>) : reject(c, parsed.error, message);
-  });
+  }) as MiddlewareHandler<E, P, { in: { query: z.input<S> }; out: { query: z.output<S> } }>;
 }

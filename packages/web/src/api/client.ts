@@ -1,3 +1,6 @@
+import { trackerReadScope } from '@open-mercato/cezar-api-client'
+import type { TrackerAutomationOptions } from '@open-mercato/cezar-api-client'
+import { trackerWatchHandleSchema, trackerWatchSnapshotSchema, type TrackerWatchInput } from "@open-mercato/cezar-api-client"
 import type {
   AgentConfigFileContent,
   AgentAccountDetailsResponse,
@@ -111,6 +114,15 @@ import type {
   WorkspaceConfigResponse,
   WorkspaceUiState,
   SkillsUpdateState,
+  TrackerAssociation,
+  TrackerAssociationInput,
+  TrackerAssociationResponse,
+  TrackerAssociationSavedResponse,
+  TrackerCandidatesResponse,
+  TrackerClearedResponse,
+  TrackerItemResponse,
+  TrackerItemsResponse,
+  TrackerKind, TrackerCredentials, TrackerConnectionResponse,
 } from '@open-mercato/cezar-api-client'
 import { parseProviderStatusResponse } from '@/lib/provider-status'
 import {
@@ -778,6 +790,128 @@ export async function getGithub(
       init(opts),
     ),
     '/github',
+  )
+}
+
+// ---- read-only issue trackers --------------------------------------------------------------
+
+export async function getTrackerAutomationOptions(query: { search?: string; cursor?: string } = {}, opts?: ReadOptions): Promise<TrackerAutomationOptions> {
+  return unwrap(await cez.api.v1.p[':projectId'].tracker['automation-options'].$get(
+    { param: { projectId: queryScope() }, query }, init(opts)), '/tracker/automation-options')
+}
+
+export async function getTrackerConnection(opts?: ReadOptions): Promise<TrackerConnectionResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.$get(
+    { param: { projectId: queryScope() } }, init(opts)), '/tracker/connection')
+}
+export async function saveTrackerConnection(input: TrackerCredentials): Promise<TrackerConnectionResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.$put(
+    { param: { projectId: queryScope() }, json: input }), '/tracker/connection')
+}
+export async function removeTrackerConnection(): Promise<TrackerClearedResponse> {
+  return unwrap(await cez.api.v1.p[':projectId'].tracker.connection.$delete(
+    { param: { projectId: queryScope() } }), '/tracker/connection')
+}
+
+export async function getTrackerAssociation(opts?: ReadOptions): Promise<TrackerAssociationResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].tracker.association.$get(
+      { param: { projectId: queryScope() } },
+      init(opts),
+    ),
+    '/tracker/association',
+  )
+}
+
+export async function getTrackerCandidates(
+  kind: TrackerKind,
+  params: { q?: string; cursor?: string; limit?: number } = {},
+  opts?: ReadOptions,
+): Promise<TrackerCandidatesResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].tracker.candidates.$get(
+      { param: { projectId: queryScope() }, query: { kind, q: params.q, cursor: params.cursor, limit: params.limit === undefined ? undefined : String(params.limit) } },
+      init(opts),
+    ),
+    '/tracker/candidates',
+  )
+}
+
+export async function saveTrackerAssociation(
+  input: TrackerAssociationInput,
+): Promise<TrackerAssociationSavedResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].tracker.association.$put({
+      param: { projectId: queryScope() },
+      json: input,
+    }),
+    '/tracker/association',
+  )
+}
+
+export async function clearTrackerAssociation(): Promise<TrackerClearedResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].tracker.association.$delete({
+      param: { projectId: queryScope() },
+    }),
+    '/tracker/association',
+  )
+}
+
+export type TrackerBrowseParams = {
+  association?: TrackerAssociation
+  cursor?: string
+  limit?: number
+  refresh?: boolean
+  state?: 'active' | 'all'
+  labels?: readonly string[]
+}
+
+function trackerBrowseQuery(params: TrackerBrowseParams) {
+  return {
+    expectedScope: params.association ? trackerReadScope(params.association) : undefined,
+    cursor: params.cursor,
+    limit: params.limit === undefined ? undefined : String(params.limit),
+    refresh: params.refresh ? ('1' as const) : undefined,
+    state: params.state,
+    labels: params.labels?.length ? JSON.stringify(params.labels) : undefined,
+  }
+}
+
+export async function getTrackerItems(
+  params: TrackerBrowseParams = {},
+  opts?: ReadOptions,
+): Promise<TrackerItemsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].tracker.$get(
+      { param: { projectId: queryScope() }, query: trackerBrowseQuery(params) },
+      init(opts),
+    ),
+    '/tracker',
+  )
+}
+
+export async function searchTrackerItems(
+  q: string,
+  params: TrackerBrowseParams = {},
+  opts?: ReadOptions,
+): Promise<TrackerItemsResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].tracker.search.$get(
+      { param: { projectId: queryScope() }, query: { ...trackerBrowseQuery(params), q } },
+      init(opts),
+    ),
+    '/tracker/search',
+  )
+}
+
+export async function getTrackerItem(id: string, opts?: ReadOptions & { association?: TrackerAssociation }): Promise<TrackerItemResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].tracker[':id'].$get(
+      { param: { projectId: queryScope(), id: encodeURIComponent(id) }, query: { expectedScope: opts?.association ? trackerReadScope(opts.association) : undefined } },
+      init(opts),
+    ),
+    `/tracker/${encodeURIComponent(id)}`,
   )
 }
 
@@ -2141,4 +2275,18 @@ export async function removeRunWorktree(id: string): Promise<RemoveWorktreeRespo
     }),
     runPath(id, '/remove-worktree'),
   )
+}
+
+// Capture project at observer creation: async continuations never consult a newly selected project.
+export async function openTrackerWatch(projectId: string, input: TrackerWatchInput, signal: AbortSignal) {
+  return trackerWatchHandleSchema.parse(await unwrap(await cez.api.v1.p[':projectId'].tracker.watch.$post(
+    { param: { projectId }, json: input }, { init: { signal } }), '/tracker/watch'))
+}
+export async function readTrackerWatch(projectId: string, watchId: string, signal: AbortSignal, after?: number) {
+  return trackerWatchSnapshotSchema.parse(await unwrap(await cez.api.v1.p[':projectId'].tracker.watch[':watchId'].$get(
+    { param: { projectId, watchId }, query: { after: after === undefined ? undefined : String(after) } }, { init: { signal } }), '/tracker/watch'))
+}
+export async function refreshTrackerWatch(projectId: string, watchId: string, signal: AbortSignal) {
+  return trackerWatchSnapshotSchema.parse(await unwrap(await cez.api.v1.p[':projectId'].tracker.watch[':watchId'].$post(
+    { param: { projectId, watchId } }, { init: { signal } }), '/tracker/watch'))
 }

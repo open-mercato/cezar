@@ -12,6 +12,7 @@ import * as React from 'react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, matchPath, useLocation } from 'react-router'
 
+import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
@@ -30,6 +31,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
+import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import {
   DEFAULT_SIDEBAR_WIDTH,
   MAX_SIDEBAR_WIDTH,
@@ -90,6 +92,7 @@ export type AppShellProps = {
    *  opt-in via `CEZ_AUTOMATIONS=1`. Defaults to shown for the same reason as `forgeAvailable`;
    *  the container passes the health payload's truth. */
   automationsAvailable?: boolean
+  tracker?: TrackerKind
   /** Single-project capability gating: hides workspace-expansion affordances. Defaults off so
    *  standalone and older callers preserve the multi-project shell. */
   singleProject?: boolean
@@ -175,6 +178,7 @@ export const AppShell = React.memo(function AppShell({
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
+  tracker,
   singleProject = false,
   banner,
   projectGroups,
@@ -184,7 +188,10 @@ export const AppShell = React.memo(function AppShell({
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
   const areaPathname = stripProjectPrefix(pathname)
   const activeTo = activeNavPath(areaPathname)
-  const current = activeNavItem(areaPathname)
+  const currentBase = activeNavItem(areaPathname)
+  const current = currentBase?.to === '/tracker' && tracker
+    ? { ...currentBase, label: TRACKER_PROVIDERS[tracker].label }
+    : currentBase
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const mainRef = React.useRef<HTMLElement>(null)
@@ -234,8 +241,8 @@ export const AppShell = React.memo(function AppShell({
   }, [])
 
   const items = React.useMemo(
-    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable }),
-    [forgeAvailable, inboxAvailable, automationsAvailable],
+    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, tracker }),
+    [forgeAvailable, inboxAvailable, automationsAvailable, tracker],
   )
 
   const nav = {

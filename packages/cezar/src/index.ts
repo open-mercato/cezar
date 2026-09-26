@@ -19,6 +19,7 @@ import { reclaimWorktrees } from './runs/retention.ts';
 import { armRepoHandle } from './runs/arm-repo-handle.ts';
 import { RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
+import { resolveTrackerAgentEnv } from './server/tracker/agent-credentials.ts';
 import { loadWorkflows } from './workflows/load.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
 import {
@@ -38,6 +39,8 @@ import { WorkspaceSemaphore } from './workspace/semaphore.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 
+import { runTrackerConnectionsCommand } from './server/tracker/connections-cli.ts';
+
 const HELP = `cezar — local cockpit for AI agent tasks in your repo
 
 Usage:
@@ -48,6 +51,7 @@ Usage:
   cezar init                scaffold .ai/cezar/ (example workflow + skill)
   cezar projects            list the projects this cockpit serves
                             (also: projects add [<dir>] · projects remove <id>)
+  cezar tracker-connections <list|remove ID>  inspect or delete local project credentials
   cezar server-install      interactive wizard to host cezar on a server
   cezar server-deploy       redeploy a new version (reload the service) + verify
   cezar server-uninstall    reverse a server-install
@@ -82,6 +86,10 @@ Skills live in .ai/skills/, .ai/cezar/skills/ and your team skills repo
 workflows in .ai/cezar/workflows/.`;
 
 async function main(): Promise<void> {
+  if (process.argv[2] === 'tracker-connections') {
+    process.exitCode = await runTrackerConnectionsCommand(process.argv.slice(3));
+    return;
+  }
   // `cez task …` (spec 2026-09-10-dispatch) has its own flags, so it is routed before the
   // cockpit's parser can refuse them. It only talks to an already-running cockpit.
   if (process.argv[2] === 'task') {
@@ -200,7 +208,7 @@ async function serveCommand(
   // keepLive + recover() (#367): runs that were queued/running/waiting when
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
-  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId });
+  const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
   const providerAuth = new ProviderAuthService();
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {

@@ -8,10 +8,21 @@ import type { RunEvent, RunStore } from '../runs/store.ts';
 
 const AUTH_ERROR_EVENT_TYPES = new Set(['error', 'session.error', 'note']);
 
+/**
+ * Watch a run store for the vendor errors that mean "your credentials were rejected", latch the
+ * provider, and — because the latch is only ever as good as the pattern match that raised it —
+ * immediately ask the provider's own CLI whether it was true.
+ *
+ * `onProviderStatus` carries BOTH edges: the invalidation, and the recovery when the self-check
+ * finds the credentials were never gone. One callback rather than two on purpose — every caller
+ * wires it to the same `provider-status` fan-out, and the cockpit already folds a `connected` row
+ * over a latched one (`applyProviderStatusRow` drops the stale incident id), so recovery needs no
+ * new wiring at any of the observer's construction sites.
+ */
 export function watchProviderRuntimeAuthFailures(
   store: RunStore,
   providerAuth: ProviderAuthService,
-  onInvalidated: (status: ProviderStatus) => void,
+  onProviderStatus: (status: ProviderStatus) => void,
 ): () => void {
   const onEvent = ({ runId, event }: { runId: string; event: RunEvent }): void => {
     if (!AUTH_ERROR_EVENT_TYPES.has(event.type)) return;
@@ -26,7 +37,7 @@ export function watchProviderRuntimeAuthFailures(
     const provider: ProviderId = step?.backend ?? run.runner ?? 'claude';
     const report = providerAuth.reportRuntimeAuthFailure(provider);
     if (!report) return;
-    if (report.transitioned) onInvalidated(report.status);
+    if (report.transitioned) onProviderStatus(report.status);
 
     const duplicate = store.readEvents(runId).some((candidate) =>
       candidate.type === 'provider-auth-required'
@@ -40,6 +51,18 @@ export function watchProviderRuntimeAuthFailures(
         ...(event.stepId ? { stepId: event.stepId } : {}),
       });
     }
+
+    // The self-check rides the LATCH EDGE, not every matching line: the second and third auth-shaped
+    // error of one failing run describe the incident already standing, and re-asking the CLI about it
+    // would only spend spawns on an answer we have. The service's own cooldown backstops the case the
+    // edge cannot see — a rejection that re-latches right after a successful recovery.
+    if (!report.transitioned) return;
+    void providerAuth.verifyRuntimeAuthFailure(provider).then(
+      (recovered) => { if (recovered) onProviderStatus(recovered); },
+      // A self-check that cannot run leaves the latch exactly as it found it. That is the behavior
+      // this whole path had before it existed, and Settings' Try again is still there.
+      () => {},
+    );
   };
 
   store.on('event', onEvent);
@@ -57,13 +80,13 @@ export class ProviderRuntimeAuthObserver {
 
   constructor(
     private readonly providerAuth: ProviderAuthService,
-    private readonly onInvalidated: (status: ProviderStatus) => void,
+    private readonly onProviderStatus: (status: ProviderStatus) => void,
   ) {}
 
   watch(store: RunStore): void {
     if (this.watched.has(store)) return;
     this.watched.add(store);
-    watchProviderRuntimeAuthFailures(store, this.providerAuth, this.onInvalidated);
+    watchProviderRuntimeAuthFailures(store, this.providerAuth, this.onProviderStatus);
   }
 }
 

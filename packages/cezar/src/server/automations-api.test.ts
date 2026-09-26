@@ -50,6 +50,20 @@ describe('GitHub automation API', () => {
     body: JSON.stringify(body),
   });
 
+  it('reports unavailable tracker event options without exposing credentials', async () => {
+    const response = await apiRequest(app(), '/api/v1/tracker/automation-options');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ available: false, code: 'not_configured' });
+  });
+
+  it('requires an explicit tracker event and refuses an unbound association', async () => {
+    const missing = await apiRequest(app(), '/api/v1/automations', json({ name: 'tracker', kind: 'tracker', task: { prompt: 'test' } }));
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: expect.stringContaining('Choose an event') });
+    const invalid = await apiRequest(app(), '/api/v1/automations', json({ name: 'tracker', kind: 'tracker', task: { prompt: 'test' }, trackerTrigger: { events: ['pull_request.opened'], association: { kind: 'jira', externalId: 'P', externalName: 'Project', source: { id: 's', webUrl: 'https://example.atlassian.net' } } } }));
+    expect(invalid.status).toBe(400);
+  });
+
   it('creates paused definitions and rejects malformed bounds', async () => {
     const bad = await apiRequest(app(), '/api/v1/automations', json({ ...input, intervalSeconds: 5 }));
     expect(bad.status).toBe(400);
@@ -70,6 +84,33 @@ describe('GitHub automation API', () => {
     expect(enabled.status).toBe(200);
     const detail = await apiRequest(app(), `/api/v1/automations/${created.id}`);
     expect(((await detail.json()) as any).state).toMatchObject({ revision: 2, baselineAt: expect.any(String) });
+  });
+
+  it('establishes a baseline when an edit switches a paused poll on, and not on a later edit', async () => {
+    const created = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
+    const updated = await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...input, enabled: true, expectedRevision: 1 }, 'PUT'));
+    expect(updated.status).toBe(200);
+    const first = ((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(first).toMatchObject({ baselineAt: expect.any(String), cursor: { timestamp: first.baselineAt } });
+
+    await apiRequest(app(), `/api/v1/automations/${created.id}`, json({ ...input, name: 'Renamed', enabled: true, expectedRevision: 2 }, 'PUT'));
+    const second = ((await (await apiRequest(app(), `/api/v1/automations/${created.id}`)).json()) as any).state;
+    expect(second.baselineAt).toBe(first.baselineAt);
+  });
+
+  it('refuses an unknown agent account on create and on update, like POST /runs does', async () => {
+    const withAccount = { ...input, task: { ...input.task, agentProfile: 'nope' } };
+    const created = await apiRequest(app(), '/api/v1/automations', json(withAccount));
+    expect(created.status).toBe(400);
+    expect(((await created.json()) as any).error).toContain('nope');
+
+    const ok = ((await (await apiRequest(app(), '/api/v1/automations', json(input))).json()) as any).automation;
+    const updated = await apiRequest(app(), `/api/v1/automations/${ok.id}`, json({ ...withAccount, expectedRevision: 1 }, 'PUT'));
+    expect(updated.status).toBe(400);
+    // The default account is always resolvable, so it saves and round-trips.
+    const fine = await apiRequest(app(), `/api/v1/automations/${ok.id}`, json({ ...input, task: { ...input.task, agentProfile: 'default' }, expectedRevision: 1 }, 'PUT'));
+    expect(fine.status).toBe(200);
+    expect(((await fine.json()) as any).automation.task.agentProfile).toBe('default');
   });
 
   it('runs preview checks asynchronously without writing receipts', async () => {

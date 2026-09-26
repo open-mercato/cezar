@@ -77,6 +77,8 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
   const isBootProject = projectId !== null && projectId === bootProjectId
   const activeProject = registry?.projects.find((project) => project.id === projectId)
+  const bootProject = registry?.projects.find((project) => project.id === bootProjectId)
+  const tracker = projectId === null ? bootProject?.tracker : activeProject?.tracker
   const titleRunId = titleContext.taskId
   const titleLabel = useProjectRuns(
     projectId ?? '',
@@ -168,6 +170,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         inboxAvailable={inboxAvailable}
         // Hidden unless health reports the opt-in automations capability (#801).
         automationsAvailable={automationsAvailable}
+        tracker={tracker}
         banner={banner}
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={taskQuickList}

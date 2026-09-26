@@ -88,11 +88,11 @@ export interface UpgradeCapableServer {
 }
 
 export interface SocketHub {
-  /** Register a topic clients may subscribe to. Registration is boot-time
-   *  wiring (createApp), so a duplicate name is a programming error: throw.
+  /** Register a topic clients may subscribe to. Duplicate names are programming errors. The returned idempotent disposer
+   *  stops the publisher and removes the registration (for bounded dynamic topics).
    *  `options.loopbackReadable` defaults to `false` (topic legible to trusted
    *  connections only) — see `TopicOptions`. */
-  registerTopic(name: string, publisher: TopicPublisher, options?: TopicOptions): void;
+  registerTopic(name: string, publisher: TopicPublisher, options?: TopicOptions): () => void;
   /** Start accepting `WS_PATH` upgrades on `server`. `verifyUpgrade` is the
    *  request-origin guard — `false` answers 403 before the handshake, otherwise
    *  its `trusted` flag decides which topics the connection may read. Boot-time
@@ -169,7 +169,7 @@ export function createSocketHub(options: SocketHubOptions = {}): SocketHub {
     void state.publisher
       .snapshot()
       .then((data) => {
-        if (client.topics.has(topic)) send(ws, { type: 'event', topic, data });
+        if (topics.get(topic) === state && client.topics.has(topic)) send(ws, { type: 'event', topic, data });
       })
       .catch(() => undefined);
   };
@@ -231,6 +231,15 @@ export function createSocketHub(options: SocketHubOptions = {}): SocketHub {
         stop: null,
         loopbackReadable: options?.loopbackReadable ?? false,
       });
+      const registered = topics.get(name)!;
+      return () => {
+        const state = topics.get(name);
+        if (state !== registered) return;
+        topics.delete(name);
+        state.stop?.();
+        for (const ws of state.subscribers) clients.get(ws)?.topics.delete(name);
+        state.subscribers.clear();
+      };
     },
 
     attach(server, verifyUpgrade) {

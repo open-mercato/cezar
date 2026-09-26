@@ -362,7 +362,9 @@ export function ThreadView({
         {/* Live session heartbeat: while the engine owns the turn (`running`), a spinner tails
             the thread so quiet gaps between bursts don't read as "finished". `waiting` hands
             off to the dock's reply hint, `queued` to the placeholder above — so `running` only. */}
-        {run.status === 'running' ? <WorkingIndicator /> : null}
+        {run.status === 'running' ? (
+          <WorkingIndicator since={liveTurnStart(run, currentThread)} lastActivityAt={currentThread.lastEventAt} />
+        ) : null}
 
         {/* Closed states read as the body's last line; the WAITING state lives in the dock
             (mockup `.paused-hint`), right above the composer it is asking the user to use. */}
@@ -577,6 +579,16 @@ function HistoryBoundary({
       </span>
     </div>
   )
+}
+
+/** Where the Working… counter starts: the open turn's start; between turns (a turn completed but
+ *  the run is still `running` — the next step spinning up), the moment that turn closed; with no
+ *  turn at all yet, the run's own start. */
+export function liveTurnStart(run: ApiRun, thread: ThreadState): string | undefined {
+  const last = thread.turns.at(-1)
+  if (last === undefined) return run.startedAt
+  if (last.completed === undefined) return last.startedAt ?? run.startedAt
+  return last.completed.ts ?? run.startedAt
 }
 
 /** The queued run's honest empty state (legacy #351): a queued run has emitted nothing, so

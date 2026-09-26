@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 import { readSharedProjects, snapshotSharedHome, writeSharedProjects } from './workspace-registry'
 
@@ -40,22 +41,22 @@ let seedDir: string
 let restoreHome: () => void
 let singleProject = false
 
-let forgeAvailable = false
 let followupsAvailable = false
 let automationsAvailable = false
+let projectsById = new Map<string, ProjectListEntry>()
 
 const scoped = (projectId: string, path: string) => `/p/${projectId}${path}`
 
-/** The nav every group renders — the same health-gated list the flat shell uses. */
-function expectedNavHrefs(projectId: string): string[] {
+/** The nav every group renders — workspace capabilities plus this project's own classification. */
+function expectedNavHrefs(project: ProjectListEntry): string[] {
+  const projectId = project.id
   return [
     scoped(projectId, '/'),
     ...(followupsAvailable ? [scoped(projectId, '/inbox')] : []),
     scoped(projectId, '/git'),
-    ...(forgeAvailable ? [scoped(projectId, '/github')] : []),
-    // #801: the automations opt-in is workspace-wide, the forge gate is per project — the item
-    // needs both.
-    ...(forgeAvailable && automationsAvailable ? [scoped(projectId, '/automations')] : []),
+    ...(project.forge === 'github' ? [scoped(projectId, '/github')] : []),
+    ...(project.tracker ? [scoped(projectId, '/tracker')] : []),
+    ...(automationsAvailable ? [scoped(projectId, '/automations')] : []),
     scoped(projectId, '/skills'),
     scoped(projectId, '/workflows'),
     scoped(projectId, '/settings'),
@@ -89,10 +90,8 @@ beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   bootProject = await bootProjectId(baseUrl)
   const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
-    forge: { available: boolean } | null
     capabilities: { followups: boolean; singleProject: boolean; automations: boolean }
   }
-  forgeAvailable = health.forge?.available === true
   followupsAvailable = health.capabilities.followups
   automationsAvailable = health.capabilities.automations
   singleProject = health.capabilities.singleProject
@@ -130,6 +129,10 @@ beforeAll(async () => {
           { ...BETA, root: makeRepo('beta'), lastOpenedAt: '2026-07-18T12:00:00Z', source: 'local' },
         ],
   )
+  const registry = (await fetch(`${baseUrl}/api/v1/projects`).then((r) => r.json())) as {
+    projects: ProjectListEntry[]
+  }
+  projectsById = new Map(registry.projects.map((project) => [project.id, project]))
 
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
@@ -241,11 +244,12 @@ describe('the grouped multi-project sidebar', () => {
     if (singleProject) skip()
     gotoGrouped(scoped(bootProject, '/git'))
     setGroupExpanded(ALPHA.id, true)
-    // The GitHub row waits on the health answer — settle it before sampling any group's nav,
-    // exactly as the flat-shell specs do.
-    if (forgeAvailable) {
+    for (const id of [bootProject, ALPHA.id]) {
+      const project = projectsById.get(id)
+      expect(project, `missing registry entry for ${id}`).toBeDefined()
+      const expectedCount = expectedNavHrefs(project!).length
       browser.waitForFunction(
-        `document.querySelector('${groupBody(ALPHA.id)} a[href="${scoped(ALPHA.id, '/github')}"]') !== null`
+        `document.querySelectorAll('${groupBody(id)} nav a').length === ${expectedCount}`
       )
     }
 
@@ -255,8 +259,8 @@ describe('the grouped multi-project sidebar', () => {
       )
 
     // The whole point of a group: it links into a project that is NOT the active one.
-    expect(hrefs(bootProject)).toEqual(expectedNavHrefs(bootProject))
-    expect(hrefs(ALPHA.id)).toEqual(expectedNavHrefs(ALPHA.id))
+    expect(hrefs(bootProject)).toEqual(expectedNavHrefs(projectsById.get(bootProject)!))
+    expect(hrefs(ALPHA.id)).toEqual(expectedNavHrefs(projectsById.get(ALPHA.id)!))
 
     // `/git` is a flat, project-agnostic route, so exactly one Git row may claim the URL — the
     // one in the scoped group. Alpha's Git link points elsewhere and must stay unmarked.
@@ -416,6 +420,17 @@ describe('the grouped multi-project sidebar', () => {
     expect(moved).toBe(true)
     browser.press('Space')
     browser.waitForFunction(`${renderedOrderJs} === '${[bootProject, BETA.id, ALPHA.id].join(',')}'`)
+
+    // DOM order updates before dnd-kit's drop transition necessarily reaches rest. Wait for the
+    // drag marker and every transform to settle so this still fails on a permanent residue while
+    // allowing the intended transition to finish.
+    browser.waitForFunction(
+      `[...document.querySelectorAll('[data-slot="project-group"]')].every((n) => {
+         const t = getComputedStyle(n).transform
+         return !n.hasAttribute('data-dragging')
+           && (t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)')
+       })`,
+    )
 
     // Every group is back at rest: no leftover transform from the drag, and the tall group still
     // has its own height rather than a scale borrowed from the one it swapped with.
