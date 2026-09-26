@@ -1,7 +1,7 @@
 import { memo, useMemo, type ReactNode } from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, useProjectRuns, useProjects, useRuns, useSkillsUpdate, useTodos } from '@/api/queries'
+import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useTodos } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
@@ -69,13 +69,13 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
   const skillsUpdate = useSkillsUpdate(projectId ?? '', projectId !== null)
   const skillsUpdateAvailable = skillsUpdateMarkerOf(skillsUpdate.data)
-  // Unread done items (#unread-done-items) for the Tasks badge. Reads the same active-scope run
-  // list the sidebar quick-list and Tasks table already hold — one cache entry, no extra fetch.
-  const unreadDoneCountSelector = useMemo(() => unreadDoneCount, [])
-  const runs = useRuns(unreadDoneCountSelector)
   const registry = useProjects().data
   const titleContext = pageTitleContext(pathname)
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
+  // Unread done items (#unread-done-items) for the Tasks badge. This shell sits ABOVE the routed
+  // project provider, so name the URL project explicitly instead of reading the module scope.
+  const unreadDoneCountSelector = useMemo(() => unreadDoneCount, [])
+  const runs = useRunsForProject(projectId, bootProjectId, unreadDoneCountSelector)
   const isBootProject = projectId !== null && projectId === bootProjectId
   const activeProject = registry?.projects.find((project) => project.id === projectId)
   const bootProject = registry?.projects.find((project) => project.id === bootProjectId)

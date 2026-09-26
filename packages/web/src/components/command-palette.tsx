@@ -1,7 +1,7 @@
 import { CheckIcon, FolderOpenIcon, LayersIcon, MoonIcon, PlusIcon } from 'lucide-react'
 import * as React from 'react'
 import { useNavigate as useRouterNavigate } from 'react-router'
-import { useHealth, useProjects, useRuns, useRunsIndex, useSkills, useUiState } from '@/api/queries'
+import { useHealth, useProjects, useRunsForProject, useRunsIndex, useSkills, useUiState } from '@/api/queries'
 import { scopeTo, useActiveProjectId, useNavigate } from '@/lib/project-router'
 import type { ProjectListEntry, RunIndexEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { visibleNavItems } from '@/components/nav-items'
@@ -90,28 +90,25 @@ export function paletteScore(value: string, search: string, keywords?: string[])
 /**
  * One palette task row, whichever project it came from.
  *
- * `RunIndexEntry` with a nullable project: the active project's rows come from `useRuns()`, which
- * knows nothing about ids — and in an unscoped cockpit (the boot project's legacy mount) there is
- * no id to know. `null` therefore means "wherever we already are", which is exactly how the
- * scope-wrapping navigate reads an unprefixed target.
+ * `RunIndexEntry` with a nullable project: the active project's live rows are already standing
+ * in their project, and an unprefixed target keeps them there. `null` therefore means "wherever
+ * we already are", which is exactly how the scope-wrapping navigate reads it.
  */
 export type PaletteTask = Omit<RunIndexEntry, 'projectId'> & { projectId: string | null }
 
 /**
- * The runs `useRuns()` answered for, plus every other project's from the cross-project index.
+ * The live runs for one project, plus every other project's from the cross-project index.
  *
- * `runsProjectId` is WHICH PROJECT `activeRuns` belongs to, and it is not always the active one.
- * `useRuns()` follows the API scope, which is null both for the boot project (`routes.tsx` mounts
- * it unscoped) and on global settings (no scope route at all) — in either case it answers for the
- * BOOT project. Passing the URL's active id here instead would, on global settings, fail to match
- * the index's boot rows and list every boot task twice. The caller resolves it: active id, else
- * the registry's boot slug.
+ * `runsProjectId` is WHICH PROJECT `activeRuns` belongs to, and it is not always the active one:
+ * global settings and other global pages use the boot project's live list. Passing the URL's
+ * active id here instead would, on global settings, fail to match the index's boot rows and list
+ * every boot task twice. The caller resolves it: active id, else the registry's boot slug.
  *
  * Dedup is per RUN, not per project: an index row is dropped only when the live list already has
  * that exact task. The live row wins — it is the one the SSE stream patches, and preferring a
  * snapshot for the project you are looking at would make the palette lag the sidebar beside it.
  * Dropping the whole project instead would be smaller code and a worse failure mode: the moment
- * `runsProjectId` disagreed with what `useRuns()` actually returned, every task in that project
+ * `runsProjectId` disagreed with what the live list actually returned, every task in that project
  * would vanish from the palette rather than merely arrive a few seconds stale.
  *
  * Ordering is locality-first, like `orderProjects`: the active project's tasks (newest first),
@@ -310,23 +307,25 @@ function PaletteContent({ close }: { close: () => void }) {
   const searching = search.trim() !== ''
   const activeProjectId = useActiveProjectId()
   const { theme, setTheme } = useTheme()
-  // Runs are already cached by the sidebar's quick-list; skills fetch here, on first open.
-  const runs = useRuns()
-  const skills = useSkills()
   // The registry is workspace-scoped (not project-scoped), so this is the ONE list the palette
   // can offer everywhere — including global settings, which has no active project at all. The
   // shell already holds this cache entry; opening the palette costs no extra request.
   const projects = useProjects()
-  // Skills list most-used → project → global (#519) — the same order every picker renders.
-  const uiState = useUiState()
   // Health is cached by the shell's chips; here it gates the forge-gated Views row (R6 1.1) —
   // the palette must not offer a GitHub view the sidebar honestly hides.
   const health = useHealth()
+  const registry = projects.data
+  const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
+  // Runs are already cached by the sidebar/shell. The palette also sits above the project route
+  // provider, so ask for the URL project explicitly rather than trusting the module scope.
+  const runs = useRunsForProject(activeProjectId, bootProjectId)
+  const skills = useSkills()
+  // Skills list most-used → project → global (#519) — the same order every picker renders.
+  const uiState = useUiState()
   const now = Date.now()
 
   // Same threshold as the sidebar's grouped nav (`app-shell-container.tsx`): with one registered
   // project there is nowhere to switch TO, and a one-row group would be pure noise.
-  const registry = projects.data
   const multiProject = registry !== undefined && registry.projects.length > 1
   // The cross-project index answers "which project is this task in", so it is only worth asking
   // when that question has more than one answer. A single-project cockpit issues no request.
@@ -343,9 +342,9 @@ function PaletteContent({ close }: { close: () => void }) {
     () => new Map((registry?.projects ?? []).map((project) => [project.id, project.name])),
     [registry],
   )
-  // Which project `useRuns()` just answered for — see `mergeTasks`. The active id when there is
+  // Which project the live run list answered for — see `mergeTasks`. The active id when there is
   // one, else the boot project, which is what an unscoped API client always reaches.
-  const runsProjectId = activeProjectId ?? registry?.bootProject ?? null
+  const runsProjectId = (activeProjectId === 'default' ? null : activeProjectId) ?? bootProjectId
   const tasks = React.useMemo(
     () => mergeTasks(runs.data ?? [], runsProjectId, runsIndex.data?.runs),
     [runs.data, runsProjectId, runsIndex.data],

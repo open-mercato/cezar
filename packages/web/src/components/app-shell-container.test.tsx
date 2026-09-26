@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { workspaceQueryKeys } from '@/api/queries'
+import { ProjectScopeProvider } from '@/api/project-scope-context'
 import type {
   HealthResponse,
   ProviderStatusResponse,
@@ -100,6 +101,29 @@ function renderShell(entry = '/', client: QueryClient = createQueryClient()) {
         <MemoryRouter initialEntries={[entry]}>
           <AppShellContainer>
             <p>route content</p>
+          </AppShellContainer>
+        </MemoryRouter>
+      </ThemeProvider>
+    </QueryClientProvider>,
+    ),
+  }
+}
+
+function renderScopedShell(
+  entry: string,
+  projectId: string,
+  client: QueryClient = createQueryClient(),
+) {
+  return {
+    client,
+    ...render(
+    <QueryClientProvider client={client}>
+      <ThemeProvider>
+        <MemoryRouter initialEntries={[entry]}>
+          <AppShellContainer>
+            <ProjectScopeProvider projectId={projectId}>
+              <p>route content</p>
+            </ProjectScopeProvider>
           </AppShellContainer>
         </MemoryRouter>
       </ThemeProvider>
@@ -356,6 +380,31 @@ describe('sidebar wiring', () => {
     expect(document.querySelector('[data-slot="task-quick-list"]')).toBeNull()
     // …and so does the repo chip, which the boot project's own group header now carries.
     expect(repoChip()).toBeNull()
+  })
+
+  it('does not write a non-boot project run list into the boot cache key', async () => {
+    const bootRun = run({ id: 'boot-run', titleSummary: 'Boot task' })
+    const shopRun = run({ id: 'shop-run', titleSummary: 'Shop task' })
+    serve({
+      '/api/v1/health': { ...HEALTH, bootProject: 'cezar' },
+      '/api/v1/todos': [],
+      '/api/v1/projects': {
+        projects: [PROJECT, { ...PROJECT, id: 'shop', name: 'shop', lastOpenedAt: '2026-07-21T00:00:00.000Z' }],
+        bootProject: 'cezar',
+        projectsDir: '/home/me/cezar/projects',
+      },
+      '/api/v1/p/cezar/runs': [bootRun],
+      '/api/v1/p/shop/runs': [shopRun],
+      '/api/v1/workspace/ui-state': {},
+    })
+    const { client } = renderScopedShell('/p/shop/', 'shop')
+
+    await waitFor(() =>
+      expect(client.getQueryData<RunRecord[]>(['shop', 'runs', 'list'])?.map((row) => row.id)).toEqual([
+        'shop-run',
+      ]),
+    )
+    expect(client.getQueryData(['default', 'runs', 'list'])).toBeUndefined()
   })
 
   it('shows the version chip even outside a git repo', async () => {

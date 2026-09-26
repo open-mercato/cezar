@@ -5,12 +5,32 @@ import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import type { HealthResponse, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
 import { TaskQuickList, TaskQuickListContainer } from '@/components/task-quick-list'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
+const HEALTH: HealthResponse = {
+  version: '0.0.0-test',
+  repoRoot: '/home/u/cezar',
+  repo: null,
+  checks: [],
+  defaultRunner: 'claude',
+  forge: null,
+  capabilities: {
+    localHandoff: true,
+    followups: true,
+    singleProject: false,
+    automations: false,
+    dispatch: false,
+    tokenMetrics: true,
+    tokenUsageMetrics: true,
+    costMetrics: true,
+  },
+  projects: [{ id: 'boot', name: 'cezar' }],
+  bootProject: 'boot',
+}
 
 let seq = 0
 
@@ -646,7 +666,11 @@ describe('TaskQuickListContainer', () => {
   })
 
   function renderContainer(runs: RunRecord[], route = '/') {
-    fetchMock.mockImplementation(async () => new Response(JSON.stringify(runs), { status: 200 }))
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const path = String(input)
+      const body = path === '/api/v1/health' ? HEALTH : runs
+      return new Response(JSON.stringify(body), { status: 200 })
+    })
     const wrapper = ({ children }: { children: ReactNode }) => (
       <QueryClientProvider client={createQueryClient()}>
         <MemoryRouter initialEntries={[route]}>
@@ -667,7 +691,15 @@ describe('TaskQuickListContainer', () => {
   it('renders the live run list', async () => {
     renderContainer([run({ id: 'live', title: 'A real run', status: 'running' })])
     expect(await screen.findByText('A real run')).not.toBeNull()
-    expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/v1/runs')
+    expect(fetchMock.mock.calls.map((call) => String(call[0]))).toContain('/api/v1/runs')
+  })
+
+  it('reads a URL-scoped project list without a provider above it', async () => {
+    renderContainer([run({ id: 'scoped', title: 'Scoped run', status: 'running' })], '/p/other/')
+    expect(await screen.findByText('Scoped run')).not.toBeNull()
+    const paths = fetchMock.mock.calls.map((call) => String(call[0]))
+    expect(paths).toContain('/api/v1/p/other/runs')
+    expect(paths).not.toContain('/api/v1/runs')
   })
 
   it('lights the row for the task open at /tasks/:id, including its child routes', async () => {

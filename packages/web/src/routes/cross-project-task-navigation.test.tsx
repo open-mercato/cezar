@@ -1,5 +1,5 @@
 import { QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import { MemoryRouter, useLocation, useNavigate } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -8,6 +8,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProjectsResponse } from '@open-mercato/cezar-api-client'
 import { AppearanceProvider } from '@/components/appearance-provider'
 import { ListViewProvider } from '@/components/list-view'
+import { ProjectGroups } from '@/components/project-groups'
 import { ThemeProvider } from '@/components/theme-provider'
 import { AppRoutes } from '@/routes'
 
@@ -97,6 +98,8 @@ beforeEach(() => {
       if (path === '/api/v1/workspace/runs-index') {
         return json({ runs: [INDEX_ROW], perProjectLimit: 200, truncated: [], referenceStatuses: {} })
       }
+      if (path === '/api/v1/p/boot/runs') return json([])
+      if (path === '/api/v1/p/other/runs') return json([RUN])
       if (path === `/api/v1/p/other/runs/${RUN_ID}`) return json(RUN)
       // What the server really answers when the boot project is asked for another one's run.
       if (UNSCOPED.includes(path)) return json({ error: 'not found' }, 404)
@@ -145,6 +148,40 @@ function renderAt(entry: string) {
   )
 }
 
+function SidebarHarness() {
+  return (
+    <>
+      <ProjectGroups
+        projects={REGISTRY.projects}
+        bootProjectId={REGISTRY.bootProject}
+        inboxAvailable={false}
+        automationsAvailable={false}
+      />
+      <AppRoutes />
+      <NavigationProbe />
+    </>
+  )
+}
+
+function renderWithSidebarAt(entry: string) {
+  const client = createQueryClient()
+  render(
+    <StrictMode>
+      <QueryClientProvider client={client}>
+        <ThemeProvider>
+          <AppearanceProvider>
+            <MemoryRouter initialEntries={[entry]}>
+              <ListViewProvider>
+                <SidebarHarness />
+              </ListViewProvider>
+            </MemoryRouter>
+          </AppearanceProvider>
+        </ThemeProvider>
+      </QueryClientProvider>
+    </StrictMode>,
+  )
+}
+
 /** Wait for the thread's own request, whichever spelling it chose, then hold both to account. */
 async function expectTheRunWasReadFromItsOwnProject() {
   await waitFor(() =>
@@ -171,6 +208,21 @@ describe('opening another project’s task without a reload', () => {
   it('reads the run from its own project when jumping out of the project in view', async () => {
     renderAt(`/p/${BOOT}/`)
     fireEvent.click(await screen.findByRole('button', { name: 'Open the other project’s task' }))
+    await expectTheRunWasReadFromItsOwnProject()
+  })
+
+  it('reads the run from its own project when clicked from a project sidebar group', async () => {
+    renderWithSidebarAt(`/p/${BOOT}/`)
+
+    const otherGroup = await waitFor(() => {
+      const group = document.querySelector('[data-slot="project-group"][data-project="other"]')
+      expect(group).not.toBeNull()
+      return group as HTMLElement
+    })
+    fireEvent.click(within(otherGroup).getByRole('button', { name: 'other-repo', expanded: false }))
+    const title = await screen.findByText('Do the thing')
+    fireEvent.click(title.closest('a')!)
+
     await expectTheRunWasReadFromItsOwnProject()
   })
 })

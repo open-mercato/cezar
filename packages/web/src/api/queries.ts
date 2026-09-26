@@ -978,6 +978,22 @@ export function useProjectRuns<TData = ApiRun[]>(
 }
 
 /**
+ * A run list for a project chosen OUTSIDE `ProjectScopeProvider` (the app shell and command
+ * palette live above the routed provider). Do not use `useRuns()` there: its key is read during
+ * the shell render, while its fetch runs after the route provider has written the module scope,
+ * which can cache project B's response under project A's key.
+ */
+export function useRunsForProject<TData = ApiRun[]>(
+  projectId: string | null,
+  bootProjectId: string | null | undefined,
+  select?: (runs: ApiRun[]) => TData,
+) {
+  const selected = projectId === 'default' ? null : projectId
+  const boot = selected === null || (bootProjectId != null && selected === bootProjectId)
+  return useProjectRuns(boot ? 'default' : selected ?? 'default', true, boot, select)
+}
+
+/**
  * The authoritative single-run read, as options rather than a hook — so a caller that needs the
  * record RIGHT NOW (`queryClient.fetchQuery`, with its own `staleTime: 0`) asks the same question
  * at the same cache key as the thread's own `useRun`, and the answer lands in the cache every
