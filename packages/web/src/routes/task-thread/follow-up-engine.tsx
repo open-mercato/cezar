@@ -12,6 +12,7 @@ import {
   modelCatalogStatus,
   resolveModel,
 } from '@/routes/new-task-form'
+import { resumeAfterIdleTeardown } from './ask-answer'
 import { useContinuationProvider } from './continuation-provider'
 import { runActionFlags } from './run-actions'
 
@@ -34,7 +35,16 @@ export interface ContinueAction {
    * rather than toasting itself, so the composer can restore the draft it optimistically
    * cleared — nothing the user typed is lost to a 409.
    */
-  continueWith: (text: string, images: AttachmentInput[]) => Promise<ContinueResponse>
+  /**
+   * `retryTeardown` defaults to true for the direct Continue action. The thread's delivery
+   * router disables it for its first attempt so a 409 can trigger the authoritative status
+   * refetch before deciding whether this is a routing race or a real teardown race.
+   */
+  continueWith: (
+    text: string,
+    images: AttachmentInput[],
+    options?: { retryTeardown?: boolean },
+  ) => Promise<ContinueResponse>
 }
 
 /**
@@ -100,11 +110,15 @@ export function useContinueAction(run: ApiRun): ContinueAction {
     : null
 
   const mutation = useMutation({
-    mutationFn: ({ text, images }: { text: string; images: AttachmentInput[] }) => {
+    mutationFn: ({ text, images, retryTeardown }: {
+      text: string
+      images: AttachmentInput[]
+      retryTeardown: boolean
+    }) => {
       if (!canContinue) {
         return Promise.reject(new Error(continuation.reason ?? 'Connect an agent provider to continue.'))
       }
-      return continueRun(run.id, {
+      const opts = {
         // An empty draft posts no `text` at all, so the server's default opening prompt
         // ("Continue.") still applies — one-click Continue, unchanged.
         text: text.trim() ? text : undefined,
@@ -118,7 +132,9 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         // account it is on — and the reopened session still resumes, which an explicit switch
         // deliberately does not (a session id lives inside ONE account's config dir).
         agentProfile: account ?? undefined,
-      })
+      }
+      const resume = () => continueRun(run.id, opts)
+      return retryTeardown ? resumeAfterIdleTeardown(resume) : resume()
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
@@ -166,6 +182,7 @@ export function useContinueAction(run: ApiRun): ContinueAction {
         />
       </div>
     ),
-    continueWith: (text, images) => mutation.mutateAsync({ text, images }),
+    continueWith: (text, images, options) =>
+      mutation.mutateAsync({ text, images, retryTeardown: options?.retryTeardown ?? true }),
   }
 }
