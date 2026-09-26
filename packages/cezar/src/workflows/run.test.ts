@@ -2508,6 +2508,195 @@ describe('native Codex requestUserInput parks and resumes the run (#565)', () =>
 });
 
 /**
+ * #955 — a Codex turn that ended ONLY because the app-server compacted its own context is
+ * not the user being handed the next action. Before this, both turn-end handlers read it as
+ * one: a long Luna task hit `Compacted context`, was parked under **Needs you** mid-work,
+ * and a "Continue" that the app-server then refused left the run reading as `running`
+ * forever, because `sendMessage` had already answered `true`.
+ *
+ * Driven end to end through the real Codex runner against the mock app-server (the #565
+ * shape), because the whole defect lives in the seam between them. No redacted Luna trace
+ * was obtainable, so the fixture is built from the documented wire contract and scripts all
+ * three post-compaction follow-up shapes the issue lists as open questions — see the header
+ * of `mock-codex-app-server.mjs`.
+ */
+describe('a context-compaction boundary keeps the run working (#955)', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  let runId: string | undefined;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+  const savedCodexBin = process.env.CEZ_CODEX_BIN;
+  const SINGLE_STEP: WorkflowDef = {
+    name: 'quick-task', source: 'built-in', steps: [{ id: 'task', name: 'Task', prompt: '{{task}}' }],
+  };
+
+  beforeEach(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-955-'));
+    delete process.env.CEZ_DRY_RUN;
+    process.env.CEZ_CODEX_BIN = join(import.meta.dirname, '../core/__fixtures__/codex/mock-codex-app-server.mjs');
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+    runId = undefined;
+  });
+
+  afterEach(() => {
+    if (runId) manager.cancel(runId);
+    manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
+    if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const waitFor = async (predicate: () => boolean, ms = 20_000) => {
+    const deadline = Date.now() + ms;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('condition not met in time');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  };
+
+  const eventsOf = (id: string) => {
+    const path = join(repoRoot, '.ai/cezar/runs', `${id}.ndjson`);
+    if (!existsSync(path)) return [] as Array<Record<string, string>>;
+    return readFileSync(path, 'utf8')
+      .trim()
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as Record<string, string>);
+  };
+  /** How many times cezar continued the run across a compaction boundary. */
+  const continuations = (id: string) =>
+    eventsOf(id).filter((e) => e.type === 'note' && e.message?.includes('continuing on the same thread')).length;
+
+  const start = (task: string) => {
+    const record = manager.startRun(SINGLE_STEP, { task, runner: 'codex', worktree: false });
+    runId = record.id;
+    return record.id;
+  };
+
+  it('stays Working and continues ONCE instead of parking under Needs you', async () => {
+    // `-hold` opens the recovered turn and never ends it, so the state under assertion
+    // cannot drift out from under the test: the run is mid-turn, which is the whole point.
+    const id = start('mock:compaction-hold refactor the parser');
+    await waitFor(() => continuations(id) === 1);
+
+    const parked = store.getRun(id);
+    expect(parked?.status).toBe('running'); // NOT `waiting` — nothing is being asked of the user
+    expect(parked?.activity).toBeUndefined(); // and not a monitor either
+    expect(eventsOf(id).some((e) => e.type === 'user-message')).toBe(false); // no fabricated user turn
+    expect(continuations(id)).toBe(1);
+  }, 40_000);
+
+  it('a successful post-compaction turn finishes the run with no human in the loop', async () => {
+    const id = start('mock:compaction refactor the parser');
+    await waitFor(() => ['done', 'review'].includes(store.getRun(id)?.status ?? ''));
+
+    expect(continuations(id)).toBe(1); // exactly one, not a loop
+    expect(eventsOf(id).some((e) => e.type === 'text' && e.text?.includes('Refactor finished'))).toBe(true);
+  }, 40_000);
+
+  it('an ordinary markerless codex turn still parks as waiting', async () => {
+    // The control: the park this fix must NOT widen. Same runner, same handler, no boundary.
+    const id = start('check the working tree');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+    expect(continuations(id)).toBe(0);
+  }, 40_000);
+
+  it('CEZ:DONE before the compaction still closes the session', async () => {
+    const id = start('mock:compaction-done wrap it up');
+    await waitFor(() => ['done', 'review'].includes(store.getRun(id)?.status ?? ''));
+    expect(continuations(id)).toBe(0);
+    expect(eventsOf(id).some((e) => e.type === 'lifecycle' && e.message?.includes('goal achieved'))).toBe(true);
+  }, 40_000);
+
+  it('CEZ:MONITORING before the compaction still parks as running/monitoring', async () => {
+    const id = start('mock:compaction-monitor kicked the build off');
+    await waitFor(() => store.getRun(id)?.activity === 'monitoring');
+    expect(store.getRun(id)?.status).toBe('running');
+    expect(continuations(id)).toBe(0);
+  }, 40_000);
+
+  it('CEZ:MONITORING followed by a task-reference line still parks as monitoring (#933)', async () => {
+    // The marker reading the monitoring decision uses (trailing `CEZ:PR=` lines stripped) must
+    // also be the one that decides the turn spoke — otherwise the boundary continues a monitor.
+    const id = start('mock:compaction-monitor-ref kicked the build off');
+    await waitFor(() => store.getRun(id)?.activity === 'monitoring');
+    expect(store.getRun(id)?.status).toBe('running');
+    expect(continuations(id)).toBe(0);
+  }, 40_000);
+
+  it('a MALFORMED CEZ:ASK before the compaction still parks, so the question is not buried', async () => {
+    // The marker raises no ask card, so nothing downstream would show that a question was
+    // asked at all — continuing here would answer it on the user's behalf and lose it.
+    const id = start('mock:compaction-badask which database?');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+
+    expect(continuations(id)).toBe(0);
+    expect(
+      eventsOf(id).some((e) => e.type === 'note' && e.message?.includes('CEZ:ASK payload is not valid JSON')),
+    ).toBe(true);
+  }, 40_000);
+
+  it('bounds repeated compaction and then parks for the user', async () => {
+    // The spin the bound exists for: every turn ends at a boundary and nothing progresses.
+    const id = start('mock:compaction-repeat refactor the parser');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+
+    expect(continuations(id)).toBe(3); // MAX_COMPACTION_CONTINUES, then it stops
+    const capped = eventsOf(id).filter(
+      (e) => e.type === 'note' && e.message?.includes('turns in a row with no progress'),
+    );
+    expect(capped).toHaveLength(1); // said once, not on every later boundary
+    expect(capped[0]?.tone).toBe('danger');
+  }, 60_000);
+
+  it('a refused post-compaction follow-up fails the run visibly instead of leaving a zombie', async () => {
+    const id = start('mock:compaction-reject refactor the parser');
+    await waitFor(() => store.getRun(id)?.status === 'failed');
+
+    expect(store.getRun(id)?.error).toContain('busy compacting context');
+    expect(eventsOf(id).some((e) => e.type === 'error' && e.message?.includes('busy compacting context'))).toBe(true);
+  }, 40_000);
+
+  it('cancellation still wins over a continued turn', async () => {
+    const id = start('mock:compaction-hold refactor the parser');
+    await waitFor(() => continuations(id) === 1);
+
+    manager.cancel(id);
+    await waitFor(() => store.getRun(id)?.status === 'cancelled');
+    expect(continuations(id)).toBe(1); // the cancel ends it; no further continuation
+  }, 40_000);
+
+  it("a CHILD thread's compaction never continues the parent (#600 holds)", async () => {
+    const id = start('mock:child-compaction fan out');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+
+    // The parent ended on its own message, so the boundary was never the parent's.
+    expect(continuations(id)).toBe(0);
+    expect(eventsOf(id).some((e) => e.type === 'text' && e.text?.includes('after the sub-agent compacted'))).toBe(true);
+  }, 40_000);
+
+  it('applies on the CONTINUATION turn-end too, not just a fresh run', async () => {
+    // The half-fix AGENTS.md warns about: `runAgentStep` and `runContinuation` are
+    // hand-duplicated, so a fresh run could recover while every Continue kept the bug.
+    const id = start('check the working tree');
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+    expect(manager.finish(id)).toBe(true);
+    await waitFor(() => ['done', 'review'].includes(store.getRun(id)?.status ?? ''));
+
+    expect(manager.continueRun(id, { text: 'mock:compaction-hold keep going' })).toEqual({ ok: true });
+    await waitFor(() => continuations(id) === 1);
+    expect(store.getRun(id)?.status).toBe('running');
+  }, 60_000);
+});
+
+/**
  * #811 — registry `/skill` expansion on the CONTINUATION path.
  *
  * `expandRegistrySlashSkill` (#676) reads `state.skills`, which only `execute` ever
