@@ -39,6 +39,8 @@ Replace the cockpit brand mark (`packages/web/public/open-mercato.svg`) used as 
 
 ## Progress
 
+PR: #1090
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Brand asset
