@@ -269,7 +269,7 @@ describe('task thread', () => {
     expect(rail.bar).toBe('100%') // both steps terminal — (1 + 1) / 2
   })
 
-  it('the plan dock shows the LATEST snapshot (2/4), expanded on desktop, mirrored in the header', () => {
+  it('the plan dock shows the LATEST snapshot (2/4), settled for this finished run, mirrored in the header', () => {
     expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.state`)).toBe('open')
     expect(browser.evaluate(`document.querySelector('[data-slot="plan-count"]').textContent`)).toBe('· 2/4')
     expect(browser.evaluate(`document.querySelector('[data-slot="plan-mirror"]').textContent`)).toBe('Plan 2/4')
@@ -281,18 +281,34 @@ describe('task thread', () => {
     }))`) as Array<{ status: string; text: string }>
     expect(items.map((i) => i.status)).toEqual(['completed', 'completed', 'in_progress', 'pending'])
     expect(items[2]!.text).toContain('Summarize cockpit features')
-    expect(items[2]!.text).toContain('in progress')
+
+    // …and the RENDERING settles, because this fixture run's status is `done`: the agent's
+    // reported status survives as data (asserted above), but a closed session is never still
+    // working on it, so the tag and the pulse are gone and the head says 2/4 was as far as it
+    // got. The live counterpart lives in the unit suite (`task-thread.test.tsx`), which has a
+    // running run to render; every run this fixture serves is terminal by design.
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-dock"]').dataset.settled`)).toBe('true')
+    expect(items[2]!.text).not.toContain('in progress')
+    expect(browser.count('[data-slot="plan-tag"]')).toBe(0)
+    expect(browser.count('[data-slot="plan-dock"] .animate-pulse')).toBe(0)
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-unfinished"]').textContent`)).toBe(
+      '· left unfinished',
+    )
 
     // It sits in the dock region above the composer area, not in the thread flow.
     expect(browser.evaluate(`document.querySelector('[data-slot="thread-dock"] [data-slot="plan-dock"]') !== null`)).toBe(true)
   })
 
-  it('collapsing the dock folds it to the odometer + the activeForm of the current item', () => {
+  it('collapsing the dock folds it to the odometer — a settled run names no current item', () => {
     browser.click('[data-slot="plan-dock"] button')
     browser.waitForFunction(`document.querySelector('[data-slot="plan-dock"]').dataset.state === 'collapsed'`)
     expect(browser.count('[data-slot="plan-list"]')).toBe(0)
-    expect(browser.evaluate(`document.querySelector('[data-slot="plan-current"]').textContent`)).toBe(
-      '— Summarizing cockpit features',
+    // A live dock folds to "— <activeForm>". This one's session is closed, so there is no current
+    // item to name: the collapsed head is the odometer plus the unfinished note, nothing implying
+    // the agent is still on item 3.
+    expect(browser.count('[data-slot="plan-current"]')).toBe(0)
+    expect(browser.evaluate(`document.querySelector('[data-slot="plan-unfinished"]').textContent`)).toBe(
+      '· left unfinished',
     )
     // Re-expand so the desktop screenshot below captures the full checklist.
     browser.click('[data-slot="plan-dock"] button')
