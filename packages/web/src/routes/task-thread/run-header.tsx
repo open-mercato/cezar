@@ -68,7 +68,7 @@ import { OpenInMenu, type OpenInChoice } from '@/components/open-in-menu'
 import { toast } from '@/components/ui/toaster'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { DirectionalUsage } from '@/components/directional-usage'
-import { deriveAttention } from '@/lib/attention'
+import { ATTENTION_RANK, deriveAttention, type AttentionTone } from '@/lib/attention'
 import { queuePositions, runTitle } from '@/lib/task-groups'
 import { usableRunners } from '@/lib/provider-status'
 import {
@@ -894,48 +894,129 @@ function DispatchParentLine({ run }: { run: ApiRun }) {
   )
 }
 
+/** Above this many dispatched children the Subtasks list starts COLLAPSED. Four chips is roughly
+ *  the one row the line was drawn as; a gauntlet parent with a hundred of them wrapped into a wall
+ *  that owned the viewport and pushed the transcript off screen — the very thing the original
+ *  "deliberately one row" note meant to prevent — so past that row the reader opts in instead. */
+const SUBTASKS_OPEN_BY_DEFAULT_MAX = 4
+
+/** Which runs the reader has opened (or closed) the Subtasks list for. Module-level and run-keyed
+ *  for exactly the reasons `detailsOpenByRun` above is: a Session → Changes hop remounts this
+ *  header and plain `useState` would forget the choice, while run A → run B does NOT remount and
+ *  `useState` would carry A's choice into B. Session-lifetime only; nothing persisted. */
+const subtasksOpenByRun = new Map<string, boolean>()
+
 /**
- * "Subtasks: <child> · <child> …" — one collapsed row naming the tasks this one dispatched.
+ * "Subtasks — <child> · <child> …" — the tasks this one dispatched, behind a disclosure.
  *
  * Derived from the run list this page already holds rather than fetched: a child's link is its
  * id and its dot is its status, both of which `useRuns()` carries and keeps live over the run
  * stream. Nothing renders for a run that dispatched nothing — which is every run on a server
  * that never turned dispatch on.
  *
- * Deliberately ONE row, truncated: the full tree is the task list, and a header that grew a list
- * would push the transcript off the screen exactly when a parent has the most children.
+ * Bounded three ways, because a dispatching parent's child count is unbounded:
+ *  - past `SUBTASKS_OPEN_BY_DEFAULT_MAX` the list starts closed, and the summary row carries the
+ *    count plus a per-status tally, so a collapsed list still answers "how is the fan-out going";
+ *  - open, it scrolls at `max-h-28` (~5 wrapped rows) instead of growing without limit;
+ *  - closed, the links leave the DOM rather than hiding visually — same reasoning as the phone
+ *    meta disclosure above, no invisible-but-focusable links in the tab order.
  */
 function DispatchChildrenLine({ run }: { run: ApiRun }) {
   const runs = useRuns()
+  const [, bumpSubtasks] = useReducer((n: number) => n + 1, 0)
+  const listId = useId()
   const children = (runs.data ?? []).filter(
     (candidate) => candidate.dispatch?.parentRunId === run.id,
   )
   if (children.length === 0) return null
+  const open = subtasksOpenByRun.get(run.id) ?? children.length <= SUBTASKS_OPEN_BY_DEFAULT_MAX
+  const toggle = () => {
+    subtasksOpenByRun.set(run.id, !open)
+    bumpSubtasks()
+  }
   return (
-    <div
-      data-slot="dispatch-children"
-      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
-    >
-      <span className="shrink-0">Subtasks</span>
-      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden">
-        {children.map((child) => {
-          const attention = deriveAttention(child)
-          return (
-            <Link
-              key={child.id}
-              to={`/tasks/${child.id}`}
-              data-slot="dispatch-child"
-              data-run-id={child.id}
-              title={`${runTitle(child)} — ${attention.label}`}
-              className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"
-            >
-              <StatusDot tone={attention.tone} pulse={attention.pulse} />
-              <span className="truncate">{runTitle(child)}</span>
-            </Link>
-          )
-        })}
-      </span>
+    <div data-slot="dispatch-children" className="mt-1 min-w-0 text-xs text-muted-foreground">
+      <button
+        type="button"
+        data-slot="dispatch-children-toggle"
+        aria-controls={listId}
+        aria-expanded={open}
+        onClick={toggle}
+        className="flex min-w-0 max-w-full items-center gap-1.5 overflow-hidden hover:text-foreground"
+      >
+        <ChevronDownIcon
+          aria-hidden="true"
+          className={cn('size-3 shrink-0 transition-transform', !open && '-rotate-90')}
+        />
+        <span className="shrink-0">Subtasks</span>
+        <span data-slot="dispatch-children-count" className="shrink-0 tabular-nums">
+          {children.length}
+        </span>
+        <SubtaskTally subtasks={children} />
+      </button>
+      {open ? (
+        <div
+          id={listId}
+          data-slot="dispatch-children-list"
+          className="mt-0.5 flex max-h-28 min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-y-auto overscroll-contain pl-[1.125rem]"
+        >
+          {children.map((child) => {
+            const attention = deriveAttention(child)
+            return (
+              <Link
+                key={child.id}
+                to={`/tasks/${child.id}`}
+                data-slot="dispatch-child"
+                data-run-id={child.id}
+                title={`${runTitle(child)} — ${attention.label}`}
+                className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"
+              >
+                <StatusDot tone={attention.tone} pulse={attention.pulse} />
+                <span className="truncate">{runTitle(child)}</span>
+              </Link>
+            )
+          })}
+        </div>
+      ) : null}
     </div>
+  )
+}
+
+/**
+ * "3 running · 1 needs you · 20 done" — the children's statuses, counted, in attention order.
+ *
+ * What makes the collapsed state honest: the point of the row is the fan-out's health, and a bare
+ * "Subtasks 100" hides precisely the child that stopped to ask something. Ordered by the canonical
+ * `ATTENTION_RANK` (and grouped by `deriveAttention`'s own label) so the rung that wants a human
+ * is read first, never buried behind the done pile.
+ */
+function SubtaskTally({ subtasks }: { subtasks: ApiRun[] }) {
+  const byLabel = new Map<string, { tone: AttentionTone; pulse: boolean; rank: number; count: number }>()
+  for (const child of subtasks) {
+    const attention = deriveAttention(child)
+    const seen = byLabel.get(attention.label)
+    if (seen) {
+      seen.count += 1
+      continue
+    }
+    byLabel.set(attention.label, {
+      tone: attention.tone,
+      pulse: attention.pulse,
+      rank: ATTENTION_RANK[attention.bucket],
+      count: 1,
+    })
+  }
+  const tally = [...byLabel.entries()].sort(([, a], [, b]) => a.rank - b.rank || b.count - a.count)
+  return (
+    <span data-slot="dispatch-children-tally" className="flex min-w-0 items-center gap-2 overflow-hidden">
+      {tally.map(([label, group]) => (
+        <span key={label} className="inline-flex shrink-0 items-center gap-1">
+          <StatusDot tone={group.tone} pulse={group.pulse} />
+          <span className="tabular-nums">{group.count}</span>
+          <span>{label}</span>
+        </span>
+      ))}
+    </span>
   )
 }
 
