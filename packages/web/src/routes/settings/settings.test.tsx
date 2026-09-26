@@ -297,7 +297,7 @@ describe('the appearance section (global scope)', () => {
     // `{ accent }` would silently drop the stored density.
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'violet', density: 'compact', width: 'narrow' },
+        appearance: { accent: 'violet', density: 'compact', width: 'wide' },
       })
     })
     expect(localStorage.getItem('cez-accent')).toBe('violet')
@@ -314,32 +314,32 @@ describe('the appearance section (global scope)', () => {
     expect(document.documentElement.hasAttribute('data-density')).toBe(false)
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'lime', density: 'comfortable', width: 'narrow' },
+        appearance: { accent: 'lime', density: 'comfortable', width: 'wide' },
       })
     })
   })
 
-  it('reading width round-trip: Wide stamps the root and PUTs the full object; back to Narrow clears it', async () => {
+  it('reading width round-trip: Narrow stamps the root and PUTs the full object; back to Full clears it', async () => {
     serve({ appearance: { accent: 'violet' } })
     renderAt('/settings/global/appearance')
-    // Wait for the server value to settle (Violet is server-provided; Narrow is the default and
+    // Wait for the server value to settle (Violet is server-provided; Full is the default and
     // would report "checked" from the mirror before the GET even lands), so the pending load
     // can't clobber the width write we're about to make.
     await waitFor(() => {
       expect(screen.getByRole('radio', { name: 'Violet' }).getAttribute('aria-checked')).toBe('true')
     })
-    expect(screen.getByRole('radio', { name: 'Narrow' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio', { name: 'Full' }).getAttribute('aria-checked')).toBe('true')
 
-    fireEvent.click(screen.getByRole('radio', { name: 'Wide' }))
-    expect(document.documentElement.dataset.width).toBe('wide')
+    fireEvent.click(screen.getByRole('radio', { name: 'Narrow' }))
+    expect(document.documentElement.dataset.width).toBe('narrow')
     await waitFor(() => {
       expect(requests.find((r) => r.method === 'PUT' && r.url === '/api/v1/workspace/ui-state')?.body).toEqual({
-        appearance: { accent: 'violet', density: 'comfortable', width: 'wide' },
+        appearance: { accent: 'violet', density: 'comfortable', width: 'narrow' },
       })
     })
 
-    // Narrow is the default — the attribute must come OFF the root, not be written as data-width="narrow".
-    fireEvent.click(screen.getByRole('radio', { name: 'Narrow' }))
+    // Full is the default — the attribute must come OFF the root, not be written as data-width="wide".
+    fireEvent.click(screen.getByRole('radio', { name: 'Full' }))
     await waitFor(() => {
       expect(document.documentElement.hasAttribute('data-width')).toBe(false)
     })
@@ -382,7 +382,7 @@ describe('the settings split writes the right store', () => {
 
     await waitFor(() => expect(putsTo('/api/v1/workspace/ui-state')).toHaveLength(1))
     expect(putsTo('/api/v1/workspace/ui-state')[0]?.body).toEqual({
-      appearance: { accent: 'violet', density: 'comfortable', width: 'narrow' },
+      appearance: { accent: 'violet', density: 'comfortable', width: 'wide' },
     })
     expect(putsTo('/api/v1/ui-state')).toHaveLength(0)
   })

@@ -28,7 +28,7 @@ describe('normalize', () => {
     for (const raw of [null, undefined, 'magenta', 42, {}]) {
       expect(normalizeAccent(raw)).toBe('lime')
       expect(normalizeDensity(raw)).toBe('comfortable')
-      expect(normalizeWidth(raw)).toBe('narrow')
+      expect(normalizeWidth(raw)).toBe('wide')
     }
     expect(normalizeDensity('compact')).toBe('compact')
     expect(normalizeDensity('ultra')).toBe('ultra')
@@ -40,17 +40,17 @@ describe('normalize', () => {
     expect(normalizeAppearance(undefined)).toEqual({
       accent: 'lime',
       density: 'comfortable',
-      width: 'narrow',
+      width: 'wide',
     })
     expect(normalizeAppearance('not-an-object')).toEqual({
       accent: 'lime',
       density: 'comfortable',
-      width: 'narrow',
+      width: 'wide',
     })
     expect(normalizeAppearance({ accent: 'violet' })).toEqual({
       accent: 'violet',
       density: 'comfortable',
-      width: 'narrow',
+      width: 'wide',
     })
     expect(normalizeAppearance({ accent: 'nope', density: 'compact', width: 'wide' })).toEqual({
       accent: 'lime',
@@ -70,21 +70,21 @@ describe('the localStorage mirror', () => {
   })
 
   it('defaults when the mirror is empty', () => {
-    expect(readStoredAppearance()).toEqual({ accent: 'lime', density: 'comfortable', width: 'narrow' })
+    expect(readStoredAppearance()).toEqual({ accent: 'lime', density: 'comfortable', width: 'wide' })
   })
 })
 
 describe('applyAppearance', () => {
   it('stamps only the non-default choices, exactly like the pre-paint script', () => {
     const root = document.documentElement
-    applyAppearance(root, { accent: 'violet', density: 'compact', width: 'wide' })
+    applyAppearance(root, { accent: 'violet', density: 'compact', width: 'narrow' })
     expect(root.dataset.accent).toBe('violet')
     expect(root.dataset.density).toBe('compact')
-    expect(root.dataset.width).toBe('wide')
+    expect(root.dataset.width).toBe('narrow')
 
     // Back to defaults: the attributes must come OFF (the stock token sheet is the default),
-    // not be written as data-accent="lime".
-    applyAppearance(root, { accent: 'lime', density: 'comfortable', width: 'narrow' })
+    // not be written as data-accent="lime" / data-width="wide".
+    applyAppearance(root, { accent: 'lime', density: 'comfortable', width: 'wide' })
     expect(root.hasAttribute('data-accent')).toBe(false)
     expect(root.hasAttribute('data-density')).toBe(false)
     expect(root.hasAttribute('data-width')).toBe(false)
