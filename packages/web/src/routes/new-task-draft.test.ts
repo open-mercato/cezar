@@ -1,16 +1,43 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
+import type { PendingAttachment } from '@/components/composer/composer-attachments'
+
 import {
   clearStartedDraft,
   composerRunModeNote,
+  handOffComposition,
   normalizeDispatchIntent,
+  readAttachments,
   readDraft,
   resetDraft,
   resolveComposerRunMode,
+  writeAttachments,
   writeDraft,
 } from './new-task-draft'
 
 afterEach(resetDraft)
+
+const EMPTY_DRAFT = {
+  text: '',
+  source: null,
+  runner: null,
+  agentProfile: null,
+  model: null,
+  variants: 1,
+  planFirst: false,
+  worktree: null,
+  autonomous: null,
+  generateFollowups: null,
+  dispatch: null,
+} as const
+
+const shot = (name = 'pasted image'): PendingAttachment => ({
+  mediaType: 'image/png',
+  data: 'iVBORw0KGgo=',
+  preview: 'data:image/png;base64,iVBORw0KGgo=',
+  name,
+  isImage: true,
+})
 
 describe('resolveComposerRunMode', () => {
   const base = {
@@ -224,6 +251,98 @@ describe('the new-task draft store', () => {
       generateFollowups: null,
       dispatch: null,
     })
+  })
+})
+
+/**
+ * #1018 — switching project while composing takes the composition with you.
+ *
+ * The per-project keys are right, and stay: a half-typed task for the shop frontend must not
+ * surface in the cezar composer. What they were wrong ABOUT is the explicit switch — the user
+ * changing their mind mid-sentence about where this task belongs, with a screenshot already
+ * pasted. That is a move, and the rules below are what keep it one.
+ */
+describe('the new-task attachment store', () => {
+  it('keeps attachments per project and hands out copies, not the stored array', () => {
+    writeAttachments([shot('a.png')], null)
+    writeAttachments([shot('b.png'), shot('c.png')], 'shop')
+
+    expect(readAttachments(null).map((a) => a.name)).toEqual(['a.png'])
+    expect(readAttachments('shop').map((a) => a.name)).toEqual(['b.png', 'c.png'])
+    // A project nobody has touched has nothing attached.
+    expect(readAttachments('blog')).toEqual([])
+
+    const held = readAttachments('shop')
+    held.pop()
+    expect(readAttachments('shop')).toHaveLength(2)
+  })
+
+  it('never reaches localStorage — four 5 MB images would not fit', () => {
+    writeAttachments([shot()], 'shop')
+    expect(
+      Object.keys(localStorage).filter((key) => key.startsWith('cez-new-task-draft')),
+    ).toEqual([])
+  })
+})
+
+describe('handOffComposition', () => {
+  it('moves the text and the attachments to the arriving project', () => {
+    writeDraft({ ...EMPTY_DRAFT, text: 'fix the flake', runner: 'codex' }, null)
+    writeAttachments([shot('screenshot.png')], null)
+
+    expect(handOffComposition(null, 'shop')).toEqual({ moved: true })
+
+    expect(readDraft('shop').text).toBe('fix the flake')
+    expect(readAttachments('shop').map((a) => a.name)).toEqual(['screenshot.png'])
+    // A MOVE: the composition now exists in exactly one project, which is what keeps the
+    // per-project isolation the storage keys are for actually true.
+    expect(readDraft(null).text).toBe('')
+    expect(readAttachments(null)).toEqual([])
+  })
+
+  it('leaves the pickers behind — a skill ref is resolved against a project’s own catalog', () => {
+    writeDraft(
+      { ...EMPTY_DRAFT, text: 'ship it', source: { source: 'skill', ref: 'om-fix' }, model: 'opus' },
+      null,
+    )
+
+    handOffComposition(null, 'shop')
+
+    expect(readDraft('shop').source).toBeNull()
+    expect(readDraft('shop').model).toBeNull()
+    // …and the departing project keeps its own way of working, minus the spent text.
+    expect(readDraft(null).source).toEqual({ source: 'skill', ref: 'om-fix' })
+  })
+
+  it('refuses to clobber an unsent draft already waiting in the arriving project', () => {
+    writeDraft({ ...EMPTY_DRAFT, text: 'from cezar' }, null)
+    writeAttachments([shot('cezar.png')], null)
+    writeDraft({ ...EMPTY_DRAFT, text: 'already writing this' }, 'shop')
+
+    expect(handOffComposition(null, 'shop')).toEqual({ moved: false, reason: 'destination-busy' })
+
+    // Nothing lost on either side: the arriving project's work in progress wins, and the
+    // departing one still holds what was typed there — switching back restores it.
+    expect(readDraft('shop').text).toBe('already writing this')
+    expect(readAttachments('shop')).toEqual([])
+    expect(readDraft(null).text).toBe('from cezar')
+    expect(readAttachments(null).map((a) => a.name)).toEqual(['cezar.png'])
+  })
+
+  it('carries an attachment pasted before a word was typed', () => {
+    writeAttachments([shot()], null)
+
+    expect(handOffComposition(null, 'shop')).toEqual({ moved: true })
+    expect(readAttachments('shop')).toHaveLength(1)
+    expect(readAttachments(null)).toEqual([])
+  })
+
+  it('does nothing when there is nothing to move, or nowhere to move it', () => {
+    expect(handOffComposition(null, 'shop')).toEqual({ moved: false, reason: 'nothing-to-move' })
+
+    writeDraft({ ...EMPTY_DRAFT, text: 'typed' }, 'shop')
+    expect(handOffComposition('shop', 'shop')).toEqual({ moved: false, reason: 'same-project' })
+    expect(readDraft('shop').text).toBe('typed')
   })
 })
 

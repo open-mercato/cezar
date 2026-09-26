@@ -483,7 +483,20 @@ leading `projectId` segment.
   joins the drawer header.)
 - **Project groups** — one collapsible group per registered project, ordered by
   `lastOpenedAt`. Group header: chevron, project name, current branch,
-  attention badge (needs-you count). Expanded, a group shows:
+  attention badge (needs-you count). **Amended 2026-09-17 (#1018):** the header
+  is TWO sibling controls, not one. The chevron is the disclosure — it opens a
+  group so another project's task list can be read without leaving the page, and
+  it never navigates. The project NAME is a link into that project's own scope
+  (`/p/<id>/`), and clicking it is how a project becomes the active one. As first
+  built the header only disclosed, so expanding a group changed nothing about
+  which project was active: the sidebar painted no project as selected, and the
+  **New task** CTA — a `/new` link scoped through `project-router` — kept starting
+  tasks in whichever project the URL still named, with that project preselected in
+  the composer's project pill. Selecting also pins the group open (an explicit
+  `false` in the collapse map), because a project cannot be the one you are
+  standing in and shut at the same time; and the selected group carries a
+  primary-accent marker, since `bg-muted` alone cannot say "selected" in a sidebar
+  where every row is `hover:bg-muted`. Expanded, a group shows:
   - its nav — Tasks, Inbox (the existing `capabilities.followups`-gated item,
     omitted from the mockup), Git, GitHub (gated per project's forge),
     Skills, Workflows, Settings — each linking to `/p/<id>/…`;
@@ -513,6 +526,25 @@ draft key all re-resolve against the selected project (each project has its
 own skills and settings), and submit posts to
 `POST /api/p/<selected>/runs`. The localStorage draft key becomes per-project
 (`cez-new-task-draft:<projectId>`) so switching projects doesn't leak drafts.
+
+**Amended 2026-09-17 (#1018): the composition follows an explicit switch.** The
+per-project keys stay, and so does what they are for — a half-typed task for the
+shop frontend must not SURFACE in the cezar composer. They were being applied to
+the one case they were never about: changing the project pill is not navigating
+away, it is deciding mid-sentence where the task you are writing belongs, and as
+built that decision silently discarded the prompt (re-read from the arriving
+project's key) and the pasted screenshots with it (`/new` left attachments to the
+composer's uncontrolled state, and the route remounts per project). Picking a
+different project now hands the text and the attachments over — a MOVE, so the
+composition still exists in exactly one project and the isolation invariant
+holds. Two guards: an arriving project that already holds its own unsent text
+keeps it, and the departing draft stays where it was (nothing is lost in either
+direction); and the pickers do not travel, because a skill ref is resolved
+against a project's own catalog and carrying `om-fix` into a project without it
+would replace a lost prompt with a silently wrong one. Attachments live in a
+module-level, per-project, IN-MEMORY map — the draft store's own reason for
+refusing them (four 5 MB images as base64 against a ~5 MB quota) is unchanged, and
+`/new` attachments still start empty on a real page load, exactly as before.
 
 ### Settings split (mockup: `settings-global.html`)
 
