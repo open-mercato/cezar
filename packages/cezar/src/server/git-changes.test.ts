@@ -220,6 +220,22 @@ describe('collectChanges — structured diff vs base', () => {
     expect(result.changes.files[0]?.patch).toContain('… (patch truncated)');
   });
 
+  it('reports an honest error when the diff output overflows the exec cap, instead of a truncated patch header', async () => {
+    writeFileSync(join(dir, 'a.txt'), 'hello\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    writeFileSync(join(dir, 'a.txt'), `${'x'.repeat(500)}\n`.repeat(20));
+
+    // A cap this small guarantees the raw `git diff --patch` blows past it, well before
+    // `patchCap` ever gets a chance to truncate the per-file payload.
+    const result = await collectChanges(dir, 'main', { maxOutputBytes: 200 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error).toContain('exceeded the');
+    expect(result.error).toContain('MB cap');
+    expect(result.error).not.toMatch(/^diff --git/);
+  });
+
   it('intentToAdd:false never stages into the index (#major-index-mutation)', async () => {
     writeFileSync(join(dir, 'tracked.txt'), 'a\n');
     g(dir, 'add', '-A');
