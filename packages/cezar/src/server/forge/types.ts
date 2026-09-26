@@ -184,6 +184,21 @@ export interface ForgePrMergeState {
   mergeable: 'mergeable' | 'conflicting' | 'unknown';
   reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown';
   checks: ForgePrCheck[];
+  /**
+   * How much of the check tier the token could actually read (#969):
+   *
+   * - `detailed` — one row per check, names and links included.
+   * - `aggregate` — only the rolled-up state was readable, collapsed into a single row. A
+   *   fine-grained PAT lands here: `statusCheckRollup`'s `CheckRun` contexts need the `checks`
+   *   scope, which fine-grained PATs cannot grant at all, while `statusCheckRollup { state }`
+   *   stays readable.
+   * - `none` — neither was readable; `checks` is empty because nothing was found out, NOT because
+   *   the pull request has no CI.
+   */
+  checksTier: 'detailed' | 'aggregate' | 'none';
+  /** Why the check tier degraded — the first line of the failure, for the panel to show. Absent
+   *  when `checksTier` is `detailed`. */
+  checksReason?: string;
   methods: ForgeMergeMethod[];
   defaultMethod: ForgeMergeMethod | null;
   eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown';

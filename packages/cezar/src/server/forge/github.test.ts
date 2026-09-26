@@ -14,7 +14,9 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 import {
+  AGGREGATE_CHECK_NAME,
   __clearCommentsCacheForTests,
+  __clearMergeStateCacheForTests,
   __clearRepoHandleCacheForTests,
   resolveRepoHandle,
   createGithubDriver,
@@ -24,8 +26,10 @@ import {
   fetchCommentCounts,
   fetchCommitChecks,
   fetchPrChecks,
+  fetchPrMergeState,
   fetchRefStatuses,
   fetchGithubRefStatus,
+  whyLine,
   derivePrReferenceStatus,
   deriveIssueReferenceStatus,
   __clearRefStatusCacheForTests,
@@ -3073,5 +3077,237 @@ describe('refNumberFromUrl', () => {
     expect(refNumberFromUrl('https://example.com/')).toBeNull();
     expect(refNumberFromUrl('')).toBeNull();
     expect(refNumberFromUrl('https://github.com/o/r/pull/0')).toBeNull();
+  });
+});
+
+/**
+ * The merge panel's own read (#969).
+ *
+ * `statusCheckRollup` used to ride along in the one `gh pr view` call that also carried
+ * `mergeable`, `mergeStateStatus` and `reviewDecision`. Under a fine-grained PAT the rollup's
+ * `CheckRun` contexts are unreadable — `gh` exits 1 with EMPTY stdout, one GraphQL error per
+ * context — so the whole call was lost and the panel reported `available: false` for every PR,
+ * hiding three fields the same token reads fine. No permission fixes that: a check run needs the
+ * `checks` scope and fine-grained PATs have no Checks permission at all.
+ *
+ * These drive the real `gh` argv through `execFileMock`, so they assert the split itself, not a
+ * paraphrase of it.
+ */
+describe('fetchPrMergeState and an unreadable statusCheckRollup (#969)', () => {
+  const repoRef = { owner: 'acme', repo: 'demo' };
+  const CORE_FIELDS = 'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision';
+  const corePr = {
+    number: 353,
+    title: 'Ship it',
+    url: 'https://github.com/acme/demo/pull/353',
+    state: 'OPEN',
+    isDraft: false,
+    headRefName: 'feat/ship',
+    baseRefName: 'main',
+    headRefOid: 'a'.repeat(40),
+    mergeable: 'MERGEABLE',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  };
+  const policy = { allow_merge_commit: true, allow_squash_merge: true, allow_rebase_merge: true };
+
+  /** Exactly what the issue recorded: exit 1, empty stdout, the permission error on stderr. */
+  const notAccessible = (command: string) =>
+    Object.assign(
+      new Error(`Command failed: ${command}\nGraphQL: Resource not accessible by personal access token`),
+      { code: 1, stdout: '', stderr: '' },
+    );
+
+  const aggregate = (state: string | null) => ({
+    data: { repository: { p0: { commits: { nodes: [{ commit: { statusCheckRollup: state === null ? null : { state } } }] } } } },
+  });
+
+  /** Every `gh` argv the merge-state read makes, routed by the call it actually is. A route left
+   *  out answers the way a fine-grained PAT does: unreadable. */
+  function routeGh(routes: {
+    core?: () => unknown;
+    detail?: () => unknown;
+    aggregate?: () => unknown;
+    protection?: () => unknown;
+  }) {
+    const calls: string[] = [];
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = args[1] as string[];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      calls.push(argv.join(' '));
+      const answer = (produce: () => unknown) => {
+        let value: unknown;
+        try {
+          value = produce();
+        } catch (err) {
+          return cb(err, { stdout: '', stderr: '' });
+        }
+        return cb(null, { stdout: typeof value === 'string' ? value : JSON.stringify(value), stderr: '' });
+      };
+      if (argv[0] === 'pr' && argv[1] === 'view') {
+        const fields = argv[argv.indexOf('--json') + 1] ?? '';
+        if (fields === 'statusCheckRollup') {
+          return answer(routes.detail ?? (() => { throw notAccessible(`gh pr view 353 --json statusCheckRollup`); }));
+        }
+        return answer(routes.core ?? (() => corePr));
+      }
+      if (argv[0] === 'api' && argv[1] === 'graphql') {
+        return answer(routes.aggregate ?? (() => { throw notAccessible('gh api graphql'); }));
+      }
+      if (argv[0] === 'api' && (argv[1] ?? '').includes('/protection/')) {
+        return answer(routes.protection ?? (() => { throw notAccessible('gh api …/protection/required_status_checks'); }));
+      }
+      if (argv[0] === 'api') return answer(() => policy);
+      return cb(new Error(`unexpected gh ${argv.join(' ')}`), null);
+    });
+    return calls;
+  }
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', ''); // dry-run short-circuits the whole gh path under test
+    execFileMock.mockReset();
+    __clearMergeStateCacheForTests();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('never asks the core call for statusCheckRollup', async () => {
+    const calls = routeGh({ detail: () => ({ statusCheckRollup: [] }) });
+
+    await fetchPrMergeState('/repo/split', repoRef, 353);
+
+    const coreCall = calls.find((c) => c.includes(CORE_FIELDS));
+    expect(coreCall).toBeDefined();
+    expect(coreCall).not.toContain('statusCheckRollup');
+    expect(calls).toContain('pr view 353 --json statusCheckRollup');
+  });
+
+  it('keeps mergeable, mergeStateStatus and reviewDecision when the rollup detail is unreadable', async () => {
+    // The fine-grained-PAT shape: detail exits 1 with empty stdout, the aggregate state is readable.
+    routeGh({ aggregate: () => aggregate('SUCCESS') });
+
+    const out = await fetchPrMergeState('/repo/fine-grained', repoRef, 353);
+
+    expect(out.available).toBe(true);
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.mergeable).toBe('mergeable');
+    expect(out.mergeState.reviewDecision).toBe('approved');
+    expect(out.mergeState.methods).toEqual(['squash', 'merge', 'rebase']);
+    expect(out.mergeState.headSha).toBe('a'.repeat(40));
+  });
+
+  it('degrades the check tier to the readable aggregate rollup rather than losing it', async () => {
+    routeGh({ aggregate: () => aggregate('SUCCESS') });
+
+    const out = await fetchPrMergeState('/repo/aggregate-ok', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checksTier).toBe('aggregate');
+    expect(out.mergeState.checks).toEqual([{ name: AGGREGATE_CHECK_NAME, state: 'passing', required: null }]);
+    expect(out.mergeState.checksReason).toContain('Resource not accessible by personal access token');
+  });
+
+  it('still blocks on a red CI it could only read in aggregate', async () => {
+    routeGh({ aggregate: () => aggregate('FAILURE'), protection: () => ['ci'] });
+
+    const out = await fetchPrMergeState('/repo/aggregate-red', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checks[0]?.state).toBe('failing');
+    // One row standing for every check, required ones included — requiredness is unknowable, and
+    // `false` would read as "not required" even with branch protection readable.
+    expect(out.mergeState.checks[0]?.required).toBeNull();
+    expect(out.mergeState.eligibility).toBe('blocked');
+    expect(out.mergeState.blockers.map((b) => b.code)).toContain('checks-failing');
+    expect(out.mergeState.canMerge).toBe(false);
+  });
+
+  it('says so, rather than "no checks", when neither tier is readable', async () => {
+    // Empty `checks` with a `detailed` tier means "this PR has no CI"; here it means "we never
+    // found out", and that must never read as ready to merge.
+    routeGh({ protection: () => ['ci'] });
+
+    const out = await fetchPrMergeState('/repo/both-dark', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checksTier).toBe('none');
+    expect(out.mergeState.checks).toEqual([]);
+    expect(out.mergeState.eligibility).toBe('unknown');
+    expect(out.mergeState.blockers.map((b) => b.code)).toContain('checks-unknown');
+    expect(out.mergeState.canMerge).toBe(false);
+    expect(out.mergeState.canOverride).toBe(true); // a human may still merge deliberately
+  });
+
+  it('reports a head with no CI as no CI, not as an unreadable tier', async () => {
+    routeGh({ aggregate: () => aggregate(null), protection: () => ['ci'] });
+
+    const out = await fetchPrMergeState('/repo/no-ci', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checksTier).toBe('aggregate');
+    expect(out.mergeState.checks).toEqual([]);
+    expect(out.mergeState.blockers.map((b) => b.code)).not.toContain('checks-unknown');
+  });
+
+  it('keeps the full per-check detail on a token that can read it', async () => {
+    // The classic-token shape — nothing about the split may cost the readable case its rows.
+    routeGh({
+      protection: () => ['lint · typecheck · build'],
+      detail: () => ({
+        statusCheckRollup: [
+          { name: 'lint · typecheck · build', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/demo/actions/runs/1' },
+          { name: 'unit tests (1/3)', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/demo/actions/runs/2' },
+        ],
+      }),
+    });
+
+    const out = await fetchPrMergeState('/repo/classic', repoRef, 353);
+
+    if (!out.available) throw new Error('expected the merge state to survive');
+    expect(out.mergeState.checksTier).toBe('detailed');
+    expect(out.mergeState.checksReason).toBeUndefined();
+    expect(out.mergeState.checks).toEqual([
+      { name: 'lint · typecheck · build', state: 'passing', required: true, url: 'https://github.com/acme/demo/actions/runs/1' },
+      { name: 'unit tests (1/3)', state: 'passing', required: false, url: 'https://github.com/acme/demo/actions/runs/2' },
+    ]);
+    expect(out.mergeState.eligibility).toBe('ready');
+    expect(out.mergeState.canMerge).toBe(true);
+  });
+
+  it('never queries the aggregate fallback when the detail call succeeded', async () => {
+    const calls = routeGh({ detail: () => ({ statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }] }) });
+
+    await fetchPrMergeState('/repo/no-wasted-call', repoRef, 353);
+
+    expect(calls.some((c) => c.startsWith('api graphql'))).toBe(false);
+  });
+
+  it('still reports the whole state unavailable when the CORE call fails', async () => {
+    // The split narrows what counts as fatal; it does not paper over a genuinely failed read.
+    routeGh({ core: () => { throw notAccessible('gh pr view 353'); } });
+
+    const out = await fetchPrMergeState('/repo/core-fails', repoRef, 353);
+
+    expect(out.available).toBe(false);
+    if (out.available) throw new Error('expected unavailable');
+    expect(out.reason).toContain('Resource not accessible by personal access token');
+  });
+});
+
+describe('whyLine', () => {
+  it('skips the "Command failed" preamble and reports what actually went wrong', () => {
+    expect(
+      whyLine('Command failed: gh pr view 353 --json statusCheckRollup\nGraphQL: Resource not accessible by personal access token'),
+    ).toBe('GraphQL: Resource not accessible by personal access token');
+  });
+
+  it('falls back to the preamble when the failure said nothing else', () => {
+    expect(whyLine('Command failed: gh pr view 353')).toBe('Command failed: gh pr view 353');
+  });
+
+  it('answers something for an empty message', () => {
+    expect(whyLine('')).toBe('gh failed');
+    expect(whyLine('\n  \n')).toBe('gh failed');
   });
 });

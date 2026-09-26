@@ -593,6 +593,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'approved',
           checks: [{ name: 'test', state: 'passing', required: true, url: 'https://example.com/check' }],
+          checksTier: 'detailed',
           methods: ['squash', 'rebase'],
           defaultMethod: 'squash',
           eligibility: 'ready',
@@ -615,6 +616,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'approved',
           checks: [],
+          checksTier: 'detailed',
           methods: ['squash'],
           defaultMethod: 'squash',
           eligibility: 'ready',
@@ -662,6 +664,7 @@ describe('the GitHub detail pane', () => {
           mergeable: 'mergeable',
           reviewDecision: 'review-required',
           checks: [{ name: 'test', state: 'pending', required: true }],
+          checksTier: 'detailed',
           methods: ['squash'],
           defaultMethod: 'squash',
           eligibility: 'blocked',
@@ -692,6 +695,94 @@ describe('the GitHub detail pane', () => {
       expectedHeadSha: '0123456789abcdef0123456789abcdef01234567',
       overrideRules: true,
     }))
+  })
+
+  /** #969 — under a fine-grained PAT the per-check detail is unreadable and no permission grants
+   *  it. The panel must still render the merge state the token CAN read, show the aggregate check
+   *  tier it fell back to, and say plainly which part is missing. */
+  it('renders the merge state with the aggregate check tier and names what it could not read', async () => {
+    stubFetch({
+      'GET /api/v1/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [{ name: 'All checks', state: 'passing', required: null }],
+          checksTier: 'aggregate',
+          checksReason: 'GraphQL: Resource not accessible by personal access token',
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'ready',
+          blockers: [],
+          canMerge: true,
+          canOverride: false,
+        },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    const box = await waitFor(() => {
+      const found = document.querySelector('[data-slot="gh-merge-box"]')
+      if (!found) throw new Error('merge box not rendered')
+      return found
+    })
+    expect(box.textContent).toContain('Ready to merge')
+    expect(box.textContent).toContain('Reviews: approved')
+    expect(box.textContent).toContain('All checks · passing')
+    const note = document.querySelector('[data-slot="gh-merge-checks-degraded"]')
+    expect(note?.textContent).toContain('per-check detail is not')
+    expect(note?.textContent).toContain('Resource not accessible by personal access token')
+    expect(box.textContent).not.toContain('No checks configured')
+  })
+
+  it('does not pass an unreadable check tier off as "no checks configured"', async () => {
+    stubFetch({
+      'GET /api/v1/github/prs/137/merge-state': () => jsonResponse({
+        available: true,
+        mergeState: {
+          number: 137,
+          title: PR_137.title,
+          url: PR_137.url,
+          state: 'open',
+          isDraft: false,
+          headRef: 'feat/sse',
+          baseRef: 'main',
+          headSha: '0123456789abcdef0123456789abcdef01234567',
+          mergeable: 'mergeable',
+          reviewDecision: 'approved',
+          checks: [],
+          checksTier: 'none',
+          checksReason: 'GraphQL: Resource not accessible by personal access token',
+          methods: ['squash'],
+          defaultMethod: 'squash',
+          eligibility: 'unknown',
+          blockers: [{ code: 'checks-unknown', message: 'This token cannot read the checks on this pull request.' }],
+          canMerge: false,
+          canOverride: true,
+        },
+      }),
+    })
+    renderAt('/github/prs/137')
+
+    const note = await waitFor(() => {
+      const found = document.querySelector('[data-slot="gh-merge-checks-degraded"]')
+      if (!found) throw new Error('degraded note not rendered')
+      return found
+    })
+    expect(note.textContent).toContain('cannot read the checks')
+    const box = document.querySelector('[data-slot="gh-merge-box"]')
+    expect(box?.textContent).not.toContain('No checks configured')
+    // The blocker says the same thing as the note above it — it must not be printed twice.
+    expect(box?.textContent?.match(/cannot read the checks/g)).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Squash and merge' }).hasAttribute('disabled')).toBe(true)
   })
 })
 
