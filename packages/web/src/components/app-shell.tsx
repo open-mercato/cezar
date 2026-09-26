@@ -46,7 +46,7 @@ import { cn } from '@/lib/utils'
 // same file at this exact path (`GET /open-mercato.svg` — the favicon index.html points at), so
 // a second, hashed URL for the same picture would be one cache entry too many. Vite serves
 // `public/` at the root in dev and copies it into the build, so the path holds in both.
-// Its own gradient + rounded corners ARE the tile.
+// Its own solid purple tile + rounded corners ARE the tile.
 const brandLogoUrl = '/open-mercato.svg'
 
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
@@ -848,7 +848,7 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
   )
 }
 
-/** The Open Mercato brand mark. The SVG carries its own gradient and rounded corners, so it is
+/** The Open Mercato brand mark. The SVG carries its own purple tile and rounded corners, so it is
  *  the tile — no wrapper background. */
 function BrandTile() {
   return (
