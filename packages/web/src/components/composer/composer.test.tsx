@@ -188,16 +188,17 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
   it('pasted screenshots become removable thumbnails and ride the submit', async () => {
     const { onSubmit, textarea } = renderComposer()
     paste(textarea, [pngFile('shot.png', [9, 9])])
-    const thumb = await screen.findByLabelText('Remove shot.png')
+    const thumb = await screen.findByLabelText('Remove pasted image')
     expect(thumb).toBeTruthy()
 
     type(textarea, 'see screenshot')
     fireEvent.keyDown(textarea, { key: 'Enter' })
+    // Clipboard images can carry a browser-generated filename; it must not reach the library.
     expect(onSubmit).toHaveBeenCalledWith('see screenshot', [
       { mediaType: 'image/png', data: btoa(String.fromCharCode(9, 9)) },
     ])
     // Sent images leave the tray with the optimistic clear.
-    await waitFor(() => expect(screen.queryByLabelText('Remove shot.png')).toBeNull())
+    await waitFor(() => expect(screen.queryByLabelText('Remove pasted image')).toBeNull())
   })
 
   it('a single paste adds exactly ONE thumbnail under StrictMode (#double-paste regression)', async () => {
@@ -216,21 +217,21 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
     )
     const textarea = screen.getByLabelText('Reply to the agent') as HTMLTextAreaElement
     paste(textarea, [pngFile('once.png')])
-    await screen.findByLabelText('Remove once.png')
+    await screen.findByLabelText('Remove pasted image')
     expect(screen.getAllByLabelText(/^Remove /)).toHaveLength(1)
   })
 
   it('an image alone (no text) is sendable — the server accepts either', async () => {
     const { onSubmit, textarea } = renderComposer()
     paste(textarea, [pngFile()])
-    await screen.findByLabelText('Remove shot.png')
+    await screen.findByLabelText('Remove pasted image')
     fireEvent.click(screen.getByLabelText('Send'))
     expect(onSubmit).toHaveBeenCalledWith('', [expect.objectContaining({ mediaType: 'image/png' })])
   })
 
   it('clicking a thumbnail removes exactly that image', async () => {
     const { textarea } = renderComposer()
-    paste(textarea, [pngFile('a.png'), pngFile('b.png')])
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('a.png'), pngFile('b.png')] } })
     await screen.findByLabelText('Remove b.png')
     fireEvent.click(screen.getByLabelText('Remove a.png'))
     expect(screen.queryByLabelText('Remove a.png')).toBeNull()
@@ -239,7 +240,7 @@ describe('attachments — attach, paste, thumbnails, caps (legacy parity)', () =
 
   it('a 5th image is refused with a toast naming it', async () => {
     const { textarea } = renderComposer()
-    paste(textarea, ['a', 'b', 'c', 'd'].map((n) => pngFile(`${n}.png`)))
+    fireEvent.drop(textarea, { dataTransfer: { files: ['a', 'b', 'c', 'd'].map((n) => pngFile(`${n}.png`)) } })
     await screen.findByLabelText('Remove d.png')
     paste(textarea, [pngFile('e.png')])
     expect(await screen.findByText('e.png skipped — max 4 attachments per message')).toBeTruthy()
@@ -295,12 +296,14 @@ describe('the controlled-images seam (#939)', () => {
    */
   it('stays uncontrolled when no images props are given — the /new case, pinned', async () => {
     const { onSubmit, textarea } = renderComposer()
-    paste(textarea, [pngFile('local.png', [7])])
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('local.png', [7])] } })
     await screen.findByLabelText('Remove local.png')
 
     fireEvent.click(screen.getByLabelText('Send'))
+    // `pngFile` always names its file (#960), so the wire carries it — unrelated to what this
+    // test is actually pinning (the uncontrolled `/new` seam).
     expect(onSubmit).toHaveBeenCalledWith('', [
-      { mediaType: 'image/png', data: btoa(String.fromCharCode(7)) },
+      { mediaType: 'image/png', data: btoa(String.fromCharCode(7)), name: 'local.png' },
     ])
   })
 
@@ -352,7 +355,7 @@ describe('the controlled-images seam (#939)', () => {
     // The host's array is what renders — a restored draft's thumbnail comes back with it.
     expect(screen.getByLabelText('Remove restored.png')).toBeTruthy()
 
-    paste(textarea, [pngFile('new.png')])
+    fireEvent.drop(textarea, { dataTransfer: { files: [pngFile('new.png')] } })
     await waitFor(() => expect(seen.length).toBeGreaterThan(0))
     expect(seen.at(-1)).toEqual([HELD, expect.objectContaining({ name: 'new.png' })])
 

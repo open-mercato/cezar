@@ -1,48 +1,53 @@
-import { WorkflowIcon } from 'lucide-react'
-
+import type { Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 import { EnginePills, type EnginePick } from '@/components/engine-pills'
 import { PickerPill } from '@/components/picker-pill'
 import { Label } from '@/components/ui/label'
+import { SourcePill } from '@/components/source-pill'
 import { Switch } from '@/components/ui/switch'
+import type { TaskSource } from '@/lib/task-source'
 
 /**
  * The "runs as" row of What to run (spec 2026-09-14-automations-redesign § UI/UX 4.4): the
- * composer's own pills — workflow, runner + model (`EnginePills`, so the automation cannot pick
+ * composer's own pills — skill or workflow (`SourcePill`), runner + model (`EnginePills`, so the automation cannot pick
  * a backend the Inbox could not), the read-only base branch — and the Autonomous switch on the
  * right.
  */
 export function EditorRunAs({
-  workflow,
+  source,
+  sourcesReady,
+  skills,
+  skillUsage,
   workflows,
-  onWorkflow,
+  onSource,
   pick,
   onPick,
   baseBranch,
   autonomous,
   onAutonomous,
 }: {
-  workflow: string
-  /** The catalog's names; the current value is kept even when the catalog lacks it. */
-  workflows: readonly string[]
-  onWorkflow: (workflow: string) => void
+  source: TaskSource | null
+  sourcesReady: boolean
+  skills: readonly Skill[]
+  skillUsage: Readonly<Record<string, number>> | undefined
+  workflows: readonly WorkflowDef[]
+  onSource: (source: TaskSource | null) => void
   pick: EnginePick
   onPick: (pick: EnginePick) => void
   baseBranch: string | undefined
   autonomous: boolean
   onAutonomous: (autonomous: boolean) => void
 }) {
-  const names = workflows.includes(workflow) ? workflows : [workflow, ...workflows]
   return (
     <div data-slot="editor-run-as" className="flex flex-wrap items-center gap-2">
-      <PickerPill
-        slot="editor-workflow-pill"
-        ariaLabel="Workflow"
-        label={<><WorkflowIcon aria-hidden="true" className="size-3" />{workflow}</>}
-        value={workflow}
-        options={names.map((name) => ({ value: name, label: name }))}
-        onPick={onWorkflow}
+      <SourcePill
+        source={source}
+        ready={sourcesReady}
+        skills={skills}
+        skillUsage={skillUsage}
+        workflows={workflows}
+        onPick={onSource}
       />
-      <EnginePills pick={pick} onChange={onPick} />
+      <EnginePills pick={pick} onChange={onPick} accounts />
       <PickerPill
         slot="editor-base-pill"
         ariaLabel="Base branch"

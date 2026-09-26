@@ -105,6 +105,24 @@ async function connect(url: string) {
 }
 
 describe('createSocketHub', () => {
+  it('disposes dynamic topics and allows the same name to be registered again', async () => {
+    const { url } = await boot(makeTopic().publisher);
+    const hub = hubs.at(-1)!;
+    const first = makeTopic();
+    const remove = hub.registerTopic('dynamic', first.publisher);
+    const client = await connect(url);
+    client.send({ type: 'subscribe', topic: 'dynamic' });
+    await client.next();
+    remove();
+    expect(first.state.stopped).toBe(1);
+    const second = makeTopic({ second: true });
+    hub.registerTopic('dynamic', second.publisher);
+    remove(); // the old disposer must not remove a newer registration
+    client.send({ type: 'subscribe', topic: 'dynamic' });
+    expect(await client.next()).toMatchObject({ type: 'event', data: { second: true } });
+    client.ws.close();
+  });
+
   it('starts the publisher on the first subscriber and answers with the snapshot', async () => {
     const { state, publisher } = makeTopic({ hello: 'world' });
     const { url } = await boot(publisher);

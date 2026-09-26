@@ -138,9 +138,10 @@ export function ProjectGroups({
     const placed = orderProjects(projects, order)
     // An UNREGISTERED boot folder leads, ahead of BOTH rules above it: it has no `lastOpenedAt`
     // to sort by (it was never written down, so the recency sort would bury it last) and no
-    // registry entry to be placed by hand — yet it is the folder the user just started cezar in,
-    // and burying it under the saved projects would repeat the disappearance this row exists to
-    // fix. A stable partition, so the result is still a permutation of the input.
+    // registry entry to be placed by hand. Defensive today — `/api/v1/projects` only lists that
+    // row while the registry is EMPTY, and one project never reaches this grouped sidebar — but
+    // the ordering must not depend on that. A stable partition, so the result is still a
+    // permutation of the input.
     const lead = placed.filter((project) => project.unregistered)
     if (lead.length === 0) return placed
     return [...lead, ...placed.filter((project) => !project.unregistered)]
@@ -558,6 +559,7 @@ function ProjectGroup({
               forge: project.forge === 'github',
               inbox: inboxAvailable,
               automations: automationsAvailable,
+              tracker: project.tracker,
             }).map((item) => {
               // Only the active group can own the current URL: the flat route map is
               // project-agnostic, so `/git` lights Git in exactly one project — the scoped one.

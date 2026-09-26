@@ -1,10 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore } from '../runs/store.ts';
-import type { PastedContent, RunManager, StartRunInput } from '../workflows/run.ts';
+import { attachmentLibraryDir, type PastedContent, type RunManager, type StartRunInput } from '../workflows/run.ts';
 import type { WorkflowDef } from '../workflows/types.ts';
 import { createApp } from './server.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
@@ -29,6 +29,7 @@ describe('attachment routes (#950)', () => {
   let app: Hono;
   let captured: StartRunInput | undefined;
   let delivered: PastedContent[] | undefined;
+  let accept = true;
 
   const PNG_B64 = Buffer.from('fake-png-bytes').toString('base64');
   const MD_B64 = Buffer.from('# brief\n').toString('base64');
@@ -39,6 +40,7 @@ describe('attachment routes (#950)', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     captured = undefined;
     delivered = undefined;
+    accept = true;
     const manager = {
       startRun: (_workflow: WorkflowDef, input: StartRunInput) => {
         captured = input;
@@ -46,8 +48,11 @@ describe('attachment routes (#950)', () => {
       },
       sendMessage: (_id: string, content: PastedContent[]) => {
         delivered = content;
-        return true;
+        return accept;
       },
+      enqueueMessage: () => null,
+      deferMessage: () => false,
+      continueRun: () => ({ ok: false, error: 'cannot continue' }),
     } as unknown as RunManager;
     app = createApp({
       repoRoot,
@@ -71,6 +76,16 @@ describe('attachment routes (#950)', () => {
     });
 
   const base = { task: 'read the brief', steps: [{ id: 'work', prompt: '{{task}}' }] };
+
+  it.each(['messages', 'continue'])('does not file images when %s rejects the request', async (action) => {
+    accept = false;
+    const run = store.createRun({ title: 't', workflow: 'test', task: 'test', steps: [] });
+    const res = await post('/api/v1/runs/' + run.id + '/' + action, {
+      text: 'test', images: [{ mediaType: 'image/png', data: PNG_B64, name: 'rejected.png' }],
+    });
+    expect(res.status).toBe(409);
+    expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
+  });
 
   describe('POST /api/v1/runs', () => {
     it('takes a PDF and a markdown file, and hands the engine file blocks', async () => {
@@ -99,6 +114,28 @@ describe('attachment routes (#950)', () => {
       ]);
     });
 
+    // A mocked engine does not persist; conversion alone must never write library files.
+    it('hands a named image to the engine without writing a library copy at the HTTP boundary', async () => {
+      const res = await post('/api/v1/runs', {
+        ...base,
+        images: [{ mediaType: 'image/png', data: PNG_B64, name: 'diagram.png' }],
+      });
+      expect(res.status).toBe(201);
+      expect(captured?.images).toEqual([
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PNG_B64 } },
+      ]);
+      const libraryPath = join(attachmentLibraryDir(join(repoRoot, '.ai/cezar')), 'diagram.png');
+      expect(existsSync(libraryPath)).toBe(false);
+    });
+
+    /** A clipboard paste never carries a name, so there is nothing to file — a library of
+     *  numbered pastes is exactly the clutter #929/#960 exist to avoid. */
+    it('never files a nameless (pasted) image', async () => {
+      const res = await post('/api/v1/runs', { ...base, images: [{ mediaType: 'image/png', data: PNG_B64 }] });
+      expect(res.status).toBe(201);
+      expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
+    });
+
     /** The allowlist is what keeps `text/html` and SVG-as-a-document out of a folder this server
      *  serves back from its own origin. A refusal is a 400, not a silent drop. */
     it('refuses a type outside the allowlist', async () => {
@@ -125,6 +162,22 @@ describe('attachment routes (#950)', () => {
         images: [{ mediaType: 'image/svg+xml', data: PNG_B64 }],
       });
       expect(res.status).toBe(201);
+    });
+
+    /**
+     * A named image is filed as a side effect of building `images` (#960) — before this,
+     * `variants > 1` outside a git repo still built it ahead of its own 400, so a request that
+     * never started a run left the file behind anyway. The manager's `startVariants` is
+     * deliberately absent from the mock: reaching it at all would be its own failure here.
+     */
+    it('refuses parallel variants outside a git repo without filing the image first', async () => {
+      const res = await post('/api/v1/runs', {
+        ...base,
+        variants: 2,
+        images: [{ mediaType: 'image/png', data: PNG_B64, name: 'diagram.png' }],
+      });
+      expect(res.status).toBe(400);
+      expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
     });
   });
 

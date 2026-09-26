@@ -4,7 +4,7 @@ import { Link as RouterLink, MemoryRouter, useLocation } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { AppShell, routeOwnsScrollArrival, type AppShellProps } from './app-shell'
-import { NAV_ITEMS } from './nav-items'
+import { NAV_ITEMS, visibleNavItems } from './nav-items'
 import { ThemeProvider } from './theme-provider'
 
 afterEach(() => {
@@ -133,7 +133,7 @@ describe('AppShell', () => {
     renderShell('/', { forgeAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/github')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge).length)
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge && !item.tracker).length)
   })
 
   // #801: same degradation for the opt-in automations capability — the item disappears, it does
@@ -142,7 +142,7 @@ describe('AppShell', () => {
     renderShell('/', { automationsAvailable: false })
     const links = within(nav()).getAllByRole('link')
     expect(links.map((a) => a.getAttribute('href'))).not.toContain('/automations')
-    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.automations).length)
+    expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.automations && !item.tracker).length)
   })
 
   it('shows the Automations item once the capability is on', () => {
@@ -782,8 +782,9 @@ describe('AppShell', () => {
 
       // Asserted against NAV_ITEMS, not a copy of it: the point of this test is that the drawer
       // reuses the sidebar's content, so adding a nav item must not need a second edit here.
-      expect(links.map((a) => a.getAttribute('href'))).toEqual(NAV_ITEMS.map((item) => item.to))
-      expect(links.map((a) => a.textContent)).toEqual(NAV_ITEMS.map((item) => item.label))
+      const visible = visibleNavItems({ forge: true, inbox: true, automations: true })
+      expect(links.map((a) => a.getAttribute('href'))).toEqual(visible.map((item) => item.to))
+      expect(links.map((a) => a.textContent)).toEqual(visible.map((item) => item.label))
 
       // …and the rest of the sidebar came along, not just the nav.
       expect(within(drawer() as HTMLElement).getByRole('link', { name: /New task/ })).toBeTruthy()

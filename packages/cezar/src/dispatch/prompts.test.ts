@@ -23,6 +23,12 @@ describe('the dispatch prompt', () => {
     expect(DISPATCH_PROMPT).toContain('cheaper or faster model');
   });
 
+  it('keeps --budget optional so an uncapped parent does not invent a cap for its children', () => {
+    expect(DISPATCH_PROMPT).toContain('--budget is optional: OMIT it unless the user asked for a cost limit');
+    expect(DISPATCH_PROMPT).toContain('Never invent a figure');
+    expect(DISPATCH_PROMPT).not.toContain('each with its own budget');
+  });
+
   it('says when NOT to dispatch — the task-shape gate the evidence demands', () => {
     expect(DISPATCH_PROMPT).toMatch(/genuinely INDEPENDENT/);
     expect(DISPATCH_PROMPT).toMatch(/NOT for one tightly coupled change/);

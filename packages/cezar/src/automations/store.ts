@@ -24,13 +24,17 @@ import {
   type AutomationRuntimeState,
 } from './types.ts';
 import type { GithubCandidate } from './github-poller.ts';
+import type { TrackerAutomationCandidate } from './tracker-poller.ts';
 
 const DEFINITIONS = 'automations.json';
 const STATE = 'automation-state.json';
 const RECEIPTS = 'automation-receipts.ndjson';
 const LOG = 'automation-log.ndjson';
 const POLL_LOCK = 'automation-poll.lock';
+const MUTATION_LOCK = 'automation-mutation.lock';
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
+/** How many times one `acquireLease` call may reclaim an abandoned lock and retry. */
+const LEASE_RECLAIM_ATTEMPTS = 1;
 
 type DefinitionsFile = ReturnType<typeof automationDefinitionsFileSchema.parse>;
 type StateFile = ReturnType<typeof automationStateFileSchema.parse>;
@@ -38,6 +42,8 @@ type StateFile = ReturnType<typeof automationStateFileSchema.parse>;
 export interface AutomationStoreOptions {
   warn?: (message: string) => void;
   now?: () => Date;
+  /** Liveness probe for the pid recorded in the poll lock. Injected by tests only. */
+  processAlive?: (pid: number) => boolean;
 }
 
 export class AutomationStore {
@@ -63,64 +69,88 @@ export class AutomationStore {
   }
 
   list(): AutomationDefinition[] {
+    this.loadDefinitions();
     return [...this.definitions.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 
   get(id: string): AutomationDefinition | undefined {
+    this.loadDefinitions();
     return this.definitions.get(id);
   }
 
   create(
     input: Omit<AutomationDefinition, 'id' | 'revision' | 'createdAt' | 'updatedAt'>,
     id: string = randomUUID(),
+    initializeState?: (definition: AutomationDefinition) => void,
   ): AutomationDefinition {
-    if (this.definitions.has(id) || this.isTombstoned(id)) throw new Error('automation id unavailable');
-    const now = this.now().toISOString();
-    const definition = automationDefinitionSchema.parse({
-      ...input,
-      id,
-      revision: 1,
-      createdAt: now,
-      updatedAt: now,
-    });
-    this.definitions.set(id, definition);
-    this.persistDefinitions();
-    return definition;
+    const mutation = this.acquireMutationLease();
+    if (!mutation) throw new Error('automation mutation conflict: a launch is in progress');
+    try {
+      this.loadDefinitions();
+      if (this.definitions.has(id) || this.isTombstoned(id)) throw new Error('automation id unavailable');
+      const now = this.now().toISOString();
+      const definition = automationDefinitionSchema.parse({
+        ...input,
+        id,
+        revision: 1,
+        createdAt: now,
+        updatedAt: now,
+      });
+      this.definitions.set(id, definition);
+      // Baseline and definition publish under one lease; readers snapshot under that lease too.
+      initializeState?.(definition);
+      this.persistDefinitions();
+      return definition;
+    } finally { mutation.release(); }
   }
 
   update(
     id: string,
     expectedRevision: number,
     input: Omit<AutomationDefinition, 'id' | 'revision' | 'createdAt' | 'updatedAt'>,
+    initializeState?: (definition: AutomationDefinition) => void,
   ): AutomationDefinition {
-    const current = this.definitions.get(id);
-    if (!current) throw new Error('automation not found');
-    if (current.revision !== expectedRevision) throw new Error('automation revision conflict');
-    const definition = automationDefinitionSchema.parse({
-      ...current,
-      ...input,
-      id,
-      revision: current.revision + 1,
-      createdAt: current.createdAt,
-      updatedAt: this.now().toISOString(),
-    });
-    this.definitions.set(id, definition);
-    if (this.state(id)) this.setState(id, (current) => ({ ...current, revision: definition.revision }));
-    this.persistDefinitions();
-    return definition;
+    const mutation = this.acquireMutationLease();
+    if (!mutation) throw new Error('automation mutation conflict: a launch is in progress');
+    try {
+      this.loadDefinitions();
+      const current = this.definitions.get(id);
+      if (!current) throw new Error('automation not found');
+      if (current.revision !== expectedRevision) throw new Error('automation revision conflict');
+      const definition = automationDefinitionSchema.parse({
+        ...current,
+        ...input,
+        id,
+        revision: current.revision + 1,
+        createdAt: current.createdAt,
+        updatedAt: this.now().toISOString(),
+      });
+      this.definitions.set(id, definition);
+      if (this.state(id)) this.setState(id, (current) => ({ ...current, revision: definition.revision }));
+      // Baseline and definition publish under one lease; readers snapshot under that lease too.
+      initializeState?.(definition);
+      this.persistDefinitions();
+      return definition;
+    } finally { mutation.release(); }
   }
 
   delete(id: string): boolean {
-    if (!this.definitions.delete(id)) return false;
-    this.definitionsFile.tombstones = {
-      ...this.definitionsFile.tombstones,
-      [id]: this.now().toISOString(),
-    };
-    this.persistDefinitions();
-    return true;
+    const mutation = this.acquireMutationLease();
+    if (!mutation) throw new Error('automation mutation conflict: a launch is in progress');
+    try {
+      this.loadDefinitions();
+      if (!this.definitions.delete(id)) return false;
+      this.definitionsFile.tombstones = {
+        ...this.definitionsFile.tombstones,
+        [id]: this.now().toISOString(),
+      };
+      this.persistDefinitions();
+      return true;
+    } finally { mutation.release(); }
   }
 
   state(id: string): AutomationRuntimeState | undefined {
+    this.stateFile = this.readJson(STATE, automationStateFileSchema, { version: 1, states: {} });
     return this.stateFile.states[id];
   }
 
@@ -165,6 +195,7 @@ export class AutomationStore {
     revision: number;
     eventId: string;
     candidate?: GithubCandidate;
+    trackerCandidate?: TrackerAutomationCandidate;
     /** schedule kind: the occurrence being reserved. */
     occurrenceAt?: string;
   }): AutomationReceipt | undefined {
@@ -181,6 +212,15 @@ export class AutomationStore {
     });
     this.appendReceipt(receipt);
     return receipt;
+  }
+
+  /** Called under both polling and mutation leases, after run reconciliation. */
+  reserveRetry(receiptId: string): AutomationReceipt | undefined {
+    const current = [...this.latestReceipts().values()].find(row => row.receiptId === receiptId);
+    if (!current || current.status !== 'launch-error' || current.runId) return undefined;
+    const reserved: AutomationReceipt = { ...current, status: 'reserved', error: undefined, updatedAt: this.now().toISOString() };
+    this.appendReceipt(reserved);
+    return reserved;
   }
 
   appendLog(
@@ -210,7 +250,7 @@ export class AutomationStore {
   compact(): void {
     const cutoff = this.now().getTime() - RETENTION_MS;
     const latest = [...this.latestReceipts().values()].filter(
-      (row) => Date.parse(row.updatedAt) >= cutoff,
+      (row) => Date.parse(row.updatedAt) >= cutoff || (this.get(row.automationId)?.kind === 'tracker'),
     );
     this.rewriteNdjson(RECEIPTS, latest);
     const logs = this.readNdjson(LOG, automationLogRecordSchema);
@@ -223,24 +263,53 @@ export class AutomationStore {
     }
   }
 
-  acquireLease(staleAfterMs = 10 * 60_000): AutomationLease | undefined {
+  acquireMutationLease(): AutomationLease | undefined {
+    return this.acquireLease(10 * 60_000, MUTATION_LOCK);
+  }
+
+  /**
+   * Take the project's poll lock, reclaiming one nobody is holding any more (#983). A cockpit
+   * killed mid-poll leaves the lock behind with its own pid inside; consulting that pid makes the
+   * crash case instant instead of a ten-minute, workspace-wide outage. `staleAfterMs` stays as the
+   * fallback for a lock whose pid we cannot read or trust.
+   */
+  acquireLease(staleAfterMs = 10 * 60_000, filename = POLL_LOCK): AutomationLease | undefined {
     mkdirSync(this.dataDir, { recursive: true });
-    const path = join(this.dataDir, POLL_LOCK);
+    return this.tryAcquireLease(join(this.dataDir, filename), staleAfterMs, 0);
+  }
+
+  private tryAcquireLease(path: string, staleAfterMs: number, attempt: number): AutomationLease | undefined {
     try {
       const fd = openSync(path, 'wx', 0o600);
       writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: this.now().toISOString() }));
       return new AutomationLease(path, fd);
     } catch {
+      // One reclaim per call: if the lock is back a moment later, a live contender took it.
+      if (attempt >= LEASE_RECLAIM_ATTEMPTS) return undefined;
       try {
-        if (this.now().getTime() - statSync(path).mtimeMs > staleAfterMs) {
+        if (this.isLeaseAbandoned(path, staleAfterMs)) {
           unlinkSync(path);
-          return this.acquireLease(staleAfterMs);
+          return this.tryAcquireLease(path, staleAfterMs, attempt + 1);
         }
       } catch {
         // A contender removed the lock or the directory is read-only.
       }
       return undefined;
     }
+  }
+
+  /** Abandoned = the process that wrote the lock is gone, or nobody released it in `staleAfterMs`. */
+  private isLeaseAbandoned(path: string, staleAfterMs: number): boolean {
+    // Clamp to zero and compare with >=: `mtimeMs` carries sub-millisecond precision that
+    // `Date.now()` does not, so a lock written a moment ago can read as zero or even slightly
+    // negative age. Without the clamp, `staleAfterMs = 0` ("reclaim on age alone") would only
+    // fire when the surrounding work happened to cross a millisecond boundary.
+    const ageMs = Math.max(0, this.now().getTime() - statSync(path).mtimeMs);
+    if (ageMs >= staleAfterMs) return true;
+    const pid = readLeasePid(path);
+    // An unreadable pid (an empty or half-written lock) leaves only the age rule above.
+    if (pid === undefined || pid === process.pid) return false;
+    return !(this.options.processAlive ?? isProcessAlive)(pid);
   }
 
   private load(): void {
@@ -255,6 +324,7 @@ export class AutomationStore {
   }
 
   private loadDefinitions(): void {
+    this.definitions.clear();
     this.definitionsFile = this.readJson(DEFINITIONS, automationDefinitionsFileSchema, {
       version: 1,
       automations: [],
@@ -355,6 +425,32 @@ export class AutomationStore {
     if (this.warned.has(key)) return;
     this.warned.add(key);
     this.options.warn?.(message);
+  }
+}
+
+/** The pid `acquireLease` wrote into the lock, or `undefined` for a lock we cannot read. */
+function readLeasePid(path: string): number | undefined {
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { pid?: unknown } | null;
+    const pid = parsed?.pid;
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Signal 0 probes a pid without touching the process. `EPERM` means it exists and belongs to
+ * somebody else — alive, as far as the lock is concerned. A recycled pid, or a pid from a
+ * namespace we do not share, reads as alive and degrades to the age rule: never worse than not
+ * looking at all.
+ */
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 

@@ -1,5 +1,5 @@
-import { useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo } from 'react'
+import { useInfiniteQuery, useMutation, useQueries, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 
 import { mergeProviderStatusResponse } from '@/lib/provider-status'
 
@@ -50,6 +50,10 @@ import {
   getSkills,
   getSkillsWhenReady,
   getTodos,
+  getTrackerAssociation, getTrackerConnection,
+  getTrackerCandidates,
+  getTrackerItem,
+  getTrackerItems,
   getUiState,
   getWorkflows,
   getWorkspaceConfig,
@@ -76,6 +80,7 @@ import {
   sendProjectRunMessage,
   putAgentConfigFile,
   retryProviderAuth,
+  searchTrackerItems,
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
@@ -103,6 +108,9 @@ import type {
   SetAgentConfigInput,
   UpdateAgentProfileInput,
   UpdateProjectInput,
+  TrackerAssociation,
+  TrackerItemsResponse,
+  TrackerKind,
 } from '@open-mercato/cezar-api-client'
 import { subscribeTopic } from './ws'
 
@@ -123,6 +131,25 @@ import { subscribeTopic } from './ws'
  * ever reach A's data. Call sites are unchanged — they keep writing `queryKeys.runs.list()`.
  */
 export const queryKeys = {
+  tracker: {
+    allFor: (projectId: string) => ['tracker', projectId] as const,
+    all: () => ['tracker', queryScope()] as const,
+    associationFor: (projectId: string) => ['tracker', projectId, 'association'] as const,
+    association: () => ['tracker', queryScope(), 'association'] as const,
+    candidates: (kind: TrackerKind, query = '') => ['tracker', queryScope(), 'candidates', kind, query] as const,
+    connection: () => ['tracker', queryScope(), 'connection'] as const,
+    items: (
+      association: TrackerAssociation,
+      params: { state: 'active' | 'all'; labels: readonly string[]; query?: string },
+    ) => [
+      'tracker', queryScope(), 'items', association.kind, association.source.id,
+      association.source.webUrl, association.externalId, association.connectionId ?? null, params.state, [...params.labels], params.query ?? '',
+    ] as const,
+    detail: (association: TrackerAssociation, id: string) => [
+      'tracker', queryScope(), 'detail', association.kind, association.source.id,
+      association.source.webUrl, association.externalId, association.connectionId ?? null, id,
+    ] as const,
+  },
   get health() {
     return [queryScope(), 'health'] as const
   },
@@ -218,6 +245,108 @@ export const queryKeys = {
   get openTargets() {
     return [queryScope(), 'open-targets'] as const
   },
+}
+
+export const TRACKER_STALE_TIME = 60_000
+
+export function useTrackerConnection() {
+  return useQuery({ queryKey: queryKeys.tracker.connection(), queryFn: ({ signal }) => getTrackerConnection({ signal }) })
+}
+
+export function useTrackerAssociation() {
+  return useQuery({
+    queryKey: queryKeys.tracker.association(),
+    queryFn: ({ signal }) => getTrackerAssociation({ signal }),
+  })
+}
+
+export function useTrackerCandidates(kind: TrackerKind, query: string, enabled: boolean) {
+  return useInfiniteQuery({
+    queryKey: queryKeys.tracker.candidates(kind, query),
+    staleTime: TRACKER_STALE_TIME,
+    queryFn: ({ pageParam, signal }) =>
+      getTrackerCandidates(kind, {
+        q: query.trim() || undefined,
+        cursor: pageParam,
+        limit: 50,
+      }, { signal }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.available && page.truncated ? page.nextCursor : undefined,
+    enabled,
+  })
+}
+
+/** Keep tracker failure metadata when a refresh rejects without replacing cached pages. */
+export class TrackerRefreshError extends Error {
+  constructor(readonly failure: Extract<TrackerItemsResponse, { available: false }>) {
+    super(failure.reason)
+    this.name = 'TrackerRefreshError'
+  }
+}
+
+export function useTrackerItems(
+  association: TrackerAssociation | null | undefined,
+  params: { state: 'active' | 'all'; labels: readonly string[]; query: string },
+  enabled = true,
+) {
+  const query = params.query.trim()
+  const queryClient = useQueryClient()
+  const queryKey = association
+    ? queryKeys.tracker.items(association, { ...params, query })
+    : ['tracker', queryScope(), 'items', 'unassociated']
+  const result = useInfiniteQuery({
+    queryKey,
+    // Watch owns automatic updates and preserves loaded pages until Show changes.
+    // Infinity still allows explicit invalidation when the connection or scope changes.
+    staleTime: Infinity,
+    queryFn: ({ pageParam, signal }) => query
+      ? searchTrackerItems(query, { association: association ?? undefined, cursor: pageParam, limit: 50, state: params.state, labels: params.labels, refresh: true }, { signal })
+      : getTrackerItems({ association: association ?? undefined, cursor: pageParam, limit: 50, state: params.state, labels: params.labels, refresh: false }, { signal }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page) => page.available && page.truncated ? page.nextCursor : undefined,
+    enabled: association != null && enabled,
+  })
+  return {
+    ...result,
+    queryKey,
+    // Fetch page one without resetting the infinite-query cache: failed refreshes must
+    // retain loaded pages and cursors. The shared query owns cancellation and loading/error
+    // state, and publishes the replacement pages only after a successful response.
+    restart: async () => {
+      await queryClient.cancelQueries({ queryKey, exact: true })
+      try {
+        await queryClient.fetchInfiniteQuery({
+          queryKey,
+          initialPageParam: undefined as string | undefined,
+          pages: 1,
+          getNextPageParam: (page: TrackerItemsResponse) => page.available && page.truncated ? page.nextCursor : undefined,
+          staleTime: 0,
+          retry: false,
+          queryFn: async ({ signal }) => {
+            const browse = { association: association ?? undefined, limit: 50, state: params.state, labels: params.labels, refresh: true }
+            const page = query
+              ? await searchTrackerItems(query, browse, { signal })
+              : await getTrackerItems(browse, { signal })
+            if (!page.available) throw new TrackerRefreshError(page)
+            return page
+          },
+        })
+      } catch {
+        // Query state exposes failures to the existing retry UI; cancellation is silent.
+      }
+    },
+  }
+}
+
+export function useTrackerItem(association: TrackerAssociation | null | undefined, id: string | undefined) {
+  return useQuery({
+    staleTime: TRACKER_STALE_TIME,
+    queryKey: association && id
+      ? queryKeys.tracker.detail(association, id)
+      : ['tracker', queryScope(), 'detail', 'disabled'],
+    queryFn: ({ signal }) => getTrackerItem(id as string, { signal, association: association ?? undefined }),
+    enabled: association != null && id != null && id !== '',
+  })
 }
 
 /**

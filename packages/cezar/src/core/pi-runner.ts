@@ -14,6 +14,7 @@ import type {
 import { buildChildEnv } from './agent-env.js';
 import { readNdjson } from './ndjson.js';
 import { createPiUiState, mapPiRpcMessage, piTurnStarted } from './pi-ui-mapper.js';
+import { V1TextCoalescer } from './v1-text-coalescer.js';
 
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const KILL_GRACE_MS = 10_000;
@@ -67,6 +68,12 @@ export class PiRunner implements AgentRunner {
     let killTimer: NodeJS.Timeout | undefined;
     let piUi = createPiUiState();
     const textChunks: string[] = [];
+    // Pi streams one assistant message at a time, without a stable message id.
+    // Keep v1 whole-message (including for redaction); v2 still streams deltas.
+    const textCoalescer = new V1TextCoalescer((text) => {
+      textChunks.push(text);
+      onEvent?.({ type: 'text', text });
+    });
     const toolCalls: AgentToolCallRecord[] = [];
     let sessionId = spec.sessionId;
     let tokensUsed = 0;
@@ -172,10 +179,10 @@ export class PiRunner implements AgentRunner {
           } else if (value.type === 'message_update' && isRecord(value.assistantMessageEvent)) {
             const update = value.assistantMessageEvent;
             if (update.type === 'text_delta' && typeof update.delta === 'string') {
-              textChunks.push(update.delta);
-              onEvent?.({ type: 'text', text: update.delta });
+              textCoalescer.append(undefined, update.delta);
             }
           } else if (value.type === 'message_end' && isRecord(value.message) && value.message.role === 'assistant') {
+            textCoalescer.complete(undefined, contentText(value.message.content));
             const usage = usageValues(value.message.usage);
             if (usage) {
               tokensUsed += usage.weighted;
@@ -201,6 +208,7 @@ export class PiRunner implements AgentRunner {
               emitImages(isRecord(value.result) ? value.result.content : undefined, onEvent);
             }
           } else if (value.type === 'agent_settled') {
+            textCoalescer.flush();
             settled = true;
             onEvent?.({ type: 'turn-end' });
             if (opts.autoEndAfterFirstTurn && open && !autoEndTimer) {
@@ -216,6 +224,8 @@ export class PiRunner implements AgentRunner {
         if (autoEndTimer) clearTimeout(autoEndTimer);
         if (killTimer) clearTimeout(killTimer);
         open = false;
+        // EOF, abort and timeout may leave a message without message_end.
+        textCoalescer.flush();
       }
 
       const exitCode = await waitForExit(child);
@@ -224,7 +234,7 @@ export class PiRunner implements AgentRunner {
         const message = `pi CLI timed out after ${Math.round((limitMs / 60_000) * 10) / 10}m and was killed`;
         onEvent?.({ type: 'error', message });
         onEvent?.({ type: 'done' });
-        return { text: textChunks.join('').trim(), toolCalls, tokensUsed, sessionId };
+        return { text: textChunks.join('\n').trim(), toolCalls, tokensUsed, sessionId };
       }
       if (exitCode !== 0 && exitCode !== null) {
         const detail = stderr.join('').trim().split('\n').slice(-3).join(' | ');
@@ -236,7 +246,7 @@ export class PiRunner implements AgentRunner {
       if (tokensUsed === 0) onEvent?.({ type: 'note', message: 'token usage not reported by pi CLI' });
       opts.onUiEvent?.({ type: 'session.ended', reason: piUi.stopReason });
       onEvent?.({ type: 'done' });
-      return { text: textChunks.join('').trim(), toolCalls, tokensUsed, sessionId };
+      return { text: textChunks.join('\n').trim(), toolCalls, tokensUsed, sessionId };
     })();
 
     const session: AgentSession = {

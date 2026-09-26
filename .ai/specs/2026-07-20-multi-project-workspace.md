@@ -198,13 +198,24 @@ context IS the project and its identity is read back out of the registry.
 Because that state is now ORDINARY rather than an edge case, two things follow
 and are load-bearing:
 
-- **`GET /api/projects` lists the boot folder anyway**, flagged
-  `unregistered: true` (see API Contracts). Registry-only, the cockpit would
-  have no row, no `lastLocation` entry and no way back to the folder it is
-  serving — the repo chip would name a project the navigation could not open.
-  Settings → Projects renders that row with **Add project** instead of Remove
-  and the per-project cap, the sidebar marks it "not saved", and everything
-  else treats it as a project.
+- **`GET /api/projects` lists the boot folder while the registry is EMPTY**,
+  flagged `unregistered: true` (see API Contracts). With nothing registered the
+  served folder is the cockpit's only project: without the row there would be no
+  sidebar entry, no `lastLocation` entry and no way back to the folder the
+  server is demonstrably serving. Settings → Projects renders that row with
+  **Add project** instead of Remove and the per-project cap, the sidebar marks
+  it "not saved", and everything else treats it as a project.
+
+  Once the registry holds ANY project the row is **not listed**: the same
+  "seed once" rule, applied to the read. Listing it put a row the user never
+  asked for in their sidebar, their ⌘K palette and their Settings table on
+  every launch from a worktree or a scratch checkout — the sidebar noise #774
+  set out to end, arriving through the other door. The folder is still SERVED:
+  `bootProject` names it, `/p/<slug>/` and the unscoped alias answer for it (the
+  cockpit's scope gate treats `bootProject` as known whether or not the registry
+  lists it), so legacy flat URLs and pasted deep links still resolve. A bare `/`
+  with nothing remembered lands on the registry's lead project instead, because
+  opening on a project with no sidebar row is the same takeover by another name.
 - **The boot slug is sticky for the process**, and reserved against other
   registrations. It is a live URL derived from a file the user edits while the
   server runs; recomputing it per call let an unrelated `Add project` with the
@@ -368,7 +379,7 @@ difference until they add a second project.
 
 | Route | Shape | Notes |
 |---|---|---|
-| `GET /api/projects` | `{ projects: [{id,name,root,branch?,status,source,lastOpenedAt,unregistered?}], bootProject: string, projectsDir: string }` | `status ∈ 'ok' \| 'missing' \| 'not-git'` (`not-git` is fully usable — same degraded single-queue mode as today; only `missing` blocks). Status/branch probes are cached with a short TTL and refreshed async — the sidebar load must not shell `git` N times per render. Never 404s. When the registry does not hold the boot root, the list LEADS with a synthetic `unregistered: true` entry for it (see "Seed once"): the server serves that folder, so the cockpit must be able to reach it. The flag is what keeps registry-editing affordances (Remove, per-project `maxParallel`) off a row that has no registry entry to edit — Settings offers Add project instead. Never written back; the row disappears the moment the folder is registered. |
+| `GET /api/projects` | `{ projects: [{id,name,root,branch?,status,source,lastOpenedAt,unregistered?}], bootProject: string, projectsDir: string }` | `status ∈ 'ok' \| 'missing' \| 'not-git'` (`not-git` is fully usable — same degraded single-queue mode as today; only `missing` blocks). Status/branch probes are cached with a short TTL and refreshed async — the sidebar load must not shell `git` N times per render. Never 404s, and never empty: when the registry holds NOTHING, the list is a single synthetic `unregistered: true` entry for the boot root (see "Seed once") — the server serves that folder and it is the cockpit's only project. Once the registry holds any project, an unregistered boot root is NOT listed: it is a launch context, not a project, and it stays reachable through `bootProject` / `/p/<slug>/`. The flag is what keeps registry-editing affordances (Remove, per-project `maxParallel`) off a row that has no registry entry to edit — Settings offers Add project instead. Never written back; the row disappears the moment the folder is registered. |
 | `POST /api/projects` | `{ root } → { project }` | Registers an existing folder (folder-browser flow). 400 non-absolute/nonexistent path; 409 already registered (returns the existing entry). |
 | `POST /api/projects/checkout` | `{ url, name? } → { project }` \| `{ error }` | `gh repo clone <url> <projectsDir>/<name>`; zod-validates `url` as a GitHub repo URL/`owner/name`; 409 target dir exists; degrades to `{ error, reason }` when `gh` is unavailable (mirrors `github.ts` degradation). Long-running: answers when the clone finishes; the dialog shows progress from `checkout-progress` SSE events. |
 | `DELETE /api/projects/:projectId` | `{ ok: true }` | Unregisters only. 409 while the project has running tasks. Never deletes files. |

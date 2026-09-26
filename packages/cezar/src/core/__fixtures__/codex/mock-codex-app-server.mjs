@@ -33,6 +33,7 @@ const rl = createInterface({ input: process.stdin });
  *   mock:compaction-reject   turn 1 compaction-ends; the next `turn/start` is REFUSED
  *   mock:compaction-done     the turn emits CEZ:DONE and THEN compacts
  *   mock:compaction-monitor  the turn emits CEZ:MONITORING and THEN compacts
+ *   mock:compaction-monitor-ref  as above, with a CEZ:PR= line AFTER the marker (#933)
  *   mock:compaction-badask   the turn emits a MALFORMED CEZ:ASK and THEN compacts
  *   mock:child-compaction    a CHILD thread compacts and ends its turn; the parent works on
  *   mock:steer-reject        the turn stays open, so a follow-up steers — and is REFUSED
@@ -40,7 +41,8 @@ const rl = createInterface({ input: process.stdin });
  * The continuation cezar sends after a boundary carries no `mock:` marker, so
  * the scenario is latched from the opening turn rather than re-read per turn.
  */
-const COMPACTION_SCENARIOS = ['hold', 'repeat', 'reject', 'done', 'monitor', 'badask'];
+// `monitor-ref` before `monitor`: `find` takes the first substring hit.
+const COMPACTION_SCENARIOS = ['hold', 'repeat', 'reject', 'done', 'monitor-ref', 'monitor', 'badask'];
 let scenario = '';
 let turnSeq = 0;
 
@@ -48,6 +50,7 @@ let turnSeq = 0;
 function compactionPrelude(kind) {
   if (kind === 'done') return 'Everything is in place.\n\nCEZ:DONE';
   if (kind === 'monitor') return 'Kicked the build off.\n\nCEZ:MONITORING';
+  if (kind === 'monitor-ref') return 'Kicked the build off.\n\nCEZ:MONITORING\nCEZ:PR=1010';
   // Malformed on purpose: it raises no card, so a continuation would bury the question.
   if (kind === 'badask') return 'Which database should I use?\n\nCEZ:ASK not-json';
   return 'Halfway through the refactor — three files still to go.';
