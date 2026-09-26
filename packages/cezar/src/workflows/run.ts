@@ -1,3 +1,5 @@
+import type { TrackerAssociation } from '@open-mercato/cezar-contract';
+import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -135,6 +137,71 @@ const DONE_MARKER_RE = /CEZ:DONE\s*$/;
  */
 const MONITORING_MARKER_RE = /CEZ:MONITORING\s*$/;
 /**
+ * Trailing task-reference marker lines — `CEZ:PR=` / `CEZ:ISSUE=` / `CEZ:TITLE=`
+ * (spec 2026-07-18-task-ref-markers), whole lines, at the very end of the turn.
+ *
+ * #933: the handoff contract asks for those "as soon as you know which PR or issue
+ * this task is ABOUT", and until now said nothing about where they sit relative to
+ * the turn-end markers. An agent that declared its PR right AFTER `CEZ:MONITORING`
+ * buried the marker behind them, the `$`-anchored test below failed, and a turn that
+ * was only waiting on its own sub-agents parked as `waiting` — "needs you", the
+ * "paused, waiting for your reply" footer, and a browser notification for work
+ * nobody needs to look at. The contract now asks for the other order; this is the
+ * engine half, so an agent that gets it wrong is still read correctly.
+ *
+ * Deliberately NOT `/m`: with the multiline flag `$` matches every line end, so the
+ * pattern would also strip a task-reference line from the MIDDLE of a turn. `^|\n`
+ * pins each line's start and the unanchored `$` pins the run of them to the end.
+ *
+ * Looser than `stripTaskMarkers`'s `MARKER_LINE` on the VALUE (`=[^\n]*`, not `=\d+`)
+ * on purpose: a mistyped reference line is still the agent talking protocol, and the
+ * failure it must not cause is burying the turn-end marker behind it.
+ */
+const TRAILING_TASK_MARKER_LINES_RE = /(?:(?:^|\n)[ \t]*CEZ:(?:PR|ISSUE|TITLE)=[^\n]*)+$/;
+/**
+ * The text a turn-end marker is matched against: the accumulated turn text with
+ * trailing whitespace and trailing task-reference lines removed.
+ *
+ * ONE helper, because there are TWO near-identical turn-end handlers here
+ * (`runContinuation` and `runAgentStep`) and AGENTS.md is explicit about them:
+ * "a lifecycle change applied to one of them ships half a fix … route both sites
+ * through one helper". Exported so the detection can be unit-tested directly
+ * rather than only through a parked run.
+ */
+export function turnEndMarkerText(turnText: string): string {
+  return turnText.trimEnd().replace(TRAILING_TASK_MARKER_LINES_RE, '').trimEnd();
+}
+/**
+ * Did this turn end on the still-working marker? Strictly a SUPERSET of the old
+ * `MONITORING_MARKER_RE.test(turnText.trimEnd())` — anything that parked as
+ * `monitoring` before still does, which is what keeps #933 additive under
+ * `BACKWARD_COMPATIBILITY.md` §8 (an already-emitted `CEZ:MONITORING` keeps
+ * meaning exactly what it meant).
+ */
+export function endsWithMonitoringMarker(turnText: string): boolean {
+  return MONITORING_MARKER_RE.test(turnEndMarkerText(turnText));
+}
+/**
+ * The follow-up cezar sends when a turn ended on nothing but the backend compacting its own
+ * context (#955). Not a user message: it never enters the transcript as one, and it is written
+ * to be read by an agent that has just lost its working memory — so it points at the durable
+ * state (the handoff file, the notes) rather than restating a task it can no longer see.
+ *
+ * Unlike `AUTONOMOUS_NUDGE` this is NOT exported for `scripts/mock-claude.mjs`: only a runner
+ * that can report a compaction boundary ever provokes it, and the dry-run claude mock is not
+ * one, so a `mock:` arm keyed on this text would be dead code.
+ */
+const COMPACTION_CONTINUE_NUDGE =
+  'Your context was automatically compacted, which ended your turn before the work was finished. Nothing is being asked of you. Re-read your handoff file and notes for where you got to, then carry on — and end the turn with CEZ:DONE, CEZ:ASK or CEZ:MONITORING when you genuinely need to stop.';
+/**
+ * How many CONSECUTIVE compaction-ended turns cezar continues before it parks the run for the
+ * user (#955). The anti-spin bound: a session that compacts, is continued, and compacts again
+ * with nothing in between is not making progress, and the alternative to a bound is a run that
+ * burns its budget in a loop. Reset to zero by any turn that ends for another reason — that is
+ * the evidence the session recovered — and by a user message, which buys a fresh budget.
+ */
+const MAX_COMPACTION_CONTINUES = 3;
+/**
  * Preserve boundaries between complete assistant text blocks while a turn is
  * accumulated for marker parsing. The runners join these same v1 blocks with
  * newlines in `AgentRunResult`; matching that contract here prevents a
@@ -228,6 +295,32 @@ function resolveAskTurn(turnText: string, enabled: boolean): AskTurnOutcome {
   if (recovery) notes.push({ message: recovery, tone: 'danger' });
   return { ask: result.kind === 'valid' ? result.request : null, notes };
 }
+/**
+ * Did this turn end WITHOUT any explicit cezar marker (#955)? The precondition for the
+ * compaction continuation, shared by both turn-end handlers so neither can drift on which
+ * markers outrank it.
+ *
+ * Deliberately independent of the `done`/`ask`/`monitoring` decisions the callers compute:
+ * those are gated on `interactive`, on the session still being open, and on whether the turn
+ * dispatched, and every one of those gates can turn a marker the agent DID emit into a falsy
+ * flag. "Did the agent say something" and "did cezar act on it" are different questions, and
+ * only the first one may authorize continuing a turn on the agent's behalf. A marker that
+ * merely FAILED to parse still counts as spoken: `CEZ:ASK` with a malformed payload is a
+ * question the user needs to see, not an invitation to keep going.
+ */
+function markerlessTurn(turnText: string): boolean {
+  const trimmed = turnText.trimEnd();
+  // Through `turnEndMarkerText` (#933), the same reading the monitoring decision uses: a turn
+  // that ends `CEZ:MONITORING` followed by a `CEZ:PR=` line spoke, and must not be continued.
+  const markerText = turnEndMarkerText(turnText);
+  if (DONE_MARKER_RE.test(markerText) || MONITORING_MARKER_RE.test(markerText)) return false;
+  // `parseAskMarkerResult`, not `ASK_MARKER_RE`: the strict regex only matches a marker whose
+  // payload is a complete `{…}`, so `CEZ:ASK not-json` — a question the user still needs to
+  // see — would read as ordinary prose and authorize a continuation. The parser's looser
+  // `none` test is the right question here, and its known over-reach (an earlier PROSE mention
+  // of the keyword also counts as spoken) errs towards parking, which is today's behavior.
+  return parseAskMarkerResult(trimmed).kind === 'none';
+}
 /** Periodic "cezar autosave" commit in the task worktree (spec 006). */
 export const AUTOSAVE_INTERVAL_MS = 90_000;
 
@@ -277,6 +370,11 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Consecutive compaction-ended turns this session has been continued through (#955),
+   *  bounded by `MAX_COMPACTION_CONTINUES`. Unlike `autoContinues` this is NOT a lifetime
+   *  budget: any turn that ends for another reason resets it, because that turn is the proof
+   *  the session is working again. See `tryCompactionContinue`. */
+  compactionContinues?: number;
   /**
    * A NON-FINAL agent step emitted `CEZ:ASK`, so the workflow is parked on that
    * step instead of advancing into its next check (#917). Two values, because
@@ -714,20 +812,26 @@ export interface FileBlock {
  *  will never see. Every RunManager entry point accepts this wider type. */
 export type PastedContent = ContentBlock | FileBlock;
 
-/** One wire attachment (`{mediaType, data}`) as the engine wants it: an image the model can view,
- *  or a file it will only ever be given the path of. The single mapping the four attachment-
- *  carrying routes share, so none of them can invent a different one. */
-export function toPastedContent(attachment: {
-  mediaType: string;
-  data: string;
-  name?: string;
-}): PastedContent {
+// Metadata belongs to the original in-memory block, never the vendor protocol. Queue
+// persistence files the library copy before serializing; deferred delivery retains the block.
+const imageLibraryNames = new WeakMap<ContentBlock, string>();
+
+/** Convert a wire attachment without writing files. Named images are filed only when
+ * RunManager persists an accepted user attachment, on the same terms as documents. */
+export function toPastedContent(
+  attachment: {
+    mediaType: string;
+    data: string;
+    name?: string;
+  },
+): PastedContent {
   if (isImageMediaType(attachment.mediaType)) {
-    // Deliberately unchanged, and deliberately NOT carrying the name: this branch produces a
-    // `ContentBlock`, which is the runner protocol (`AGENT_PROTOCOL.md`) and goes to a backend
-    // verbatim. An extra key here would survive `contentBlocksOf` and reach a vendor API that
-    // rejects unknown fields.
-    return { type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data } };
+    const block: ContentBlock = {
+      type: 'image', source: { type: 'base64', media_type: attachment.mediaType, data: attachment.data },
+    };
+    const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
+    if (name) imageLibraryNames.set(block, name);
+    return block;
   }
   const name = attachment.name ? sanitizeAttachmentName(attachment.name, attachment.mediaType) : null;
   return { type: 'file', mediaType: attachment.mediaType, data: attachment.data, ...(name ? { name } : {}) };
@@ -752,13 +856,14 @@ export function pastedAttachmentsText(attachments: PersistedAttachment[], librar
   // user attached to some earlier task and now refers to only by name. Naming the folder also
   // keeps the note independent of per-attachment state, which does not survive the re-read at
   // dequeue (`readPersistedAttachments` reconstructs an attachment from its URL alone).
-  // Says "documents", not "files": images and uploads that arrived without a name of their own are
-  // deliberately never filed, so a note promising every attachment would send an agent hunting for
-  // last week's pasted screenshot in a folder that was never going to hold it.
+  // Says "documents and named images", not "attachments": an upload that arrived without a name of
+  // its own — a clipboard paste, typically — is never filed (#929, #960), so a note promising every
+  // attachment would send an agent hunting for last week's pasted screenshot in a folder that was
+  // never going to hold it.
   const library = libraryDir
-    ? `Documents (PDF, TXT, MD) attached anywhere in this project are also kept under their ` +
-      `original names in ${libraryDir} — look there for a document the user names but did not ` +
-      `attach to this message.\n`
+    ? `Documents and named images attached anywhere in this project are also kept under their ` +
+      `original names in ${libraryDir} — look there for a file the user names but did not attach ` +
+      `to this message.\n`
     : '';
   return (
     `The user attached ${attachments.length} pasted file${attachments.length > 1 ? 's' : ''}, ` +
@@ -917,13 +1022,26 @@ export class RunManager {
    *  CLI needs to address the right project over the API (spec 2026-09-10-dispatch). */
   private readonly projectId: string | undefined;
 
+  /** See the constructor option of the same name. */
+  private readonly resolveTrackerEnv: ((root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>) | undefined;
+
   constructor(
     private readonly store: RunStore,
     private readonly repoRoot: string,
-    options: { semaphore?: WorkspaceSemaphore; projectId?: string } = {},
+    options: {
+      semaphore?: WorkspaceSemaphore;
+      projectId?: string;
+      /**
+       * Revalidate the tracker association captured by the run before every spawn,
+       * including Continue and recovery. A mismatch fails the step before credentials
+       * reach an agent. Secrets are registered with RunStore before any output arrives.
+       */
+      resolveTrackerEnv?: (root: string, expected: TrackerAssociation | undefined) => Promise<Record<string, string>>;
+    } = {},
   ) {
     this.dataDir = join(repoRoot, '.ai/cezar');
     this.projectId = options.projectId;
+    this.resolveTrackerEnv = options.resolveTrackerEnv;
     this.semaphore = options.semaphore ?? new WorkspaceSemaphore();
     this.offSemaphore = this.semaphore.register({
       busySlots: () => this.busySlots(),
@@ -1084,8 +1202,17 @@ export class RunManager {
     const profileId = options.recordedProfileId
       ?? (backend === (run?.runner ?? 'claude') ? run?.agentProfile : undefined);
     const resolved = await resolveProfileEnvForRoot(this.repoRoot, backend, profileId);
+    const association = run?.automationTracker?.association;
+    const trackerEnv = association && this.resolveTrackerEnv && process.env.CEZ_DRY_RUN !== '1'
+      ? await this.resolveTrackerEnv(this.repoRoot, association)
+      : {};
+    const secrets = [trackerEnv.JIRA_API_TOKEN, trackerEnv.LINEAR_API_KEY].filter((value): value is string => Boolean(value));
+    if (trackerEnv.JIRA_EMAIL && trackerEnv.JIRA_API_TOKEN) {
+      secrets.push(Buffer.from(`${trackerEnv.JIRA_EMAIL}:${trackerEnv.JIRA_API_TOKEN}`).toString('base64'));
+    }
+    this.store.registerRunSecrets(runId, secrets);
     return {
-      env: { ...this.agentEnv(runId, options.generateFollowups), ...resolved.env },
+      env: { ...this.agentEnv(runId, options.generateFollowups), ...trackerEnv, ...resolved.env },
       profileId: resolved.profile.id,
     };
   }
@@ -1634,6 +1761,8 @@ export class RunManager {
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
     this.active.delete(runId);
+    // Session result has settled and its sink has flushed before terminal cleanup.
+    this.store.clearRunSecrets(runId);
     this.memoryPausing.delete(runId);
     this.lastNamerKey.delete(runId);
     this.forceStarted.delete(runId);
@@ -3027,7 +3156,10 @@ export class RunManager {
     // Persist the attachments so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
-    const persisted = userAuthored ? this.persistPastedAttachments(runId, content) : [];
+    // The session can still refuse despite reporting open. Commit image library copies
+    // only after it accepts; the run-local paths are needed to build the message first.
+    const imageLibraryWrites: Array<() => void> = [];
+    const persisted = userAuthored ? this.persistPastedAttachments(runId, content, imageLibraryWrites) : [];
     const images = persisted.map((saved) => saved.url);
     if (userAuthored) {
       this.store.appendEvent(runId, {
@@ -3048,14 +3180,20 @@ export class RunManager {
     const blocks = contentBlocksOf(content);
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
     const deliverable = persisted.length
-      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted))]
+      ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted) ??
+          (imageLibraryWrites.length ? attachmentLibraryDir(this.dataDir) : undefined))]
       : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
+      for (const write of imageLibraryWrites) write();
       this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
       this.waiting.delete(runId); // resumed — the run counts against slots again
+      // A message into the session is a fresh start for the compaction bound (#955): whoever
+      // sent it — the user, a child's report, the monitoring wake-up — is asking for work
+      // that has not been tried yet, so it must not inherit a spent anti-spin budget.
+      state.compactionContinues = 0;
       this.leaveMonitoring(runId);
       // The answer landed, so a mid-workflow ask park (#917) is over and the
       // workflow may advance past this step again. The durable twin
@@ -3378,7 +3516,11 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        // `stripTaskMarkers` runs INNERMOST (#933): it deletes whole `CEZ:PR=`/`CEZ:ISSUE=`/
+        // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
+        // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
+        // they saw those references and left the protocol marker in the transcript.
+        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
@@ -3404,8 +3546,21 @@ export class RunManager {
         // coalescers; the v1 turn boundary flushes again (idempotent) so no
         // buffered delta can outlive its turn.
         sink.flushAll();
+        turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
+        // Did the backend end this turn purely to compact its own context (#955)? Absent on
+        // every runner that has no such signal, and on every recording written before the
+        // field existed — which is exactly the pre-#955 behaviour.
+        const compacted = event.reason === 'context-compaction';
+        // Computed here because `turnText` is cleared further down, and only when the
+        // boundary actually exists — on every ordinary turn the whole #955 path, this extra
+        // marker scan included, stays inert.
+        const markerless = compacted && markerlessTurn(turnText);
+        // Any turn that did NOT end at a compaction boundary is the evidence the session is
+        // working again, so the anti-spin budget is restored. Before the early returns below,
+        // because a turn that finished or dispatched is progress too.
+        if (!compacted) state.compactionContinues = 0;
         const done = sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // The dispatch facts of this turn (spec 2026-09-10-dispatch), through the ONE helper both
         // turn-end handlers call. Inert for a run with no `dispatch`.
@@ -3429,7 +3584,7 @@ export class RunManager {
           !done &&
           !ask &&
           !dispatchTurn.overBudget &&
-          (dispatchTurn.dispatched || MONITORING_MARKER_RE.test(turnText.trimEnd()));
+          (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         if (done) {
@@ -3444,8 +3599,16 @@ export class RunManager {
         // with `runAgentStep`'s twin turn-end so the two cannot drift — including the shape:
         // hoisted out of the branch below because the heartbeat at the end of this handler
         // needs to know whether the turn parked.
-        const autoContinued =
+        const nudged =
           dispatchTurn.rePrompted || (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false);
+        // Compaction alone never means the user owns the next action (#955). Tried LAST, so
+        // every marker, the dispatch rules and the autonomous nudge keep their precedence —
+        // the twin of `runAgentStep`'s call, through the one helper both sites share.
+        const compactionContinued =
+          !nudged && compacted && Boolean(sessionOpen)
+            ? this.tryCompactionContinue(runId, state, stepId, { markerless, dispatchTurn })
+            : false;
+        const autoContinued = nudged || compactionContinued;
         if (sessionOpen) {
           if (!autoContinued) {
             // `CEZ:ASK` → park `waiting` (attention) AND surface the structured
@@ -3489,7 +3652,17 @@ export class RunManager {
         appendHandoffHeartbeat(
           this.dataDir,
           runId,
-          `turn complete — status=${autoContinued ? 'running (autonomous nudge)' : monitoring ? 'monitoring' : sessionOpen ? 'waiting' : 'running'}`,
+          `turn complete — status=${
+            compactionContinued
+              ? 'running (context compacted, continuing)'
+              : autoContinued
+                ? 'running (autonomous nudge)'
+                : monitoring
+                  ? 'monitoring'
+                  : sessionOpen
+                    ? 'waiting'
+                    : 'running'
+          }`,
         );
       }
     };
@@ -3574,7 +3747,7 @@ export class RunManager {
         recordedProfileId: resumedProfileId,
       });
     } catch (err) {
-      if (!(err instanceof AgentTempDirError)) throw err;
+      if (!(err instanceof AgentTempDirError) && !(err instanceof TrackerAgentBindingError)) throw err;
       failBeforeSpawn(err.message);
       return;
     }
@@ -4139,7 +4312,11 @@ export class RunManager {
       }
       if (event.type === 'text') {
         turnText = appendTurnText(turnText, event.text);
-        const text = stripAskMarker(stripTaskMarkers(stripMonitoringMarker(stripDoneMarker(event.text))));
+        // `stripTaskMarkers` runs INNERMOST (#933): it deletes whole `CEZ:PR=`/`CEZ:ISSUE=`/
+        // `CEZ:TITLE=` lines, so running it first lets the two trailing-marker strippers see a
+        // `CEZ:MONITORING` / `CEZ:DONE` that an agent put ABOVE its task references. Outside-in
+        // they saw those references and left the protocol marker in the transcript.
+        const text = stripAskMarker(stripMonitoringMarker(stripDoneMarker(stripTaskMarkers(event.text))));
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
@@ -4165,8 +4342,14 @@ export class RunManager {
         // v2 `turn.completed` already flushed the coalescers; the v1 turn
         // boundary flushes again (idempotent) as a backstop.
         sink.flushAll();
+        turnText = this.store.redactRunText(runId, turnText);
         void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
+        // The twin of `runContinuation`'s read — see there for why the field is absent on
+        // every runner and every recording that predates it (#955).
+        const compacted = event.reason === 'context-compaction';
+        const markerless = compacted && markerlessTurn(turnText);
+        if (!compacted) state.compactionContinues = 0;
         const done = interactive && sessionOpen && DONE_MARKER_RE.test(turnText.trimEnd());
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
@@ -4213,7 +4396,7 @@ export class RunManager {
           !done &&
           !ask &&
           !dispatchTurn.overBudget &&
-          (dispatchTurn.dispatched || MONITORING_MARKER_RE.test(turnText.trimEnd()));
+          (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         turnText = '';
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
@@ -4244,7 +4427,18 @@ export class RunManager {
         // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
           dispatchTurn.rePrompted || (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false);
-        if (waiting && !autoContinued) {
+        // The compaction continuation (#955), through the same helper `runContinuation` calls.
+        // Deliberately NOT gated on `waiting`: that flag is about who the turn hands control
+        // to, and an ordinary intermediate step never hands control to anyone — it is closed
+        // by the one-shot timer below. A step whose turn ended at a compaction boundary would
+        // therefore be closed with its work half done, which is the same defect wearing a
+        // different status. `sessionOpen` is the only precondition that actually matters here.
+        const compactionContinued =
+          !autoContinued && compacted && Boolean(sessionOpen)
+            ? this.tryCompactionContinue(runId, state, step.id, { markerless, dispatchTurn })
+            : false;
+        const continued = autoContinued || compactionContinued;
+        if (waiting && !continued) {
           // Turn over, session open. Either the ball is in the user's court
           // (`waiting`) — optionally with a structured `CEZ:ASK` question the
           // cockpit renders as an ask card (#473) — or the agent declared it is
@@ -4306,7 +4500,7 @@ export class RunManager {
         // is false once `state.cancelled` is set, and `cancel()` tears the session
         // down through `state.interrupt()` instead.
         const closing = state.session;
-        if (!interactive && sessionOpen && !parksWorkflow && !autoContinued && closing) {
+        if (!interactive && sessionOpen && !parksWorkflow && !continued && closing) {
           const autoEnd = setTimeout(() => {
             if (closing.open) closing.end();
           }, AUTO_END_DELAY_MS);
@@ -4323,7 +4517,17 @@ export class RunManager {
         appendHandoffHeartbeat(
           this.dataDir,
           runId,
-          `turn complete — status=${autoContinued ? 'running (autonomous nudge)' : monitoring ? 'monitoring' : waiting ? 'waiting' : 'running'}`,
+          `turn complete — status=${
+            compactionContinued
+              ? 'running (context compacted, continuing)'
+              : autoContinued
+                ? 'running (autonomous nudge)'
+                : monitoring
+                  ? 'monitoring'
+                  : waiting
+                    ? 'waiting'
+                    : 'running'
+          }`,
         );
       }
     };
@@ -4363,7 +4567,7 @@ export class RunManager {
         generateFollowups: followupsEnabled() && input.generateFollowups !== false,
       });
     } catch (err) {
-      if (err instanceof AgentTempDirError) return err.message;
+      if (err instanceof AgentTempDirError || err instanceof TrackerAgentBindingError) return err.message;
       throw err;
     }
     this.store.updateStep(runId, step.id, { profileId: stepProfile.profileId });
@@ -4601,6 +4805,8 @@ export class RunManager {
     // CEZ_AUTONAME=0 kills all LLM naming; dry-run skips it too unless
     // CEZ_AUTONAME=1 forces the mock path — see autoNamingActive.
     if (!autoNamingActive()) return;
+    task = this.store.redactRunText(runId, task);
+    if (live?.turnText) live = { ...live, turnText: this.store.redactRunText(runId, live.turnText) };
     try {
       let skillDescription: string | undefined;
       if (skillName) {
@@ -4630,6 +4836,8 @@ export class RunManager {
   }
 
   async recordTurnEnd(runId: string, turnText: string): Promise<void> {
+    // The namer can finish after session cleanup removes its in-memory secrets.
+    turnText = this.store.redactRunText(runId, turnText);
     try {
       const run = this.store.getRun(runId);
       if (!run) return;
@@ -4763,7 +4971,7 @@ export class RunManager {
    * run's own attachment folder, in the order they were attached. The returned paths are what the
    * agent is told about; the caller decides which of them also ride along as viewable blocks.
    *
-   * A named FILE is additionally filed in the per-project attachment library (#929). This is the
+   * A named attachment is additionally filed in the per-project attachment library (#929). This is the
    * only caller that does so, which is what keeps the library to user uploads: `persistAttachment`
    * is also how the agent's own tool screenshots land, and a folder of those would be a log, not
    * a library.
@@ -4771,11 +4979,14 @@ export class RunManager {
   private persistPastedAttachments(
     runId: string,
     content: readonly PastedContent[],
+    imageLibraryWrites?: Array<() => void>,
   ): PersistedAttachment[] {
     return content
       .map((b) =>
         b.type === 'image'
-          ? this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted')
+          ? this.fileInAttachmentLibrary(
+              this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted'), imageLibraryNames.get(b), imageLibraryWrites,
+            )
           : b.type === 'file'
             ? this.fileInAttachmentLibrary(this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name)
             : null,
@@ -4795,8 +5006,13 @@ export class RunManager {
   private fileInAttachmentLibrary(
     saved: PersistedAttachment | null,
     name: string | undefined,
+    deferredWrites?: Array<() => void>,
   ): PersistedAttachment | null {
     if (!saved || !name) return saved;
+    if (deferredWrites) {
+      deferredWrites.push(() => this.fileInAttachmentLibrary(saved, name));
+      return saved;
+    }
     try {
       copyToAttachmentLibrary(this.dataDir, name, readFileSync(saved.path));
     } catch {
@@ -4818,13 +5034,13 @@ export class RunManager {
 
   /**
    * The attachment library to name in a message's note, or `undefined` when there is nothing to
-   * point at yet — no file attachment on this message, or a project where nothing has ever been
-   * filed. Derived from the persisted NAMES rather than from per-attachment state, so it survives
-   * the dequeue/restart re-read that reconstructs an attachment from its URL alone.
+   * point at yet — no attachment on this message, or a project where nothing has ever been filed.
+   *
+   * The name metadata is intentionally not serialized into PersistedAttachment. The
+   * directory hint therefore depends on persisted attachments and library existence.
    */
   private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
-    if (!attachments.some((a) => !isImageAttachmentName(a.name))) return undefined;
-    return this.grantableAttachmentLibrary();
+    return attachments.length ? this.grantableAttachmentLibrary() : undefined;
   }
 
   /**
@@ -4970,6 +5186,73 @@ export class RunManager {
         message: `autonomous — question overridden by the auto-continue nudge: ${askKey}`,
       });
     }
+    return true;
+  }
+
+  /**
+   * A turn ended on nothing but the backend compacting its own context (#955). Keep the run
+   * WORKING and continue once on the same thread, instead of parking it under "Needs you".
+   *
+   * Compaction is internal session maintenance. It is not the agent saying anything, so it is
+   * not evidence that the user owns the next action — but by the time `turn/completed` reaches
+   * here it looks exactly like a turn that DID hand over, which is why a long Codex task that
+   * crossed its context window was parked mid-work with nobody to answer it.
+   *
+   * The precedence this sits UNDER, and why each one wins (`BACKWARD_COMPATIBILITY.md` §8 —
+   * an emitted marker means what it meant when the session started):
+   *  - `CEZ:DONE` — already returned before this is reached, at both sites;
+   *  - `CEZ:ASK` — the agent has a question on the user's screen; continuing would answer it
+   *    for them;
+   *  - `CEZ:MONITORING` — the agent said it is still working on its OWN downstream work, which
+   *    is a park it chose, not one compaction imposed;
+   *  - a turn that DISPATCHED — it waits on its children and owes them its slot;
+   *  - the budget brake, cancellation, a closed session;
+   *  - the autonomous nudge, which the callers try first: an autonomous run continues anyway,
+   *    and two nudges for one turn would be two messages into one session.
+   * Everything left is a MARKERLESS turn — the ordinary case #955 describes — and an ordinary
+   * markerless turn with no compaction boundary is untouched: it still parks at `waiting`.
+   *
+   * ONE helper for BOTH turn-end handlers, for the reason AGENTS.md gives: they are
+   * hand-duplicated, and a lifecycle change applied to one of them ships half a fix — here
+   * that would mean a fresh run recovering while every Continue and every restart recovery
+   * kept the bug.
+   *
+   * The exits, so this is not another state with no way out: the continued turn either
+   * finishes (`CEZ:DONE`), parks (any marker, or a markerless boundary-free turn), fails, or
+   * compacts again — and `MAX_COMPACTION_CONTINUES` consecutive compactions park the run with
+   * a note. `sendMessage` answering false (a session that closed under us) parks it too.
+   */
+  private tryCompactionContinue(
+    runId: string,
+    state: ActiveRun,
+    stepId: string,
+    opts: { markerless: boolean; dispatchTurn: DispatchTurnResult },
+  ): boolean {
+    if (!opts.markerless) return false;
+    if (opts.dispatchTurn.dispatched || opts.dispatchTurn.overBudget) return false;
+    if (state.cancelled || !state.session?.open) return false;
+    const attempts = state.compactionContinues ?? 0;
+    if (attempts >= MAX_COMPACTION_CONTINUES) {
+      // Once, on the turn the bound is reached — the run parks on every later boundary too,
+      // and repeating the note each time would bury the transcript it is meant to explain.
+      if (attempts === MAX_COMPACTION_CONTINUES) {
+        state.compactionContinues = attempts + 1;
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          tone: 'danger',
+          message: `context compaction ended ${MAX_COMPACTION_CONTINUES} turns in a row with no progress in between — the run parks for you instead of continuing again`,
+        });
+      }
+      return false;
+    }
+    if (!state.session.sendMessage([{ type: 'text', text: COMPACTION_CONTINUE_NUDGE }])) return false;
+    state.compactionContinues = attempts + 1;
+    this.store.appendEvent(runId, {
+      type: 'note',
+      stepId,
+      message: `context was compacted mid-task — continuing on the same thread (${state.compactionContinues}/${MAX_COMPACTION_CONTINUES})`,
+    });
     return true;
   }
 

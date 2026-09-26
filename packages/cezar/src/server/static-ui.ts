@@ -25,7 +25,7 @@ export type GetTarget = IndexTarget | 'passthrough';
 /** Paths owned by routes registered before the catch-all: the built app's
  *  hashed bundles and the favicon. */
 function isStaticAsset(path: string): boolean {
-  return path.startsWith('/assets/') || path === '/open-mercato.svg';
+  return path.startsWith('/assets/') || path === '/icon.svg' || path === '/open-mercato.svg';
 }
 
 /** Decide what any GET gets, so every route in the spec's map (`/tasks/:id/changes`,

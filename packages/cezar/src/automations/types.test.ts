@@ -3,6 +3,7 @@ import {
   automationDefinitionSchema,
   automationDefinitionsFileSchema,
   automationRuntimeStateSchema,
+  isTrackerAutomation,
 } from './types.ts';
 
 const definition = {
@@ -33,6 +34,15 @@ describe('automation schemas', () => {
     expect(
       automationDefinitionSchema.safeParse({ ...definition, events: ['issue.labeled'] }).success,
     ).toBe(false);
+  });
+
+  it('accepts the review events and an optional reviewers filter', () => {
+    const parsed = automationDefinitionSchema.safeParse({
+      ...definition,
+      events: ['pull_request.reviewed', 'pull_request.review_requested', 'pull_request.rereview_requested'],
+      filters: { lookbackDays: 7, maxRecords: 25, reviewers: ['octocat'] },
+    });
+    expect(parsed.success, JSON.stringify(parsed.success ? null : parsed.error.issues)).toBe(true);
   });
 
   it('preserves unknown fields at every persisted object layer', () => {
@@ -86,5 +96,30 @@ describe('automation schemas — kinds (spec 2026-09-14)', () => {
     expect(automationDefinitionSchema.safeParse({ ...definition, kind: 'schedule' }).success).toBe(false);
     expect(automationDefinitionSchema.safeParse({ ...definition, events: [] }).success).toBe(false);
     expect(automationDefinitionSchema.safeParse({ ...definition, task: { ...definition.task, dispatch: { maxSubtasks: 0 } } }).success).toBe(false);
+  });
+});
+
+describe('automation schemas — tracker kind (2026-09-19)', () => {
+  const trackerBase = {
+    id: 'todo-to-done', revision: 1, name: 'Watch To Do', kind: 'tracker' as const,
+    filters: { status: 'To Do', lookbackDays: 7, maxRecords: 25 },
+    task: { prompt: 'Work on {{tracker.key}}: {{tracker.title}} ({{tracker.url}})' },
+    createdAt: '2026-09-19T00:00:00.000Z', updatedAt: '2026-09-19T00:00:00.000Z',
+  };
+
+  it('loads legacy status filters but refuses execution until an event is chosen', () => {
+    const parsed = automationDefinitionSchema.parse(trackerBase);
+    expect(parsed.kind).toBe('tracker');
+    expect(parsed.intervalSeconds).toBe(1800);
+    expect(parsed.filters).toMatchObject({ status: 'To Do' });
+    expect(isTrackerAutomation(parsed)).toBe(false);
+  });
+
+  it('refuses a tracker poll without a status filter', () => {
+    expect(automationDefinitionSchema.safeParse({ ...trackerBase, filters: { lookbackDays: 7, maxRecords: 25 } }).success).toBe(false);
+  });
+
+  it('does not identify a github or schedule definition as a tracker automation', () => {
+    expect(isTrackerAutomation(automationDefinitionSchema.parse(definition))).toBe(false);
   });
 });

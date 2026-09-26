@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RunStore } from '../runs/store.ts';
 import { agentAccountsPath } from '../paths.ts';
 import { mergeWriteAgentAccounts } from '../workspace/agent-accounts.ts';
@@ -72,6 +72,66 @@ describe('RunManager agent-profile resolution', () => {
       agentProfile: over.agentProfile,
       steps: [{ id: 'work', name: 'work', kind: 'agent' }],
     });
+
+  it('binds tracker credentials and registers literal and Basic values before spawn', async () => {
+    const association = { kind: 'jira' as const, source: { id: 'source', webUrl: 'https://example.com' }, externalId: 'SAM', externalName: 'Sam' };
+    manager = new RunManager(store, repoRoot, { resolveTrackerEnv: async (_root, expected) => {
+      expect(expected).toEqual(association);
+      return { JIRA_EMAIL: 'mail@example.com', JIRA_API_TOKEN: 'synthetic-private-value' };
+    } });
+    const run = newRun();
+    store.updateRun(run.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com', association } });
+    const { env } = await seam().agentEnvForStep(run.id, 'claude');
+    expect(env.JIRA_API_TOKEN).toBe('synthetic-private-value');
+    const basic = Buffer.from('mail@example.com:synthetic-private-value').toString('base64');
+    expect(store.appendEvent(run.id, { type: 'note', message: `synthetic-private-value Basic ${basic}` }).message).toBe('[REDACTED] Basic [REDACTED]');
+  });
+
+  it('does not swallow binding failures on the step and continuation seam', async () => {
+    manager = new RunManager(store, repoRoot, { resolveTrackerEnv: async () => { throw new Error('connection changed'); } });
+    const run = newRun();
+    store.updateRun(run.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com', association: { kind: 'jira', source: { id: 'source', webUrl: 'https://example.com' }, externalId: 'SAM', externalName: 'Sam' } } });
+    await expect(seam().agentEnvForStep(run.id, 'claude')).rejects.toThrow('connection changed');
+    await expect(seam().agentEnvForStep(run.id, 'claude', { recordedProfileId: 'default' })).rejects.toThrow('connection changed');
+  });
+
+  it('does not resolve tracker credentials for ordinary, legacy, or dry runs', async () => {
+    manager = new RunManager(store, repoRoot, { resolveTrackerEnv: async () => { throw new Error('must not resolve'); } });
+    const run = newRun();
+    expect((await seam().agentEnvForStep(run.id, 'claude')).env.JIRA_API_TOKEN).toBeUndefined();
+    store.updateRun(run.id, { automationTracker: { automationId: 'a', automationRevision: 1, receiptId: 'r', provider: 'jira', key: 'SAM-1', url: 'https://example.com' } });
+    expect((await seam().agentEnvForStep(run.id, 'claude')).env.JIRA_API_TOKEN).toBeUndefined();
+    const previous = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    try {
+      store.updateRun(run.id, { automationTracker: { ...store.getRun(run.id)!.automationTracker!, association: { kind: 'jira', source: { id: 'source', webUrl: 'https://example.com' }, externalId: 'SAM', externalName: 'Sam' } } });
+      expect((await seam().agentEnvForStep(run.id, 'claude')).env.JIRA_API_TOKEN).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = previous;
+    }
+  });
+
+  it('redacts turn context before a late title update outlives secret cleanup', async () => {
+    const run = newRun();
+    const token = 'synthetic-private-value';
+    const basic = Buffer.from(`mail@example.com:${token}`).toString('base64');
+    store.registerRunSecrets(run.id, [token, basic]);
+    let release!: () => void;
+    const pending = new Promise<void>(resolve => { release = resolve });
+    const namer = vi.spyOn(manager as unknown as { maybeRefreshTitle(id: string, text: string): Promise<void> }, 'maybeRefreshTitle')
+      .mockImplementation(async (id, text) => {
+        await pending;
+        store.updateRun(id, { titleSummary: text });
+      });
+    try {
+      const recording = manager.recordTurnEnd(run.id, `${token} Basic ${basic}`);
+      store.clearRunSecrets(run.id);
+      release();
+      await recording;
+      expect(store.getRun(run.id)?.titleSummary).toBe('[REDACTED] Basic [REDACTED]');
+    } finally { release(); namer.mockRestore(); }
+  });
 
   it('adds NOTHING for the default account — the zero-config env is untouched', async () => {
     const run = newRun();

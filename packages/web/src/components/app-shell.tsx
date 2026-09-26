@@ -12,6 +12,7 @@ import * as React from 'react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, matchPath, useLocation } from 'react-router'
 
+import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
@@ -30,6 +31,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
+import type { TrackerKind } from '@open-mercato/cezar-api-client'
 import {
   DEFAULT_SIDEBAR_WIDTH,
   MAX_SIDEBAR_WIDTH,
@@ -41,11 +43,11 @@ import {
 } from '@/lib/sidebar-width'
 import { cn } from '@/lib/utils'
 // The Open Mercato brand mark. A `public/` asset, not a bundled import: the service serves the
-// same file at this exact path (`GET /open-mercato.svg` — the favicon index.html points at), so
+// same file at this exact path (`GET /icon.svg` — the favicon index.html points at), so
 // a second, hashed URL for the same picture would be one cache entry too many. Vite serves
 // `public/` at the root in dev and copies it into the build, so the path holds in both.
-// Its own gradient + rounded corners ARE the tile.
-const brandLogoUrl = '/open-mercato.svg'
+// Its own solid purple tile + rounded corners ARE the tile.
+const brandLogoUrl = '/icon.svg'
 
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
@@ -77,6 +79,11 @@ export type AppShellProps = {
   latestVersion?: string | null
   /** Step 3.3's grouped task quick-list. */
   taskQuickList?: ReactNode
+  /** The sidebar's machine glance (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`):
+   *  effective CPU, its sparkline and compact RAM, rendered as the footer's first row. It is a
+   *  SLOT because `AppShell` stays presentational and QueryClient-free - the container supplies a
+   *  node whose own viewport/transport gate decides whether anything mounts at all. */
+  hostWidget?: ReactNode
   /** Step 4.2's Tools dropdown trigger. */
   toolsMenu?: ReactNode
   /** Forge gating (R6 Step 1.1): `false` drops the GitHub nav item — see `visibleNavItems`.
@@ -90,6 +97,7 @@ export type AppShellProps = {
    *  opt-in via `CEZ_AUTOMATIONS=1`. Defaults to shown for the same reason as `forgeAvailable`;
    *  the container passes the health payload's truth. */
   automationsAvailable?: boolean
+  tracker?: TrackerKind
   /** Single-project capability gating: hides workspace-expansion affordances. Defaults off so
    *  standalone and older callers preserve the multi-project shell. */
   singleProject?: boolean
@@ -171,10 +179,12 @@ export const AppShell = React.memo(function AppShell({
   version = null,
   latestVersion = null,
   taskQuickList,
+  hostWidget,
   toolsMenu,
   forgeAvailable = true,
   inboxAvailable = true,
   automationsAvailable = true,
+  tracker,
   singleProject = false,
   banner,
   projectGroups,
@@ -184,7 +194,10 @@ export const AppShell = React.memo(function AppShell({
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
   const areaPathname = stripProjectPrefix(pathname)
   const activeTo = activeNavPath(areaPathname)
-  const current = activeNavItem(areaPathname)
+  const currentBase = activeNavItem(areaPathname)
+  const current = currentBase?.to === '/tracker' && tracker
+    ? { ...currentBase, label: TRACKER_PROVIDERS[tracker].label }
+    : currentBase
   const [menuOpen, setMenuOpen] = React.useState(false)
   const closeMenu = React.useCallback(() => setMenuOpen(false), [])
   const mainRef = React.useRef<HTMLElement>(null)
@@ -234,8 +247,8 @@ export const AppShell = React.memo(function AppShell({
   }, [])
 
   const items = React.useMemo(
-    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable }),
-    [forgeAvailable, inboxAvailable, automationsAvailable],
+    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, tracker }),
+    [forgeAvailable, inboxAvailable, automationsAvailable, tracker],
   )
 
   const nav = {
@@ -249,6 +262,7 @@ export const AppShell = React.memo(function AppShell({
     version,
     latestVersion,
     taskQuickList,
+    hostWidget,
     toolsMenu,
     projectGroups,
     singleProject,
@@ -299,6 +313,7 @@ type NavProps = {
   version: string | null
   latestVersion: string | null
   taskQuickList?: ReactNode
+  hostWidget?: ReactNode
   toolsMenu?: ReactNode
   projectGroups?: ReactNode
   singleProject: boolean
@@ -482,6 +497,7 @@ function SidebarContent({
   version,
   latestVersion,
   taskQuickList,
+  hostWidget,
   toolsMenu,
   projectGroups,
   singleProject,
@@ -635,14 +651,17 @@ function SidebarContent({
         </>
       )}
 
-      {/* Two deliberate rows, never a wrap (#702): the search bar owns line 1, the chrome controls
-       *  line 2. `flex-col` rather than `flex-wrap` on purpose — the previous single wrapping row
-       *  overflowed the 264px column and silently stranded the theme toggle on a line of its own,
-       *  and a column cannot regress into that no matter what a future control's width is. */}
+      {/* Deliberate rows, never a wrap (#702): the machine glance (when one is mounted), then the
+       *  search bar, then the chrome controls. `flex-col` rather than `flex-wrap` on purpose — the
+       *  previous single wrapping row overflowed the 264px column and silently stranded the theme
+       *  toggle on a line of its own, and a column cannot regress into that no matter what a future
+       *  control's width is. The slot renders nothing at all when its own gate says no (below `md`
+       *  and in remote), so the count of rows is a property of the viewport, not of the markup. */}
       <div
         data-slot="sidebar-footer"
         className="flex flex-col gap-1.5 border-t border-border px-3.5 py-2.5"
       >
+        {hostWidget}
         <CommandPaletteHint />
         <div data-slot="sidebar-footer-controls" className="flex items-center gap-2">
           {/* SLOT — Step 4.2 mounts the Tools dropdown (aggregate status dot + tool versions) here. */}
@@ -841,7 +860,7 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
   )
 }
 
-/** The Open Mercato brand mark. The SVG carries its own gradient and rounded corners, so it is
+/** The Open Mercato brand mark. The SVG carries its own purple tile and rounded corners, so it is
  *  the tile — no wrapper background. */
 function BrandTile() {
   return (

@@ -114,6 +114,15 @@ class CodexSession implements AgentSession {
     this.emit({ type: 'text', text });
   });
   private tokensUsed = 0;
+  /**
+   * Did the CURRENT turn's last act turn out to be the app-server compacting its own
+   * context window (#955)? Set by a completed `contextCompaction` item on OUR thread and
+   * cleared by anything after it that could be a real handoff — an assistant message, a
+   * native `requestUserInput`, or the next turn starting. The turn boundary then carries it
+   * out as the additive `turn-end` reason, because `turn/completed` is byte-identical
+   * whether the model stopped to hand over or the session merely paused to tidy itself up.
+   */
+  private compactionEndedTurn = false;
   private ready!: Promise<void>;
   private autoEndTimer: NodeJS.Timeout | undefined;
   private eofTermTimer: NodeJS.Timeout | undefined;
@@ -295,10 +304,47 @@ class CodexSession implements AgentSession {
     void this.ready
       .then(() => this.startOrSteerTurn(text))
       .catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        this.emit({ type: 'note', message: `codex: turn failed: ${message}` });
+        this.emit(this.asyncTurnFailure(err instanceof Error ? err.message : String(err)));
       });
     return true;
+  }
+
+  /**
+   * How a `turn/start` / `turn/steer` that was ACCEPTED into stdin but REJECTED by the
+   * app-server reaches the run (#955).
+   *
+   * `sendMessage` answers `true` as soon as the frame is written, so
+   * `RunManager.deliverMessage` has already cleared `waiting` and written `running` by the
+   * time the JSON-RPC response settles. When the rejection was a refused `turn/start` there
+   * is now NO turn at all, and as a mere `note` that state was invisible to the run
+   * lifecycle: the task sat at `running` forever with nothing running — the silent zombie.
+   * `error` is the SAME authority `turn/failed` already carries for the same class of event,
+   * and `RunManager` turns it into a visible failed run the user can act on.
+   *
+   * Two failures deliberately stay notes, because neither leaves a zombie behind:
+   *
+   *  - a failure cezar itself caused. Once stdin is closed or we have signalled the child,
+   *    every request still in flight is rejected by `rejectPending` as part of an ordinary
+   *    teardown, and escalating those would make every cancel a failed run — the
+   *    self-inflicted failure #703 removed.
+   *  - a refused `turn/steer` while a turn is STILL LIVE. The session is demonstrably
+   *    working and `RunManager`'s `running` is simply true; what was lost is the follow-up,
+   *    not the run. Escalating would interrupt the turn in flight and throw away real work
+   *    to report a problem the run does not have. The note says the message did not land so
+   *    the user can resend it once the turn ends.
+   */
+  private asyncTurnFailure(detail: string): AgentEvent {
+    // Read in the order of the two exceptions above, then the rule.
+    if (!this.stdinOpen || this.terminatedByCezar || this.timedOut) {
+      return { type: 'note', message: `codex: turn failed: ${detail}` };
+    }
+    if (this.activeTurnId) {
+      return {
+        type: 'note',
+        message: `codex: the follow-up did not reach the model and was dropped — the turn already in flight is still running: ${detail}`,
+      };
+    }
+    return { type: 'error', message: `codex: turn failed: ${detail}` };
   }
 
   end(): void {
@@ -411,6 +457,8 @@ class CodexSession implements AgentSession {
       return;
     }
     if (this.pendingUserInput) this.rejectPendingUserInput('superseded by a newer requestUserInput');
+    // A native ask IS the user owning the next action, whatever happened before it (#955).
+    this.compactionEndedTurn = false;
     this.pendingUserInput = { rpcId, questions };
     this.opts.onUiEvent?.({ type: 'ask.requested', requestId: `codex-${String(rpcId)}`, questions });
   }
@@ -446,6 +494,7 @@ class CodexSession implements AgentSession {
       case 'turn/started': {
         if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
+        this.compactionEndedTurn = false; // the boundary is turn-scoped (#955)
         break;
       }
       case 'item/agentMessage/delta': {
@@ -468,6 +517,18 @@ class CodexSession implements AgentSession {
         const item = (params.item as Record<string, unknown>) ?? {};
         const type = stringField(item, 'type');
         const id = stringField(item, 'id') ?? '';
+        // The compaction boundary (#955). Item events are NOT thread-filtered — only turn
+        // lifecycle is (#600) — so the thread check has to happen here, or a sub-agent
+        // tidying ITS context would colour the parent's turn boundary. The item itself is
+        // mapped exactly as before, below: the "Compacted context" row is unchanged, and
+        // this only adds lifecycle meaning alongside it.
+        const ownThread = !this.isForeignThreadTurn(params);
+        if (ownThread && type === 'contextCompaction') {
+          this.compactionEndedTurn = true;
+        } else if (ownThread && type === 'agentMessage') {
+          // The model spoke AFTER compacting — that is a real handoff, not maintenance.
+          this.compactionEndedTurn = false;
+        }
         if (type === 'agentMessage') {
           // One v1 `text` per finished message — the snapshot's full text when
           // present (also covers turns that send no deltas), else the deltas.
@@ -498,12 +559,19 @@ class CodexSession implements AgentSession {
         // An interrupted/failed item never sees item/completed — surface its
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
+        // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
+        // boundary carries it: a `turn/failed` already emits an authoritative error, and
+        // stacking a "keep going" reason on top of it would be two verdicts for one turn.
+        const compacted = method === 'turn/completed' && this.compactionEndedTurn;
+        this.compactionEndedTurn = false;
         if (method === 'turn/failed' && !this.terminatedByCezar) {
           const error = params.error as Record<string, unknown> | undefined;
           const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
           this.emit({ type: 'error', message });
         }
-        this.emit({ type: 'turn-end' });
+        // The bare event when there is nothing extra to say, so every existing consumer
+        // and every golden recording sees the exact frame it saw before (§7 additive).
+        this.emit(compacted ? { type: 'turn-end', reason: 'context-compaction' } : { type: 'turn-end' });
         if (this.opts.autoEndAfterFirstTurn && this.stdinOpen && !this.autoEndTimer) {
           this.autoEndTimer = setTimeout(() => this.end(), AUTO_END_DELAY_MS);
           this.autoEndTimer.unref?.();

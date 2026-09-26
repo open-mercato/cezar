@@ -340,3 +340,12 @@ describe('looksSecret', () => {
     }
   });
 });
+
+it.each(['claude', 'codex', 'opencode'] as const)('does not forward tracker credentials to %s by default', backend => {
+  const env = buildChildEnv({ backend, source: {
+    PATH: '/usr/bin', JIRA_BASE_URL: 'https://acme.atlassian.net',
+    JIRA_EMAIL: 'user@example.com', JIRA_API_TOKEN: 'jira-token-value', LINEAR_API_KEY: 'linear-key-value',
+  } });
+  expect(env.JIRA_API_TOKEN).toBeUndefined();
+  expect(env.LINEAR_API_KEY).toBeUndefined();
+});

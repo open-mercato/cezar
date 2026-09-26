@@ -53,6 +53,7 @@ export function useAutomationsQuery(enabled: boolean) {
 
 export interface AutomationActions {
   /** Schedule → `run` (a launch, paused or not); poll → `check` with mode `execute`. */
+  preview: (automation: AutomationListEntry) => Promise<void>
   runNow: (automation: AutomationListEntry) => Promise<void>
   toggleEnabled: (automation: AutomationListEntry) => Promise<void>
   /** Creates a PAUSED copy named "<name> (copy)". */
@@ -74,8 +75,16 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         toast(`Started "${automation.name}" — the task is queued.`)
       } else {
         await checkAutomation(automation.id, 'execute')
-        toast(`Checking GitHub for "${automation.name}" now.`)
+        toast(`Checking events for "${automation.name}" now.`)
       }
+    },
+    onSuccess: () => void refresh(),
+    onError: fail,
+  })
+  const preview = useMutation({
+    mutationFn: async (automation: AutomationListEntry) => {
+      await checkAutomation(automation.id, 'preview')
+      toast(`Preview queued for "${automation.name}" — no tasks will launch. See the execution log for results.`)
     },
     onSuccess: () => void refresh(),
     onError: fail,
@@ -93,7 +102,9 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
         kind: automation.kind,
         ...(automation.kind === 'schedule'
           ? { schedule: automation.schedule }
-          : { events: automation.events, intervalSeconds: automation.intervalSeconds, filters: automation.filters }),
+          : automation.kind === 'tracker'
+            ? { trackerTrigger: automation.trackerTrigger, intervalSeconds: automation.intervalSeconds, filters: automation.filters }
+            : { events: automation.events, intervalSeconds: automation.intervalSeconds, filters: automation.filters }),
         task: automation.task,
       }
       return createAutomation(body)
@@ -111,6 +122,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
   })
 
   return {
+    preview: (automation) => preview.mutateAsync(automation).then(() => undefined, () => undefined),
     runNow: (automation) => run.mutateAsync(automation).then(() => undefined, () => undefined),
     toggleEnabled: (automation) => toggle.mutateAsync(automation).then(() => undefined, () => undefined),
     duplicate: (automation) => duplicate.mutateAsync(automation).then(() => undefined, () => undefined),
@@ -119,6 +131,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
       const line = cliOf({
         name: automation.name,
         kind: automation.kind,
+        trackerTrigger: automation.trackerTrigger,
         schedule: automation.schedule,
         events: automation.events,
         intervalSeconds: automation.intervalSeconds,
@@ -127,7 +140,7 @@ export function useAutomationActions(data: AutomationsResponse | undefined): Aut
       })
       await copyText(line)
     },
-    busy: run.isPending || toggle.isPending || duplicate.isPending || remove.isPending,
+    busy: preview.isPending || run.isPending || toggle.isPending || duplicate.isPending || remove.isPending,
   }
   // `data` is accepted so a caller can key actions on the loaded zone later without a new hook.
   void data

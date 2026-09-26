@@ -1,18 +1,23 @@
 <div align="center">
-  <h1>cezar ⚡</h1>
+  <h1>Cezar - orchestrate hundreds of AI coding agents, 24/7.</h1>
 </div>
 
 <h4 align="center">
-  <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">Watch the demo</a> |
-  <a href="#quick-start">Quick start</a> |
-  <a href="docs/reference.md">Documentation</a> |
+  <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">Demo</a>&nbsp;·
+  <a href="#quick-start">Quick start</a>&nbsp;·
+  <a href="docs/reference.md">Docs</a>&nbsp;·
   <a href="https://github.com/open-mercato/cezar/issues">Issues</a>
 </h4>
 
+<p align="center">
+  English | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a>
+</p>
+
 <div align="center">
   <h2>
-    Run coding agents in parallel, right in your repo.<br />
-    Local, zero config, no accounts.
+    One control center for Claude Code, Codex, OpenCode and other coding agents.<br />
+    Run agents locally or on a VPS, automate multi-step workflows,<br />
+    and let them keep working while you're away.
   </h2>
 </div>
 
@@ -24,6 +29,11 @@
   <img alt="Node 20+" src="https://img.shields.io/badge/node-20%2B-339933" />
   <a href="https://github.com/open-mercato/cezar/pulls">
     <img alt="PRs welcome!" src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat" /></a>
+</p>
+
+<p align="center">
+  <a href="https://openmercatocloud.com/247agentic-cear" target="_blank" rel="noopener">
+    <img src="docs/screenshots/cloud-banner.svg" alt="Use cezar on a cloud sandbox for 24/7 coding. Start for free." width="720" /></a>
 </p>
 
 <div align="center">
@@ -50,42 +60,39 @@
 
 ## Screenshots
 
+**Parallel tasks** — Run and queue many tasks, each in its own git worktree.
+
+[![Parallel tasks: Run and queue many tasks, each in its own git worktree.](docs/screenshots/task-view.png)](docs/screenshots/task-view.png)
+
+**Live run** — Every step, tool call and token, as it happens.
+
+[![Live run: Every step, tool call and token, as it happens.](docs/screenshots/live-run.png)](docs/screenshots/live-run.png)
+
+**Variants** — Run a task ×2 or ×3 and keep the best diff.
+
+[![Variants: Run a task ×2 or ×3 and keep the best diff.](docs/screenshots/variants-compare.png)](docs/screenshots/variants-compare.png)
+
+**Workflows** — Drag skills and checks into a chain, saved as YAML.
+
+[![Workflows: Drag skills and checks into a chain, saved as YAML.](docs/screenshots/workflow-builder.png)](docs/screenshots/workflow-builder.png)
+
+**GitHub** — Hand an open issue to the agent in one click.
+
+[![GitHub: Hand an open issue to the agent in one click.](docs/screenshots/github-issues.png)](docs/screenshots/github-issues.png)
+
+**Skills + Autonomous** — Pick a playbook, flip Autonomous and walk away.
+
+[![Skills + Autonomous: Pick a playbook, flip Autonomous and walk away.](docs/screenshots/skills-autonomous.png)](docs/screenshots/skills-autonomous.png)
+
+**On your phone** — the same cockpit, from the task list to the diff.
+
 <table>
   <tr>
-    <td width="50%"><a href="docs/screenshots/task-view.png"><img src="docs/screenshots/task-view.png" alt="Tasks view with parallel runs and a queue" /></a></td>
-    <td width="50%"><a href="docs/screenshots/live-run.png"><img src="docs/screenshots/live-run.png" alt="A running task streaming live" /></a></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Parallel tasks</b><br />Run and queue many tasks, each in its own worktree.</td>
-    <td align="center"><b>Live run</b><br />Every step, tool call and token as it happens.</td>
-  </tr>
-  <tr>
-    <td width="50%"><a href="docs/screenshots/variants-compare.png"><img src="docs/screenshots/variants-compare.png" alt="Two variants compared side by side" /></a></td>
-    <td width="50%"><a href="docs/screenshots/workflow-builder.png"><img src="docs/screenshots/workflow-builder.png" alt="Workflow builder" /></a></td>
-  </tr>
-  <tr>
-    <td align="center"><b>Variants</b><br />Run a task ×2 or ×3 and keep the best diff.</td>
-    <td align="center"><b>Workflows</b><br />Drag skills and checks into a chain, saved as YAML.</td>
-  </tr>
-  <tr>
-    <td width="50%"><a href="docs/screenshots/github-issues.png"><img src="docs/screenshots/github-issues.png" alt="GitHub issues tab" /></a></td>
-    <td width="50%"><a href="docs/screenshots/skills-autonomous.png"><img src="docs/screenshots/skills-autonomous.png" alt="Skill picker and Autonomous flag" /></a></td>
-  </tr>
-  <tr>
-    <td align="center"><b>GitHub</b><br />Hand an issue to the agent in one click.</td>
-    <td align="center"><b>Skills + Autonomous</b><br />Pick a playbook, flip Autonomous and walk away.</td>
+    <td width="33%"><img src="docs/screenshots/mobile-tasks.png" alt="Task list on mobile" /></td>
+    <td width="33%"><img src="docs/screenshots/mobile-session.png" alt="A session on mobile" /></td>
+    <td width="33%"><img src="docs/screenshots/mobile-review.png" alt="Reviewing a diff on mobile" /></td>
   </tr>
 </table>
-
-<p align="center">
-  <img src="docs/screenshots/mobile-tasks.png" alt="Task list on mobile" width="260" />
-  &nbsp;
-  <img src="docs/screenshots/mobile-session.png" alt="Session on mobile" width="260" />
-  &nbsp;
-  <img src="docs/screenshots/mobile-review.png" alt="Reviewing a diff on mobile" width="260" />
-  <br />
-  <em>The same cockpit on your phone.</em>
-</p>
 
 ## Quick start
 
@@ -165,3 +172,7 @@ npm run dev
 ## License
 
 **MIT** © Patryk Lewczuk. Full text in [LICENSE](LICENSE).
+
+## Jira and Linear
+
+Connect a project issue tracker in Settings to browse issues, launch workflows and configure event automations. See [setup, permissions and recovery](docs/issue-trackers.md).

@@ -130,7 +130,8 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     const dir = await lockedDirectory('{half-writ');
     const store = AutomationStore.open(dir, { processAlive: () => false });
     expect(store.acquireLease()).toBeUndefined();
-    // Same unreadable lock, once it is old enough: reclaimed on age alone.
+    // Same unreadable lock, now with staleAfterMs of 0: "stale regardless of age" is
+    // deterministic and does not depend on any real time having passed since it was written.
     expect(store.acquireLease(0)).toBeDefined();
   });
 
@@ -183,4 +184,20 @@ describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => 
       lastSuccessAt: '2026-09-14T02:00:00.000Z',
     });
   });
+});
+
+it('keeps old tracker receipts while the definition can resume history, then expires them after deletion', async () => {
+  let now = new Date('2026-01-01T00:00:00.000Z');
+  const store = AutomationStore.open(await directory(), { now: () => now });
+  store.create({ ...input, kind: 'tracker', filters: { ...input.filters, status: 'To Do' } }, 'tracker');
+  store.create(input, 'github');
+  store.reserveReceipt({ automationId: 'tracker', revision: 1, eventId: 'history:1' });
+  store.reserveReceipt({ automationId: 'github', revision: 1, eventId: 'event:1' });
+  now = new Date('2026-09-19T00:00:00.000Z');
+  store.compact();
+  expect(store.receipts().map(receipt => receipt.automationId)).toEqual(['tracker']);
+  expect(store.reserveReceipt({ automationId: 'tracker', revision: 1, eventId: 'history:1' })).toBeUndefined();
+  store.delete('tracker');
+  store.compact();
+  expect(store.receipts()).toEqual([]);
 });

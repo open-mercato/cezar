@@ -313,7 +313,7 @@ export function Composer({
   // ---- attachments ---------------------------------------------------------------------------
 
   const addFiles = useCallback(
-    (files: readonly File[]) => {
+    (files: readonly File[], source: 'file' | 'clipboard' = 'file') => {
       if (disabled) return
       // Side effects (screening toasts + async encode) run OUTSIDE any setState updater: React
       // StrictMode double-invokes updater functions in dev, so screening here would encode and
@@ -322,7 +322,7 @@ export function Composer({
       const intake = screenFiles(files, imagesRef.current.length)
       for (const reason of intake.rejected) toast(reason, { tone: 'danger' })
       for (const file of intake.accepted) {
-        void fileToPendingAttachment(file).then((attachment) =>
+        void fileToPendingAttachment(file, source).then((attachment) =>
           setImages((prev) => (prev.length >= MAX_ATTACHMENTS ? prev : [...prev, attachment])),
         )
       }
@@ -340,7 +340,7 @@ export function Composer({
       .filter((file): file is File => file !== null)
     if (files.length === 0) return
     event.preventDefault()
-    addFiles(files)
+    addFiles(files, 'clipboard')
   }
 
   const onDrop = (event: DragEvent) => {
