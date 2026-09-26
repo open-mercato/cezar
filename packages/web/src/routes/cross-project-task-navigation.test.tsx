@@ -219,7 +219,7 @@ describe('opening another project’s task without a reload', () => {
       expect(group).not.toBeNull()
       return group as HTMLElement
     })
-    fireEvent.click(within(otherGroup).getByRole('button', { name: 'other-repo', expanded: false }))
+    fireEvent.click(within(otherGroup).getByRole('button', { name: 'Expand other-repo', expanded: false }))
     const title = await screen.findByText('Do the thing')
     fireEvent.click(title.closest('a')!)
 
