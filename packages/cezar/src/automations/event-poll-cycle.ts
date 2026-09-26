@@ -18,6 +18,8 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
   isCurrent?: () => Promise<boolean>;
   launch?: (candidate: C) => Promise<void>;
   persist: (result: R, current: AutomationRuntimeState) => AutomationRuntimeState;
+  /** What a completed execute cycle's `no-match` row says; defaults to a plain completion. */
+  reason?: (result: R) => string;
   onChange?: (id: string, revision: number) => void;
 }): Promise<R> {
   const { store, definition, mode } = input;
@@ -94,7 +96,7 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       result: mode === 'preview' ? 'preview' : 'no-match',
       reason: mode === 'preview'
         ? `Bounded preview found ${eligible.length} match${eligible.length === 1 ? '' : 'es'}; no tasks were launched.`
-        : 'Scheduled check completed.',
+        : input.reason?.(result) ?? 'Scheduled check completed.',
       durationMs: Date.now() - started,
     });
     input.onChange?.(definition.id, definition.revision);
