@@ -49,5 +49,5 @@ Replace the cockpit brand mark (`packages/web/public/open-mercato.svg`) used as 
 
 ### Phase 2: Validate
 
-- [ ] 2.1 Run targeted brand/static tests
-- [ ] 2.2 Run full validation gate
+- [x] 2.1 Run targeted brand/static tests — b94eed80
+- [x] 2.2 Run full validation gate — b94eed80
