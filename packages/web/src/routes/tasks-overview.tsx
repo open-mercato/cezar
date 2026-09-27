@@ -974,6 +974,7 @@ function TaskCard({
   const unread = isUnread(run)
   const readDone = isReadDoneItem(run)
   const cost = formatCost(run.costUsd)
+  const subtasks = subtaskLabel(childCount)
   const hasDirectionalUsage = run.inputTokens !== undefined || run.outputTokens !== undefined
 
   return (
@@ -1018,9 +1019,9 @@ function TaskCard({
         ) : null}
         {/* Same handle as the table's Task cell (#1110) — the dispatched children are the cards
             this unfolds below. The card's own click already steps around `a, button`. */}
-        {subtaskLabel(childCount) ? (
+        {subtasks ? (
           <SubtaskToggle
-            label={subtaskLabel(childCount) as string}
+            label={subtasks}
             expanded={subtasksExpanded}
             onToggle={() => onToggleSubtasks(run.id)}
             className="mt-px"

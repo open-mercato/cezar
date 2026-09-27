@@ -831,6 +831,7 @@ function TaskRow({
   // project-scoped view can use the one repo it is standing in; this page has a different repo
   // per row, which is why the registry entry carries `repoUrl`.
   const references = taskReferences(run, task.project?.repoUrl)
+  const subtasks = subtaskLabel(childCount)
   // The SAME live/peak rule the per-project table applies. The live sample rides the index row
   // itself (`run.usage`, attached server-side per poll) rather than the run event stream, which
   // is project-scoped and so cannot reach forty projects at once.
@@ -892,9 +893,9 @@ function TaskRow({
           ) : null}
           {/* The dispatched children are the indented rows underneath — counted, and since
               #1110 folded behind this handle until it is clicked open. */}
-          {subtaskLabel(childCount) ? (
+          {subtasks ? (
             <SubtaskToggle
-              label={subtaskLabel(childCount) as string}
+              label={subtasks}
               expanded={subtasksExpanded}
               onToggle={() => onToggleSubtasks(run.id)}
             />
