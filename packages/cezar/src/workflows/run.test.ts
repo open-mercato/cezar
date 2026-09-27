@@ -1475,16 +1475,30 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       session,
       sessionEverOpened: true,
     };
-    const internals = manager as unknown as { active: Map<string, typeof state> };
+    const internals = manager as unknown as { active: Map<string, unknown> };
     internals.active.set(record.id, state);
     store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
     store.updateStep(record.id, 'task', { status: 'running' });
 
     expect(manager.cancel(record.id)).toBe(true);
     expect(manager.isActive(record.id)).toBe(true);
+    // The grace timer has fired, but the SIGTERM-ignoring child is still alive:
+    // its old generation must retain the slot and cannot admit this owner yet.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    expect(manager.isActive(record.id)).toBe(true);
+    const replacement = {
+      ownerToken: Symbol('replacement-owner'),
+      cancelled: false,
+      interrupt: () => undefined,
+      cwd: repoRoot,
+      sessionEverOpened: true,
+    };
+    internals.active.set(record.id, replacement);
     await session.result;
     await new Promise((resolve) => setTimeout(resolve, 1_100));
-    expect(manager.isActive(record.id)).toBe(false);
+    // Late old-session settlement cannot release the same-id replacement.
+    expect(internals.active.get(record.id)).toBe(replacement);
+    internals.active.delete(record.id);
   }, 15_000);
 
   it('finishing a run parked at an intermediate ask ends it like any other Finish', async () => {

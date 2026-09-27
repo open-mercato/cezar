@@ -2848,9 +2848,13 @@ export class RunManager {
         const session = state.session;
         if (!session) return;
         session.hardStop?.();
-        void session.result.finally(() => {
+        const reapSettled = () => {
           if (this.active.get(runId) === state && state.cancelled) this.dropActive(runId, state);
-        });
+        };
+        // Handle both fulfillment and rejection: a bare finally() creates a new
+        // rejected promise when a provider teardown fails, producing an orphaned
+        // unhandled rejection during cancellation.
+        void session.result.then(reapSettled, reapSettled);
       }, CANCEL_GRACE_MS);
       state.cancellationTimer.unref?.();
     }
@@ -4248,6 +4252,11 @@ export class RunManager {
       await autosaveCommit(state.cwd, 'run finalize');
     }
 
+    // The cancellation grace timer may have retired this owner while the async
+    // workflow was unwinding, and a same-id continuation may now own the record.
+    // No settlement branch below may touch that newer owner.
+    if (this.active.get(runId) !== state) return;
+
     const finishedAt = new Date().toISOString();
     if (state.cancelled && this.active.get(runId) === state) {
       const run = this.store.getRun(runId);
@@ -4749,8 +4758,10 @@ export class RunManager {
     } finally {
       this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
-      this.leaveMonitoring(runId);
-      this.waiting.delete(runId);
+      if (this.active.get(runId) === state) {
+        this.leaveMonitoring(runId);
+        this.waiting.delete(runId);
+      }
       this.clearMonitoringWakeTimer(state, runId);
       state.session = undefined;
       state.currentStepId = undefined;
