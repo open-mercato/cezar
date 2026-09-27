@@ -1,20 +1,17 @@
 import { useEffect, useState } from 'react'
 
-import {
-  HOST_HISTORY_LENGTH,
-  useHostHistory,
-  useHostLastFrameAt,
-  useHostTransport,
-  useHostUsage,
-} from '@/api/host-usage'
+import { useHostHistory, useHostLastFrameAt, useHostTransport, useHostUsage } from '@/api/host-usage'
 import { Link } from '@/lib/project-router'
 import { effectiveHostView, formatCpuCores, formatMemPair } from '@/lib/host-effective'
 import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
 
 /**
- * The sidebar glance: effective CPU, its 60 s sparkline and compact RAM, one row above the footer
- * (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`, Phase 2).
+ * The sidebar glance: two labelled meter rows - effective CPU and RAM, each a bar, a percentage
+ * and a detail - above the footer (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`,
+ * Phase 2). The 60 s CPU sparkline lives on the Machine card the row links to; the sidebar trades
+ * it for a RAM meter, because an unlabelled line beside an unlabelled number did not say which
+ * resource was which, and memory pressure is the one that actually stops a machine.
  *
  * Two gates, and both are about not paying for what nobody sees:
  *
@@ -34,12 +31,20 @@ import { cn } from '@/lib/utils'
 /** Five server ticks: one dropped frame is a hiccup, five is a stopped sampler. */
 export const HOST_WIDGET_STALE_MS = 10_000
 
-const SPARK_WIDTH = 100
-const SPARK_HEIGHT = 24
-/** A hand-drawn line needs two points; one sample is a dot nobody can read. */
-const MIN_SPARK_POINTS = 2
+/** Meter thresholds: past `WARN` the bar turns amber, past `CRITICAL` red. */
+export const HOST_METER_WARN_PCT = 80
+export const HOST_METER_CRITICAL_PCT = 90
+
+type MeterLevel = 'ok' | 'warn' | 'critical'
 
 const clampPct = (value: number): number => Math.min(100, Math.max(0, value))
+
+const meterLevel = (pct: number | undefined): MeterLevel =>
+  pct === undefined || pct < HOST_METER_WARN_PCT
+    ? 'ok'
+    : pct < HOST_METER_CRITICAL_PCT
+      ? 'warn'
+      : 'critical'
 
 export function HostUsageWidget() {
   const desktop = useIsDesktop()
@@ -80,18 +85,15 @@ function HostUsageWidgetRow() {
           ? 'sampling…'
           : '—'
         : `${Math.round(cpuPct)}%`
+  const memPct =
+    view === undefined || view.memUsedBytes === undefined || view.memTotalBytes <= 0
+      ? undefined
+      : (view.memUsedBytes / view.memTotalBytes) * 100
+  const memPctText = stale ? 'stale' : memPct === undefined ? '—' : `${Math.round(memPct)}%`
   const memText = view === undefined ? '—' : formatMemPair(view.memUsedBytes, view.memTotalBytes)
-  const points =
-    history.length >= MIN_SPARK_POINTS
-      ? history
-          .map((point, index) => {
-            // The SAME 30-point axis the card draws on, so both sparklines describe the same 60 s
-            // of the same series - a short ring plots on the left, exactly as it does up there.
-            const x = (index / (HOST_HISTORY_LENGTH - 1)) * SPARK_WIDTH
-            const y = SPARK_HEIGHT - (clampPct(point.cpuPct) / 100) * SPARK_HEIGHT
-            return `${x.toFixed(1)},${y.toFixed(1)}`
-          })
-          .join(' ')
+  const cpuCores =
+    view?.cpuLimited === true
+      ? `${view.cpuLimitKind === 'cpuset' ? 'cpuset ' : ''}${formatCpuCores(view.cpuCores)}`
       : undefined
 
   return (
@@ -99,44 +101,84 @@ function HostUsageWidgetRow() {
       to="/settings/resources"
       data-slot="host-usage-widget"
       data-state={stale ? 'stale' : 'live'}
-      aria-label={`Machine usage: CPU ${cpuText}, memory ${memText}. Open Settings, Resources.`}
+      // How many frames the store holds - the e2e proof that the root writer keeps feeding it.
+      data-frames={history.length}
+      aria-label={`Machine usage: CPU ${cpuText}${cpuCores === undefined ? '' : ` of ${cpuCores}`}, RAM ${memPctText} (${memText}). Open Settings, Resources.`}
+      title={`CPU ${cpuText}${cpuCores === undefined ? '' : ` of ${cpuCores}`} · RAM ${memText}`}
       className={cn(
-        'flex flex-col gap-1 rounded-md border border-border px-2 py-1.5 text-[11px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
+        'grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1 rounded-md border border-border px-2 py-1.5 text-[11px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
         stale ? 'opacity-70' : null,
       )}
     >
-      <span className="flex items-center gap-1.5">
-        <span data-slot="host-usage-widget-cpu" className="font-medium tabular-nums text-foreground">
-          {cpuText}
-        </span>
-        {view?.cpuLimited === true ? (
-          <span data-slot="host-usage-widget-cores" className="tabular-nums">
-            {view.cpuLimitKind === 'cpuset' ? 'cpuset ' : ''}
-            {formatCpuCores(view.cpuCores)}
-          </span>
-        ) : null}
-        <span data-slot="host-usage-widget-mem" className="ml-auto tabular-nums">
-          {memText}
-        </span>
-      </span>
-      {points === undefined ? null : (
-        <svg
-          data-slot="host-usage-widget-sparkline"
-          className="h-4 w-full text-primary"
-          viewBox={`0 0 ${SPARK_WIDTH} ${SPARK_HEIGHT}`}
-          preserveAspectRatio="none"
-          role="img"
-          aria-label={`CPU over the last ${history.length * 2} seconds`}
-        >
-          <polyline
-            points={points}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={1.5}
-            vectorEffect="non-scaling-stroke"
-          />
-        </svg>
-      )}
+      <Meter
+        label="CPU"
+        pct={stale ? undefined : cpuPct}
+        valueSlot="host-usage-widget-cpu"
+        value={cpuText}
+        detailSlot="host-usage-widget-cores"
+        detail={cpuCores}
+      />
+      <Meter
+        label="RAM"
+        pct={stale ? undefined : memPct}
+        valueSlot="host-usage-widget-mem-pct"
+        value={memPctText}
+        detailSlot="host-usage-widget-mem"
+        detail={memText}
+      />
     </Link>
+  )
+}
+
+interface MeterProps {
+  label: string
+  pct: number | undefined
+  valueSlot: string
+  value: string
+  detailSlot: string
+  detail: string | undefined
+}
+
+/** One grid row: label, bar, percentage, detail - the four columns line up across both rows. */
+function Meter({ label, pct, valueSlot, value, detailSlot, detail }: MeterProps) {
+  const level = meterLevel(pct)
+  return (
+    <>
+      <span className="font-medium tracking-wide text-muted-foreground">{label}</span>
+      <span
+        data-slot={`host-usage-widget-${label.toLowerCase()}-bar`}
+        data-level={level}
+        role="meter"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct === undefined ? undefined : Math.round(clampPct(pct))}
+        className="h-1.5 overflow-hidden rounded-full bg-muted"
+      >
+        <span
+          className={cn(
+            'block h-full rounded-full transition-[width] duration-500',
+            level === 'critical' ? 'bg-destructive' : level === 'warn' ? 'bg-pending' : 'bg-primary',
+          )}
+          style={{ width: `${pct === undefined ? 0 : clampPct(pct)}%` }}
+        />
+      </span>
+      <span
+        data-slot={valueSlot}
+        className={cn(
+          'text-right font-medium tabular-nums',
+          level === 'critical'
+            ? 'text-destructive'
+            : level === 'warn'
+              ? 'text-pending-strong'
+              : 'text-foreground',
+        )}
+      >
+        {value}
+      </span>
+      <span data-slot={detailSlot} className="text-right tabular-nums">
+        {detail ?? ''}
+      </span>
+    </>
   )
 }

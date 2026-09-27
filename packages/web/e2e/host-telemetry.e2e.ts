@@ -10,8 +10,8 @@ import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
  * Two viewports, two different writers, and the assertions jsdom cannot make:
  *
  *   - **1440×900**: the sidebar glance is mounted, it sits in the desktop sidebar above the
- *     footer's own rows, it links to Settings → Resources, and it draws a sparkline - which is
- *     only possible if the root subscription really held the `host` topic for the session.
+ *     footer's own rows, it links to Settings → Resources, and its store fills past one frame -
+ *     which is only possible if the root subscription really held the `host` topic for the session.
  *   - **390×844**: the widget is UNMOUNTED (not merely hidden), the drawer still opens, and the
  *     Machine card on Settings → Resources is still live - the card's own view subscription is
  *     the demand below `md`.
@@ -91,10 +91,10 @@ describe('host telemetry across the md breakpoint', () => {
     expect(info.cpu === null ? '' : info.cpu).toMatch(/^(sampling…|stale|—|\d+%)$/)
     expect(info.mem === null ? '' : info.mem).toMatch(/(GB|MB|kB)/)
 
-    // A sparkline needs two frames, i.e. ~4 s of a held `host` topic: this is the end-to-end
-    // proof that the root writer - not the card - is feeding the store on this viewport.
+    // Two frames in the store, i.e. ~4 s of a held `host` topic: this is the end-to-end proof
+    // that the root writer - not the card - is feeding the store on this viewport.
     browser.waitForFunction(
-      `document.querySelector('[data-slot="host-usage-widget-sparkline"]') !== null`,
+      `Number(document.querySelector('${WIDGET}')?.getAttribute('data-frames') ?? 0) >= 2`,
     )
     const cardMode = browser.text('[data-slot="machine-card-mode"]')
     expect(cardMode).toBe('live')
