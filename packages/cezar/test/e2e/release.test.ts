@@ -143,6 +143,8 @@ test('a patch bump stamps every manifest, keeps the caret ranges, and emits the 
     assert.match(output, /^version=0\.1\.6$/m);
     assert.match(output, /^published=false$/m);
     assert.match(output, /^dryRun=true$/m);
+    // The release notes' install command reads this output.
+    assert.match(output, /^runAliasName=fake-run-alias$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

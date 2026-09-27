@@ -148,11 +148,15 @@ test('dry-run publish stamps every manifest, pins each sibling exact, and emits 
     const result = JSON.parse(resultLine.slice('result='.length)) as {
       distTag: string;
       installLines: string[];
+      aliasName: string;
+      runAliasName: string;
     };
+    assert.equal(result.aliasName, 'fake-alias');
+    assert.equal(result.runAliasName, 'fake-run-alias');
     assert.equal(result.distTag, 'pr-77');
     assert.ok(
-      result.installLines.some((line) => line.includes('npx fake-alias@0.9.9-pr77.5')),
-      'install lines should use the actual alias name and exact version',
+      result.installLines.some((line) => line.includes('npx fake-run-alias@0.9.9-pr77.5')),
+      'install lines should use the documented (cezar-run) alias name and exact version',
     );
   } finally {
     await rm(root, { recursive: true, force: true });

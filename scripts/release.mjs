@@ -152,5 +152,7 @@ emitOutput({
   rootName: stamped.cezar.name,
   apiClientName: stamped.apiClient.name,
   aliasName: stamped.alias.name,
+  // The documented npx spelling — the release notes' install command uses it.
+  runAliasName: stamped.runAlias.name,
   publishedNames: published.join(','),
 });

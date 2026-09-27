@@ -164,8 +164,10 @@ emitOutput({
   rootName: stamped.cezar.name,
   apiClientName: stamped.apiClient.name,
   aliasName: stamped.alias.name,
+  // The documented npx spelling — every copy-paste command CI prints uses it.
+  runAliasName: stamped.runAlias.name,
   version: plan.version,
   distTag: plan.distTag,
   publishedNames: published.join(','),
-  installLines: buildInstallLines(stamped.alias.name, plan.version),
+  installLines: buildInstallLines(stamped.runAlias.name, plan.version),
 });
