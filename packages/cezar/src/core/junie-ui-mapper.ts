@@ -56,13 +56,17 @@
  * `nativeSubagentSessions`, but that capability has no published wire shape at
  * all (unlike `agent_thought_chunk`/`plan`, which at least have a schema this
  * mapper can implement ahead of observing them). ui-parity.test.ts's
- * "sub-agent task items" row and sub-agent nesting are the documented,
- * narrowly-scoped exception this leaves junie out of — see that test's own
- * comment, not a generic per-backend opt-out:
+ * "sub-agent task items" row and sub-agent nesting are therefore left unsatisfied
+ * for junie today — a known, tracked gap against the documented "every backend,
+ * every row" hard rule (`BACKWARD_COMPATIBILITY.md` §7, `AGENT_PROTOCOL.md` §9 item
+ * 7), NOT a sanctioned exception: a narrow, documented substitute for this exact gap
+ * was drafted into both files during PR #1111's review but reverted for lack of a
+ * maintainer's explicit sign-off on amending a protected surface (see that PR's
+ * review ⚠️ WARNING). See ui-parity.test.ts's own comment for the resolution path:
  *  - sub-agent nesting (`parentItemId`) — same gap: no wire shape exists, so
  *    no nesting is attempted; a spawned sub-agent (should one ever surface as
- *    a `tool_call`) renders as a flat, unnested item, the same documented
- *    substitute codex's review-mode items use.
+ *    a `tool_call`) renders as a flat, unnested item, structurally excluded from
+ *    that row's loop rather than through any doc-sanctioned substitute.
  *
  * Robustness rule (shared with every other mapper): input is untrusted wire
  * data, so this mapper never throws — malformed frames map to zero events.
@@ -99,6 +103,9 @@ export interface JunieUiMapperState {
   /** Last `usage_update.cost.amount` seen — cumulative-for-session, same
    *  semantics as claude's own `total_cost_usd` (also session-cumulative). */
   readonly lastCostUsd: number | null;
+  /** Mints a fresh synthetic id for each NEW id-less message/reasoning item (see
+   *  `mapMessageChunk`) — a shared per-kind constant folded unrelated id-less items together. */
+  readonly noIdCounter: number;
 }
 
 export interface JunieUiMapping {
@@ -114,6 +121,7 @@ export function createJunieUiState(): JunieUiMapperState {
     openMessage: null,
     knownTools: new Map(),
     lastCostUsd: null,
+    noIdCounter: 0,
   };
 }
 
@@ -250,11 +258,20 @@ function mapMessageChunk(
   const text = contentTextOf(raw.content);
   if (text === undefined || text === '') return { events: [], state };
   // A frame without `messageId` still has real text to render (unlike a tool call with no id,
-  // which `mapToolCall` correctly drops) — so this falls back to a synthetic, non-empty,
-  // per-kind id rather than `''`. `item.id: ''` broke a truthy-id assumption downstream and,
-  // via `open.id !== messageId` comparing `'' !== ''`, silently folded unrelated id-less
-  // messages of the same kind into one item.
-  const messageId = str(raw.messageId) ?? `junie-${itemKind}-no-id`;
+  // which `mapToolCall` correctly drops). Absent a wire id, a chunk that arrives while a
+  // message/reasoning item of the SAME kind is already open continues that item (junie sends
+  // no per-message id at all for some frames — e.g. the "Task was interrupted" notice — and no
+  // separate continuation signal either, so this is the closest reading of intent). But a NEW
+  // id-less item — nothing open, or a kind switch — must not collide with any other id-less
+  // item: it gets a fresh id off `noIdCounter` rather than a shared per-kind constant, which
+  // folded unrelated id-less messages together into one (#1111 review).
+  const rawMessageId = str(raw.messageId);
+  const openBefore = state.openMessage;
+  const continuesOpenById =
+    rawMessageId === undefined && openBefore !== null && openBefore.kind === itemKind;
+  const noIdCounter = continuesOpenById ? state.noIdCounter : state.noIdCounter + 1;
+  const messageId = rawMessageId ?? (continuesOpenById ? openBefore!.id : `junie-${itemKind}-no-id-${noIdCounter}`);
+  state = { ...state, noIdCounter };
 
   const events: UiEvent[] = [];
   let open = state.openMessage;

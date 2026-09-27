@@ -96,8 +96,8 @@ export const setWorkspaceConfigInputSchema = z.object({
         .object({
           claude: z.string().trim().min(1).max(200).nullable().optional(),
           codex: z.string().trim().min(1).max(200).nullable().optional(),
-        opencode: z.string().trim().min(1).max(200).nullable().optional(),
-        junie: z.string().trim().min(1).max(200).nullable().optional(),
+          opencode: z.string().trim().min(1).max(200).nullable().optional(),
+          junie: z.string().trim().min(1).max(200).nullable().optional(),
           pi: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),

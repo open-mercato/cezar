@@ -593,6 +593,21 @@ describe('reduceThread — provider authorization recovery', () => {
     }])
   })
 
+  it('persists a junie authorization incident (the runner deliberately left unknown-but-usable)', () => {
+    expect(reduceThread([
+      line(1, 'provider-auth-required', {
+        provider: 'junie',
+        authFailureId: 'incident-1',
+        stepId: 'work',
+      }),
+    ]).turns[0]?.items).toEqual([{
+      kind: 'provider-auth-required',
+      id: 'v1:1',
+      provider: 'junie',
+      authFailureId: 'incident-1',
+    }])
+  })
+
   it.each([
     ['an unknown provider', { provider: 'future', authFailureId: 'incident-1' }],
     ['a blank incident id', { provider: 'claude', authFailureId: '' }],

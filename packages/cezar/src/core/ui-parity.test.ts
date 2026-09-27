@@ -17,20 +17,28 @@
  * every row"). junie's `plan.updated`/reasoning rows are backed by
  * `__fixtures__/junie/schema-plan-reasoning.*`, a fixture derived from the public
  * ACP schema rather than a live capture (see `junie-ui-mapper.ts`'s module doc) —
- * schema-derived is enough to satisfy the row, since the row asserts the mapper
- * CAN produce the capability, not that it was observed live.
+ * schema-derived is enough to satisfy the row under §7's existing fixture-provenance
+ * rule (cite the upstream schema/source, PR #443 precedent), since the row asserts
+ * the mapper CAN produce the capability, not that it was observed live. A future
+ * junie/model revision that emits either live should get a real, captured fixture
+ * replacing the schema-derived one — re-check this the next time junie's ACP surface
+ * or model lineup changes materially.
  *
- * "sub-agent task items" is the one row with no per-backend workaround: junie's
- * wire is unmodified core ACP, which has no `task` tool-call kind and no
+ * "sub-agent task items" and its nesting cell are NOT currently satisfied for junie:
+ * junie's wire is unmodified core ACP, which has no `task` tool-call kind and no
  * published shape for `nativeSubagentSessions` at all (see the module doc) — a
- * genuine protocol gap, not an assumption or a missing fixture, so no fixture
- * (real or schema-derived) could ever satisfy it. This is the SAME narrow,
- * documented substitute `AGENT_PROTOCOL.md` §9 item 7 already grants codex for
- * the nesting cell (codex's wire has no parent attribution either), extended to
- * cover the one row junie's protocol cannot express at all — not a generic
- * per-backend opt-out mechanism. junie is therefore excluded from the loop
- * below the same structural way nesting already excludes codex/pi/junie, rather
- * than through a reusable `exempt` flag on the table.
+ * genuine protocol gap, not an assumption or a missing fixture, so no fixture (real
+ * or schema-derived) could satisfy it today. `BACKWARD_COMPATIBILITY.md` §7 and
+ * `AGENT_PROTOCOL.md` §9 item 7, as written, do NOT carve out an exception for this:
+ * a documented narrow substitute for exactly this gap was drafted and applied to both
+ * files during PR #1111's review, but a maintainer's explicit sign-off on amending a
+ * protected surface was still outstanding at merge time (see that PR's review ⚠️
+ * WARNING), so the doc amendment was reverted rather than landed on a reviewer bot's
+ * say-so. junie is excluded from the two loops below ANYWAY, structurally (an explicit
+ * filter, never a reusable `exempt` flag on the capability table) — this is a known,
+ * open gap against the documented hard rule, tracked in PR #1111, pending either a
+ * maintainer's explicit approval of the drafted amendment or a future junie/ACP
+ * revision that actually publishes the missing wire shape.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -69,7 +77,8 @@ function hasToolStatus(events: UiEvent[], status: string): boolean {
 /** The parity matrix (spec §"Backend parity requirement"): capability → predicate over a
  *  backend's full v2 fixture output. Every row here is required from EVERY backend — no
  *  per-backend exemption list. "sub-agent task items" is asserted separately below, the one
- *  row where junie has a genuine, documented, protocol-level gap (see module doc). */
+ *  row where junie has a protocol-level gap not yet reconciled with the documented hard rule
+ *  (see module doc). */
 const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) => boolean]> = [
   [
     'plan.updated with entries (TodoWrite / todoList / todowrite)',
@@ -116,11 +125,15 @@ describe('protocol v2 backend parity (every mapper emits every matrix capability
   // own bespoke sub-agent tool name onto cezar's `task` ToolKind EXTENSION (not part of ACP
   // itself). junie speaks unmodified core ACP, whose `tool_call.kind` enum has no `task` value
   // and no published shape for `nativeSubagentSessions` — a genuine protocol-level gap, not an
-  // assumption or a missing fixture (see `junie-ui-mapper.ts`'s module doc). This is the same
-  // narrow, documented substitute `AGENT_PROTOCOL.md` §9 item 7 already grants codex for the
-  // nesting cell below, extended to this one row for junie specifically — not a reusable
-  // per-backend exemption mechanism.
-  for (const backend of ['claude', 'codex', 'opencode', 'pi'] as const) {
+  // assumption or a missing fixture (see `junie-ui-mapper.ts`'s module doc). `BACKWARD_COMPATIBILITY.md`
+  // §7 and `AGENT_PROTOCOL.md` §9 item 7, as currently written, do NOT exempt this row — a
+  // documented substitute for exactly this gap was drafted during PR #1111's review but reverted
+  // for lack of a maintainer's sign-off on amending a protected surface (see that PR's ⚠️ WARNING).
+  // junie is excluded from this loop by explicit filter (never a reusable per-backend `exempt`
+  // flag on the table) as a known, tracked gap against the documented hard rule, not a sanctioned
+  // exception — resolve by either a maintainer approving the drafted amendment, or a future
+  // junie/ACP revision that actually publishes a `task`-shaped wire capability.
+  for (const backend of BACKENDS.filter((b) => b !== 'junie')) {
     it(`${backend} produces sub-agent task items (Task / review-mode items / subtask parts)`, () => {
       const produced = items(fixtureEvents(backend)).some((item) => item.kind === 'tool' && item.toolKind === 'task');
       expect(produced).toBe(true);
@@ -130,10 +143,12 @@ describe('protocol v2 backend parity (every mapper emits every matrix capability
   // Sub-agent NESTING rides on parentItemId where the wire attributes work
   // to its parent: claude `parent_tool_use_id` and opencode child-session
   // parts under a `subtask`. Codex's wire has no parent attribution — its
-  // matrix cell is the review-mode task items asserted above. junie's cell is
-  // the same documented gap as "sub-agent task items" above: no confirmed wire
-  // shape for `nativeSubagentSessions` at all, nested or otherwise.
-  for (const backend of ['claude', 'opencode'] as const) {
+  // matrix cell is the review-mode task items asserted above (a substitute
+  // AGENT_PROTOCOL.md §9 item 7 does document). junie's cell is the same
+  // gap as "sub-agent task items" above: no confirmed wire shape for
+  // `nativeSubagentSessions` at all, nested or otherwise — see the comment on
+  // that loop for why this is an open gap, not a documented exception.
+  for (const backend of BACKENDS.filter((b) => b !== 'codex' && b !== 'pi' && b !== 'junie')) {
     it(`${backend} nests sub-agent work via parentItemId`, () => {
       expect(items(fixtureEvents(backend)).some((item) => item.parentItemId !== undefined)).toBe(true);
     });

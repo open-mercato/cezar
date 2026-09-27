@@ -44,7 +44,7 @@
       "status": "running",
       "input": {
         "command": "false",
-        "cwd": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe"
+        "cwd": "/repo/junie-acp-probe"
       }
     }
   },
@@ -59,7 +59,7 @@
       "status": "running",
       "input": {
         "command": "false",
-        "cwd": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe"
+        "cwd": "/repo/junie-acp-probe"
       }
     }
   },
@@ -74,7 +74,7 @@
       "status": "running",
       "input": {
         "command": "false",
-        "cwd": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe"
+        "cwd": "/repo/junie-acp-probe"
       }
     }
   },
@@ -89,7 +89,7 @@
       "status": "failed",
       "input": {
         "command": "false",
-        "cwd": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe"
+        "cwd": "/repo/junie-acp-probe"
       },
       "exitCode": 1
     }
@@ -105,7 +105,7 @@
       "status": "running",
       "input": {
         "command": "echo done",
-        "cwd": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe"
+        "cwd": "/repo/junie-acp-probe"
       }
     }
   },
@@ -131,7 +131,7 @@
       "status": "running",
       "input": {
         "command": "echo done",
-        "cwd": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe"
+        "cwd": "/repo/junie-acp-probe"
       },
       "output": "done"
     }
@@ -147,7 +147,7 @@
       "status": "running",
       "input": {
         "command": "echo done",
-        "cwd": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe"
+        "cwd": "/repo/junie-acp-probe"
       },
       "output": "done"
     }
@@ -163,14 +163,14 @@
       "status": "running",
       "diffs": [
         {
-          "path": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe/result.txt",
+          "path": "/repo/junie-acp-probe/result.txt",
           "oldText": null,
           "newText": "DONE"
         }
       ],
       "locations": [
         {
-          "path": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe/result.txt"
+          "path": "/repo/junie-acp-probe/result.txt"
         }
       ]
     }
@@ -187,14 +187,14 @@
       "output": "A file containing the text \"DONE\" was successfully created.",
       "diffs": [
         {
-          "path": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe/result.txt",
+          "path": "/repo/junie-acp-probe/result.txt",
           "oldText": null,
           "newText": "DONE"
         }
       ],
       "locations": [
         {
-          "path": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe/result.txt"
+          "path": "/repo/junie-acp-probe/result.txt"
         }
       ]
     }
@@ -210,7 +210,7 @@
       "status": "completed",
       "input": {
         "command": "echo done",
-        "cwd": "/home/ren/workspace/cezar/.ai/cezar/tmp/fc9ad513-6de7-42c0-ac58-37966e36b33e/junie-acp-probe"
+        "cwd": "/repo/junie-acp-probe"
       },
       "output": "done",
       "exitCode": 0

@@ -217,7 +217,7 @@ function stamp(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'pi'
+  return value === 'claude' || value === 'codex' || value === 'junie' || value === 'opencode' || value === 'pi'
     ? value
     : undefined
 }

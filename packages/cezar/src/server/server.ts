@@ -6611,7 +6611,11 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
   if (!isSafeSessionId(sessionId)) return null;
   switch (runner) {
     case 'junie':
-      return `junie --resume ${sessionId}`;
+      // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the LAST session;
+      // the target session is named by the separate `--session-id=<id>` flag, not a positional
+      // argument (junie's positional slot is `[<task>]`) — `junie --resume ${sessionId}` would
+      // silently resume the wrong session and read the id as a task prompt instead.
+      return `junie --resume --session-id=${sessionId}`;
     case 'codex':
       return `codex resume ${sessionId}`;
     case 'opencode':

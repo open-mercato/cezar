@@ -119,6 +119,39 @@ describe('junie ACP → v2 golden fixtures', () => {
     ]);
   });
 
+  it('folds id-less chunks of the same message together, but keeps two SEPARATE id-less messages apart', () => {
+    let state = junieTurnStarted(createJunieUiState()).state;
+    // Two chunks with no messageId, back to back, with nothing closing the first in between —
+    // read as continuations of ONE message (junie sends no per-message id at all for some
+    // frames and no separate continuation signal either).
+    state = mapJunieSessionUpdate(
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'part one ' } },
+      state,
+    ).state;
+    const secondChunk = mapJunieSessionUpdate(
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'part two' } },
+      state,
+    );
+    expect(secondChunk.events).toEqual([
+      { type: 'item.delta', itemId: 'junie-message-no-id-1', field: 'text', delta: 'part two' },
+    ]);
+    // A tool call closes the first message; a THIRD id-less chunk afterwards starts a brand
+    // new item rather than reopening/merging into the first (the bug: a shared per-kind
+    // constant made every id-less message compare equal to every other).
+    const afterTool = mapJunieSessionUpdate(
+      { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run', kind: 'execute', status: 'in_progress' },
+      secondChunk.state,
+    );
+    const thirdChunk = mapJunieSessionUpdate(
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'unrelated' } },
+      afterTool.state,
+    );
+    expect(thirdChunk.events).toEqual([
+      { type: 'item.started', item: { kind: 'message', id: 'junie-message-no-id-2', role: 'assistant', text: '' } },
+      { type: 'item.delta', itemId: 'junie-message-no-id-2', field: 'text', delta: 'unrelated' },
+    ]);
+  });
+
   it('maps documented ACP stop reasons not yet observed on junie\'s own wire', () => {
     expect(junieStopReason('refusal')).toBe('refusal');
     expect(junieStopReason('max_turn_requests')).toBe('max_tokens');
