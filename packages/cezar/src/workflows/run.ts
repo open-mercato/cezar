@@ -376,11 +376,12 @@ interface ActiveRun {
    *  the session is working again. See `tryCompactionContinue`. */
   compactionContinues?: number;
   /**
-   * A NON-FINAL agent step emitted `CEZ:ASK`, so the workflow is parked on that
-   * step instead of advancing into its next check (#917). Two values, because
+   * A NON-FINAL agent step emitted `CEZ:ASK` or `CEZ:MONITORING`, so the workflow
+   * is parked on that step instead of advancing into its next check (#917, #1076).
+   * Two values, because
    * the park has two endings and they settle differently:
    *
-   *  - `'waiting'` — live: the session is open and the answer is still expected.
+   *  - `'waiting'` — live: the session is open and an answer or monitored work is still expected.
    *    `execute` sits inside `runAgentStep` for as long as that holds, so seeing
    *    this value after the step loop means the session closed WITHOUT an answer
    *    (the idle timer, the wall clock, a crash) and the run settles `failed`.
@@ -388,7 +389,8 @@ interface ActiveRun {
    *    so the run settles like any other finished run.
    *
    * A delivered answer clears it (`deliverMessage`) and the workflow resumes.
-   * Mirrored durably onto the record as `RunRecord.askParked` for `recover()`.
+   * ASK parks are mirrored durably onto the record as `RunRecord.askParked` for `recover()`;
+   * monitoring parks are already durable as `status: 'running', activity: 'monitoring'`.
    * Never set on an autonomous run whose nudge outranked the ask — see
    * `tryAutonomousNudge` and the park in `runAgentStep`'s turn-end.
    */
@@ -3218,10 +3220,10 @@ export class RunManager {
     const state = this.active.get(runId);
     if (state?.session?.open) {
       this.clearIdleTimer(state);
-      // Finish on a run parked mid-workflow on a `CEZ:ASK` (#917) is not an
-      // answer, it is "stop here" — so it settles like every other Finish
-      // (`done`, or `review` when the worktree holds changes) instead of the
-      // `failed` a question nobody ever answered settles as.
+      // Finish on a run parked mid-workflow on `CEZ:ASK` or `CEZ:MONITORING`
+      // (#917, #1076) is an explicit "stop here" — so it settles like every
+      // other Finish (`done`, or `review` when the worktree holds changes)
+      // instead of the `failed` an abandoned live park would settle as.
       if (state.askPark === 'waiting') state.askPark = 'abandoned';
       this.store.appendEvent(runId, { type: 'lifecycle', message: 'session closed by user' });
       state.session.end();
