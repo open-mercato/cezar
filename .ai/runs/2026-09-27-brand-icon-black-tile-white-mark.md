@@ -64,9 +64,36 @@ new colours rather than the retired purple.
 
 ### Phase 1: Recolour the asset
 
-- [ ] 1.1 Remap the embedded PNG to black tile + white mark
-- [ ] 1.2 Update the brand-asset regression guards
+- [x] 1.1 Remap the embedded PNG to black tile + white mark — ed4e5ada
+- [x] 1.2 Update the brand-asset regression guards — d356859b
 
 ### Phase 2: Validate
 
-- [ ] 2.1 Run the full validation gate
+- [x] 2.1 Run the full validation gate
+
+## Validation
+
+Gate run in full on `feat/brand-icon-black-tile-white-mark`:
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | pass |
+| `npm test` | 8278 pass, **2 pre-existing failures** (see below) |
+| `npm run test:unit` | 36 pass |
+| `npm run build` | pass (`check:pack ok — 651 files`) |
+| `npm run test:package` | 16 pass |
+
+The two `npm test` failures are `workflows/agent-profile-wiring.test.ts` ("adds NOTHING for the
+default account") and `workflows/system-prompt.test.ts` ("without CEZ_FOLLOWUPS the agent is never
+told about the inbox"). Both concern agent system-prompt composition and neither reads the brand
+asset. Confirmed pre-existing: with the working tree reset to `origin/main`'s content, the same two
+tests fail identically (`2 failed | 43 passed`).
+
+The remap's exactness was also checked numerically: the recoloured PNG's opaque tone split is
+393,388 black / 91,659 white — the same pixel counts the original had as purple / black.
+
+Note on the environment: this worktree's `node_modules` was empty, so workspace resolution fell
+through to the repo-root `node_modules/@open-mercato/*`, whose symlinks point into a deleted
+`/tmp/cezar-review-1098-final-*` checkout. That made `npm run typecheck` fail on files outside the
+repo entirely. `npm ci` inside the worktree fixes it; the stale root symlinks are untouched by this
+run and remain a trap for the next one.
