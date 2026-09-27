@@ -64,6 +64,8 @@ prostu mogę sobie kliknąć i je rozwinąć.")
 
 ## Progress
 
+PR: #1110
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: collapse rule in the tree lib
