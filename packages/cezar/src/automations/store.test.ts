@@ -178,6 +178,15 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     })));
     expect(results.filter(Boolean)).toHaveLength(1);
   });
+
+  it('recovers a reclaim mutex abandoned by a dead process', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    writeFileSync(join(dir, 'automation-poll.lock.reclaim'), JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const lease = AutomationStore.open(dir).acquireLease();
+    expect(lease).toBeDefined();
+    expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(process.pid);
+    lease?.release();
+  });
 });
 
 describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => {
