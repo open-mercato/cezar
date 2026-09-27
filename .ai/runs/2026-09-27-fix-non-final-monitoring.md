@@ -52,18 +52,18 @@ the workflow or spinning indefinitely.
 
 ### Phase 1: Regression proof and lifecycle model
 
-- [ ] 1.1 Add the issue-1076 multi-step reproducer and prove it fails on the
+- [x] 1.1 Add the issue-1076 multi-step reproducer and prove it fails on the
   original source for both non-autonomous and autonomous runs.
-- [ ] 1.2 Trace and document the two turn-end paths, durable recovery signal,
+- [x] 1.2 Trace and document the two turn-end paths, durable recovery signal,
   monitoring wake timer, and precedence/terminal transitions; use this to pin
   shared invariants without changing cancellation code.
 
 ### Phase 2: Minimal monitoring park fix
 
-- [ ] 2.1 Remove the accidental final-step-only gate from valid monitoring
+- [x] 2.1 Remove the accidental final-step-only gate from valid monitoring
   detection and include monitoring in the non-final workflow-park decision while
   preserving DONE/ASK/budget/dispatch precedence.
-- [ ] 2.2 Apply identical park, bounded wake, resume, and terminal cleanup
+- [x] 2.2 Apply identical park, bounded wake, resume, and terminal cleanup
   behavior to both streaming/first-session and continuation handlers.
 - [ ] 2.3 Add durable restart recovery for a parked non-final monitoring step;
   prove a recovered run does not settle the unfinished step or skip downstream
@@ -71,7 +71,7 @@ the workflow or spinning indefinitely.
 
 ### Phase 3: Regression matrix and validation
 
-- [ ] 3.1 Cover autonomous and non-autonomous monitoring, explicit DONE/ASK/
+- [x] 3.1 Cover autonomous and non-autonomous monitoring, explicit DONE/ASK/
   budget precedence, cancellation, wake liveness/cap, user resume, and
   multi-step progression.
 - [ ] 3.2 Re-run the original reproducer against the pre-fix source to retain
@@ -95,17 +95,17 @@ the workflow or spinning indefinitely.
 
 ### Phase 1: Regression proof and lifecycle model
 
-- [ ] 1.1 Add the issue-1076 multi-step reproducer and prove it fails on the original source for both non-autonomous and autonomous runs.
-- [ ] 1.2 Trace and document the two turn-end paths, durable recovery signal, monitoring wake timer, and precedence/terminal transitions; use this to pin shared invariants without changing cancellation code.
+- [x] 1.1 Add the issue-1076 multi-step reproducer and prove it fails on the original source for both non-autonomous and autonomous runs.
+- [x] 1.2 Trace and document the two turn-end paths, durable recovery signal, monitoring wake timer, and precedence/terminal transitions; use this to pin shared invariants without changing cancellation code.
 
 ### Phase 2: Minimal monitoring park fix
 
-- [ ] 2.1 Remove the accidental final-step-only gate from valid monitoring detection and include monitoring in the non-final workflow-park decision while preserving DONE/ASK/budget/dispatch precedence.
-- [ ] 2.2 Apply identical park, bounded wake, resume, and terminal cleanup behavior to both streaming/first-session and continuation handlers.
+- [x] 2.1 Remove the accidental final-step-only gate from valid monitoring detection and include monitoring in the non-final workflow-park decision while preserving DONE/ASK/budget/dispatch precedence.
+- [x] 2.2 Apply identical park, bounded wake, resume, and terminal cleanup behavior to both streaming/first-session and continuation handlers.
 - [ ] 2.3 Add durable restart recovery for a parked non-final monitoring step; prove a recovered run does not settle the unfinished step or skip downstream work.
 
 ### Phase 3: Regression matrix and validation
 
-- [ ] 3.1 Cover autonomous and non-autonomous monitoring, explicit DONE/ASK/budget precedence, cancellation, wake liveness/cap, user resume, and multi-step progression.
+- [x] 3.1 Cover autonomous and non-autonomous monitoring, explicit DONE/ASK/budget precedence, cancellation, wake liveness/cap, user resume, and multi-step progression.
 - [ ] 3.2 Re-run the original reproducer against the pre-fix source to retain red evidence, then run focused workflow tests and the configured full gate.
 - [ ] 3.3 Review the diff for interaction with PR #1098 cancellation changes, run local `om-code-review`/`om-auto-review-pr` where possible, and leave the PR draft if any required gate remains incomplete.
