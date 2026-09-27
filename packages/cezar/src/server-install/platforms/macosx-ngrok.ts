@@ -217,7 +217,7 @@ async function resolveCezarArgv(ctx: InstallContext): Promise<string[]> {
 }
 
 /** launchd agent that keeps the cezar cockpit running on the given port. */
-export function cezarLaunchdPlist(repoRoot: string, port: number, argv: string[]): string {
+export function cezarLaunchdPlist(repoRoot: string, port: number, argv: string[], instanceId?: string): string {
   // Give the agent the operator's PATH so cezar can spawn claude/gh/codex.
   const pathDirs = [dirname(process.execPath), ...(process.env.PATH ?? '').split(':'), '/usr/local/bin', '/usr/bin', '/bin']
     .filter((d, i, a) => d && d !== '.' && a.indexOf(d) === i);
@@ -240,6 +240,7 @@ ${argXml}
     <dict>
       <key>CEZ_REMOTE</key>
       <string>1</string>
+${instanceId ? `      <key>CEZ_INSTANCE_ID</key>\n      <string>${escapeXml(instanceId)}</string>\n` : ''}      <key>PATH</key>
       <key>PATH</key>
       <string>${escapeXml(pathDirs.join(':'))}</string>
     </dict>
@@ -266,7 +267,7 @@ const autostartStep: InstallStep = {
       ctx.ui.info(`DRY RUN — would write ${path} and launchctl bootstrap it.`);
     } else {
       mkdirSync(join(homedir(), 'Library', 'LaunchAgents'), { recursive: true });
-      writeFileSync(path, cezarLaunchdPlist(ctx.repoRoot, ctx.state.primaryPort, argv), { encoding: 'utf8', mode: 0o600 });
+      writeFileSync(path, cezarLaunchdPlist(ctx.repoRoot, ctx.state.primaryPort, argv, ctx.state.instanceId), { encoding: 'utf8', mode: 0o600 });
       chmodSync(path, 0o600);
       const uid = process.getuid ? process.getuid() : 0;
       await ctx.runner.capture('launchctl', ['bootout', `gui/${uid}/${CEZAR_PLIST_LABEL}`]);

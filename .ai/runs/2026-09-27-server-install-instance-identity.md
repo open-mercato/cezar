@@ -10,13 +10,13 @@ Non-goals: changing proxy authentication, macOS ngrok routing, workflow/dispatch
 
 ### Phase 1: Identity plumbing
 
-- [ ] 1.1 Add a persisted install identity and pass it to generated service environments.
-- [ ] 1.2 Add the identity as an additive health response field.
+- [x] 1.1 Add a persisted install identity and pass it to generated service environments.
+- [x] 1.2 Add the identity as an additive health response field.
 
 ### Phase 2: Verification and evidence
 
-- [ ] 2.1 Compare the authenticated health payload during Ubuntu installation verification, degrading safely when unavailable.
-- [ ] 2.2 Add regression and compatibility tests, run targeted validation, and update compatibility documentation if required.
+- [x] 2.1 Compare the authenticated health payload during Ubuntu installation verification, degrading safely when unavailable.
+- [x] 2.2 Add regression and compatibility tests, run targeted validation, and update compatibility documentation if required.
 - [ ] 2.3 Run the full configured validation gate and finalize the PR.
 
 ## Risks
@@ -30,11 +30,11 @@ Non-goals: changing proxy authentication, macOS ngrok routing, workflow/dispatch
 
 ### Phase 1: Identity plumbing
 
-- [ ] 1.1 Add a persisted install identity and pass it to generated service environments.
-- [ ] 1.2 Add the identity as an additive health response field.
+- [x] 1.1 Add a persisted install identity and pass it to generated service environments.
+- [x] 1.2 Add the identity as an additive health response field.
 
 ### Phase 2: Verification and evidence
 
-- [ ] 2.1 Compare the authenticated health payload during Ubuntu installation verification, degrading safely when unavailable.
-- [ ] 2.2 Add regression and compatibility tests, run targeted validation, and update compatibility documentation if required.
+- [x] 2.1 Compare the authenticated health payload during Ubuntu installation verification, degrading safely when unavailable.
+- [x] 2.2 Add regression and compatibility tests, run targeted validation, and update compatibility documentation if required.
 - [ ] 2.3 Run the full configured validation gate and finalize the PR.

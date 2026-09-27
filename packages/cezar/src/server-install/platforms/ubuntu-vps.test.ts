@@ -411,6 +411,12 @@ describe('systemdUnit', () => {
     expect(unit).toContain('WorkingDirectory=/srv/app');
     expect(unit).toContain('WantedBy=default.target');
   });
+
+  it('passes the install identity to the service environment', () => {
+    expect(systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar', undefined, 'install-a')).toContain(
+      'Environment=CEZ_INSTANCE_ID=install-a',
+    );
+  });
   it('system scope pins User= and multi-user.target', () => {
     const unit = systemdUnit('/srv/app', 5000, 'system', '/usr/local/bin/cezar');
     expect(unit).toContain('User=');
@@ -431,6 +437,29 @@ describe('systemdUnit', () => {
     const plain = systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar');
     expect(systemdUnit('/srv/app', 4321, 'user', '/usr/local/bin/cezar', '127.0.0.1')).toBe(plain);
     expect(plain).not.toContain('--bind-host');
+  });
+});
+
+describe('ubuntu-vps identity verification (#1008)', () => {
+  it('rejects a different cezar instance answering on the expected port', async () => {
+    const errors: string[] = [];
+    const ui = { ...createAutoUi(), error: (message: string) => errors.push(message) } as Ui;
+    let curl = 0;
+    const runner: Runner = {
+      capture: async (program, args) => {
+        if (program !== 'curl') return { code: 0, stdout: '', stderr: '' };
+        curl++;
+        if (curl === 1) return { code: 0, stdout: '200', stderr: '' }; // upstream
+        if (curl === 2) return { code: 0, stdout: '401', stderr: '' }; // anonymous proxy
+        if (curl === 3) return { code: 0, stdout: '200', stderr: '' }; // authenticated reach
+        return { code: 0, stdout: '{"instanceId":"other-install"}\n200', stderr: '' };
+      },
+      interactive: async () => 0,
+    };
+    const ctx = ctxWith({ ui, runner, state: { instanceId: 'this-install' } });
+    ctx.prefs = { cockpit: { user: 'ops', password: 'password' } };
+    await expect(stepById('identity').run(ctx)).rejects.toBeInstanceOf(StepAborted);
+    expect(errors.join('\n')).toContain('serving another install, not this one');
   });
 });
 
