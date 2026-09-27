@@ -164,18 +164,28 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
   it('allows at most one of two processes to reclaim the same abandoned lock', async () => {
     const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
     const child = fileURLToPath(new URL('./store-lease-child.ts', import.meta.url));
-    const at = Date.now() + 100;
-    const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', child, dir, String(at)], { stdio: ['pipe', 'pipe', 'inherit'] }));
-    const results = await Promise.all(children.map((childProcess) => new Promise<boolean>((resolve, reject) => {
-      let output = '';
+    const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] }));
+    const states = children.map((childProcess) => {
+      let buffer = '';
+      let ready!: () => void;
+      let result!: (held: boolean) => void;
+      const readyPromise = new Promise<void>((resolve) => { ready = resolve; });
+      const resultPromise = new Promise<boolean>((resolve) => { result = resolve; });
       childProcess.stdout.setEncoding('utf8');
-      childProcess.stdout.on('data', (chunk) => { output += chunk; });
-      childProcess.once('error', reject);
-      childProcess.once('close', (code) => {
-        if (code !== 0) reject(new Error(`lease child exited ${code}`));
-        else resolve(JSON.parse(output).held as boolean);
+      childProcess.stdout.on('data', (chunk) => {
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (line === 'ready') ready();
+          else if (line) result(JSON.parse(line).held as boolean);
+        }
       });
-    })));
+      return { readyPromise, resultPromise };
+    });
+    await Promise.all(states.map((state) => state.readyPromise));
+    for (const childProcess of children) childProcess.stdin.write('go\n');
+    const results = await Promise.all(states.map((state) => state.resultPromise));
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 

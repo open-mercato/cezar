@@ -293,7 +293,7 @@ export class AutomationStore {
       // stable lock. A contender that cannot get the reclaim lock reports busy; it must never
       // remove a lock while another contender is replacing it (#998).
       if (attempt >= LEASE_RECLAIM_ATTEMPTS) return undefined;
-      const reclaim = this.tryAcquireLease(`${path}${RECLAIM_LOCK_SUFFIX}`, staleAfterMs, 0);
+      const reclaim = this.tryAcquireReclaimMutex(`${path}${RECLAIM_LOCK_SUFFIX}`, staleAfterMs);
       if (!reclaim) return undefined;
       try {
         // The lock may have been replaced while this contender waited for the reclaimer.
@@ -310,6 +310,22 @@ export class AutomationStore {
         // A contender removed the lock or the directory is read-only.
       } finally {
         reclaim.release();
+      }
+      return undefined;
+    }
+  }
+
+  private tryAcquireReclaimMutex(path: string, staleAfterMs: number): AutomationLease | undefined {
+    try {
+      return this.createLease(path);
+    } catch {
+      try {
+        if (this.isLeaseAbandoned(path, staleAfterMs)) {
+          unlinkSync(path);
+          return this.createLease(path);
+        }
+      } catch {
+        // Another reclaimer won, or the mutex is not recoverable yet.
       }
       return undefined;
     }
@@ -491,11 +507,27 @@ export class AutomationLease {
     if (this.released) return;
     this.released = true;
     closeSync(this.fd);
+    const reclaimPath = `${this.path}${RECLAIM_LOCK_SUFFIX}`;
+    let reclaimFd: number | undefined;
+    let reclaimToken: string | undefined;
     try {
+      reclaimFd = openSync(reclaimPath, 'wx', 0o600);
+      reclaimToken = randomUUID();
+      writeFileSync(reclaimFd, JSON.stringify({ pid: process.pid, token: reclaimToken, startedAt: new Date().toISOString() }));
       const owner = JSON.parse(readFileSync(this.path, 'utf8')) as { token?: unknown };
       if (owner.token === this.token) unlinkSync(this.path);
     } catch {
       // Already removed, malformed, or replaced during shutdown cleanup.
+    } finally {
+      if (reclaimFd !== undefined) {
+        closeSync(reclaimFd);
+        try {
+          const owner = JSON.parse(readFileSync(reclaimPath, 'utf8')) as { token?: unknown };
+          if (owner.token === reclaimToken) unlinkSync(reclaimPath);
+        } catch {
+          // Another process recovered the mutex, or it was already removed.
+        }
+      }
     }
   }
 }
