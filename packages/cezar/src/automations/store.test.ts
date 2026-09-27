@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -163,6 +163,10 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
 
   it('allows at most one of two processes to reclaim the same abandoned lock', async () => {
     const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const guard = join(dir, 'automation-poll.lock.guard');
+    mkdirSync(guard);
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(guard, old, old);
     const child = fileURLToPath(new URL('./store-lease-child.ts', import.meta.url));
     const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] }));
     const states = children.map((childProcess) => {
@@ -189,9 +193,12 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 
-  it('recovers a reclaim mutex abandoned by a dead process', async () => {
+  it('recovers a guard abandoned by a dead process', async () => {
     const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
-    writeFileSync(join(dir, 'automation-poll.lock.reclaim'), JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const guard = join(dir, 'automation-poll.lock.guard');
+    mkdirSync(guard);
+    const old = new Date(Date.now() - 20 * 60_000);
+    utimesSync(guard, old, old);
     const lease = AutomationStore.open(dir).acquireLease();
     expect(lease).toBeDefined();
     expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(process.pid);
