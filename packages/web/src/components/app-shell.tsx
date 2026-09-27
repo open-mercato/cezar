@@ -1,8 +1,8 @@
-import { LayoutDashboardIcon } from 'lucide-react'
 import {
   FolderIcon,
   FolderOpenIcon,
   LayersIcon,
+  LayoutDashboardIcon,
   MenuIcon,
   PlusIcon,
   SearchIcon,
