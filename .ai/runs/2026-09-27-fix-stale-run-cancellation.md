@@ -10,12 +10,12 @@ Non-goals: monitoring wake/park behavior, recovery policy for non-cancelled runs
 
 ### Phase 1: Reproduce and define ownership
 
-- [ ] 1.1 Add a regression test for cancelling an active pre-session run and prove it fails before the fix.
-- [ ] 1.2 Add state-ownership guards for asynchronous cleanup.
+- [x] 1.1 Add a regression test for cancelling an active pre-session run and prove it fails before the fix. — d7a28f1b
+- [x] 1.2 Add state-ownership guards for asynchronous cleanup. — d7a28f1b
 
 ### Phase 2: Implement durable cancellation
 
-- [ ] 2.1 Persist terminal cancellation, settle running steps, release the active slot, and prevent late startup work from reviving the run.
+- [x] 2.1 Persist terminal cancellation, settle running steps, release the active slot, and prevent late startup work from reviving the run. — d7a28f1b
 - [ ] 2.2 Run targeted cancellation tests and the configured validation gate.
 
 ## Risks
@@ -28,10 +28,10 @@ Cancellation is intentionally terminal before provider cooperation; late session
 
 ### Phase 1: Reproduce and define ownership
 
-- [ ] 1.1 Add a regression test for cancelling an active pre-session run and prove it fails before the fix.
-- [ ] 1.2 Add state-ownership guards for asynchronous cleanup.
+- [x] 1.1 Add a regression test for cancelling an active pre-session run and prove it fails before the fix. — d7a28f1b
+- [x] 1.2 Add state-ownership guards for asynchronous cleanup. — d7a28f1b
 
 ### Phase 2: Implement durable cancellation
 
-- [ ] 2.1 Persist terminal cancellation, settle running steps, release the active slot, and prevent late startup work from reviving the run.
+- [x] 2.1 Persist terminal cancellation, settle running steps, release the active slot, and prevent late startup work from reviving the run. — d7a28f1b
 - [ ] 2.2 Run targeted cancellation tests and the configured validation gate.
