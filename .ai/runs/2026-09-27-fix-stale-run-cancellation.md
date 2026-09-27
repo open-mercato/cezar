@@ -16,7 +16,7 @@ Non-goals: monitoring wake/park behavior, recovery policy for non-cancelled runs
 ### Phase 2: Implement durable cancellation
 
 - [x] 2.1 Persist terminal cancellation, settle running steps, release the active slot, and prevent late startup work from reviving the run. — d7a28f1b
-- [ ] 2.2 Run targeted cancellation tests and the configured validation gate.
+- [x] 2.2 Run targeted cancellation tests and the configured validation gate. — fe22e1bb
 
 ## Risks
 
@@ -34,4 +34,4 @@ Cancellation is intentionally terminal before provider cooperation; late session
 ### Phase 2: Implement durable cancellation
 
 - [x] 2.1 Persist terminal cancellation, settle running steps, release the active slot, and prevent late startup work from reviving the run. — d7a28f1b
-- [ ] 2.2 Run targeted cancellation tests and the configured validation gate.
+- [x] 2.2 Run targeted cancellation tests and the configured validation gate. — fe22e1bb
