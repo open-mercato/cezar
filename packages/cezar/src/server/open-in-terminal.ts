@@ -44,6 +44,13 @@ export async function openInTerminal(
   }
 
   if (process.platform === 'win32') {
+    // Both launchers below go through `cmd /c start`, and libuv quotes a spawn argument only when
+    // it holds a space, tab or quote — so a space-free worktree path such as `C:\dev\a&calc`
+    // reached cmd bare and its `&` ran `calc` (BatBadBut, CVE-2024-27980; CodeQL
+    // js/shell-command-injection-from-environment, alert #18). `%` and `!` expand variables before
+    // cmd tokenizes. Refuse rather than escape — cmd's quoting has no reliable escape — and the
+    // caller falls back to the copy-the-command dialog, the same as for an unembeddable env.
+    if (WIN32_CMD_METACHARS_RE.test(cwd)) return false;
     const inner = `cd /d "${cwd}" && ${prefixed}`;
     // Windows Terminal first, classic cmd window as fallback.
     if (await runDetached('cmd', ['/c', 'start', '', 'wt', '-d', cwd, 'cmd', '/K', prefixed])) {
@@ -80,6 +87,11 @@ export async function openInTerminal(
   }
   return false;
 }
+
+/** Characters cmd.exe acts on in an unquoted argument (`&|<>^`), expands before parsing (`%!`), or
+ *  that can end its quoting (`"`, control characters). Parentheses are left out: they only matter
+ *  inside a block, and `Program Files (x86)` is too common a path to refuse. */
+const WIN32_CMD_METACHARS_RE = /[&|<>^%!"\u0000-\u001f]/;
 
 /** The Windows-side (bin, args) candidates for launching `scriptPath` inside `distro` through
  *  WSL interop, in try-order — Windows Terminal first, a classic console window as fallback. Pure

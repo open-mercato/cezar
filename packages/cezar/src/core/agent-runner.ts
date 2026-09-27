@@ -210,6 +210,8 @@ export interface AgentSession {
   end(): void;
   /** Hard stop (used by cancel). */
   interrupt(): void;
+  /** Escalate a cancellation to a bounded process kill when graceful interrupt is ignored. */
+  hardStop?(): void;
   /** True while the session still accepts messages. */
   readonly open: boolean;
 }

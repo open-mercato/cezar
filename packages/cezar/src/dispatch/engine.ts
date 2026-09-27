@@ -67,14 +67,16 @@ export function remainingBudgetUsd(parent: RunRecord, children: readonly RunReco
   // parent. Without this a commander's headroom only ever shrank: three audits lost their final
   // child to a refusal that fired while real budget remained. `costUsd ?? budgetUsd` keeps
   // a settled child with no recorded cost from being under-charged by a data gap.
-  const promised = children.reduce(
-    (sum, child) =>
-      sum +
-      (isTerminalStatus(child.status)
-        ? (child.costUsd ?? child.dispatch?.budgetUsd ?? 0)
-        : (child.dispatch?.budgetUsd ?? 0)),
-    0,
-  );
+  const promised = children.reduce((sum, child) => {
+    // Zero may be a preliminary/partial report, even within a single step or
+    // invocation. We have no cost-completeness evidence, so preserve the pre-zero-
+    // reporting budget behavior: zero remains visible but cannot release a reservation.
+    const settledCost = child.costUsd !== undefined && child.costUsd > 0
+      ? child.costUsd : undefined;
+    return sum + (isTerminalStatus(child.status)
+      ? (settledCost ?? child.dispatch?.budgetUsd ?? 0)
+      : (child.dispatch?.budgetUsd ?? 0));
+  }, 0);
   return budget - (parent.costUsd ?? 0) - promised;
 }
 

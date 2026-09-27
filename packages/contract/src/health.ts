@@ -95,5 +95,7 @@ export const healthResponseSchema = z.object({
   // optional, which was wider than the server has ever been.
   projects: z.array(z.object({ id: z.string(), name: z.string() })),
   bootProject: z.string(),
+  /** Random identity of the installed service, when server-install supplied one. */
+  instanceId: z.string().optional(),
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;

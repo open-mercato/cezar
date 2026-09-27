@@ -732,6 +732,12 @@ export class RunStore extends EventEmitter {
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
+  // Preserve failed-load evidence even after a later save rewrites the index. A workspace
+  // summary must not call an owner that silently dropped records a complete empty project.
+  private indexReadHealth: { state: 'complete' | 'unavailable'; omittedRuns: number; reason?: string } = { state: 'complete', omittedRuns: 0 };
+
+  getIndexReadHealth() { return { ...this.indexReadHealth }; }
+
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
    *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
    *  exactly the pre-#945 behavior. */
@@ -755,8 +761,11 @@ export class RunStore extends EventEmitter {
           for (const run of parsed.data) {
             store.runs.set(run.id, reconcileLoadedRun(run, opts));
           }
+        } else {
+          store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
         }
       } catch {
+        store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         // corrupt index — start fresh; event files stay on disk untouched
       }
     }
@@ -1003,7 +1012,8 @@ export class RunStore extends EventEmitter {
       ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.outputTokens ?? 0), 0)
       : undefined;
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
-    run.costUsd = cost > 0 ? cost : undefined;
+    // A reported zero is still a measurement; an unreported run is not free.
+    run.costUsd = run.steps.some((s) => s.costUsd !== undefined) ? cost : undefined;
     this.touch(run);
   }
 
