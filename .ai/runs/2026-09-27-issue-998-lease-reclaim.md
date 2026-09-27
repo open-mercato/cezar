@@ -16,13 +16,13 @@ Non-goals: workflow, scheduler, server, receipt semantics, or unrelated automati
 
 ### Phase 1: Reproduce and design
 
-- [ ] 1.1 Add a deterministic competing-process regression test for abandoned lease reclaim
-- [ ] 1.2 Add tests for crash recovery, malformed locks, and owner-safe release
+- [x] 1.1 Add a deterministic competing-process regression test for abandoned lease reclaim — working tree
+- [x] 1.2 Add tests for crash recovery, malformed locks, and owner-safe release — working tree
 
 ### Phase 2: Implement
 
-- [ ] 2.1 Replace the reclaim TOCTOU sequence with mutually exclusive ownership and fencing
-- [ ] 2.2 Preserve malformed/dead-lock fallback behavior and update lease tests
+- [x] 2.1 Replace the reclaim TOCTOU sequence with mutually exclusive ownership and fencing — working tree
+- [x] 2.2 Preserve malformed/dead-lock fallback behavior and update lease tests — working tree
 
 ### Phase 3: Validate
 

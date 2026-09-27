@@ -32,6 +32,7 @@ const RECEIPTS = 'automation-receipts.ndjson';
 const LOG = 'automation-log.ndjson';
 const POLL_LOCK = 'automation-poll.lock';
 const MUTATION_LOCK = 'automation-mutation.lock';
+const RECLAIM_LOCK_SUFFIX = '.reclaim';
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 /** How many times one `acquireLease` call may reclaim an abandoned lock and retry. */
 const LEASE_RECLAIM_ATTEMPTS = 1;
@@ -286,22 +287,39 @@ export class AutomationStore {
 
   private tryAcquireLease(path: string, staleAfterMs: number, attempt: number): AutomationLease | undefined {
     try {
-      const fd = openSync(path, 'wx', 0o600);
-      writeFileSync(fd, JSON.stringify({ pid: process.pid, startedAt: this.now().toISOString() }));
-      return new AutomationLease(path, fd);
+      return this.createLease(path);
     } catch {
-      // One reclaim per call: if the lock is back a moment later, a live contender took it.
+      // Reclaiming is a remove-and-create sequence, so serialize that sequence with a separate
+      // stable lock. A contender that cannot get the reclaim lock reports busy; it must never
+      // remove a lock while another contender is replacing it (#998).
       if (attempt >= LEASE_RECLAIM_ATTEMPTS) return undefined;
+      const reclaim = this.tryAcquireLease(`${path}${RECLAIM_LOCK_SUFFIX}`, staleAfterMs, 0);
+      if (!reclaim) return undefined;
       try {
+        // The lock may have been replaced while this contender waited for the reclaimer.
+        try {
+          return this.createLease(path);
+        } catch {
+          // Continue with the abandonment check while holding the reclaim mutex.
+        }
         if (this.isLeaseAbandoned(path, staleAfterMs)) {
           unlinkSync(path);
-          return this.tryAcquireLease(path, staleAfterMs, attempt + 1);
+          return this.createLease(path);
         }
       } catch {
         // A contender removed the lock or the directory is read-only.
+      } finally {
+        reclaim.release();
       }
       return undefined;
     }
+  }
+
+  private createLease(path: string): AutomationLease {
+    const fd = openSync(path, 'wx', 0o600);
+    const token = randomUUID();
+    writeFileSync(fd, JSON.stringify({ pid: process.pid, token, startedAt: this.now().toISOString() }));
+    return new AutomationLease(path, fd, token);
   }
 
   /** Abandoned = the process that wrote the lock is gone, or nobody released it in `staleAfterMs`. */
@@ -466,6 +484,7 @@ export class AutomationLease {
   constructor(
     private readonly path: string,
     private readonly fd: number,
+    private readonly token: string,
   ) {}
 
   release(): void {
@@ -473,9 +492,10 @@ export class AutomationLease {
     this.released = true;
     closeSync(this.fd);
     try {
-      unlinkSync(this.path);
+      const owner = JSON.parse(readFileSync(this.path, 'utf8')) as { token?: unknown };
+      if (owner.token === this.token) unlinkSync(this.path);
     } catch {
-      // Already removed during shutdown cleanup.
+      // Already removed, malformed, or replaced during shutdown cleanup.
     }
   }
 }

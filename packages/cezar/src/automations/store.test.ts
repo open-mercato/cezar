@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -142,6 +142,21 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     const lease = AutomationStore.open(dead).acquireLease();
     expect(lease).toBeDefined();
     lease?.release();
+  });
+
+  it('serializes competing stale-lock reclaimers and does not let an old owner release a replacement', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const one = AutomationStore.open(dir, { processAlive: () => false });
+    const two = AutomationStore.open(dir, { processAlive: () => false });
+    const first = one.acquireLease();
+    expect(first).toBeDefined();
+    // A contender must observe the live replacement, not reclaim it as the abandoned lock.
+    expect(two.acquireLease()).toBeUndefined();
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement', startedAt: new Date().toISOString() });
+    writeFileSync(join(dir, 'automation-poll.lock'), replacement);
+    first?.release();
+    expect(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).toBe(replacement);
+    unlinkSync(join(dir, 'automation-poll.lock'));
   });
 });
 
