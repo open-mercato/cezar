@@ -441,6 +441,25 @@ describe('systemdUnit', () => {
 });
 
 describe('ubuntu-vps identity verification (#1008)', () => {
+  function identityCtx(healthOutput: string) {
+    const messages: string[] = [];
+    let curl = 0;
+    const runner: Runner = {
+      capture: async (program) => {
+        if (program !== 'curl') return { code: 0, stdout: '', stderr: '' };
+        curl++;
+        if (curl === 1) return { code: 0, stdout: '200', stderr: '' };
+        if (curl === 2) return { code: 0, stdout: '401', stderr: '' };
+        if (curl === 3) return { code: 0, stdout: '200', stderr: '' };
+        return { code: 0, stdout: healthOutput, stderr: '' };
+      },
+      interactive: async () => 0,
+    };
+    const ctx = ctxWith({ runner, ui: { ...createAutoUi(), success: (m: string) => messages.push(m), warn: (m: string) => messages.push(m) }, state: { instanceId: 'this-install' } });
+    ctx.prefs = { cockpit: { user: 'ops', password: 'password' } };
+    return { ctx, messages };
+  }
+
   it('rejects a different cezar instance answering on the expected port', async () => {
     const errors: string[] = [];
     const ui = { ...createAutoUi(), error: (message: string) => errors.push(message) } as Ui;
@@ -460,6 +479,21 @@ describe('ubuntu-vps identity verification (#1008)', () => {
     ctx.prefs = { cockpit: { user: 'ops', password: 'password' } };
     await expect(stepById('identity').run(ctx)).rejects.toBeInstanceOf(StepAborted);
     expect(errors.join('\n')).toContain('serving another install, not this one');
+  });
+
+  it('accepts a matching identity', async () => {
+    const { ctx } = identityCtx('{"instanceId":"this-install"}\n200');
+    await expect(stepById('identity').run(ctx)).resolves.toBeTruthy();
+  });
+
+  it.each([
+    ['an absent identity', '\n200'],
+    ['a malformed health payload', 'not-json\n200'],
+    ['a forbidden health response', '{"error":"forbidden"}\n403'],
+  ])('reports %s as an inconclusive identity check', async (_label, healthOutput) => {
+    const { ctx, messages } = identityCtx(healthOutput);
+    await expect(stepById('identity').run(ctx)).resolves.toBeTruthy();
+    expect(messages.join('\n')).toContain('identity check could not run');
   });
 });
 

@@ -1200,6 +1200,9 @@ const identityStep: InstallStep = {
             're-run: cezar server-install --platform ubuntu-vps --reconfigure ssl',
         );
       }
+      if (ctx.state.instanceId && identityOk === null) {
+        ctx.ui.warn('The cockpit is reachable, but the instance identity check could not run (older or invalid health payload).');
+      }
       return { artifacts: [] };
     }
 
