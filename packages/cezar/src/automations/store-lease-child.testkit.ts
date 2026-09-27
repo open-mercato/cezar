@@ -1,3 +1,6 @@
+// Child process for the two-process lease contention tests in store.test.ts (#998).
+// `.testkit.ts` keeps it out of `tsconfig.json`'s build input, so this test-only
+// entry point never reaches `dist` or the published tarball.
 import { AutomationStore } from './store.ts';
 
 const dir = process.argv[2]!;

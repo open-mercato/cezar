@@ -178,7 +178,7 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     mkdirSync(guard);
     const old = new Date(Date.now() - 20 * 60_000);
     utimesSync(guard, old, old);
-    const child = fileURLToPath(new URL('./store-lease-child.ts', import.meta.url));
+    const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
     const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] }));
     const states = children.map((childProcess) => {
       let buffer = '';
@@ -218,7 +218,7 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
 
   it('recovers a real killed owner after the bounded guard stale window', async () => {
     const dir = await directory();
-    const child = fileURLToPath(new URL('./store-lease-child.ts', import.meta.url));
+    const child = fileURLToPath(new URL('./store-lease-child.testkit.ts', import.meta.url));
     const childProcess = spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] });
     let output = '';
     const acquired = new Promise<void>((resolve, reject) => {
