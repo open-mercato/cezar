@@ -128,6 +128,17 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(FOREIGN_PID);
   });
 
+  it('does not overwrite a replacement that appears after stale metadata validation', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const replacement = JSON.stringify({ pid: process.pid, token: 'replacement', startedAt: new Date().toISOString() });
+    const store = AutomationStore.open(dir, {
+      processAlive: () => false,
+      beforeLeaseMetadataWrite: (path) => writeFileSync(path, replacement),
+    });
+    expect(store.acquireLease()).toBeUndefined();
+    expect(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).toBe(replacement);
+  });
+
   it('falls back to the age rule for a lock whose pid cannot be read', async () => {
     const dir = await lockedDirectory('{half-writ');
     const store = AutomationStore.open(dir, { processAlive: () => false });

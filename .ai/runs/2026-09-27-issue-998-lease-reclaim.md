@@ -61,4 +61,7 @@ PR: #1099
 - Reused reviewed sidebar test commit `e882054b6300542f36583286e2e1804fcafd0598` unchanged; targeted `packages/web/src/routes/cross-project-task-navigation.test.tsx`: 1 file, 3 tests passed (`/tmp/pr1099-targeted.log`).
 - Sanitized sequential gate (`CEZ_*` unset, `TMPDIR=/tmp`): `npm run typecheck` PASS; `npm test` PASS (7951/7951); `npm run test:unit` PASS (36/36); `npm run build` PASS; `npm run test:package` PASS (16/16). Full log: `/tmp/pr1099-full-gate.log`.
 
-Final independent review: [approved](https://github.com/open-mercato/cezar/pull/1099#issuecomment-5852038867). Reviewed source head: `eace31df`.
+### CodeQL follow-up (source review pending)
+
+- CodeQL alert #36 (`js/file-system-race`) identified the metadata pathname write as a real TOCTOU. The source correction is pending review and must preserve exclusive creation, crash recovery, owner-safe release, and compromise/receipt guarantees.
+- Dependency validation was recorded on the frozen pre-correction head; it does not approve the new source correction. Full-gate evidence remains in `/tmp/pr1099-full-gate.log` and targeted sidebar evidence in `/tmp/pr1099-targeted.log`.

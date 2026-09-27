@@ -46,6 +46,8 @@ export interface AutomationStoreOptions {
   now?: () => Date;
   /** Liveness probe for the pid recorded in the poll lock. Injected by tests only. */
   processAlive?: (pid: number) => boolean;
+  /** Test-only hook for exercising a replacement between metadata validation and creation. */
+  beforeLeaseMetadataWrite?: (path: string) => void;
 }
 
 export class AutomationStore {
@@ -318,7 +320,15 @@ export class AutomationStore {
         throw new Error('lease metadata is not stale');
       }
       const token = randomUUID();
-      writeFileSync(path, JSON.stringify({ pid: process.pid, token, startedAt: this.now().toISOString() }), { mode: 0o600 });
+      if (existed) {
+        try {
+          unlinkSync(path);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        }
+      }
+      this.options.beforeLeaseMetadataWrite?.(path);
+      writeLeaseMetadataExclusive(path, JSON.stringify({ pid: process.pid, token, startedAt: this.now().toISOString() }));
       return new AutomationLease(path, token, releaseGuard, () => !compromised);
     } catch (error) {
       try { releaseGuard(); } catch { /* guard was already recovered */ }
@@ -439,6 +449,19 @@ export class AutomationStore {
     if (this.warned.has(key)) return;
     this.warned.add(key);
     this.options.warn?.(message);
+  }
+}
+
+/**
+ * Create metadata without ever truncating a pathname that appeared after the
+ * stale check. EEXIST is deliberately surfaced as busy to the lease caller.
+ */
+function writeLeaseMetadataExclusive(path: string, contents: string): void {
+  const fd = openSync(path, 'wx', 0o600);
+  try {
+    writeFileSync(fd, contents);
+  } finally {
+    closeSync(fd);
   }
 }
 
