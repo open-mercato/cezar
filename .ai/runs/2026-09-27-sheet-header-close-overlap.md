@@ -75,13 +75,13 @@ space in the header.
 
 ### Phase 1: Fix the primitive
 
-- [ ] 1.1 Give the sheet close button a 44px centred tap target and reserve its footprint in the header
-- [ ] 1.2 Add `sheet.test.tsx` covering the reserve, the tap target, and `showCloseButton={false}`
+- [x] 1.1 Give the sheet close button a 44px centred tap target and reserve its footprint in the header — 70f64f67
+- [x] 1.2 Add `sheet.test.tsx` covering the reserve, the tap target, and `showCloseButton={false}` — 70f64f67
 
 ### Phase 2: Remove the now-redundant call-site workarounds
 
-- [ ] 2.1 Drop the `[&>button]` close-button overrides from the three dashboard sheets
-- [ ] 2.2 Drop the `pr-8` title workaround from the subagent sheet
+- [x] 2.1 Drop the `[&>button]` close-button overrides from the three dashboard sheets — 6a7e2d2e
+- [x] 2.2 Drop the `pr-8` title workaround from the subagent sheet — 6a7e2d2e
 
 ### Phase 3: Validation
 
