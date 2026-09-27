@@ -2840,7 +2840,7 @@ export class RunManager {
     // A startup wedge has no provider session to reap, so release its slot immediately. Once a
     // session has opened, keep the slot until its interrupt/teardown settles; admitting a
     // replacement while a non-cooperative provider is still alive would violate maxParallel.
-    if (!state.sessionEverOpened || this.waiting.has(runId)) {
+    if (!state.sessionEverOpened || !state.session) {
       this.dropActive(runId, state);
     } else {
       state.cancellationTimer = setTimeout(() => {

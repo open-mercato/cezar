@@ -11,6 +11,7 @@ import type {
   ContentBlock,
   SessionOptions,
 } from './agent-runner.js';
+import { trackChildExit } from './agent-runner.js';
 import { buildChildEnv } from './agent-env.js';
 import { readNdjson } from './ndjson.js';
 import { createPiUiState, mapPiRpcMessage, piTurnStarted } from './pi-ui-mapper.js';
@@ -66,6 +67,8 @@ export class PiRunner implements AgentRunner {
     let timedOut = false;
     let autoEndTimer: NodeJS.Timeout | undefined;
     let killTimer: NodeJS.Timeout | undefined;
+    let hardKillTimer: NodeJS.Timeout | undefined;
+    const hasExited = trackChildExit(child);
     let piUi = createPiUiState();
     const textChunks: string[] = [];
     // Pi streams one assistant message at a time, without a stable message id.
@@ -134,6 +137,14 @@ export class PiRunner implements AgentRunner {
       write({ type: 'abort' });
       open = false;
       child.kill('SIGTERM');
+    };
+    const hardStop = (): void => {
+      interrupt();
+      if (hardKillTimer || hasExited()) return;
+      hardKillTimer = setTimeout(() => {
+        if (!hasExited()) child.kill('SIGKILL');
+      }, KILL_GRACE_MS);
+      hardKillTimer.unref?.();
     };
 
     write({ id: 'cezar-state', type: 'get_state' });
@@ -223,6 +234,7 @@ export class PiRunner implements AgentRunner {
         if (deadline) clearTimeout(deadline);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         if (killTimer) clearTimeout(killTimer);
+        if (hardKillTimer) clearTimeout(hardKillTimer);
         open = false;
         // EOF, abort and timeout may leave a message without message_end.
         textCoalescer.flush();
@@ -254,6 +266,7 @@ export class PiRunner implements AgentRunner {
       sendMessage,
       end,
       interrupt,
+      hardStop,
       pid: child.pid,
       get open() {
         return open;

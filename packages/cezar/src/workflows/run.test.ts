@@ -1475,8 +1475,9 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       session,
       sessionEverOpened: true,
     };
-    const internals = manager as unknown as { active: Map<string, unknown> };
+    const internals = manager as unknown as { active: Map<string, unknown>; waiting: Set<string> };
     internals.active.set(record.id, state);
+    internals.waiting.add(record.id);
     store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
     store.updateStep(record.id, 'task', { status: 'running' });
 
@@ -1499,6 +1500,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     // Late old-session settlement cannot release the same-id replacement.
     expect(internals.active.get(record.id)).toBe(replacement);
     internals.active.delete(record.id);
+    internals.waiting.delete(record.id);
   }, 15_000);
 
   it('finishing a run parked at an intermediate ask ends it like any other Finish', async () => {

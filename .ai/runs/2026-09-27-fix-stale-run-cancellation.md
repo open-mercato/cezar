@@ -24,6 +24,7 @@ Non-goals: monitoring wake/park behavior, recovery policy for non-cancelled runs
 - Sanitized sequential gate (`CEZ_*` unset, `TMPDIR=/tmp`): typecheck PASS; npm test 7947/7948 with one failure; unit 36/36 PASS; build PASS; package 16/16 PASS. Full log: `/tmp/pr1098-fresh-full-gate.log`.
 - The remaining npm-test failure reproduces in isolation (5/6): `packages/cezar/src/workflows/autosave-gate.test.ts` expects autosave timer behavior but calls `RunManager.armAutosave` with undefined state (`run.ts:5452`, `TypeError: Cannot read properties of undefined (reading 'cwd')`). Isolation log: `/tmp/pr1098-isolated-autosave.log`. No lifecycle source changes were made by this dependency update.
 - Corrected the autosave-gate callers to pass the run id and registered owner state, preserving the opt-in/root-run assertions. Focused autosave + workflow validation: 2 files, 143 tests passed; `npm run typecheck` and `git diff --check` passed.
+- Independent review correction: waiting sessions no longer bypass the live-session teardown grace; red-before-fix waiting-stubborn regression failed because `isActive` was false immediately, then passed after the guard changed. Codex hard-stop regression likewise failed before implementation (`hardStop` absent) and passes with SIGTERM→SIGKILL escalation. Claude, Codex, OpenCode and Pi now expose bounded cancellation behavior through the session seam.
 
 ## Risks
 

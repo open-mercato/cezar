@@ -301,6 +301,10 @@ class OpencodeSession implements AgentSession {
     this.terminate();
   }
 
+  hardStop(): void {
+    this.interrupt();
+  }
+
   /**
    * The one place either signal is sent: SIGTERM now, SIGKILL once the grace
    * window elapses.
