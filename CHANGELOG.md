@@ -56,8 +56,8 @@
 - @michal-codes
 - @patzick
 - @matgren
-- @tayfuryldz
 - @matkowalski
+- @tayfuryldz
 - @aleksanderw1992
 
 # 0.11.1 (2026-09-18)
