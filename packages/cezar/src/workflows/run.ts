@@ -1491,7 +1491,7 @@ export class RunManager {
                 finishedAt: new Date().toISOString(),
               });
               this.starting.delete(runId);
-              this.dropActive(runId);
+            this.dropActive(runId);
             });
             continue;
           }
@@ -1514,7 +1514,7 @@ export class RunManager {
               this.clearAutosaveTimer(state);
             }
             this.starting.delete(runId);
-            this.dropActive(runId);
+              this.dropActive(runId);
           });
         }
       } while (this.pumpAgain);
@@ -1753,8 +1753,12 @@ export class RunManager {
   }
 
   /** Remove a run from the live registries — keeps `waiting ⊆ active`. */
-  private dropActive(runId: string): void {
+  private dropActive(runId: string, expectedState?: ActiveRun): void {
     const state = this.active.get(runId);
+    // Cancellation can retire a state while its async startup/teardown is still unwinding. A
+    // continuation (or another owner) may have claimed the same run id by the time that old
+    // promise reaches finally; never let stale cleanup release the newer owner's slot.
+    if (expectedState !== undefined && state !== expectedState) return;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
     this.waiting.delete(runId);
@@ -2804,7 +2808,21 @@ export class RunManager {
     if (!state) return false;
     state.cancelled = true;
     this.clearIdleTimer(state);
-    state.interrupt();
+    try {
+      state.interrupt();
+    } catch {
+      // Cancellation is terminal even if a provider's interrupt hook is already tearing down.
+    }
+    const finishedAt = new Date().toISOString();
+    for (const step of this.store.getRun(runId)?.steps ?? []) {
+      if (step.status === 'running' || step.status === 'waiting') {
+        this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt });
+      }
+    }
+    this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
+    this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+    // Do not wait for a cooperative provider: a missing startup process must not hold a slot.
+    this.dropActive(runId, state);
     return true;
   }
 
@@ -3453,7 +3471,7 @@ export class RunManager {
             currentStepId: undefined,
           });
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
-          this.dropActive(runId);
+          this.dropActive(runId, state);
           return;
         }
       }
@@ -3471,6 +3489,13 @@ export class RunManager {
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
+
+    // Cancellation may have retired this continuation while its async preparation was running.
+    // Do not let the late promise make a durably cancelled run look active again.
+    if (state.cancelled) {
+      this.dropActive(runId, state);
+      return;
+    }
 
     this.store.updateRun(runId, {
       status: 'running',
@@ -3690,7 +3715,7 @@ export class RunManager {
         type: 'lifecycle',
         message: `continue failed — ${message}`,
       });
-      this.dropActive(runId);
+      this.dropActive(runId, state);
     };
     // Apply the SAME canonical-identity gate the first spawn applies (#405, review M1).
     // A follow-up may switch both runner and model (#401), so without this the record keeps
@@ -3754,6 +3779,7 @@ export class RunManager {
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
     const runner = createRunner(continueBackend);
+    if (state.cancelled) return;
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
     // A continuation's opening message becomes the session's `userPrompt` and never passes
@@ -3845,7 +3871,7 @@ export class RunManager {
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
       if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'turn end');
-      this.dropActive(runId);
+      this.dropActive(runId, state);
     }
   }
 
@@ -3969,7 +3995,7 @@ export class RunManager {
           currentStepId: undefined,
         });
         emit({ type: 'lifecycle', message: `run failed — ${error}` });
-        this.dropActive(runId);
+        this.dropActive(runId, state);
         return;
       }
     } else {
@@ -4201,7 +4227,7 @@ export class RunManager {
       await this.settleSuccess(runId);
     }
     this.clearIdleTimer(state);
-    this.dropActive(runId);
+    this.dropActive(runId, state);
   }
 
   /** Returns an error message, or null on success. */
@@ -4576,6 +4602,7 @@ export class RunManager {
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
+    if (state.cancelled) return 'cancelled';
     try {
       session = runner.startSession(
         {

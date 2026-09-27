@@ -1402,6 +1402,49 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     expect(manager.isActive(record.id)).toBe(false);
   }, 30_000);
 
+  it('cancelling an active run before its session opens is durable and releases the slot', () => {
+    const record = store.createRun({
+      title: 'startup cancellation',
+      workflow: 'quick-task',
+      task: 'startup cancellation',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
+    store.updateStep(record.id, 'task', { status: 'running', startedAt: new Date().toISOString() });
+    const state = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const internals = manager as unknown as {
+      active: Map<string, typeof state>;
+    };
+    internals.active.set(record.id, state);
+
+    expect(manager.cancel(record.id)).toBe(true);
+    expect(store.getRun(record.id)).toMatchObject({ status: 'cancelled', currentStepId: undefined });
+    expect(store.getRun(record.id)?.steps[0]).toMatchObject({ status: 'cancelled' });
+    expect(manager.isActive(record.id)).toBe(false);
+  });
+
+  it('does not let late cleanup from a cancelled owner remove a replacement owner', () => {
+    const record = store.createRun({
+      title: 'late cleanup',
+      workflow: 'quick-task',
+      task: 'late cleanup',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const oldState = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const newState = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const internals = manager as unknown as {
+      active: Map<string, typeof oldState>;
+      dropActive: (runId: string, expectedState?: typeof oldState) => void;
+    };
+    internals.active.set(record.id, oldState);
+    expect(manager.cancel(record.id)).toBe(true);
+    internals.active.set(record.id, newState);
+
+    internals.dropActive(record.id, oldState);
+
+    expect(internals.active.get(record.id)).toBe(newState);
+  });
+
   it('finishing a run parked at an intermediate ask ends it like any other Finish', async () => {
     const record = manager.startRun(BLOCKING_CHECK, { task: 'mock:ask choose a path', worktree: false });
     currentId = record.id;
