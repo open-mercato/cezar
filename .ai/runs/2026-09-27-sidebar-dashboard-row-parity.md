@@ -68,8 +68,8 @@ line, which is how it drifted from the neighbour it sits against.
 
 ### Phase 1: Align the two top-level sidebar rows
 
-- [ ] 1.1 Share the section-link styling and give Dashboard the All-tasks height and violet icon
-- [ ] 1.2 Pin the row parity in app-shell tests
+- [x] 1.1 Share the section-link styling and give Dashboard the All-tasks height and violet icon — 8fe67c71
+- [x] 1.2 Pin the row parity in app-shell tests — 8fe67c71
 
 ### Phase 2: Validation
 
