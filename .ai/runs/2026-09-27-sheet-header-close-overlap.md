@@ -71,6 +71,8 @@ space in the header.
 
 ## Progress
 
+PR: #1118
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Fix the primitive
@@ -85,4 +87,4 @@ space in the header.
 
 ### Phase 3: Validation
 
-- [ ] 3.1 Run the full validation gate
+- [x] 3.1 Run the full validation gate — see the PR's Validation section
