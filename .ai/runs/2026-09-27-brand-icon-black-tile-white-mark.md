@@ -97,3 +97,19 @@ through to the repo-root `node_modules/@open-mercato/*`, whose symlinks point in
 `/tmp/cezar-review-1098-final-*` checkout. That made `npm run typecheck` fail on files outside the
 repo entirely. `npm ci` inside the worktree fixes it; the stale root symlinks are untouched by this
 run and remain a trap for the next one.
+
+## Review
+
+`om-auto-review-pr --autofix` found one blocker, fixed in 51b26ade: the new PNG decoder tripped the
+web package's `noUncheckedIndexedAccess`, and CI's typecheck step failed in 29s.
+
+The guards had been written and `npm run typecheck` had passed with them. The suite was then re-run
+against `origin/main`'s content to prove the two unrelated failures pre-existing, and restoring
+afterwards with `git checkout HEAD -- .` reset the file to the last commit — silently discarding the
+uncommitted fixes. The gate was not re-run after the restore, so what was pushed had never been
+typechecked in the state it was pushed in.
+
+Worth carrying forward: `git checkout HEAD -- .` is not an undo for "put back what I had"; it is an
+undo for "put back what was committed". Comparing against a base branch belongs in a throwaway
+worktree, not in the tree holding uncommitted work — and the gate belongs *after* the restore, not
+only before it.
