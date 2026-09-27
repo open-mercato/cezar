@@ -13,7 +13,7 @@ afterEach(cleanup)
 const HEADER_RESERVE = '[&_[data-slot=sheet-header]]:pr-16'
 
 function renderSheet(props: { showCloseButton?: boolean; headerClassName?: string } = {}) {
-  const { container } = render(
+  render(
     <Sheet open>
       <SheetContent showCloseButton={props.showCloseButton}>
         <SheetHeader className={props.headerClassName}>
@@ -25,7 +25,7 @@ function renderSheet(props: { showCloseButton?: boolean; headerClassName?: strin
   )
   const content = document.querySelector('[data-slot="sheet-content"]')
   const header = document.querySelector('[data-slot="sheet-header"]')
-  return { container, content, header }
+  return { content, header }
 }
 
 describe('SheetContent', () => {

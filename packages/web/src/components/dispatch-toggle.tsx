@@ -173,7 +173,10 @@ export function DispatchToggle({
           <SheetContent
             side="bottom"
             data-slot="dispatch-settings"
-            className="rounded-t-xl p-4 pb-[max(1rem,env(safe-area-inset-bottom))]"
+            // This sheet has no SheetHeader, so nothing else clears the sheet's close button and
+            // it lands on the settings header's own switch — half-covering it before the button
+            // grew to a 44px target, entirely after. Reserve the strip it occupies (`top-4` + 44px).
+            className="rounded-t-xl p-4 pt-16 pb-[max(1rem,env(safe-area-inset-bottom))]"
           >
             {/* Radix wants a title on every dialog; the form's own header is the visible one. */}
             <SheetTitle className="sr-only">Dispatch</SheetTitle>

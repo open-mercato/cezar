@@ -2457,6 +2457,10 @@ describe('the Dispatch toggle', () => {
     expect(settings()?.getAttribute('data-slot')).toBe('dispatch-settings')
     expect(document.querySelector('[data-slot="sheet-overlay"]')).not.toBeNull()
     expect(document.querySelector('[data-slot="popover-content"]')).toBeNull()
+
+    // The sheet's close button is absolutely positioned over the top-right corner, which is where
+    // the settings header keeps its on/off switch — without the reserved strip the X swallows it.
+    expect(settings()?.className).toContain('pt-16')
   })
 
   it('survives a remount through the draft, and is dropped when the server no longer offers it', async () => {
