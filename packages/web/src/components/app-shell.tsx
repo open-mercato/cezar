@@ -562,7 +562,11 @@ function SidebarContent({
         {singleProject ? null : <AddProjectMenu />}
       </div>
 
-      <div className="shrink-0 px-1.5"><NavLink to="/dashboard" onClick={onNavigate} className={({ isActive }) => cn('flex min-h-11 items-center gap-2 rounded-md px-3 text-sm font-semibold transition-colors hover:bg-muted', isActive && 'bg-muted text-foreground')}><LayoutDashboardIcon className="size-4 shrink-0" aria-hidden="true" />Dashboard</NavLink></div>
+      {/* The first of the two top-level doors; `AllTasksLink` is the other. They share one skin
+          (SIDEBAR_SECTION_LINK_CLASS) because they stack directly against each other. */}
+      <div className="shrink-0 px-1.5">
+        <DashboardLink onNavigate={onNavigate} />
+      </div>
       {projectGroups ? (
         <>
           {/* PINNED above the scroller, not the first row inside it. It is about every group
@@ -680,6 +684,56 @@ function SidebarContent({
 }
 
 /**
+ * The shared skin of the sidebar's two top-level doors — Dashboard and All tasks. They stack
+ * directly on top of each other, so they are peers and must be painted as one: the same row
+ * height, the same type scale, the same violet icon.
+ *
+ * ONE constant rather than two copies on purpose. Dashboard shipped as its own inline class
+ * string and drifted to `min-h-11`/`text-sm`/no icon colour, which read on desktop as an 8px
+ * taller row with the only grey icon of the pair. A shared string is what makes the next tweak
+ * land on both rows or on neither.
+ *
+ * Not the per-project nav rows below them: those are a lower tier (muted foreground, semibold
+ * only when active, `md:h-[34px]`) and are deliberately NOT peers of these two.
+ */
+const SIDEBAR_SECTION_LINK_CLASS =
+  'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9'
+
+/**
+ * The accent icon of a top-level door — violet, the same hue the tag chips and the Tasks page's
+ * own selected filters use, so the door and the room match. Full strength once the row is the
+ * current page.
+ */
+function sidebarSectionIconClass(isActive: boolean) {
+  return cn('size-4 shrink-0', isActive ? 'text-violet' : 'text-violet/70')
+}
+
+/**
+ * The way into the cross-project Dashboard (`/dashboard`).
+ *
+ * A `NavLink`, unlike its `AllTasksLink` neighbour: `/dashboard` carries its own view and period
+ * query strings (`?view=costs`, `?period=30d`), and NavLink's path-only matching keeps the row
+ * lit across all of them where a `pathname ===` check on a full location would not.
+ */
+function DashboardLink({ onNavigate }: { onNavigate?: () => void }) {
+  return (
+    <NavLink
+      to="/dashboard"
+      data-slot="dashboard-link"
+      onClick={onNavigate}
+      className={({ isActive }) => cn(SIDEBAR_SECTION_LINK_CLASS, isActive && 'bg-muted')}
+    >
+      {({ isActive }) => (
+        <>
+          <LayoutDashboardIcon className={sidebarSectionIconClass(isActive)} aria-hidden="true" />
+          Dashboard
+        </>
+      )}
+    </NavLink>
+  )
+}
+
+/**
  * The way into the global Tasks page (`/tasks`) — every project's work in one table, filtered
  * and grouped by project, tag, status or workflow.
  *
@@ -699,17 +753,10 @@ function AllTasksLink({ onNavigate }: { onNavigate?: () => void }) {
       aria-current={isActive ? 'page' : undefined}
       // Reads at the weight of a section header rather than a nav row: full-strength foreground
       // and semibold, where the project groups below it are semibold-on-default and their nav
-      // rows are muted. The violet icon is the one spot of accent — the same hue the tag chips
-      // and this page's own selected filters use, so the door and the room match.
-      className={cn(
-        'flex h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-[13.5px] font-semibold text-foreground transition-colors hover:bg-muted md:h-9',
-        isActive && 'bg-muted',
-      )}
+      // rows are muted.
+      className={cn(SIDEBAR_SECTION_LINK_CLASS, isActive && 'bg-muted')}
     >
-      <LayersIcon
-        className={cn('size-4 shrink-0', isActive ? 'text-violet' : 'text-violet/70')}
-        aria-hidden="true"
-      />
+      <LayersIcon className={sidebarSectionIconClass(isActive)} aria-hidden="true" />
       All tasks
     </RouterLink>
   )

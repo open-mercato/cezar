@@ -428,6 +428,51 @@ describe('AppShell', () => {
     })
   })
 
+  /**
+   * Dashboard and All tasks stack directly against each other, so they are peers: one row
+   * height, one type scale, one violet icon. Dashboard shipped with its own inline class string
+   * and drifted to a taller row with a grey icon; these pin the pair together.
+   */
+  describe('top-level doors read as peers', () => {
+    const dashboard = () => document.querySelector('[data-slot="dashboard-link"]') as HTMLElement
+    const allTasks = () => document.querySelector('[data-slot="all-tasks-link"]') as HTMLElement
+
+    /** The shared skin, minus the active-state background either row adds on its own page. */
+    const skin = (el: HTMLElement) => [...el.classList].filter(c => c !== 'bg-muted').sort()
+
+    it('paints both rows from the same class string', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      expect(skin(dashboard())).toEqual(skin(allTasks()))
+    })
+
+    it('gives both rows the touch height that relaxes to 36px on desktop', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      for (const row of [dashboard(), allTasks()]) {
+        expect(row.classList.contains('h-11')).toBe(true)
+        expect(row.classList.contains('md:h-9')).toBe(true)
+        // The drifted Dashboard row was `min-h-11` with no desktop override — 8px taller than
+        // the row beneath it at every width above `md`.
+        expect(row.classList.contains('min-h-11')).toBe(false)
+      }
+    })
+
+    it('gives both icons the violet accent', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      for (const row of [dashboard(), allTasks()]) {
+        const icon = row.querySelector('svg') as SVGElement
+        expect(icon).not.toBeNull()
+        expect(icon.getAttribute('class')).toContain('text-violet/70')
+      }
+    })
+
+    it('brings its own icon to full strength on its own page', () => {
+      renderShell('/dashboard', { projectGroups: <p>groups</p> })
+      const icon = dashboard().querySelector('svg') as SVGElement
+      expect(icon.getAttribute('class')).toContain('text-violet')
+      expect(icon.getAttribute('class')).not.toContain('text-violet/70')
+    })
+  })
+
   describe('banner slot', () => {
     it('renders the banner when one is passed', () => {
       renderShell('/', { banner: <p>banner content</p> })
