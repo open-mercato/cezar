@@ -26,6 +26,8 @@ Non-goals: changing proxy authentication, macOS ngrok routing, workflow/dispatch
 
 ## Progress
 
+PR: #1100
+
 > Convention: `- [ ]` pending, `- [x]` done. Append — <commit sha> when a step lands. Do not rename step titles.
 
 ### Phase 1: Identity plumbing
@@ -44,3 +46,5 @@ Non-goals: changing proxy authentication, macOS ngrok routing, workflow/dispatch
 - Reused reviewed sidebar test commit `e882054b6300542f36583286e2e1804fcafd0598` unchanged; targeted `packages/web/src/routes/cross-project-task-navigation.test.tsx`: 1 file, 3 tests passed.
 - Sanitized gate (`CEZ_*` unset, `TMPDIR=/tmp`): `npm run typecheck` PASS; serialized `npm test` PASS (7956/7956); `npm run test:unit` PASS (36/36); `npm run build` PASS; `npm run test:package` PASS (16/16).
 - The initial concurrent run reported two timing failures, but both reproduced green in isolation (OpenCode 13/13, system-prompt 34/34). Serialized retry log: `/tmp/pr1100-npm-test-serialized.log`; isolation logs: `/tmp/pr1100-isolated-opencode.log`, `/tmp/pr1100-isolated-system-prompt.log`.
+
+Final independent review: [approved](https://github.com/open-mercato/cezar/pull/1100#issuecomment-5852038953). Reviewed source head: `e37ac315`.
