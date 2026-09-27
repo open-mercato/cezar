@@ -65,3 +65,5 @@ PR: #1099
 
 - CodeQL alert #36 (`js/file-system-race`) identified the metadata pathname write as a real TOCTOU. The source correction is pending review and must preserve exclusive creation, crash recovery, owner-safe release, and compromise/receipt guarantees.
 - Dependency validation was recorded on the frozen pre-correction head; it does not approve the new source correction. Full-gate evidence remains in `/tmp/pr1099-full-gate.log` and targeted sidebar evidence in `/tmp/pr1099-targeted.log`.
+- Correction `d5c09ceb` adds exclusive descriptor creation (`wx`) after accepted stale cleanup; the replacement regression was red before the fix and green after it. Scoped lease/automation/data-gitignore tests pass 56/56.
+- Sanitized sequential gate on the corrected source (`CEZ_*` unset, `TMPDIR=/tmp`) passes: typecheck, npm test 7952/7952, unit 36/36, build/check-pack, and package 16/16. Log: `/tmp/pr1099-codeql-full-gate.log`. Source review remains pending; the earlier independent approval applies only to the pre-correction source.
