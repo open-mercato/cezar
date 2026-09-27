@@ -24,18 +24,27 @@
  * `session/prompt` RESPONSE, mapped by `junieUsageFromResponse` and fed into
  * `junieTurnCompleted` by the runner).
  *
- * NOT yet observed live (tried explicitly: a stronger model + high effort for
- * reasoning, an unprompted 3-step task for a structured checklist) — mapped
- * per the public ACP schema (agentclientprotocol.com), and exercised by
+ * NOT yet observed live — re-verified post-review (2026-09-27) by driving the
+ * REAL ACP `session/set_config_option` knobs directly rather than only
+ * choosing a stronger model: `configId: 'effort'` (`low|medium|high`,
+ * confirmed live, `category: 'thought_level'`) set to `high`, `configId:
+ * 'mode'` (`default|plan`) set to `plan`, and `model` set to
+ * `v1:12:jetbrains-ai:claude-opus-5-5` (the strongest JetBrains-AI option
+ * `session/new`'s `configOptions` advertised) — a multi-step planning prompt
+ * under all three still produced only `agent_message_chunk` prose, no `plan`
+ * and no `agent_thought_chunk`. Mapped per the public ACP schema
+ * (agentclientprotocol.com) anyway, and exercised by
  * `__fixtures__/junie/schema-plan-reasoning.{ndjson,expected.json}`, a
  * SCHEMA-DERIVED fixture explicitly labelled as such rather than one claiming
  * a live capture that never happened (AGENT_PROTOCOL.md §7's "verify against
  * upstream wire shapes" rule, PR #443 precedent; ui-parity.test.ts's B2 review):
  *  - `agent_thought_chunk` (reasoning stream) — junie folded all visible
- *    reasoning into the final prose message for every model/effort tried;
- *  - a structured `plan` update — junie's own "Plan mode" produces a prose
- *    planning document via `agent_message_chunk`, not a checklist, and a
- *    plain multi-step task never emitted one either.
+ *    reasoning into the final prose message for every model/effort tried,
+ *    including the real `effort: 'high'` config option;
+ *  - a structured `plan` update — junie's own "Plan mode" (now confirmed via
+ *    the real `mode: 'plan'` config option, not just the `--plan` CLI flag)
+ *    produces a prose planning document via `agent_message_chunk`, not a
+ *    checklist, and a plain multi-step task never emitted one either.
  *
  * Genuinely unimplementable, not merely unobserved — no fixture, schema-derived
  * or otherwise, can cover these because the public ACP schema itself has no wire
