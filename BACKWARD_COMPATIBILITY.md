@@ -139,6 +139,18 @@ Written by one version, read by the next, and hand-editable by design:
   Tracker receipts are conservatively retained while their definition exists; see
   `docs/issue-trackers.md` for the event behavior and local verification notes for retention costs.
 
+- **Automation lease guards (#998):** each automation lock now has a companion
+  `automation-poll.lock.guard/` / `automation-mutation.lock.guard/` directory — the atomic-`mkdir`
+  mutex that serializes reclaiming an abandoned lock — and the lock metadata carries an additive
+  `token` beside the existing `pid`/`startedAt`, so only the owner that wrote a lock can delete it.
+  Both are transient local state, ignored by the data gitignore, and safe to delete while no cockpit
+  is running. Old readers ignore the `token` and read `pid` exactly as before, and a stale guard is
+  recovered automatically, so nothing requires the user to clear `.ai/cezar/`. The honest cost of a
+  protocol change: a cockpit from before #998 does not take the guard, so two cockpits of *different*
+  versions polling the same project data directory interlock only through the lock file's pid check,
+  not the mutex. Matching the `tracker-association.lock` rule above, a live owner is never evicted by
+  age alone; a dead owner's lease is recovered at once.
+
 - **`runs.json`** — array of `RunRecord` (zod schema in `packages/cezar/src/runs/store.ts`), atomic tmp+rename writes. New fields MUST be optional or defaulted (`archived` uses `.default(false)`); a required new field silently drops every pre-existing run because the loader `safeParse`s the whole array. The `runner` and `backend` enums keep the legacy id `claude-cli` **parseable and self-normalizing** — `storedRunnerSchema` accepts it and folds it to `claude`, so an old or hand-edited record loads instead of dropping every run in the file, and no consumer, wire type or contract schema ever sees a fourth runner (#547). Follow that precedent for any id this project renames: widen the READ, fold to the current spelling, and leave the authored surfaces (request bodies, settings, workflow step defs) narrow.
   - Additive for issue #737: optional `inputTokens`/`outputTokens` run and step counters plus optional per-step invocation/turn checkpoint fields. Historical records remain valid without them; directional aggregates appear only when every started agent step has complete checkpoints, so an unmetered or interrupted turn cannot leave a misleading partial subtotal.
   - Additive for issue #935: optional `pinned`/`pinnedAt` — the per-project "Pinned" group. Optional with **no default**, unlike `archived`: absent already means "not pinned", so every record written before this parses and reads exactly as it did, and a consumer that ignores both keys sees the old shape. Unpinning DELETES the keys rather than writing `pinned: false`, so an unpinned record is byte-identical to one that never knew about pins. Archiving clears them (`setArchived` and the bulk `archiveFinished` sweep alike) — the same rule, and for the same reason, as the pending auto-resume it also retires.
