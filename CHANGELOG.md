@@ -1,7 +1,7 @@
 # 0.12.0 (2026-09-27)
 
 ## Highlights
-<!-- TODO: Highlights — auto-update-changelog leaves this blank for the human author to fill in. -->
+This release is about seeing the work. A workspace Dashboard arrives with Overview and Usage & cost — task counters and outcomes, project comparisons, live work, automation deadlines and reported cost, exportable as PDF or CSV — and the Machine card now reads the process's own cgroup, so a cockpit inside a container or a systemd scope reports the CPU and memory it actually has rather than the host's totals, with a sidebar glance beside it. Jira and Linear join GitHub: browse issues, launch a task carrying the issue's context, trigger automations on tracker events. Alongside that, a run stops misreporting its own state — a non-final step that says it is still monitoring stays parked instead of handing half-done work to the next check, cancelling a stale run is terminal, a finished run's plan dock settles instead of pulsing forever, and a Codex turn that ended in compaction keeps working. Automations gain an exclusive lease reclaim and an escape from a saturated poll band that could pin a cursor for days. In the cockpit, clicking a project's name in the sidebar selects it and what you were writing travels with you, and task lists stay in the project you are pointing at. Security is versioned now: a CodeQL workflow in the repo, a `SECURITY.md`, and three real findings closed — a ReDoS on agent output, an incomplete Jira table escape and a win32 command injection.
 
 ## ✨ Features
 - ✨ A workspace Dashboard — task counters and outcomes, project comparisons, live work, automation deadlines and reported cost, with PDF and CSV export. (#1047) *(@matwiatrzyk)*
