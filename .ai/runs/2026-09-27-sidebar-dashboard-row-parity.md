@@ -64,6 +64,8 @@ line, which is how it drifted from the neighbour it sits against.
 
 ## Progress
 
+PR: #1116
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Align the two top-level sidebar rows
@@ -73,4 +75,4 @@ line, which is how it drifted from the neighbour it sits against.
 
 ### Phase 2: Validation
 
-- [x] 2.1 Run the full validation gate
+- [x] 2.1 Run the full validation gate — 718bca6e
