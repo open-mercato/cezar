@@ -373,3 +373,42 @@ describe('loadConfig machine-wide agent defaults', () => {
     expect(config.systemPrompt).toBe('be brief');
   });
 });
+
+describe('loadConfig permissions (#475 fail-closed)', () => {
+  let repoRoot: string;
+
+  beforeEach(() => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-perm-config-'));
+    mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  const write = (value: unknown) =>
+    writeFileSync(join(repoRoot, '.ai/cezar', 'config.json'), JSON.stringify(value), 'utf8');
+
+  it('is undefined when absent (historical posture, not auto)', async () => {
+    write({ maxParallel: 3 });
+    const config = await loadConfig(repoRoot);
+    expect(config.permissions).toBeUndefined();
+    expect(config.maxParallel).toBe(3);
+  });
+
+  it('keeps mode and drops only an illegal specifier (never fail-open to auto)', async () => {
+    write({
+      permissions: { mode: 'manual', rules: { deny: ['Bash (git *)', 'Bash(rm *)'] } },
+    });
+    const config = await loadConfig(repoRoot);
+    expect(config.permissions?.mode).toBe('manual');
+    expect(config.permissions?.rules?.deny).toEqual(['Bash(rm *)']);
+  });
+
+  it('drops the key when mode itself is garbage, without discarding the rest of the file', async () => {
+    write({ maxParallel: 4, permissions: { mode: 'yolo' } });
+    const config = await loadConfig(repoRoot);
+    expect(config.permissions).toBeUndefined();
+    expect(config.maxParallel).toBe(4);
+  });
+});

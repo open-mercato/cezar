@@ -90,12 +90,88 @@ function writeHandoffAndTodo() {
 async function respond(userText, imageCount) {
   turn += 1;
   await sleep(250);
-  // `mock:done` anywhere in the message → the reply ends with the CEZ:DONE
-  // completion marker (#347), so the auto-close path is testable dry. `mock:report` implies it:
-  // a unit that has reported is finished, and a report with no done marker would leave the child
-  // parked instead of settling into the report its parent is waiting for.
-  // `mock:autonomous` arms the dry autonomous loop: once armed, the first nudge the engine sends
-  // is answered with CEZ:DONE, so a nudged run settles instead of looping to the cap.
+
+  // `mock:permission` → emit a scripted `can_use_tool` control_request and wait
+  // for the host's control_response before continuing the turn (#475 Phase 2).
+  // Lets CEZ_DRY_RUN=1 exercise prompt → answer → continue end-to-end.
+  if (userText.includes('mock:permission')) {
+    const doneHere =
+      userText.includes('mock:done') || userText.includes('## Tree inbox')
+        ? '\n\nCEZ:DONE'
+        : '';
+    emit({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: 'I need to run a shell command — waiting for your permission.',
+          },
+          {
+            type: 'tool_use',
+            id: `toolu_mock_perm_${turn}`,
+            name: 'Bash',
+            input: { command: 'echo hello-from-permission-mock' },
+          },
+        ],
+        usage: { input_tokens: 80, output_tokens: 40 },
+      },
+    });
+    await sleep(100);
+    const decision = await emitPermissionPrompt('Bash', {
+      command: 'echo hello-from-permission-mock',
+    });
+    const allowed = decision?.behavior === 'allow';
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: `toolu_mock_perm_${turn}`,
+            content: allowed
+              ? 'hello-from-permission-mock\n'
+              : 'Permission denied by user',
+            is_error: !allowed,
+          },
+        ],
+      },
+    });
+    await sleep(100);
+    emit({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'text',
+            text: allowed
+              ? `Permission allowed — command ran (dry run).${doneHere}`
+              : `Permission rejected — skipping the command (dry run).${doneHere}`,
+          },
+        ],
+        usage: { input_tokens: 120, output_tokens: 50 },
+      },
+    });
+    await sleep(100);
+    emit({
+      type: 'result',
+      subtype: 'success',
+      result: allowed ? 'permission allowed (dry run)' : 'permission rejected (dry run)',
+      usage: { input_tokens: 120, output_tokens: 50 },
+      total_cost_usd: 0.004,
+    });
+    return;
+  }
+
+  // `mock:autonomous` → the autonomous auto-nudge fixture (#autonomous). Cezar's nudge text is
+  // fixed and carries no `mock:` marker, so a marker-per-message mock could never end such a
+  // session: the first turn would end plainly, every nudge would end plainly, and the run would
+  // only stop at MAX_AUTO_CONTINUES. This one flag ARMS the session instead — the turn that
+  // answers the nudge ends with CEZ:DONE — so a dry-run test can watch a nudged run complete
+  // rather than time out.
   if (userText.includes('mock:autonomous')) autonomousArmed = true;
   // `mock:ask-repeat` → the SAME CEZ:ASK on this turn and on every later one (a nudge included):
   // the agent that is blocked on something no nudge can fix and keeps asking about it.
@@ -530,13 +606,84 @@ async function respond(userText, imageCount) {
 
 const rl = createInterface({ input: process.stdin });
 let queue = Promise.resolve();
+/** Pending can_use_tool request waiting for a control_response (#475). */
+let pendingPermission = null;
+/** Resolve callback for the permission wait. */
+let resolvePermission = null;
+
+function handleControlLine(msg) {
+  if (msg?.type === 'control_request' && msg.request?.subtype === 'initialize') {
+    emit({
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: msg.request_id,
+        response: { commands: [], agents: [], models: [], output_style: 'default', available_output_styles: ['default'], account: {} },
+      },
+    });
+    return true;
+  }
+  if (msg?.type === 'control_response' && pendingPermission) {
+    const response = msg.response ?? {};
+    if (response.request_id === pendingPermission) {
+      pendingPermission = null;
+      const resolve = resolvePermission;
+      resolvePermission = null;
+      resolve?.(response.response ?? {});
+      return true;
+    }
+  }
+  return false;
+}
+
+async function emitPermissionPrompt(toolName, input) {
+  const requestId = `mock-perm-${turn}-${Date.now()}`;
+  pendingPermission = requestId;
+  const answered = new Promise((resolve) => {
+    resolvePermission = resolve;
+  });
+  emit({
+    type: 'control_request',
+    request_id: requestId,
+    request: {
+      subtype: 'can_use_tool',
+      tool_name: toolName,
+      input,
+      tool_use_id: `toolu_mock_${turn}`,
+    },
+  });
+  // Park until the host answers (or EOF closes the wait).
+  const race = await Promise.race([
+    answered,
+    new Promise((resolve) => {
+      const timer = setTimeout(() => resolve({ behavior: 'deny', message: 'mock timeout' }), 120_000);
+      // If stdin closes while waiting, deny so the mock can exit.
+      rl.once('close', () => {
+        clearTimeout(timer);
+        resolve({ behavior: 'deny', message: 'stdin closed' });
+      });
+    }),
+  ]);
+  pendingPermission = null;
+  resolvePermission = null;
+  return race;
+}
+
 rl.on('line', (line) => {
   const trimmed = line.trim();
   if (!trimmed) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    parsed = null;
+  }
+  if (parsed && handleControlLine(parsed)) return;
+
   let userText = '(unparseable message)';
   let imageCount = 0;
   try {
-    const msg = JSON.parse(trimmed);
+    const msg = parsed ?? JSON.parse(trimmed);
     const blocks = msg?.message?.content ?? [];
     userText = blocks.filter((b) => b.type === 'text').map((b) => b.text).join('\n') || '(no text)';
     imageCount = blocks.filter((b) => b.type === 'image').length;

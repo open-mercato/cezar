@@ -173,6 +173,12 @@ describe('describeRunNotification', () => {
     expect(describeRunNotification(run({ status: 'failed' })).body).toBe('Task failed')
   })
 
+  it('names a permission park from the attention label (#475)', () => {
+    expect(describeRunNotification(run({ status: 'waiting', awaitingPermission: true })).body).toBe(
+      'Task needs permission',
+    )
+  })
+
   it('tags stay stable per run, so a later transition replaces rather than piles up', () => {
     const a = describeRunNotification(run({ status: 'waiting' }))
     const b = describeRunNotification(run({ status: 'failed' }))

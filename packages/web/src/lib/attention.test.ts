@@ -110,13 +110,13 @@ describe('deriveAttention', () => {
     expect(JSON.stringify(record)).toBe(frozen)
   })
 
-  it('never claims a permission prompt — cezar emits none yet', () => {
-    // The bucket exists (the spec ranks it first) but R2's `permission.*` events are what will
-    // feed it. Until then no record can produce it: this test is the guard that nothing invented
-    // a source in the meantime.
-    for (const status of ALL_STATUSES) {
-      expect(deriveAttention(run({ status })).bucket).not.toBe('permission')
-    }
+  it('surfaces awaitingPermission as the permission attention bucket (#475)', () => {
+    expect(deriveAttention(run({ status: 'waiting', awaitingPermission: true }))).toEqual({
+      bucket: 'permission',
+      tone: 'violet',
+      pulse: true,
+      label: 'needs permission',
+    })
   })
 
   it('never claims unseen — there is no seen marker to compare against', () => {

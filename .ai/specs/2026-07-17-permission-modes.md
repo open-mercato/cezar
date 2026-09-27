@@ -64,8 +64,9 @@ Verified against the installed CLIs (2026-07-17) and vendor docs.
 ### Codex (`codex app-server`)
 
 - Two orthogonal knobs: `sandbox` = `read-only` | `workspace-write` |
-  `danger-full-access`; `approvalPolicy` = `untrusted` | `on-failure` |
-  `on-request` | `never`. No per-tool allowlist, no globs.
+  `danger-full-access`; `approvalPolicy` = `on-request` | `never` |
+  `{ granular: { … } }` (docs: `untrusted` retired, `on-failure` deprecated).
+  No per-tool allowlist, no globs.
 - Headless approval channel: per-item JSON-RPC requests
   (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`)
   that the client answers with an approve/deny response.
@@ -98,7 +99,7 @@ action in Settings), and codex sandbox escalation flows.
 | claude args | `--permission-mode acceptEdits`, `--allowedTools` default-deny, `Bash(prefix:*)` globs | `src/core/claude-cli-runner.ts:301-360` |
 | codex args | `sandbox: danger-full-access`, `approvalPolicy: never` (#563; `CEZ_CODEX_NETWORK=0` opts into network-blocked `workspace-write`) | `src/core/codex-app-server-runner.ts:295` |
 | opencode | auto-approved permissions, `allowedTools` ignored | `src/core/opencode-server-runner.ts:39` |
-| Protocol | `permission.requested` / `permission.resolved` RESERVED; `PermissionOption` kinds `allow_once` / `allow_always` / `reject_once` / `reject_always` | `src/core/ui-events.ts:122-135, 296-312` |
+| Protocol | `permission.requested` / `permission.resolved` wired; `PermissionOption` kinds `allow_once` / `allow_always` / `reject_once` / `reject_always`; `optionId` on resolve is optional (absent + `cancelled: true` on teardown) | `src/core/ui-events.ts` |
 | Attention | `permission` already tops the priority ladder | `web/app/src/lib/attention.ts:16` |
 | Settings UI | Settings → Agents: runner, models, system prompt, base branch — `PUT /api/config` partial patches | `web/app/src/routes/settings/agents-section.tsx` |
 | Composer | Autonomous toggle (`#autonomous`), per-task runner/model | `web/app/src/routes/new-task.tsx:135` |
@@ -112,10 +113,12 @@ presets plus optional advanced rules:
 
 | Preset | Meaning (UI copy) | claude | codex | opencode |
 | --- | --- | --- | --- | --- |
-| `auto` *(default)* | Full permissions; run without asking | `bypassPermissions` / dangerously-skip permissions | `danger-full-access` + `never` | all permissions allowed |
-| `guarded` | Edits run; shell & network ask | `acceptEdits`, `Bash` moved from allowlist to `ask` | `workspace-write` + `on-request` | `edit: allow`, `bash: ask`, `webfetch: ask` |
-| `read-only` | Reads run; any change asks | `manual` + allowlist `Read,Grep,Glob`; writes/exec ask | `read-only` sandbox + `on-request` | `edit: ask`, `bash: ask` |
-| `manual` | Everything asks | `--permission-mode manual`, empty allowlist | `untrusted` | all tools `ask` |
+| `auto` *(opt-in skip-all)* | Full permissions; run without asking | `bypassPermissions` / dangerously-skip permissions | `danger-full-access` + `never` | all permissions allowed |
+| `guarded` | Edits run; shell & network ask | `acceptEdits` + `--permission-prompt-tool stdio`; Bash in `ask` | `workspace-write` + `on-request` | `edit: allow`, `bash: ask`, `webfetch: ask` |
+| `read-only` | Reads run; any change asks | `manual` (or `default` on CLIs that list that name instead) + allowlist `Read,Grep,Glob` | `read-only` sandbox + `on-request` | `edit: ask`, `bash: ask` |
+| `manual` | Everything asks | `--permission-mode manual` (same `default` alias as read-only), empty allowlist | `read-only` + granular approvals (all categories surface; `untrusted` retired) | all tools `ask` |
+
+Zero-config (no `permissions` key) is **not** `auto`. Claude keeps `--permission-mode dontAsk` + the coding-tool allowlist; Codex/OpenCode stay unrestricted. Explicit `{ mode: 'auto' }` is skip-all.
 
 Advanced rules (optional, on top of a preset): three lists — `allow`, `ask`,
 `deny` — of canonical `Tool` / `Tool(pattern)` specifiers (`Bash(git *)`,

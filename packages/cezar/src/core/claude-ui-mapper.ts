@@ -33,12 +33,14 @@ import type {
   ToolLocation,
   UiEvent,
   UiMessageItem,
+  UiPermissionRequestedEvent,
   UiReasoningItem,
   UiSessionStartedEvent,
   UiToolItem,
   UiTurnCompletedEvent,
   UiUsageUpdatedEvent,
 } from './ui-events.ts';
+import { PERMISSION_OPTIONS_WITH_ALWAYS, permissionTitle } from './permission-prompt.ts';
 import { toolDisplay } from './tool-display.ts';
 
 export interface ClaudeUiMapperState {
@@ -119,10 +121,33 @@ export function mapClaudeMessage(msg: unknown, state: ClaudeUiMapperState): Clau
       return mapToolResults(msg, state);
     case 'result':
       return mapResult(msg, state);
+    case 'control_request':
+      return mapControlRequest(msg, state);
     default:
-      // stream_event, control_request, … — nothing to render yet.
+      // stream_event, control_response, … — nothing to render.
       return { events: [], state };
   }
+}
+
+/** `control_request` subtype `can_use_tool` → `permission.requested` (#475). */
+function mapControlRequest(msg: Record<string, unknown>, state: ClaudeUiMapperState): ClaudeUiMapping {
+  const requestId = str(msg.request_id);
+  const request = isRecord(msg.request) ? msg.request : undefined;
+  if (requestId === undefined || request === undefined || request.subtype !== 'can_use_tool') {
+    return { events: [], state };
+  }
+  const toolName = str(request.tool_name) ?? 'Tool';
+  const input = isRecord(request.input) ? request.input : {};
+  const event: UiPermissionRequestedEvent = {
+    type: 'permission.requested',
+    requestId,
+    title: str(request.title) ?? permissionTitle(toolName, input),
+    // Claude's control channel supports once + always for both allow and reject.
+    options: [...PERMISSION_OPTIONS_WITH_ALWAYS],
+  };
+  const itemId = str(request.tool_use_id);
+  if (itemId !== undefined) event.itemId = itemId;
+  return { events: [event], state };
 }
 
 // ---- system/init → session.started ----------------------------------------

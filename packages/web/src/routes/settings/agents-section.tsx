@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { BotIcon } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 import { putConfig } from '@/api/client'
 import {
@@ -21,6 +21,14 @@ import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toaster'
 import { providerStatusFor } from '@/lib/provider-status'
+import {
+  DEFAULT_PERMISSION_PRESET,
+  formatPermissionRulesText,
+  parsePermissionRulesText,
+  PERMISSION_MODES,
+  type PermissionChoice,
+  type PermissionMode,
+} from '@/lib/permission-modes'
 import {
   DefaultAgentPicker,
   agentPickerRows,
@@ -293,6 +301,17 @@ function AgentsForm({
         </label>
       </Field>
 
+      <PermissionsField
+        config={config}
+        saving={save.isPending}
+        onSave={(permissions) =>
+          save.mutate(
+            { permissions },
+            { onSuccess: () => toast(permissions === null ? 'Permissions reset to workspace default' : 'Permissions saved') },
+          )
+        }
+      />
+
       <Field
         title="Base branch"
         hint="New task worktrees branch from this and draft PRs target it. Also settable from the Git view."
@@ -431,3 +450,155 @@ function Field({ title, hint, children }: { title: string; hint: string; childre
     </section>
   )
 }
+
+/**
+ * Permission presets + optional advanced allow/ask/deny rules (spec 2026-07-17-permission-modes).
+ * Edits locally then saves explicitly — same pattern as the system prompt textarea.
+ */
+function PermissionsField({
+  config,
+  saving,
+  onSave,
+}: {
+  config: ConfigResponse
+  saving: boolean
+  onSave: (permissions: SetConfigInput['permissions']) => void
+}) {
+  const savedMode: PermissionChoice = config.permissions?.mode && (PERMISSION_MODES.some((m) => m.id === config.permissions?.mode))
+    ? (config.permissions.mode as PermissionMode)
+    : 'default'
+  const [mode, setMode] = useState<PermissionChoice>(savedMode)
+  const [allowText, setAllowText] = useState(formatPermissionRulesText(config.permissions?.rules?.allow))
+  const [askText, setAskText] = useState(formatPermissionRulesText(config.permissions?.rules?.ask))
+  const [denyText, setDenyText] = useState(formatPermissionRulesText(config.permissions?.rules?.deny))
+
+  const savedKey = JSON.stringify(config.permissions ?? null)
+  useEffect(() => {
+    setMode(savedMode)
+    setAllowText(formatPermissionRulesText(config.permissions?.rules?.allow))
+    setAskText(formatPermissionRulesText(config.permissions?.rules?.ask))
+    setDenyText(formatPermissionRulesText(config.permissions?.rules?.deny))
+  }, [savedKey]) // eslint-disable-line react-hooks/exhaustive-deps -- re-seed only when server payload changes
+
+  const parsedAllow = parsePermissionRulesText(allowText)
+  const parsedAsk = parsePermissionRulesText(askText)
+  const parsedDeny = parsePermissionRulesText(denyText)
+  const invalid = [...parsedAllow.invalid, ...parsedAsk.invalid, ...parsedDeny.invalid]
+  const allow = parsedAllow.rules
+  const ask = parsedAsk.rules
+  const deny = parsedDeny.rules
+  const hasRules = Boolean(allow || ask || deny)
+  const draft =
+    mode === 'default'
+      ? null
+      : {
+          mode,
+          ...(hasRules ? { rules: { ...(allow ? { allow } : {}), ...(ask ? { ask } : {}), ...(deny ? { deny } : {}) } } : {}),
+        }
+  const saved = config.permissions ?? null
+  const savedComparable = saved
+    ? {
+        mode: saved.mode,
+        ...(saved.rules && (saved.rules.allow?.length || saved.rules.ask?.length || saved.rules.deny?.length)
+          ? {
+              rules: {
+                ...(saved.rules.allow?.length ? { allow: saved.rules.allow } : {}),
+                ...(saved.rules.ask?.length ? { ask: saved.rules.ask } : {}),
+                ...(saved.rules.deny?.length ? { deny: saved.rules.deny } : {}),
+              },
+            }
+          : {}),
+      }
+    : null
+  const dirty = JSON.stringify(draft) !== JSON.stringify(savedComparable)
+
+  return (
+    <Field
+      title="Permissions"
+      hint="What agents may do without asking. Applies to every new task; each task can override it in the composer."
+    >
+      <div data-slot="agents-permissions" className="flex max-w-xl flex-col gap-2">
+        {[DEFAULT_PERMISSION_PRESET, ...PERMISSION_MODES].map((preset) => (
+          <label
+            key={preset.id}
+            className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3.5 py-3 ${
+              mode === preset.id ? 'border-ring bg-muted/40' : 'border-border'
+            }`}
+          >
+            <input
+              type="radio"
+              name="permission-mode"
+              className="mt-1"
+              checked={mode === preset.id}
+              disabled={saving}
+              onChange={() => setMode(preset.id)}
+            />
+            <span>
+              <span className="flex items-center gap-2 text-[13.5px] font-semibold text-foreground">
+                {preset.label}
+                {preset.id === 'default' ? (
+                  <span className="rounded-full border border-border px-2 py-px text-[10.5px] font-medium text-muted-foreground">
+                    zero-config
+                  </span>
+                ) : null}
+              </span>
+              <span className="mt-0.5 block text-[12.5px] text-muted-foreground">{preset.desc}</span>
+            </span>
+          </label>
+        ))}
+
+        <details className="mt-2 border-t border-border pt-3">
+          <summary className="cursor-pointer text-[13px] text-muted-foreground">
+            Advanced rules — fine-tune the preset with per-tool patterns
+          </summary>
+          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+            {(
+              [
+                ['Always allow', allowText, setAllowText],
+                ['Always ask', askText, setAskText],
+                ['Always deny', denyText, setDenyText],
+              ] as const
+            ).map(([label, value, setValue]) => (
+              <label key={label} className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">{label}</span>
+                <Textarea
+                  value={value}
+                  onChange={(event) => setValue(event.target.value)}
+                  disabled={saving}
+                  placeholder={'Bash(git *)\nEdit'}
+                  className="min-h-24 font-mono text-xs"
+                />
+              </label>
+            ))}
+          </div>
+          <p className="mt-2 rounded-md border border-border bg-muted/30 px-2.5 py-2 text-xs text-muted-foreground">
+            One rule per line: <code>Tool</code> or <code>Tool(pattern)</code>. Deny wins over ask,
+            ask wins over allow. Fidelity varies by runner — codex applies the preset only;
+            opencode applies tool-level rules. A run notes anything it couldn&apos;t apply.
+          </p>
+          {invalid.length > 0 ? (
+            <p role="alert" className="mt-2 text-xs text-danger">
+              Invalid specifiers (Tool or Tool(pattern) only, no spaces around the name): {invalid.join(', ')}
+            </p>
+          ) : null}
+        </details>
+
+        <div className="flex items-center gap-3 pt-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-action="agents-save-permissions"
+            disabled={!dirty || saving || invalid.length > 0}
+            onClick={() => onSave(draft)}
+          >
+            Save
+          </Button>
+          <p className="text-[11px] text-soft-foreground">Applied to new runs only.</p>
+        </div>
+      </div>
+    </Field>
+  )
+}
+
+

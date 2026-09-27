@@ -3,6 +3,7 @@
  * inferred from it, shared by the server, the api-client and the cockpit.
  */
 export * from './events.ts';
+export * from './permissions.ts';
 export * from './health.ts';
 export * from './runs.ts';
 export * from './drafts.ts';

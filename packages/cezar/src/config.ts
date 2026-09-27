@@ -3,6 +3,12 @@ import { join } from 'node:path';
 import { z } from 'zod';
 import { loadWorkspaceConfig, type WorkspaceConfig } from './workspace/config.ts';
 import { RUNNER_IDS } from './core/agent-runner.ts';
+import {
+  PERMISSION_SPECIFIER_RE,
+  permissionModeSchema,
+  permissionSpecSchema,
+  type PermissionRules,
+} from '@open-mercato/cezar-contract';
 
 /**
  * Optional advanced config at `.ai/cezar/config.json`. Zero-config rule:
@@ -24,6 +30,39 @@ export const DEFAULT_SKILLS_REPOS: SkillsRepoSource[] = [
 
 /** Last-resort retention when neither the repo nor the workspace says anything. */
 export const DEFAULT_WORKTREE_RETENTION = 10;
+
+function sanitizeRuleList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw.filter(
+    (item): item is string =>
+      typeof item === 'string' && item.length <= 200 && PERMISSION_SPECIFIER_RE.test(item),
+  );
+  return out.length > 0 ? out.slice(0, 100) : undefined;
+}
+
+function sanitizeLoadedRules(raw: unknown): PermissionRules | undefined {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rec = raw as Record<string, unknown>;
+  const allow = sanitizeRuleList(rec.allow);
+  const ask = sanitizeRuleList(rec.ask);
+  const deny = sanitizeRuleList(rec.deny);
+  if (!allow && !ask && !deny) return undefined;
+  return {
+    ...(allow ? { allow } : {}),
+    ...(ask ? { ask } : {}),
+    ...(deny ? { deny } : {}),
+  };
+}
+
+/** Keep a valid mode; drop only illegal specifiers. Never widen to skip-all. */
+function sanitizeLoadedPermissions(raw: unknown): unknown {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const rec = raw as Record<string, unknown>;
+  const mode = permissionModeSchema.safeParse(rec.mode);
+  if (!mode.success) return undefined;
+  const rules = sanitizeLoadedRules(rec.rules);
+  return { mode: mode.data, ...(rules ? { rules } : {}) };
+}
 
 /** Bounds for `worktreeRetention` — shared with the presence probe below, so the
  *  "does this repo set its own?" question is answered by the same rule the
@@ -105,6 +144,15 @@ const configSchema = z.object({
    * false preserves the ordinary per-runner model selector.
    */
   modelsLocked: z.boolean().optional().catch(undefined),
+  /**
+   * Global default permission mode for every agent run (spec 2026-07-17-permission-modes, #475).
+   *
+   * Missing key = each backend's historical zero-config posture (Claude: dontAsk +
+   * coding-tool allowlist — NOT skip-all). A malformed `mode` drops the key (same
+   * historical posture). Invalid *rules* are dropped while the mode is kept — a
+   * security control must not fail open to auto/skip-permissions.
+   */
+  permissions: z.preprocess(sanitizeLoadedPermissions, permissionSpecSchema.optional()),
 });
 
 export type CezConfig = z.infer<typeof configSchema>;
