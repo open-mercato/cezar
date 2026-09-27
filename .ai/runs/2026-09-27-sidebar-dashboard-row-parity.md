@@ -73,4 +73,4 @@ line, which is how it drifted from the neighbour it sits against.
 
 ### Phase 2: Validation
 
-- [ ] 2.1 Run the full validation gate
+- [x] 2.1 Run the full validation gate
