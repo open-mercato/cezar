@@ -1,7 +1,9 @@
 import { chmodSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AutomationStore } from './store.ts';
 
@@ -157,6 +159,24 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     first?.release();
     expect(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).toBe(replacement);
     unlinkSync(join(dir, 'automation-poll.lock'));
+  });
+
+  it('allows at most one of two processes to reclaim the same abandoned lock', async () => {
+    const dir = await lockedDirectory(JSON.stringify({ pid: UNREACHABLE_PID, startedAt: new Date().toISOString() }));
+    const child = fileURLToPath(new URL('./store-lease-child.ts', import.meta.url));
+    const at = Date.now() + 100;
+    const children = [0, 1].map(() => spawn(process.execPath, ['--import', 'tsx', child, dir, String(at)], { stdio: ['pipe', 'pipe', 'inherit'] }));
+    const results = await Promise.all(children.map((childProcess) => new Promise<boolean>((resolve, reject) => {
+      let output = '';
+      childProcess.stdout.setEncoding('utf8');
+      childProcess.stdout.on('data', (chunk) => { output += chunk; });
+      childProcess.once('error', reject);
+      childProcess.once('close', (code) => {
+        if (code !== 0) reject(new Error(`lease child exited ${code}`));
+        else resolve(JSON.parse(output).held as boolean);
+      });
+    })));
+    expect(results.filter(Boolean)).toHaveLength(1);
   });
 });
 

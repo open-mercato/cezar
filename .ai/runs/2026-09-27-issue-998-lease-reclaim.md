@@ -52,4 +52,4 @@ recovery after a dead owner.
 ### Phase 3: Validate
 
 - [ ] 3.1 Run targeted automation tests and the configured full validation gate
-- [x] 3.2 Review the diff and record limitations/evidence — working tree
+- [x] 3.2 Review the diff and record limitations/evidence — pending review submission
