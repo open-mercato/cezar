@@ -7,11 +7,24 @@ import { useIsDesktop } from '@/lib/use-desktop'
 import { cn } from '@/lib/utils'
 
 /**
- * The sidebar glance: two labelled meter rows - effective CPU and RAM, each a bar, a percentage
- * and a detail - above the footer (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`,
+ * The sidebar glance: two labelled meters - effective CPU and RAM, each a bar and a percentage -
+ * on ONE line above the footer (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`,
  * Phase 2). The 60 s CPU sparkline lives on the Machine card the row links to; the sidebar trades
  * it for a RAM meter, because an unlabelled line beside an unlabelled number did not say which
  * resource was which, and memory pressure is the one that actually stops a machine.
+ *
+ * **Height is the budget this component is designed against.** It is the first row of a footer
+ * that also carries the search hint and the chrome controls, and every pixel it takes comes out
+ * of the task list above it. That is why it is one line and not two stacked meters: stacking a
+ * RAM row under a CPU row cost as much vertical space as the old CPU-line-plus-sparkline it
+ * replaced (~47px), which bought labels at no saving at all. One line of `leading-[14px]` inside
+ * `py-1` is 24px - roughly half - and that halving is the point, not a side effect.
+ *
+ * What one line cannot hold at the 264px minimum sidebar is the DETAIL text: the RAM GB pair and
+ * the effective-core count. Two labels, two bars, two percentages and a GB pair do not fit across
+ * ~218px of content box without squeezing the bars to a few pixels, so the details moved into the
+ * `title` tooltip and the accessible name, which is where a number you read occasionally - rather
+ * than glance at - belongs. The bar and its colour carry the at-a-glance half.
  *
  * Two gates, and both are about not paying for what nobody sees:
  *
@@ -95,6 +108,11 @@ function HostUsageWidgetRow() {
     view?.cpuLimited === true
       ? `${view.cpuLimitKind === 'cpuset' ? 'cpuset ' : ''}${formatCpuCores(view.cpuCores)}`
       : undefined
+  // ONE string behind both the tooltip and the accessible name: it is the only home the GB pair
+  // and the effective-core count have now, and a hovering user and a screen-reader user must not
+  // get different readings of the same row. Comma-separated rather than `·`-separated for the
+  // same reason - a middle dot is announced as "middle dot" by readers that do not drop it.
+  const summary =`CPU ${cpuText}${cpuCores === undefined ? '' : ` of ${cpuCores}`}, RAM ${memPctText} (${memText})`
 
   return (
     <Link
@@ -103,10 +121,15 @@ function HostUsageWidgetRow() {
       data-state={stale ? 'stale' : 'live'}
       // How many frames the store holds - the e2e proof that the root writer keeps feeding it.
       data-frames={history.length}
-      aria-label={`Machine usage: CPU ${cpuText}${cpuCores === undefined ? '' : ` of ${cpuCores}`}, RAM ${memPctText} (${memText}). Open Settings, Resources.`}
-      title={`CPU ${cpuText}${cpuCores === undefined ? '' : ` of ${cpuCores}`} · RAM ${memText}`}
+      aria-label={`Machine usage: ${summary}. Open Settings, Resources.`}
+      title={summary}
       className={cn(
-        'grid grid-cols-[auto_minmax(0,1fr)_auto_auto] items-center gap-x-2 gap-y-1 rounded-md border border-border px-2 py-1.5 text-[11px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
+        // Six columns on ONE 14px line: label · bar · value, twice. The two `minmax(0,1fr)`
+        // tracks are the bars, so they split whatever the fixed text leaves over and stay equal
+        // to each other however wide `sampling…` renders. `leading-[14px]` is load-bearing: the
+        // default `normal` line box for 11px text is ~13px, and pinning it keeps the row's height
+        // a property of this file rather than of the font the browser happened to pick.
+        'grid grid-cols-[auto_minmax(0,1fr)_auto_auto_minmax(0,1fr)_auto] items-center gap-x-1.5 rounded-md border border-border px-2 py-1 text-[11px] leading-[14px] text-soft-foreground transition-colors hover:bg-muted hover:text-foreground',
         stale ? 'opacity-70' : null,
       )}
     >
@@ -115,16 +138,13 @@ function HostUsageWidgetRow() {
         pct={stale ? undefined : cpuPct}
         valueSlot="host-usage-widget-cpu"
         value={cpuText}
-        detailSlot="host-usage-widget-cores"
-        detail={cpuCores}
       />
       <Meter
         label="RAM"
         pct={stale ? undefined : memPct}
         valueSlot="host-usage-widget-mem-pct"
         value={memPctText}
-        detailSlot="host-usage-widget-mem"
-        detail={memText}
+        gutter
       />
     </Link>
   )
@@ -135,16 +155,28 @@ interface MeterProps {
   pct: number | undefined
   valueSlot: string
   value: string
-  detailSlot: string
-  detail: string | undefined
+  /** Extra space before the label, so the second meter reads as its own thing and not as a
+   *  continuation of the first one's percentage. Only the trailing meter sets it. */
+  gutter?: boolean
 }
 
-/** One grid row: label, bar, percentage, detail - the four columns line up across both rows. */
-function Meter({ label, pct, valueSlot, value, detailSlot, detail }: MeterProps) {
+/**
+ * Three of the row's six columns: label, bar, percentage. A fragment rather than a wrapper,
+ * because the bar has to be a grid track of the row itself - nested in a flex box it could only
+ * size against its own content, and the two bars would stop matching each other.
+ */
+function Meter({ label, pct, valueSlot, value, gutter }: MeterProps) {
   const level = meterLevel(pct)
   return (
     <>
-      <span className="font-medium tracking-wide text-muted-foreground">{label}</span>
+      <span
+        className={cn(
+          'font-medium tracking-wide text-muted-foreground',
+          gutter === true ? 'ml-1' : null,
+        )}
+      >
+        {label}
+      </span>
       <span
         data-slot={`host-usage-widget-${label.toLowerCase()}-bar`}
         data-level={level}
@@ -175,9 +207,6 @@ function Meter({ label, pct, valueSlot, value, detailSlot, detail }: MeterProps)
         )}
       >
         {value}
-      </span>
-      <span data-slot={detailSlot} className="text-right tabular-nums">
-        {detail ?? ''}
       </span>
     </>
   )
