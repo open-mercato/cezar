@@ -117,6 +117,8 @@ async function configuredModelProvider(
 }
 /** An interactive session that hears nothing from the user closes itself. */
 export const IDLE_TIMEOUT_MS = 15 * 60_000;
+/** Maximum time a live provider gets to honor cancellation before its slot is reaped. */
+const CANCEL_GRACE_MS = 1_000;
 /**
  * Task-completion marker from the agent contract (HANDOFF_INSTRUCTIONS): a
  * turn whose text ends with `CEZ:DONE` means "goal achieved, nothing to ask" —
@@ -347,6 +349,8 @@ const REPOSITORY_ROOT_LOCK_DISABLED_NOTE =
   'repository-root lock disabled by CEZ_DISABLE_REPO_LOCK=1 (shared checkout is unsafe)';
 
 interface ActiveRun {
+  /** Identity of this async owner; stale promises must not mutate a replacement owner. */
+  ownerToken: symbol;
   cancelled: boolean;
   interrupt: () => void;
   /** Where this run's steps execute: the task worktree, or the repo root. */
@@ -359,6 +363,7 @@ interface ActiveRun {
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
   autosaveTimer?: NodeJS.Timeout;
+  cancellationTimer?: NodeJS.Timeout;
   /* The screenshot counter lives on `RunManager.queuedImageSeq` (#472), keyed by
    * run id — a queued run persists attachments with no `ActiveRun` at all. */
   /** Has a session EVER opened on this run (#472)? `session` alone cannot answer
@@ -1474,6 +1479,7 @@ export class RunManager {
           this.starting.add(runId);
           if (continuation) {
             const hydrated = this.hydrateQueuedContinuation(runId, continuation);
+            const ownerToken = Symbol('run-owner');
             void this.runContinuation(
               runId,
               hydrated.stepId,
@@ -1483,15 +1489,11 @@ export class RunManager {
               hydrated.images,
               hydrated.persistedImages,
               hydrated.persistedAttachments,
+              ownerToken,
             ).catch((err: unknown) => {
               const message = err instanceof Error ? err.message : String(err);
-              this.store.updateRun(runId, {
-                status: 'failed',
-                error: `continue crashed: ${message}`,
-                finishedAt: new Date().toISOString(),
-              });
+              this.failOwnedContinuation(runId, ownerToken, message);
               this.starting.delete(runId);
-              this.dropActive(runId);
             });
             continue;
           }
@@ -1501,20 +1503,20 @@ export class RunManager {
           // in the same synchronous tick as the `pendingJobs.delete` above, so no
           // handler can observe a half-dequeued run.
           const input = this.hydrateQueuedInput(runId, job.input);
-          void this.execute(runId, job.workflow, input).catch((err: unknown) => {
+          const ownerToken = Symbol('run-owner');
+          void this.execute(runId, job.workflow, input, ownerToken).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
+            const state = this.active.get(runId);
+            if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
             this.store.updateRun(runId, {
               status: 'failed',
               error: `engine crashed: ${message}`,
               finishedAt: new Date().toISOString(),
             });
-            const state = this.active.get(runId);
-            if (state) {
-              this.clearIdleTimer(state);
-              this.clearAutosaveTimer(state);
-            }
+            this.clearIdleTimer(state);
+            this.clearAutosaveTimer(state);
             this.starting.delete(runId);
-            this.dropActive(runId);
+            if (state && !state.cancelled) this.dropActive(runId, state);
           });
         }
       } while (this.pumpAgain);
@@ -1752,11 +1754,29 @@ export class RunManager {
     return workflows.find((w) => w.name === run.workflow) ?? null;
   }
 
-  /** Remove a run from the live registries — keeps `waiting ⊆ active`. */
-  private dropActive(runId: string): void {
+  /** Fence a continuation failure to the async owner that started it. */
+  private failOwnedContinuation(runId: string, ownerToken: symbol, message: string): void {
     const state = this.active.get(runId);
+    if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
+    this.store.updateRun(runId, {
+      status: 'failed',
+      error: `continue crashed: ${message}`,
+      finishedAt: new Date().toISOString(),
+    });
+    this.dropActive(runId, state);
+  }
+
+  /** Remove a run from the live registries — keeps `waiting ⊆ active`. */
+  private dropActive(runId: string, expectedState?: ActiveRun): void {
+    const state = this.active.get(runId);
+    // Cancellation can retire a state while its async startup/teardown is still unwinding. A
+    // continuation (or another owner) may have claimed the same run id by the time that old
+    // promise reaches finally; never let stale cleanup release the newer owner's slot.
+    if (expectedState !== undefined && state !== expectedState) return;
     state?.releaseRepoRoot?.();
     if (state) state.releaseRepoRoot = undefined;
+    if (state?.cancellationTimer) clearTimeout(state.cancellationTimer);
+    if (state) state.cancellationTimer = undefined;
     this.waiting.delete(runId);
     this.leaveMonitoring(runId);
     if (state) this.clearMonitoringWakeTimer(state, runId);
@@ -2804,7 +2824,40 @@ export class RunManager {
     if (!state) return false;
     state.cancelled = true;
     this.clearIdleTimer(state);
-    state.interrupt();
+    try {
+      state.interrupt();
+    } catch {
+      // Cancellation is terminal even if a provider's interrupt hook is already tearing down.
+    }
+    const finishedAt = new Date().toISOString();
+    for (const step of this.store.getRun(runId)?.steps ?? []) {
+      if (step.status === 'running' || step.status === 'waiting') {
+        this.store.updateStep(runId, step.id, { status: 'cancelled', finishedAt });
+      }
+    }
+    this.store.updateRun(runId, { status: 'cancelled', finishedAt, currentStepId: undefined });
+    this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
+    // A startup wedge has no provider session to reap, so release its slot immediately. Once a
+    // session has opened, keep the slot until its interrupt/teardown settles; admitting a
+    // replacement while a non-cooperative provider is still alive would violate maxParallel.
+    if (!state.sessionEverOpened || !state.session) {
+      this.dropActive(runId, state);
+    } else {
+      state.cancellationTimer = setTimeout(() => {
+        if (this.active.get(runId) !== state || !state.cancelled) return;
+        const session = state.session;
+        if (!session) return;
+        session.hardStop?.();
+        const reapSettled = () => {
+          if (this.active.get(runId) === state && state.cancelled) this.dropActive(runId, state);
+        };
+        // Handle both fulfillment and rejection: a bare finally() creates a new
+        // rejected promise when a provider teardown fails, producing an orphaned
+        // unhandled rejection during cancellation.
+        void session.result.then(reapSettled, reapSettled);
+      }, CANCEL_GRACE_MS);
+      state.cancellationTimer.unref?.();
+    }
     return true;
   }
 
@@ -3361,6 +3414,7 @@ export class RunManager {
       });
       return { ok: true };
     }
+    const ownerToken = Symbol('run-owner');
     void this.runContinuation(
       runId,
       stepId,
@@ -3368,15 +3422,13 @@ export class RunManager {
       targetRunner,
       prompt,
       images,
+      undefined,
+      undefined,
+      ownerToken,
     ).catch(
       (err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
-        this.store.updateRun(runId, {
-          status: 'failed',
-          error: `continue crashed: ${message}`,
-          finishedAt: new Date().toISOString(),
-        });
-        this.dropActive(runId);
+        this.failOwnedContinuation(runId, ownerToken, message);
       },
     );
     return { ok: true };
@@ -3397,7 +3449,9 @@ export class RunManager {
      *  opening a recovered continuation does not persist duplicate files. */
     persistedImages: ContentBlock[] = [],
     persistedAttachments: PersistedAttachment[] = [],
+    ownerToken?: symbol,
   ): Promise<void> {
+    const effectiveOwnerToken = ownerToken ?? Symbol('run-owner');
     // Continuation runs in the task's worktree when it still exists (spec
     // 006) — the resumed session sees exactly what the original run left.
     // Retention (#483) may have reclaimed this run's worktree directory while
@@ -3427,6 +3481,7 @@ export class RunManager {
     // start and `recover` preserves. `autoContinues` restarts per session, which is the point:
     // the cap bounds ONE unattended stretch, and a human Continue is attention.
     const state: ActiveRun = {
+      ownerToken: effectiveOwnerToken,
       cancelled: false,
       interrupt: () => undefined,
       cwd,
@@ -3453,12 +3508,12 @@ export class RunManager {
             currentStepId: undefined,
           });
           this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
-          this.dropActive(runId);
+          this.dropActive(runId, state);
           return;
         }
       }
     }
-    this.armAutosave(state);
+    this.armAutosave(runId, state);
     if (record) seedHandoffFile(this.dataDir, record); // idempotent — normally already there
     // Registry snapshot for `/skill` expansion. `execute` loads this for the workflow's own
     // sessions; a continuation builds its OWN ActiveRun, and without this the resumed session
@@ -3471,6 +3526,13 @@ export class RunManager {
     // a run that quietly degrades into an ordinary task.
     this.prepareDispatchSession(runId, state);
     this.prepareAutomationsSession(state);
+
+    // Cancellation may have retired this continuation while its async preparation was running.
+    // Do not let the late promise make a durably cancelled run look active again.
+    if (state.cancelled) {
+      this.dropActive(runId, state);
+      return;
+    }
 
     this.store.updateRun(runId, {
       status: 'running',
@@ -3509,6 +3571,7 @@ export class RunManager {
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, stepId);
     const onEvent = (event: AgentEvent) => {
+      if (state.cancelled || this.active.get(runId) !== state) return;
       if (event.type === 'image') {
         const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) this.store.appendEvent(runId, { type: 'image', stepId, ...saved });
@@ -3547,7 +3610,7 @@ export class RunManager {
         // buffered delta can outlive its turn.
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
-        void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
+        void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         // Did the backend end this turn purely to compact its own context (#955)? Absent on
         // every runner that has no such signal, and on every recording written before the
@@ -3673,6 +3736,10 @@ export class RunManager {
     /** Settle this turn as a failure before anything is spawned — the shape both
      *  pre-spawn gates below need (model identity, #405; temp directory, #785). */
     const failBeforeSpawn = (message: string): void => {
+      if (state.cancelled || this.active.get(runId) !== state) {
+        this.dropActive(runId, state);
+        return;
+      }
       const failedAt = new Date().toISOString();
       sink.sessionEnded('error', message);
       this.store.updateStep(runId, stepId, {
@@ -3690,7 +3757,7 @@ export class RunManager {
         type: 'lifecycle',
         message: `continue failed — ${message}`,
       });
-      this.dropActive(runId);
+      this.dropActive(runId, state);
     };
     // Apply the SAME canonical-identity gate the first spawn applies (#405, review M1).
     // A follow-up may switch both runner and model (#401), so without this the record keeps
@@ -3754,6 +3821,7 @@ export class RunManager {
     this.store.updateStep(runId, stepId, { profileId: continueProfile.profileId });
 
     const runner = createRunner(continueBackend);
+    if (state.cancelled) return;
     state.currentStepId = stepId;
     this.beginUsageInvocation(runId, state, stepId);
     // A continuation's opening message becomes the session's `userPrompt` and never passes
@@ -3817,7 +3885,7 @@ export class RunManager {
       await session.result;
       if (sessionError) throw new Error(sessionError);
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
-      if (state.cancelled) {
+      if (state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
@@ -3831,28 +3899,33 @@ export class RunManager {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sink.sessionEnded('error', message);
-      this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
-      appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
-      this.store.updateRun(runId, {
-        status: 'failed',
-        error: `continue failed: ${message}`,
-        finishedAt: finishedAt(),
-        currentStepId: undefined,
-      });
-      this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
+      if (!state.cancelled && this.active.get(runId) === state) {
+        this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
+        appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
+        this.store.updateRun(runId, {
+          status: 'failed',
+          error: `continue failed: ${message}`,
+          finishedAt: finishedAt(),
+          currentStepId: undefined,
+        });
+        this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
+      }
     } finally {
-      this.recordUsagePeaks(runId);
+      this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
-      if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'turn end');
-      this.dropActive(runId);
+      if (!state.cancelled && this.active.get(runId) === state && state.cwd !== this.repoRoot) {
+        await autosaveCommit(state.cwd, 'turn end');
+      }
+      this.dropActive(runId, state);
     }
   }
 
   // ---- execution -----------------------------------------------------------
 
-  private async execute(runId: string, workflow: WorkflowDef, input: StartRunInput): Promise<void> {
+  private async execute(runId: string, workflow: WorkflowDef, input: StartRunInput, ownerToken?: symbol): Promise<void> {
     const state: ActiveRun = {
+      ownerToken: ownerToken ?? Symbol('run-owner'),
       cancelled: false,
       interrupt: () => undefined,
       cwd: this.repoRoot,
@@ -3861,8 +3934,10 @@ export class RunManager {
     };
     this.active.set(runId, state);
     this.starting.delete(runId);
-    const emit = (event: { type: string; stepId?: string; [k: string]: unknown }) =>
+    const emit = (event: { type: string; stepId?: string; [k: string]: unknown }) => {
+      if (this.active.get(runId) !== state || state.cancelled) return;
       this.store.appendEvent(runId, event);
+    };
 
     // Resolve the agent backend for this run: the task choice (GUI) wins over
     // the config default. Per-step `runner` can still override it below.
@@ -3906,6 +3981,10 @@ export class RunManager {
     // that requests isolation fails closed if the worktree cannot be
     // established; only explicit opt-out and non-Git modes run in place.
     const repo = await getRepoInfo(this.repoRoot);
+    if (state.cancelled) {
+      this.dropActive(runId, state);
+      return;
+    }
     if (repo && input.worktree === false) {
       // Composer opt-out: run in the repo working tree, no branch/worktree. The
       // repository-root lease serializes these runs by default; the explicit
@@ -3957,8 +4036,12 @@ export class RunManager {
         if (seededConfig.length > 0) {
           emit({ type: 'note', message: `seeded personal agent config: ${seededConfig.join(', ')}` });
         }
-        this.armAutosave(state);
+        this.armAutosave(runId, state);
       } catch (err) {
+        if (state.cancelled) {
+          this.dropActive(runId, state);
+          return;
+        }
         const message = err instanceof Error ? err.message : String(err);
         const error = `worktree creation failed: ${message}`;
         emit({ type: 'note', message: `${error} — task stopped before workflow execution` });
@@ -3969,7 +4052,7 @@ export class RunManager {
           currentStepId: undefined,
         });
         emit({ type: 'lifecycle', message: `run failed — ${error}` });
-        this.dropActive(runId);
+        this.dropActive(runId, state);
         return;
       }
     } else {
@@ -4051,6 +4134,11 @@ export class RunManager {
     let startImages: ContentBlock[] | undefined = startBlocks.length ? startBlocks : undefined;
 
     const lastAgentIdx = findLastAgentStepIndex(workflow);
+
+    if (state.cancelled) {
+      this.dropActive(runId, state);
+      return;
+    }
 
     let i = 0;
     while (i < workflow.steps.length) {
@@ -4160,10 +4248,17 @@ export class RunManager {
 
     // Final autosave: the branch always ends holding the finished state.
     this.clearAutosaveTimer(state);
-    if (state.cwd !== this.repoRoot) await autosaveCommit(state.cwd, 'run finalize');
+    if (!state.cancelled && this.active.get(runId) === state && state.cwd !== this.repoRoot) {
+      await autosaveCommit(state.cwd, 'run finalize');
+    }
+
+    // The cancellation grace timer may have retired this owner while the async
+    // workflow was unwinding, and a same-id continuation may now own the record.
+    // No settlement branch below may touch that newer owner.
+    if (this.active.get(runId) !== state) return;
 
     const finishedAt = new Date().toISOString();
-    if (state.cancelled) {
+    if (state.cancelled && this.active.get(runId) === state) {
       const run = this.store.getRun(runId);
       for (const s of run?.steps ?? []) {
         if (s.status === 'running' || s.status === 'waiting') {
@@ -4201,7 +4296,7 @@ export class RunManager {
       await this.settleSuccess(runId);
     }
     this.clearIdleTimer(state);
-    this.dropActive(runId);
+    this.dropActive(runId, state);
   }
 
   /** Returns an error message, or null on success. */
@@ -4305,6 +4400,7 @@ export class RunManager {
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
+      if (state.cancelled || this.active.get(runId) !== state) return;
       if (event.type === 'image') {
         const saved = this.persistAttachment(runId, event.mediaType, event.data);
         if (saved) emit({ type: 'image', stepId: step.id, ...saved });
@@ -4343,7 +4439,7 @@ export class RunManager {
         // boundary flushes again (idempotent) as a backstop.
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
-        void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
+        void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         // The twin of `runContinuation`'s read — see there for why the field is absent on
         // every runner and every recording that predates it (#955).
@@ -4576,6 +4672,7 @@ export class RunManager {
     let session: AgentSession;
     state.currentStepId = step.id;
     this.beginUsageInvocation(runId, state, step.id);
+    if (state.cancelled) return 'cancelled';
     try {
       session = runner.startSession(
         {
@@ -4650,17 +4747,21 @@ export class RunManager {
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
       // events to the RunManager — only it knows how the session settled).
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
-      this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
+      if (!state.cancelled && this.active.get(runId) === state) {
+        this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
+      }
       return null;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
       return message;
     } finally {
-      this.recordUsagePeaks(runId);
+      this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
-      this.leaveMonitoring(runId);
-      this.waiting.delete(runId);
+      if (this.active.get(runId) === state) {
+        this.leaveMonitoring(runId);
+        this.waiting.delete(runId);
+      }
       this.clearMonitoringWakeTimer(state, runId);
       state.session = undefined;
       state.currentStepId = undefined;
@@ -4687,6 +4788,7 @@ export class RunManager {
   /** Native backend asks arrive before turn-end. Persist and park immediately
    * so the cockpit shows attention and the run releases its workspace slot. */
   private handleRunnerUiEvent(runId: string, state: ActiveRun, sink: UiEventSink, event: UiEvent): void {
+    if (state.cancelled || (this.active.has(runId) && this.active.get(runId) !== state)) return;
     this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
     if (event.type !== 'ask.requested' || state.cancelled) return;
@@ -4835,12 +4937,13 @@ export class RunManager {
     }
   }
 
-  async recordTurnEnd(runId: string, turnText: string): Promise<void> {
+  async recordTurnEnd(runId: string, turnText: string, owner?: ActiveRun): Promise<void> {
     // The namer can finish after session cleanup removes its in-memory secrets.
     turnText = this.store.redactRunText(runId, turnText);
     try {
       const run = this.store.getRun(runId);
       if (!run) return;
+      if (owner && this.active.get(runId) !== owner) return;
       this.applyTurnMarkers(runId, run, turnText);
       // Titles are the namer's job (task auto-naming spec) — turn text is
       // deliberately NEVER a title source; see maybeRefreshTitle below. The
@@ -4854,8 +4957,10 @@ export class RunManager {
           taskBranch: run.branch,
           runStartedAt: run.startedAt,
         });
-        if (stat) this.store.updateRun(runId, { diffStat: stat });
-        else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });
+        if (!owner || this.active.get(runId) === owner) {
+          if (stat) this.store.updateRun(runId, { diffStat: stat });
+          else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });
+        }
       }
       await this.maybeRefreshTitle(runId, turnText);
     } catch {
@@ -4918,7 +5023,10 @@ export class RunManager {
    * a run can hold several sessions (multiple agent steps, Continue) and the
    * record keeps the highest water mark across all of them.
    */
-  private recordUsagePeaks(runId: string): void {
+  private recordUsagePeaks(runId: string, owner: ActiveRun): void {
+    // unregisterRunProcess is keyed by run id, so an old generation must not
+    // remove telemetry belonging to a replacement owner.
+    if (this.active.get(runId) !== owner) return;
     const peaks = unregisterRunProcess(runId);
     if (!peaks) return;
     const run = this.store.getRun(runId);
@@ -5339,10 +5447,11 @@ export class RunManager {
 
   /** Autosave-commit the worktree every 90 s while the run lives (spec 006).
    *  Opt-in via CEZ_AUTOSAVE=1 (#471) — see periodicAutosaveEnabled. */
-  private armAutosave(state: ActiveRun): void {
+  private armAutosave(runId: string, state: ActiveRun): void {
     if (!periodicAutosaveEnabled()) return;
     if (state.cwd === this.repoRoot || state.autosaveTimer) return;
     state.autosaveTimer = setInterval(() => {
+      if (this.active.get(runId) !== state || state.cancelled) return;
       void autosaveCommit(state.cwd, 'periodic');
     }, AUTOSAVE_INTERVAL_MS);
     state.autosaveTimer.unref?.();

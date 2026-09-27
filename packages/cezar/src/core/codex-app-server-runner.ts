@@ -127,6 +127,7 @@ class CodexSession implements AgentSession {
   private autoEndTimer: NodeJS.Timeout | undefined;
   private eofTermTimer: NodeJS.Timeout | undefined;
   private eofKillTimer: NodeJS.Timeout | undefined;
+  private hardKillTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
   /** Set the moment WE signal the child (EOF watchdog, cancel, kill switch).
@@ -231,7 +232,8 @@ class CodexSession implements AgentSession {
 
       const exitCode = await waitForCodexAppServerExit(this.child);
       if (this.eofTermTimer) clearTimeout(this.eofTermTimer);
-      if (this.eofKillTimer) clearTimeout(this.eofKillTimer);
+        if (this.eofKillTimer) clearTimeout(this.eofKillTimer);
+        if (this.hardKillTimer) clearTimeout(this.hardKillTimer);
       this.rpc.rejectPending();
 
       if (this.spawnFailed) throw this.spawnFailed;
@@ -380,6 +382,18 @@ class CodexSession implements AgentSession {
       this.terminatedByCezar = true;
       this.child.kill('SIGTERM');
     }
+  }
+
+  hardStop(): void {
+    this.interrupt();
+    if (this.hardKillTimer || this.hasExited()) return;
+    this.hardKillTimer = setTimeout(() => {
+      if (!this.hasExited()) {
+        this.terminatedByCezar = true;
+        this.child.kill('SIGKILL');
+      }
+    }, KILL_GRACE_MS);
+    this.hardKillTimer.unref?.();
   }
 
   // ---- protocol -----------------------------------------------------------

@@ -337,4 +337,19 @@ describe('SIGTERM→SIGKILL escalation for an app-server that survives SIGTERM',
       expect(fake.signals).toEqual([]);
     });
   });
+
+  it('hard-stops a SIGTERM-ignoring app-server within the bounded grace', () => {
+    withFakeChild((fake) => {
+      const session = new CodexAppServerRunner({ bin: 'codex', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+      });
+      void session.result.catch(() => undefined);
+
+      session.hardStop?.();
+      expect(fake.signals).toEqual(['SIGTERM']);
+      vi.advanceTimersByTime(KILL_GRACE_MS);
+      expect(fake.signals).toEqual(['SIGTERM', 'SIGKILL']);
+    });
+  });
 });

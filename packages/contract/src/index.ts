@@ -18,5 +18,8 @@ export * from './zoned-time.ts';
 export * from './automation-schedule.ts';
 export * from './automations.ts';
 export * from './dispatch.ts';
+export * from './dashboard.ts';
+export * from './dashboard-costs.ts';
+export * from './dashboard-overview.ts';
 export * from './host.ts';
 export * from './tracker.ts';
