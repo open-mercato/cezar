@@ -187,7 +187,7 @@ The Manage-skills opt-out (`importedSkills` in the global `~/.cezar/ui-state.jso
 
 ## 6. npm package surface (`package.json`)
 
-- Name `@open-mercato/cezar` (plus the `cezar-cli` npx alias documented in the README); `bin` entries `cezar` + `cez`; published `files`: `dist`, `packages/cezar/web/dist`, `scripts`, `README.md`; `engines.node >= 20`; `"type": "module"`. The brand mark ships inside the Vite build as `web/dist/icon.svg` (source: `packages/web/public/icon.svg`).
+- Name `@open-mercato/cezar` (plus the `cezar-cli` and `cezar-run` npx aliases); `bin` entries `cezar` + `cez`; published `files`: `dist`, `packages/cezar/web/dist`, `scripts`, `README.md`; `engines.node >= 20`; `"type": "module"`. The brand mark ships inside the Vite build as `web/dist/icon.svg` (source: `packages/web/public/icon.svg`).
 - There is **no** `exports`/library API — the package is CLI-only. Keep it that way deliberately: adding one creates a new compatibility surface; if it happens, this document gains a section first.
 - `dist/index.js` must remain the bin entry, and `web/` must stay resolvable relative to `dist/server` (`resolveWebDir` walks `../../web`; the built cockpit lives at `packages/cezar/web/dist`).
 - The tarball MUST contain the built UI (`packages/cezar/web/dist/index.html` + hashed `packages/cezar/web/dist/assets/*`) — `npm run check:pack` (`packages/cezar/scripts/check-pack.mjs`, run as the last leg of `npm run build`, hence by `prepublishOnly`) enforces this; do not remove it from the build chain.

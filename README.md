@@ -109,6 +109,7 @@ npx cezar-cli
 This opens the cockpit at `http://localhost:4321`. Type a task, pick a workflow, then hit **Start**.
 
 ```bash
+npx cezar-run                                                 # the same cockpit, under another name
 npx cezar-cli run "add a --json flag to the export command"   # headless, no browser
 npx cezar-cli init                                            # scaffold .ai/cezar/
 npx cezar-cli@nightly                                         # try tonight's build

@@ -93,7 +93,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add packages/api-client/package.json packages/cezar/package.json alias-cezar/package.json
+          git add packages/api-client/package.json packages/cezar/package.json alias-cezar/package.json alias-cezar-run/package.json
           git commit -m "chore(release): v${VERSION}"
           git push origin "$BRANCH"
           gh pr create --base "${{ github.ref_name }}" --head "$BRANCH" \

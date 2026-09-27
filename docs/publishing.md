@@ -21,6 +21,7 @@ Three packages are in the release, always at the same version; two of them ship:
 | `@open-mercato/cezar-api-client` | **no — `private`** | the typed client and shared contract types (`packages/api-client`) |
 | `@open-mercato/cezar` | yes | the service + CLI, ships the built cockpit (`packages/cezar`) |
 | `cezar-cli` | yes | the unscoped bin alias, so `npx cezar-cli` works (`alias-cezar`) |
+| `cezar-run` | yes | a second unscoped bin alias, so `npx cezar-run` works (`alias-cezar-run`) — npx resolves a package name, never a bin name, so each npx spelling is its own package |
 
 That table is also the **publish order**, and it is load-bearing: each package
 depends on the one above it, so publishing a dependent first would briefly
@@ -136,15 +137,19 @@ below is done.
 
 ## One-time admin setup
 
-On **npmjs.com** (as an owner of the npm org and of the `cezar-cli` package):
+On **npmjs.com** (as an owner of the npm org and of the `cezar-cli` and `cezar-run` packages):
 
 1. Verify the org exists and your user is an **Owner**.
-2. Give the org control of the unscoped alias (unscoped packages attach to
-   orgs via teams) — run as the current `cezar-cli` owner:
-   `npm access grant read-write <org>:developers cezar-cli`.
+2. Give the org control of the unscoped aliases (unscoped packages attach to
+   orgs via teams) — run as their current owner:
+   `npm access grant read-write <org>:developers cezar-cli` (and the same for `cezar-run`).
+   An unscoped alias is outside the org scope, so the CI token below cannot create
+   it: the FIRST publish of a new alias is manual
+   (`cd alias-cezar-run && npm publish --access public`), before the release set
+   that includes it reaches CI.
 3. Create a **granular access token**: *Read and write*; packages and scopes =
    the org **scope** (`@open-mercato/*`) rather than a hand-picked package
-   list, **plus** the `cezar-cli` package; set an expiry per your policy (CI
+   list, **plus** the `cezar-cli` and `cezar-run` packages; set an expiry per your policy (CI
    fails loudly with `E401`/`E404` when it lapses).
    - Selecting the scope instead of individual packages is load-bearing: a
      token limited to *selected packages* cannot **create** a new one, and npm

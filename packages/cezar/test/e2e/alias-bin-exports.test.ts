@@ -11,7 +11,8 @@ const execFile = promisify(execFileCallback);
 // This file lives at packages/cezar/test/e2e; the alias package it guards is at the REPO
 // root, because it is published alongside this package rather than from inside it.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-const aliasBin = join(repoRoot, 'alias-cezar', 'bin.js');
+// Every unscoped alias ships its own copy of the same shim, so each one is checked.
+const aliasBins = [join(repoRoot, 'alias-cezar', 'bin.js'), join(repoRoot, 'alias-cezar-run', 'bin.js')];
 const packageManifest = join(repoRoot, 'packages', 'cezar', 'package.json');
 
 /**
@@ -37,14 +38,14 @@ const packageManifest = join(repoRoot, 'packages', 'cezar', 'package.json');
  */
 
 /** Every `@open-mercato/cezar` specifier the alias entry point imports. */
-async function aliasSpecifiers(): Promise<string[]> {
+async function aliasSpecifiers(aliasBin: string): Promise<string[]> {
   const source = await readFile(aliasBin, 'utf8');
   const pattern = /['"](@open-mercato\/cezar(?:\/[^'"]*)?)['"]/g;
   return [...source.matchAll(pattern)].map((match) => match[1] as string);
 }
 
-test('the cezar-cli alias imports a specifier the exports map exposes', async () => {
-  const specifiers = await aliasSpecifiers();
+async function assertAliasResolves(aliasBin: string): Promise<void> {
+  const specifiers = await aliasSpecifiers(aliasBin);
   // A computed specifier would slip past the regex; fail loudly rather than vacuously pass.
   assert.ok(
     specifiers.length > 0,
@@ -68,7 +69,7 @@ test('the cezar-cli alias imports a specifier the exports map exposes', async ()
       ).catch((error: Error & { stderr?: string }) => {
         assert.fail(
           `the alias imports '${specifier}', which the @open-mercato/cezar exports map does not expose — ` +
-            `npx cezar-cli would fail for every user (#851): ${error.stderr?.trim() ?? error.message}`,
+            `npx of this alias would fail for every user (#851): ${error.stderr?.trim() ?? error.message}`,
         );
       });
 
@@ -82,4 +83,8 @@ test('the cezar-cli alias imports a specifier the exports map exposes', async ()
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-});
+}
+
+for (const aliasBin of aliasBins) {
+  test(`${aliasBin} imports a specifier the exports map exposes`, () => assertAliasResolves(aliasBin));
+}

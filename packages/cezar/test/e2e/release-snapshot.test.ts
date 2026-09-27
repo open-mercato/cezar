@@ -58,21 +58,27 @@ async function makeFixture(): Promise<string> {
   );
   await writeFile(join(root, 'packages', 'cezar', 'index.js'), 'export {};\n');
 
-  await mkdir(join(root, 'alias-cezar'));
-  await writeFile(
-    join(root, 'alias-cezar', 'package.json'),
-    `${JSON.stringify(
-      {
-        name: 'fake-alias',
-        version: '0.9.9',
-        files: ['bin.js'],
-        dependencies: { '@scope/fake-root': '^0.9.9' },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeFile(join(root, 'alias-cezar', 'bin.js'), '#!/usr/bin/env node\n');
+  // Both unscoped aliases, each its own npx-resolvable package.
+  for (const [dir, name] of [
+    ['alias-cezar', 'fake-alias'],
+    ['alias-cezar-run', 'fake-run-alias'],
+  ] as const) {
+    await mkdir(join(root, dir));
+    await writeFile(
+      join(root, dir, 'package.json'),
+      `${JSON.stringify(
+        {
+          name,
+          version: '0.9.9',
+          files: ['bin.js'],
+          dependencies: { '@scope/fake-root': '^0.9.9' },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFile(join(root, dir, 'bin.js'), '#!/usr/bin/env node\n');
+  }
   return root;
 }
 
@@ -127,6 +133,9 @@ test('dry-run publish stamps every manifest, pins each sibling exact, and emits 
     assert.equal(cezarPkg.version, '0.9.9-pr77.5');
     assert.equal(aliasPkg.version, '0.9.9-pr77.5');
     assert.deepEqual(aliasPkg.dependencies, { '@scope/fake-root': '0.9.9-pr77.5' });
+    const runAliasPkg = await readPkg(root, 'alias-cezar-run');
+    assert.equal(runAliasPkg.version, '0.9.9-pr77.5');
+    assert.deepEqual(runAliasPkg.dependencies, { '@scope/fake-root': '0.9.9-pr77.5' });
     assert.deepEqual(cezarPkg.devDependencies, { '@scope/fake-client': '0.9.9-pr77.5' });
     // The workspace root publishes nothing and must be left exactly as it was.
     assert.equal((await readPkg(root)).version, '0.0.0');
