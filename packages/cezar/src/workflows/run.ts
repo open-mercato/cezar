@@ -4376,27 +4376,26 @@ export class RunManager {
           turnText,
           Boolean(sessionOpen) && !done && !dispatchTurn.dispatched,
         );
-        // Does this ask park the WORKFLOW — hold a non-final step open instead
-        // of letting `execute` mark it done and run the next check (#917)?
+        // Does this turn park the WORKFLOW — hold a non-final step open instead
+        // of letting `execute` mark it done and run the next check (#917, #1076)?
         //
-        // Only a marker that parsed can: a malformed one produces no ask card,
-        // so parking on it would halt an otherwise autonomous workflow on a
-        // question the user cannot even see, for as long as the session lives.
+        // Only a parsed ASK or valid monitoring marker can: a malformed ASK produces no ask card,
+        // so parking on it would halt an otherwise autonomous workflow on a question the user
+        // cannot even see, for as long as the session lives.
         // It degrades to the `resolveAskTurn` note plus the raw marker left in
         // the transcript, and the workflow carries on. The final interactive step
         // is untouched by this: it parks at `waiting` whatever the marker looked
         // like, where the prose fallback is still answerable and nothing
         // downstream is being blocked (#473).
-        const parksWorkflow = !interactive && ask !== null && Boolean(sessionOpen);
         // A spawn parks the commander like `CEZ:MONITORING` does — it waits on its children and
         // gives them its slot. The budget brake (Q6 ii) overrides both and parks `waiting`.
         const monitoring =
-          interactive &&
           sessionOpen &&
           !done &&
           !ask &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
+        const parksWorkflow = !interactive && (ask !== null || monitoring);
         turnText = '';
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
@@ -4407,8 +4406,8 @@ export class RunManager {
           state.session?.end();
           return;
         }
-        // `waiting` now also covers a NON-final step parking on an ask (#917), which
-        // is what holds the workflow at that step instead of running its next check.
+        // `waiting` now also covers a NON-final step parking on an ask or monitor (#917, #1076),
+        // which is what holds the workflow at that step instead of running its next check.
         const waiting = (interactive || parksWorkflow) && sessionOpen;
         // Autonomous (#autonomous): never hand the ball back to the user. Nudge the agent to keep
         // going (bounded by MAX_AUTO_CONTINUES) instead of parking at `waiting`. The SAME helper
