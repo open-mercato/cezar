@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
+import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
@@ -1430,20 +1431,61 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       task: 'late cleanup',
       steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
     });
-    const oldState = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
-    const newState = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const oldToken = Symbol('old-owner');
+    const newToken = Symbol('new-owner');
+    const oldState = { ownerToken: oldToken, cancelled: false, interrupt: () => undefined, cwd: repoRoot, sessionEverOpened: true };
+    const newState = { ownerToken: newToken, cancelled: false, interrupt: () => undefined, cwd: repoRoot, sessionEverOpened: true };
     const internals = manager as unknown as {
       active: Map<string, typeof oldState>;
       dropActive: (runId: string, expectedState?: typeof oldState) => void;
+      failOwnedContinuation: (runId: string, ownerToken: symbol, message: string) => void;
     };
     internals.active.set(record.id, oldState);
     expect(manager.cancel(record.id)).toBe(true);
+    expect(internals.active.get(record.id)).toBe(oldState); // live sessions retain the slot during grace
     internals.active.set(record.id, newState);
 
+    internals.failOwnedContinuation(record.id, oldToken, 'late startup failure');
     internals.dropActive(record.id, oldState);
 
     expect(internals.active.get(record.id)).toBe(newState);
+    expect(store.getRun(record.id)?.status).toBe('cancelled');
   });
+
+  it('keeps a live hanging session counted until interrupt teardown, then reaps it', async () => {
+    const record = store.createRun({
+      title: 'hanging session',
+      workflow: 'quick-task',
+      task: 'hanging session',
+      steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
+    });
+    const fixture = join(process.cwd(), 'packages/cezar/src/core/__fixtures__/claude/stub-ignores-eof-exits-143.mjs');
+    let sawText = () => undefined;
+    const textSeen = new Promise<void>((resolve) => { sawText = resolve; });
+    const session = new ClaudeCliRunner({ bin: fixture, timeoutMs: 0 }).startSession(
+      { userPrompt: 'hang', cwd: repoRoot },
+      (event) => { if (event.type === 'text') sawText(); },
+    );
+    await textSeen;
+    const state = {
+      ownerToken: Symbol('live-owner'),
+      cancelled: false,
+      interrupt: () => session.interrupt(),
+      cwd: repoRoot,
+      session,
+      sessionEverOpened: true,
+    };
+    const internals = manager as unknown as { active: Map<string, typeof state> };
+    internals.active.set(record.id, state);
+    store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
+    store.updateStep(record.id, 'task', { status: 'running' });
+
+    expect(manager.cancel(record.id)).toBe(true);
+    expect(manager.isActive(record.id)).toBe(true);
+    await session.result;
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    expect(manager.isActive(record.id)).toBe(false);
+  }, 15_000);
 
   it('finishing a run parked at an intermediate ask ends it like any other Finish', async () => {
     const record = manager.startRun(BLOCKING_CHECK, { task: 'mock:ask choose a path', worktree: false });
