@@ -26,7 +26,7 @@ Non-goals: workflow, scheduler, server, receipt semantics, or unrelated automati
 
 ### Phase 3: Validate
 
-- [ ] 3.1 Run targeted automation tests and the configured full validation gate
+- [x] 3.1 Run targeted automation tests and the configured full validation gate — dependency validation 2026-09-27; all configured commands pass
 - [ ] 3.2 Review the diff and record limitations/evidence
 
 ## Risks
@@ -51,5 +51,10 @@ recovery after a dead owner.
 
 ### Phase 3: Validate
 
-- [ ] 3.1 Run targeted automation tests and the configured full validation gate — targeted commands pass; full `npm test` has unrelated failures and was stopped
+- [x] 3.1 Run targeted automation tests and the configured full validation gate — targeted sidebar test 3/3; sanitized full gate all pass
 - [x] 3.2 Review the diff and record limitations/evidence — cc7ec5e5
+
+### Dependency validation evidence (2026-09-27)
+
+- Reused reviewed sidebar test commit `e882054b6300542f36583286e2e1804fcafd0598` unchanged; targeted `packages/web/src/routes/cross-project-task-navigation.test.tsx`: 1 file, 3 tests passed (`/tmp/pr1099-targeted.log`).
+- Sanitized sequential gate (`CEZ_*` unset, `TMPDIR=/tmp`): `npm run typecheck` PASS; `npm test` PASS (7951/7951); `npm run test:unit` PASS (36/36); `npm run build` PASS; `npm run test:package` PASS (16/16). Full log: `/tmp/pr1099-full-gate.log`.
