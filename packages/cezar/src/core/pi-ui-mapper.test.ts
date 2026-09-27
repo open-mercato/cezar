@@ -156,6 +156,25 @@ describe('pi RPC → v2 golden fixture', () => {
     ]);
   });
 
+  it('completes a tool whose result lands after a mid-turn steer starts a new turn', () => {
+    let state = piTurnStarted(createPiUiState()).state;
+    state = mapPiRpcMessage(
+      { type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read', args: { path: 'a.ts' } },
+      state,
+    ).state;
+    // Steering while the tool still runs: pi-runner calls piTurnStarted again mid-turn, so the
+    // per-message reset must not drop tool calls keyed by pi's session-unique toolCallId.
+    state = piTurnStarted(state).state;
+    const ended = mapPiRpcMessage(
+      { type: 'tool_execution_end', toolCallId: 'read-1', result: { content: 'ok' }, isError: false },
+      state,
+    );
+
+    expect(ended.events).toEqual([
+      { type: 'item.completed', item: expect.objectContaining({ kind: 'tool', id: 'read-1', status: 'completed' }) },
+    ]);
+  });
+
   it('settles an interrupted stream and clears unfinished item bookkeeping', () => {
     let state = piTurnStarted(createPiUiState()).state;
     state = mapPiRpcMessage(

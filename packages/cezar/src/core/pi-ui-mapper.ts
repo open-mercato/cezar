@@ -72,7 +72,9 @@ export function piTurnStarted(state: PiUiMapperState): PiUiMapping {
       stopReason: 'end_turn',
       startedItems: new Set(),
       textByItem: new Map(),
-      tools: new Map(),
+      // `tools` deliberately survives: this also runs mid-turn when the user steers, and tool items
+      // are keyed by pi's own session-unique `toolCallId` — never by the content index this reset is
+      // about. Dropping them here would strand an in-flight tool with no `item.completed`.
     },
   };
 }
@@ -257,20 +259,14 @@ function completeTurn(reason: StopReason, state: PiUiMapperState): PiUiMapping {
 
 function mapMessageEnd(value: Record<string, unknown>, state: PiUiMapperState): PiUiMapping {
   const message = isRecord(value.message) ? value.message : undefined;
-  if (message?.role === 'assistant' && state.turnId) {
-    const nextState = { ...state, messageSeq: state.messageSeq + 1 };
-    const usage = usageEvent(message.usage);
-    if (!usage) return { events: [], state: nextState };
-    return {
-      events: [usage],
-      state: { ...nextState, turnUsage: usage.usage, turnCostUsd: usage.costUsd ?? null },
-    };
-  }
-  const usage = message && message.role === 'assistant' ? usageEvent(message.usage) : undefined;
-  if (!usage) return { events: [], state };
+  const isAssistant = message?.role === 'assistant';
+  // The next message's content indexes restart at zero, so close this message's ordinal out.
+  const next = isAssistant && state.turnId ? { ...state, messageSeq: state.messageSeq + 1 } : state;
+  const usage = isAssistant ? usageEvent(message?.usage) : undefined;
+  if (!usage) return { events: [], state: next };
   return {
     events: [usage],
-    state: { ...state, turnUsage: usage.usage, turnCostUsd: usage.costUsd ?? null },
+    state: { ...next, turnUsage: usage.usage, turnCostUsd: usage.costUsd ?? null },
   };
 }
 
