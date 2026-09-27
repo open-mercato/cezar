@@ -34,6 +34,8 @@ const LOG = 'automation-log.ndjson';
 const POLL_LOCK = 'automation-poll.lock';
 const MUTATION_LOCK = 'automation-mutation.lock';
 const GUARD_SUFFIX = '.guard';
+/** proper-lockfile enforces a 2s minimum; this bounds crash recovery without stealing live owners. */
+const GUARD_STALE_MS = 2_000;
 const RETENTION_MS = 90 * 24 * 60 * 60 * 1_000;
 
 type DefinitionsFile = ReturnType<typeof automationDefinitionsFileSchema.parse>;
@@ -295,26 +297,33 @@ export class AutomationStore {
   }
 
   private createLease(path: string, staleAfterMs: number): AutomationLease {
-    const existed = existsSync(path);
-    const previous = existed ? readLeaseMetadata(path) : undefined;
-    const releaseGuard = lockfile.lockSync(path, { lockfilePath: `${path}${GUARD_SUFFIX}`, realpath: false, stale: staleAfterMs });
-    const ageMs = existed ? Math.max(0, this.now().getTime() - statSync(path).mtimeMs) : 0;
-    if (previous?.pid === process.pid || (previous?.pid && (this.options.processAlive ?? isProcessAlive)(previous.pid))) {
-      releaseGuard();
-      throw new Error('lease is held by a live process');
-    }
-    if (existed && !previous?.pid && ageMs < staleAfterMs) {
-      releaseGuard();
-      throw new Error('lease metadata is not stale');
-    }
-    const token = randomUUID();
+    let compromised = false;
+    const releaseGuard = lockfile.lockSync(path, {
+      lockfilePath: `${path}${GUARD_SUFFIX}`,
+      realpath: false,
+      stale: Math.max(GUARD_STALE_MS, Math.min(staleAfterMs || GUARD_STALE_MS, GUARD_STALE_MS)),
+      // proper-lockfile's default throws from its heartbeat timer. Never take the
+      // cockpit down for a lost guard; callers check validity before launching or
+      // publishing after an asynchronous compromise notification.
+      onCompromised: () => { compromised = true; },
+    });
     try {
+      const existed = existsSync(path);
+      const previous = existed ? readLeaseMetadata(path) : undefined;
+      const ageMs = existed ? Math.max(0, this.now().getTime() - statSync(path).mtimeMs) : 0;
+      if (previous?.pid === process.pid || (previous?.pid && (this.options.processAlive ?? isProcessAlive)(previous.pid))) {
+        throw new Error('lease is held by a live process');
+      }
+      if (existed && !previous?.pid && ageMs < staleAfterMs) {
+        throw new Error('lease metadata is not stale');
+      }
+      const token = randomUUID();
       writeFileSync(path, JSON.stringify({ pid: process.pid, token, startedAt: this.now().toISOString() }), { mode: 0o600 });
+      return new AutomationLease(path, token, releaseGuard, () => !compromised);
     } catch (error) {
-      releaseGuard();
+      try { releaseGuard(); } catch { /* guard was already recovered */ }
       throw error;
     }
-    return new AutomationLease(path, token, releaseGuard);
   }
 
   private load(): void {
@@ -468,7 +477,11 @@ export class AutomationLease {
     private readonly path: string,
     private readonly token: string,
     private readonly releaseGuard: () => void,
+    private readonly guardIsHealthy: () => boolean = () => true,
   ) {}
+
+  /** False after the lock primitive reports that another owner replaced this guard. */
+  isValid(): boolean { return !this.released && this.guardIsHealthy(); }
 
   release(): void {
     if (this.released) return;

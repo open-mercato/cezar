@@ -204,6 +204,31 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
     expect(JSON.parse(readFileSync(join(dir, 'automation-poll.lock'), 'utf8')).pid).toBe(process.pid);
     lease?.release();
   });
+
+  it('recovers a real killed owner after the bounded guard stale window', async () => {
+    const dir = await directory();
+    const child = fileURLToPath(new URL('./store-lease-child.ts', import.meta.url));
+    const childProcess = spawn(process.execPath, ['--import', 'tsx', child, dir], { stdio: ['pipe', 'pipe', 'inherit'] });
+    let output = '';
+    const acquired = new Promise<void>((resolve, reject) => {
+      childProcess.stdout.setEncoding('utf8');
+      childProcess.stdout.on('data', (chunk) => {
+        output += chunk;
+        if (output.includes('ready\n')) childProcess.stdin.write('go\n');
+        if (output.includes('"held":true')) resolve();
+      });
+      childProcess.once('error', reject);
+    });
+    await acquired;
+    childProcess.kill('SIGKILL');
+    await new Promise<void>((resolve) => childProcess.once('close', () => resolve()));
+    // proper-lockfile's stale threshold is 2s minimum; leave margin for the final
+    // heartbeat/stat timestamp and filesystem timestamp granularity.
+    await new Promise((resolve) => setTimeout(resolve, 3_200));
+    const lease = AutomationStore.open(dir).acquireLease();
+    expect(lease).toBeDefined();
+    lease?.release();
+  }, 8_000);
 });
 
 describe('AutomationStore.setState (spec 2026-09-14: read-modify-write)', () => {
