@@ -98,6 +98,18 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // opencode (#387) — no default provider, so a bare model is rejected loudly
   // and `toBackendModel` hands pi the full `provider/model` on its `--model`.
   pi: {},
+  // junie's model ids are its OWN opaque catalog strings
+  // (`v1:12:jetbrains-ai:claude-sonnet-5`, `v1:6:custom:custom:qwen3-coder-local`)
+  // — already unambiguous, never provider-qualified, and never containing a
+  // `/`. `defaultProvider: 'junie'` names the backend itself rather than a real
+  // LLM vendor: it exists only to make a bare id resolve instead of being
+  // rejected as ambiguous (the opencode/pi rule, which does not apply — a
+  // junie id is not naming a provider-agnostic model), and its ONLY visible
+  // effect is `toBackendModel` returning the raw string unchanged (the
+  // `id.model` branch, since `allowExplicitProvider` is unset). An explicit
+  // `foo/bar` string is still rejected loudly, matching a real foreign
+  // provider on any other single-provider backend.
+  junie: { defaultProvider: 'junie' },
 };
 
 const SLASH = '/';

@@ -88,7 +88,7 @@ export function openInIcon(target: OpenTarget): LucideIcon {
  *  target (editors, Finder, terminal) — mirrors the server's `agentCliRunner` (open-in-app.ts)
  *  without importing server code into the bundle. */
 export function cliTargetRunner(targetId: string): Runner | undefined {
-  const match = /^cli:(claude|codex|opencode|pi)$/.exec(targetId)
+  const match = /^cli:(claude|codex|junie|opencode|pi)$/.exec(targetId)
   return match ? (match[1] as Runner) : undefined
 }
 

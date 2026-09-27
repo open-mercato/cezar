@@ -39,6 +39,11 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // overlap (`anthropic/claude-sonnet-5`), and a shared id present in pi's list but absent from
   // OpenCode's empty one would read as "another runner's preset" and be refused.
   pi: [],
+  // junie lists nothing for the same reason OpenCode does (#794): its models come from its own
+  // live catalog (`session/new`'s configOptions, discovered per-account/per-host), so a
+  // hard-coded list would go stale the same way. `defaultProvider: 'junie'` (model-identity.ts)
+  // still gives it a structural guard via `namesAnotherKnownProvider` without any preset list.
+  junie: [],
 };
 
 /**

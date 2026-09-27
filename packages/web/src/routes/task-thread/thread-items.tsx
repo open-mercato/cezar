@@ -320,6 +320,7 @@ export function NoteLine({ note }: { note: ThreadNote }) {
 const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  junie: 'Junie',
   opencode: 'OpenCode',
   pi: 'pi',
 }

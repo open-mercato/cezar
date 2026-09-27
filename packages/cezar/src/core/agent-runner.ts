@@ -4,13 +4,15 @@
  * no token-budget circuit breaker, no zod response schemas — one run is one
  * agent-CLI session streaming normalized events.
  *
- * Four interchangeable backends implement this seam, each as a persistent
+ * Five interchangeable backends implement this seam, each as a persistent
  * process so multi-turn follow-ups, `waiting`, interrupt and resume all work:
  *  - `claude`   — Claude Code CLI, stream-json over stdin/stdout;
  *  - `codex`    — `codex app-server`, JSON-RPC 2.0 (JSONL) over stdin/stdout;
  *  - `opencode` — `opencode serve`, HTTP + SSE;
  *  - `pi`       — pi coding CLI, RPC over JSONL stdin/stdout, selecting its
- *                 model with `provider/model`.
+ *                 model with `provider/model`;
+ *  - `junie`    — JetBrains Junie CLI, real Agent Client Protocol (ACP:
+ *                 `junie --acp=true`), JSON-RPC 2.0 (JSONL) over stdin/stdout.
  */
 
 import type { UiEvent } from './ui-events.ts';
@@ -21,7 +23,7 @@ import type { UiEvent } from './ui-events.ts';
  * server-install "at least one agent CLI" gate, the CLI-handoff registry) rather than repeating
  * the literals, so adding runner #5 is a one-line change here and typecheck finds the rest.
  */
-export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
+export const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi', 'junie'] as const;
 
 /** The user-selectable runners (what config/GUI expose). */
 export type RunnerId = (typeof RUNNER_IDS)[number];

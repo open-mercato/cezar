@@ -12,6 +12,7 @@ const LABEL: Record<ProviderId, string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   pi: 'pi',
+  junie: 'Junie',
 };
 
 export function providersRequiredByWorkflow(
@@ -63,7 +64,9 @@ export function unavailableProviderMessage(
     if (row?.enabled === false) {
       return `${LABEL[provider]} is disabled. Enable it in Settings → Agents → Providers.`;
     }
-    if (row?.status !== 'connected') {
+    // Junie has no read-only auth-status command: its probe deliberately reports unknown.
+    // Let ACP authenticate at run startup; a real runtime rejection is still latched as disconnected.
+    if (row?.status !== 'connected' && !(provider === 'junie' && row?.status === 'unknown')) {
       return `${LABEL[provider]} credentials are unavailable. Authorize it in Settings → Agents → Providers.`;
     }
   }

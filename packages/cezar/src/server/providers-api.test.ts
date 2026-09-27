@@ -33,6 +33,9 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
     '└  1 credential',
   ].join('\n'),
   pi: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
+  // junie has no auth-status subcommand (`parseJunieStatus` always answers `null`), so no output
+  // shape can make it read as connected — this value is never asserted on, only type-satisfying.
+  junie: 'Junie version: 26.9.22 (3419.7)',
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -43,10 +46,13 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
     '└  0 credentials',
   ].join('\n'),
   pi: 'No models available. Use /login to authenticate.',
+  junie: 'Junie version: 26.9.22 (3419.7)',
 };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie') {
+    return executable;
+  }
   throw new Error(`unexpected executable: ${executable}`);
 };
 

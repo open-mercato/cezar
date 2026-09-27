@@ -1,6 +1,6 @@
 import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-mercato/cezar-api-client'
 
-const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'opencode', 'pi']
+const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'pi']
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -154,7 +154,13 @@ export function usableRunners(status: ProviderStatusResponse | undefined): Runne
   if (rows === null) return []
   const usable = new Set(
     rows
-      .filter((row) => row.enabled && row.status === 'connected')
+      .filter((row) => row.enabled && (
+        row.status === 'connected'
+        // Junie has no read-only auth-status command. Its probe can confirm the CLI is installed,
+        // but must report auth as unknown rather than guess; allow selection and let ACP surface
+        // any required authentication at run time.
+        || (row.provider === 'junie' && row.status === 'unknown')
+      ))
       .map((row) => row.provider),
   )
   return RUNNER_ORDER.filter((runner) => usable.has(runner))

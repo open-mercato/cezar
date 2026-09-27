@@ -11,6 +11,18 @@
  *
  * `BACKENDS` lists every backend that owns a wire mapper. Pi uses its documented
  * RPC protocol and therefore has its own wire-faithful fixture set.
+ *
+ * junie is exempted from three rows via `EXEMPT` below, each backed by a real
+ * live investigation (not an assumption) documented in `junie-ui-mapper.ts`'s
+ * module doc: a stronger model at high reasoning effort never emitted a
+ * `agent_thought_chunk`; neither "Plan mode" (prose, not a checklist) nor an
+ * unprompted multi-step task ever emitted a structured `plan` update; and
+ * junie's `tool_call.kind` is unmodified core ACP, which has no `task` kind at
+ * all (cezar's `task` is an extension for the other three backends' own
+ * bespoke sub-agent tool names) — so `nativeSubagentSessions`
+ * (`_meta.jetbrains.air.capabilities`) has no confirmed wire shape to render,
+ * nested or otherwise. A future junie/model revision that emits any of these
+ * should get a real fixture and drop the matching exemption.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -20,7 +32,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'pi'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'pi', 'junie'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -47,11 +59,17 @@ function hasToolStatus(events: UiEvent[], status: string): boolean {
 }
 
 /** The parity matrix (spec §"Backend parity requirement"): capability →
- *  predicate over a backend's full v2 fixture output. */
-const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) => boolean]> = [
+ *  predicate over a backend's full v2 fixture output, plus the backends
+ *  documented (module doc above) as not producing it on today's wire. */
+const CAPABILITIES: ReadonlyArray<[
+  name: string,
+  produced: (events: UiEvent[]) => boolean,
+  exempt?: ReadonlyArray<(typeof BACKENDS)[number]>,
+]> = [
   [
     'plan.updated with entries (TodoWrite / todoList / todowrite)',
     (events) => events.some((e) => e.type === 'plan.updated' && e.entries.length > 0),
+    ['junie'],
   ],
   ['tool status: running', (events) => hasToolStatus(events, 'running')],
   ['tool status: completed', (events) => hasToolStatus(events, 'completed')],
@@ -61,6 +79,7 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   [
     'reasoning items (thinking / reasoning items / reasoning parts)',
     (events) => items(events).some((item) => item.kind === 'reasoning' && item.text.trim() !== ''),
+    ['junie'],
   ],
   [
     'structured diffs (Edit input / fileChange.changes / patch parts)',
@@ -69,6 +88,7 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   [
     'sub-agent task items (Task / review-mode items / subtask parts)',
     (events) => items(events).some((item) => item.kind === 'tool' && item.toolKind === 'task'),
+    ['junie'],
   ],
   [
     'usage.updated with raw token counts',
@@ -87,7 +107,8 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
 describe('protocol v2 backend parity (every mapper emits every matrix capability)', () => {
   for (const backend of BACKENDS) {
     const events = fixtureEvents(backend);
-    for (const [name, produced] of CAPABILITIES) {
+    for (const [name, produced, exempt] of CAPABILITIES) {
+      if (exempt?.includes(backend)) continue;
       it(`${backend} produces ${name}`, () => {
         expect(produced(events)).toBe(true);
       });
@@ -97,7 +118,9 @@ describe('protocol v2 backend parity (every mapper emits every matrix capability
   // Sub-agent NESTING rides on parentItemId where the wire attributes work
   // to its parent: claude `parent_tool_use_id` and opencode child-session
   // parts under a `subtask`. Codex's wire has no parent attribution — its
-  // matrix cell is the review-mode task items asserted above.
+  // matrix cell is the review-mode task items asserted above. junie's cell is
+  // the documented `EXEMPT` on "sub-agent task items" above: no confirmed wire
+  // shape for `nativeSubagentSessions` at all, nested or otherwise.
   for (const backend of ['claude', 'opencode'] as const) {
     it(`${backend} nests sub-agent work via parentItemId`, () => {
       expect(items(fixtureEvents(backend)).some((item) => item.parentItemId !== undefined)).toBe(true);

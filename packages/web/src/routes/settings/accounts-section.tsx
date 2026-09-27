@@ -91,6 +91,7 @@ import { AddAccountDialog } from './add-account-dialog'
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  junie: 'Junie',
   opencode: 'OpenCode',
   pi: 'pi',
 }
@@ -99,6 +100,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
 const PROVIDER_INSTALL: Record<ProviderId, string> = {
   claude: 'curl -fsSL https://claude.ai/install.sh | bash',
   codex: 'npm i -g @openai/codex',
+  junie: 'https://www.jetbrains.com/junie/',
   opencode: 'https://opencode.ai',
   pi: 'https://github.com/badlogic/pi-mono',
 }
@@ -144,7 +146,7 @@ function AccountsPane({ data }: { data: AgentProfilesResponse }) {
   // Every agent gets a tab, including one that cannot carry a second login: the tab is where its
   // install state and config folder live, and hiding OpenCode would just move the question
   // "is OpenCode set up?" somewhere else.
-  const providers: ProviderId[] = ['claude', 'codex', 'opencode', 'pi']
+  const providers: ProviderId[] = ['claude', 'codex', 'junie', 'opencode', 'pi']
 
   if (!data.editable) {
     return (

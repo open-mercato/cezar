@@ -15,6 +15,9 @@ vi.mock('./claude-bin.ts', async (importOriginal) => ({
   ...await importOriginal<typeof import('./claude-bin.ts')>(),
   resolveClaudeBin: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_CLAUDE_BIN || 'claude',
 }));
+vi.mock('./junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
+}));
 
 import {
   ProviderAuthService,
@@ -512,7 +515,7 @@ describe('provider auth parsers', () => {
 });
 
 describe('ProviderAuthService', () => {
-  it('always returns claude, codex, opencode, pi in descriptor order', async () => {
+  it('always returns providers in descriptor order', async () => {
     const service = new ProviderAuthService({ runCommand: runner() });
 
     await expect(service.status()).resolves.toMatchObject({
@@ -521,6 +524,7 @@ describe('ProviderAuthService', () => {
         { provider: 'codex' },
         { provider: 'opencode' },
         { provider: 'pi' },
+        { provider: 'junie', status: 'connected' },
       ],
     });
   });
@@ -996,6 +1000,7 @@ describe('ProviderAuthService', () => {
         { provider: 'codex', status: 'connected' },
         { provider: 'opencode', status: 'connected' },
         { provider: 'pi', status: 'connected' },
+        { provider: 'junie', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1095,7 +1100,7 @@ describe('ProviderAuthService', () => {
       .toBe('"C:\\Program Files\\op^%en^&co^!de^".exe" auth login');
   });
 
-  it('reports all four providers connected in CEZ_DRY_RUN without executing a command', async () => {
+  it('reports all providers connected in CEZ_DRY_RUN without executing a command', async () => {
     process.env.CEZ_DRY_RUN = '1';
     const runCommand = runner();
     const service = new ProviderAuthService({ runCommand });
@@ -1106,6 +1111,7 @@ describe('ProviderAuthService', () => {
         { provider: 'codex', status: 'connected' },
         { provider: 'opencode', status: 'connected' },
         { provider: 'pi', status: 'connected' },
+        { provider: 'junie', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1160,7 +1166,7 @@ describe('ProviderAuthService', () => {
       const before = spawns;
       now += 60 * 60_000; // an hour later
 
-      expect(service.peekStatus()?.providers).toHaveLength(4);
+      expect(service.peekStatus()?.providers).toHaveLength(5);
       expect(service.peekProfileStatus('claude', 'work')).toBeDefined();
       expect(spawns).toBe(before); // …and still nothing spawned
     });
@@ -1183,7 +1189,7 @@ describe('ProviderAuthService', () => {
       await service.status();
       await service.profileStatus('claude', { id: 'work', configDir: '/work' });
       const before = spawns;
-      expect(service.peekStatus()?.providers).toHaveLength(4);
+      expect(service.peekStatus()?.providers).toHaveLength(5);
       expect(service.peekProfileStatus('claude', 'work')?.profileId).toBe('work');
       expect(spawns).toBe(before);
     });

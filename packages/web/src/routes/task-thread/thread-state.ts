@@ -70,7 +70,7 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'opencode' | 'pi'
+  provider: 'claude' | 'codex' | 'junie' | 'opencode' | 'pi'
   authFailureId: string
 }
 

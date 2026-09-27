@@ -5,7 +5,7 @@ import { resolveClaudeBin } from './claude-bin.ts';
 const exec = promisify(execFile);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'pi' | 'gh' | 'git';
+  name: 'claude' | 'codex' | 'opencode' | 'pi' | 'junie' | 'gh' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -13,10 +13,10 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` / `pi` alternatives), `gh` (GitHub auth for
- * PR creation) and `git`. Nothing is required except at least one agent CLI —
- * the GUI degrades gracefully, only offers the runners that are present, and
- * shows the hints for the rest.
+ * the optional `codex` / `opencode` / `pi` / `junie` alternatives), `gh`
+ * (GitHub auth for PR creation) and `git`. Nothing is required except at
+ * least one agent CLI — the GUI degrades gracefully, only offers the runners
+ * that are present, and shows the hints for the rest.
  */
 export async function detectEnvironment(): Promise<BackendCheck[]> {
   return Promise.all([
@@ -24,6 +24,7 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probeCodex(),
     probeOpencode(),
     probePi(),
+    probeJunie(),
     probeGh(),
     probeGit(),
   ]);
@@ -128,6 +129,35 @@ async function probePi(): Promise<BackendCheck> {
       name: 'pi',
       available: false,
       hint: 'optional: install the pi CLI and log in to use the pi runner',
+    };
+  }
+}
+
+async function probeJunie(): Promise<BackendCheck> {
+  // Unlike claude/pi, junie has no bundled CEZ_DRY_RUN mock (same posture as
+  // codex/opencode): the real CLI is required, dry-run or not.
+  const bin = process.env.CEZ_JUNIE_BIN ?? 'junie';
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    const version = stdout.trim();
+    if (!/junie version[:\s]/i.test(version)) {
+      return {
+        name: 'junie',
+        available: false,
+        hint: `\`${bin}\` resolves but doesn't look like Junie (got: ${version.slice(0, 80)})`,
+      };
+    }
+    return {
+      name: 'junie',
+      available: true,
+      version,
+      hint: 'if not authenticated, run `junie` once and log in',
+    };
+  } catch {
+    return {
+      name: 'junie',
+      available: false,
+      hint: 'optional: install Junie (https://junie.jetbrains.com/cli) and log in to use the Junie runner',
     };
   }
 }

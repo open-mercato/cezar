@@ -114,7 +114,7 @@ afterEach(() => {
 })
 
 describe('ProviderSettings', () => {
-  it('always renders Claude Code, Codex, OpenCode, and pi cards in that order', async () => {
+  it('always renders provider cards in order', async () => {
     serve()
     renderSettings()
 
@@ -123,7 +123,7 @@ describe('ProviderSettings', () => {
       [...document.querySelectorAll('[data-slot="provider-card"]')].map((item) =>
         item.querySelector('h3')?.textContent,
       ),
-    ).toEqual(['Claude Code', 'Codex', 'OpenCode', 'pi'])
+    ).toEqual(['Claude Code', 'Codex', 'Junie', 'OpenCode', 'pi'])
   })
 
   it('presents discovery truth, enablement, and runtime recovery without hiding diagnostics', async () => {
@@ -182,6 +182,7 @@ describe('ProviderSettings', () => {
         providers: [
           { provider: 'claude', status: 'connected', enabled: true },
           { provider: 'codex', status: 'unknown', enabled: true },
+          { provider: 'junie', status: 'unknown', enabled: true, hint: 'Junie authentication check failed: invalid credentials.' },
           { provider: 'opencode', status: 'connected', enabled: true },
         ],
       },
@@ -193,6 +194,7 @@ describe('ProviderSettings', () => {
     expect(within(card('codex')).getByRole('button', { name: 'Check again' })).toBeTruthy()
     expect(within(card('codex')).queryByText('Not connected')).toBeNull()
     expect(within(card('codex')).queryByRole('button', { name: 'Connect' })).toBeNull()
+    expect(within(card('junie')).getByText('Junie authentication check failed: invalid credentials.')).toBeTruthy()
   })
 
   it('connects with only the provider id, then explains the terminal flow and refreshes status', async () => {
@@ -265,7 +267,7 @@ describe('ProviderSettings', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
-    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(4)
+    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(5)
   })
 
   it('treats a malformed successful response as a safe verification error', async () => {
@@ -275,7 +277,7 @@ describe('ProviderSettings', () => {
 
     expect(await screen.findByText('Provider status could not be loaded')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy()
-    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(4)
+    expect(document.querySelectorAll('[data-slot="provider-card"]')).toHaveLength(5)
     expect(screen.queryByText(secret)).toBeNull()
   })
 

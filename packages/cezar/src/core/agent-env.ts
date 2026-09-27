@@ -229,6 +229,12 @@ const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // granting it here handed pi the whole `AWS_*` / `GOOGLE_CLOUD_*` family on any host that had
   // set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, plus Claude's own config dir.
   pi: ['PI_', ...MULTI_PROVIDER_PREFIXES],
+  // junie's default auth (JetBrains account) lives entirely under `~/.junie/`
+  // (already reachable via the base `HOME` allowlist — no env var needed), but
+  // it also supports BYOK across the same provider set opencode/pi do
+  // (`--anthropic-api-key` etc, confirmed in `junie --help`), so it needs the
+  // same multi-provider credential surface for that path to work.
+  junie: ['JUNIE_', ...MULTI_PROVIDER_PREFIXES],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the

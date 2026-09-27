@@ -5,6 +5,7 @@ import { providerStatusFor } from '@/lib/provider-status'
 const PROVIDER_LABEL: Record<Runner, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
+  junie: 'Junie',
   opencode: 'OpenCode',
   pi: 'pi',
 }

@@ -128,6 +128,7 @@ describe('useRunnerModels', () => {
     ['codex', 'gpt-future'],
     ['claude', 'opus[1m]'],
     ['opencode', 'openai/gpt-5.4'],
+    ['junie', 'v1:model:junie:sonnet'],
   ] as const)('loads the workspace %s catalog from its own cache entry', async (runner, id) => {
     fetchMock.mockResolvedValue(json({ runner, models: [{ id, label: 'Future', description: '' }], source: 'live', stale: false }))
     const { result } = renderHook(() => useRunnerModels(runner), { wrapper: wrapper() })

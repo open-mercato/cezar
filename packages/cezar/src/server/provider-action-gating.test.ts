@@ -345,6 +345,15 @@ describe('the gate verifies before it refuses', () => {
     expect(startRun).toHaveBeenCalledTimes(1);
   });
 
+  it('allows Junie runs when credentials are unknown because Junie has no read-only auth probe', async () => {
+    const { app } = setup();
+
+    const response = await start(app, 'junie');
+
+    expect(response.status).toBe(201);
+    expect(startRun).toHaveBeenCalledTimes(1);
+  });
+
   it('still refuses when the fresh answer agrees — verifying is not a way in', async () => {
     const { app, providerAuth, advance } = setup();
     await providerAuth.status();
