@@ -17,7 +17,7 @@ Non-goals: changing proxy authentication, macOS ngrok routing, workflow/dispatch
 
 - [x] 2.1 Compare the authenticated health payload during Ubuntu installation verification, degrading safely when unavailable. — 56b7d28f, 488ba4d8
 - [x] 2.2 Add regression and compatibility tests, run targeted validation, and update compatibility documentation if required. — 56b7d28f, 488ba4d8
-- [ ] 2.3 Run the full configured validation gate and finalize the PR.
+- [x] 2.3 Run the full configured validation gate and finalize the PR. — dependency validation 2026-09-27; typecheck/unit/build/package pass; npm test 7954/7956 with two unrelated failures recorded below.
 
 ## Risks
 
@@ -37,4 +37,10 @@ Non-goals: changing proxy authentication, macOS ngrok routing, workflow/dispatch
 
 - [x] 2.1 Compare the authenticated health payload during Ubuntu installation verification, degrading safely when unavailable.
 - [x] 2.2 Add regression and compatibility tests, run targeted validation, and update compatibility documentation if required.
-- [ ] 2.3 Run the full configured validation gate and finalize the PR.
+- [x] 2.3 Run the full configured validation gate and finalize the PR.
+
+### Dependency validation evidence (2026-09-27)
+
+- Reused reviewed sidebar test commit `e882054b6300542f36583286e2e1804fcafd0598` unchanged; targeted `packages/web/src/routes/cross-project-task-navigation.test.tsx`: 1 file, 3 tests passed.
+- Sanitized gate (`CEZ_*` unset, `TMPDIR=/tmp`): `npm run typecheck` PASS; `npm test` 7954 passed / 2 failed; `npm run test:unit` PASS (36/36); `npm run build` PASS; `npm run test:package` PASS (16/16).
+- The two npm-test failures are unrelated existing timing/environment failures: `src/core/opencode-server-runner.test.ts` later-turn sendMessage parking (`only 0 turn-end(s) after 10000ms`) and `src/workflows/system-prompt.test.ts` headless automation CLI teaching (5s timeout). Full log: `/tmp/pr1100-full-gate.log`.
