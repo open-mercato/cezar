@@ -68,8 +68,8 @@ prostu mogę sobie kliknąć i je rozwinąć.")
 
 ### Phase 1: collapse rule in the tree lib
 
-- [ ] 1.1 `isExpanded` predicate in `flattenTaskTree`/`taskTreeRows`
-- [ ] 1.2 task-tree unit tests for collapsed subtrees
+- [x] 1.1 `isExpanded` predicate in `flattenTaskTree`/`taskTreeRows` — e5d22e53
+- [x] 1.2 task-tree unit tests for collapsed subtrees — e5d22e53
 
 ### Phase 2: per-project table and cards
 
