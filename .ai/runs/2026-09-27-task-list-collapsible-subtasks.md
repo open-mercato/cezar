@@ -73,9 +73,9 @@ prostu mogę sobie kliknąć i je rozwinąć.")
 
 ### Phase 2: per-project table and cards
 
-- [ ] 2.1 expanded-ids state + query force-expand in `TasksOverview`
-- [ ] 2.2 subtask chip becomes the accordion toggle in `TitleCell` and `TaskCard`
-- [ ] 2.3 tasks-overview tests for default-collapsed and toggling
+- [x] 2.1 expanded-ids state + query force-expand in `TasksOverview` — e73f7179
+- [x] 2.2 subtask chip becomes the accordion toggle in `TitleCell` and `TaskCard` — e73f7179
+- [x] 2.3 tasks-overview tests for default-collapsed and toggling — e73f7179
 
 ### Phase 3: cross-project list
 
