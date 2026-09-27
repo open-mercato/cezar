@@ -356,6 +356,59 @@ describe('global tasks page', () => {
     ).toEqual(['a1', 'w1'])
   })
 
+  // The subtask accordion (#1110), same contract as the per-project table: a dispatched child
+  // folds behind its parent's chip, collapsed by default, and a live search overrides the fold
+  // so a match can never hide under a collapsed parent.
+  describe('dispatched subtasks fold behind their parent', () => {
+    const DISPATCHED: RunIndexEntry = {
+      projectId: 'api',
+      id: 'a2',
+      title: 'Review the checkout endpoint',
+      status: 'running',
+      createdAt: '2026-07-14T10:30:00Z',
+      archived: false,
+      workflow: 'quick-task',
+      dispatch: { rootRunId: 'a1', parentRunId: 'a1', kind: 'review' },
+    }
+    const toggle = () =>
+      document.querySelector<HTMLButtonElement>('[data-run-id="a1"] [data-slot="subtask-toggle"]')
+
+    it('hides the child until the parent’s chip is clicked, and folds it back on the next click', async () => {
+      stubFetch({ runs: [...RUNS, DISPATCHED] })
+      renderPage()
+      await screen.findByText('Add checkout endpoint')
+
+      // Collapsed on arrival: the child is not a row, the parent wears the count.
+      expect(rowIds()).toEqual(['a1', 'w1', 'i1'])
+      expect(toggle()?.textContent).toBe('1 subtask')
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('false')
+
+      fireEvent.click(toggle()!)
+      expect(rowIds()).toEqual(['a1', 'a2', 'w1', 'i1'])
+      expect(
+        document.querySelector('[data-run-id="a2"]')?.getAttribute('data-depth'),
+      ).toBe('1')
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('true')
+
+      fireEvent.click(toggle()!)
+      expect(rowIds()).toEqual(['a1', 'w1', 'i1'])
+    })
+
+    it('a live search overrides the fold so a nested match stays visible', async () => {
+      stubFetch({ runs: [...RUNS, DISPATCHED] })
+      renderPage()
+      await screen.findByText('Add checkout endpoint')
+
+      const input = screen.getAllByLabelText('Search tasks across projects')[0]!
+      fireEvent.change(input, { target: { value: 'checkout endpoint' } })
+      await waitFor(() => expect(rowIds()).toEqual(['a1', 'a2']))
+
+      // Clearing the search folds the untouched accordion back to its default.
+      fireEvent.change(input, { target: { value: '' } })
+      await waitFor(() => expect(rowIds()).toEqual(['a1', 'w1', 'i1']))
+    })
+  })
+
   describe('filters live in the URL', () => {
     it('restores a filtered, grouped view from the query string alone', async () => {
       // The refresh case: a reload re-enters the route with only the URL to go on.
