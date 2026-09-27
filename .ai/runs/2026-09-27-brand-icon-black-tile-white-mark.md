@@ -98,6 +98,17 @@ through to the repo-root `node_modules/@open-mercato/*`, whose symlinks point in
 repo entirely. `npm ci` inside the worktree fixes it; the stale root symlinks are untouched by this
 run and remain a trap for the next one.
 
+## Visual evidence
+
+`2026-09-27-brand-icon-black-tile-white-mark-artifacts/brand-mark-before-after.png` — the mark
+composited over both sidebar backgrounds. Left column before, right column after; top row the dark
+sidebar (`#171717`), bottom row the light one (`#fafafa`). Composited rather than screenshotted:
+the browser provider was unavailable in this run, and an exact 4×4 box downscale of the 704px
+source needs no resampling, so the composite is the real pixels over the real token colours.
+
+It confirms the dark-theme note above: the black tile's edge is only just distinguishable from
+`#171717` while the white mark stays crisp, and on light the tile is strong.
+
 ## Review
 
 `om-auto-review-pr --autofix` found one blocker, fixed in 51b26ade: the new PNG decoder tripped the
