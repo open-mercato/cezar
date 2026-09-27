@@ -134,6 +134,7 @@ const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: st
   // must also reach the LAUNCH — see `withResolvedClaudeBin`.
   { runner: 'claude', label: 'Claude CLI', icon: 'claude', bin: 'claude', envBin: () => claudeShellCommand() ?? undefined },
   { runner: 'codex', label: 'Codex CLI', icon: 'codex', bin: 'codex', envBin: () => process.env.CEZ_CODEX_BIN },
+  { runner: 'junie', label: 'Junie CLI', icon: 'junie', bin: 'junie', envBin: () => process.env.CEZ_JUNIE_BIN },
   { runner: 'opencode', label: 'OpenCode', icon: 'opencode', bin: 'opencode', envBin: () => process.env.CEZ_OPENCODE_BIN },
   { runner: 'pi', label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: () => process.env.CEZ_PI_BIN },
 ];

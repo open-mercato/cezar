@@ -1,0 +1,58 @@
+[
+  { "type": "session.started", "sessionId": "session-schema-derived-1", "backend": "junie" },
+  { "type": "turn.started", "turnId": "turn_1" },
+  {
+    "type": "item.started",
+    "item": { "kind": "reasoning", "id": "reasoning-1", "text": "" }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "reasoning-1",
+    "field": "reasoning",
+    "delta": "Checking whether the existing regression suite already exercises this edge case before writing a new test."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "reasoning",
+      "id": "reasoning-1",
+      "text": "Checking whether the existing regression suite already exercises this edge case before writing a new test."
+    }
+  },
+  {
+    "type": "plan.updated",
+    "entries": [
+      { "content": "Check whether existing tests already cover the edge case.", "status": "completed", "priority": "medium" },
+      { "content": "Add a regression test for the interrupted-session edge case.", "status": "in_progress", "priority": "high" }
+    ]
+  },
+  {
+    "type": "item.started",
+    "item": { "kind": "message", "id": "final-1", "role": "assistant", "text": "" }
+  },
+  {
+    "type": "item.delta",
+    "itemId": "final-1",
+    "field": "text",
+    "delta": "Added a regression test covering the interrupted-session edge case; the suite passes."
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "final-1",
+      "role": "assistant",
+      "text": "Added a regression test covering the interrupted-session edge case; the suite passes."
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": { "input": 1200, "output": 340, "total": 1540 }
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": { "input": 1200, "output": 340, "total": 1540 }
+  }
+]

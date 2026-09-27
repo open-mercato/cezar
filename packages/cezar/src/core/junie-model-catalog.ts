@@ -4,6 +4,7 @@ import { readNdjson } from './ndjson.ts';
 import {
   endJunieAcp,
   JunieAcpRpc,
+  junieSpawnError,
   resolveJunieExecutable,
   spawnJunieAcp,
   type JunieAcpMessage,
@@ -73,12 +74,14 @@ export async function discoverJunieModels(
       timeout.unref?.();
     });
     const exited = new Promise<never>((_, reject) => {
-      const fail = (message: string) => {
-        rpc.rejectPending(message);
-        reject(new Error(message));
+      const fail = (error: Error) => {
+        rpc.rejectPending(error.message);
+        reject(error);
       };
-      child.once('error', () => fail('Junie model discovery child failed'));
-      child.once('exit', (code) => fail(`Junie model discovery child exited (${code ?? 'unknown'})`));
+      // The spawn error (ENOENT when the binary is missing) carries `.code` via `junieSpawnError`
+      // so `probeJunieAuthentication` can tell "not installed" apart from any other failure.
+      child.once('error', (error) => fail(junieSpawnError(error, resolveJunieExecutable(options.bin))));
+      child.once('exit', (code) => fail(new Error(`Junie model discovery child exited (${code ?? 'unknown'})`)));
     });
 
     return await Promise.race([discoverOverAcp(rpc, options.cwd), deadline, exited]);

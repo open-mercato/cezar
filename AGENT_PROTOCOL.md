@@ -35,7 +35,7 @@ id — that is the whole point of the seam.
 ### Identity
 
 ```ts
-const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;  // the source of truth
+const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi', 'junie'] as const;  // the source of truth
 type RunnerId     = (typeof RUNNER_IDS)[number];                   // user-selectable
 type AgentBackend = RunnerId | 'claude-cli';                       // + legacy id, still parses
 ```
@@ -441,7 +441,23 @@ To be first-class:
    replaying them.
 7. **Parity** — add the id to `BACKENDS` in `ui-parity.test.ts`; every capability
    row must pass. (If the backend has no wire parent attribution, document the
-   nesting cell's substitute the way codex's review-mode items are handled.)
+   nesting cell's substitute the way codex's review-mode items are handled.) A
+   capability the backend's own upstream protocol has genuinely never published a
+   wire shape for at all — not merely unobserved on a live capture, but absent
+   from the protocol's own public schema — gets the SAME narrow substitute as the
+   nesting cell: excluded from that one row's per-backend loop, with a comment
+   citing exactly what was checked and why no shape exists (junie's "sub-agent
+   task items" row, backed by core ACP's `tool_call.kind` enum having no `task`
+   value and no published `nativeSubagentSessions` shape, is the precedent). This
+   is NOT a generic per-backend opt-out: `ui-parity.test.ts` must never grow a
+   reusable "exempt this backend from this row" flag on the capability table
+   itself (rejected as B2 in the PR #1111 review — it silently turns the hard
+   rule into an opt-in for every future backend). A capability the backend
+   COULD implement per the upstream protocol's own schema but has never observed
+   live is a different case and does not qualify for this: implement it from the
+   schema and back it with a fixture explicitly labelled schema-derived rather
+   than captured (`BACKWARD_COMPATIBILITY.md` §7, PR #443 precedent) — junie's
+   `plan`/`agent_thought_chunk` fixture is the worked example.
 8. **Plumbing** — the run-store `runner` enum, workflow step schema, the
    `POST /api/runs` / `PUT /api/config` bodies, `resumeCommand()`, the web
    `Runner` type, composer pills/presets, and Settings → Agents. Keep additive

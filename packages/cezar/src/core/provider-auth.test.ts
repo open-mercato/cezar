@@ -26,6 +26,7 @@ import {
   type ProviderCommandResult,
   type RunProviderCommand,
 } from './provider-auth.ts';
+import { probeJunieAuthentication } from './junie-auth-probe.ts';
 
 const connectedResults: Record<string, ProviderCommandResult> = {
   claude: { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 },
@@ -527,6 +528,29 @@ describe('ProviderAuthService', () => {
         { provider: 'junie', status: 'connected' },
       ],
     });
+  });
+
+  it('bounds the default junie probe to the same 10s budget every other provider gets (#M2)', async () => {
+    const service = new ProviderAuthService({ runCommand: runner() });
+    await service.status();
+
+    expect(probeJunieAuthentication).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 10_000 }),
+    );
+  });
+
+  it('reports junie as not-installed, not unknown, when the binary is missing (#M1)', async () => {
+    vi.mocked(probeJunieAuthentication).mockResolvedValueOnce({ connected: false, notInstalled: true });
+    const service = new ProviderAuthService({ runCommand: runner() });
+
+    await expect(statuses(service)).resolves.toMatchObject({ junie: { status: 'not-installed' } });
+  });
+
+  it('reports junie as not-installed when the probe throws an ENOENT error (#M1)', async () => {
+    vi.mocked(probeJunieAuthentication).mockRejectedValueOnce(Object.assign(new Error('nope'), { code: 'ENOENT' }));
+    const service = new ProviderAuthService({ runCommand: runner() });
+
+    await expect(statuses(service)).resolves.toMatchObject({ junie: { status: 'not-installed' } });
   });
 
   it('runs the four status commands concurrently with a 10 second timeout', async () => {

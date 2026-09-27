@@ -232,15 +232,15 @@ function parseOpenCodeStatus(result: ProviderCommandResult): ProviderConnectionS
 }
 
 /**
- * Unlike its three siblings, junie's CLI exposes no `auth status`-shaped
- * subcommand at all (`junie --help`'s `Authentication:` section is write-only:
- * `--auth=<token>`, `--<provider>-api-key=<key>`) — a real Auth CHECK requires
- * driving the ACP handshake itself (`initialize` → `authenticate` →
- * `session/prompt`, confirmed live to be the only path that actually surfaces
- * "no usable entitlement"), which this synchronous execFile-and-regex probe
- * has no seam for. `--version` only confirms the binary is present, so this
- * always answers `null` (→ `unknown`, never a false `disconnected`) rather
- * than guessing at a status this command cannot see.
+ * Dead code, on purpose: `probe()` special-cases `descriptor.id === 'junie'` and returns before
+ * `descriptor.parse` is ever reached, because a real Auth CHECK requires driving the ACP
+ * handshake itself (`initialize` → `authenticate` → `session/prompt`, confirmed live to be the
+ * only path that actually surfaces "no usable entitlement") — this synchronous
+ * execFile-and-regex probe has no seam for that. `junie --help`'s `Authentication:` section is
+ * write-only (`--auth=<token>`, `--<provider>-api-key=<key>`) so there is no `auth status`-shaped
+ * subcommand to parse in the first place. Kept only because `ProviderDescriptor.parse` is
+ * required on every entry — this is the junie descriptor's metadata-only placeholder, not a
+ * live code path.
  */
 function parseJunieStatus(_result: ProviderCommandResult): ProviderConnectionState | null {
   return null;
@@ -376,7 +376,7 @@ export class ProviderAuthService {
   private readonly now: () => number;
   private readonly platform: NodeJS.Platform;
   private readonly createAuthFailureId: () => string;
-  private readonly probeJunie: () => Promise<{ connected: boolean; hint?: string }>;
+  private readonly probeJunie: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
   private readonly runtimeFailures = new Map<ProviderId, RuntimeAuthFailure>();
   /** One self-check at a time per provider, and not more often than the cooldown. Both guard the
    *  same thing — a CLI spawn per auth-shaped error line — from the two directions it can arrive
@@ -405,13 +405,21 @@ export class ProviderAuthService {
     now?: () => number;
     platform?: NodeJS.Platform;
     createAuthFailureId?: () => string;
-    probeJunie?: () => Promise<{ connected: boolean; hint?: string }>;
+    /** Working directory the junie ACP probe opens its session in. Defaults to `process.cwd()`,
+     *  but the server passes the boot project root so this agrees with the model catalog's own
+     *  discovery cwd (`server.ts`'s `bootRoot`) instead of silently diverging from it. */
+    cwd?: string;
+    probeJunie?: () => Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }>;
   }) {
     this.runCommand = options?.runCommand ?? defaultRunProviderCommand;
     this.now = options?.now ?? Date.now;
     this.platform = options?.platform ?? process.platform;
     this.createAuthFailureId = options?.createAuthFailureId ?? randomUUID;
-    this.probeJunie = options?.probeJunie ?? (() => probeJunieAuthentication({ cwd: process.cwd() }));
+    // Bounded to the SAME budget every other provider's status probe respects (#M2 review) — the
+    // discovery module's own 15s default exists for the explicit "Check again" / model-picker
+    // path, not for a status read that runs on every poll and warm-up.
+    this.probeJunie = options?.probeJunie
+      ?? (() => probeJunieAuthentication({ cwd: options?.cwd ?? process.cwd(), timeoutMs: COMMAND_TIMEOUT_MS }));
   }
 
   /**
@@ -709,10 +717,16 @@ export class ProviderAuthService {
     if (descriptor.id === 'junie') {
       try {
         const result = await this.probeJunie();
+        if (result.notInstalled) return { provider: 'junie', status: 'not-installed', hint: descriptor.installHint };
         return result.connected
           ? { provider: 'junie', status: 'connected' }
           : { provider: 'junie', status: 'unknown', hint: result.hint };
       } catch (error) {
+        // Same distinction as the try path above: a missing binary is "not-installed" (so the
+        // GUI never offers a runner that cannot run), everything else stays "unknown" (#M1).
+        if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+          return { provider: 'junie', status: 'not-installed', hint: descriptor.installHint };
+        }
         return {
           provider: 'junie',
           status: 'unknown',

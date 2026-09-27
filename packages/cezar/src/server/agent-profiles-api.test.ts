@@ -21,6 +21,15 @@ vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
   resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
 }));
 
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, every status probe in this suite spawned a
+// real `junie` process — on a machine with Junie installed and logged in, that handshake is slow
+// enough to blow past `vi.waitFor`'s default timeout before the boot warm-up settles (#M3 review,
+// same bug as providers-api.test.ts / provider-auth-runtime.test.ts / provider-action-gating.test.ts).
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: true })),
+}));
+
 /**
  * `/api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles): extra config dirs for a
  * second login of the same agent CLI.

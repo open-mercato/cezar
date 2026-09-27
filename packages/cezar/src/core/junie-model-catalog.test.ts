@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { discoverJunieModels } from './junie-model-catalog.ts';
 
-const mockBin = fileURLToPath(new URL('./__fixtures__/junie/mock-junie-acp.mjs', import.meta.url));
+const mockBin = fileURLToPath(new URL('../../scripts/mock-junie-acp.mjs', import.meta.url));
 
 describe('discoverJunieModels', () => {
   it('reads model choices from ACP session config options and closes the short-lived process', async () => {

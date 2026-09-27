@@ -134,8 +134,10 @@ async function probePi(): Promise<BackendCheck> {
 }
 
 async function probeJunie(): Promise<BackendCheck> {
-  // Unlike claude/pi, junie has no bundled CEZ_DRY_RUN mock (same posture as
-  // codex/opencode): the real CLI is required, dry-run or not.
+  // Dry-run stands the runner up on the shared mock, so report it present.
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'junie', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
   const bin = process.env.CEZ_JUNIE_BIN ?? 'junie';
   try {
     const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });

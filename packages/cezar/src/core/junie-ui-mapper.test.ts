@@ -78,6 +78,18 @@ describe('junie ACP → v2 golden fixtures', () => {
     expect(replay('cancelled-turn', 'session-260927-141912-1jcp')).toStrictEqual(expectedEvents('cancelled-turn'));
   });
 
+  // `agent_thought_chunk` and `plan` were never observed live (see module doc) — this fixture is
+  // schema-derived, not captured: `entries[].priority` (required by the public ACP schema) and
+  // `agent_thought_chunk`'s shape (mirroring the sibling `agent_message_chunk`'s confirmed-live
+  // `content`/`messageId` fields, since both are the same producer's message-chunk family) are
+  // synthetic. It exercises `mapMessageChunk('reasoning', …)` and `mapPlan` for real rather than
+  // leaving them dead code, without claiming a capture that never happened (#443 precedent, B2 review).
+  it('maps a schema-derived plan + reasoning turn exactly', () => {
+    expect(replay('schema-plan-reasoning', 'session-schema-derived-1')).toStrictEqual(
+      expectedEvents('schema-plan-reasoning'),
+    );
+  });
+
   it('malformed and unknown session/update payloads are ignored without throwing', () => {
     const state = createJunieUiState();
     for (const value of [null, 42, [], {}, { sessionUpdate: 'future_event' }, { sessionUpdate: 42 }]) {

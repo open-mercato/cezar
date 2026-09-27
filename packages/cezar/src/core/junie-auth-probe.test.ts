@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 
-const mockBin = fileURLToPath(new URL('./__fixtures__/junie/mock-junie-acp.mjs', import.meta.url));
+const mockBin = fileURLToPath(new URL('../../scripts/mock-junie-acp.mjs', import.meta.url));
 const previousAuthError = process.env.CEZ_MOCK_JUNIE_AUTH_ERROR;
 
 afterEach(() => {
@@ -41,4 +41,11 @@ describe('probeJunieAuthentication', () => {
         hint: 'Junie model verification failed: invalid token: [redacted] [redacted]',
       });
   }, 15_000);
+
+  it('reports notInstalled, not a generic unknown, when the binary is missing (#M1)', async () => {
+    const result = await probeJunieAuthentication({ bin: '/no/such/junie-binary', cwd: process.cwd() });
+    expect(result.connected).toBe(false);
+    expect(result.notInstalled).toBe(true);
+    expect(result.hint).toContain('not found on PATH');
+  });
 });

@@ -8,12 +8,17 @@ export async function probeJunieAuthentication(options: {
   bin?: string;
   spawn?: Parameters<typeof discoverJunieModels>[0]['spawn'];
   timeoutMs?: number;
-}): Promise<{ connected: boolean; hint?: string }> {
+}): Promise<{ connected: boolean; hint?: string; notInstalled?: boolean }> {
   try {
     const models = await discoverJunieModels(options);
     if (models.length > 0) return { connected: true };
     return { connected: false, hint: 'Junie did not return any available models.' };
   } catch (error) {
+    // The binary itself is missing (spawn ENOENT) — distinct from "installed but the ACP
+    // handshake failed", which is a genuinely unknown auth state (#M1 review).
+    if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') {
+      return { connected: false, notInstalled: true, hint: safeDiagnostic(errorMessage(error)) };
+    }
     return { connected: false, hint: `Junie model verification failed: ${safeDiagnostic(errorMessage(error))}` };
   }
 }

@@ -26,20 +26,34 @@
  *
  * NOT yet observed live (tried explicitly: a stronger model + high effort for
  * reasoning, an unprompted 3-step task for a structured checklist) — mapped
- * per the public ACP schema (agentclientprotocol.com) as forward-compatible,
- * dead-until-proven code, and flagged here rather than backed by a fixture
- * claiming a live capture that never happened (AGENT_PROTOCOL.md §7's
- * "verify against upstream wire shapes" rule, PR #443 precedent):
+ * per the public ACP schema (agentclientprotocol.com), and exercised by
+ * `__fixtures__/junie/schema-plan-reasoning.{ndjson,expected.json}`, a
+ * SCHEMA-DERIVED fixture explicitly labelled as such rather than one claiming
+ * a live capture that never happened (AGENT_PROTOCOL.md §7's "verify against
+ * upstream wire shapes" rule, PR #443 precedent; ui-parity.test.ts's B2 review):
  *  - `agent_thought_chunk` (reasoning stream) — junie folded all visible
  *    reasoning into the final prose message for every model/effort tried;
  *  - a structured `plan` update — junie's own "Plan mode" produces a prose
  *    planning document via `agent_message_chunk`, not a checklist, and a
- *    plain multi-step task never emitted one either;
- *  - sub-agent nesting (`parentItemId`) — `_meta.jetbrains.air.capabilities`
- *    advertises `nativeSubagentSessions`, but no wire shape for it was ever
- *    seen, so no nesting is attempted; a spawned sub-agent (should one ever
- *    surface as a `tool_call`) renders as a flat, unnested item, the same
- *    documented substitute codex's review-mode items use.
+ *    plain multi-step task never emitted one either.
+ *
+ * Genuinely unimplementable, not merely unobserved — no fixture, schema-derived
+ * or otherwise, can cover these because the public ACP schema itself has no wire
+ * shape to map: junie's `tool_call.kind` is unmodified core ACP
+ * (`read`/`edit`/`delete`/`move`/`search`/`execute`/`think`/`fetch`/`other`),
+ * which has no `task` kind at all — cezar's `task` `ToolKind` is an extension
+ * the OTHER three backends' bespoke sub-agent tool names map onto, not
+ * something ACP itself defines. `_meta.jetbrains.air.capabilities` advertises
+ * `nativeSubagentSessions`, but that capability has no published wire shape at
+ * all (unlike `agent_thought_chunk`/`plan`, which at least have a schema this
+ * mapper can implement ahead of observing them). ui-parity.test.ts's
+ * "sub-agent task items" row and sub-agent nesting are the documented,
+ * narrowly-scoped exception this leaves junie out of — see that test's own
+ * comment, not a generic per-backend opt-out:
+ *  - sub-agent nesting (`parentItemId`) — same gap: no wire shape exists, so
+ *    no nesting is attempted; a spawned sub-agent (should one ever surface as
+ *    a `tool_call`) renders as a flat, unnested item, the same documented
+ *    substitute codex's review-mode items use.
  *
  * Robustness rule (shared with every other mapper): input is untrusted wire
  * data, so this mapper never throws — malformed frames map to zero events.
@@ -226,7 +240,12 @@ function mapMessageChunk(
 ): JunieUiMapping {
   const text = contentTextOf(raw.content);
   if (text === undefined || text === '') return { events: [], state };
-  const messageId = str(raw.messageId) ?? '';
+  // A frame without `messageId` still has real text to render (unlike a tool call with no id,
+  // which `mapToolCall` correctly drops) — so this falls back to a synthetic, non-empty,
+  // per-kind id rather than `''`. `item.id: ''` broke a truthy-id assumption downstream and,
+  // via `open.id !== messageId` comparing `'' !== ''`, silently folded unrelated id-less
+  // messages of the same kind into one item.
+  const messageId = str(raw.messageId) ?? `junie-${itemKind}-no-id`;
 
   const events: UiEvent[] = [];
   let open = state.openMessage;

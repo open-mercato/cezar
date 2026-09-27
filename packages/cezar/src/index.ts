@@ -209,7 +209,7 @@ async function serveCommand(
   // the previous process exited are re-queued or resumed instead of failed.
   const store = openStore(repoRoot, { keepLive: true });
   const manager = new RunManager(store, repoRoot, { semaphore, projectId: bootProjectId, resolveTrackerEnv: resolveTrackerAgentEnv });
-  const providerAuth = new ProviderAuthService();
+  const providerAuth = new ProviderAuthService({ cwd: repoRoot });
   const workspaceEvents = new WorkspaceEventBus();
   const providerRuntimeAuth = new ProviderRuntimeAuthObserver(providerAuth, (status) => {
     workspaceEvents.emit('provider-status', status);
@@ -370,7 +370,7 @@ async function runCommand(
     return;
   }
 
-  const providerAuth = new ProviderAuthService();
+  const providerAuth = new ProviderAuthService({ cwd: repoRoot });
   const requiredProviders = providersRequiredByWorkflow(
     workflow,
     (await loadConfig(repoRoot)).defaultRunner,

@@ -20,6 +20,14 @@ vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
   resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
 }));
 
+// Junie has no read-only auth-status command, so `ProviderAuthService` probes it through a real
+// ACP session instead of `runCommand`. Left unmocked, the junie test below spawned a real
+// `junie` process (#M3 review). `connected: false` with no hint is what a genuinely unverifiable
+// ACP handshake maps to — the 'unknown' status the one junie test in this file is about.
+vi.mock('../core/junie-auth-probe.ts', () => ({
+  probeJunieAuthentication: vi.fn(async () => ({ connected: false })),
+}));
+
 const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents → Providers.';
 
 const memoryWorkspaceConfig = (disabledProviders: ProviderId[] = ['codex']) => {

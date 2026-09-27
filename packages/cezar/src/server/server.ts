@@ -1139,7 +1139,7 @@ export function createApp(deps: ServerDeps) {
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
     },
   });
-  const providerAuth = deps.providerAuth ?? new ProviderAuthService();
+  const providerAuth = deps.providerAuth ?? new ProviderAuthService({ cwd: bootRoot });
   const workspaceConfig = deps.workspaceConfig ?? {
     load: loadWorkspaceConfig,
     mergeWrite: mergeWriteWorkspaceConfig,

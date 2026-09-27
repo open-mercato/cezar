@@ -1,4 +1,6 @@
 import { spawn as nodeSpawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve as resolvePath } from 'node:path';
 import { trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
 import { EOF_KILL_GRACE_MS, EOF_TERM_GRACE_MS, KILL_GRACE_MS } from './claude-cli-runner.ts';
@@ -17,7 +19,20 @@ interface PendingRequest {
 }
 
 export function resolveJunieExecutable(override?: string): string {
-  return override ?? process.env.CEZ_JUNIE_BIN ?? 'junie';
+  if (override) return override;
+  if (process.env.CEZ_JUNIE_BIN) return process.env.CEZ_JUNIE_BIN;
+  // CEZ_DRY_RUN=1 swaps in the bundled mock so the cockpit / store / GUI can
+  // be exercised without a logged-in junie or burning tokens — same posture
+  // as claude/pi (#M5 review: the spec always claimed this, the wiring was
+  // just missing).
+  return process.env.CEZ_DRY_RUN === '1' ? mockJuniePath() : 'junie';
+}
+
+/** Path to the bundled mock (`scripts/mock-junie-acp.mjs`), for CEZ_DRY_RUN=1. */
+function mockJuniePath(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  // here = <pkg>/dist/core (built) or <pkg>/src/core (tsx dev).
+  return resolvePath(here, '..', '..', 'scripts', 'mock-junie-acp.mjs');
 }
 
 export function buildJunieAcpEnv(extraEnv?: Record<string, string>): NodeJS.ProcessEnv {
@@ -168,8 +183,13 @@ export function waitForJunieAcpExit(child: ChildProcessWithoutNullStreams): Prom
 export function junieSpawnError(error: unknown, bin: string): Error {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'ENOENT') {
-    return new Error(
-      `\`${bin}\` not found on PATH — install Junie (https://junie.jetbrains.com/cli) and run \`junie\` once to log in`,
+    // `.code` travels with the error so callers (the provider-status probe) can tell "not
+    // installed" apart from any other spawn failure without parsing this message.
+    return Object.assign(
+      new Error(
+        `\`${bin}\` not found on PATH — install Junie (https://junie.jetbrains.com/cli) and run \`junie\` once to log in`,
+      ),
+      { code: 'ENOENT' },
     );
   }
   return error instanceof Error ? error : new Error(String(error));

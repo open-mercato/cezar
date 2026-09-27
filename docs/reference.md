@@ -242,7 +242,7 @@ steps:
     prompt: "{{task}}"
     skill: project-conventions   # optional — from .ai/skills or .ai/cezar/skills
     # model: opus                # optional per-step model override
-    # runner: codex              # optional per-step backend: claude · codex · opencode · pi
+    # runner: codex              # optional per-step backend: claude · codex · junie · opencode · pi
     # allowedTools: [Read, Edit, Write, Grep, Glob, Bash]
   - id: verify
     name: Verify
@@ -276,7 +276,7 @@ the task's worktree — but note the zero-config default list (`Read`, `Edit`,
 `Write`, `Grep`, `Glob`, `Bash`) grants unrestricted `Bash` unless a step sets
 `bashAllowlist`, so treat a run as having full shell access in its worktree,
 not a sandboxed allowlist. Set `CEZ_APPROVAL_GATE=1` to opt into Claude's
-interactive approval UI. Codex and OpenCode are driven through their own
+interactive approval UI. Codex, Junie and OpenCode are driven through their own
 native protocols and don't honor `allowedTools` at all — see
 [Coding agent backends](#coding-agent-backends) for what each one actually
 locks down. Nothing runs on a server you don't own.
@@ -295,6 +295,7 @@ Useful environment variables:
 | `CEZ_AUTOSAVE=1` | Re-enable the periodic (90 s) autosave commit in task worktrees. Off by default (#471) — turn-end and pre-PR flushes always run, so branches still end complete. Every autosave names its trigger in the commit subject (`cezar autosave (periodic)` vs `(turn end)` / `(run finalize)` / `(pre-PR)`), so the flushes you keep are distinguishable from the timer you disabled. |
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. Rarely needed: when it is unset, cezar takes `claude` from PATH, and failing that looks where Claude Code's own installers put it — `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin` — so an install the launching shell never added to PATH is still found. |
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
+| `CEZ_JUNIE_BIN=/path/to/junie` | Override which `junie` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
@@ -353,36 +354,38 @@ platform.
 ## Coding agent backends
 
 cezar is not married to one vendor. Every agent step runs through a single
-`AgentRunner` seam with four built-in backends:
+`AgentRunner` seam with five built-in backends:
 
 | Backend | CLI | How cezar drives it | Tool access |
 |---|---|---|---|
 | **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` → `acceptEdits` + approval UI). |
 | **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
+| **Junie** _(experimental)_ | [`junie`](https://junie.jetbrains.com/cli) | `junie --acp=true` — the real Agent Client Protocol over stdio, the same transport JetBrains IDEs use. | Ignores `allowedTools`; every permission is auto-approved. |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
 | **pi** _(experimental)_ | [`pi`](https://github.com/badlogic/pi-mono) | Persistent `--mode rpc` over JSONL; models are picked with the `provider/model` convention. | Maps `allowedTools` onto pi's `--tools` allowlist; a configured `bashAllowlist` disables Bash because pi cannot express command-prefix rules. |
 
-> ⚠️ **OpenCode and pi support are experimental.** Both runners work but are less
-> battle-tested than the Claude Code and Codex backends, and OpenCode auto-approves
-> every permission (it ignores `allowedTools`). Treat them as previews and expect
-> rough edges.
+> ⚠️ **Junie, OpenCode and pi support are experimental.** All three runners work
+> but are less battle-tested than the Claude Code and Codex backends, and Junie
+> and OpenCode auto-approve every permission (they ignore `allowedTools`). Treat
+> them as previews and expect rough edges.
 
 On startup cezar probes which CLIs are installed and the cockpit only offers
-the backends it found — install any one of the four and you're operational.
+the backends it found — install any one of the five and you're operational.
 
 **Models come from your own machine.** The model picker does not ship a list of
-vendor releases that goes stale between cezar versions. For Claude, Codex and
-OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
+vendor releases that goes stale between cezar versions. For Claude, Codex, Junie
+and OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
 Code's `list_models` control request; the Codex app-server's `model/list`;
-`opencode models`) and shows exactly that, in that order — so a model your
-account gained yesterday is selectable today with no cezar release, and one your
-provider retired stops being offered. Discovery is read-only, costs no tokens,
-and is cached briefly in memory. If the CLI is missing, logged out, too old or
-slow, the picker quietly falls back to that runner's built-in entries (`auto`
-plus Claude's tier aliases) and says so in a status row; `pi`, which has no
-host-local catalog yet, always shows its built-in entries. `auto` — send no
-model at all and let the CLI decide — is always available, and a model you
-pinned by hand stays selectable even when it is no longer advertised.
+Junie's ACP `session/new` config options; `opencode models`) and shows exactly
+that, in that order — so a model your account gained yesterday is selectable
+today with no cezar release, and one your provider retired stops being offered.
+Discovery is read-only, costs no tokens, and is cached briefly in memory. If the
+CLI is missing, logged out, too old or slow, the picker quietly falls back to
+that runner's built-in entries (`auto` plus Claude's tier aliases) and says so
+in a status row; `pi`, which has no host-local catalog yet, always shows its
+built-in entries. `auto` — send no model at all and let the CLI decide — is
+always available, and a model you pinned by hand stays selectable even when it
+is no longer advertised.
 
 **Pick a backend at three levels** (most specific wins):
 
@@ -482,7 +485,7 @@ never blocks startup):
   // the source against a moving branch head — cezar verifies it resolves to
   // exactly that commit, and reports it as `team.commit`.
   "worktreeRetention": 10,   // keep the last N finished worktrees on disk; 0 = unlimited (branch always kept)
-  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode" · "pi"
+  "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "junie" · "opencode" · "pi"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
   "baseBranch": "develop"    // branch worktrees fork from + PRs target (also settable in the Git tab)

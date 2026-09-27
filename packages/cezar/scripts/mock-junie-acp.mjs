@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-// Test-only mock of `junie --acp=true` — speaks just enough real ACP JSON-RPC
-// 2.0 JSONL (confirmed live against @jetbrains/junie 26.9.22, see
-// junie-ui-mapper.ts's module doc) for the runner wiring tests in
-// junie-runner.test.ts: initialize/authenticate/session/new/set_config_option
-// handshake, one scripted turn (a message + a command tool call), a turn
-// failure, and a session/cancel → cancelled-response flow.
+// Mock `junie --acp=true` for CEZ_DRY_RUN=1 — speaks just enough real ACP
+// JSON-RPC 2.0 JSONL (confirmed live against @jetbrains/junie 26.9.22, see
+// junie-ui-mapper.ts's module doc) for the engine / store / GUI to be
+// exercised without a logged-in Junie or burning tokens, and doubles as the
+// fixture for the runner wiring tests in junie-runner.test.ts:
+// initialize/authenticate/session/new/set_config_option handshake, one
+// scripted turn (a message + a command tool call), a turn failure, and a
+// session/cancel → cancelled-response flow.
 //
 // `MOCK_JUNIE_IGNORE_EOF=1` switches to the #703 teardown shape instead: the
 // process stays deaf to stdin EOF and handles SIGTERM itself, exiting 143

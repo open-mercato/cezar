@@ -21,7 +21,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   };
 });
 
-const mockBin = fileURLToPath(new URL('./__fixtures__/junie/mock-junie-acp.mjs', import.meta.url));
+const mockBin = fileURLToPath(new URL('../../scripts/mock-junie-acp.mjs', import.meta.url));
 
 describe('JunieRunner against the mock ACP process', () => {
   it('drives the full handshake and a scripted turn end to end', async () => {
@@ -37,10 +37,12 @@ describe('JunieRunner against the mock ACP process', () => {
 
     expect(result.text).toBe('Checking the working tree.');
     expect(result.sessionId).toBe('mock-session-1');
-    expect(result.toolCalls).toEqual([{ id: 'call-1', name: 'execute', input: { command: 'git status --short', cwd: process.cwd() } }]);
+    // `name`/`tool` carry junie's real tool title ("git status --short"), not the ACP `kind`
+    // category ("execute") — a v1 consumer would otherwise see "execute" for most calls.
+    expect(result.toolCalls).toEqual([{ id: 'call-1', name: 'git status --short', input: { command: 'git status --short', cwd: process.cwd() } }]);
     expect(result.tokensUsed).toBe(1500);
     expect(events).toContainEqual({ type: 'session', sessionId: 'mock-session-1' });
-    expect(events).toContainEqual({ id: 'call-1', type: 'tool-call', tool: 'execute', input: { command: 'git status --short', cwd: process.cwd() } });
+    expect(events).toContainEqual({ id: 'call-1', type: 'tool-call', tool: 'git status --short', input: { command: 'git status --short', cwd: process.cwd() } });
     expect(events).toContainEqual({ type: 'tool-result', toolCallId: 'call-1', result: ' M src/example.ts', isError: false });
     expect(events.at(-1)).toEqual({ type: 'done' });
     expect(events.some((e) => e.type === 'error')).toBe(false);

@@ -373,6 +373,12 @@ class JunieSession implements AgentSession {
           value: this.spec.model,
         });
       }
+    } else {
+      // `session/new`/`session/load` resolved without a `sessionId` — `drainQueue()` below
+      // refuses to send anything while `this.sessionId` is unset, and nothing ever re-drains,
+      // so a silent hang (the run sits until the wall-clock timeout) is the alternative to
+      // failing loud here.
+      throw new Error('junie: session/new did not return a sessionId');
     }
 
     const first = prependSystemPrompt(this.spec.systemPrompt, this.spec.userPrompt);
@@ -481,7 +487,10 @@ class JunieSession implements AgentSession {
         this.lastMessageId = undefined;
       }
       const id = stringField(update, 'toolCallId');
-      const name = typeof update.kind === 'string' ? update.kind : 'other';
+      // The real tool name junie sends (v2's mapper uses the same field, see `junie-ui-mapper.ts`'s
+      // `toolItemFrom`) — the ACP `kind` category (`read`/`edit`/`execute`/`other`) is only a
+      // fallback for the rare frame with no title, so v1 consumers stop seeing `other` for most calls.
+      const name = stringField(update, 'title') ?? (typeof update.kind === 'string' ? update.kind : 'other');
       if (id) {
         this.toolCalls.push({ id, name, input: update.rawInput ?? { title: update.title } });
         this.emit({ type: 'tool-call', id, tool: name, input: update.rawInput ?? { title: update.title } });
