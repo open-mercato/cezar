@@ -105,23 +105,23 @@
 
 ```bash
 cd your-repo
-npx cezar-cli
+npx cezar-run
 ```
 
 這會在 `http://localhost:4321` 開啟座艙。輸入任務、選擇工作流程，然後按下 **Start**。
 
 ```bash
-npx cezar-cli run "add a --json flag to the export command"   # headless, no browser
-npx cezar-cli init                                            # scaffold .ai/cezar/
-npx cezar-cli@nightly                                         # try tonight's build
+npx cezar-run run "add a --json flag to the export command"   # headless, no browser
+npx cezar-run init                                            # scaffold .ai/cezar/
+npx cezar-run@nightly                                         # try tonight's build
 ```
 
-> 只是想先逛逛嗎？執行 `CEZ_DRY_RUN=1 npx cezar-cli`。它會使用內建的 mock agent，不需要登入。
+> 只是想先逛逛嗎？執行 `CEZ_DRY_RUN=1 npx cezar-run`。它會使用內建的 mock agent，不需要登入。
 
 ### 在伺服器上執行
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps
+npx cezar-run server-install --platform ubuntu-vps
 ```
 
 這會設定好 HTTPS、登入機制與系統服務，讓你從任何地方開啟座艙，包括手機。

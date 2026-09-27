@@ -87,7 +87,7 @@ One browser window, with live task updates over Server-Sent Events:
 | **Workflows** | Build a chain by drag-ordering skills, save it as portable YAML, import/export, or delete. Built-ins always come back. |
 | **Settings** | Appearance (dark/light theme, accent, density), agent backends, notifications, and the skills catalog. |
 
-The cockpit is a React app served pre-built from the package — `npx cezar-cli`
+The cockpit is a React app served pre-built from the package — `npx cezar-run`
 still means no build step and no dev server on your machine — with a dark/light
 theme, a ⌘K command palette, and bookmarklets that launch a task straight from
 a GitHub page.
@@ -429,12 +429,12 @@ strategy**, and never escalates silently: every privileged command is printed
 and verified, and it ends with a real authenticated end-to-end check.
 
 ```bash
-npx cezar-cli server-install   --platform ubuntu-vps   # stand it up
-npx cezar-cli server-deploy    --platform ubuntu-vps   # roll out a new version (reload the service)
-npx cezar-cli server-uninstall --platform ubuntu-vps   # reverse it
+npx cezar-run server-install   --platform ubuntu-vps   # stand it up
+npx cezar-run server-deploy    --platform ubuntu-vps   # roll out a new version (reload the service)
+npx cezar-run server-uninstall --platform ubuntu-vps   # reverse it
 
 # host a SECOND cockpit for another domain on the same box (ubuntu-vps):
-npx cezar-cli server-install   --platform ubuntu-vps --domain shop.example.com
+npx cezar-run server-install   --platform ubuntu-vps --domain shop.example.com
 ```
 
 On `ubuntu-vps` a single host can run several independent cockpits — add
@@ -446,7 +446,7 @@ nginx already owns `:80/:443`, cezar's would fight it for the ports. Install the
 service only and let your proxy front it:
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps \
+npx cezar-run server-install --platform ubuntu-vps \
   --external-proxy --domain cezar.example.com --bind-host 172.17.0.1
 ```
 
@@ -574,7 +574,7 @@ Every night we publish the trunk to npm, so the features landing in the next
 release are one command away:
 
 ```bash
-npx cezar-cli@nightly      # everything merged as of last night
+npx cezar-run@nightly      # everything merged as of last night
 ```
 
 **Come build this with us.** cezar is shaped by the people who run it on real
@@ -590,9 +590,9 @@ can be rough, a flag or a screen may change under you, and something occasionall
 breaks in a way no test caught. Nothing is at risk beyond your patience — every
 task runs in its own git worktree and cezar never auto-merges — but if you need a
 boring day, stay on the stable release. Pin a nightly you liked with its exact
-version (`npx cezar-cli@0.9.2-nightly.20260813.126` — the cockpit prints the
+version (`npx cezar-run@0.9.2-nightly.20260813.126` — the cockpit prints the
 version it booted, and the date in it tells you how old the build is), and drop
-back to stable any time with a plain `npx cezar-cli`.
+back to stable any time with a plain `npx cezar-run`.
 
 ### Preview builds
 
@@ -601,13 +601,13 @@ Every green CI run also publishes an installable npm snapshot
 merged yet:
 
 ```bash
-npx cezar-cli@develop      # current develop head
+npx cezar-run@develop      # current develop head
 ```
 
 Every pull request gets its own preview too — the CI bot posts a sticky comment
 on the PR with the exact pinned version to copy-paste
-(`npx cezar-cli@<version>-pr<N>.<run>`). Nightlies and previews are all
-prerelease versions under their own dist-tags; a plain `npx cezar-cli` always
+(`npx cezar-run@<version>-pr<N>.<run>`). Nightlies and previews are all
+prerelease versions under their own dist-tags; a plain `npx cezar-run` always
 resolves to the latest stable release.
 
 ---
@@ -635,7 +635,7 @@ npm install
 npm run build
 ```
 
-**4. Install as a global command** — build + put `cezar` / `cez` / `cezar-cli` on
+**4. Install as a global command** — build + put `cezar` / `cez` / `cezar-cli` / `cezar-run` on
 your PATH pointing at *this checkout*:
 
 ```bash
@@ -648,7 +648,7 @@ Now `cd` into any other repo and run it:
 ```bash
 cd ~/some-other-project
 cezar            # cockpit for that repo, straight off your checkout
-cezar-cli --help # same binary; the name matches `npx cezar-cli`
+cezar-run --help # same binary; the name matches `npx cezar-run`
 ```
 
 **5. The change loop**
@@ -662,7 +662,7 @@ cezar-cli --help # same binary; the name matches `npx cezar-cli`
 **6. Uninstall**
 
 ```bash
-npm run uninstall-as-command    # removes cezar / cez / cezar-cli (either flavor)
+npm run uninstall-as-command    # removes cezar / cez / cezar-cli / cezar-run (either flavor)
 ```
 
 **7. Troubleshooting**
