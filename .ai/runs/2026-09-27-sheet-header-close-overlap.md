@@ -88,3 +88,7 @@ PR: #1118
 ### Phase 3: Validation
 
 - [x] 3.1 Run the full validation gate — see the PR's Validation section
+
+### Phase 4: Review
+
+- [x] 4.1 Run `om-auto-review-pr --autofix` and land its findings — 3cc995d8 (mobile dispatch sheet: the enlarged close button covered the settings switch)
