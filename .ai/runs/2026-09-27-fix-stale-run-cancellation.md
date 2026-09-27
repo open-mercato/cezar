@@ -33,6 +33,8 @@ Cancellation is intentionally terminal before provider cooperation; late session
 
 ## Progress
 
+PR: #1098
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Reproduce and define ownership
@@ -44,3 +46,5 @@ Cancellation is intentionally terminal before provider cooperation; late session
 
 - [x] 2.1 Persist terminal cancellation, settle running steps, release the active slot, and prevent late startup work from reviving the run. — d7a28f1b
 - [x] 2.2 Run targeted cancellation tests and the configured validation gate. — fe22e1bb
+
+Final independent review: [approved](https://github.com/open-mercato/cezar/pull/1098#issuecomment-5852038770). Reviewed source head: `f4b5eed0`.
