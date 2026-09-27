@@ -513,102 +513,110 @@ function ProjectGroup({
       data-active={active ? '' : undefined}
       className={cn('mb-1', isDragging && 'relative z-10 opacity-40')}
     >
-      {/* Three SIBLINGS, never nested: the grip has to be a real focusable control for dnd-kit's
-          keyboard path, and a button inside a button — or inside a link — is invalid markup.
-          That is also what lets the row carry two jobs without them competing: the chevron
-          DISCLOSES a group (peek at another project's tasks without leaving the page), the name
-          SELECTS the project (#1018 — before this the row only ever disclosed, so clicking a
-          project left the active one, and the New task CTA, on whichever project you came from). */}
-      <div className="group/row relative flex items-center">
-        {active ? (
-          // The selection marker. `bg-muted` alone could not carry it: every row in this sidebar
-          // is `hover:bg-muted`, so "selected" and "the pointer is here" painted identically.
-          <span
-            aria-hidden="true"
-            data-slot="project-group-selected"
-            // `pointer-events-none` is load-bearing, not tidiness: an absolutely positioned
-            // element paints above its non-positioned siblings, so without it these 3px sit on
-            // top of the reorder grip's left edge and eat the drag that starts there — on the
-            // ACTIVE group, the only one that has this marker at all.
-            className="pointer-events-none absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-primary"
-          />
-        ) : null}
+      {/* Three controls, never nested in each other: the grip has to be a real focusable control
+          for dnd-kit's keyboard path, and a button inside a button — or inside a link — is
+          invalid markup. That is also what lets the row carry two jobs without them competing:
+          the chevron DISCLOSES a group (peek at another project's tasks without leaving the
+          page), the name SELECTS the project (#1018 — before this the row only ever disclosed,
+          so clicking a project left the active one, and the New task CTA, on whichever project
+          you came from). The chevron and the name share a plain wrapper below, which is how they
+          can stay separate controls and still paint as one row. */}
+      <div className="group/row flex items-center">
         {grip}
-        <button
-          type="button"
-          onClick={() => onToggle(project.id)}
-          aria-expanded={!collapsed}
-          aria-controls={bodyId}
-          aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${project.name}`}
-          data-slot="project-group-disclosure"
+        {/* ONE pill behind both controls, and the highlight lives here rather than on either of
+            them. Two controls painting their own backgrounds made the selected row read as two
+            tiles with a seam down the middle — the chevron lighting up alone under the pointer,
+            the name carrying the selection on its own. The wrapper is not a control (no role, no
+            handlers, nothing focusable), so hovering either child hovers it and the whole row
+            lights as one.
+
+            Selection is that same `bg-muted`, deliberately: the earlier accent bar beside the
+            grip was busier than the thing it distinguished. Hover is transient and belongs to
+            the one row under the pointer, so the two only collide while you are pointing at the
+            selected project — and `data-active` plus `aria-current` still say which it is. */}
+        <div
+          data-slot="project-group-row"
           className={cn(
-            // Exactly the width the chevron and its left padding used to occupy inside the
-            // header, so the disclosure affordance stays on the vertical the body's rail hangs
-            // off and nothing in the row visibly moved.
-            'flex h-11 w-[27px] shrink-0 items-center justify-center rounded-lg transition-colors hover:bg-muted md:h-[34px]',
+            'flex min-w-0 flex-1 items-center rounded-lg transition-colors hover:bg-muted',
+            active && 'bg-muted',
           )}
         >
-          <ChevronDownIcon
+          <button
+            type="button"
+            onClick={() => onToggle(project.id)}
+            aria-expanded={!collapsed}
+            aria-controls={bodyId}
+            aria-label={`${collapsed ? 'Expand' : 'Collapse'} ${project.name}`}
+            data-slot="project-group-disclosure"
             className={cn(
-              'size-3 shrink-0 text-muted-foreground transition-transform',
-              collapsed && '-rotate-90',
+              // Exactly the width the chevron and its left padding used to occupy inside the
+              // header, so the disclosure affordance stays on the vertical the body's rail hangs
+              // off and nothing in the row visibly moved.
+              'flex h-11 w-[27px] shrink-0 items-center justify-center rounded-lg md:h-[34px]',
             )}
-            aria-hidden="true"
-          />
-        </button>
-        <Link
-          to={scopeTo(project.id, '/')}
-          onClick={() => {
-            // Open on the way in, so a group the user pinned shut cannot be selected and
-            // invisible at the same time.
-            onSelect(project.id)
-            onNavigate?.()
-          }}
-          // `true`, not `page`: this link targets the project's tasks pane, which is not the
-          // page you are on when you are standing in its Git or Settings tab — and on the tasks
-          // pane itself the nav's own Tasks row already claims `page` for that exact href. What
-          // this row says is "this is the selected one of the projects", which is what
-          // `aria-current="true"` means.
-          aria-current={active ? 'true' : undefined}
-          data-slot="project-group-header"
-          className={cn(
-            // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
-            // relaxation the flat nav makes.
-            'flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg pr-2 text-left text-[13px] font-semibold transition-colors hover:bg-muted md:h-[34px]',
-            active && 'bg-muted text-foreground',
-          )}
-        >
-          <span className="truncate">{project.name}</span>
-          {project.unregistered ? (
-            // Says what the row is without pretending it is a problem: cezar is serving this
-            // folder, it just is not in the saved list. Global settings → Projects has the
-            // one-click Add; repeating the button here would put a registry write in the nav.
-            <span
-              data-slot="project-unregistered"
-              title="cezar is serving this folder — it is not in your saved projects. Add it in Global settings → Projects."
-              className="shrink-0 rounded-full bg-muted px-[7px] py-px text-[10px] font-medium text-soft-foreground"
-            >
-              not saved
-            </span>
-          ) : null}
-          {waiting ? (
-            <span
-              data-slot="project-attention"
-              title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
-              className="shrink-0 rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
-            >
-              {waiting}
-            </span>
-          ) : null}
-          {project.branch ? (
-            <span
-              data-slot="project-branch"
-              className="ml-auto max-w-[92px] truncate font-mono text-[10.5px] font-medium text-soft-foreground"
-            >
-              {project.branch}
-            </span>
-          ) : null}
-        </Link>
+          >
+            <ChevronDownIcon
+              className={cn(
+                'size-3 shrink-0 text-muted-foreground transition-transform',
+                collapsed && '-rotate-90',
+              )}
+              aria-hidden="true"
+            />
+          </button>
+          <Link
+            to={scopeTo(project.id, '/')}
+            onClick={() => {
+              // Open on the way in, so a group the user pinned shut cannot be selected and
+              // invisible at the same time.
+              onSelect(project.id)
+              onNavigate?.()
+            }}
+            // `true`, not `page`: this link targets the project's tasks pane, which is not the
+            // page you are on when you are standing in its Git or Settings tab — and on the tasks
+            // pane itself the nav's own Tasks row already claims `page` for that exact href. What
+            // this row says is "this is the selected one of the projects", which is what
+            // `aria-current="true"` means.
+            aria-current={active ? 'true' : undefined}
+            data-slot="project-group-header"
+            className={cn(
+              // 44px touch target in the drawer, the mockup's 34px row on desktop — the same
+              // relaxation the flat nav makes.
+              'flex h-11 min-w-0 flex-1 items-center gap-[7px] rounded-lg pr-2 text-left text-[13px] font-semibold md:h-[34px]',
+              active && 'text-foreground',
+            )}
+          >
+            <span className="truncate">{project.name}</span>
+            {project.unregistered ? (
+              // Says what the row is without pretending it is a problem: cezar is serving this
+              // folder, it just is not in the saved list. Global settings → Projects has the
+              // one-click Add; repeating the button here would put a registry write in the nav.
+              <span
+                data-slot="project-unregistered"
+                title="cezar is serving this folder — it is not in your saved projects. Add it in Global settings → Projects."
+                className="shrink-0 rounded-full bg-muted px-[7px] py-px text-[10px] font-medium text-soft-foreground"
+              >
+                not saved
+              </span>
+            ) : null}
+            {waiting ? (
+              <span
+                data-slot="project-attention"
+                title={`${waiting} task${waiting === 1 ? '' : 's'} need${waiting === 1 ? 's' : ''} you`}
+                className="shrink-0 rounded-full bg-violet px-1.5 py-px text-[10.5px] font-semibold text-violet-foreground"
+              >
+                {waiting}
+              </span>
+            ) : null}
+            {project.branch ? (
+              <span
+                data-slot="project-branch"
+                className="ml-auto max-w-[92px] truncate font-mono text-[10.5px] font-medium text-soft-foreground"
+              >
+                {project.branch}
+              </span>
+            ) : null}
+          </Link>
+        </div>
       </div>
 
       {collapsed ? null : (

@@ -322,9 +322,18 @@ describe('the grouped multi-project sidebar', () => {
       browser.evaluate(`document.querySelector('[data-slot="project-group"][data-project="${bootProject}"]')
         .hasAttribute('data-active')`)
     ).toBe(false)
-    // Selected, and visibly so — the marker `bg-muted` alone could not carry, because every row
-    // in this sidebar is `hover:bg-muted`.
-    expect(browser.count(`[data-slot="project-group"][data-project="${ALPHA.id}"] [data-slot="project-group-selected"]`)).toBe(1)
+    // Selected, and visibly so — one background behind the chevron AND the name, painted on the
+    // pill they share rather than on either control, so the row lights as a single tile.
+    //
+    // The pointer is still on Alpha's header after the click, and hover paints the same colour,
+    // so the boot project's row is what makes this an assertion about SELECTION: nothing is
+    // hovering it, and it must be transparent now that it is no longer the selected project.
+    const rowBackground = (projectId: string) =>
+      String(browser.evaluate(`getComputedStyle(document.querySelector(
+        '[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-row"]'
+      )).backgroundColor`))
+    expect(rowBackground(ALPHA.id)).not.toBe('rgba(0, 0, 0, 0)')
+    expect(rowBackground(bootProject)).toBe('rgba(0, 0, 0, 0)')
 
     // …and the New task CTA now starts a task in the project the user picked. This is the bug as
     // reported: the composer used to open on whichever project the sidebar had left active.

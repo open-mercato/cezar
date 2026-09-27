@@ -131,6 +131,11 @@ const header = (id: string) =>
 const grip = (id: string) =>
   group(id).querySelector('[data-slot="project-group-grip"]') as HTMLButtonElement | null
 
+/** The pill the chevron and the name share — it, and not either control, carries the hover and
+ *  the selected background, so the row lights as one tile. */
+const headerRow = (id: string) =>
+  group(id).querySelector('[data-slot="project-group-row"]') as HTMLElement
+
 /** How many times the workspace ui-state has been asked for — the sidebar reads it for the
  *  project order, so "no request" assertions became "no EXTRA request" ones. */
 const uiStateRequests = () =>
@@ -562,17 +567,21 @@ describe('ProjectGroups', () => {
     await waitFor(() => expect(group('shop')).not.toBeNull())
     expect(group('shop').hasAttribute('data-active')).toBe(true)
     expect(group('cezar').hasAttribute('data-active')).toBe(false)
-    // The selected project's own row says so — in the accessibility tree and with a marker that
-    // does not collide with `hover:bg-muted`, which every row in this sidebar carries.
+    // The selected project's own row says so — in the accessibility tree, and visibly through
+    // the ONE background the chevron and the name share (the same `bg-muted` hover paints, which
+    // is all the distinction this row needs: hover belongs to the row under the pointer).
     expect(header('shop').getAttribute('aria-current')).toBe('true')
     expect(header('cezar').getAttribute('aria-current')).toBeNull()
-    expect(group('shop').querySelector('[data-slot="project-group-selected"]')).not.toBeNull()
-    expect(group('cezar').querySelector('[data-slot="project-group-selected"]')).toBeNull()
-    // The marker is absolutely positioned, so it paints ABOVE the reorder grip it overlaps —
-    // it must not be able to eat a drag that starts on the grip's left edge.
-    expect(
-      group('shop').querySelector('[data-slot="project-group-selected"]')!.className,
-    ).toContain('pointer-events-none')
+    // `classList`, not a substring of `className`: every row carries `hover:bg-muted`, which a
+    // `toContain('bg-muted')` would happily match on the unselected group too.
+    expect(headerRow('shop').classList.contains('bg-muted')).toBe(true)
+    expect(headerRow('cezar').classList.contains('bg-muted')).toBe(false)
+    // The highlight is the WRAPPER's, never a control's: a background on the chevron or on the
+    // name alone is what split the selected row into two tiles with a seam between them.
+    expect(disclosure('shop').classList.contains('bg-muted')).toBe(false)
+    expect(header('shop').classList.contains('bg-muted')).toBe(false)
+    expect(headerRow('shop').contains(disclosure('shop'))).toBe(true)
+    expect(headerRow('shop').contains(header('shop'))).toBe(true)
     // …and the nav row for the URL's own area is the current page inside that group only.
     expect(
       within(group('shop')).getByRole('link', { name: 'Git' }).getAttribute('aria-current'),
