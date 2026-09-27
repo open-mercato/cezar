@@ -41,15 +41,15 @@ recovery after a dead owner.
 
 ### Phase 1: Reproduce and design
 
-- [ ] 1.1 Add a deterministic competing-process regression test for abandoned lease reclaim
-- [ ] 1.2 Add tests for crash recovery, malformed locks, and owner-safe release
+- [x] 1.1 Add a deterministic competing-process regression test for abandoned lease reclaim — a21f1865
+- [x] 1.2 Add tests for crash recovery, malformed locks, and owner-safe release — a21f1865
 
 ### Phase 2: Implement
 
-- [ ] 2.1 Replace the reclaim TOCTOU sequence with mutually exclusive ownership and fencing
-- [ ] 2.2 Preserve malformed/dead-lock fallback behavior and update lease tests
+- [x] 2.1 Replace the reclaim TOCTOU sequence with mutually exclusive ownership and fencing — a21f1865
+- [x] 2.2 Preserve malformed/dead-lock fallback behavior and update lease tests — a21f1865
 
 ### Phase 3: Validate
 
 - [ ] 3.1 Run targeted automation tests and the configured full validation gate
-- [ ] 3.2 Review the diff and record limitations/evidence
+- [x] 3.2 Review the diff and record limitations/evidence — working tree
