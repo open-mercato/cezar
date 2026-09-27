@@ -79,5 +79,5 @@ prostu mogę sobie kliknąć i je rozwinąć.")
 
 ### Phase 3: cross-project list
 
-- [ ] 3.1 expanded-ids state + chip toggle threaded through `TaskTable`/`TaskRow`
-- [ ] 3.2 global-tasks tests for collapse/expand
+- [x] 3.1 expanded-ids state + chip toggle threaded through `TaskTable`/`TaskRow` — de6101f1
+- [x] 3.2 global-tasks tests for collapse/expand — de6101f1
