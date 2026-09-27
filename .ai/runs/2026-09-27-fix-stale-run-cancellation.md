@@ -23,6 +23,7 @@ Non-goals: monitoring wake/park behavior, recovery policy for non-cancelled runs
 - Refreshed from released remote `de04e0c54b729f70babe45e4d751582325c143f5`; reused reviewed sidebar test commit `e882054b6300542f36583286e2e1804fcafd0598` unchanged (`f0700fdb`). Targeted sidebar test: 1 file, 3 tests passed (`/tmp/pr1098-fresh-targeted.log`).
 - Sanitized sequential gate (`CEZ_*` unset, `TMPDIR=/tmp`): typecheck PASS; npm test 7947/7948 with one failure; unit 36/36 PASS; build PASS; package 16/16 PASS. Full log: `/tmp/pr1098-fresh-full-gate.log`.
 - The remaining npm-test failure reproduces in isolation (5/6): `packages/cezar/src/workflows/autosave-gate.test.ts` expects autosave timer behavior but calls `RunManager.armAutosave` with undefined state (`run.ts:5452`, `TypeError: Cannot read properties of undefined (reading 'cwd')`). Isolation log: `/tmp/pr1098-isolated-autosave.log`. No lifecycle source changes were made by this dependency update.
+- Corrected the autosave-gate callers to pass the run id and registered owner state, preserving the opt-in/root-run assertions. Focused autosave + workflow validation: 2 files, 143 tests passed; `npm run typecheck` and `git diff --check` passed.
 
 ## Risks
 
