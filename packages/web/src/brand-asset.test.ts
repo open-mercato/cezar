@@ -12,9 +12,9 @@ function readBrandSvg(): string {
 
 /** The `<image href="data:image/png;base64,…">` the SVG wraps. */
 function embeddedPng(svg: string): Buffer {
-  const match = svg.match(/data:image\/png;base64,([A-Za-z0-9+/=]+)/)
-  if (!match) throw new Error('icon.svg no longer embeds a base64 PNG')
-  return Buffer.from(match[1], 'base64')
+  const base64 = svg.match(/data:image\/png;base64,([A-Za-z0-9+/=]+)/)?.[1]
+  if (!base64) throw new Error('icon.svg no longer embeds a base64 PNG')
+  return Buffer.from(base64, 'base64')
 }
 
 /**
@@ -51,13 +51,14 @@ function decodeGrayAlphaPng(png: Buffer): { width: number; height: number; pixel
     return pa <= pb && pa <= pc ? a : pb <= pc ? b : c
   }
   for (let y = 0; y < height; y++) {
-    const filter = raw[y * (stride + 1)]
+    const filter = raw[y * (stride + 1)] ?? 0
     const line = raw.subarray(y * (stride + 1) + 1, y * (stride + 1) + 1 + stride)
     for (let i = 0; i < stride; i++) {
-      const a = i >= bpp ? pixels[y * stride + i - bpp] : 0
-      const b = y ? pixels[(y - 1) * stride + i] : 0
-      const c = y && i >= bpp ? pixels[(y - 1) * stride + i - bpp] : 0
-      const x = line[i]
+      // Left, above and above-left neighbours; out of bounds reads as 0, per the spec.
+      const a = (i >= bpp ? pixels[y * stride + i - bpp] : 0) ?? 0
+      const b = (y ? pixels[(y - 1) * stride + i] : 0) ?? 0
+      const c = (y && i >= bpp ? pixels[(y - 1) * stride + i - bpp] : 0) ?? 0
+      const x = line[i] ?? 0
       const value =
         filter === 0 ? x
         : filter === 1 ? x + a
@@ -104,15 +105,17 @@ describe('cockpit brand asset', () => {
     for (let i = 0; i < width * height; i++) {
       // Partially transparent pixels are the rounded corners' antialiasing, not tile or mark.
       if (pixels[i * 2 + 1] !== 0xff) continue
-      const luma = pixels[i * 2]
+      const luma = pixels[i * 2] ?? 0
       opaque.set(luma, (opaque.get(luma) ?? 0) + 1)
     }
 
-    const [tile, mark] = [...opaque].sort((a, b) => b[1] - a[1]).slice(0, 2)
+    const byArea = [...opaque].sort(([, a], [, b]) => b - a)
+    const [tile, mark] = [byArea[0], byArea[1]]
+    if (!tile || !mark) throw new Error('the mark should have a tile tone and a mark tone')
     expect(tile[0]).toBe(0x00) // the dominant tone is the tile, and it is black
     expect(mark[0]).toBe(0xff) // the mark sitting on it is white
     // Everything else is edge antialiasing between the two — a couple of thousand pixels at most.
-    const antialiasing = [...opaque].reduce((n, [, count]) => n + count, 0) - tile[1] - mark[1]
+    const antialiasing = byArea.reduce((n, [, count]) => n + count, 0) - tile[1] - mark[1]
     expect(antialiasing).toBeLessThan(0.01 * width * height)
   })
 
