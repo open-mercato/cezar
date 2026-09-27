@@ -10,13 +10,13 @@ Non-goals: changing proxy authentication, macOS ngrok routing, workflow/dispatch
 
 ### Phase 1: Identity plumbing
 
-- [x] 1.1 Add a persisted install identity and pass it to generated service environments. — 56b7d28f
+- [x] 1.1 Add a persisted install identity and pass it to generated service environments. — 56b7d28f, 488ba4d8
 - [x] 1.2 Add the identity as an additive health response field. — 56b7d28f
 
 ### Phase 2: Verification and evidence
 
-- [x] 2.1 Compare the authenticated health payload during Ubuntu installation verification, degrading safely when unavailable. — 56b7d28f
-- [x] 2.2 Add regression and compatibility tests, run targeted validation, and update compatibility documentation if required. — 56b7d28f
+- [x] 2.1 Compare the authenticated health payload during Ubuntu installation verification, degrading safely when unavailable. — 56b7d28f, 488ba4d8
+- [x] 2.2 Add regression and compatibility tests, run targeted validation, and update compatibility documentation if required. — 56b7d28f, 488ba4d8
 - [ ] 2.3 Run the full configured validation gate and finalize the PR.
 
 ## Risks
