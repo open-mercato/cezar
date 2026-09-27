@@ -108,6 +108,7 @@ export class ScheduleRunner {
     const lease = this.handle.store.acquireLease();
     if (!lease) return { result: 'lease-held', occurrenceAt: occurrence.at };
     try {
+      if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const reserved: AutomationReceipt = { ...receipt, status: 'reserved', error: undefined, updatedAt: new Date(now).toISOString() };
       this.handle.store.appendReceipt(reserved);
       return await this.launchReserved(definition, occurrence, reserved, now, { advance: false }, lease);
@@ -131,6 +132,7 @@ export class ScheduleRunner {
       return { result: 'lease-held', occurrenceAt: occurrence.at };
     }
     try {
+      if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const eventId = occurrence.trigger === 'manual' ? `manual:${occurrence.at}` : `schedule:${occurrence.at}`;
       const receipt = store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId, occurrenceAt: occurrence.at });
       if (!receipt) {
@@ -181,6 +183,10 @@ export class ScheduleRunner {
       this.handle.onChange?.(definition.id, definition.revision);
       return { result, runId: launched.runId, occurrenceAt: occurrence.at };
     } catch (error) {
+      // Do not let an owner that lost its guard publish failure state after a
+      // successor has taken over. The reserved receipt remains the successor's
+      // durable hand-off rather than being rewritten by the stale process.
+      if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const message = error instanceof Error ? error.message : String(error);
       store.appendReceipt({ ...receipt, status: 'launch-error', error: message, updatedAt: new Date(this.now()).toISOString() });
       store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'failed', reason: message, receiptId: receipt.receiptId, durationMs: Date.now() - started });

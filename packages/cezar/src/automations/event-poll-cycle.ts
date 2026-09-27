@@ -47,6 +47,7 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       && latestState.revision === capturedState.revision;
   };
   try {
+    if (!lease.isValid()) throw new Error('automation polling lease was lost');
     const snapshotLease = store.acquireMutationLease();
     if (!snapshotLease) throw new Error('automation mutation conflict');
     try {
@@ -104,6 +105,9 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
     input.onChange?.(definition.id, definition.revision);
     return { ...result, candidates: eligible };
   } catch (error) {
+    // A compromised owner must not append backoff/error state after another
+    // process has taken over this automation.
+    if (!lease.isValid()) throw new Error('automation polling lease was lost');
     const mutation = store.acquireMutationLease();
     try {
       if (mutation && lease.isValid() && mode === 'execute' && current()) {
