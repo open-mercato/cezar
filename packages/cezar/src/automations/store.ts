@@ -317,12 +317,12 @@ export class AutomationStore {
 
   private tryAcquireReclaimMutex(path: string, staleAfterMs: number): AutomationLease | undefined {
     try {
-      return this.createLease(path);
+      return this.createLease(path, false);
     } catch {
       try {
         if (this.isLeaseAbandoned(path, staleAfterMs)) {
           unlinkSync(path);
-          return this.createLease(path);
+          return this.createLease(path, false);
         }
       } catch {
         // Another reclaimer won, or the mutex is not recoverable yet.
@@ -331,11 +331,11 @@ export class AutomationStore {
     }
   }
 
-  private createLease(path: string): AutomationLease {
+  private createLease(path: string, coordinateRelease = true): AutomationLease {
     const fd = openSync(path, 'wx', 0o600);
     const token = randomUUID();
     writeFileSync(fd, JSON.stringify({ pid: process.pid, token, startedAt: this.now().toISOString() }));
-    return new AutomationLease(path, fd, token);
+    return new AutomationLease(path, fd, token, coordinateRelease);
   }
 
   /** Abandoned = the process that wrote the lock is gone, or nobody released it in `staleAfterMs`. */
@@ -501,12 +501,22 @@ export class AutomationLease {
     private readonly path: string,
     private readonly fd: number,
     private readonly token: string,
+    private readonly coordinateRelease: boolean,
   ) {}
 
   release(): void {
     if (this.released) return;
     this.released = true;
     closeSync(this.fd);
+    if (!this.coordinateRelease) {
+      try {
+        const owner = JSON.parse(readFileSync(this.path, 'utf8')) as { token?: unknown };
+        if (owner.token === this.token) unlinkSync(this.path);
+      } catch {
+        // Already removed, malformed, or replaced during shutdown cleanup.
+      }
+      return;
+    }
     const reclaimPath = `${this.path}${RECLAIM_LOCK_SUFFIX}`;
     let reclaimFd: number | undefined;
     let reclaimToken: string | undefined;
