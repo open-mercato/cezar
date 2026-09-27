@@ -204,7 +204,31 @@ export const workspaceLastLocationSchema = z.strictObject({
 });
 export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
 
+/** Optional dashboard preferences; old/new clients preserve unknown keys. */
+// Reserve room for every supported widget in addition to the future-ID budget.
+const dashboardKnownTileIds = new Set(['fleet', 'needsYou', 'recent', 'usage', 'trends', 'overview', 'portfolio', 'automations']);
+const dashboardTileOrderSchema = z.array(z.string().min(1).max(64))
+  .max(200 + dashboardKnownTileIds.size)
+  .refine(items => items.filter(id => !dashboardKnownTileIds.has(id)).length <= 200, 'Too many unknown dashboard tiles')
+  .refine(items => new Set(items).size === items.length, 'Duplicate dashboard tile');
+export const dashboardPreferencesInputSchema = z.looseObject({
+  order: dashboardTileOrderSchema.optional(),
+  tiles: z.looseObject({ automations: z.boolean().optional(), fleet: z.boolean().optional(), needsYou: z.boolean().optional(), recent: z.boolean().optional(), usage: z.boolean().optional(), trends: z.boolean().optional() }).optional(),
+});
+export const dashboardPreferencesSchema = z.looseObject({
+  order: dashboardTileOrderSchema.catch([]).optional(),
+  tiles: z.looseObject({
+    automations: z.boolean().catch(true).optional(),
+    fleet: z.boolean().catch(true).optional(),
+    needsYou: z.boolean().catch(true).optional(),
+    recent: z.boolean().catch(true).optional(),
+    usage: z.boolean().catch(true).optional(),
+    trends: z.boolean().catch(true).optional(),
+  }).catch({}).optional(),
+}).catch({});
+
 export const workspaceUiStateSchema = z.looseObject({
+  dashboard: dashboardPreferencesSchema.optional(),
   sidebar: z
     .looseObject({
       /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
@@ -268,6 +292,7 @@ const TASK_TABLE_MAX_COLUMNS = 50;
 export const setWorkspaceUiStateInputSchema = z
   .looseObject({
     ...workspaceUiStateSchema.shape,
+    dashboard: dashboardPreferencesInputSchema.optional(),
     sidebar: z
       .looseObject({
         collapsed: z
