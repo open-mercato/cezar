@@ -46,10 +46,10 @@ recovery after a dead owner.
 
 ### Phase 2: Implement
 
-- [x] 2.1 Replace the reclaim TOCTOU sequence with mutually exclusive ownership and fencing — a21f1865
-- [x] 2.2 Preserve malformed/dead-lock fallback behavior and update lease tests — a21f1865
+- [x] 2.1 Replace the reclaim TOCTOU sequence with mutually exclusive ownership and fencing — cc7ec5e5
+- [x] 2.2 Preserve malformed/dead-lock fallback behavior and update lease tests — cc7ec5e5
 
 ### Phase 3: Validate
 
-- [ ] 3.1 Run targeted automation tests and the configured full validation gate
-- [x] 3.2 Review the diff and record limitations/evidence — pending review submission
+- [ ] 3.1 Run targeted automation tests and the configured full validation gate — targeted commands pass; full `npm test` has unrelated failures and was stopped
+- [x] 3.2 Review the diff and record limitations/evidence — cc7ec5e5
