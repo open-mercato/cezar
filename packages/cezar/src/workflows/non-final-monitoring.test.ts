@@ -108,4 +108,27 @@ describe('CEZ:MONITORING on a non-final workflow step (#1076)', () => {
     ]);
     expect(store.getRun(record.id)?.activity).toBeUndefined();
   }, 40_000);
+
+  it('recovers a persisted monitoring park without completing downstream work', async () => {
+    const record = manager.startRun(workflow, {
+      task: 'mock:monitoring compare in the background',
+      worktree: false,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (current) => current?.activity === 'monitoring');
+
+    manager.dispose();
+    store.flush();
+    const reopened = RunStore.open(join(repoRoot, '.ai/cezar'), { keepLive: true });
+    store = reopened;
+    manager = new RunManager(reopened, repoRoot);
+    await manager.recover();
+
+    await waitFor(record.id, (current) => current?.activity === 'monitoring');
+    const recovered = store.getRun(record.id);
+    expect(recovered?.status).toBe('running');
+    expect(recovered?.steps.find((step) => step.id === 'verify')?.status).toBe('pending');
+    expect(recovered?.steps.some((step) => step.id.startsWith('continue-'))).toBe(true);
+    expect(store.readEvents(record.id).some((event) => String(event.message).includes('run finished'))).toBe(false);
+  }, 40_000);
 });

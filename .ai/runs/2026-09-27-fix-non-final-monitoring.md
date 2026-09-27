@@ -65,7 +65,7 @@ the workflow or spinning indefinitely.
   preserving DONE/ASK/budget/dispatch precedence.
 - [x] 2.2 Apply identical park, bounded wake, resume, and terminal cleanup
   behavior to both streaming/first-session and continuation handlers.
-- [ ] 2.3 Add durable restart recovery for a parked non-final monitoring step;
+- [x] 2.3 Add durable restart recovery for a parked non-final monitoring step;
   prove a recovered run does not settle the unfinished step or skip downstream
   work.
 
@@ -102,7 +102,7 @@ the workflow or spinning indefinitely.
 
 - [x] 2.1 Remove the accidental final-step-only gate from valid monitoring detection and include monitoring in the non-final workflow-park decision while preserving DONE/ASK/budget/dispatch precedence.
 - [x] 2.2 Apply identical park, bounded wake, resume, and terminal cleanup behavior to both streaming/first-session and continuation handlers.
-- [ ] 2.3 Add durable restart recovery for a parked non-final monitoring step; prove a recovered run does not settle the unfinished step or skip downstream work.
+- [x] 2.3 Add durable restart recovery for a parked non-final monitoring step; prove a recovered run does not settle the unfinished step or skip downstream work.
 
 ### Phase 3: Regression matrix and validation
 
@@ -113,7 +113,8 @@ the workflow or spinning indefinitely.
 ## Validation evidence
 
 - Baseline red: the issue reproducer failed 2/2 on the original source (both non-autonomous and autonomous), with the non-final step advancing to downstream work.
-- Focused green: `npx vitest run packages/cezar/src/workflows/non-final-monitoring.test.ts` — 3/3; `npx vitest run packages/cezar/src/workflows/run.test.ts` — 134/134.
+- Focused green: `npx vitest run packages/cezar/src/workflows/non-final-monitoring.test.ts` — 4/4; `npx vitest run packages/cezar/src/workflows/run.test.ts` — 134/134. The dedicated suite covers first-session non-final parking, autonomous nudge-before-advance, bounded wake/cancellation, and persisted restart recovery with downstream step still pending.
+- Existing transition coverage reused: `run.ts`'s shared `askPark` branch guards session-close/failure settlement; `finish()` explicitly handles a mid-workflow park; `dropActive()` clears monitoring state/timers on cancellation and terminal paths; `runContinuation` has the parallel monitoring turn-end handler. Existing `run.test.ts` covers DONE/ASK/budget precedence and continuation monitoring.
 - `npm run typecheck` — pass; `npm run test:unit` — 36/36; `npm run build` — pass; `npm run test:package` — 16/16.
 - `npm test` — 7,947 passed, one known unrelated baseline failure at `packages/web/src/routes/cross-project-task-navigation.test.tsx:222` (`getByRole('button', { name: 'other-repo' })`), tracked by #1096/#1097; no workflow failure.
 - Local review: no actionable findings; PR remains draft because the configured full gate is not entirely green and GitHub self-approval is unavailable.
