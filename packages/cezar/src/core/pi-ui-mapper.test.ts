@@ -55,4 +55,50 @@ describe('pi RPC → v2 golden fixture', () => {
       { type: 'turn.completed', turnId: 'turn_1', stopReason: 'max_tokens' },
     ]);
   });
+
+  it('gives each assistant message distinct item identities when content indexes restart', () => {
+    let state = piTurnStarted(createPiUiState()).state;
+    const events: UiEvent[] = [];
+    const push = (value: unknown): void => {
+      const mapped = mapPiRpcMessage(value, state);
+      state = mapped.state;
+      events.push(...mapped.events);
+    };
+
+    push({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } });
+    push({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'first' } });
+    push({ type: 'message_update', assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'first' } });
+    push({ type: 'message_end', message: { role: 'assistant' } });
+    push({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } });
+    push({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'second' } });
+    push({ type: 'message_update', assistantMessageEvent: { type: 'text_end', contentIndex: 0, content: 'second' } });
+
+    expect(events.filter((event) => event.type === 'item.started')).toHaveLength(2);
+    expect(events.filter((event) => event.type === 'item.completed').map((event) => event.item.id)).toEqual([
+      'turn_1_message_0_text_0',
+      'turn_1_message_1_text_0',
+    ]);
+  });
+
+  it('resets per-turn message identity and bookkeeping at settlement', () => {
+    let state = piTurnStarted(createPiUiState()).state;
+    state = mapPiRpcMessage(
+      { type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: 0, delta: 'one' } },
+      state,
+    ).state;
+    state = mapPiRpcMessage({ type: 'message_end', message: { role: 'assistant' } }, state).state;
+    state = mapPiRpcMessage({ type: 'agent_settled' }, state).state;
+    expect(state.turnId).toBeNull();
+    expect(state.startedItems).toHaveLength(0);
+    expect(state.textByItem).toHaveLength(0);
+
+    state = piTurnStarted(state).state;
+    expect(mapPiRpcMessage(
+      { type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: 0 } },
+      state,
+    ).events[0]).toEqual({
+      type: 'item.started',
+      item: { kind: 'message', id: 'turn_2_message_0_text_0', role: 'assistant', text: '' },
+    });
+  });
 });

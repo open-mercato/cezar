@@ -20,6 +20,8 @@ export interface PiUiMapperState {
   readonly sessionId: string | null;
   readonly turnSeq: number;
   readonly turnId: string | null;
+  /** Assistant-message ordinal within the active turn (Pi restarts contentIndex per message). */
+  readonly messageSeq: number;
   readonly stopReason: StopReason;
   /**
    * The usage pi reported for the turn currently in flight, held between `message_end` (which
@@ -47,6 +49,7 @@ export function createPiUiState(): PiUiMapperState {
     sessionId: null,
     turnSeq: 0,
     turnId: null,
+    messageSeq: 0,
     stopReason: 'end_turn',
     turnUsage: null,
     turnCostUsd: null,
@@ -61,7 +64,16 @@ export function piTurnStarted(state: PiUiMapperState): PiUiMapping {
   const turnId = `turn_${turnSeq}`;
   return {
     events: [{ type: 'turn.started', turnId }],
-    state: { ...state, turnSeq, turnId, stopReason: 'end_turn' },
+    state: {
+      ...state,
+      turnSeq,
+      turnId,
+      messageSeq: 0,
+      stopReason: 'end_turn',
+      startedItems: new Set(),
+      textByItem: new Map(),
+      tools: new Map(),
+    },
   };
 }
 
@@ -135,7 +147,7 @@ function mapMessageUpdate(value: Record<string, unknown>, state: PiUiMapperState
     updateType.startsWith('thinking_') ? ('reasoning' as const) : updateType.startsWith('text_') ? ('text' as const) : null;
   if (!field) return { events: [], state };
 
-  const itemId = `${state.turnId}_${field}_${contentIndex}`;
+  const itemId = `${state.turnId}_message_${state.messageSeq}_${field}_${contentIndex}`;
   const events: UiEvent[] = [];
   let startedItems = state.startedItems;
   let textByItem = state.textByItem;
@@ -228,11 +240,32 @@ function completeTurn(reason: StopReason, state: PiUiMapperState): PiUiMapping {
   if (state.turnCostUsd !== null) event.costUsd = state.turnCostUsd;
   // Cleared with the turn id: the next turn's counts are its own, and a turn pi ends without
   // reporting usage must not inherit the previous turn's numbers.
-  return { events: [event], state: { ...state, turnId: null, turnUsage: null, turnCostUsd: null } };
+  return {
+    events: [event],
+    state: {
+      ...state,
+      turnId: null,
+      messageSeq: 0,
+      turnUsage: null,
+      turnCostUsd: null,
+      startedItems: new Set(),
+      textByItem: new Map(),
+      tools: new Map(),
+    },
+  };
 }
 
 function mapMessageEnd(value: Record<string, unknown>, state: PiUiMapperState): PiUiMapping {
   const message = isRecord(value.message) ? value.message : undefined;
+  if (message?.role === 'assistant' && state.turnId) {
+    const nextState = { ...state, messageSeq: state.messageSeq + 1 };
+    const usage = usageEvent(message.usage);
+    if (!usage) return { events: [], state: nextState };
+    return {
+      events: [usage],
+      state: { ...nextState, turnUsage: usage.usage, turnCostUsd: usage.costUsd ?? null },
+    };
+  }
   const usage = message && message.role === 'assistant' ? usageEvent(message.usage) : undefined;
   if (!usage) return { events: [], state };
   return {
