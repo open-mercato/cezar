@@ -37,6 +37,8 @@ recovery after a dead owner.
 
 ## Progress
 
+PR: #1099
+
 > Convention: `- [ ]` pending, `- [x]` done. Append — <commit sha> when a step lands. Do not rename step titles.
 
 ### Phase 1: Reproduce and design
@@ -58,3 +60,5 @@ recovery after a dead owner.
 
 - Reused reviewed sidebar test commit `e882054b6300542f36583286e2e1804fcafd0598` unchanged; targeted `packages/web/src/routes/cross-project-task-navigation.test.tsx`: 1 file, 3 tests passed (`/tmp/pr1099-targeted.log`).
 - Sanitized sequential gate (`CEZ_*` unset, `TMPDIR=/tmp`): `npm run typecheck` PASS; `npm test` PASS (7951/7951); `npm run test:unit` PASS (36/36); `npm run build` PASS; `npm run test:package` PASS (16/16). Full log: `/tmp/pr1099-full-gate.log`.
+
+Final independent review: [approved](https://github.com/open-mercato/cezar/pull/1099#issuecomment-5852038867). Reviewed source head: `eace31df`.
