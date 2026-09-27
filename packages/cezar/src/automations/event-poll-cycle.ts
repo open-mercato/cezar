@@ -87,6 +87,9 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       const mutation = store.acquireMutationLease();
       if (!mutation) throw new Error('automation mutation conflict');
       try {
+        // The trailing `mutation.isValid()` is the deliberate re-check AFTER `isCurrent` is
+        // awaited: the guard can be lost while that promise is pending, and a lost guard must
+        // not publish state a successor already owns. Do not "simplify" it away.
         if (lease.isValid() && mutation.isValid() && current() && (!input.isCurrent || await input.isCurrent()) && mutation.isValid()) {
           store.setState(definition.id, state => input.persist(result, state));
         }
