@@ -1,11 +1,27 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AutomationStore } from './store.ts';
 import { runEventPollCycle } from './event-poll-cycle.ts';
 
 describe('shared event cycle', () => {
+  it('stops after the guard is compromised during awaited polling without publishing error state', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'event-cycle-'));
+    const store = AutomationStore.open(dir);
+    const definition = store.create({ kind: 'github', enabled: true, name: 'test', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'test' } });
+    await expect(runEventPollCycle({
+      store, definition, mode: 'execute',
+      poll: async () => {
+        rmSync(join(dir, 'automation-poll.lock.guard'), { recursive: true, force: true });
+        await new Promise(resolve => setTimeout(resolve, 1_300));
+        return { candidates: [] };
+      },
+      launch: vi.fn(), persist: vi.fn(),
+    })).rejects.toThrow('automation polling lease was lost');
+    expect(store.logs({ automationId: definition.id })).toEqual([]);
+  }, 6_000);
+
   it('does not launch or overwrite state after a cross-process pause during polling', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'event-cycle-'));
     const store = AutomationStore.open(dir);

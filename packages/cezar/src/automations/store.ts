@@ -301,7 +301,7 @@ export class AutomationStore {
     const releaseGuard = lockfile.lockSync(path, {
       lockfilePath: `${path}${GUARD_SUFFIX}`,
       realpath: false,
-      stale: Math.max(GUARD_STALE_MS, Math.min(staleAfterMs || GUARD_STALE_MS, GUARD_STALE_MS)),
+      stale: GUARD_STALE_MS,
       // proper-lockfile's default throws from its heartbeat timer. Never take the
       // cockpit down for a lost guard; callers check validity before launching or
       // publishing after an asynchronous compromise notification.

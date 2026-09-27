@@ -78,6 +78,7 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
           if (!current() || (input.isCurrent && !await input.isCurrent())) {
             return { ...result, candidates: [] };
           }
+          if (!mutation.isValid()) throw new Error('automation mutation lease was lost');
           await input.launch?.(candidate);
         } finally {
           mutation.release();
@@ -86,7 +87,7 @@ export async function runEventPollCycle<C extends { timestamp: string }, R exten
       const mutation = store.acquireMutationLease();
       if (!mutation) throw new Error('automation mutation conflict');
       try {
-        if (lease.isValid() && current() && (!input.isCurrent || await input.isCurrent())) {
+        if (lease.isValid() && mutation.isValid() && current() && (!input.isCurrent || await input.isCurrent()) && mutation.isValid()) {
           store.setState(definition.id, state => input.persist(result, state));
         }
       } finally {

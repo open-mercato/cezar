@@ -166,8 +166,10 @@ export class ScheduleRunner {
     try {
       if (!lease.isValid()) throw new Error('automation schedule lease was lost');
       const launched = await this.handle.launch(definition, occurrence, receipt.receiptId);
-      if (!lease.isValid()) throw new Error('automation schedule lease was lost');
+      // The task side effect is now real. Even if the lease heartbeat was lost
+      // while awaiting it, persist the run id so a successor cannot retry it.
       store.appendReceipt({ ...receipt, status: 'launched', runId: launched.runId, updatedAt: new Date(this.now()).toISOString() });
+      if (!lease.isValid()) return { result, runId: launched.runId, occurrenceAt: occurrence.at };
       store.appendLog({
         automationId: definition.id, revision: definition.revision, result,
         reason: reasonFor(occurrence, this.handle.timeZone),
