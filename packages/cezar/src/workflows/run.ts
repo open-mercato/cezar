@@ -1514,7 +1514,7 @@ export class RunManager {
               this.clearAutosaveTimer(state);
             }
             this.starting.delete(runId);
-            this.dropActive(runId);
+              this.dropActive(runId);
           });
         }
       } while (this.pumpAgain);
