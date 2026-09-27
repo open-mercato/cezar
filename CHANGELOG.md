@@ -1,33 +1,64 @@
-# 0.12.0 (2026-09-25)
+# 0.12.0 (2026-09-27)
 
 ## Highlights
 <!-- TODO: Highlights — auto-update-changelog leaves this blank for the human author to fill in. -->
 
 ## ✨ Features
+- ✨ A workspace Dashboard — task counters and outcomes, project comparisons, live work, automation deadlines and reported cost, with PDF and CSV export. (#1047) *(@matwiatrzyk)*
+- ✨ The parallel-task and monitoring limits in Settings are typed integer steppers, and a per-project limit left empty inherits the workspace one. (#1075) *(@pat-lewczuk)*
+- ✨ Inside a container or a systemd scope, the Machine card and a new sidebar glance show the capacity this process actually has, not the host's totals. (#1042) *(@michal-codes)*
+- ✨ The sidebar brand tile and the browser favicon carry the new Open Mercato mark, served from `/icon.svg`. (#1090) *(@pat-lewczuk)*
 - ✨ Connect Jira or Linear in Settings: browse issues, launch tasks with the issue's context, and trigger automations on tracker events. (#1045) *(@matwiatrzyk)*
 - ✨ The Working… indicator carries a live clock — elapsed time on the current turn, and when the agent was last active. (#1069) *(@patzick)*
 
+## 🔒 Security
+- 🔒 Three CodeQL findings closed: a cubic-backtracking ReDoS on agent output, an incomplete Jira table escape, and a win32 `cwd` command injection. (#1093) *(@pat-lewczuk)*
+
 ## 🐛 Fixes
+- 🐛 A non-final workflow step still reporting that it is monitoring stays parked, so the next step no longer runs against half-done work (fixes #1076). (#1102) *(@pat-lewczuk)*
+- 🐛 A Pi turn with several assistant messages keeps each one distinct, so earlier text and reasoning are no longer overwritten (fixes #1074). (#1101) *(@pat-lewczuk)*
+- 🐛 Reclaiming an abandoned automation lease is exclusive, so two cockpits cannot both launch the same automation run (fixes #998). (#1099) *(@pat-lewczuk)*
+- 🐛 Cancelling a stale run is terminal — a startup failure persists its state, and an old run generation can no longer clear its replacement's (fixes #1087). (#1098) *(@pat-lewczuk)*
+- 🔧 `server-install` verifies that the cockpit answering on the expected port is the one it just installed, not a different instance (fixes #1008). (#1100) *(@pat-lewczuk)*
+- 🐛 The merge panel no longer goes dark for every PR under a fine-grained PAT — an unreadable check rollup degrades to the aggregate state (fixes #969). (#996) *(@pat-lewczuk)*
+- 🐛 A GitHub poll whose overlap band is saturated no longer pins its cursor forever — the record budget climbs once, and the stall is logged (fixes #982). (#1002) *(@pat-lewczuk)*
+- 🐛 The sidebar, command palette and quick task list keep their task lists in the project you are pointing at, instead of serving another project's cache. (#1060) *(@matgren)*
+- 🐛 Clicking a project's name in the sidebar selects it, and what you were writing travels with you when you switch the composer's project. (#1018) *(@pat-lewczuk)*
+- 🐛 A Codex turn that ended in compaction keeps working, and a follow-up the backend rejected is surfaced instead of silently dropped (fixes #955). (#1010) *(@pat-lewczuk)*
+- 🐛 A finished run's plan dock settles — no pulse, no in-progress item, and an incomplete plan says it was left unfinished. (#1072) *(@patzick)*
 - 🐛 A cezar started without `~/.local/bin` on its PATH finds a natively installed claude instead of reporting it not installed. (#1061) *(@patzick)*
 - 🔧 `.cmd` shims stay away from the no-shell spawn sites, and a mistyped `CEZ_CLAUDE_BIN` no longer breaks the terminal handoff. (#1064) *(@patzick)*
 - 🐛 The launch folder is no longer listed as a project once the registry holds one — it is still served, so deep links keep resolving. (#1057) *(@patzick)*
 - 🐛 A review-request burst spanning two poll boundaries launches one automation run instead of several. (#1056) *(@patzick)*
 - 🐛 A cockpit save no longer drops the `cezar run` tasks another process wrote to the run index. (#1025) *(@matkowalski)*
 
+## 🧪 Testing
+- 🧪 The sidebar test targets the separate disclosure button #1018 introduced (fixes #1096). (#1097) *(@tayfuryldz)*
+- 🧪 An end-to-end test pins the invariant that a resumed step keeps its own `bashAllowlist` (fixes #877). (#1006) *(@pat-lewczuk)*
+
 ## 📝 Specs & Documentation
+- 📝 Live host resource telemetry — the Machine card in Settings → Resources. (#1035) *(@michal-codes)*
+- 📝 A `SECURITY.md` with the vulnerability reporting policy, response targets and scope. (#1091) *(@pat-lewczuk)*
+- 📝 Simplified and Traditional Chinese READMEs, with language navigation from the English one. (#1086) *(@michal-codes)*
+- 📝 The README header names what cezar does — orchestrate hundreds of AI coding agents, 24/7. (#1088) *(@pat-lewczuk)*
 - 📝 Browse Jira and Linear tasks alongside GitHub. (#1026) *(@matwiatrzyk)*
 - 📝 A dispatch admission cap — an opt-in ceiling on how many children a dispatching task may admit. (#1033) *(@michal-codes)*
 - 📝 Runner seam native backends — seam de-dup, codex providers, Gemini and Copilot over ACP. (#1030) *(@aleksanderw1992)*
 - 📝 The README carries an Open Mercato Cloud banner. (#1063) *(@pat-lewczuk)*
 
+## 🚀 CI/CD & Infrastructure
+- 🚀 Code scanning is versioned in the repo as a CodeQL advanced-setup workflow on the `security-extended` suite, with test code out of scope. (#1092) *(@pat-lewczuk)*
+
 ## 👥 Contributors
 
 - @matwiatrzyk
-- @patzick
-- @matkowalski
-- @michal-codes
-- @aleksanderw1992
 - @pat-lewczuk
+- @michal-codes
+- @patzick
+- @matgren
+- @tayfuryldz
+- @matkowalski
+- @aleksanderw1992
 
 # 0.11.1 (2026-09-18)
 
