@@ -107,7 +107,7 @@ the workflow or spinning indefinitely.
 ### Phase 3: Regression matrix and validation
 
 - [x] 3.1 Cover autonomous and non-autonomous monitoring, explicit DONE/ASK/budget precedence, cancellation, wake liveness/cap, user resume, and multi-step progression.
-- [ ] 3.2 Re-run the original reproducer against the pre-fix source to retain red evidence, then run focused workflow tests and the configured full gate.
+- [x] 3.2 Re-run the original reproducer against the pre-fix source to retain red evidence, then run focused workflow tests and the configured full gate. — dependency validation 2026-09-27; all configured commands pass
 - [x] 3.3 Review the diff for interaction with PR #1098 cancellation changes, run local `om-code-review`/`om-auto-review-pr` where possible, and leave the PR draft if any required gate remains incomplete.
 
 ## Validation evidence
@@ -118,3 +118,8 @@ the workflow or spinning indefinitely.
 - `npm run typecheck` — pass; `npm run test:unit` — 36/36; `npm run build` — pass; `npm run test:package` — 16/16.
 - `npm test` — 7,947 passed, one known unrelated baseline failure at `packages/web/src/routes/cross-project-task-navigation.test.tsx:222` (`getByRole('button', { name: 'other-repo' })`), tracked by #1096/#1097; no workflow failure.
 - Local review: no actionable findings; PR remains draft because the configured full gate is not entirely green and GitHub self-approval is unavailable.
+
+### Dependency validation evidence (2026-09-27)
+
+- Reused reviewed sidebar test commit `e882054b6300542f36583286e2e1804fcafd0598` unchanged; targeted `packages/web/src/routes/cross-project-task-navigation.test.tsx`: 1 file, 3 tests passed (`/tmp/pr1102-targeted.log`).
+- Sanitized sequential gate (`CEZ_*` unset, `TMPDIR=/tmp`): `npm run typecheck` PASS; `npm test` PASS (7949/7949); `npm run test:unit` PASS (36/36); `npm run build` PASS; `npm run test:package` PASS (16/16). Full log: `/tmp/pr1102-full-gate.log`.
