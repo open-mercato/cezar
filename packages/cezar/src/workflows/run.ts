@@ -4452,8 +4452,10 @@ export class RunManager {
         // The dispatch facts, through the same ONE helper `runContinuation` calls (spec
         // 2026-09-10-dispatch A5). Not gated on `interactive`: a report and a dispatch
         // are the agent telling cezar what it did, and a chained workflow's non-final step that
-        // reported would otherwise be heard by nobody. The PARK below stays interactive-only,
-        // exactly as it always was.
+        // reported would otherwise be heard by nobody. The PARK below is no longer
+        // interactive-only either (#1076): a non-final step that dispatched, or that emitted
+        // `CEZ:MONITORING`, is waiting on work it started, so it holds the workflow at that step
+        // exactly as a non-final `CEZ:ASK` does (#917) instead of closing and running the next check.
         const dispatchTurn = this.handleDispatchTurn(runId, turnText, {
           state,
           stepId: step.id,
