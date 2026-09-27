@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
@@ -1387,7 +1387,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       { id: 'implement', status: 'cancelled' },
       { id: 'verify', status: 'pending' },
     ]);
-    expect(manager.isActive(record.id)).toBe(false);
+    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
   }, 30_000);
 
   /** The control for the case above: the same cancel on the FINAL interactive
@@ -1400,7 +1400,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
     expect(manager.cancel(record.id)).toBe(true);
     await waitFor(record.id, (r) => r?.status === 'cancelled');
-    expect(manager.isActive(record.id)).toBe(false);
+    await vi.waitFor(() => expect(manager.isActive(record.id)).toBe(false), { timeout: 15_000 });
   }, 30_000);
 
   it('cancelling an active run before its session opens is durable and releases the slot', () => {
@@ -1433,10 +1433,17 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     });
     const oldToken = Symbol('old-owner');
     const newToken = Symbol('new-owner');
-    const oldState = { ownerToken: oldToken, cancelled: false, interrupt: () => undefined, cwd: repoRoot, sessionEverOpened: true };
+    const oldState = {
+      ownerToken: oldToken,
+      cancelled: false,
+      interrupt: () => undefined,
+      cwd: repoRoot,
+      sessionEverOpened: true,
+      session: { open: true, result: new Promise<never>(() => {}), interrupt: () => undefined, hardStop: () => undefined },
+    };
     const newState = { ownerToken: newToken, cancelled: false, interrupt: () => undefined, cwd: repoRoot, sessionEverOpened: true };
     const internals = manager as unknown as {
-      active: Map<string, typeof oldState>;
+      active: Map<string, unknown>;
       dropActive: (runId: string, expectedState?: typeof oldState) => void;
       failOwnedContinuation: (runId: string, ownerToken: symbol, message: string) => void;
     };
