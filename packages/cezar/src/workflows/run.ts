@@ -1491,7 +1491,7 @@ export class RunManager {
                 finishedAt: new Date().toISOString(),
               });
               this.starting.delete(runId);
-            this.dropActive(runId);
+              this.dropActive(runId);
             });
             continue;
           }
@@ -1514,7 +1514,7 @@ export class RunManager {
               this.clearAutosaveTimer(state);
             }
             this.starting.delete(runId);
-              this.dropActive(runId);
+            this.dropActive(runId);
           });
         }
       } while (this.pumpAgain);
