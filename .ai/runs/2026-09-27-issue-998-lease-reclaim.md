@@ -1,0 +1,55 @@
+# Fix automation lease reclaim race (#998)
+
+## Goal
+
+Make abandoned automation poll leases safe under competing processes, including crash
+recovery and owner-safe release, without changing scheduler or server behavior.
+
+## Scope
+
+- `packages/cezar/src/automations/store.ts`
+- `packages/cezar/src/automations/store.test.ts` and lease/concurrency fixtures if needed
+
+Non-goals: workflow, scheduler, server, receipt semantics, or unrelated automation state changes.
+
+## Implementation Plan
+
+### Phase 1: Reproduce and design
+
+- [ ] 1.1 Add a deterministic competing-process regression test for abandoned lease reclaim
+- [ ] 1.2 Add tests for crash recovery, malformed locks, and owner-safe release
+
+### Phase 2: Implement
+
+- [ ] 2.1 Replace the reclaim TOCTOU sequence with mutually exclusive ownership and fencing
+- [ ] 2.2 Preserve malformed/dead-lock fallback behavior and update lease tests
+
+### Phase 3: Validate
+
+- [ ] 3.1 Run targeted automation tests and the configured full validation gate
+- [ ] 3.2 Review the diff and record limitations/evidence
+
+## Risks
+
+Lease persistence is a cross-process coordination seam; an incorrect reclaim can either
+duplicate automation launches or strand polling. Tests must cover both live ownership and
+recovery after a dead owner.
+
+## Progress
+
+> Convention: `- [ ]` pending, `- [x]` done. Append — <commit sha> when a step lands. Do not rename step titles.
+
+### Phase 1: Reproduce and design
+
+- [ ] 1.1 Add a deterministic competing-process regression test for abandoned lease reclaim
+- [ ] 1.2 Add tests for crash recovery, malformed locks, and owner-safe release
+
+### Phase 2: Implement
+
+- [ ] 2.1 Replace the reclaim TOCTOU sequence with mutually exclusive ownership and fencing
+- [ ] 2.2 Preserve malformed/dead-lock fallback behavior and update lease tests
+
+### Phase 3: Validate
+
+- [ ] 3.1 Run targeted automation tests and the configured full validation gate
+- [ ] 3.2 Review the diff and record limitations/evidence
