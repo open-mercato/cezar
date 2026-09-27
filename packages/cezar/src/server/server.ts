@@ -6610,6 +6610,8 @@ export function isSafeSessionId(sessionId: string): boolean {
 export function resumeCommand(runner: string | undefined, sessionId: string): string | null {
   if (!isSafeSessionId(sessionId)) return null;
   switch (runner) {
+    case 'junie':
+      return `junie --resume ${sessionId}`;
     case 'codex':
       return `codex resume ${sessionId}`;
     case 'opencode':
