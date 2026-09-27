@@ -1459,7 +1459,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       task: 'hanging session',
       steps: [{ id: 'task', name: 'Task', kind: 'agent' }],
     });
-    const fixture = join(process.cwd(), 'packages/cezar/src/core/__fixtures__/claude/stub-ignores-eof-exits-143.mjs');
+    const fixture = join(process.cwd(), 'packages/cezar/src/core/__fixtures__/claude/stub-ignores-eof-and-sigterm.mjs');
     let sawText: () => void = () => undefined;
     const textSeen = new Promise<void>((resolve) => { sawText = resolve; });
     const session = new ClaudeCliRunner({ bin: fixture, timeoutMs: 0 }).startSession(

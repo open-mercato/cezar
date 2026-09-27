@@ -1503,18 +1503,18 @@ export class RunManager {
           // in the same synchronous tick as the `pendingJobs.delete` above, so no
           // handler can observe a half-dequeued run.
           const input = this.hydrateQueuedInput(runId, job.input);
-          void this.execute(runId, job.workflow, input).catch((err: unknown) => {
+          const ownerToken = Symbol('run-owner');
+          void this.execute(runId, job.workflow, input, ownerToken).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
+            const state = this.active.get(runId);
+            if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
             this.store.updateRun(runId, {
               status: 'failed',
               error: `engine crashed: ${message}`,
               finishedAt: new Date().toISOString(),
             });
-            const state = this.active.get(runId);
-            if (state) {
-              this.clearIdleTimer(state);
-              this.clearAutosaveTimer(state);
-            }
+            this.clearIdleTimer(state);
+            this.clearAutosaveTimer(state);
             this.starting.delete(runId);
             if (state && !state.cancelled) this.dropActive(runId, state);
           });
@@ -2844,7 +2844,13 @@ export class RunManager {
       this.dropActive(runId, state);
     } else {
       state.cancellationTimer = setTimeout(() => {
-        if (this.active.get(runId) === state && state.cancelled) this.dropActive(runId, state);
+        if (this.active.get(runId) !== state || !state.cancelled) return;
+        const session = state.session;
+        if (!session) return;
+        session.hardStop?.();
+        void session.result.finally(() => {
+          if (this.active.get(runId) === state && state.cancelled) this.dropActive(runId, state);
+        });
       }, CANCEL_GRACE_MS);
       state.cancellationTimer.unref?.();
     }
@@ -3503,7 +3509,7 @@ export class RunManager {
         }
       }
     }
-    this.armAutosave(state);
+    this.armAutosave(runId, state);
     if (record) seedHandoffFile(this.dataDir, record); // idempotent — normally already there
     // Registry snapshot for `/skill` expansion. `execute` loads this for the workflow's own
     // sessions; a continuation builds its OWN ActiveRun, and without this the resumed session
@@ -3600,7 +3606,7 @@ export class RunManager {
         // buffered delta can outlive its turn.
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
-        void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
+        void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         // Did the backend end this turn purely to compact its own context (#955)? Absent on
         // every runner that has no such signal, and on every recording written before the
@@ -3875,7 +3881,7 @@ export class RunManager {
       await session.result;
       if (sessionError) throw new Error(sessionError);
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
-      if (state.cancelled) {
+      if (state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'cancelled', finishedAt: finishedAt() });
         this.store.updateRun(runId, { status: 'cancelled', finishedAt: finishedAt(), currentStepId: undefined });
         this.store.appendEvent(runId, { type: 'lifecycle', message: 'run cancelled' });
@@ -3901,7 +3907,7 @@ export class RunManager {
         this.store.appendEvent(runId, { type: 'lifecycle', message: `continue failed — ${message}` });
       }
     } finally {
-      this.recordUsagePeaks(runId);
+      this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
       if (!state.cancelled && this.active.get(runId) === state && state.cwd !== this.repoRoot) {
@@ -3913,9 +3919,9 @@ export class RunManager {
 
   // ---- execution -----------------------------------------------------------
 
-  private async execute(runId: string, workflow: WorkflowDef, input: StartRunInput): Promise<void> {
+  private async execute(runId: string, workflow: WorkflowDef, input: StartRunInput, ownerToken?: symbol): Promise<void> {
     const state: ActiveRun = {
-      ownerToken: Symbol('run-owner'),
+      ownerToken: ownerToken ?? Symbol('run-owner'),
       cancelled: false,
       interrupt: () => undefined,
       cwd: this.repoRoot,
@@ -4026,7 +4032,7 @@ export class RunManager {
         if (seededConfig.length > 0) {
           emit({ type: 'note', message: `seeded personal agent config: ${seededConfig.join(', ')}` });
         }
-        this.armAutosave(state);
+        this.armAutosave(runId, state);
       } catch (err) {
         if (state.cancelled) {
           this.dropActive(runId, state);
@@ -4243,7 +4249,7 @@ export class RunManager {
     }
 
     const finishedAt = new Date().toISOString();
-    if (state.cancelled) {
+    if (state.cancelled && this.active.get(runId) === state) {
       const run = this.store.getRun(runId);
       for (const s of run?.steps ?? []) {
         if (s.status === 'running' || s.status === 'waiting') {
@@ -4424,7 +4430,7 @@ export class RunManager {
         // boundary flushes again (idempotent) as a backstop.
         sink.flushAll();
         turnText = this.store.redactRunText(runId, turnText);
-        void this.recordTurnEnd(runId, turnText); // titleSummary + diffStat (#389)
+        void this.recordTurnEnd(runId, turnText, state); // titleSummary + diffStat (#389)
         const sessionOpen = !state.cancelled && state.session?.open;
         // The twin of `runContinuation`'s read — see there for why the field is absent on
         // every runner and every recording that predates it (#955).
@@ -4732,14 +4738,16 @@ export class RunManager {
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
       // events to the RunManager — only it knows how the session settled).
       sink.sessionEnded(state.cancelled ? 'cancelled' : 'end_turn');
-      this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
+      if (!state.cancelled && this.active.get(runId) === state) {
+        this.store.updateStep(runId, step.id, { tokensUsed: startTokens + result.tokensUsed });
+      }
       return null;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sink.sessionEnded('error', message); // alongside v1's fatal `error`
       return message;
     } finally {
-      this.recordUsagePeaks(runId);
+      this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
       this.leaveMonitoring(runId);
       this.waiting.delete(runId);
@@ -4918,12 +4926,13 @@ export class RunManager {
     }
   }
 
-  async recordTurnEnd(runId: string, turnText: string): Promise<void> {
+  async recordTurnEnd(runId: string, turnText: string, owner?: ActiveRun): Promise<void> {
     // The namer can finish after session cleanup removes its in-memory secrets.
     turnText = this.store.redactRunText(runId, turnText);
     try {
       const run = this.store.getRun(runId);
       if (!run) return;
+      if (owner && this.active.get(runId) !== owner) return;
       this.applyTurnMarkers(runId, run, turnText);
       // Titles are the namer's job (task auto-naming spec) — turn text is
       // deliberately NEVER a title source; see maybeRefreshTitle below. The
@@ -4937,8 +4946,10 @@ export class RunManager {
           taskBranch: run.branch,
           runStartedAt: run.startedAt,
         });
-        if (stat) this.store.updateRun(runId, { diffStat: stat });
-        else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });
+        if (!owner || this.active.get(runId) === owner) {
+          if (stat) this.store.updateRun(runId, { diffStat: stat });
+          else this.store.appendEvent(runId, { type: 'note', message: 'diff stat unavailable — git diff --shortstat failed in the worktree' });
+        }
       }
       await this.maybeRefreshTitle(runId, turnText);
     } catch {
@@ -5001,7 +5012,10 @@ export class RunManager {
    * a run can hold several sessions (multiple agent steps, Continue) and the
    * record keeps the highest water mark across all of them.
    */
-  private recordUsagePeaks(runId: string): void {
+  private recordUsagePeaks(runId: string, owner: ActiveRun): void {
+    // unregisterRunProcess is keyed by run id, so an old generation must not
+    // remove telemetry belonging to a replacement owner.
+    if (this.active.get(runId) !== owner) return;
     const peaks = unregisterRunProcess(runId);
     if (!peaks) return;
     const run = this.store.getRun(runId);
@@ -5422,10 +5436,11 @@ export class RunManager {
 
   /** Autosave-commit the worktree every 90 s while the run lives (spec 006).
    *  Opt-in via CEZ_AUTOSAVE=1 (#471) — see periodicAutosaveEnabled. */
-  private armAutosave(state: ActiveRun): void {
+  private armAutosave(runId: string, state: ActiveRun): void {
     if (!periodicAutosaveEnabled()) return;
     if (state.cwd === this.repoRoot || state.autosaveTimer) return;
     state.autosaveTimer = setInterval(() => {
+      if (this.active.get(runId) !== state || state.cancelled) return;
       void autosaveCommit(state.cwd, 'periodic');
     }, AUTOSAVE_INTERVAL_MS);
     state.autosaveTimer.unref?.();

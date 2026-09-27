@@ -118,6 +118,7 @@ export class ClaudeCliRunner implements AgentRunner {
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
+    let hardKillTimer: NodeJS.Timeout | undefined;
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -196,6 +197,15 @@ export class ClaudeCliRunner implements AgentRunner {
     const interrupt = (): void => {
       stdinOpen = false;
       if (!hasExited()) signalChild('SIGTERM');
+    };
+
+    const hardStop = (): void => {
+      interrupt();
+      if (hardKillTimer || hasExited()) return;
+      hardKillTimer = setTimeout(() => {
+        if (!hasExited()) signalChild('SIGKILL');
+      }, 1_000);
+      hardKillTimer.unref?.();
     };
 
     // Seed the first user message — the same path every follow-up takes.
@@ -286,6 +296,7 @@ export class ClaudeCliRunner implements AgentRunner {
       } finally {
         if (deadline) clearTimeout(deadline);
         if (killTimer) clearTimeout(killTimer);
+        if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
       }
@@ -338,6 +349,7 @@ export class ClaudeCliRunner implements AgentRunner {
       sendMessage,
       end,
       interrupt,
+      hardStop,
       pid: child.pid,
       get open() {
         return stdinOpen;
