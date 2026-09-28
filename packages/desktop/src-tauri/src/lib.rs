@@ -315,9 +315,7 @@ struct InstalledVersion {
 /// install first — the same rule as cezar's own `listInstalled`.
 fn installed_versions() -> Vec<InstalledVersion> {
     let dir = cezar_home().join("versions");
-    let active = std::fs::read_link(dir.join("current"))
-        .ok()
-        .and_then(|target| target.file_name().map(|name| name.to_string_lossy().into_owned()));
+    let active = active_id(&dir);
     let mut rows: Vec<(String, InstalledVersion)> = Vec::new();
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
@@ -372,14 +370,7 @@ fn switch_version(shell: &Shell, id: &str) -> bool {
     if !dir.join(id).join("node_modules").join("@open-mercato").join("cezar").join("dist").join("index.js").is_file() {
         return false;
     }
-    let tmp = dir.join(format!(".current.{}.tmp", std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
-    #[cfg(unix)]
-    let linked = std::os::unix::fs::symlink(id, &tmp).is_ok();
-    #[cfg(windows)]
-    let linked = std::os::windows::fs::symlink_dir(id, &tmp).is_ok() || std::fs::write(&tmp, id).is_ok();
-    if !linked || std::fs::rename(&tmp, dir.join("current")).is_err() {
-        let _ = std::fs::remove_file(&tmp);
+    if activate(&dir, id).is_err() {
         return false;
     }
     let mut guard = shell.child.lock().unwrap();
@@ -446,7 +437,7 @@ fn check_cezar_update(app: &AppHandle, shell: &Shell) {
     let running = shell.running_version.lock().unwrap().clone();
     let Some(running) = running else { return };
     let tag = release_tag();
-    let mut command = login_shell(&format!("npm view {PACKAGE}@{tag} version --json 2>/dev/null"));
+    let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     let Ok(output) = command.output() else { return };
     let raw = String::from_utf8_lossy(&output.stdout);
@@ -791,16 +782,25 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
 // ---- Node.js — the one prerequisite ---------------------------------------------------------
 
 /// The `node` the shell runs: `CEZ_DESKTOP_NODE` when set (a path, or a bogus one to test the
-/// missing-Node page), else whatever the login shell resolves.
-fn node_binary() -> String {
-    std::env::var("CEZ_DESKTOP_NODE").ok().filter(|v| !v.is_empty()).map(|v| shell_quote(&v)).unwrap_or_else(|| "node".into())
+/// missing-Node page), else whatever the user's PATH resolves.
+fn node_program() -> String {
+    std::env::var("CEZ_DESKTOP_NODE").ok().filter(|v| !v.is_empty()).unwrap_or_else(|| "node".into())
 }
 
-/// Node 20+ reachable through the login shell? Returns its version, or the reason it is not.
+/// npm ships as a batch file on Windows; std runs those through `cmd` with its own escaping.
+fn npm_program() -> &'static str {
+    if cfg!(windows) {
+        "npm.cmd"
+    } else {
+        "npm"
+    }
+}
+
+/// Node 20+ reachable on the user's PATH? Returns its version, or the reason it is not.
 fn check_node() -> Result<String, String> {
-    let mut command = login_shell(&format!("{} -p process.versions.node 2>/dev/null", node_binary()));
+    let mut command = tool_command(&node_program(), &["-p", "process.versions.node"]);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
-    let output = command.output().map_err(|e| format!("could not start the login shell: {e}"))?;
+    let output = command.output().map_err(|_| "Node.js was not found on your PATH.".to_string())?;
     let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if !output.status.success() || version.is_empty() {
         return Err("Node.js was not found on your PATH.".into());
@@ -854,63 +854,42 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
     let versions = cezar_home().join("versions");
     splash_reset(&window, title, &format!("{PACKAGE}@{tag} → {}", versions.display()));
 
-    // POSIX sh: the same steps as packages/cezar/src/self-update/installer.ts, staging dir and
-    // all, written so they run against any node/npm on the user's login PATH.
-    let script = format!(
-        r#"set -e
-V={versions}
-mkdir -p "$V"
-S="$V/.staging-shell-$$"
-rm -rf "$S"; mkdir -p "$S"
-npm install --prefix "$S" --omit=dev --no-audit --no-fund --no-package-lock --loglevel=notice {package}@{tag}
-VER=$({node} -p "require('$S/node_modules/{package}/package.json').version")
-# The version becomes a path under $V: refuse anything that is not a plain version id, the
-# same rule as assertSafeId in packages/cezar/src/self-update/layout.ts.
-case "$VER" in ""|*..*|*/*|[!0-9A-Za-z]*|*[!0-9A-Za-z.+-]*) echo "refusing version id: $VER" >&2; exit 1;; esac
-test -f "$S/node_modules/{package}/dist/index.js"
-rm -rf "$V/$VER"
-mv "$S" "$V/$VER"
-printf '{{"version":"%s","source":"registry","installedAt":"%s"}}\n' "$VER" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$V/$VER/.cezar-install.json"
-ln -sfn "$VER" "$V/current"
-echo "installed $VER"
-"#,
-        versions = shell_quote(&versions.to_string_lossy()),
-        package = PACKAGE,
-        tag = tag,
-        node = node_binary(),
-    );
-    let mut command = login_shell(&script);
-    command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let ok = match command.spawn() {
-        Ok(mut child) => {
-            let mut lines: Vec<String> = Vec::new();
-            for reader in [
-                child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
-                child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                // Sequential drain is fine: npm's chatter is small and stdout closes at the end.
-                for line in BufReader::new(reader).lines().map_while(Result::ok) {
-                    splash_log(&window, &line);
-                    lines.push(line);
-                }
-            }
-            match child.wait() {
-                Ok(status) if status.success() => true,
-                Ok(status) => {
-                    fail(&window, "cezar could not be installed", &format!("npm exited with {status}. Is Node 20+ on your PATH?"), &lines.join("\n"));
-                    false
-                }
-                Err(error) => {
-                    fail(&window, "cezar could not be installed", &error.to_string(), "");
-                    false
-                }
+    let mut lines: Vec<String> = Vec::new();
+    let installed = install_into(&versions, |staging| {
+        let spec = format!("{PACKAGE}@{tag}");
+        let prefix = staging.to_string_lossy();
+        let mut command = tool_command(
+            npm_program(),
+            &["install", "--prefix", &prefix, "--omit=dev", "--no-audit", "--no-fund", "--no-package-lock", "--loglevel=notice", &spec],
+        );
+        command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = command.spawn().map_err(|error| format!("could not start npm: {error}. Is Node 20+ on your PATH?"))?;
+        for reader in [
+            child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
+            child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            // Sequential drain is fine: npm's chatter is small and stdout closes at the end.
+            for line in BufReader::new(reader).lines().map_while(Result::ok) {
+                splash_log(&window, &line);
+                lines.push(line);
             }
         }
-        Err(error) => {
-            fail(&window, "cezar could not be installed", &format!("could not start the login shell: {error}"), "");
+        match child.wait() {
+            Ok(status) if status.success() => Ok(()),
+            Ok(status) => Err(format!("npm exited with {status}. Is Node 20+ on your PATH?")),
+            Err(error) => Err(error.to_string()),
+        }
+    });
+    let ok = match installed {
+        Ok(version) => {
+            splash_log(&window, &format!("installed {version}"));
+            true
+        }
+        Err(reason) => {
+            fail(&window, "cezar could not be installed", &reason, &lines.join("\n"));
             false
         }
     };
@@ -942,8 +921,7 @@ fn release_tag() -> &'static str {
 // ---- process -------------------------------------------------------------------------------
 
 fn spawn_sidecar(entry: &Path, port: u16, cwd: &Path, log: Arc<Mutex<VecDeque<String>>>) -> Result<Child, String> {
-    let script = format!("exec {} {} serve --no-open --port {}", node_binary(), shell_quote(&entry.to_string_lossy()), port);
-    let mut command = login_shell(&script);
+    let mut command = tool_command(&node_program(), &[&entry.to_string_lossy(), "serve", "--no-open", "--port", &port.to_string()]);
     command
         .current_dir(cwd)
         .env("CEZ_DESKTOP", "1")
@@ -954,7 +932,7 @@ fn spawn_sidecar(entry: &Path, port: u16, cwd: &Path, log: Arc<Mutex<VecDeque<St
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|error| format!("could not spawn the login shell: {error}"))?;
+    let mut child = command.spawn().map_err(|error| format!("could not start node: {error}"))?;
     for reader in [
         child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),
         child.stderr.take().map(|err| Box::new(err) as Box<dyn Read + Send>),
@@ -976,26 +954,182 @@ fn spawn_sidecar(entry: &Path, port: u16, cwd: &Path, log: Arc<Mutex<VecDeque<St
     Ok(child)
 }
 
-/// A command through the user's LOGIN shell, so nvm/volta/homebrew PATH entries resolve exactly
-/// as in their terminal. `cmd /C` on Windows (PoC — untested).
-fn login_shell(script: &str) -> Command {
+/// `program` with `args`, the way this platform finds the user's tools.
+///
+/// macOS and Linux: through the user's LOGIN shell, because a GUI app inherits none of the PATH
+/// their terminal has — nvm, volta and homebrew entries only exist after the profile ran.
+/// Windows: directly. There is no login shell, the PATH a GUI process gets is the user's own
+/// (installers write it to the registry), and `cmd` understands none of POSIX quoting — so
+/// nothing here is ever a script on Windows, only a program and its arguments.
+fn tool_command(program: &str, args: &[&str]) -> Command {
     #[cfg(windows)]
     {
-        let mut command = Command::new("cmd");
-        command.args(["/C", script]);
+        use std::os::windows::process::CommandExt;
+        /// No console window flashing up behind the app for every node and npm call.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        let mut command = Command::new(program);
+        command.args(args).creation_flags(CREATE_NO_WINDOW);
         command
     }
     #[cfg(not(windows))]
     {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| if cfg!(target_os = "macos") { "/bin/zsh".into() } else { "/bin/bash".into() });
         let mut command = Command::new(shell);
-        command.args(["-lc", script]);
+        command.args(["-lc", &posix_script(program, args)]);
         command
     }
 }
 
+/// `exec 'program' 'arg' …` — every word single-quoted, so a path with a space or a quote in it
+/// stays one argument.
+#[cfg(any(not(windows), test))]
+fn posix_script(program: &str, args: &[&str]) -> String {
+    let mut script = format!("exec {}", shell_quote(program));
+    for arg in args {
+        script.push(' ');
+        script.push_str(&shell_quote(arg));
+    }
+    script
+}
+
+#[cfg(any(not(windows), test))]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+// ---- the managed layout --------------------------------------------------------------------
+//
+// The same layout, manifest and rules as packages/cezar/src/self-update/{layout,installer}.ts.
+// Written against the filesystem rather than as a shell script, so one implementation — and one
+// set of tests — serves macOS, Linux and Windows.
+
+fn entry_under(root: &Path) -> PathBuf {
+    root.join("node_modules").join("@open-mercato").join("cezar").join("dist").join("index.js")
+}
+
+/// A version id becomes a directory name under `versions/`: a plain version and nothing else.
+/// The rule of `assertSafeId` in layout.ts.
+fn valid_version_id(id: &str) -> bool {
+    id.chars().next().is_some_and(|first| first.is_ascii_alphanumeric())
+        && id.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '+' | '-'))
+        && !id.contains("..")
+        && id.len() <= 64
+}
+
+/// The id `current` points at: a link (a symlink, or a junction on Windows), else a text file
+/// holding the id — what cezar writes where it could create neither.
+fn active_id(versions: &Path) -> Option<String> {
+    let current = versions.join("current");
+    std::fs::read_link(&current)
+        .ok()
+        .and_then(|target| target.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .or_else(|| std::fs::read_to_string(&current).ok().map(|raw| raw.trim().to_string()))
+        .filter(|id| valid_version_id(id))
+}
+
+/// The active version's entry file, or None when nothing usable is installed.
+fn managed_entry(versions: &Path) -> Option<PathBuf> {
+    let through_link = entry_under(&versions.join("current"));
+    if through_link.is_file() {
+        return Some(through_link);
+    }
+    let by_id = entry_under(&versions.join(active_id(versions)?));
+    by_id.is_file().then_some(by_id)
+}
+
+/// Point `current` at an installed id.
+fn activate(versions: &Path, id: &str) -> Result<(), String> {
+    if !valid_version_id(id) || !entry_under(&versions.join(id)).is_file() {
+        return Err(format!("version {id} is not installed"));
+    }
+    let current = versions.join("current");
+    #[cfg(unix)]
+    {
+        // Atomic: the new link is made beside the old one and renamed over it.
+        let tmp = versions.join(format!(".current.{}.tmp", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        std::os::unix::fs::symlink(id, &tmp).map_err(|error| error.to_string())?;
+        std::fs::rename(&tmp, &current).map_err(|error| {
+            let _ = std::fs::remove_file(&tmp);
+            error.to_string()
+        })
+    }
+    #[cfg(windows)]
+    {
+        // A junction: a directory link that needs no privilege (a symlink needs developer mode
+        // or an elevated process). Windows will not rename one over another, so the old link
+        // goes first — `remove_dir` on a link removes the link, never what it points at.
+        if std::fs::remove_dir(&current).is_err() {
+            let _ = std::fs::remove_file(&current);
+        }
+        junction::create(versions.join(id), &current).map_err(|error| error.to_string())
+    }
+}
+
+/// Install one version into `versions` and make it current. `run_npm` fills the staging
+/// directory it is given (`npm install --prefix <staging>`); everything else is files:
+/// read the version npm resolved, refuse an id that is not a plain version, move staging into
+/// place, write the manifest, flip `current`. Returns the installed version.
+fn install_into(versions: &Path, run_npm: impl FnOnce(&Path) -> Result<(), String>) -> Result<String, String> {
+    std::fs::create_dir_all(versions).map_err(|error| format!("{}: {error}", versions.display()))?;
+    let staging = versions.join(format!(".staging-shell-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|error| format!("{}: {error}", staging.display()))?;
+    let result = (|| {
+        run_npm(&staging)?;
+        let manifest = staging.join("node_modules").join("@open-mercato").join("cezar").join("package.json");
+        let version = std::fs::read_to_string(&manifest)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|json| json.get("version").and_then(|value| value.as_str()).map(str::to_owned))
+            .ok_or("npm finished, but the package it installed has no version")?;
+        if !valid_version_id(&version) {
+            return Err(format!("refusing version id: {version}"));
+        }
+        if !entry_under(&staging).is_file() {
+            return Err("npm finished, but the package has no dist/index.js".into());
+        }
+        let target = versions.join(&version);
+        // A complete install of this exact version is already there: keep it. It may be the one
+        // RUNNING, and Windows will not delete files a live process holds open.
+        if entry_under(&target).is_file() && target.join(".cezar-install.json").is_file() {
+            let _ = std::fs::remove_dir_all(&staging);
+        } else {
+            if target.exists() {
+                std::fs::remove_dir_all(&target).map_err(|error| format!("{}: {error}", target.display()))?;
+            }
+            std::fs::rename(&staging, &target).map_err(|error| format!("{}: {error}", target.display()))?;
+            let record = serde_json::json!({ "version": version, "source": "registry", "installedAt": iso_now() });
+            std::fs::write(target.join(".cezar-install.json"), format!("{record}\n")).map_err(|error| error.to_string())?;
+        }
+        activate(versions, &version)?;
+        Ok(version)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    result
+}
+
+/// Now, as `2026-09-28T11:03:07Z` — the shape cezar's own manifests carry.
+fn iso_now() -> String {
+    let seconds = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    iso_from_unix(seconds)
+}
+
+fn iso_from_unix(seconds: u64) -> String {
+    let (days, rest) = (seconds / 86_400, seconds % 86_400);
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + if month <= 2 { 1 } else { 0 };
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rest / 3_600, rest % 3_600 / 60, rest % 60)
 }
 
 /// The bundled splash (`tauri://` / `http://tauri.localhost`) and the cockpit — loopback http on
@@ -1177,8 +1311,7 @@ fn resolve_entry() -> Option<PathBuf> {
             return Some(explicit);
         }
     }
-    let managed = cezar_home().join("versions").join("current").join("node_modules").join("@open-mercato").join("cezar").join("dist").join("index.js");
-    managed.is_file().then_some(managed)
+    managed_entry(&cezar_home().join("versions"))
 }
 
 /// The boot folder: `CEZ_DESKTOP_CWD`, else the most recently opened registered project, else
@@ -1351,5 +1484,205 @@ mod tests {
             "http://localhost:4321/p/a?from=127.0.0.1"
         );
         assert_eq!(browser_url(url("http://localhost:4321/x")), "http://localhost:4321/x");
+    }
+
+    // ---- the managed layout ------------------------------------------------------------------
+
+    struct Scratch(PathBuf);
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("cezar-desktop-test-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        }
+    }
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// What `npm install --prefix <staging>` leaves behind, for a package at `version`.
+    fn fake_npm(version: &'static str) -> impl FnOnce(&Path) -> Result<(), String> {
+        move |staging| {
+            let package = staging.join("node_modules").join("@open-mercato").join("cezar");
+            std::fs::create_dir_all(package.join("dist")).unwrap();
+            std::fs::write(package.join("package.json"), format!(r#"{{"name":"@open-mercato/cezar","version":"{version}"}}"#)).unwrap();
+            std::fs::write(package.join("dist").join("index.js"), format!("// {version}\n")).unwrap();
+            Ok(())
+        }
+    }
+
+    fn leftovers(versions: &Path) -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(versions)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with('.'))
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn version_ids_are_plain_versions() {
+        for id in ["0.12.0", "0.12.0+local", "0.12.0-nightly.20260927.60"] {
+            assert!(valid_version_id(id), "{id}");
+        }
+        for id in ["", "..", "a..b", ".hidden", "-weird", "/etc", "a/b", "a\\b", "has space", "0.1.0;rm"] {
+            assert!(!valid_version_id(id), "{id}");
+        }
+    }
+
+    #[test]
+    fn install_puts_a_version_in_place_and_makes_it_current() {
+        let scratch = Scratch::new("install");
+        let versions = scratch.0.join("versions");
+        assert_eq!(managed_entry(&versions), None);
+
+        assert_eq!(install_into(&versions, fake_npm("0.12.0")).unwrap(), "0.12.0");
+        assert_eq!(active_id(&versions).as_deref(), Some("0.12.0"));
+        let entry = managed_entry(&versions).expect("an entry after install");
+        assert_eq!(std::fs::read_to_string(&entry).unwrap(), "// 0.12.0\n");
+        let manifest: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(versions.join("0.12.0").join(".cezar-install.json")).unwrap()).unwrap();
+        assert_eq!(manifest["version"], "0.12.0");
+        assert_eq!(manifest["source"], "registry");
+        assert!(leftovers(&versions).is_empty(), "staging left behind: {:?}", leftovers(&versions));
+
+        // A second version replaces `current`, and the first stays installed.
+        assert_eq!(install_into(&versions, fake_npm("0.13.0")).unwrap(), "0.13.0");
+        assert_eq!(active_id(&versions).as_deref(), Some("0.13.0"));
+        assert_eq!(std::fs::read_to_string(managed_entry(&versions).unwrap()).unwrap(), "// 0.13.0\n");
+        assert!(entry_under(&versions.join("0.12.0")).is_file());
+
+        // Switching back is a link flip.
+        activate(&versions, "0.12.0").unwrap();
+        assert_eq!(active_id(&versions).as_deref(), Some("0.12.0"));
+        assert_eq!(std::fs::read_to_string(managed_entry(&versions).unwrap()).unwrap(), "// 0.12.0\n");
+    }
+
+    #[test]
+    fn installing_the_version_already_in_place_keeps_it() {
+        let scratch = Scratch::new("reinstall");
+        let versions = scratch.0.join("versions");
+        install_into(&versions, fake_npm("0.12.0")).unwrap();
+        let marker = versions.join("0.12.0").join("kept");
+        std::fs::write(&marker, "x").unwrap();
+        assert_eq!(install_into(&versions, fake_npm("0.12.0")).unwrap(), "0.12.0");
+        assert!(marker.is_file(), "the running version's directory was replaced");
+        assert!(leftovers(&versions).is_empty());
+    }
+
+    #[test]
+    fn a_failed_or_hostile_install_changes_nothing() {
+        let scratch = Scratch::new("refuse");
+        let versions = scratch.0.join("versions");
+        install_into(&versions, fake_npm("0.12.0")).unwrap();
+
+        assert!(install_into(&versions, |_| Err("npm exited with 1".into())).is_err());
+        assert!(install_into(&versions, fake_npm("..")).unwrap_err().contains("refusing version id"));
+        assert!(install_into(&versions, fake_npm("../../escape")).is_err());
+        // No entry file: not a built package.
+        assert!(install_into(&versions, |staging| {
+            let package = staging.join("node_modules").join("@open-mercato").join("cezar");
+            std::fs::create_dir_all(&package).unwrap();
+            std::fs::write(package.join("package.json"), r#"{"version":"9.9.9"}"#).unwrap();
+            Ok(())
+        })
+        .is_err());
+
+        assert_eq!(active_id(&versions).as_deref(), Some("0.12.0"));
+        assert!(!versions.join("9.9.9").exists());
+        assert!(leftovers(&versions).is_empty(), "staging left behind: {:?}", leftovers(&versions));
+        assert!(activate(&versions, "1.0.0").is_err(), "activated a version that is not installed");
+        assert!(activate(&versions, "..").is_err());
+    }
+
+    #[test]
+    fn current_as_a_text_file_is_followed() {
+        let scratch = Scratch::new("textfile");
+        let versions = scratch.0.join("versions");
+        install_into(&versions, fake_npm("0.12.0")).unwrap();
+        let current = versions.join("current");
+        if std::fs::remove_dir(&current).is_err() {
+            std::fs::remove_file(&current).unwrap();
+        }
+        std::fs::write(&current, "0.12.0\n").unwrap();
+        assert_eq!(active_id(&versions).as_deref(), Some("0.12.0"));
+        assert_eq!(managed_entry(&versions), Some(entry_under(&versions.join("0.12.0"))));
+        // And a link replaces the text file on the next switch.
+        activate(&versions, "0.12.0").unwrap();
+        assert!(entry_under(&current).is_file());
+    }
+
+    #[test]
+    fn timestamps_are_iso_utc() {
+        assert_eq!(iso_from_unix(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_from_unix(951_782_400), "2000-02-29T00:00:00Z");
+        assert_eq!(iso_from_unix(1_790_593_387), "2026-09-28T09:03:07Z");
+    }
+
+    #[test]
+    fn a_posix_command_keeps_every_argument_whole() {
+        assert_eq!(
+            posix_script("node", &["/Users/o'neil/my app/index.js", "serve", "--port", "4321"]),
+            r#"exec 'node' '/Users/o'\''neil/my app/index.js' 'serve' '--port' '4321'"#
+        );
+    }
+
+    // ---- against the real tools (CI runs these with `--ignored`; they need Node on PATH) ------
+
+    /// The reviewer's dead screen: on Windows the shell asked `cmd` to run a POSIX script and
+    /// reported a missing Node with Node installed.
+    #[test]
+    #[ignore = "needs Node.js on PATH"]
+    fn finds_the_node_on_path() {
+        let version = check_node().expect("Node 20+ on PATH");
+        assert!(version.split('.').next().unwrap().parse::<u32>().unwrap() >= 20, "{version}");
+    }
+
+    /// The sidecar's whole launch: node is started with the entry and the arguments cezar
+    /// expects, in the right folder and environment, and its health answers on the port.
+    #[test]
+    #[ignore = "needs Node.js on PATH"]
+    fn starts_a_sidecar_and_hears_its_health() {
+        let scratch = Scratch::new("side car");
+        let entry = scratch.0.join("index.js");
+        std::fs::write(
+            &entry,
+            r#"const args = process.argv.slice(2);
+const port = Number(args[args.indexOf('--port') + 1]);
+const ok = args[0] === 'serve' && args.includes('--no-open') && process.env.CEZ_DESKTOP === '1'
+  && process.env.CEZ_SUPERVISED === '1' && Number(process.env.CEZ_SUPERVISOR_PID) > 0;
+require('node:http').createServer((req, res) => {
+  res.writeHead(ok ? 200 : 500, { 'content-type': 'application/json' });
+  res.end(JSON.stringify({ version: '9.9.9-test' }));
+}).listen(port, '127.0.0.1');
+"#,
+        )
+        .unwrap();
+        let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let mut child = spawn_sidecar(&entry, port, &scratch.0, Arc::new(Mutex::new(VecDeque::new()))).expect("node starts");
+        let version = wait_for_health(port, &mut child, Duration::from_secs(20));
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(version.as_deref(), Some("9.9.9-test"));
+    }
+
+    /// npm itself, through the same command the shell builds: a real (small) install into a
+    /// prefix with a space in it.
+    #[test]
+    #[ignore = "needs npm on PATH and the network"]
+    fn runs_npm_with_a_prefix() {
+        let scratch = Scratch::new("npm prefix");
+        let prefix = scratch.0.to_string_lossy().into_owned();
+        let output = tool_command(npm_program(), &["install", "--prefix", &prefix, "--no-audit", "--no-fund", "--no-package-lock", "is-number@7.0.0"])
+            .stdin(Stdio::null())
+            .output()
+            .expect("npm starts");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(scratch.0.join("node_modules").join("is-number").join("package.json").is_file());
     }
 }
