@@ -5,6 +5,7 @@
   "description": "Desktop shell for cezar (PoC): a Tauri window around the managed cezar install — a Dock/taskbar app, no terminal. Not an npm workspace on purpose: it pulls the Tauri CLI, which the service, contract and cockpit never need.",
   "type": "module",
   "scripts": {
+    "tauri": "tauri",
     "dev": "tauri dev",
     "build": "tauri build",
     "build:debug": "tauri build --debug",
