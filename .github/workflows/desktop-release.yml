@@ -6,7 +6,8 @@ name: Desktop release
 # inside the cockpit), so a cezar release never touches it and a shell release is rare.
 #
 # Trigger: push a `desktop-v<version>` tag whose version matches packages/desktop/src-tauri/
-# tauri.conf.json, or dispatch by hand with the same version. The result is ONE GitHub Release
+# tauri.conf.json, or run the workflow by hand — it then releases the version that file names,
+# with nothing to type. The result is ONE GitHub Release
 # holding, per platform, the installer under a stable versionless name (what the landing page
 # and package managers link), the versioned original, and `desktop-latest.json` — the updater
 # manifest the installed shells poll (`plugins.updater.endpoints`).
@@ -25,10 +26,6 @@ on:
       - 'desktop-v*'
   workflow_dispatch:
     inputs:
-      version:
-        description: 'Version to release (must equal packages/desktop/src-tauri/tauri.conf.json)'
-        required: true
-        type: string
       dry_run:
         description: 'Build the installers as run artifacts only: no release, no tag, no download links'
         required: false
@@ -59,17 +56,12 @@ jobs:
 
       - name: Resolve and verify the version
         id: version
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            VERSION="${GITHUB_REF_NAME#desktop-v}"
-          else
-            VERSION="$INPUT_VERSION"
-          fi
-          CONFIGURED=$(node -p "require('./$DESKTOP_DIR/src-tauri/tauri.conf.json').version")
-          if [ "$VERSION" != "$CONFIGURED" ]; then
-            echo "::error::tag/input version $VERSION does not match tauri.conf.json version $CONFIGURED"
+          # tauri.conf.json is the version. A manual run releases what it says; a tag can
+          # disagree with it, so a tag is checked against it.
+          VERSION=$(node -p "require('./$DESKTOP_DIR/src-tauri/tauri.conf.json').version")
+          if [ "${{ github.event_name }}" = "push" ] && [ "${GITHUB_REF_NAME#desktop-v}" != "$VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match tauri.conf.json version $VERSION"
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"

@@ -25,7 +25,9 @@ security fix lands, or the icon/name/signing identity changes. Never for a cezar
 
 ## The release: GitHub Releases, tag `desktop-v<version>`
 
-`desktop-release.yml` runs on a `desktop-v*` tag push (or manual dispatch with a version) and:
+`desktop-release.yml` runs on a `desktop-v*` tag push, or by hand from the Actions tab (it then releases the
+version `tauri.conf.json` names; `dry_run` builds the installers as run artifacts and publishes
+nothing), and:
 
 1. **prepare** — verifies the tag equals `packages/desktop/src-tauri/tauri.conf.json`'s
    `version` (a mismatched tag fails before any build) and creates a draft release.
@@ -92,8 +94,8 @@ Maintainer, per shell release:
    `packages/desktop/src-tauri/Cargo.toml`, `packages/desktop/src-tauri/tauri.conf.json`.
    The shell is versioned on its own (`0.1.1` today), never in step with cezar.
 2. `git tag desktop-v<version> && git push --tags`. `desktop-release.yml` builds, signs, uploads
-   the installers under stable names and publishes `desktop-latest.json`. (Or dispatch the
-   workflow by hand with the version.)
+   the installers under stable names and publishes `desktop-latest.json`. (Or run the
+   workflow by hand: it reads the version from `tauri.conf.json`.)
 
 User: nothing. On the next launch the installed shell fetches `desktop-latest.json`, verifies
 the minisign signature against the compiled-in public key, downloads and installs the bundle
