@@ -1621,7 +1621,7 @@ mod tests {
     fn timestamps_are_iso_utc() {
         assert_eq!(iso_from_unix(0), "1970-01-01T00:00:00Z");
         assert_eq!(iso_from_unix(951_782_400), "2000-02-29T00:00:00Z");
-        assert_eq!(iso_from_unix(1_790_593_387), "2026-09-28T09:03:07Z");
+        assert_eq!(iso_from_unix(1_790_593_387), "2026-09-28T11:03:07Z");
     }
 
     #[test]
@@ -1649,7 +1649,8 @@ mod tests {
     #[ignore = "needs Node.js on PATH"]
     fn starts_a_sidecar_and_hears_its_health() {
         let scratch = Scratch::new("side car");
-        let entry = scratch.0.join("index.js");
+        // `.cjs`: a temp dir can sit under a package.json that says "type": "module".
+        let entry = scratch.0.join("index.cjs");
         std::fs::write(
             &entry,
             r#"const args = process.argv.slice(2);
@@ -1664,11 +1665,12 @@ require('node:http').createServer((req, res) => {
         )
         .unwrap();
         let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-        let mut child = spawn_sidecar(&entry, port, &scratch.0, Arc::new(Mutex::new(VecDeque::new()))).expect("node starts");
+        let log = Arc::new(Mutex::new(VecDeque::new()));
+        let mut child = spawn_sidecar(&entry, port, &scratch.0, log.clone()).expect("node starts");
         let version = wait_for_health(port, &mut child, Duration::from_secs(20));
         let _ = child.kill();
         let _ = child.wait();
-        assert_eq!(version.as_deref(), Some("9.9.9-test"));
+        assert_eq!(version.as_deref(), Some("9.9.9-test"), "sidecar output: {:?}", log.lock().unwrap());
     }
 
     /// npm itself, through the same command the shell builds: a real (small) install into a

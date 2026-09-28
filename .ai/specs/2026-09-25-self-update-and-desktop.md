@@ -75,7 +75,9 @@ project. The shell needs no release to ship a cezar update.
 
 ## Not done (PoC)
 
-- Windows launcher (`.cmd`) and the text-file `current` fallback are untested.
+- Windows launcher (`.cmd`) is untested. `current` on Windows is a junction (layout tests run
+  on `windows-latest` in `desktop-check.yml`); a text file naming the id is still READ, for
+  homes written by an earlier build.
 - No spec-grade tests for the installer (npm shell-outs); layout, semver, registry parse and
   restart args are unit-tested.
 - Tauri updater plugin for the shell itself, code signing, CI bundles per platform.

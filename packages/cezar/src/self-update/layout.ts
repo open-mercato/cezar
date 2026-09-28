@@ -4,8 +4,8 @@
  *   ~/.cezar/versions/<id>/                       one `npm install --prefix` tree per version
  *   ~/.cezar/versions/<id>/.cezar-install.json    manifest: version, source, installedAt
  *   ~/.cezar/versions/<id>/node_modules/@open-mercato/cezar/dist/index.js   the entry
- *   ~/.cezar/versions/current  →  <id>            the active version (symlink; a text file
- *                                                 holding the id where symlinks are unavailable)
+ *   ~/.cezar/versions/current  →  <id>            the active version (a symlink; a junction on
+ *                                                 Windows)
  *   ~/.cezar/bin/cezar, cez                       launchers that exec `current`'s entry
  *
  * `<id>` is the version string, plus `+local` for a build installed from a checkout so it never
@@ -14,7 +14,7 @@
  * rebuilds it — state, never configuration.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 
@@ -135,22 +135,40 @@ export function activeId(env: NodeJS.ProcessEnv = process.env): string | null {
 }
 
 /**
- * Point `current` at `id`. Atomic: the new link is created beside the old one and renamed over
- * it, so a reader never sees a missing `current`. Falls back to a text file naming the id where
- * symlinks cannot be created (Windows without developer mode) — `currentEntry()` cannot follow a
- * text file, so the launcher reads it instead; the PoC only exercises the symlink path.
+ * Point `current` at `id`. Atomic on POSIX: the new link is created beside the old one and
+ * renamed over it, so a reader never sees a missing `current`.
+ *
+ * Windows links with a JUNCTION — a directory link that needs no privilege, where a symlink
+ * needs developer mode or elevation. Two things differ there: a junction's target must be
+ * absolute (Node resolves a relative one against the working directory, not against the link),
+ * and Windows will not rename a link over an existing one, so the old link is removed first.
+ * The desktop shell does the same (`activate` in packages/desktop/src-tauri/src/lib.rs).
  */
+/** Remove `current` itself — a junction, a symlink or the legacy text file — and never the
+ *  version behind it: `unlink` and `rmdir` both act on a link, not through it. */
+function removeLink(link: string): void {
+  for (const remove of [unlinkSync, rmdirSync]) {
+    try {
+      remove(link);
+      return;
+    } catch {
+      // Not that kind of entry, or not there at all: the next one, then the create decides.
+    }
+  }
+}
+
 export function activate(id: string, env: NodeJS.ProcessEnv = process.env): void {
   if (!existsSync(versionEntry(id, env))) throw new Error(`version ${id} is not installed`);
   const dir = versionsDir(env);
   const link = join(dir, CURRENT_LINK);
   const tmp = join(dir, `.${CURRENT_LINK}.${process.pid}.tmp`);
-  rmSync(tmp, { force: true });
-  try {
-    symlinkSync(id, tmp, process.platform === 'win32' ? 'junction' : 'dir');
-  } catch {
-    writeFileSync(tmp, `${id}\n`);
+  if (process.platform === 'win32') {
+    removeLink(link);
+    symlinkSync(versionDir(id, env), link, 'junction');
+    return;
   }
+  rmSync(tmp, { force: true });
+  symlinkSync(id, tmp, 'dir');
   renameSync(tmp, link);
 }
 

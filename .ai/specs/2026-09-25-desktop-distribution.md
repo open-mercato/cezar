@@ -29,7 +29,7 @@ security fix lands, or the icon/name/signing identity changes. Never for a cezar
 
 1. **prepare** — verifies the tag equals `packages/desktop/src-tauri/tauri.conf.json`'s
    `version` (a mismatched tag fails before any build) and creates a draft release.
-2. **build** (matrix) — macOS Apple silicon, macOS Intel, Linux x64 (Windows is deliberately absent, see below), through
+2. **build** (matrix) — macOS Apple silicon, macOS Intel, Windows x64, Linux x64, through
    `tauri-apps/tauri-action`. Each job uploads the versioned bundle AND a **stable, versionless
    copy** plus its `.sha256`:
 
@@ -37,7 +37,7 @@ security fix lands, or the icon/name/signing identity changes. Never for a cezar
    | --- | --- |
    | macOS (arm64) | `cezar-macos-aarch64.dmg` |
    | macOS (x64) | `cezar-macos-x86_64.dmg` |
-   | Windows | none yet — the shell cannot start there (see "Windows is not built") |
+   | Windows | `cezar-windows-x86_64-setup.exe` (NSIS) |
    | Linux | `cezar-linux-x86_64.AppImage` (+ `.deb` versioned) |
 
    Stable names are the contract: `https://github.com/open-mercato/cezar/releases/download/desktop-latest/<asset>`
@@ -252,11 +252,15 @@ of them is the one case where the shell must ship BEFORE the cezar version that 
 
 ## Open items
 
-- **Windows is not built.** The shell runs node and npm through POSIX `sh` scripts
-  (`login_shell`, `update_cezar`, `spawn_sidecar` in `src-tauri/src/lib.rs`); `cmd /C` cannot run
-  them, so a Windows build stops at "Node.js was not found" with Node installed. The release
-  matrix has no Windows leg until those three have a Windows-native path — an installer under
-  a permanent URL that opens to a dead screen is worse than no installer.
+- **Windows is built, and verified by CI rather than by hand.** The shell never hands Windows
+  a script: `tool_command` starts `node` and `npm.cmd` directly with an argument list (there is
+  no login shell, and a GUI process already has the user's PATH), the install is filesystem
+  calls in Rust (`install_into`) instead of `sh`, and `current` is a junction — a directory
+  link that needs no privilege. `desktop-check.yml` runs on `windows-latest` and proves the
+  three things that used to be impossible there: Node is found, a sidecar starts and answers
+  health, npm installs into a prefix with a space in it. What NO automated run covers is the
+  window itself — nobody has clicked through the installed app on Windows. Do that once,
+  from the first release's installer, before the download link goes public.
 - Windows signing, Flathub, universal macOS binary (two dmgs today).
 - A `cezar desktop` version chip somewhere in the cockpit (the sidecar knows `CEZ_DESKTOP`,
   the shell version could ride along in an env var) so a bug report names both versions.

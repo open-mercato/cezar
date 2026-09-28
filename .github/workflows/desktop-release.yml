@@ -98,11 +98,12 @@ jobs:
             args: --target x86_64-apple-darwin
             stable: cezar-macos-x86_64.dmg
             glob: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg'
-          # NO Windows leg, on purpose. The shell drives node and npm through POSIX `sh` scripts
-          # (`login_shell` in src-tauri/src/lib.rs), which `cmd /C` cannot run: a Windows build
-          # installs and then stops at "Node.js was not found". Publishing that under a permanent
-          # download URL would be shipping a dead screen — add the leg back together with a
-          # Windows-native `login_shell`, `update_cezar` and `spawn_sidecar`.
+          - name: Windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: ''
+            stable: cezar-windows-x86_64-setup.exe
+            glob: 'src-tauri/target/release/bundle/nsis/*-setup.exe'
           - name: Linux
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -240,7 +241,7 @@ jobs:
           # Every installer or none: `--clobber` replaces by name, so a file missing here would
           # leave the PREVIOUS release's asset under the same permanent URL — a download page
           # that silently mixes versions.
-          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-linux-x86_64.AppImage; do
+          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage; do
             if ! gh release download "$TAG" --repo "$REPO" --pattern "$f" --dir rolling; then
               echo "::error::$f is not on $TAG — desktop-latest left untouched"
               exit 1
@@ -277,7 +278,7 @@ jobs:
             echo ""
             echo "| Platform | Stable download |"
             echo "|---|---|"
-            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-linux-x86_64.AppImage; do
+            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage; do
               echo "| \`$f\` | https://github.com/${REPO}/releases/download/desktop-latest/$f |"
             done
             echo ""
