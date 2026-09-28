@@ -2,13 +2,9 @@
   <img src="docs/brand/cezar-icon-black.svg" alt="" width="104" />
 </p>
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/hero/hero-zh-CN-dark.svg" />
-    <img src="docs/hero/hero-zh-CN-light.svg" width="380"
-      alt="Cezar：编排数百个 AI 编程智能体，7×24 小时不间断。一个面向 Claude Code、Codex、OpenCode 及其他编程智能体的控制台。在本地或 VPS 上运行智能体，自动化多步骤工作流，并让它们在你离开时继续工作。" />
-  </picture>
-</p>
+<div align="center">
+  <h1>Cezar：编排数百个 AI 编程智能体，7×24 小时不间断。</h1>
+</div>
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">演示</a>&nbsp;·
@@ -20,6 +16,14 @@
 <p align="center">
   <a href="README.md">English</a> | 简体中文 | <a href="README.zh-TW.md">繁體中文</a>
 </p>
+
+<div align="center">
+  <h2>
+    一个面向 Claude Code、Codex、OpenCode 及其他编程智能体的控制台。<br />
+    在本地或 VPS 上运行智能体，自动化多步骤工作流，<br />
+    并让它们在你离开时继续工作。
+  </h2>
+</div>
 
 > 本文译自 README.md @ 33aee0ee；如有出入，以英文版为准。
 

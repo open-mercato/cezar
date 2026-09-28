@@ -38,14 +38,6 @@ jobs:
           node-version: lts/*
           cache: npm
 
-      # The README hero headline and description are drawn into docs/hero/*.svg because a
-      # heading — GitHub's only way to enlarge text — always carries a permalink icon. The
-      # wording therefore lives in the generator, and editing an SVG (or the `alt` text)
-      # by hand would silently fork it from its source. Runs before `npm ci`: it needs no
-      # dependencies and fails in under a second.
-      - name: Check generated README hero assets
-        run: node scripts/build-readme-hero.mjs --check
-
       - name: Install dependencies
         run: npm ci
 

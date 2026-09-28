@@ -2,13 +2,9 @@
   <img src="docs/brand/cezar-icon-black.svg" alt="" width="104" />
 </p>
 
-<p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/hero/hero-en-dark.svg" />
-    <img src="docs/hero/hero-en-light.svg" width="380"
-      alt="Cezar - orchestrate hundreds of AI coding agents, 24/7. One control center for Claude Code, Codex, OpenCode and other coding agents. Run agents locally or on a VPS, automate multi-step workflows, and let them keep working while you're away." />
-  </picture>
-</p>
+<div align="center">
+  <h1>Cezar - orchestrate hundreds of AI coding agents, 24/7.</h1>
+</div>
 
 <p align="center">
   <a href="https://www.youtube.com/watch?v=nNLJm9gArnE">Demo</a>&nbsp;·
@@ -20,6 +16,14 @@
 <p align="center">
   English | <a href="README.zh-CN.md">简体中文</a> | <a href="README.zh-TW.md">繁體中文</a>
 </p>
+
+<div align="center">
+  <h2>
+    One control center for Claude Code, Codex, OpenCode and other coding agents.<br />
+    Run agents locally or on a VPS, automate multi-step workflows,<br />
+    and let them keep working while you're away.
+  </h2>
+</div>
 
 <p align="center">
   <a href="LICENSE">
