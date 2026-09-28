@@ -244,9 +244,89 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # The Arch package is made from the Debian build, in its own job.
+      - name: Hand the .deb to the Arch job
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux-deb
+          path: ${{ env.DESKTOP_DIR }}/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error
+          retention-days: 1
+
+  # Arch Linux and what is built on it (Omarchy, Manjaro, EndeavourOS): a pacman package, built
+  # AND installed inside a real Arch container, so a library the binary needs and Arch does not
+  # have fails here rather than on a user's machine.
+  arch:
+    name: Build Arch Linux package
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    timeout-minutes: 20
+    env:
+      STABLE: cezar-linux-x86_64.pkg.tar.zst
+    steps:
+      - name: Install the packaging tools
+        run: pacman -Syu --noconfirm --needed base-devel git github-cli libarchive
+
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Fetch the .deb
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: linux-deb
+          path: deb
+
+      - name: Build the package
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          # makepkg refuses to run as root.
+          useradd --create-home builder
+          mkdir work
+          cp "$DESKTOP_DIR/arch/PKGBUILD" work/PKGBUILD
+          sed -i "s/@VERSION@/$VERSION/" work/PKGBUILD
+          cp deb/*.deb work/cezar.deb
+          chown -R builder work
+          su builder -c 'cd work && makepkg --nodeps --noconfirm'
+          cp work/cezar-desktop-bin-*.pkg.tar.zst "$STABLE"
+          sha256sum "$STABLE" > "$STABLE.sha256"
+
+      - name: Install it and check every library resolves
+        run: |
+          pacman -U --noconfirm "$STABLE"
+          pacman -Ql cezar-desktop-bin
+          BIN=$(pacman -Qlq cezar-desktop-bin | grep -E '^/usr/bin/[^/]+$' | head -1)
+          test -x "$BIN"
+          if ldd "$BIN" | grep "not found"; then
+            echo "::error::$BIN needs libraries Arch does not provide"
+            exit 1
+          fi
+          echo "every library $BIN links against is present"
+
+      - name: Keep the package as a run artifact (dry run)
+        if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cezar-linux-x86_64.pkg.tar.zst
+          path: |
+            cezar-linux-x86_64.pkg.tar.zst
+            cezar-linux-x86_64.pkg.tar.zst.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload the package to the release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: gh release upload "$TAG" "$STABLE" "$STABLE.sha256" --clobber --repo "$REPO"
+
   publish:
     name: Publish release
-    needs: [prepare, build]
+    needs: [prepare, build, arch]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
     steps:
@@ -282,7 +362,7 @@ jobs:
           # Every installer or none: `--clobber` replaces by name, so a file missing here would
           # leave the PREVIOUS release's asset under the same permanent URL — a download page
           # that silently mixes versions.
-          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage; do
+          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage cezar-linux-x86_64.pkg.tar.zst; do
             if ! gh release download "$TAG" --repo "$REPO" --pattern "$f" --dir rolling; then
               echo "::error::$f is not on $TAG — desktop-latest left untouched"
               exit 1
@@ -319,7 +399,7 @@ jobs:
             echo ""
             echo "| Platform | Stable download |"
             echo "|---|---|"
-            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage; do
+            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage cezar-linux-x86_64.pkg.tar.zst; do
               echo "| \`$f\` | https://github.com/${REPO}/releases/download/desktop-latest/$f |"
             done
             echo ""
