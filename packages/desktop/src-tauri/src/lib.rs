@@ -72,7 +72,9 @@ const INIT_SCRIPT: &str = r#"
   (function () {
     var platform = "__PLATFORM__";
     window.__CEZ_DESKTOP__ = { platform: platform };
-    document.documentElement.dataset.cezDesktop = platform;
+    // At document start the root element may not exist yet; the flag is a convenience, the
+    // rest of this script is not.
+    if (document.documentElement) document.documentElement.dataset.cezDesktop = platform;
     if (platform !== "macos" || location.protocol !== "http:") return;
 
     // What the shell adds to the title strip of a cockpit that predates the desktop-aware build
@@ -171,7 +173,11 @@ const INIT_SCRIPT: &str = r#"
       shell.appendChild(strip);
       var style = document.createElement('style');
       style.textContent =
-        '[data-slot="app-shell"]>aside[data-slot="sidebar"],[data-slot="app-shell"]>div{padding-top:28px!important}' +
+        // The cockpit's columns — never the strip and the row this script adds beside them,
+        // which are `div`s under the same parent: inset too, the row grew to 28px and pushed
+        // the version chip out of the band, onto the brand row.
+        '[data-slot="app-shell"]>aside[data-slot="sidebar"],' +
+        '[data-slot="app-shell"]>div:not([data-cez-legacy-titlebar]):not([data-cez-titlebar-items]){padding-top:28px!important}' +
         '[data-slot="sidebar-content"]>div:first-child{padding-top:6px!important}';
       document.head.appendChild(style);
       if (pendingVersion) { var v = pendingVersion; pendingVersion = null; renderVersion(v); }
@@ -1456,6 +1462,17 @@ mod tests {
 
     fn url(raw: &str) -> url::Url {
         url::Url::parse(raw).unwrap()
+    }
+
+    /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
+    /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
+    /// onto the brand row (shell 0.1.1).
+    #[test]
+    fn the_legacy_inset_spares_what_the_shell_adds() {
+        let rule = INIT_SCRIPT.split("padding-top:28px!important").next().unwrap();
+        let selector = rule.rsplit("style.textContent").next().unwrap();
+        assert!(selector.contains(":not([data-cez-legacy-titlebar])"), "{selector}");
+        assert!(selector.contains(":not([data-cez-titlebar-items])"), "{selector}");
     }
 
     #[test]
