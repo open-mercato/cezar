@@ -57,3 +57,10 @@ describe('automation-cli', () => {
     expect(everyFlag(90)).toBe('90s')
   })
 })
+
+
+it('preserves required tracker labels in Copy as CLI JSON', () => {
+  const trackerTrigger = { association: { kind: 'jira' as const, source: { id: 'cloud', webUrl: 'https://fixture.atlassian.net' }, externalId: '1', externalName: 'Project' }, events: ['issue.opened' as const], requiredLabels: ['bug', 'urgent'] }
+  const command = cliOf({ name: 'bugs', kind: 'tracker', trackerTrigger, task: { prompt: 'Fix' } })
+  expect(command).toContain('"requiredLabels":["bug","urgent"]')
+})

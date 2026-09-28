@@ -8,7 +8,7 @@ describe('findPackGaps', () => {
     'README.md',
     'dist/index.js',
     'scripts/mock-claude.mjs',
-    'web/open-mercato.svg',
+    'web/dist/icon.svg',
     'web/dist/index.html',
     'web/dist/assets/index-Ck3fQ2ab.js',
     'web/dist/assets/index-B9dL0xyz.css',

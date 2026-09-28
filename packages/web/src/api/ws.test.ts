@@ -89,6 +89,20 @@ afterEach(() => {
 })
 
 describe('createTopicSocket', () => {
+  it('reports an expired topic only to its current error listeners', () => {
+    const socket = createTopicSocket(URL)
+    const gone = vi.fn()
+    const off = socket.subscribe('tracker:one', () => {}, gone)
+    const ws = instance(0); ws.open()
+    ws.message({ type: 'error', topic: 'tracker:other', error: 'unknown topic' })
+    expect(gone).not.toHaveBeenCalled()
+    ws.message({ type: 'error', topic: 'tracker:one', error: 'unknown topic' })
+    expect(gone).toHaveBeenCalledTimes(1)
+    off()
+    ws.message({ type: 'error', topic: 'tracker:one', error: 'unknown topic' })
+    expect(gone).toHaveBeenCalledTimes(1)
+  })
+
   it('connects lazily on the first subscription and announces the topic on open', () => {
     const socket = createTopicSocket(URL)
     expect(FakeWebSocket.instances).toHaveLength(0)

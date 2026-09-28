@@ -1,0 +1,66 @@
+name: CodeQL
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+  push:
+    branches:
+      - main
+      - develop
+  # Weekly, so new CodeQL queries reach code nobody has touched since the last push.
+  schedule:
+    - cron: '27 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # `javascript-typescript` covers every workspace; `actions` scans these workflow files.
+        # Both extract from source — no install or build step needed (build-mode: none).
+        language:
+          - javascript-typescript
+          - actions
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          # Tests and e2e drivers never ship; their alerts were dismissed as "used in tests".
+          config: |
+            queries:
+              - uses: security-extended
+            paths-ignore:
+              - '**/*.test.ts'
+              - '**/*.test.tsx'
+              - '**/*.e2e.ts'
+              - packages/web/e2e
+              - packages/cezar/test
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: /language:${{ matrix.language }}

@@ -156,11 +156,22 @@ type AgentEvent =
   | { type: 'token-usage'; tokensUsed: number }
   | { type: 'cost'; usd: number }
   | { type: 'session'; sessionId: string }                    // backend's real session id, once known
-  | { type: 'turn-end' }
+  | { type: 'turn-end'; reason?: 'context-compaction' }       // optional, additive (#955)
   | { type: 'note'; message: string }
   | { type: 'done' }
   | { type: 'error'; message: string };
 ```
+
+`turn-end.reason` is optional and additive (#955), in the same shape as `note.tone`
+(#936): a runner emits the bare event unless it knows something the turn's text
+cannot say, an old recording with no `reason` replays unchanged, and an
+unrecognized value degrades to "no reason given". `context-compaction` means the
+turn's last act was the backend compacting its OWN context window with no
+assistant message or native ask after it — internal session maintenance, not the
+user being handed the next action — so the run manager keeps the run working and
+continues once on the same thread instead of parking it at `waiting`. Codex emits
+it off a completed `contextCompaction` item on its own thread; a runner that has
+no such signal simply never sets the field.
 
 Every v1 event stays **derivable** from the v2 stream, so a consumer can migrate
 one panel at a time. New work should read v2; v1 exists for the console renderer

@@ -93,7 +93,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add packages/api-client/package.json packages/cezar/package.json alias-cezar/package.json
+          git add packages/api-client/package.json packages/cezar/package.json alias-cezar/package.json alias-cezar-run/package.json
           git commit -m "chore(release): v${VERSION}"
           git push origin "$BRANCH"
           gh pr create --base "${{ github.ref_name }}" --head "$BRANCH" \
@@ -108,12 +108,14 @@ jobs:
           ROOT_NAME: ${{ steps.release.outputs.rootName }}
           API_CLIENT_NAME: ${{ steps.release.outputs.apiClientName }}
           ALIAS_NAME: ${{ steps.release.outputs.aliasName }}
+          RUN_ALIAS_NAME: ${{ steps.release.outputs.runAliasName }}
         with:
           script: |
             const version = process.env.RESULT;
             const root = process.env.ROOT_NAME;
             const apiClient = process.env.API_CLIENT_NAME;
             const alias = process.env.ALIAS_NAME;
+            const runAlias = process.env.RUN_ALIAS_NAME;
             const body = [
               '## Published packages',
               '',
@@ -121,12 +123,13 @@ jobs:
               '|---|---|',
               `| \`${root}\` | \`${version}\` |`,
               `| \`${apiClient}\` | \`${version}\` |`,
+              `| \`${runAlias}\` | \`${version}\` |`,
               `| \`${alias}\` | \`${version}\` |`,
               '',
               '### Install',
               '',
               '```bash',
-              `npx ${alias}@${version}`,
+              `npx ${runAlias}@${version}`,
               '```',
             ].join('\n');
             // Creates the tag at the released commit if it doesn't exist yet —
@@ -148,13 +151,13 @@ jobs:
         env:
           VERSION: ${{ steps.release.outputs.version }}
           PUBLISHED: ${{ steps.release.outputs.published }}
-          ALIAS_NAME: ${{ steps.release.outputs.aliasName }}
+          RUN_ALIAS_NAME: ${{ steps.release.outputs.runAliasName }}
         run: |
           {
             echo "## 🚀 Release ${VERSION}"
             echo ""
             if [ "$PUBLISHED" = "true" ]; then
-              echo "Published \`${ALIAS_NAME}@${VERSION}\` to \`latest\` and tagged \`v${VERSION}\`."
+              echo "Published \`${RUN_ALIAS_NAME}@${VERSION}\` to \`latest\` and tagged \`v${VERSION}\`."
             else
               echo "⚠️ Dry run — \`NPM_TOKEN\` is not configured, nothing was published. See \`docs/publishing.md\`."
             fi

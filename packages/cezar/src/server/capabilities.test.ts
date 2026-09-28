@@ -168,6 +168,13 @@ describe('resolveCapabilities — followups (#471)', () => {
   });
 });
 
+it('keeps tracker readiness out of global health even with environment credentials or demo mode', () => {
+  for (const env of [{ LINEAR_API_KEY: 'dummy' }, { CEZ_DRY_RUN: '1' }]) {
+    expect(resolveCapabilities(env)).not.toHaveProperty('trackerJira');
+    expect(resolveCapabilities(env)).not.toHaveProperty('trackerLinear');
+  }
+});
+
 describe('resolveCapabilities — singleProject', () => {
   it('is off by default', () => {
     expect(resolveCapabilities({}).singleProject).toBe(false);

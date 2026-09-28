@@ -146,6 +146,7 @@ export function response(overrides: Partial<AutomationsResponse> = {}): Automati
 /** Every action a resolved spy, so a test can assert what a click asked for. */
 export function mockActions(overrides: Partial<AutomationActions> = {}): AutomationActions {
   return {
+    preview: vi.fn(() => Promise.resolve()),
     runNow: vi.fn(() => Promise.resolve()),
     toggleEnabled: vi.fn(() => Promise.resolve()),
     duplicate: vi.fn(() => Promise.resolve()),

@@ -26,6 +26,9 @@ export function automationTemplatesOf(
       continue;
     }
     for (const definition of definitions) {
+      // A tracker automation is not a valid template yet: the create form it would pre-fill
+      // does not accept `kind: 'tracker'` (2026-09-19, no create/edit route for it either).
+      if (definition.kind === 'tracker') continue;
       templates.push({
         project: { id: project.id, name: project.name || basename(project.root) },
         id: definition.id,

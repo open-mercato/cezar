@@ -43,10 +43,12 @@ describe('server state', () => {
     const s = freshServerState();
     s.platform = 'ubuntu-vps';
     s.steps.deps = { status: 'done', created: null };
+    s.instanceId = 'install-a';
     saveServerState(s);
     const mode = statSync(serverStatePath()).mode & 0o777;
     expect(mode).toBe(0o600);
     expect(loadServerState().steps.deps?.status).toBe('done');
+    expect(loadServerState().instanceId).toBe('install-a');
   });
 
   it('firstIncompleteStep skips done and skipped, stops at pending/failed', () => {

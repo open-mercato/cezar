@@ -289,3 +289,35 @@ describe('cez automation add / run (spec 2026-09-14)', () => {
     expect(bodyFromAddFlags({ name: 'w', cron: '30 7 * * 1-5' }, 'p')).toMatchObject({ kind: 'schedule', schedule: { type: 'weekdays', hour: 7, minute: 30 } });
   });
 });
+
+it('tracker flags build a provider event trigger with a 30 minute default', () => {
+  expect(bodyFromAddFlags({ name: 'Jira work', kind: 'tracker', on: 'issue.status_changed', 'to-status': ['todo-id'] }, 'Implement')).toMatchObject({
+    kind: 'tracker', intervalSeconds: 1800,
+    trackerTrigger: { events: ['issue.status_changed'], targetStatusIds: ['todo-id'] },
+  });
+});
+it('rejects tracker-only filters on GitHub flags instead of silently dropping them', () => {
+  expect(() => bodyFromAddFlags({ name: 'work', on: 'issue.opened', 'to-status': ['todo'] }, 'Implement')).toThrow(/tracker/);
+});
+
+it('tracker add resolves the project association before posting the trigger', async () => {
+  const association = { kind: 'jira', source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: 'Team', connectionId: '11111111-1111-4111-8111-111111111111' };
+  const calls: Array<{ url: string; body?: unknown }> = [];
+  const errors: string[] = [];
+  const code = await runAutomationCommand(['add', '--kind', 'tracker', '--name', 'Jira work', '--on', 'issue.status_changed', '--to-status', 'todo-id', '--require-label', 'bug', '--require-label', 'urgent', '--prompt', 'Implement'], { CEZ_API_URL: 'http://localhost:4321', CEZ_PROJECT_ID: 'project' }, {
+    fetch: (async (input, init) => {
+      const url = String(input); calls.push({ url, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      return new Response(JSON.stringify(url.endsWith('/automation-options')
+        ? { available: true, association, events: ['issue.status_changed'], statuses: [{ id: 'todo-id', name: 'To Do' }], labels: [], limitations: [] }
+        : { automation: { id: 'auto', name: 'Jira work', kind: 'tracker', enabled: false } }), { status: url.endsWith('/automation-options') ? 200 : 201, headers: { 'content-type': 'application/json' } });
+    }) as typeof fetch,
+    log: () => {}, error: message => errors.push(message),
+  });
+  expect(errors).toEqual([]); expect(code).toBe(0);
+  expect(calls[0]?.url).toBe('http://localhost:4321/api/v1/p/project/tracker/automation-options');
+  expect(calls[1]?.body).toMatchObject({ trackerTrigger: { association, events: ['issue.status_changed'], targetStatusIds: ['todo-id'], requiredLabels: ['bug', 'urgent'] } });
+});
+
+it('rejects required tracker labels on other automation kinds', () => {
+  expect(() => bodyFromAddFlags({ name: 'work', on: 'issue.opened', 'require-label': ['bug'] }, 'Implement')).toThrow(/tracker/);
+});

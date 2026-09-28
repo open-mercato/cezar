@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { BrowserRouter } from 'react-router'
 
 import { GlobalEventsProvider } from './api/global-events'
+import { HostUsageProvider } from './api/host-usage'
 import { createQueryClient } from './api/query-client'
 import { AppShellContainer } from './components/app-shell-container'
 import { AppearanceProvider } from './components/appearance-provider'
@@ -34,31 +35,37 @@ export function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <GlobalEventsProvider>
-        {/* Beside the stream on purpose: it watches the run-list cache the stream patches
-            (and reconciliation refetches), turning attention transitions into browser
-            notifications when the tab is hidden (R6 1.7). Renders nothing. */}
-        <RunNotifications />
-        <ThemeProvider>
-          {/* Beside ThemeProvider on purpose: appearance (accent/density) is the ui-state.json
-              half of the same boot contract — mirror pre-paints, server truth reconciles. */}
-          <AppearanceProvider>
-            <BrowserRouter>
-              <LastLocationController />
-              {/* At the root for the same reason the event stream is: the sidebar, the task table
-                  and an open run header all paint PR/issue chips, often the SAME ones, and each
-                  asking for itself was several round trips and a staggered wave of colour. They
-                  register what they are painting here instead, and it goes out as one request per
-                  project. */}
-              <ReferenceStatusRegistry>
-                <AppShellContainer>
-                  <AppRoutes />
-                </AppShellContainer>
-              </ReferenceStatusRegistry>
-              {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
-              <Toaster />
-            </BrowserRouter>
-          </AppearanceProvider>
-        </ThemeProvider>
+        {/* The machine-telemetry store, one per app: the sidebar widget and the Settings card are
+            two readers of the same sample and the same 60 s ring, and exactly one writer (root,
+            card or route) is live per viewport. Muted here at the root because the widget lives in
+            the shell for the session, above every route. */}
+        <HostUsageProvider>
+          {/* Beside the stream on purpose: it watches the run-list cache the stream patches
+              (and reconciliation refetches), turning attention transitions into browser
+              notifications when the tab is hidden (R6 1.7). Renders nothing. */}
+          <RunNotifications />
+          <ThemeProvider>
+            {/* Beside ThemeProvider on purpose: appearance (accent/density) is the ui-state.json
+                half of the same boot contract — mirror pre-paints, server truth reconciles. */}
+            <AppearanceProvider>
+              <BrowserRouter>
+                <LastLocationController />
+                {/* At the root for the same reason the event stream is: the sidebar, the task table
+                    and an open run header all paint PR/issue chips, often the SAME ones, and each
+                    asking for itself was several round trips and a staggered wave of colour. They
+                    register what they are painting here instead, and it goes out as one request per
+                    project. */}
+                <ReferenceStatusRegistry>
+                  <AppShellContainer>
+                    <AppRoutes />
+                  </AppShellContainer>
+                </ReferenceStatusRegistry>
+                {/* One toast outlet for the whole app — `toast()` is a module-level call. */}
+                <Toaster />
+              </BrowserRouter>
+            </AppearanceProvider>
+          </ThemeProvider>
+        </HostUsageProvider>
       </GlobalEventsProvider>
     </QueryClientProvider>
   )

@@ -11,6 +11,7 @@ import {
   KeyboardIcon,
   NotebookPenIcon,
   PaletteIcon,
+  TicketIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
@@ -27,6 +28,7 @@ import { PromptTemplatesSection } from './prompt-templates-section'
 import { ResourcesSection } from './resources-section'
 import { SkillsSection } from './skills-section'
 import { WorktreesSection } from './worktrees-section'
+import { TrackerSection } from './tracker-section'
 
 /**
  * The Settings section registry (R6 Step 1.3, spec §"Settings"): the ONE place a section is
@@ -57,6 +59,7 @@ export type SettingsSectionId =
   | 'prompt-templates'
   | 'keyboard'
   | 'skills'
+  | 'tracker'
 
 /** Which settings area a section belongs to — and therefore which store it writes. */
 export type SettingsScope = 'project' | 'global'
@@ -91,6 +94,14 @@ function comingSoon(title: string, Icon: ComponentType<SVGProps<SVGSVGElement>>)
 
 export const SETTINGS_SECTIONS: SettingsSection[] = [
   // ---- project scope (`/p/<projectId>/settings/…`) — settings that describe THIS repo -------
+  {
+    id: 'tracker',
+    title: 'Issue tracker',
+    description: 'Connect this project to Jira or Linear.',
+    icon: TicketIcon,
+    component: TrackerSection,
+    scope: 'project',
+  },
   {
     id: 'agents',
     title: 'Agents',

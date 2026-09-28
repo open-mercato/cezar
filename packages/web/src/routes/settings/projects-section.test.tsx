@@ -220,7 +220,7 @@ const confirmButton = () => document.querySelector<HTMLButtonElement>('[data-act
 const deletes = () => requests.filter((r) => r.method === 'DELETE')
 const patches = () => requests.filter((r) => r.method === 'PATCH')
 const maxParallelSelect = (id: string) =>
-  row(id)?.querySelector<HTMLSelectElement>('[data-slot="project-max-parallel"]')
+  row(id)?.querySelector<HTMLInputElement>('[data-slot="project-max-parallel"]')
 const tagInput = (id: string) =>
   row(id)?.querySelector<HTMLInputElement>('[data-slot="project-tag-input"]')
 const tagChips = (id: string) =>
@@ -392,12 +392,13 @@ describe('Global settings → Projects', () => {
     await waitFor(() => expect(rows()).toHaveLength(3))
     const select = maxParallelSelect('shop-backend')
     expect(select).not.toBeNull()
-    // Unset projects show the inherit option carrying the live workspace cap (2).
+    // Unset projects show an empty field whose placeholder names the live workspace cap (2).
     expect(select!.value).toBe('')
-    expect(select!.textContent).toContain('Inherit workspace (2)')
+    expect(select!.placeholder).toBe('Inherit (2)')
 
-    // Choosing a number PATCHes the per-project ceiling…
+    // Typing a number PATCHes the per-project ceiling…
     fireEvent.change(select!, { target: { value: '1' } })
+    fireEvent.blur(select!)
     await waitFor(() =>
       expect(patches()).toEqual([
         { method: 'PATCH', url: '/api/v1/projects/shop-backend', body: { maxParallel: 1 } },
@@ -406,8 +407,9 @@ describe('Global settings → Projects', () => {
     // …and the row reflects the persisted value after the query refreshes.
     await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('1'))
 
-    // Selecting "Inherit" clears the override with an explicit null.
+    // Emptying the field clears the override with an explicit null.
     fireEvent.change(maxParallelSelect('shop-backend')!, { target: { value: '' } })
+    fireEvent.blur(maxParallelSelect('shop-backend')!)
     await waitFor(() =>
       expect(patches().at(-1)).toEqual({
         method: 'PATCH',
@@ -657,6 +659,7 @@ describe('Global settings → Projects', () => {
       await waitFor(() => expect(rows()).toHaveLength(3))
 
       fireEvent.change(maxParallelSelect('shop-backend')!, { target: { value: '3' } })
+      fireEvent.keyDown(maxParallelSelect('shop-backend')!, { key: 'Enter' })
       await waitFor(() => expect(maxParallelSelect('shop-backend')!.value).toBe('3'))
 
       fireEvent.change(tagInput('shop-backend')!, { target: { value: 'storefront' } })

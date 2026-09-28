@@ -12,6 +12,15 @@ import { apiRequest } from './loopback-request.testkit.ts';
 import { ProviderAuthService } from '../core/provider-auth.ts';
 import { createApp, type ServerDeps } from './server.ts';
 
+// `resolveClaudeBin` probes the real machine for an install that is off PATH, so the claude
+// executable these cases assert on would otherwise be whatever the DEVELOPER has. Pinned to the
+// env-only resolution so the suite reads the same on every host; `claude-bin.test.ts` tests
+// discovery for real.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/claude-bin.ts')>()),
+  resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
+}));
+
 /**
  * `/api/v1/workspace/agent-profiles` (spec 2026-07-29-agent-profiles): extra config dirs for a
  * second login of the same agent CLI.
@@ -504,7 +513,7 @@ describe('agent profiles API', () => {
       });
       const spawns: string[] = [];
       const app = makeApp({
-        socketHub: { registerTopic: () => undefined, attach: () => undefined, close: () => undefined },
+        socketHub: { registerTopic: () => () => undefined, attach: () => undefined, close: () => undefined },
         providerAuth: new ProviderAuthService({
           runCommand: async (executable) => {
             spawns.push(executable);

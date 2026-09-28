@@ -12,6 +12,12 @@ import { cn } from '@/lib/utils'
  * entry states (✓ strikethrough / ◐ pulsing "in progress" / ○ pending / ⊘ cancelled).
  *
  * The caller keys this component by run id, so the collapse default re-derives per task.
+ *
+ * `settled`: the run's session is closed, so nothing will ever advance the plan again. Agents
+ * routinely end a turn without a final `plan.updated` (codex stopping at "1/4" while the work
+ * was done), and a pulsing "in progress" above a finished run is a lie. A settled dock stops
+ * animating, drops the tag, and — when the plan never reached N/N — says it was left
+ * unfinished instead of implying the agent is still on it.
  */
 
 /** Collapse memory per run id — a module-level map on purpose (the scroll-cache pattern):
@@ -43,12 +49,21 @@ export function planActiveEntry(entries: PlanEntry[]): PlanEntry | undefined {
   return entries.find((entry) => entry.status === 'in_progress') ?? entries.find((entry) => entry.status === 'pending')
 }
 
-export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry[] }) {
+export function PlanDock({
+  runId,
+  entries,
+  settled = false,
+}: {
+  runId: string
+  entries: PlanEntry[]
+  settled?: boolean
+}) {
   const [open, setOpen] = useState(() => openByRun.get(runId) ?? defaultOpen())
   if (entries.length === 0) return null // full-replacement can empty the plan — nothing to dock
 
   const { done, total } = planCounts(entries)
-  const active = planActiveEntry(entries)
+  const active = settled ? undefined : planActiveEntry(entries)
+  const unfinished = settled && done < total
   const toggle = () =>
     setOpen((value) => {
       openByRun.set(runId, !value)
@@ -59,6 +74,7 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
     <section
       data-slot="plan-dock"
       data-state={open ? 'open' : 'collapsed'}
+      data-settled={settled ? 'true' : undefined}
       className="min-w-0 overflow-hidden rounded-lg border border-border bg-card shadow-xs"
     >
       {/* The mockup's `.grad-edge` — the brand gradient as a hairline top edge. */}
@@ -73,6 +89,11 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
         <span data-slot="plan-count" className="shrink-0 text-muted-foreground tabular-nums">
           · {done}/{total}
         </span>
+        {unfinished ? (
+          <span data-slot="plan-unfinished" className="shrink-0 text-soft-foreground">
+            · left unfinished
+          </span>
+        ) : null}
         {!open && active !== undefined ? (
           <span data-slot="plan-current" className="min-w-0 truncate text-muted-foreground">
             — {active.activeForm ?? active.content}
@@ -86,7 +107,7 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
       {open ? (
         <ul data-slot="plan-list" className="flex flex-col gap-[7px] px-3.5 pb-3">
           {entries.map((entry, index) => (
-            <PlanRow key={`${index}:${entry.content}`} entry={entry} />
+            <PlanRow key={`${index}:${entry.content}`} entry={entry} settled={settled} />
           ))}
         </ul>
       ) : null}
@@ -94,23 +115,26 @@ export function PlanDock({ runId, entries }: { runId: string; entries: PlanEntry
   )
 }
 
-function PlanRow({ entry }: { entry: PlanEntry }) {
+function PlanRow({ entry, settled }: { entry: PlanEntry; settled: boolean }) {
+  // A settled run has no current item: its stale `in_progress` renders like any other
+  // unreached entry (see PlanDock's `settled`).
+  const status: PlanStatus = settled && entry.status === 'in_progress' ? 'pending' : entry.status
   return (
     <li
       data-slot="plan-item"
       data-status={entry.status}
       className={cn(
         'flex min-h-5 min-w-0 items-center gap-2.5 text-[13px]',
-        entry.status === 'completed' && 'text-soft-foreground line-through',
-        entry.status === 'in_progress' && 'font-medium',
-        entry.status === 'pending' && 'text-muted-foreground',
+        status === 'completed' && 'text-soft-foreground line-through',
+        status === 'in_progress' && 'font-medium',
+        status === 'pending' && 'text-muted-foreground',
         // Struck through like a done row, but faded further: abandoned, not achieved.
-        entry.status === 'cancelled' && 'text-soft-foreground/70 line-through',
+        status === 'cancelled' && 'text-soft-foreground/70 line-through',
       )}
     >
-      <PlanIcon status={entry.status} />
+      <PlanIcon status={status} />
       <span className="min-w-0 truncate">{entry.content}</span>
-      {entry.status === 'in_progress' ? (
+      {status === 'in_progress' ? (
         <span
           data-slot="plan-tag"
           className="ml-auto shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-semibold tracking-[0.05em] text-muted-foreground uppercase"

@@ -130,3 +130,12 @@ describe('RowActions', () => {
     expect(actions.remove).not.toHaveBeenCalled()
   })
 })
+
+it('offers preview for a tracker without launching or opening its row', () => {
+  const tracker = { ...FLAKY, kind: 'tracker' as const }
+  const { actions, rowClick } = renderActions(tracker)
+  fireEvent.click(screen.getByRole('button', { name: 'Preview matches' }))
+  expect(actions.preview).toHaveBeenCalledWith(tracker)
+  expect(actions.runNow).not.toHaveBeenCalled()
+  expect(rowClick).not.toHaveBeenCalled()
+})

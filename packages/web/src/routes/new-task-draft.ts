@@ -4,6 +4,7 @@ import {
   type DispatchIntent,
   type Runner,
 } from '@open-mercato/cezar-api-client'
+import type { PendingAttachment } from '@/components/composer/composer-attachments'
 import { RUNNERS, type TaskSource } from './new-task-form'
 
 /**
@@ -259,10 +260,79 @@ export function clearStartedDraft(projectId: string | null = null): void {
   writeDraft({ ...readDraft(projectId), text: '', source: null }, projectId)
 }
 
+/**
+ * The composer's attachments, per project — IN MEMORY, deliberately.
+ *
+ * The draft above is localStorage-backed and says, in so many words, why the images are not:
+ * four 5 MB attachments encoded as base64 is ~27 MB against a ~5 MB quota, so persisting them
+ * would break the whole draft rather than enrich it. What they DO need is to survive the one
+ * navigation that was losing them: `/p/:projectId/new` remounts per project (`routes.tsx`
+ * `NewTaskProjectRoute` keys on the id), so swapping the project pill unmounted the composer and
+ * took its uncontrolled `images` state with it. A module-level map outlives that remount at no
+ * storage cost, and — like every other module store here — starts empty on a real page load,
+ * which is exactly the promise `/new` attachments have always made.
+ *
+ * Keyed by the same `storageKey` the draft uses, so the boot project's bare key and the suffixed
+ * key of every other project cannot drift apart.
+ */
+const attachments = new Map<string, PendingAttachment[]>()
+
+export function readAttachments(projectId: string | null = null): PendingAttachment[] {
+  return [...(attachments.get(storageKey(projectId)) ?? [])]
+}
+
+export function writeAttachments(
+  next: readonly PendingAttachment[],
+  projectId: string | null = null,
+): void {
+  const key = storageKey(projectId)
+  if (next.length === 0) attachments.delete(key)
+  else attachments.set(key, [...next])
+}
+
+/**
+ * Switching project while composing takes the composition with you (#1018).
+ *
+ * The per-project draft keys exist so a half-typed task for the shop frontend does not surface
+ * in the cezar composer — and they should. But that rule was being applied to the one case it
+ * was never about: the user did not NAVIGATE away, they changed their mind about where this
+ * task belongs, mid-sentence, with a screenshot already pasted. The prompt and its attachments
+ * are the thing being moved, so they move with it.
+ *
+ * A MOVE, never a copy: the composition ends up in exactly one project, which is what keeps the
+ * isolation invariant true. And never a clobber — when the arriving project already holds its
+ * own unsent text, that is somebody's work in progress and it wins; nothing moves, and the
+ * departing draft stays where it was (switching back restores it, attachments included, from
+ * the map above).
+ *
+ * The pickers deliberately stay behind. A skill ref is resolved against the project's own
+ * catalog, so carrying `om-fix` into a project that has no such skill would replace a lost
+ * prompt with a silently wrong one.
+ */
+export function handOffComposition(
+  from: string | null,
+  to: string | null,
+): { moved: boolean; reason?: 'same-project' | 'nothing-to-move' | 'destination-busy' } {
+  if (from === to) return { moved: false, reason: 'same-project' }
+  const departing = readDraft(from)
+  const carried = readAttachments(from)
+  if (departing.text === '' && carried.length === 0) {
+    return { moved: false, reason: 'nothing-to-move' }
+  }
+  const arriving = readDraft(to)
+  if (arriving.text !== '') return { moved: false, reason: 'destination-busy' }
+  writeDraft({ ...arriving, text: departing.text }, to)
+  writeDraft({ ...departing, text: '' }, from)
+  writeAttachments(carried, to)
+  writeAttachments([], from)
+  return { moved: true }
+}
+
 /** Test isolation — drop EVERY project's cache and stored draft, so the next read re-consults
  *  storage (a fresh page). */
 export function resetDraft(): void {
   cache.clear()
+  attachments.clear()
   try {
     for (const key of Object.keys(localStorage)) {
       if (key === STORAGE_KEY || key.startsWith(`${STORAGE_KEY}:`)) localStorage.removeItem(key)

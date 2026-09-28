@@ -46,6 +46,7 @@ describe('stampStableManifests', () => {
       devDependencies: { '@scope/client': '^0.1.5' },
     },
     alias: { name: 'impl-cli', version: '0.1.5', dependencies: { '@scope/impl': '^0.1.5' } },
+    runAlias: { name: 'impl-run', version: '0.1.5', dependencies: { '@scope/impl': '^0.1.5' } },
   });
 
   it('stamps every manifest and keeps caret ranges on the intra-release pins', () => {
@@ -57,6 +58,8 @@ describe('stampStableManifests', () => {
     expect(stamped.cezar.files).toEqual(['dist']); // passthrough untouched
     // Caret, not an exact pin — the opposite of the snapshot stamper.
     expect(stamped.alias.dependencies).toEqual({ '@scope/impl': '^0.1.6' });
+    expect(stamped.runAlias.version).toBe('0.1.6');
+    expect(stamped.runAlias.dependencies).toEqual({ '@scope/impl': '^0.1.6' });
     expect(stamped.cezar.devDependencies).toEqual({ '@scope/client': '^0.1.6' });
   });
 
@@ -91,6 +94,7 @@ describe('stampStableManifests', () => {
     expect(stamped.alias.repository).toEqual(repository);
     expect(stamped.alias.homepage).toBe('https://example.test');
     expect(stamped.alias.bugs).toEqual({ url: 'https://example.test/issues' });
+    expect(stamped.runAlias.repository).toEqual(repository);
   });
 
   it('leaves the alias untouched when the service declares no repository', () => {

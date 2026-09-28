@@ -36,6 +36,14 @@ describe('ensureDataGitignore', () => {
     expect(gitignore().split('\n')).toContain('attachments/');
   });
 
+  it('ignores tracker association state and its atomic temporary file', () => {
+    ensureDataGitignore(repoRoot);
+    expect(gitignore().split('\n')).toEqual(expect.arrayContaining([
+      'tracker.json',
+      'tracker.json.tmp',
+    ]));
+  });
+
   it('appends what is missing and keeps what the user added', () => {
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     writeFileSync(join(repoRoot, '.ai/cezar', '.gitignore'), 'runs.json\nmy-own-scratch/\n', 'utf8');

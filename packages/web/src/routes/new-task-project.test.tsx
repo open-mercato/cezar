@@ -218,6 +218,22 @@ function renderAt(entry: string) {
 }
 
 const textarea = () => screen.getByLabelText('Describe a task for the agent') as HTMLTextAreaElement
+
+/** A pasted screenshot, the way the clipboard actually delivers one — a file ITEM, which is
+ *  what the composer's intake filters on. Mirrors `composer.test.tsx`'s helpers. */
+const pngFile = (name = 'shot.png', bytes: number[] = [1, 2, 3]) =>
+  new File([new Uint8Array(bytes)], name, { type: 'image/png' })
+
+const paste = (target: HTMLTextAreaElement, files: File[]) =>
+  fireEvent.paste(target, {
+    clipboardData: {
+      items: files.map((file) => ({ kind: 'file', type: file.type, getAsFile: () => file })),
+    },
+  })
+
+/** Whatever the composer's attachment tray is holding — thumbnails and named chips alike carry
+ *  a `Remove <name>` control, which is the one handle both shapes share. */
+const attachmentChips = () => screen.queryAllByLabelText(/^Remove /)
 const projectPill = () => screen.getByRole('button', { name: 'Project' })
 const sourcePill = () => screen.getByRole('button', { name: 'Choose a skill or workflow' })
 const pathname = () => screen.getByTestId('location').textContent
@@ -310,7 +326,18 @@ describe('switching project', () => {
     )
   })
 
-  it('keeps drafts isolated per project — one composer never leaks into the other', async () => {
+  /**
+   * #1018 — the composition follows the switch.
+   *
+   * This used to assert the opposite: the arriving composer started empty and the typed text
+   * stayed behind under the departing project's key. The per-project keys are still right — a
+   * half-typed task for the shop frontend must not SURFACE in the cezar composer — but they
+   * were being applied to the one case they were never about. Changing the project pill is not
+   * navigating away; it is deciding, mid-sentence, where the task you are writing belongs. So
+   * the prompt moves with it, and the isolation invariant holds because it is a MOVE: the
+   * composition exists in exactly one project at a time.
+   */
+  it('carries the prompt to the project you switch to, and leaves none behind', async () => {
     serve()
     renderAt(`/p/${BOOT}/new`)
     await composerReady()
@@ -318,28 +345,73 @@ describe('switching project', () => {
 
     await switchProject(OTHER)
     await composerReady()
-    // The arriving project starts from ITS draft, which is empty — not the departing text.
-    expect(textarea().value).toBe('')
-    fireEvent.change(textarea(), { target: { value: 'ship the storefront' } })
+    expect(textarea().value).toBe('fix the cezar flake')
 
-    // The boot project keeps the bare legacy key (unscoped invariant); the second project
-    // gets the spec's suffixed one.
+    // The boot project keeps the bare legacy key (unscoped invariant); the second project gets
+    // the spec's suffixed one — and the text is under exactly one of them.
     await waitFor(() => {
-      expect(JSON.parse(localStorage.getItem('cez-new-task-draft')!).text).toBe('fix the cezar flake')
       expect(JSON.parse(localStorage.getItem(`cez-new-task-draft:${OTHER}`)!).text).toBe(
-        'ship the storefront',
+        'fix the cezar flake',
       )
+      expect(JSON.parse(localStorage.getItem('cez-new-task-draft')!).text).toBe('')
     })
+  })
 
-    // Switching back restores what was typed there, untouched by the detour.
+  it('never overwrites an unsent draft waiting in the project you switch to', async () => {
+    serve()
+    // `other` already holds a task somebody started writing there and walked away from.
+    localStorage.setItem(
+      `cez-new-task-draft:${OTHER}`,
+      JSON.stringify({ text: 'ship the storefront' }),
+    )
+    renderAt(`/p/${BOOT}/new`)
+    await composerReady()
+    fireEvent.change(textarea(), { target: { value: 'fix the cezar flake' } })
+
+    await switchProject(OTHER)
+    await composerReady()
+    // Their work in progress wins …
+    expect(textarea().value).toBe('ship the storefront')
+
+    // … and nothing was lost: switching back finds the cezar draft exactly where it was typed.
     await switchProject(BOOT)
     await waitFor(() => expect(pathname()).toBe(`/p/${BOOT}/new`))
     await composerReady()
     expect(textarea().value).toBe('fix the cezar flake')
   })
 
+  /**
+   * The half of the report that had no seam at all: `/new` left its attachments to the
+   * composer's uncontrolled state, so a pasted screenshot lived exactly as long as the mounted
+   * component — and the project pill remounts it (`NewTaskProjectRoute` keys on the id).
+   */
+  it('carries a pasted attachment across the switch, and posts it with the run', async () => {
+    serve()
+    renderAt(`/p/${BOOT}/new`)
+    await composerReady()
+    fireEvent.change(textarea(), { target: { value: 'look at this' } })
+    paste(textarea(), [pngFile('shot.png')])
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    await switchProject(OTHER)
+    await composerReady()
+    expect(textarea().value).toBe('look at this')
+    await waitFor(() => expect(attachmentChips()).toHaveLength(1))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start task' }))
+    await waitFor(() =>
+      expect(requests.some((r) => r.method === 'POST' && r.url === `/api/v1/p/${OTHER}/runs`)).toBe(true),
+    )
+    const posted = requests.find((r) => r.method === 'POST' && r.url === `/api/v1/p/${OTHER}/runs`)
+    expect((posted?.body as { images?: unknown[] }).images).toHaveLength(1)
+  })
+
   it('submits to the SELECTED project and clears only that project’s draft text', async () => {
     serve()
+    // `other` already holds an unsent draft, so the switch below declines to hand the cezar
+    // composition over (#1018) and the cezar draft genuinely stays behind — which is what makes
+    // the last assertion here about the SUBMIT rather than about the switch.
+    localStorage.setItem(`cez-new-task-draft:${OTHER}`, JSON.stringify({ text: 'a storefront idea' }))
     renderAt(`/p/${BOOT}/new`)
     await composerReady()
     fireEvent.change(textarea(), { target: { value: 'left behind in cezar' } })

@@ -1,9 +1,15 @@
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve, sep } from 'node:path';
-import { PROJECT_TAGS_MAX, PROJECT_TAG_MAX_LENGTH } from '@open-mercato/cezar-contract';
+import {
+  PROJECT_TAGS_MAX,
+  PROJECT_TAG_MAX_LENGTH,
+  type TrackerKind,
+} from '@open-mercato/cezar-contract';
 import { forgeKindOfRemote, forgeWebRoot, type ForgeKind } from '../server/forge/index.ts';
 import { getRepoInfo } from '../server/git.ts';
+import { readTrackerAssociation } from '../tracker-association.ts';
+import { TrackerConnections } from '../server/tracker/connections.ts';
 import {
   mergeWriteWorkspaceConfig,
   loadWorkspaceConfig,
@@ -246,6 +252,8 @@ export interface ProjectListEntry extends WorkspaceProject {
    *  surface link a reference the run knows only by NUMBER — the global Tasks
    *  page has one row per project and so cannot use any single repo's base. */
   repoUrl?: string;
+  /** Saved read-only issue tracker association, classified from local state only. */
+  tracker?: TrackerKind;
 }
 
 interface RootProbe {
@@ -292,12 +300,23 @@ async function computeProbe(root: string): Promise<RootProbe> {
   };
 }
 
-async function probeRoot(root: string): Promise<RootProbe> {
+async function probeRoot(root: string): Promise<RootProbe & { tracker?: TrackerKind }> {
   const cached = probeCache.get(root);
-  if (cached && Date.now() - cached.at < PROBE_TTL_MS) return cached.probe;
-  const probe = await computeProbe(root);
-  probeCache.set(root, { at: Date.now(), probe });
-  return probe;
+  let probe: RootProbe;
+  if (cached && Date.now() - cached.at < PROBE_TTL_MS) {
+    probe = cached.probe;
+  } else {
+    probe = await computeProbe(root);
+    probeCache.set(root, { at: Date.now(), probe });
+  }
+  const association = await readTrackerAssociation(join(root, '.ai/cezar'));
+  const connection = association && process.env.CEZ_DRY_RUN !== '1'
+    ? await new TrackerConnections().read(root) : null;
+  const connected = process.env.CEZ_DRY_RUN === '1' || (connection
+    && connection.credentials.kind === association?.kind
+    && (!association.connectionId || association.connectionId === connection.id));
+  const tracker = connected ? association?.kind : undefined;
+  return { ...probe, ...(tracker === undefined ? {} : { tracker }) };
 }
 
 /**
@@ -309,7 +328,7 @@ async function probeRoot(root: string): Promise<RootProbe> {
  */
 export async function probeProjectStatus(
   root: string,
-): Promise<Pick<ProjectListEntry, 'status' | 'branch' | 'forge' | 'repoUrl'>> {
+): Promise<Pick<ProjectListEntry, 'status' | 'branch' | 'forge' | 'repoUrl' | 'tracker'>> {
   return probeRoot(root);
 }
 

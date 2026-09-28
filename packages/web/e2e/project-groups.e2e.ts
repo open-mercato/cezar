@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 
+import type { ProjectListEntry } from '@open-mercato/cezar-api-client'
 import { AgentBrowser, bootProjectId, readTestEnv } from './agent-browser'
 import { readSharedProjects, snapshotSharedHome, writeSharedProjects } from './workspace-registry'
 
@@ -40,22 +41,22 @@ let seedDir: string
 let restoreHome: () => void
 let singleProject = false
 
-let forgeAvailable = false
 let followupsAvailable = false
 let automationsAvailable = false
+let projectsById = new Map<string, ProjectListEntry>()
 
 const scoped = (projectId: string, path: string) => `/p/${projectId}${path}`
 
-/** The nav every group renders — the same health-gated list the flat shell uses. */
-function expectedNavHrefs(projectId: string): string[] {
+/** The nav every group renders — workspace capabilities plus this project's own classification. */
+function expectedNavHrefs(project: ProjectListEntry): string[] {
+  const projectId = project.id
   return [
     scoped(projectId, '/'),
     ...(followupsAvailable ? [scoped(projectId, '/inbox')] : []),
     scoped(projectId, '/git'),
-    ...(forgeAvailable ? [scoped(projectId, '/github')] : []),
-    // #801: the automations opt-in is workspace-wide, the forge gate is per project — the item
-    // needs both.
-    ...(forgeAvailable && automationsAvailable ? [scoped(projectId, '/automations')] : []),
+    ...(project.forge === 'github' ? [scoped(projectId, '/github')] : []),
+    ...(project.tracker ? [scoped(projectId, '/tracker')] : []),
+    ...(automationsAvailable ? [scoped(projectId, '/automations')] : []),
     scoped(projectId, '/skills'),
     scoped(projectId, '/workflows'),
     scoped(projectId, '/settings'),
@@ -89,10 +90,8 @@ beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   bootProject = await bootProjectId(baseUrl)
   const health = (await fetch(`${baseUrl}/api/v1/health`).then((r) => r.json())) as {
-    forge: { available: boolean } | null
     capabilities: { followups: boolean; singleProject: boolean; automations: boolean }
   }
-  forgeAvailable = health.forge?.available === true
   followupsAvailable = health.capabilities.followups
   automationsAvailable = health.capabilities.automations
   singleProject = health.capabilities.singleProject
@@ -130,6 +129,10 @@ beforeAll(async () => {
           { ...BETA, root: makeRepo('beta'), lastOpenedAt: '2026-07-18T12:00:00Z', source: 'local' },
         ],
   )
+  const registry = (await fetch(`${baseUrl}/api/v1/projects`).then((r) => r.json())) as {
+    projects: ProjectListEntry[]
+  }
+  projectsById = new Map(registry.projects.map((project) => [project.id, project]))
 
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
@@ -155,6 +158,12 @@ function gotoGrouped(path: string): void {
   )
 }
 
+/** The chevron. Disclosing a group and SELECTING a project are two controls since #1018 — this
+ *  is the one that owns `aria-expanded`, and the one that must never navigate. */
+const groupDisclosure = (projectId: string) =>
+  `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-disclosure"]`
+/** The project name — a link into that project's own scope, which is what makes it the active
+ *  project everything else (New task above all) then follows. */
 const groupHeader = (projectId: string) =>
   `[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-header"]`
 const groupBody = (projectId: string) =>
@@ -185,12 +194,14 @@ const renderedOrder = (): string[] => String(browser.evaluate(renderedOrderJs)).
  * a test never has to assume which state a previous test left behind.
  */
 function setGroupExpanded(projectId: string, expanded: boolean): void {
-  const header = groupHeader(projectId)
-  const state = `document.querySelector('${header}')?.getAttribute('aria-expanded')`
+  // The chevron, never the name: since #1018 clicking the name navigates into the project, so
+  // driving disclosure through it would silently change the active project under every caller.
+  const chevron = groupDisclosure(projectId)
+  const state = `document.querySelector('${chevron}')?.getAttribute('aria-expanded')`
   browser.waitForFunction(`${state} !== null && ${state} !== undefined`)
   for (let attempt = 0; attempt < 3; attempt += 1) {
     if (browser.evaluate(state) === String(expanded)) break
-    browser.click(header)
+    browser.click(chevron)
     try {
       browser.waitForFunction(`${state} === '${expanded}'`)
       break
@@ -230,7 +241,7 @@ describe('the grouped multi-project sidebar', () => {
     ])
 
     // The project you are looking at is open, the rest are shut (the no-stored-state default).
-    expect(browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-group-header"]'))
+    expect(browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-group-disclosure"]'))
       .map((el) => el.getAttribute('aria-expanded'))`)).toEqual(['true', 'false', 'false'])
     expect(browser.count('[data-slot="project-group-body"]')).toBe(1)
 
@@ -241,11 +252,12 @@ describe('the grouped multi-project sidebar', () => {
     if (singleProject) skip()
     gotoGrouped(scoped(bootProject, '/git'))
     setGroupExpanded(ALPHA.id, true)
-    // The GitHub row waits on the health answer — settle it before sampling any group's nav,
-    // exactly as the flat-shell specs do.
-    if (forgeAvailable) {
+    for (const id of [bootProject, ALPHA.id]) {
+      const project = projectsById.get(id)
+      expect(project, `missing registry entry for ${id}`).toBeDefined()
+      const expectedCount = expectedNavHrefs(project!).length
       browser.waitForFunction(
-        `document.querySelector('${groupBody(ALPHA.id)} a[href="${scoped(ALPHA.id, '/github')}"]') !== null`
+        `document.querySelectorAll('${groupBody(id)} nav a').length === ${expectedCount}`
       )
     }
 
@@ -255,15 +267,21 @@ describe('the grouped multi-project sidebar', () => {
       )
 
     // The whole point of a group: it links into a project that is NOT the active one.
-    expect(hrefs(bootProject)).toEqual(expectedNavHrefs(bootProject))
-    expect(hrefs(ALPHA.id)).toEqual(expectedNavHrefs(ALPHA.id))
+    expect(hrefs(bootProject)).toEqual(expectedNavHrefs(projectsById.get(bootProject)!))
+    expect(hrefs(ALPHA.id)).toEqual(expectedNavHrefs(projectsById.get(ALPHA.id)!))
 
     // `/git` is a flat, project-agnostic route, so exactly one Git row may claim the URL — the
-    // one in the scoped group. Alpha's Git link points elsewhere and must stay unmarked.
+    // one in the scoped group. Alpha's Git link points elsewhere and must stay unmarked. The
+    // selected project's own name row is `aria-current="true"` rather than `page` (#1018): it
+    // says which project you are standing IN, not which page you are on.
     expect(
       browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-groups"] a[aria-current="page"]'))
         .map((a) => new URL(a.href).pathname)`)
     ).toEqual([scoped(bootProject, '/git')])
+    expect(
+      browser.evaluate(`Array.from(document.querySelectorAll('[data-slot="project-groups"] a[aria-current="true"]'))
+        .map((a) => new URL(a.href).pathname)`)
+    ).toEqual([scoped(bootProject, '/')])
 
     // Each group's door into its own tasks pane.
     expect(
@@ -271,6 +289,61 @@ describe('the grouped multi-project sidebar', () => {
         `new URL(document.querySelector('${groupBody(ALPHA.id)} [data-slot="project-group-more"]').href).pathname`
       )
     ).toBe(scoped(ALPHA.id, '/'))
+  })
+
+  /**
+   * #1018 — clicking a project makes it the project you are working in.
+   *
+   * Before this, the header only disclosed: you could open another project's group, see its
+   * tasks, and still have the New task CTA start a run in the project you came from, because
+   * "active" is the URL's `/p/<id>` prefix and nothing in the sidebar changed it. The two jobs
+   * are separate controls now, and this spec drives both in a real browser: the chevron peeks,
+   * the name moves you.
+   */
+  it('selects the project you click, and leaves the chevron peeking', ({ skip }) => {
+    if (singleProject) skip()
+    gotoGrouped(scoped(bootProject, '/'))
+
+    // The chevron PEEKS: Alpha's task list opens with the boot project still active.
+    setGroupExpanded(ALPHA.id, true)
+    expect(browser.evaluate(`location.pathname`)).toBe(scoped(bootProject, '/'))
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="project-group"][data-project="${bootProject}"]')
+        .hasAttribute('data-active')`)
+    ).toBe(true)
+
+    // The name MOVES you — into Alpha's scope, which is what every scoped affordance follows.
+    browser.click(groupHeader(ALPHA.id))
+    browser.waitForFunction(`location.pathname === '${scoped(ALPHA.id, '/')}'`)
+    browser.waitForFunction(
+      `document.querySelector('[data-slot="project-group"][data-project="${ALPHA.id}"]').hasAttribute('data-active')`
+    )
+    expect(
+      browser.evaluate(`document.querySelector('[data-slot="project-group"][data-project="${bootProject}"]')
+        .hasAttribute('data-active')`)
+    ).toBe(false)
+    // Selected, and visibly so — one background behind the chevron AND the name, painted on the
+    // pill they share rather than on either control, so the row lights as a single tile.
+    //
+    // The pointer is still on Alpha's header after the click, and hover paints the same colour,
+    // so the boot project's row is what makes this an assertion about SELECTION: nothing is
+    // hovering it, and it must be transparent now that it is no longer the selected project.
+    const rowBackground = (projectId: string) =>
+      String(browser.evaluate(`getComputedStyle(document.querySelector(
+        '[data-slot="project-group"][data-project="${projectId}"] [data-slot="project-group-row"]'
+      )).backgroundColor`))
+    expect(rowBackground(ALPHA.id)).not.toBe('rgba(0, 0, 0, 0)')
+    expect(rowBackground(bootProject)).toBe('rgba(0, 0, 0, 0)')
+
+    // …and the New task CTA now starts a task in the project the user picked. This is the bug as
+    // reported: the composer used to open on whichever project the sidebar had left active.
+    expect(
+      browser.evaluate(
+        `new URL(document.querySelector('[data-slot="sidebar"] a[href$="/new"]').href).pathname`
+      )
+    ).toBe(scoped(ALPHA.id, '/new'))
+
+    browser.screenshot(`${artifactsDir}/sidebar-project-selected.png`)
   })
 
   it('persists a collapse in THIS browser, so a reload keeps it and the workspace file does not', async ({
@@ -293,7 +366,7 @@ describe('the grouped multi-project sidebar', () => {
     gotoGrouped(scoped(bootProject, '/'))
     expect(browser.count(groupBody(bootProject))).toBe(0)
     expect(
-      browser.evaluate(`document.querySelector('${groupHeader(bootProject)}').getAttribute('aria-expanded')`)
+      browser.evaluate(`document.querySelector('${groupDisclosure(bootProject)}').getAttribute('aria-expanded')`)
     ).toBe('false')
 
     // And back: the same gesture re-opens it, so the stored `true` is a toggle and not a trap.
@@ -416,6 +489,17 @@ describe('the grouped multi-project sidebar', () => {
     expect(moved).toBe(true)
     browser.press('Space')
     browser.waitForFunction(`${renderedOrderJs} === '${[bootProject, BETA.id, ALPHA.id].join(',')}'`)
+
+    // DOM order updates before dnd-kit's drop transition necessarily reaches rest. Wait for the
+    // drag marker and every transform to settle so this still fails on a permanent residue while
+    // allowing the intended transition to finish.
+    browser.waitForFunction(
+      `[...document.querySelectorAll('[data-slot="project-group"]')].every((n) => {
+         const t = getComputedStyle(n).transform
+         return !n.hasAttribute('data-dragging')
+           && (t === 'none' || t === 'matrix(1, 0, 0, 1, 0, 0)')
+       })`,
+    )
 
     // Every group is back at rest: no leftover transform from the drag, and the tall group still
     // has its own height rather than a scale borrowed from the one it swapped with.

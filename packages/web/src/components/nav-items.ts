@@ -6,10 +6,12 @@ import {
   SparklesIcon,
   WorkflowIcon,
   ZapIcon,
+  TicketIcon,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
+import type { ForgeKind, TrackerKind } from '@open-mercato/cezar-api-client'
 
-import type { ForgeKind } from '@open-mercato/cezar-api-client'
+import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { GithubIcon } from '@/components/icons'
 import { forgeIcon, forgeLabel } from '@/lib/forge-display'
 
@@ -35,6 +37,7 @@ export type NavItem = {
    *  needs no GitHub remote, so a repo without one still gets the page (with the poll kind
    *  disabled there). See `visibleNavItems`. */
   automations?: boolean
+  tracker?: boolean
 }
 
 /** The sidebar nav from the spec's "App shell & navigation" section, in mockup order.
@@ -48,6 +51,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/inbox', label: 'Inbox', icon: InboxIcon, match: ['/inbox'], badge: 'inbox-count', inbox: true },
   { to: '/git', label: 'Git', icon: GitBranchIcon, match: ['/git'] },
   { to: '/github', label: 'GitHub', icon: GithubIcon, match: ['/github'], forge: true },
+  { to: '/tracker', label: 'Tracker', icon: TicketIcon, match: ['/tracker'], tracker: true },
   { to: '/automations', label: 'Automations', icon: ZapIcon, match: ['/automations'], automations: true },
   { to: '/skills', label: 'Skills', icon: SparklesIcon, match: ['/skills'], badge: 'skills-update' },
   { to: '/workflows', label: 'Workflows', icon: WorkflowIcon, match: ['/workflows'] },
@@ -62,6 +66,8 @@ export type NavAvailability = {
   inbox?: boolean
   /** `capabilities.automations` — automations, default-on (spec 2026-09-14), `CEZ_AUTOMATIONS=0` off. */
   automations?: boolean
+  /** Saved local association; its kind supplies the provider label. */
+  tracker?: TrackerKind
 }
 
 /**
@@ -83,11 +89,14 @@ export function visibleNavItems({
   forge = false,
   inbox = false,
   automations = false,
+  tracker,
 }: NavAvailability = {}): NavItem[] {
   return NAV_ITEMS.filter((item) =>
     (item.forge ? forge : true)
     && (item.inbox ? inbox : true)
-    && (item.automations ? automations : true))
+    && (item.automations ? automations : true)
+    && (item.tracker ? tracker !== undefined : true))
+    .map((item) => item.tracker ? { ...item, label: tracker ? TRACKER_PROVIDERS[tracker].label : item.label } : item)
 }
 
 /** Does `pathname` sit inside the area rooted at `prefix`?

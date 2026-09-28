@@ -156,9 +156,10 @@ describe('the General page', () => {
   it('carries the per-project concurrency ceiling, named against the workspace cap', async () => {
     renderAt('/p/demo/settings')
     const select = await screen.findByLabelText('Max parallel tasks for demo-project')
-    expect(select.textContent).toContain('Inherit workspace (4)')
+    expect((select as HTMLInputElement).placeholder).toBe('Inherit (4)')
 
     fireEvent.change(select, { target: { value: '3' } })
+    fireEvent.keyDown(select, { key: 'Enter' })
 
     await waitFor(() => {
       const patch = requests.find((r) => r.method === 'PATCH')

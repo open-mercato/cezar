@@ -2,8 +2,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProviderAuthService } from '../core/provider-auth.ts';
+import * as processUsage from '../core/process-usage.ts';
 import { emitUsageForTest, type ProcessUsage } from '../core/process-usage.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
@@ -67,6 +68,7 @@ describe('GET /api/v1/workspace/events', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     for (const close of closers.splice(0)) await close().catch(() => undefined);
     contexts.disposeAll();
     store.flush();
@@ -211,6 +213,11 @@ describe('GET /api/v1/workspace/events', () => {
       rssBytes: 222 * 1024,
       procCount: 5,
     };
+    store.updateRun(bootRunId, { status: 'running' });
+    other.store.updateRun(otherRunId, { status: 'running' });
+    const sampledAt = '2026-09-18T10:00:00.000Z';
+    vi.spyOn(processUsage, 'currentTimedUsage').mockImplementation((id) => id === bootRunId
+      ? { ...bootSample, sampledAt } : id === otherRunId ? { ...otherSample, sampledAt, cpuPct: null } : undefined);
     emitUsageForTest({ [bootRunId]: bootSample, [otherRunId]: otherSample });
 
     const body = await ws.readUntil(`"project":"${other.id}","usage"`);
@@ -223,10 +230,14 @@ describe('GET /api/v1/workspace/events', () => {
     expect(events).toContainEqual({
       project: bootId,
       usage: { [bootRunId]: bootSample },
+      samples: [{ projectId: bootId, runId: bootRunId, ...bootSample, sampledAt }],
+      sentAt: expect.any(String),
     });
     expect(events).toContainEqual({
       project: other.id,
       usage: { [otherRunId]: otherSample },
+      samples: [{ projectId: other.id, runId: otherRunId, ...otherSample, sampledAt, cpuPct: null }],
+      sentAt: expect.any(String),
     });
 
     // A snapshot owned entirely by one project → exactly ONE more event; the

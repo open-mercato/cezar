@@ -113,7 +113,7 @@ function AutomationRow({
       </td>
       <td className={cn(TD, 'max-w-0 min-w-[200px]')}>
         <span className="flex min-w-0 items-center gap-2">
-          {github ? <GithubIcon className="size-3.5 shrink-0 text-soft-foreground" /> : <Clock3Icon className="size-3.5 shrink-0 text-soft-foreground" />}
+          {github ? <GithubIcon className="size-3.5 shrink-0 text-soft-foreground" /> : automation.kind === 'tracker' ? <ZapIcon className="size-3.5 shrink-0 text-soft-foreground" /> : <Clock3Icon className="size-3.5 shrink-0 text-soft-foreground" />}
           <span className="overflow-hidden text-[13px] font-medium text-ellipsis whitespace-nowrap">{automation.name}</span>
           {dispatch ? (
             <span
@@ -193,7 +193,7 @@ function AutomationRow({
 /** `continuous` for a poll; the next instant (server-reported, else computed) for a schedule; `—` paused. */
 function nextRunText(automation: AutomationListEntry, timeZone: string, now: number): string {
   if (!automation.enabled) return '—'
-  if (automation.kind === 'github') return 'continuous'
+  if (automation.kind !== 'schedule') return 'continuous'
   if (automation.nextRunAt) return dayTime(automation.nextRunAt, timeZone) || '—'
   const next = automation.schedule ? nextOccurrence(automation.schedule, now, timeZone) : null
   return next === null ? '—' : dayTime(next, timeZone) || '—'

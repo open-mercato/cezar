@@ -234,3 +234,21 @@ describe('helpers', () => {
     expect(cliDefinitionOf(fromDefinition(GITHUB_DEF))).not.toHaveProperty('enable')
   })
 })
+
+describe('tracker event draft', () => {
+  const association = { kind: 'jira' as const, source: { id: 'cloud', webUrl: 'https://example.atlassian.net' }, externalId: '100', externalName: 'Team', connectionId: '11111111-1111-4111-8111-111111111111' }
+  it('round trips an event trigger without converting it into a GitHub poll', () => {
+    const definition = { ...GITHUB_DEF, kind: 'tracker' as const, events: undefined,
+      trackerTrigger: { events: ['issue.status_changed' as const], targetStatusIds: ['todo-id'], requiredLabels: ['bug', 'urgent'], association }, intervalSeconds: 1800 }
+    const draft = fromDefinition(definition)
+    expect(draft.kind).toBe('tracker')
+    expect(toBody(draft)).toMatchObject({ kind: 'tracker', trackerTrigger: definition.trackerTrigger, intervalSeconds: 1800 })
+    expect(toBody(draft)).not.toHaveProperty('events')
+    expect(cliDefinitionOf(draft)).toHaveProperty('trackerTrigger', definition.trackerTrigger)
+  })
+  it('keeps a legacy tracker visibly unconfigured rather than guessing status-change semantics', () => {
+    const draft = fromDefinition({ ...GITHUB_DEF, kind: 'tracker' })
+    expect(draft.kind).toBe('tracker')
+    expect(draft.trackerTrigger).toBeUndefined()
+  })
+})

@@ -1,4 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * Claude's executable is resolved by `resolveClaudeBin`, which probes PATH and then the
+ * installers' known locations — so on a developer machine it answers with an absolute path like
+ * `/Users/me/.local/bin/claude`. This suite asserts the executable LITERALLY (and `resultFor`
+ * below routes anything it does not recognise to the pi fixture), so the real resolver would
+ * make the whole file pass or fail depending on where claude happens to be installed on the host
+ * running it — failing on precisely the off-PATH installs that resolver was added to support.
+ *
+ * Pin it to the environment override and the bare name: that is what these tests are about, and
+ * `resolveClaudeBin` has its own dedicated coverage in `claude-bin.test.ts`.
+ */
+vi.mock('./claude-bin.ts', async (importOriginal) => ({
+  ...await importOriginal<typeof import('./claude-bin.ts')>(),
+  resolveClaudeBin: (env: NodeJS.ProcessEnv = process.env) => env.CEZ_CLAUDE_BIN || 'claude',
+}));
+
 import {
   ProviderAuthService,
   isRuntimeProviderAuthFailure,

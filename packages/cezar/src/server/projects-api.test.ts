@@ -231,20 +231,20 @@ describe('workspace projects API', () => {
   });
 
   /**
-   * The folder the server was started in, when the registry does not hold it —
-   * the ordinary state since boot registration became seed-once. It is listed
-   * so the cockpit can reach what the server serves (sidebar row, `lastLocation`
-   * eligibility, Settings' Add button); it is flagged so nothing offers to edit
-   * a registry row that does not exist.
+   * The folder the server was started in, when the registry does not hold it.
+   * Listed only while the registry is EMPTY — there the launch folder is the
+   * cockpit's project, and it is flagged so nothing offers to edit a registry
+   * row that does not exist. Once the user has projects, starting cezar
+   * somewhere neither registers that folder (seed-once) nor lists it; it is
+   * still served under `/p/<bootProject>/` and the unscoped alias.
    */
   describe('GET /api/v1/projects — the unregistered boot folder', () => {
     it('lists the boot folder as unregistered, with its status and no registry timestamps', async () => {
-      const other = await registerProject(otherRoot);
       const body = await getProjects();
 
       const boot = body.projects.find((project) => project.id === body.bootProject);
       expect(boot).toMatchObject({
-        id: allocateProjectSlug(repoRoot, [other.id]),
+        id: allocateProjectSlug(repoRoot, []),
         root: realpathSync(repoRoot),
         name: basename(realpathSync(repoRoot)),
         status: 'not-git', // a real probe, exactly like a registered row
@@ -252,9 +252,34 @@ describe('workspace projects API', () => {
         addedAt: '',
         lastOpenedAt: '',
       });
-      // Listed, never written: the registry still holds only the project the
-      // user actually added.
+      // Listed, never written: nothing reached the registry.
+      expect((await loadWorkspaceConfig()).projects).toEqual([]);
+    });
+
+    it('omits the boot folder once the registry holds any project, and still names it', async () => {
+      const other = await registerProject(otherRoot);
+      const body = await getProjects();
+
+      // The whole point (#774 follow-up): starting cezar in a folder the user
+      // never added puts no row in their sidebar.
+      expect(body.projects.map((project) => project.id)).toEqual([other.id]);
+      expect(body.projects.some((project) => project.unregistered)).toBe(false);
+      // Still the boot project, so `/p/<bootProject>/` and the legacy flat URLs
+      // it backs keep resolving to the folder this server is serving.
+      expect(body.bootProject).toBe(allocateProjectSlug(repoRoot, [other.id]));
       expect((await loadWorkspaceConfig()).projects.map((p) => p.root)).toEqual([other.root]);
+    });
+
+    it('comes back when the last project is removed', async () => {
+      const other = await registerProject(otherRoot);
+      expect((await getProjects()).projects.some((p) => p.unregistered)).toBe(false);
+
+      const app = makeApp();
+      const removed = await apiRequest(app, `/api/v1/projects/${other.id}`, { method: 'DELETE' });
+      expect(removed.status).toBe(200);
+
+      const body = await getProjects();
+      expect(body.projects).toMatchObject([{ id: body.bootProject, unregistered: true }]);
     });
 
     it('drops the flag once the boot folder is registered, and never duplicates it', async () => {
@@ -298,7 +323,9 @@ describe('workspace projects API', () => {
 
       const after = (await (await apiRequest(app, '/api/v1/projects')).json()) as ProjectsResponse;
       expect(after.bootProject).toBe(bootId);
-      expect(after.projects.map((p) => p.id)).toContain(bootId);
+      // The registry is no longer empty, so the served folder is not listed —
+      // but the id it is served under did not move under the open tab.
+      expect(after.projects.map((p) => p.id)).toEqual([project.id]);
     });
 
     it('hands the boot folder its own slug when the user adds it', async () => {
@@ -339,7 +366,7 @@ describe('workspace projects API', () => {
       // project's sidebar row.
       const after = (await (await apiRequest(app, '/api/v1/projects')).json()) as ProjectsResponse;
       expect(after.bootProject).not.toBe(bootId);
-      expect(after.projects.find((p) => p.unregistered)?.id).toBe(after.bootProject);
+      expect(after.projects.map((p) => p.id)).toEqual([stolen.id]);
 
       // …and the row that DID take the slug resolves to its own root.
       const contexts = new ProjectContexts({ listProjects });

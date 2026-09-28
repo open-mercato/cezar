@@ -239,6 +239,14 @@ describe('opening and closing', () => {
 })
 
 describe('Views group', () => {
+  it('uses the associated provider label in a single-project workspace', async () => {
+    renderPalette({ projects: [project({ id: 'cezar', tracker: 'linear' })], entry: '/p/cezar/' })
+    openWith({ metaKey: true })
+    await screen.findByRole('dialog')
+    await waitFor(() => expect(document.querySelector('[data-nav-to="/tracker"]')).not.toBeNull())
+    expect(document.querySelector('[data-nav-to="/tracker"]')?.textContent).toContain('Linear')
+  })
+
   it('leads with New task and its C hint, then the 8 nav destinations', async () => {
     renderPalette({ automations: true })
     openWith({ metaKey: true })

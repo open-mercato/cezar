@@ -1,7 +1,7 @@
 import { ChevronDownIcon, ScaleIcon } from 'lucide-react'
 import * as React from 'react'
-import { useHealth, usePinRun, useReferenceProjectId, useRuns } from '@/api/queries'
-import { Link, scopeTo, useProjectMatch } from '@/lib/project-router'
+import { useHealth, usePinRun, useReferenceProjectId, useRunsForProject } from '@/api/queries'
+import { Link, scopeTo, useActiveProjectId, useProjectMatch } from '@/lib/project-router'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { useListView } from '@/components/list-view'
@@ -581,14 +581,15 @@ function variantLabel(run: RunRecord, showTokens: boolean, showCost: boolean): s
 }
 
 /**
- * The quick-list wired to live data: `useRuns()` for the list (kept fresh by the global SSE
+ * The quick-list wired to live data: an explicit project run list (kept fresh by the global SSE
  * stream, Step 3.2), the router for which row is open, and the shared Active/Archived context so
  * the sidebar and the Tasks table (Step 3.4) always show the same filter.
  */
 export function TaskQuickListContainer() {
-  const runs = useRuns()
-  const pinMutation = usePinRun()
   const health = useHealth()
+  const activeProjectId = useActiveProjectId()
+  const runs = useRunsForProject(activeProjectId, health.data?.bootProject ?? null)
+  const pinMutation = usePinRun()
   const visibility = usageMetricVisibility(health.data)
   const [view, setView] = useListView()
   // Project-prefix-agnostic matches (step 3.2): `/p/<id>/tasks/:id` must light its row too.

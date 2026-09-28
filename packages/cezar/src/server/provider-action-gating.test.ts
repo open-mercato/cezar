@@ -11,6 +11,15 @@ import type { WorkflowDef } from '../workflows/types.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
 import { createApp } from './server.ts';
 
+// `resolveClaudeBin` probes the real machine for an install that is off PATH, so the claude
+// executable these cases assert on would otherwise be whatever the DEVELOPER has. Pinned to the
+// env-only resolution so the suite reads the same on every host; `claude-bin.test.ts` tests
+// discovery for real.
+vi.mock('../core/claude-bin.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../core/claude-bin.ts')>()),
+  resolveClaudeBin: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
+}));
+
 const DISABLED_MESSAGE = 'Codex is disabled. Enable it in Settings → Agents → Providers.';
 
 const memoryWorkspaceConfig = (disabledProviders: ProviderId[] = ['codex']) => {

@@ -15,7 +15,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
-import { SCHEDULE_TYPES, parseCron, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
 
 export interface AutomationCliEnv {
@@ -35,7 +35,7 @@ export interface AutomationCliIo {
   sleep?: (ms: number) => Promise<void>;
 }
 
-const USAGE = `cez automation — create and manage automations (GitHub polls and schedules) on a running cockpit
+const USAGE = `cez automation — create and manage automations (GitHub/Jira/Linear event polls and schedules) on a running cockpit
 
   cez automation schema                         print the definition shape, bounds and prompt placeholders
   cez automation create [--file <def.json> | --json '<json>'] [--enable]
@@ -48,10 +48,13 @@ const USAGE = `cez automation — create and manage automations (GitHub polls an
                                                 the same, from flags: --cron takes "M H * * *" (daily), "M H * * 1-5"
                                                 (weekdays), "M H * * D" (one weekday, 0 or 7 = Sunday) or "0 */N * * *"
                                                 (every N hours, N in 1,2,3,4,6,8,12); anything else needs the JSON form
+  cez automation add --kind tracker --name <name> --on issue.status_changed --to-status <status-id>
+                     [--changed-label <label-id>] [--require-label <name>]... [--every 30m] --prompt <text> [--enable]
+                                                use this project's configured tracker; only advertised events are accepted
   cez automation update <id> [--file | --json]  replace the definition's editable keys (name, description, kind,
                                                 events, intervalSeconds, filters, schedule, task); keys you omit keep
                                                 their value
-  cez automation check <id> [--execute]         GitHub poll: run the filter now — preview counts matches and launches
+  cez automation check <id> [--execute]         event poll: run the filter now — preview counts matches and launches
                                                 nothing, --execute launches a task per match exactly as a poll would
   cez automation run <id>                       schedule: launch it once, now, by hand (paused or not)
   cez automation list                           every automation of this project, with state and counts
@@ -64,7 +67,7 @@ const CHECK_POLL_MS = 500;
 const CHECK_TIMEOUT_MS = 120_000;
 
 /** The keys `PUT /automations/:id` accepts besides `enabled` and `expectedRevision`. */
-const EDITABLE_KEYS = ['name', 'description', 'kind', 'events', 'intervalSeconds', 'filters', 'schedule', 'task'] as const;
+const EDITABLE_KEYS = ['name', 'description', 'kind', 'events', 'intervalSeconds', 'filters', 'schedule', 'trackerTrigger', 'task'] as const;
 
 function base(env: AutomationCliEnv): { url: string; scope: string; projectId?: string } | null {
   const url = env.CEZ_API_URL?.replace(/\/+$/, '');
@@ -136,7 +139,7 @@ export function parseEvery(value: string): number {
 
 /** The `add` flags as the `create` body they stand for. Exported so the tests pin the mapping. */
 export function bodyFromAddFlags(values: {
-  name?: string; cron?: string; on?: string; every?: string; prompt?: string;
+  name?: string; cron?: string; on?: string; every?: string; prompt?: string; kind?: string; 'to-status'?: string[]; 'changed-label'?: string[]; 'require-label'?: string[];
   workflow?: string; runner?: string; model?: string; autonomous?: boolean; 'no-autonomous'?: boolean;
   dispatch?: boolean; 'max-subtasks'?: string; 'review-child'?: boolean; label?: string[]; author?: string[]; enable?: boolean;
 }, prompt: string): Record<string, unknown> {
@@ -144,6 +147,11 @@ export function bodyFromAddFlags(values: {
   if (!prompt.trim()) throw new Error('--prompt (or --prompt-file) is required');
   if (values.cron && values.on) throw new Error('give --cron (a schedule) OR --on (a GitHub poll), not both');
   if (!values.cron && !values.on) throw new Error('give --cron "<M H * * *>" for a schedule or --on <event> for a GitHub poll');
+  if (values.kind && !['github', 'schedule', 'tracker'].includes(values.kind)) throw new Error('--kind must be github, schedule or tracker');
+  if (values.kind === 'tracker' && (values.cron || values.label?.length || values.author?.length)) throw new Error('tracker polls use --on and --to-status/--changed-label, not --cron/--label/--author');
+  if (values.kind !== 'tracker' && (values['to-status']?.length || values['changed-label']?.length || values['require-label']?.length)) throw new Error('--to-status/--changed-label/--require-label require --kind tracker');
+  if (values.kind === 'schedule' && !values.cron) throw new Error('--kind schedule requires --cron');
+  if (values.kind === 'github' && values.cron) throw new Error('--kind github requires --on');
   const task: Record<string, unknown> = { prompt, worktree: true, autonomous: values['no-autonomous'] ? false : true };
   if (values.workflow) task.workflow = values.workflow;
   if (values.runner) task.runner = values.runner;
@@ -166,6 +174,15 @@ export function bodyFromAddFlags(values: {
     }
     body.kind = 'schedule';
     body.schedule = schedule;
+  } else if (values.kind === 'tracker') {
+    body.kind = 'tracker';
+    body.trackerTrigger = { events: values.on!.split(',').map(event => event.trim()).filter(Boolean),
+      ...(values['to-status']?.length ? { targetStatusIds: values['to-status'] } : {}),
+      ...(values['require-label']?.length ? { requiredLabels: values['require-label'] } : {}),
+      ...(values['changed-label']?.length ? { changedLabelIds: values['changed-label'] } : {}),
+    };
+    body.intervalSeconds = values.every ? parseEvery(values.every) : 1800;
+    body.filters = { lookbackDays: 7, maxRecords: 25 };
   } else {
     body.kind = 'github';
     body.events = values.on!.split(',').map((event) => event.trim()).filter(Boolean);
@@ -247,6 +264,7 @@ export async function runAutomationCommand(
           args: rest,
           allowPositionals: false,
           options: {
+            kind: { type: 'string' }, 'to-status': { type: 'string', multiple: true }, 'changed-label': { type: 'string', multiple: true }, 'require-label': { type: 'string', multiple: true },
             name: { type: 'string' }, cron: { type: 'string' }, on: { type: 'string' }, every: { type: 'string' },
             prompt: { type: 'string' }, 'prompt-file': { type: 'string' },
             workflow: { type: 'string' }, runner: { type: 'string' }, model: { type: 'string' },
@@ -271,6 +289,13 @@ export async function runAutomationCommand(
           // the agent should reach for the JSON form, not stop and report.
           io.error(`cez automation: ${error instanceof Error ? error.message : String(error)}`);
           return 2;
+        }
+        if (body.kind === 'tracker') {
+          const response = await json(`${api.scope}/tracker/automation-options`);
+          if (!response.ok) throw new Error(`tracker setup unavailable — ${await readError(response)}`);
+          const options = trackerAutomationOptionsSchema.parse(await response.json());
+          if (!options.available) throw new Error(`${options.reason} Configure the project's Issue tracker in Settings.`);
+          body.trackerTrigger = { ...(body.trackerTrigger as Record<string, unknown>), association: options.association };
         }
         return await createFrom(body);
       }
@@ -356,6 +381,7 @@ export async function runAutomationCommand(
             id: string; name: string; enabled: boolean; kind?: string; events?: string[]; intervalSeconds?: number; schedule?: AutomationSchedule;
             counts: { launched: number; duplicates: number; errors: number };
             nextRunAt?: string;
+            trackerTrigger?: { events: string[]; association: { kind: string } };
             state?: { nextCheckAt?: string; lastSuccessAt?: string };
           }>;
         };
@@ -369,7 +395,9 @@ export async function runAutomationCommand(
           const next = item.enabled && nextAt ? `  next ${nextAt}` : '';
           const trigger = item.kind === 'schedule' && item.schedule
             ? scheduleLabel(item.schedule)
-            : `every ${item.intervalSeconds ?? 300}s  ${shortEvents(item.events)}`;
+            : item.kind === 'tracker'
+              ? `${item.trackerTrigger?.association.kind ?? 'tracker'} every ${item.intervalSeconds ?? 1800}s  ${item.trackerTrigger ? shortEvents(item.trackerTrigger.events) : 'select an event to complete setup'}`
+              : `every ${item.intervalSeconds ?? 300}s  ${shortEvents(item.events)}`;
           io.log(`${item.id}  ${item.enabled ? 'enabled' : 'paused '}  ${trigger}  launched ${item.counts.launched}, duplicates ${item.counts.duplicates}, errors ${item.counts.errors}${next}  ${item.name}`);
         }
         return 0;

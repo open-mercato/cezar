@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { AGENT_MODELS_LOCKED_ENV } from './agent-model-policy.ts';
 import { profileEnv } from './agent-profiles.ts';
-import { withEnvPrefix } from './shell-env.ts';
+import { resolveClaudeBin } from './claude-bin.ts';
+import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 
 export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
@@ -243,7 +244,7 @@ function parsePiStatus(result: ProviderCommandResult): ProviderConnectionState |
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
-    executable: () => process.env.CEZ_CLAUDE_BIN ?? 'claude',
+    executable: () => resolveClaudeBin(),
     statusArgs: ['auth', 'status', '--json'],
     loginArgs: ['auth', 'login'],
     installHint: 'Install Claude Code, then run `claude auth login`.',
@@ -311,13 +312,6 @@ function defaultRunProviderCommand(
       },
     );
   });
-}
-
-function quoteExecutable(executable: string, platform: NodeJS.Platform): string {
-  if (platform === 'win32') {
-    return `"${executable.replace(/[%&!"]/g, '^$&')}"`;
-  }
-  return `'${executable.replaceAll("'", "'\\''")}'`;
 }
 
 /** The per-account cache key. ONE definition: a probe that wrote under a different spelling than
