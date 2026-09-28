@@ -2,6 +2,9 @@ import {
   DISPATCH_MAX_IN_FLIGHT,
   DISPATCH_MAX_SUBTASKS,
   type DispatchIntent,
+  type HarnessModelRef,
+  type HarnessRoles,
+  type HarnessSkillProfile,
   type Runner,
 } from '@open-mercato/cezar-api-client'
 import type { PendingAttachment } from '@/components/composer/composer-attachments'
@@ -40,6 +43,17 @@ export interface NewTaskDraft {
   autonomous: boolean | null
   /** Follow-up generation is default-on. null → remembered value / on. */
   generateFollowups: boolean | null
+  /** Which composer tab is active: the ordinary Task surface or the Multi-model
+   *  one (user feedback 2026-07-23). null → derived (a harness lastTask lands
+   *  on 'multi', everything else on 'task'). */
+  composerMode: 'task' | 'multi' | null
+  harnessMode: 'fix-issue' | 'implement-feature' | null
+  /** Which complete phase playbooks the structured graph uses. */
+  harnessSkillProfile: HarnessSkillProfile | null
+  /** The role-based model selection (2026-07-24). null → derived defaults from
+   *  the available catalog. Kept as picked even while momentarily invalid —
+   *  the panel shows the rule, the submit enforces it. */
+  harnessRoles: HarnessRoles | null
   /** The Dispatch toggle (spec 2026-09-10-dispatch): this task fans work out to subtasks.
    *  `null` = off; `{}` = on with the engine's defaults; the keys are the limits the settings
    *  surface (long-press) set. Sticky like the other pills — it is a way of working. */
@@ -135,6 +149,10 @@ const EMPTY: NewTaskDraft = {
   worktree: null,
   autonomous: null,
   generateFollowups: null,
+  composerMode: null,
+  harnessMode: null,
+  harnessSkillProfile: null,
+  harnessRoles: null,
   dispatch: null,
 }
 
@@ -171,6 +189,14 @@ function normalize(raw: unknown): NewTaskDraft {
     autonomous: typeof obj.autonomous === 'boolean' ? obj.autonomous : null,
     generateFollowups:
       typeof obj.generateFollowups === 'boolean' ? obj.generateFollowups : null,
+    composerMode: obj.composerMode === 'task' || obj.composerMode === 'multi' ? obj.composerMode : null,
+    harnessMode:
+      obj.harnessMode === 'fix-issue' || obj.harnessMode === 'implement-feature' ? obj.harnessMode : null,
+    harnessSkillProfile:
+      obj.harnessSkillProfile === 'generic' || obj.harnessSkillProfile === 'open-mercato'
+        ? obj.harnessSkillProfile
+        : null,
+    harnessRoles: isHarnessRoles(obj.harnessRoles) ? obj.harnessRoles : null,
     dispatch: normalizeDispatchIntent(obj.dispatch),
   }
 }
@@ -208,6 +234,28 @@ export function normalizeDispatchIntent(raw: unknown): DispatchIntent | null {
     intent.budgetUsd = obj.budgetUsd
   }
   return intent
+}
+
+const HARNESS_MODEL_RUNNERS: readonly string[] = ['claude', 'codex', 'opencode', 'harness']
+
+function isModelRef(raw: unknown): raw is HarnessModelRef {
+  return (
+    !!raw &&
+    typeof raw === 'object' &&
+    HARNESS_MODEL_RUNNERS.includes((raw as HarnessModelRef).runner) &&
+    typeof (raw as HarnessModelRef).model === 'string'
+  )
+}
+
+function isHarnessRoles(raw: unknown): raw is HarnessRoles {
+  if (!raw || typeof raw !== 'object') return false
+  const roles = raw as HarnessRoles
+  return (
+    isModelRef(roles.orchestrator) &&
+    isModelRef(roles.implementer) &&
+    Array.isArray(roles.reviewers) &&
+    roles.reviewers.every(isModelRef)
+  )
 }
 
 function isSource(raw: unknown): raw is TaskSource {

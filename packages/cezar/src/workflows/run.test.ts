@@ -19,7 +19,13 @@ import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
-import { appendTurnText, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
+import {
+  appendTurnText,
+  endsWithMonitoringMarker,
+  harnessInfrastructureToolFailure,
+  RunManager,
+  turnEndMarkerText,
+} from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 type UsageAccountingHarness = {
@@ -28,7 +34,7 @@ type UsageAccountingHarness = {
     runId: string,
     state: Record<string, unknown>,
     sink: { handle(event: UiEvent): void },
-    event: UiEvent,
+  event: UiEvent,
   ): void;
 };
 
@@ -70,6 +76,27 @@ describe('appendTurnText', () => {
     expect(appendTurnText('', 'first')).toBe('first');
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
+  });
+});
+
+describe('harnessInfrastructureToolFailure', () => {
+  it('stops deterministic E2BIG shell failures for small commands', () => {
+    expect(
+      harnessInfrastructureToolFailure(
+        "E2BIG: argument list too long, posix_spawn '/bin/zsh'",
+        3,
+      ),
+    ).toMatch(/stopped to prevent repeated paid retries/);
+  });
+
+  it('does not classify an actually oversized command or an ordinary tool failure', () => {
+    expect(
+      harnessInfrastructureToolFailure(
+        "E2BIG: argument list too long, posix_spawn '/bin/zsh'",
+        70 * 1024,
+      ),
+    ).toBeNull();
+    expect(harnessInfrastructureToolFailure('exit 1', 3)).toBeNull();
   });
 });
 
@@ -847,6 +874,66 @@ describe('a chain of 2 selected skills runs BOTH steps, in order (#410)', () => 
 });
 
 /**
+ * Bundled directory skills materialize into the run cwd (spec
+ * 2026-07-24-vendored-cez-skills): the SKILL.md body is injected into the
+ * prompt as always, but the companion files (references/, scripts/, assets/)
+ * and the `requires:` closure must land on disk where the session can read
+ * them — `<cwd>/.claude/skills/<name>/`. This is the exact gap that broke
+ * run 9788d87f: only team-repo skills used to materialize, so the vendored
+ * runtime was body-only and the setup skill stopped at "not installed".
+ */
+describe('a bundled directory skill materializes with its requires closure into the run cwd', () => {
+  let repoRoot: string;
+  let store: RunStore;
+  let manager: RunManager;
+  const savedEnv: Record<string, string | undefined> = {};
+
+  beforeAll(async () => {
+    repoRoot = mkdtempSync(join(tmpdir(), 'cez-bundled-run-'));
+    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
+    await run('git', ['add', '-A'], { cwd: repoRoot });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'base'], { cwd: repoRoot });
+    store = RunStore.open(join(repoRoot, '.ai/cezar'));
+    manager = new RunManager(store, repoRoot);
+  });
+
+  afterAll(() => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    store.flush();
+    rmSync(repoRoot, { recursive: true, force: true });
+  });
+
+  it('copies the vendored cez-setup-harness tree and its requires into .claude/skills', async () => {
+    const workflow: WorkflowDef = {
+      name: '(planned)',
+      source: 'built-in',
+      steps: [{ id: 'task', name: 'cez-setup-harness', skill: 'cez-setup-harness', prompt: '{{task}}' }],
+    };
+    const record = manager.startRun(workflow, { task: 'mock:done configure the harness', worktree: false });
+
+    const terminal = new Set(['done', 'review', 'failed', 'cancelled']);
+    const deadline = Date.now() + 20_000;
+    while (!terminal.has(store.getRun(record.id)?.status ?? '')) {
+      if (Date.now() > deadline) throw new Error('run did not finish in time');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+
+    for (const name of ['cez-setup-harness', 'cez-harness']) {
+      expect(existsSync(join(repoRoot, '.claude', 'skills', name, 'SKILL.md'))).toBe(true);
+    }
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'om-code-review', 'SKILL.md'))).toBe(false);
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-setup-pipeline', 'SKILL.md'))).toBe(false);
+    expect(existsSync(join(repoRoot, '.claude', 'skills', 'cez-harness', 'scripts', 'harness.mjs'))).toBe(true);
+  }, 30_000);
+});
+
+/**
  * The other half of #410's contract: the note exists to explain a step
  * boundary, so a workflow with only ONE agent step must not get it — its
  * prompt stays exactly what the author wrote. Check steps are shell commands,
@@ -1412,7 +1499,13 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
     });
     store.updateRun(record.id, { status: 'running', currentStepId: 'task' });
     store.updateStep(record.id, 'task', { status: 'running', startedAt: new Date().toISOString() });
-    const state = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
+    const state = {
+      cancelled: false,
+      interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
+      cwd: repoRoot,
+    };
     const internals = manager as unknown as {
       active: Map<string, typeof state>;
     };
@@ -1437,11 +1530,21 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       ownerToken: oldToken,
       cancelled: false,
       interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
       cwd: repoRoot,
       sessionEverOpened: true,
       session: { open: true, result: new Promise<never>(() => {}), interrupt: () => undefined, hardStop: () => undefined },
     };
-    const newState = { ownerToken: newToken, cancelled: false, interrupt: () => undefined, cwd: repoRoot, sessionEverOpened: true };
+    const newState = {
+      ownerToken: newToken,
+      cancelled: false,
+      interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
+      cwd: repoRoot,
+      sessionEverOpened: true,
+    };
     const internals = manager as unknown as {
       active: Map<string, unknown>;
       dropActive: (runId: string, expectedState?: typeof oldState) => void;
@@ -1478,6 +1581,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       ownerToken: Symbol('live-owner'),
       cancelled: false,
       interrupt: () => session.interrupt(),
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
       cwd: repoRoot,
       session,
       sessionEverOpened: true,
@@ -1498,6 +1603,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       ownerToken: Symbol('replacement-owner'),
       cancelled: false,
       interrupt: () => undefined,
+      interruptHandlers: new Set<() => void>(),
+      liveSessions: new Set(),
       cwd: repoRoot,
       sessionEverOpened: true,
     };
@@ -1664,8 +1771,8 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
       header: string;
       options: Array<{ label: string; description?: string }>;
     }>;
-    expect(questions[0]!.header).toBe('Implementati');
-    expect(questions[0]!.options[0]).toEqual({ label: 'Minimal', description: 'd'.repeat(280) });
+    expect(questions[0]!.header).toBe('Implementat…');
+    expect(questions[0]!.options[0]).toEqual({ label: 'Minimal', description: `${'d'.repeat(279)}…` });
     expect(events.filter((event) => event.type === 'text').some((event) => String(event.text).includes('CEZ:ASK'))).toBe(false);
   }, 30_000);
 

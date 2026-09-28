@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { runnerSchema } from './health.ts';
 import { referenceStatusSchema } from './github.ts';
+import { harnessRunStubSchema, harnessStartInputSchema } from './harness.ts';
 // The chain shapes belong to the workflows family; the run record embeds one, so this file
 // consumes them rather than redeclaring. One-way on purpose — see the header of `./workflows.ts`.
 import { workflowDefSchema, workflowStepDefSchema } from './workflows.ts';
@@ -300,6 +301,8 @@ export const runRecordSchema = z.object({
    * like every other key.
    */
   workflowDef: workflowDefSchema.optional(),
+  /** Presence marks a staged multi-model harness run; the full durable state is in its ledger. */
+  harness: harnessRunStubSchema.optional(),
 });
 export type RunRecord = z.infer<typeof runRecordSchema>;
 
@@ -523,6 +526,7 @@ export const messageResponseSchema = z.union([
   z.object({ delivered: z.literal(true) }),
   z.object({ queued: z.literal(true), message: queuedMessageSchema }),
   z.object({ deferred: z.literal(true) }),
+  z.object({ queuedForPhase: z.literal(true) }),
 ]);
 export type MessageResponse = z.infer<typeof messageResponseSchema>;
 
@@ -905,6 +909,8 @@ export const createRunInputBaseSchema = z
     /** The inbox entry this task came from (#374). Best-effort bookkeeping: an unknown or
      *  already-started id never fails the run. For ×2/×3 the FIRST variant is recorded. */
     todoId: z.string().min(1).max(200, 'must be at most 200 characters').optional(),
+    /** Staged multi-model harness parameters. Valid only with a built-in harness workflow. */
+    harness: harnessStartInputSchema.optional(),
     /** The composer's Dispatch toggle (spec 2026-09-10-dispatch): start this task as the root of
      *  a dispatch tree, with the user's limits. Omit for an ordinary task. Ignored — the run is
      *  still created — on a server with `capabilities.dispatch` off. */

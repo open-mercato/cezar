@@ -83,6 +83,9 @@ describe('global Resources monitoring controls', () => {
 
     choose('[data-slot="resources-monitoring-wake-mode"]', 'interval')
     browser.fill('[data-slot="resources-monitoring-wake-interval"]', '7')
+    browser.waitForFunction(
+      `document.querySelector('[data-action="resources-save-monitoring-wake"]')?.disabled === false`,
+    )
     browser.click('[data-action="resources-save-monitoring-wake"]')
     await waitForResources((resources) => resources.monitoringWakeIntervalMinutes === 7)
 

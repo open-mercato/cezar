@@ -84,10 +84,11 @@ export function largeThreadEvents(turnCount: number): Array<Line & { seq: number
 }
 
 /** How many thread rows the transcript renders: task bubble + the leading dim lines + per
- *  turn (bubble from turn 2 on, message, tool card, note). Kept next to the generator so the
- *  e2e's DOM-count assertions state their expectation instead of re-deriving it. */
+ *  turn (bubble from turn 2 on, message, tool card, note). The step-start event also renders
+ *  one phase-divider row. Kept next to the generator so the e2e's DOM-count assertions state
+ *  their expectation instead of re-deriving it. */
 export function expectedRowCount(turnCount: number): number {
-  const leading = 1 /* task bubble */ + 2 /* lifecycle + worktree notes */
+  const leading = 1 /* task bubble */ + 2 /* lifecycle + worktree notes */ + 1 /* step divider */
   const perTurn = 4 // user bubble + assistant message + tool card + `$ …` note
   const trailing = 1 // 'goal achieved' lifecycle line
   return leading + perTurn * turnCount - 1 /* turn 1 has no user bubble */ + trailing

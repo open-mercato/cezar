@@ -558,6 +558,7 @@ const NOTE_COMPARE_FIELDS = {
   id: true,
   text: true,
   tone: true,
+  marker: true,
 } satisfies Record<keyof ThreadNote, true>
 
 const IMAGE_COMPARE_FIELDS = {

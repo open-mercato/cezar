@@ -29,6 +29,10 @@ const EMPTY_DRAFT = {
   autonomous: null,
   generateFollowups: null,
   dispatch: null,
+  composerMode: null,
+  harnessMode: null,
+  harnessSkillProfile: null,
+  harnessRoles: null,
 } as const
 
 const shot = (name = 'pasted image'): PendingAttachment => ({
@@ -132,6 +136,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
   })
@@ -148,6 +156,10 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
     const first = readDraft()
@@ -170,6 +182,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
     clearStartedDraft()
@@ -186,6 +202,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: true,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
   })
@@ -202,6 +222,10 @@ describe('the new-task draft store', () => {
       worktree: false,
       autonomous: null,
       generateFollowups: false,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
     // A fresh page has no in-memory cache but keeps localStorage: resetDraft removes storage, so
@@ -233,6 +257,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
 
@@ -249,6 +277,10 @@ describe('the new-task draft store', () => {
       worktree: null,
       autonomous: null,
       generateFollowups: null,
+      composerMode: null,
+      harnessMode: null,
+      harnessSkillProfile: null,
+      harnessRoles: null,
       dispatch: null,
     })
   })

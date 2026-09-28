@@ -279,7 +279,12 @@ describe('a run stopped by a usage limit resumes itself', () => {
     const first = new RunManager(store, repoRoot, { semaphore });
     const runs = [1, 2].map((n) => first.startRun(workflow, { task: `mock:limit pair ${n}` }));
     for (const run of runs) await settle(run.id);
-    expect(runs.every((r) => store.getRun(r.id)?.autoResumeAt !== undefined)).toBe(true);
+    // The failed status is persisted before the follow-up scheduling write. Under a loaded
+    // full-suite worker, `settle` can observe that boundary, so wait for the actual condition
+    // this test needs instead of assuming both writes land in the same polling turn.
+    await expect
+      .poll(() => runs.every((r) => store.getRun(r.id)?.autoResumeAt !== undefined), { timeout: 5_000 })
+      .toBe(true);
     first.dispose();
 
     // Both windows reopen together — the exact state the live deadlock started from. The task
@@ -419,6 +424,26 @@ describe('a run stopped by a usage limit resumes itself', () => {
       .poll(() => store.getRun(record.id)?.status, { timeout: 20_000 })
       .not.toBe('queued');
   }, 60_000);
+
+  it('watchdog: a sweep after manager disposal cannot re-adopt work', async () => {
+    const record = store.createRun({
+      title: 'disposed orphan',
+      workflow: workflow.name,
+      task: 'mock:done orphan',
+      steps: workflow.steps.map((step) => ({
+        id: step.id,
+        name: step.name ?? step.id,
+        kind: 'agent' as const,
+      })),
+    });
+    manager = new RunManager(store, repoRoot);
+    manager.dispose();
+
+    await manager.rescueStalledQueue();
+
+    expect(store.getRun(record.id)?.status).toBe('queued');
+    expect(store.readEvents(record.id)).toEqual([]);
+  });
 
   it('a re-limited resume holds the other resumes back', async () => {
     // What the live workspace showed: several windows reopen together, every resume is let

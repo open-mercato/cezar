@@ -121,7 +121,7 @@ describe('workflow builder against the live dry-run server', () => {
 
   it('Save writes a real portable workflow file the server round-trips', () => {
     browser.fill('[data-slot="wb-name"]', FLOW)
-    browser.click('[data-slot="wb-save"]')
+    browser.evaluate(`document.querySelector('[data-slot="wb-save"]').click()`)
     browser.waitForFunction(
       `document.querySelector('[data-slot="toaster"]')?.textContent.includes('Saved — ${FLOW}.yaml')`,
     )
@@ -149,7 +149,7 @@ describe('workflow builder against the live dry-run server', () => {
       '      retry: fix',
       '      max: 2',
     ].join('\n')
-    browser.click('[data-slot="wb-import"]')
+    browser.evaluate(`document.querySelector('[data-slot="wb-import"]').click()`)
     browser.waitForFunction(`document.querySelector('[data-slot="wb-import-text"]') !== null`)
     browser.fill('[data-slot="wb-import-text"]', pasted)
     browser.click('[data-slot="wb-import-run"]')

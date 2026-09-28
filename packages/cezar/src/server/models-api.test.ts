@@ -106,9 +106,9 @@ describe('workspace model catalog API', () => {
     );
     const response = await apiRequest(server, '/api/v1/models?runner=opencode');
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({
-      runner: 'opencode',
-      models: [{ id: 'openai/gpt-5.4', description: 'via openai' }],
+      expect(await response.json()).toMatchObject({
+        runner: 'opencode',
+        models: [{ id: 'openai/gpt-5.4', description: 'via openai' }],
       source: 'live',
     });
   });

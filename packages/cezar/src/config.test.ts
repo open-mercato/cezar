@@ -116,6 +116,22 @@ describe('loadConfig systemPrompt', () => {
     });
   });
 
+  /** The multi-model harness feature flag: OFF unless a repo opts in, and a bad
+   *  value degrades to off rather than silently enabling the feature. */
+  describe('multiModel', () => {
+    it('defaults to false, round-trips true, and degrades a bad value to false', async () => {
+      expect((await loadConfig(repoRoot)).multiModel).toBe(false);
+
+      write({ multiModel: true });
+      expect((await loadConfig(repoRoot)).multiModel).toBe(true);
+
+      write({ multiModel: 'on', defaultRunner: 'codex' });
+      const config = await loadConfig(repoRoot);
+      expect(config.multiModel).toBe(false);
+      expect(config.defaultRunner).toBe('codex');
+    });
+  });
+
   /** `worktreeRetention` (#483): count-based, always materialized (default 10),
    *  `.catch(10)` so a bad value degrades to the default. `0` = unlimited. */
   describe('worktreeRetention', () => {

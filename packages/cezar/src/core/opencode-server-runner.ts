@@ -10,6 +10,10 @@ import type {
 import type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { prependSystemPrompt, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
+import {
+  AGENT_PROCESS_DETACHED,
+  terminateAgentProcessTree,
+} from './process-tree.ts';
 import { AUTO_END_DELAY_MS, DEFAULT_RUN_TIMEOUT_MS } from './claude-cli-runner.ts';
 import { parseModelIdentity } from './model-identity.ts';
 import { V1TextCoalescer } from './v1-text-coalescer.ts';
@@ -171,6 +175,7 @@ class OpencodeSession implements AgentSession {
       this.child = nodeSpawn(bin, ['serve', '--hostname', '127.0.0.1', '--port', String(port)], {
         cwd: spec.cwd,
         env: buildChildEnv({ backend: 'opencode', extraEnv: spec.env }),
+        detached: AGENT_PROCESS_DETACHED,
       });
     } catch (err) {
       throw wrapSpawnError(err, bin);
@@ -266,6 +271,10 @@ class OpencodeSession implements AgentSession {
     return this.child.pid;
   }
 
+  get processGroup(): boolean {
+    return true;
+  }
+
   sendMessage(content: ContentBlock[]): boolean {
     if (!this.serverOpen) return false;
     if (this.autoEndTimer) {
@@ -323,15 +332,17 @@ class OpencodeSession implements AgentSession {
    * once SIGTERM is out with SIGKILL armed there is nothing a second pass adds.
    * The old `!child.killed` test deduplicated this as a side effect of being
    * wrong; `signalled` keeps that property on purpose.
+   *
+   * Termination is tree-wide: `opencode serve` spawns provider and MCP children
+   * that must not outlive it, and the escalation inside
+   * `terminateAgentProcessTree` asks whether the process GROUP is still alive
+   * rather than whether the leader exited — the stronger form of the same
+   * liveness rule `hasExited()` enforces here.
    */
   private terminate(): void {
     if (this.signalled || this.hasExited()) return;
     this.signalled = true;
-    this.child.kill('SIGTERM');
-    setTimeout(() => {
-      if (this.hasExited()) return;
-      this.child.kill('SIGKILL');
-    }, KILL_GRACE_MS).unref?.();
+    terminateAgentProcessTree(this.child, KILL_GRACE_MS);
   }
 
   // ---- server lifecycle ---------------------------------------------------

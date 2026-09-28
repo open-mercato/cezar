@@ -17,7 +17,9 @@ export const skillSchema = z.object({
   path: z.string(),
   /** `builtin`: the one skill cezar ships itself (`create-cezar-automation`), served only while
    *  GitHub automations are on and reachable (spec 2026-09-13-automations-from-prompt). */
-  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'builtin']),
+  source: z.enum(['ai', 'cezar', 'agents', 'global', 'team', 'bundled', 'builtin']),
+  /** Optional companion skills that must be materialized with this entry. */
+  requires: z.array(z.string()).optional(),
   /** Team skills only: where the definition lives in its skills repo. */
   team: z
     .object({

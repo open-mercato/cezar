@@ -1,0 +1,40 @@
+{
+  "source": {
+    "repo": "open-mercato/skills",
+    "ref": "feat/omdyo-harness",
+    "commit": "a018dc97b15213106e2d283be3c4fce80fa0811e"
+  },
+  "generatedAt": "2026-07-30T00:13:57.291Z",
+  "generatedBy": "scripts/vendor-skills.mjs",
+  "nameMap": {
+    "om-setup-agent-harness": "cez-setup-harness",
+    "om-harness-review": "cez-harness-review",
+    "om-verify-in-repo": "cez-verify-in-repo",
+    "om-spec-writing": "cez-spec-writing",
+    "om-code-review": "cez-code-review",
+    "om-root-cause": "cez-root-cause",
+    "om-harness": "cez-harness",
+    "om-fix": "cez-fix"
+  },
+  "requires": {
+    "cez-setup-harness": [
+      "cez-harness"
+    ]
+  },
+  "cezarOwned": [
+    "cez-setup-harness",
+    "cez-pre-implement-spec",
+    "cez-implement-spec"
+  ],
+  "skills": [
+    "cez-code-review",
+    "cez-fix",
+    "cez-harness",
+    "cez-implement-spec",
+    "cez-pre-implement-spec",
+    "cez-root-cause",
+    "cez-setup-harness",
+    "cez-spec-writing",
+    "cez-verify-in-repo"
+  ]
+}

@@ -13,6 +13,7 @@ import {
   useReferenceProjectId,
   useProjectRepoBase,
   queryKeys,
+  useAcceptContestedHarness,
   useProviderStatus,
   useRefreshProviderStatus,
   useRetryProviderAuth,
@@ -958,6 +959,105 @@ describe('query defaults', () => {
     expect(defaults?.refetchInterval).toBe(false)
     expect(defaults?.refetchOnWindowFocus).toBe(false)
     expect(defaults?.staleTime).toBeGreaterThanOrEqual(60_000)
+  })
+})
+
+/**
+ * Review finding (2026-07-27): the mutation patched only `outcome` into the
+ * cached ledger, but BOTH the server's publish gate and its client mirror
+ * require the matching `accept-contested` row in `decisions`. `useRunHarness`
+ * has `staleTime: Infinity` and never polls, so the missing row was permanent:
+ * the Review panel flipped to "Contested result accepted" and toasted
+ * "Publishing controls are now unlocked" while Finish and Draft PR stayed
+ * disabled with the "accept the risk first" tooltip.
+ */
+describe('useAcceptContestedHarness', () => {
+  const ledger = (): Record<string, unknown> => ({
+    outcome: { status: 'contested', blockingReasons: ['[major] X'] },
+    decisions: [],
+    stage: { status: 'staged' },
+  })
+
+  it('patches the decision row alongside the outcome so publishing unlocks', async () => {
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.runs.harness('run-1'), ledger())
+    const accepted = {
+      outcome: {
+        status: 'contested',
+        blockingReasons: ['[major] X'],
+        acceptedAt: '2026-07-27T10:00:00.000Z',
+        acceptedBy: 'user',
+        acceptanceReason: 'shipping behind a flag',
+      },
+      decisions: [
+        {
+          at: '2026-07-27T10:00:00.000Z',
+          kind: 'accept-contested',
+          by: 'user',
+          detail: 'shipping behind a flag',
+        },
+      ],
+    }
+    fetchMock.mockResolvedValue(json(accepted))
+
+    const { result } = renderHook(() => useAcceptContestedHarness('run-1'), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    await act(async () => {
+      await result.current.mutateAsync('shipping behind a flag')
+    })
+
+    const patched = client.getQueryData(queryKeys.runs.harness('run-1')) as Record<string, unknown>
+    expect(patched.outcome).toEqual(accepted.outcome)
+    expect(patched.decisions).toEqual(accepted.decisions)
+    const outcome = patched.outcome as Record<string, unknown>
+    const decisions = patched.decisions as Array<Record<string, unknown>>
+    expect(
+      decisions.some(
+        (d) =>
+          d.kind === 'accept-contested' &&
+          d.by === 'user' &&
+          d.at === outcome.acceptedAt &&
+          d.detail === outcome.acceptanceReason,
+      ),
+    ).toBe(true)
+  })
+
+  it('reconstructs the row when an older server answers with outcome only', async () => {
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.runs.harness('run-1'), ledger())
+    fetchMock.mockResolvedValue(
+      json({
+        outcome: {
+          status: 'contested',
+          blockingReasons: ['[major] X'],
+          acceptedAt: '2026-07-27T11:00:00.000Z',
+          acceptedBy: 'user',
+          acceptanceReason: 'reason',
+        },
+      }),
+    )
+
+    const { result } = renderHook(() => useAcceptContestedHarness('run-1'), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <QueryClientProvider client={client}>{children}</QueryClientProvider>
+      ),
+    })
+    await act(async () => {
+      await result.current.mutateAsync('reason')
+    })
+
+    const patched = client.getQueryData(queryKeys.runs.harness('run-1')) as Record<string, unknown>
+    expect(patched.decisions).toEqual([
+      {
+        at: '2026-07-27T11:00:00.000Z',
+        kind: 'accept-contested',
+        by: 'user',
+        detail: 'reason',
+      },
+    ])
   })
 })
 

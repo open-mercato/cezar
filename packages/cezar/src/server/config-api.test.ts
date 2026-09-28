@@ -85,6 +85,7 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      multiModel: false,
     });
   });
 
@@ -202,6 +203,7 @@ describe('the config API', () => {
       worktreeRetention: 10,
       liveTitleUpdates: null,
       reviewGate: null,
+      multiModel: false,
     });
   });
 

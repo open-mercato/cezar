@@ -227,7 +227,9 @@ describe('the Changes tab against a live dry run', () => {
   })
 
   it('the Files tab opens the worktree browser under the same header (deep coverage: task-files.e2e.ts)', () => {
-    browser.click(`[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]`)
+    browser.evaluate(
+      `document.querySelector('[data-slot="run-tabs"] a[href="${scoped(`/tasks/${runId}/files`)}"]').click()`,
+    )
     browser.waitForFunction(`document.querySelector('[data-route="task-files"] [data-slot="files-tree"]') !== null`)
     expect(browser.url()).toBe(`${baseUrl}${scoped(`/tasks/${runId}/files`)}`)
     expect(

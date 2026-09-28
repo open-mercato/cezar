@@ -264,14 +264,15 @@ export async function collectChanges(
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
   const patchCap = opts.patchCap ?? PATCH_CAP;
   // `git add -N .` (intent-to-add) makes untracked files appear in the diff, but it MUTATES the
-  // index — fine in a task worktree cezar owns, but forbidden on the user's real main tree (a
-  // read-only GET must never stage files, #major-index-mutation). When `intentToAdd` is false we
-  // build a SCRATCH index (GIT_INDEX_FILE) seeded from HEAD + intent-to-add, so untracked files
-  // still show WITHOUT touching the user's real index.
+  // index. That was long treated as "fine in a task worktree cezar owns" — until run 5f6fe8ae,
+  // where this exact write raced the harness's subject-integrity checks and voided a whole
+  // review council. Read paths must not write ANY index, worktree or not: the scratch-index
+  // path (GIT_INDEX_FILE seeded from HEAD + intent-to-add) is the default now, and
+  // `intentToAdd: true` remains only as an explicit legacy opt-in.
   let env: Record<string, string> | undefined;
   let scratchIndex: string | undefined;
   try {
-    if (opts.intentToAdd === false) {
+    if (opts.intentToAdd !== true) {
       scratchIndex = join(tmpdir(), `cez-scratch-index-${process.pid}-${scratchSeq++}`);
       env = { GIT_INDEX_FILE: scratchIndex };
       await git(dir, ['read-tree', 'HEAD'], env); // seed with tracked files; harmless if no HEAD

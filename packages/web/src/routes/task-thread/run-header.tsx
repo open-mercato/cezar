@@ -36,7 +36,7 @@ import {
   useRunHandoff,
   useRuns,
 } from '@/api/queries'
-import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
+import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget, type StepState } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
@@ -86,6 +86,8 @@ import { Markdown } from './markdown'
 import { useContinuationProvider } from './continuation-provider'
 import { cliTargetResumes, cliTargetRunner, finishTitle, resumeHint, runActionFlags } from './run-actions'
 import { WorkflowSteps } from './step-rail'
+import { HScroller } from '@/components/h-scroller'
+import { runShellClass } from './run-shell'
 import { useFinishRun } from './use-finish-run'
 import { useDraft } from './thread-draft'
 
@@ -106,7 +108,7 @@ import { useDraft } from './thread-draft'
  */
 /** Which run-detail tab this header instance sits above — drives the active underline.
  *  A prop rather than a route match so the header stays testable with a bare render. */
-export type RunTab = 'session' | 'changes' | 'commits' | 'files'
+export type RunTab = 'session' | 'review' | 'packets' | 'changes' | 'commits' | 'files'
 
 /** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
  *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
@@ -122,6 +124,12 @@ interface RunHeaderProps {
   run: ApiRun
   planTally?: { done: number; total: number }
   tab?: RunTab
+  publishBlockedReason?: string
+  /** Wired only where a transcript exists to jump in (the Session tab). */
+  onJumpToStep?: (id: string) => void
+  /** Steps in EXECUTION order (harness pages derive it from the ledger) —
+   *  older harness runs recorded their dynamic steps appended at the tail. */
+  orderedSteps?: StepState[]
   /** Fired the moment "Mark unread" is invoked, BEFORE the mutation — the Session tab uses it
    *  to suppress its auto-mark-read effect for the rest of the visit (#775). Optional because
    *  the three `task-git` tabs render this same header and run no such effect. */
@@ -135,6 +143,9 @@ interface RunHeaderProps {
 const headerPropComparators = {
   run: (before, after) => before.run === after.run,
   tab: (before, after) => before.tab === after.tab,
+  publishBlockedReason: (before, after) => before.publishBlockedReason === after.publishBlockedReason,
+  onJumpToStep: (before, after) => before.onJumpToStep === after.onJumpToStep,
+  orderedSteps: (before, after) => before.orderedSteps === after.orderedSteps,
   onMarkedUnread: (before, after) => before.onMarkedUnread === after.onMarkedUnread,
   continuationEngine: (before, after) => before.continuationEngine === after.continuationEngine,
   planTally: (before, after) => before.planTally?.done === after.planTally?.done &&
@@ -150,9 +161,22 @@ function RunHeaderView({
   run,
   planTally,
   tab = 'session',
+  publishBlockedReason,
+  onJumpToStep,
+  orderedSteps,
   onMarkedUnread,
   continuationEngine,
 }: RunHeaderProps) {
+  // Harness runs render the wide shell (they carry a run rail); everything else
+  // keeps the reading measure. One source of truth so the header can never sit
+  // at a different width than the body under it (review 2026-07-27).
+  const wide = Boolean(run.harness)
+  // The header is sticky, so anything else that sticks has to know how tall it
+  // is (review 2026-07-27): the run rail was pinning at 12px and disappearing
+  // behind 185px of header. Its height is genuinely dynamic — the title wraps,
+  // the step rail expands, the notes panel opens — so it is measured and
+  // published as a custom property rather than guessed at.
+  const headerRef = useRef<HTMLElement>(null)
   const attention = deriveAttention(run)
   const flags = runActionFlags(run)
   const hint = resumeHint(run)
@@ -182,12 +206,38 @@ function RunHeaderView({
   const health = useHealth()
   const metricVisibility = usageMetricVisibility(health.data)
 
+  useEffect(() => {
+    const el = headerRef.current
+    if (!el) return
+    const publish = () => {
+      document.documentElement.style.setProperty(
+        '--run-header-h',
+        `${Math.round(el.getBoundingClientRect().height)}px`,
+      )
+    }
+    publish()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', publish)
+      return () => {
+        window.removeEventListener('resize', publish)
+        document.documentElement.style.removeProperty('--run-header-h')
+      }
+    }
+    const observer = new ResizeObserver(publish)
+    observer.observe(el)
+    return () => {
+      observer.disconnect()
+      document.documentElement.style.removeProperty('--run-header-h')
+    }
+  }, [])
+
   return (
     <header
+      ref={headerRef}
       data-slot="run-header"
       className="relative z-20 border-b border-border bg-background/95 px-3 pt-2 backdrop-blur md:sticky md:top-0 md:px-6 md:pt-3"
     >
-      <div className="mx-auto w-full max-w-[var(--measure)]">
+      <div className={runShellClass(wide)}>
         <div className="flex min-w-0 items-center gap-2">
           <EditableTitle run={run} />
           <span className="ml-auto flex shrink-0 items-center gap-2.5">
@@ -222,7 +272,12 @@ function RunHeaderView({
                 className={cn('transition-transform', detailsOpen && 'rotate-180')}
               />
             </Button>
-            <ActionsKebab run={run} actions={actions} onToggleNotes={() => setNotesOpen((open) => !open)} />
+            <ActionsKebab
+              run={run}
+              actions={actions}
+              publishBlockedReason={publishBlockedReason}
+              onToggleNotes={() => setNotesOpen((open) => !open)}
+            />
           </span>
         </div>
 
@@ -252,10 +307,28 @@ function RunHeaderView({
         <DispatchParentLine run={run} />
         <DispatchChildrenLine run={run} />
 
+        {/* Tabs and actions are separate flex children (review 2026-07-27): they
+            used to share one horizontal scroller, so at ANY width — 926px of
+            content in an 812px box even at a 1600px viewport — the last action
+            was clipped ("Archive" rendered as "Arch"). Only the tab list may
+            scroll now, and the actions are always reachable. */}
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
+          <HScroller ariaLabel="Run tabs" className="flex-1">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
             Session
           </TabLink>
+          {run.harness ? (
+            <>
+              <TabLink to={`/tasks/${run.id}/review`} active={tab === 'review'}>
+                Review
+              </TabLink>
+              {run.harness.profile === 'high-assurance' ? (
+                <TabLink to={`/tasks/${run.id}/packets`} active={tab === 'packets'}>
+                  Packets
+                </TabLink>
+              ) : null}
+            </>
+          ) : null}
           <TabLink to={`/tasks/${run.id}/changes`} active={tab === 'changes'}>
             Changes
           </TabLink>
@@ -266,9 +339,17 @@ function RunHeaderView({
             Files
           </TabLink>
 
-          <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 pb-1 md:flex">
+          </HScroller>
+
+          <div data-slot="run-actions" className="ml-auto hidden shrink-0 items-center gap-1 pb-1 lg:flex">
             {flags.finish ? (
-              <Button variant="outline" size="sm" title={finishTitle(run.status)} onClick={() => actions.finish.mutate()}>
+              <Button
+                variant="outline"
+                size="sm"
+                title={publishBlockedReason ?? finishTitle(run.status)}
+                disabled={publishBlockedReason !== undefined}
+                onClick={() => actions.finish.mutate()}
+              >
                 <CheckIcon aria-hidden="true" />
                 Finish
               </Button>
@@ -350,7 +431,7 @@ function RunHeaderView({
 
         {run.steps.length > 0 ? (
           <div className="border-t border-border pt-1 pb-0 md:pt-2 md:pb-1">
-            <WorkflowSteps runId={run.id} steps={run.steps} />
+            <WorkflowSteps runId={run.id} steps={orderedSteps ?? run.steps} onJumpToStep={onJumpToStep} />
           </div>
         ) : null}
 
@@ -1092,22 +1173,28 @@ function ActionsKebab({
   run,
   actions,
   onToggleNotes,
+  publishBlockedReason,
 }: {
   run: ApiRun
   actions: RunActions
   onToggleNotes: () => void
+  publishBlockedReason?: string
 }) {
   const flags = runActionFlags(run)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon-sm" aria-label="Run actions" className="md:hidden">
+        <Button variant="ghost" size="icon-sm" aria-label="Run actions" className="lg:hidden">
           <EllipsisVerticalIcon aria-hidden="true" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" data-slot="run-actions-menu">
         {flags.finish ? (
-          <DropdownMenuItem onSelect={() => actions.finish.mutate()}>
+          <DropdownMenuItem
+            disabled={publishBlockedReason !== undefined}
+            title={publishBlockedReason}
+            onSelect={() => actions.finish.mutate()}
+          >
             <CheckIcon aria-hidden="true" /> Finish
           </DropdownMenuItem>
         ) : null}

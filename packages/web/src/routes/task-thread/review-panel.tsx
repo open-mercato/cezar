@@ -35,7 +35,13 @@ import { useFinishRun } from './use-finish-run'
  * — legacy semantics verbatim), Draft PR (`POST /pr`; 409 → the copyable `git merge` manual
  * fallback), and ✓ Accept (the shared finish action from use-finish-run.ts).
  */
-export function ReviewPanel({ run }: { run: ApiRun }) {
+export function ReviewPanel({
+  run,
+  publishBlockedReason,
+}: {
+  run: ApiRun
+  publishBlockedReason?: string
+}) {
   return (
     <section data-slot="review-panel" aria-label="Review the changes" className="flex flex-col gap-3">
       <div
@@ -52,14 +58,20 @@ export function ReviewPanel({ run }: { run: ApiRun }) {
       </div>
 
       <RunDiff runId={run.id} />
-      <ReviewActions run={run} />
+      <ReviewActions run={run} publishBlockedReason={publishBlockedReason} />
     </section>
   )
 }
 
 // ---- notes + exits --------------------------------------------------------------------------
 
-function ReviewActions({ run }: { run: ApiRun }) {
+function ReviewActions({
+  run,
+  publishBlockedReason,
+}: {
+  run: ApiRun
+  publishBlockedReason?: string
+}) {
   const queryClient = useQueryClient()
   const notesRef = useRef<HTMLTextAreaElement>(null)
   // Review notes are the second-longest thing anyone types into a task, and they are typed while
@@ -199,8 +211,9 @@ function ReviewActions({ run }: { run: ApiRun }) {
             data-slot="review-draft-pr"
             variant="outline"
             size="sm"
-            title="Push the branch and open a draft PR"
-            disabled={draftPr.isPending}
+            title={publishBlockedReason ?? 'Push the branch and open a draft PR'}
+            aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
+            disabled={draftPr.isPending || publishBlockedReason !== undefined}
             onClick={() => draftPr.mutate()}
           >
             <GitPullRequestIcon aria-hidden="true" />
@@ -212,14 +225,23 @@ function ReviewActions({ run }: { run: ApiRun }) {
           variant="contrast"
           size="sm"
           className="ml-auto"
-          title={finishTitle('review')}
-          disabled={finish.isPending}
+          title={publishBlockedReason ?? finishTitle('review')}
+          aria-describedby={publishBlockedReason ? 'harness-publish-guidance' : undefined}
+          disabled={finish.isPending || publishBlockedReason !== undefined}
           onClick={() => finish.mutate()}
         >
           <CheckIcon aria-hidden="true" />
           Accept
         </Button>
       </div>
+      {publishBlockedReason ? (
+        <p
+          id="harness-publish-guidance"
+          className="text-xs text-warning"
+        >
+          {publishBlockedReason}
+        </p>
+      ) : null}
       {manual !== null ? <ManualMergeLine command={manual} /> : null}
     </div>
   )

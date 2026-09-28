@@ -17,6 +17,7 @@ export * from './agent-profiles.ts';
 export * from './zoned-time.ts';
 export * from './automation-schedule.ts';
 export * from './automations.ts';
+export * from './harness.ts';
 export * from './dispatch.ts';
 export * from './dashboard.ts';
 export * from './dashboard-costs.ts';

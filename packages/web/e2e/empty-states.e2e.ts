@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
+import { once } from 'node:events'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -71,9 +72,12 @@ beforeAll(async () => {
   browser.setViewport(1440, 900)
 }, 90_000)
 
-afterAll(() => {
+afterAll(async () => {
   browser?.close()
-  server?.kill()
+  if (server && server.exitCode === null && server.signalCode === null) {
+    server.kill()
+    await once(server, 'exit')
+  }
   if (dataRoot) rmSync(dataRoot, { recursive: true, force: true })
 })
 

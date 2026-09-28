@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -8,7 +8,11 @@ import {
   branchFor,
   createWorktree,
   parseShortstat,
+  remoteDefaultBranch,
   resolveBaseRef,
+  staleBaseNote,
+  worktreeDiff,
+  worktreeDiffStat,
   worktreeShortstat,
   worktreeSizeBytes,
 } from './git-worktree.ts';
@@ -19,6 +23,12 @@ const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
 
 const worktreeRoots: string[] = [];
+
+function scratchIndexFiles(): string[] {
+  return readdirSync(tmpdir())
+    .filter((name) => name.startsWith(`cez-wt-scratch-${process.pid}-`))
+    .sort();
+}
 
 async function fixtureRepo(prefix: string): Promise<string> {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -188,6 +198,19 @@ describe('worktreeShortstat (real git)', () => {
     }
   });
 
+  it('removes every scratch index after diff reads finish', async () => {
+    const r = await fixtureRepo('cez-scratch-cleanup-');
+    await run('git', ['checkout', '-q', '-b', 'work'], { cwd: r });
+    writeFileSync(join(r, 'untracked.txt'), 'visible only through intent-to-add\n');
+    const before = scratchIndexFiles();
+
+    expect(await worktreeDiff(r, 'main')).toContain('untracked.txt');
+    expect(await worktreeDiffStat(r, 'main')).toContain('untracked.txt');
+    expect(await worktreeShortstat(r, 'main')).toEqual({ adds: 1, dels: 0, files: 1 });
+
+    expect(scratchIndexFiles()).toEqual(before);
+  });
+
   it('counts only the task\'s own changes after the base is merged back in', async () => {
     // Regression: anchoring to a moving base *name* (via merge-base) must stay
     // correct when the task syncs with its base — the routine merge that a
@@ -253,6 +276,69 @@ describe('worktreeShortstat (real git)', () => {
         repointed: true,
       });
     });
+
+    it('never refreshes the real index while choosing a repointed-worktree anchor', async () => {
+      const r = await repoWithForeignBranch();
+      const tracked = join(r, 'f.txt');
+      const index = join(r, '.git', 'index');
+      // Make the cached stat data stale without changing the tracked contents. A plain
+      // `git diff --shortstat` refreshes this entry and rewrites the real index; the diff-base
+      // probes must inherit the same scratch-index environment as the final reported stat.
+      const future = new Date(Date.now() + 10_000);
+      utimesSync(tracked, future, future);
+      writeFileSync(join(r, 'mine.txt'), 'z\n');
+      const before = readFileSync(index);
+
+      expect(await worktreeShortstat(r, 'main', { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+        repointed: true,
+      });
+
+      expect(readFileSync(index)).toEqual(before);
+      expect((await run('git', ['status', '--porcelain'], { cwd: r })).stdout).toBe('?? mine.txt\n');
+    });
+
+    it.runIf(process.platform !== 'win32')(
+      'runs every repointed diff-base probe under the scratch-index environment',
+      async () => {
+        const r = await repoWithForeignBranch();
+        const trace = join(r, 'git-env.log');
+        const bin = join(r, 'bin');
+        const helper = join(bin, 'git');
+        const realGit = (await run('which', ['git'])).stdout.trim();
+        mkdirSync(bin);
+        writeFileSync(
+          helper,
+          `#!/bin/sh\nprintf '%s\\t%s\\n' "\${GIT_INDEX_FILE-unset}" "$*" >> '${trace}'\nexec '${realGit}' "$@"\n`,
+        );
+        chmodSync(helper, 0o755);
+        writeFileSync(join(r, 'f.txt'), 'changed by this run\n');
+
+        const previousPath = process.env.PATH;
+        process.env.PATH = `${bin}:${previousPath ?? ''}`;
+        try {
+          expect(
+            await worktreeShortstat(r, 'main', {
+              taskBranch: 'cez/x',
+              runStartedAt: '2099-01-01T00:00:00Z',
+            }),
+          ).not.toBeNull();
+        } finally {
+          process.env.PATH = previousPath;
+        }
+
+        const seen = readFileSync(trace, 'utf8')
+          .trim()
+          .split('\n')
+          .filter((line) => line.includes('\tdiff --shortstat '));
+        expect(seen.length).toBeGreaterThan(0);
+        expect(
+          seen.every((line) => line.startsWith(`${tmpdir()}/cez-wt-scratch-${process.pid}-`)),
+        ).toBe(true);
+      },
+    );
 
     it('reports the foreign branch\'s whole diff without the guard — the bug being fixed', async () => {
       const r = await repoWithForeignBranch();
@@ -461,6 +547,33 @@ describe('worktreeShortstat (real git)', () => {
         files: 1,
       });
     });
+  });
+});
+
+describe('remoteDefaultBranch + staleBaseNote (run 9788d87f: a stale configured base hid tracked files)', () => {
+  it('reads the branch origin/HEAD points at, and null without a remote', async () => {
+    const origin = mkdtempSync(join(tmpdir(), 'cez-origin-'));
+    worktreeRoots.push(origin);
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: origin });
+    writeFileSync(join(origin, 'a.txt'), '1\n');
+    await run('git', ['add', '-A'], { cwd: origin });
+    await run('git', [...GIT_ID, 'commit', '-q', '-m', 'c1'], { cwd: origin });
+    const work = mkdtempSync(join(tmpdir(), 'cez-work-'));
+    worktreeRoots.push(work);
+    await run('git', ['clone', '-q', origin, work], { cwd: tmpdir() });
+    expect(await remoteDefaultBranch(work)).toBe('main');
+
+    const lone = mkdtempSync(join(tmpdir(), 'cez-lone-'));
+    worktreeRoots.push(lone);
+    await run('git', ['init', '-q', '-b', 'main'], { cwd: lone });
+    expect(await remoteDefaultBranch(lone)).toBeNull();
+  });
+
+  it('staleBaseNote warns only when the configured base is not the remote default', () => {
+    expect(staleBaseNote('develop', 'main')).toContain('"develop" is not the remote default "main"');
+    expect(staleBaseNote('main', 'main')).toBeNull();
+    expect(staleBaseNote('origin/main', 'main')).toBeNull();
+    expect(staleBaseNote('develop', null)).toBeNull();
   });
 });
 

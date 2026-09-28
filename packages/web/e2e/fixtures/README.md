@@ -21,7 +21,8 @@ Alongside the transcript:
 - `thread-run-images/` — the `<id>-images/` directory the run persisted; the transcript's
   `image` line points into it via `/api/v1/runs/<id>/images/…`.
 
-To regenerate: build, boot `CEZ_DRY_RUN=1 node dist/index.js serve --repo <tmp-git-repo>`,
+To regenerate: build, boot
+`CEZ_DRY_RUN=1 node packages/cezar/dist/index.js serve --repo <tmp-git-repo>`,
 POST a run whose task has no `mock:` marker, POST one `/messages` reply containing `mock:md`
 once it waits, POST `/finish` (twice: the mock's turn 1 touches `notes.md`, so the run parks
 at `review` first — the second finish accepts it), then copy `<tmp>/.ai/cezar/runs/<id>.ndjson`,
@@ -68,6 +69,7 @@ untouched.
   with the id, title/task, branch and worktree path swapped for this run. Status `done`, so the
   store's `recover()` leaves it alone.
 
-To regenerate: build, boot `CEZ_DRY_RUN=1 node dist/index.js serve --repo <tmp-git-repo>`,
+To regenerate: build, boot
+`CEZ_DRY_RUN=1 node packages/cezar/dist/index.js serve --repo <tmp-git-repo>`,
 start a task whose text is `mock:subagents`, wait for it to settle, then copy
 `<tmp>/.ai/cezar/runs/<id>.ndjson` here and normalize the timestamps.

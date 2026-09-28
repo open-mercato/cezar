@@ -38,6 +38,8 @@ describe('per-task auto-resume cancellation', () => {
           store.updateRun(id, { autoResumeAt: undefined, autoResumeAttempts: undefined });
           return true;
         },
+        // The archive route consults liveness before releasing a harness issue claim.
+        isActive: () => false,
       } as unknown as RunManager,
       version: '0.0.0-test',
     });

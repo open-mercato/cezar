@@ -1,4 +1,6 @@
 import { cleanup, render } from '@testing-library/react'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 import type { RunEvent } from '@open-mercato/cezar-api-client'
@@ -24,8 +26,25 @@ const asRunEvents = (events: object[]): RunEvent[] =>
   events.map((event, index) => ({ seq: index + 1, ts: '2026-07-14T12:00:00.000Z', ...event }) as RunEvent)
 
 const REPLAYED = reduceThread(asRunEvents(subagentTask as object[]))
+const E2E_REPLAY = reduceThread(
+  readFileSync(
+    resolve(import.meta.dirname, '../../../e2e/fixtures/subagents-run.ndjson'),
+    'utf8',
+  )
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as RunEvent),
+)
 
 describe('replayed run — the dock', () => {
+  it('rebuilds the complete two-agent E2E fan-out after the run is terminal', () => {
+    const agents = collectSubagents(E2E_REPLAY.turns, true)
+    expect(agents.map((agent) => agent.title)).toEqual([
+      'Audit the auth flow',
+      'Review the store layer',
+    ])
+  })
+
   it('rebuilds the fan-out from persisted events alone', () => {
     const agents = collectSubagents(REPLAYED.turns)
     expect(agents).toHaveLength(1)
