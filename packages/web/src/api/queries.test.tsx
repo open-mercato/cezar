@@ -1,6 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from './client'
@@ -1087,9 +1088,26 @@ describe('useForgeKind', () => {
     return function Wrapper({ children }: { children: ReactNode }) {
       return (
         <QueryClientProvider client={client}>
-          <ProjectScopeContext.Provider value={{ projectId: scope, apiBase: '/api/v1' }}>
-            {children}
-          </ProjectScopeContext.Provider>
+          <MemoryRouter>
+            <ProjectScopeContext.Provider value={{ projectId: scope, apiBase: '/api/v1' }}>
+              {children}
+            </ProjectScopeContext.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+    }
+  }
+
+  // The shell and the ⌘K palette render OUTSIDE every `ProjectScopeProvider` (the routes mount
+  // it; `AppShellContainer` wraps the routes) — the URL prefix is the only scope they have.
+  const mountedAtUrl = (pathname: string, health: unknown, projects: unknown) => {
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.health, health)
+    client.setQueryData(workspaceQueryKeys.projects, { projects })
+    return function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={[pathname]}>{children}</MemoryRouter>
         </QueryClientProvider>
       )
     }
@@ -1135,6 +1153,20 @@ describe('useForgeKind', () => {
     // `proj-b` has no forge remote at all; health's kind is the boot project's.
     const { result } = renderHook(() => useForgeKind(), { wrapper: mounted('proj-b', GITLAB_HEALTH, REGISTRY) })
     expect(result.current).toBeUndefined()
+  })
+
+  it('reads the viewed project from the URL where no scope provider is mounted (the shell, the palette)', () => {
+    const { result } = renderHook(() => useForgeKind(), { wrapper: mountedAtUrl('/p/proj-gl/github', GITHUB_HEALTH, REGISTRY) })
+    expect(result.current).toBe('gitlab')
+    const nonForge = renderHook(() => useForgeKind(), { wrapper: mountedAtUrl('/p/proj-b/tasks', GITLAB_HEALTH, REGISTRY) })
+    expect(nonForge.result.current).toBeUndefined()
+  })
+
+  it('answers for the boot project on an unprefixed page and on the reserved `default` alias', () => {
+    const global = renderHook(() => useForgeKind(), { wrapper: mountedAtUrl('/tasks', GITHUB_HEALTH, REGISTRY) })
+    expect(global.result.current).toBe('github')
+    const alias = renderHook(() => useForgeKind(), { wrapper: mountedAtUrl('/p/default/github', GITHUB_HEALTH, REGISTRY) })
+    expect(alias.result.current).toBe('github')
   })
 
   it('answers from health while the registry has not loaded', () => {

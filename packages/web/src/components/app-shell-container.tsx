@@ -185,7 +185,7 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
           // the chips: the nav must not claim a GitHub tab it cannot back. The Tools menu's
           // forge note says why it is absent.
           forgeAvailable={health.data?.forge?.available === true}
-          // Same source as the title above — the boot folder's health-level answer (Step 3.8).
+          // Same source as the title above — the viewed project's kind, read from the URL (`useForgeKind`).
           forgeKind={forgeKind}
           // Hidden unless health reports the opt-in inbox (#471) — same honesty rule as above:
           // the nav must not offer an Inbox this server will never fill.

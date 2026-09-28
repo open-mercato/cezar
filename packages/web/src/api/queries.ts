@@ -84,6 +84,7 @@ import {
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
+import { useActiveProjectId } from '@/lib/project-router'
 import { isReferenceStatus } from '@/lib/reference-status'
 import { forgeRepoBase, type ForgeRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
@@ -919,7 +920,12 @@ export function useProjectRepoBase(): ForgeRepoBase | undefined {
 export function useForgeKind(): ForgeKind | undefined {
   const health = useHealth().data
   const projects = useProjects().data?.projects
-  const { projectId } = useProjectScope()
+  // The provider's id where one is mounted, else the URL prefix: the shell and the ⌘K palette —
+  // the document title, the nav label and the chips' `ReferenceForgeScope` — sit ABOVE every
+  // `ProjectScopeProvider`, so the context alone would answer the boot project on every page.
+  // `default` is the reserved boot alias, the same as no prefix.
+  const activeProjectId = useActiveProjectId()
+  const projectId = activeProjectId === 'default' ? null : activeProjectId
   const scopedId = projectId ?? health?.bootProject
   const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
   // `forge` is omitted for a project with no forge remote, and for a registry payload predating
