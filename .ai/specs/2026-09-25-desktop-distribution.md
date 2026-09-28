@@ -41,6 +41,14 @@ nothing), and:
    | macOS (x64) | `cezar-macos-x86_64.dmg` |
    | Windows | `cezar-windows-x86_64-setup.exe` (NSIS) |
    | Linux | `cezar-linux-x86_64.AppImage` (+ `.deb` versioned) |
+   | Arch Linux (Omarchy, Manjaro, EndeavourOS) | `cezar-linux-x86_64.pkg.tar.zst` — `sudo pacman -U <file>` |
+
+   The Arch package is its own job (`arch`): it repackages the `.deb`'s binary with
+   `packages/desktop/arch/PKGBUILD` inside an `archlinux` container, installs the result with
+   `pacman -U` and fails if `ldd` finds a library Arch does not provide. It runs against the
+   system's WebKitGTK, which the AppImage cannot. Two limits: the in-app shell updater only
+   replaces AppImages, so a pacman install is updated by installing the next package; and the
+   package is not in the AUR — publishing there needs an AUR account and is a follow-up.
 
    Stable names are the contract: `https://github.com/open-mercato/cezar/releases/download/desktop-latest/<asset>`
    always resolves to the newest shell, so the landing page and package-manager manifests never
