@@ -462,8 +462,13 @@ fn check_cezar_update(app: &AppHandle, shell: &Shell) {
     }
 }
 
-/// Tell the page there is something newer. The desktop-aware cockpit ignores this (it paints
-/// its own button from the sidecar's check); a legacy one grows the button in its strip.
+/// Whether the legacy strip's version chip has anything to offer.
+fn switcher_has_choices(installed: usize) -> bool {
+    installed > 1
+}
+
+/// Tell the page which version runs. The desktop-aware cockpit ignores this (it paints its own
+/// chip); a legacy one grows the switcher in its strip.
 fn offer_version(window: &WebviewWindow, version: &str) {
     let _ = window.eval(&format!(
         "window.__CEZ_DESKTOP__ && window.__CEZ_DESKTOP__.showVersion && window.__CEZ_DESKTOP__.showVersion({})",
@@ -731,8 +736,12 @@ fn supervise(app: AppHandle, shell: Arc<Shell>) {
             let generation = pid;
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(4));
-                if let (Some(version), Some(window)) = (shell.running_version.lock().unwrap().clone(), app.get_webview_window("main")) {
-                    offer_version(&window, &version);
+                // The chip is a SWITCHER: with one version installed it would open a list of
+                // one. The version itself is already in the cockpit's sidebar and in the menu.
+                if switcher_has_choices(installed_versions().len()) {
+                    if let (Some(version), Some(window)) = (shell.running_version.lock().unwrap().clone(), app.get_webview_window("main")) {
+                        offer_version(&window, &version);
+                    }
                 }
                 check_cezar_update(&app, &shell);
                 std::thread::sleep(Duration::from_secs(30 * 60));
@@ -1467,6 +1476,13 @@ mod tests {
     /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
     /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
     /// onto the brand row (shell 0.1.1).
+    #[test]
+    fn the_version_switcher_needs_something_to_switch_to() {
+        assert!(!switcher_has_choices(0));
+        assert!(!switcher_has_choices(1));
+        assert!(switcher_has_choices(2));
+    }
+
     #[test]
     fn the_legacy_inset_spares_what_the_shell_adds() {
         let rule = INIT_SCRIPT.split("padding-top:28px!important").next().unwrap();
