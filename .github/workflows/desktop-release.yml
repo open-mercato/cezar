@@ -261,6 +261,40 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      # The Linux leg builds two installers and the matrix names one: the .deb gets its
+      # versionless copy here, so its download link survives a release like the others do.
+      - name: Upload the versionless .deb
+        if: runner.os == 'Linux'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          STABLE: cezar-linux-x86_64.deb
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          shopt -s nullglob
+          files=( src-tauri/target/release/bundle/deb/*.deb )
+          if [ ${#files[@]} -eq 0 ]; then echo "::error::no .deb was built"; exit 1; fi
+          cp "${files[0]}" "$STABLE"
+          sha256sum "$STABLE" > "$STABLE.sha256"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry run: $STABLE is kept as a run artifact"
+          else
+            gh release upload "$TAG" "$STABLE" "$STABLE.sha256" --clobber
+          fi
+
+      - name: Keep the .deb as a run artifact (dry run)
+        if: ${{ inputs.dry_run && runner.os == 'Linux' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cezar-linux-x86_64.deb
+          path: |
+            ${{ env.DESKTOP_DIR }}/cezar-linux-x86_64.deb
+            ${{ env.DESKTOP_DIR }}/cezar-linux-x86_64.deb.sha256
+          if-no-files-found: error
+          retention-days: 7
+
       # The Arch package is made from the Debian build, in its own job.
       - name: Hand the .deb to the Arch job
         if: runner.os == 'Linux'
@@ -382,7 +416,7 @@ jobs:
           # Every installer or none: `--clobber` replaces by name, so a file missing here would
           # leave the PREVIOUS release's asset under the same permanent URL — a download page
           # that silently mixes versions.
-          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage cezar-linux-x86_64.pkg.tar.zst; do
+          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage cezar-linux-x86_64.deb cezar-linux-x86_64.pkg.tar.zst; do
             if ! gh release download "$TAG" --repo "$REPO" --pattern "$f" --dir rolling; then
               echo "::error::$f is not on $TAG — desktop-latest left untouched"
               exit 1
@@ -421,7 +455,7 @@ jobs:
             echo ""
             echo "| Platform | Stable download |"
             echo "|---|---|"
-            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage cezar-linux-x86_64.pkg.tar.zst; do
+            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage cezar-linux-x86_64.deb cezar-linux-x86_64.pkg.tar.zst; do
               echo "| \`$f\` | https://github.com/${REPO}/releases/download/desktop-latest/$f |"
             done
             echo ""

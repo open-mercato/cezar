@@ -40,7 +40,8 @@ nothing), and:
    | macOS (arm64) | `cezar-macos-aarch64.dmg` |
    | macOS (x64) | `cezar-macos-x86_64.dmg` |
    | Windows | `cezar-windows-x86_64-setup.exe` (NSIS) |
-   | Linux | `cezar-linux-x86_64.AppImage` (+ `.deb` versioned) |
+   | Linux (any distribution) | `cezar-linux-x86_64.AppImage` |
+   | Debian, Ubuntu | `cezar-linux-x86_64.deb` |
    | Arch Linux (Omarchy, Manjaro, EndeavourOS) | `cezar-linux-x86_64.pkg.tar.zst` — `sudo pacman -U <file>` |
 
    The Arch package is its own job (`arch`): it repackages the `.deb`'s binary with
