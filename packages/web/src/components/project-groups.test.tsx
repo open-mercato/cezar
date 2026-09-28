@@ -239,7 +239,7 @@ describe('ProjectGroups', () => {
       project({ id: 'lab', name: 'lab', forge: 'gitlab', lastOpenedAt: '2026-07-19T00:00:00.000Z' }),
     ])
 
-    await waitFor(() => expect(header('lab').getAttribute('aria-expanded')).toBe('true'))
+    await waitFor(() => expect(disclosure('lab').getAttribute('aria-expanded')).toBe('true'))
     const cezarNav = within(group('cezar')).getByRole('navigation', { name: 'cezar navigation' })
     expect(within(cezarNav).getByRole('link', { name: 'GitHub' }).getAttribute('href')).toBe('/p/cezar/github')
     const labNav = within(group('lab')).getByRole('navigation', { name: 'lab navigation' })
