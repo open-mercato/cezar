@@ -27,6 +27,9 @@ export interface SelfUpdateDeps {
   /** Hosted mode trims the absolute entry path off the wire (#431). */
   trimPaths?: () => boolean;
   supervised?: boolean;
+  /** Report only: `capability()` answers false whatever the install kind, so `apply()` can
+   *  never install or activate. For a service that has no way to restart the process. */
+  readOnly?: boolean;
   env?: NodeJS.ProcessEnv;
   registry?: RegistryCache;
 }
@@ -156,6 +159,7 @@ export class SelfUpdateService {
   }
 
   capability(): { canSelfUpdate: boolean; reason?: string } {
+    if (this.deps.readOnly) return { canSelfUpdate: false, reason: 'This cezar was started without an updater.' };
     switch (this.installKind) {
       case 'managed':
         return { canSelfUpdate: true };

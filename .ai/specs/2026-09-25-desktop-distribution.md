@@ -29,7 +29,7 @@ security fix lands, or the icon/name/signing identity changes. Never for a cezar
 
 1. **prepare** — verifies the tag equals `packages/desktop/src-tauri/tauri.conf.json`'s
    `version` (a mismatched tag fails before any build) and creates a draft release.
-2. **build** (matrix) — macOS Apple silicon, macOS Intel, Windows x64, Linux x64, through
+2. **build** (matrix) — macOS Apple silicon, macOS Intel, Linux x64 (Windows is deliberately absent, see below), through
    `tauri-apps/tauri-action`. Each job uploads the versioned bundle AND a **stable, versionless
    copy** plus its `.sha256`:
 
@@ -37,7 +37,7 @@ security fix lands, or the icon/name/signing identity changes. Never for a cezar
    | --- | --- |
    | macOS (arm64) | `cezar-macos-aarch64.dmg` |
    | macOS (x64) | `cezar-macos-x86_64.dmg` |
-   | Windows | `cezar-windows-x86_64-setup.exe` (NSIS) |
+   | Windows | none yet — the shell cannot start there (see "Windows is not built") |
    | Linux | `cezar-linux-x86_64.AppImage` (+ `.deb` versioned) |
 
    Stable names are the contract: `https://github.com/open-mercato/cezar/releases/download/desktop-latest/<asset>`
@@ -184,6 +184,23 @@ A locally built bundle (no Developer ID) opens fine on the machine that built it
 quarantine flag. The same bundle DOWNLOADED by someone else is what Gatekeeper refuses; that is
 the signing checklist above, not a packaging gap.
 
+## What verifies the shell
+
+`packages/desktop` is outside the npm workspaces, so the main CI job never compiles it.
+`.github/workflows/desktop-check.yml` does, on every pull request and push that touches
+`packages/desktop/**`: `cargo check --locked --all-targets` and `cargo test --locked` on Linux,
+with no bundling, signing or secrets. Platform-gated code (`cfg(target_os = "macos")`, the
+overlay title bar) is only compiled by the release build.
+
+## Who may call the shell's commands
+
+The capability file grants the three app commands to `http://127.0.0.1:*` and
+`http://localhost:*`, because its URL patterns are static and the sidecar's port is picked at
+launch. The narrowing is in the code: every command starts with `caller_is_trusted`, which
+admits the splash and the cockpit **on the port this shell spawned** and nothing else, and
+`on_navigation` applies the same rule, so a link to another local server (a dev server on
+`localhost:3000`) opens in the browser instead of taking over the window.
+
 ## Downstream pointers (in the order to add them)
 
 1. **Landing page "Download"** — a static page (Cloudflare/GitHub Pages) with OS detection and
@@ -235,6 +252,11 @@ of them is the one case where the shell must ship BEFORE the cezar version that 
 
 ## Open items
 
+- **Windows is not built.** The shell runs node and npm through POSIX `sh` scripts
+  (`login_shell`, `update_cezar`, `spawn_sidecar` in `src-tauri/src/lib.rs`); `cmd /C` cannot run
+  them, so a Windows build stops at "Node.js was not found" with Node installed. The release
+  matrix has no Windows leg until those three have a Windows-native path — an installer under
+  a permanent URL that opens to a dead screen is worse than no installer.
 - Windows signing, Flathub, universal macOS binary (two dmgs today).
 - A `cezar desktop` version chip somewhere in the cockpit (the sidecar knows `CEZ_DESKTOP`,
   the shell version could ride along in an env var) so a bug report names both versions.

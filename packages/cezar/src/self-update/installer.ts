@@ -33,6 +33,8 @@ function readJson(path: string): unknown {
 export interface InstallOptions {
   onLog?: (line: string) => void;
   env?: NodeJS.ProcessEnv;
+  /** The npm runner; tests substitute one that touches no network. */
+  runNpm?: typeof runNpm;
 }
 
 export interface InstallResult {
@@ -66,7 +68,7 @@ export async function installFromLocal(packageRoot: string, opts: InstallOptions
   mkdirSync(packDir, { recursive: true });
   try {
     opts.onLog?.(`packing ${packageRoot}`);
-    await runNpm(['pack', '--pack-destination', packDir, '--silent'], packageRoot, opts.onLog);
+    await (opts.runNpm ?? runNpm)(['pack', '--pack-destination', packDir, '--silent'], packageRoot, opts.onLog);
     const tarball = readdirSync(packDir).find((name) => name.endsWith('.tgz'));
     if (!tarball) throw new Error('npm pack produced no tarball');
     // A local reinstall replaces the previous local build of the same version — it is the
@@ -93,7 +95,7 @@ async function installSpec(
   mkdirSync(staging, { recursive: true });
   try {
     opts.onLog?.(`npm install --prefix ${staging} ${spec}`);
-    await runNpm(
+    await (opts.runNpm ?? runNpm)(
       ['install', '--prefix', staging, '--omit=dev', '--no-audit', '--no-fund', '--no-package-lock', '--loglevel=notice', spec],
       staging,
       opts.onLog,

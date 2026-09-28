@@ -1,0 +1,68 @@
+name: Desktop check
+
+# Compiles and tests the desktop shell (packages/desktop) on every change to it. The shell sits
+# OUTSIDE the npm workspaces, so the main CI job never sees it, and `desktop-release.yml` only
+# runs on a `desktop-v*` tag — without this job the first thing to compile a change to
+# `src-tauri/` would be the release itself, on every runner at once.
+#
+# `cargo check` and `cargo test` only: no bundling, no signing, no secrets. Linux is the cheapest
+# runner that can build it; platform-specific code is `cfg`-gated and stays the release build's
+# to prove.
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'packages/desktop/**'
+      - '.github/workflows/desktop-check.yml'
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - 'packages/desktop/**'
+      - '.github/workflows/desktop-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-check-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Desktop shell (cargo check + test)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          # Pinned by SHA, so the action cannot read the toolchain from its own ref name.
+          toolchain: stable
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: packages/desktop/src-tauri
+
+      # The same list as desktop-release.yml's Linux leg.
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: cargo check
+        working-directory: packages/desktop/src-tauri
+        run: cargo check --locked --all-targets
+
+      - name: cargo test
+        working-directory: packages/desktop/src-tauri
+        run: cargo test --locked

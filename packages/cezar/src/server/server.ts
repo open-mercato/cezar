@@ -1196,8 +1196,9 @@ export function createApp(deps: ServerDeps) {
   const openFile = deps.openFile ?? openFileInDefaultApp;
   const openApp = deps.openApp ?? openInApp;
   const skillsUpdate = deps.skillsUpdate ?? new SkillsUpdateService();
-  // No injected updater (tests, embedded callers): a service over the running entry that can
-  // only ever report — its `restart` is a no-op, so nothing here can exit a test process.
+  // No injected updater (tests, embedded callers): a READ-ONLY service over the running entry.
+  // It has no way to restart the process, so it must not install either — an install that
+  // flips `current` under a process that keeps running the old code is the worst of both.
   const selfUpdate =
     deps.selfUpdate ??
     new SelfUpdateService({
@@ -1205,6 +1206,7 @@ export function createApp(deps: ServerDeps) {
       version: deps.version,
       entry: process.argv[1] ?? '',
       restart: () => {},
+      readOnly: true,
       trimPaths: () => !capabilities().localHandoff,
     });
 

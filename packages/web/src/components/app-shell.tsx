@@ -328,8 +328,9 @@ export const AppShell = React.memo(function AppShell({
 /**
  * The title strip's "Update cezar" button (desktop shell only): shown whenever the channel the
  * cockpit follows has something newer than what is running, sitting right after the traffic
- * lights where the native title would be. One click starts the update — the dialog opens to
- * show the install log and the restart, it does not ask again.
+ * lights where the native title would be. With nothing running, one click starts the update and
+ * the dialog shows the install log and the restart. With tasks in flight the dialog opens to its
+ * warning instead and waits for "Update & restart": a restart interrupts them.
  */
 function TitlebarUpdateButton({ latestVersion }: { latestVersion: string }) {
   const [open, setOpen] = React.useState(false)

@@ -98,12 +98,11 @@ jobs:
             args: --target x86_64-apple-darwin
             stable: cezar-macos-x86_64.dmg
             glob: 'src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg'
-          - name: Windows
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
-            args: ''
-            stable: cezar-windows-x86_64-setup.exe
-            glob: 'src-tauri/target/release/bundle/nsis/*-setup.exe'
+          # NO Windows leg, on purpose. The shell drives node and npm through POSIX `sh` scripts
+          # (`login_shell` in src-tauri/src/lib.rs), which `cmd /C` cannot run: a Windows build
+          # installs and then stops at "Node.js was not found". Publishing that under a permanent
+          # download URL would be shipping a dead screen — add the leg back together with a
+          # Windows-native `login_shell`, `update_cezar` and `spawn_sidecar`.
           - name: Linux
             os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
@@ -238,13 +237,18 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir rolling
-          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage desktop-latest.json; do
-            gh release download "$TAG" --repo "$REPO" --pattern "$f" --dir rolling || echo "::warning::$f is not on $TAG"
+          # Every installer or none: `--clobber` replaces by name, so a file missing here would
+          # leave the PREVIOUS release's asset under the same permanent URL — a download page
+          # that silently mixes versions.
+          for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-linux-x86_64.AppImage; do
+            if ! gh release download "$TAG" --repo "$REPO" --pattern "$f" --dir rolling; then
+              echo "::error::$f is not on $TAG — desktop-latest left untouched"
+              exit 1
+            fi
           done
-          if [ -z "$(ls -A rolling)" ]; then
-            echo "::error::nothing to publish under desktop-latest"
-            exit 1
-          fi
+          # The updater manifest exists only when the signing key does; its absence is already
+          # warned about above and must not block the installers.
+          gh release download "$TAG" --repo "$REPO" --pattern desktop-latest.json --dir rolling 2>/dev/null || true
           SHA=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
           if gh release view desktop-latest --repo "$REPO" >/dev/null 2>&1; then
             gh api -X PATCH "repos/$REPO/git/refs/tags/desktop-latest" -f sha="$SHA" -F force=true >/dev/null
@@ -273,7 +277,7 @@ jobs:
             echo ""
             echo "| Platform | Stable download |"
             echo "|---|---|"
-            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-windows-x86_64-setup.exe cezar-linux-x86_64.AppImage; do
+            for f in cezar-macos-aarch64.dmg cezar-macos-x86_64.dmg cezar-linux-x86_64.AppImage; do
               echo "| \`$f\` | https://github.com/${REPO}/releases/download/desktop-latest/$f |"
             done
             echo ""

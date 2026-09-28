@@ -21,6 +21,7 @@ import { RunStore } from './runs/store.ts';
 import { RunManager } from './workflows/run.ts';
 import { resolveTrackerAgentEnv } from './server/tracker/agent-credentials.ts';
 import { loadWorkflows } from './workflows/load.ts';
+import { resolveCapabilities } from './server/capabilities.ts';
 import { startServer, WorkspaceEventBus } from './server/server.ts';
 import {
   ProviderRuntimeAuthObserver,
@@ -280,7 +281,9 @@ async function serveCommand(
   let httpServer: ReturnType<typeof startServer> | null = null;
   const selfUpdate = buildSelfUpdateService({
     activeRuns: () => store.listRuns().filter((r) => ['queued', 'waiting', 'running'].includes(r.status)).length,
-    trimPaths: () => process.env.CEZ_REMOTE === '1' || (bindHost !== undefined && !['127.0.0.1', 'localhost', '::1'].includes(bindHost)),
+    // The server's own predicate, not a second spelling of it: the `/apply` guard decides hosted
+    // mode through `resolveCapabilities`, and the two must never disagree (they did, on 127.0.0.2).
+    trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
     restart: () => {
       store.flush();
       restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
@@ -373,8 +376,10 @@ async function serveCommand(
       if (!gone) {
         try {
           process.kill(supervisorPid, 0);
-        } catch {
-          gone = true;
+        } catch (error) {
+          // Only "no such process" means gone. EPERM is a supervisor that EXISTS under another
+          // uid — reading that as dead would shut a healthy cockpit down.
+          gone = (error as NodeJS.ErrnoException).code === 'ESRCH';
         }
       }
       if (!gone) return;

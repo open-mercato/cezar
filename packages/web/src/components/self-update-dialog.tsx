@@ -39,7 +39,9 @@ export function SelfUpdateDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
   /** Start installing this version as soon as the status confirms it can (the title strip's
-   *  "Update cezar" button): the dialog then only shows progress. Fires once per mount. */
+   *  "Update cezar" button): the dialog then only shows progress. Fires once per mount, and
+   *  ONLY when no task is running — a restart interrupts running tasks, so with any in flight
+   *  the dialog opens to its warning and waits for "Update & restart" like every other entry. */
   autoApply?: string
 }) {
   const status = useSelfUpdate(open)
@@ -53,12 +55,23 @@ export function SelfUpdateDialog({
   useEffect(() => {
     if (!autoApply || autoApplied.current || !data) return
     if (!data.canSelfUpdate || data.job) return
+    // Decided once, on the first status: tasks that finish while the dialog is open must not
+    // start an install the user has not asked for a second time.
     autoApplied.current = true
+    if (data.activeRuns > 0) return
     apply.mutate(autoApply)
   }, [autoApply, data, apply])
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // An install in flight ends in a restart of the cockpit. Closing the dialog would stop
+        // the polling and leave nothing on screen saying so — it stays until the job settles.
+        if (!next && data?.job?.status === 'running') return
+        onOpenChange(next)
+      }}
+    >
       <DialogContent
         data-slot="self-update-dialog"
         className="sm:max-w-xl"

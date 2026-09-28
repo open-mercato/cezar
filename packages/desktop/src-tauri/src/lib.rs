@@ -14,8 +14,12 @@
 //! updater is never a dead end. That is `npm install --prefix` into the same layout the
 //! cockpit's updater uses — no cezar code needed, any version recoverable.
 //!
-//! No Tauri IPC is exposed to the cockpit beyond window dragging; the splash page is driven
-//! with `eval`.
+//! Three commands are exposed over Tauri IPC — `update_cezar_command`, `retry_start` and
+//! `show_versions_menu` — beside window dragging. The capability has to name loopback with a
+//! port wildcard (the cockpit's port is picked at launch), so the narrowing happens HERE: every
+//! command refuses a caller that is not the splash or the cockpit on the port this shell
+//! spawned (`caller_is_trusted`), and the window itself never navigates to another local server
+//! (`is_own_origin`). A dev server on `localhost:3000` is somebody else's page.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -186,7 +190,8 @@ fn platform_name() -> &'static str {
     }
 }
 
-fn build_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
+fn build_main_window(app: &AppHandle, shell: &Arc<Shell>) -> tauri::Result<WebviewWindow> {
+    let shell_for_navigation = shell.clone();
     let builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
         .title("Cezar")
         .inner_size(1360.0, 900.0)
@@ -204,9 +209,10 @@ fn build_main_window(app: &AppHandle) -> tauri::Result<WebviewWindow> {
             tauri::webview::NewWindowResponse::Deny
         })
         // Same-window navigation stays inside the cockpit (and the splash); a link to anywhere
-        // else is handed to the browser — the shell is the cockpit, not a general browser.
-        .on_navigation(|url| {
-            if is_own_origin(url) {
+        // else — another server on this machine included — is handed to the browser. The shell
+        // is the cockpit, not a general browser, and a page it shows holds its IPC grants.
+        .on_navigation(move |url| {
+            if is_own_origin(url, shell_for_navigation.port.load(Ordering::SeqCst)) {
                 return true;
             }
             open_url(url.as_str());
@@ -387,7 +393,10 @@ fn switch_version(shell: &Shell, id: &str) -> bool {
 /// The legacy strip's "Update cezar" button lands here (capability: `allow-update-cezar` for
 /// the cockpit's origin). Same flow as the menu item.
 #[tauri::command]
-fn update_cezar_command(app: AppHandle, shell: tauri::State<'_, Arc<Shell>>) {
+fn update_cezar_command(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
+    if !caller_is_trusted(&window, &shell) {
+        return;
+    }
     let app = app.clone();
     let shell = shell.inner().clone();
     std::thread::spawn(move || update_cezar(&app, &shell, "Updating cezar…"));
@@ -469,6 +478,9 @@ fn offer_version(window: &WebviewWindow, version: &str) {
 /// native menu at the pointer. Menus are main-thread objects, commands are not.
 #[tauri::command]
 fn show_versions_menu(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
+    if !caller_is_trusted(&window, &shell) {
+        return;
+    }
     use tauri::menu::ContextMenu;
     let shell = shell.inner().clone();
     let handle = app.clone();
@@ -523,7 +535,7 @@ pub fn run() {
         .setup(move |app| {
             app.manage(shell_for_state.clone());
             let handle = app.handle().clone();
-            build_main_window(&handle)?;
+            build_main_window(&handle, &shell_for_setup)?;
             build_menu(&handle, &shell_for_setup)?;
             let shell = shell_for_setup.clone();
             let supervisor_handle = handle.clone();
@@ -572,7 +584,7 @@ pub fn run() {
                     .get_webview_window("main")
                     .and_then(|window| window.url().ok())
                     .filter(|url| url.scheme() == "http")
-                    .map(|url| url.to_string().replacen("127.0.0.1", "localhost", 1));
+                    .map(browser_url);
                 let port = shell_for_menu.port.load(Ordering::SeqCst);
                 match current {
                     Some(url) => open_url(&url),
@@ -803,8 +815,8 @@ fn check_node() -> Result<String, String> {
 /// The splash's "Try again" (after installing Node) lands here: start a supervisor when none
 /// is running. Idempotent — a click while one is alive does nothing.
 #[tauri::command]
-fn retry_start(app: AppHandle, shell: tauri::State<'_, Arc<Shell>>) {
-    if shell.supervising.load(Ordering::SeqCst) {
+fn retry_start(app: AppHandle, window: WebviewWindow, shell: tauri::State<'_, Arc<Shell>>) {
+    if !caller_is_trusted(&window, &shell) || shell.supervising.load(Ordering::SeqCst) {
         return;
     }
     let app = app.clone();
@@ -852,6 +864,9 @@ S="$V/.staging-shell-$$"
 rm -rf "$S"; mkdir -p "$S"
 npm install --prefix "$S" --omit=dev --no-audit --no-fund --no-package-lock --loglevel=notice {package}@{tag}
 VER=$({node} -p "require('$S/node_modules/{package}/package.json').version")
+# The version becomes a path under $V: refuse anything that is not a plain version id, the
+# same rule as assertSafeId in packages/cezar/src/self-update/layout.ts.
+case "$VER" in ""|*..*|*/*|[!0-9A-Za-z]*|*[!0-9A-Za-z.+-]*) echo "refusing version id: $VER" >&2; exit 1;; esac
 test -f "$S/node_modules/{package}/dist/index.js"
 rm -rf "$V/$VER"
 mv "$S" "$V/$VER"
@@ -983,13 +998,31 @@ fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-/// The cockpit (loopback http) and the bundled splash (`tauri://` / `http://tauri.localhost`).
-fn is_own_origin(url: &url::Url) -> bool {
-    match url.scheme() {
-        "tauri" => true,
-        "http" | "https" => matches!(url.host_str(), Some("127.0.0.1") | Some("localhost") | Some("tauri.localhost")),
+/// The bundled splash (`tauri://` / `http://tauri.localhost`) and the cockpit — loopback http on
+/// the port THIS shell spawned it on, and no other. `port` 0 means no sidecar yet: nothing on
+/// loopback is ours.
+fn is_own_origin(url: &url::Url, port: u16) -> bool {
+    match (url.scheme(), url.host_str()) {
+        ("tauri", _) => true,
+        ("http" | "https", Some("tauri.localhost")) => true,
+        ("http", Some("127.0.0.1" | "localhost")) => port != 0 && url.port_or_known_default() == Some(port),
         _ => false,
     }
+}
+
+/// The guard every IPC command starts with: the page asking must be one of ours. The capability
+/// cannot express this (it grants loopback on any port), so the commands do.
+fn caller_is_trusted(window: &WebviewWindow, shell: &Shell) -> bool {
+    window.url().map(|url| is_own_origin(&url, shell.port.load(Ordering::SeqCst))).unwrap_or(false)
+}
+
+/// The same page on `localhost`, for the browser: only the HOST changes, never a `127.0.0.1`
+/// that happens to sit in the path or the query.
+fn browser_url(mut url: url::Url) -> String {
+    if url.host_str() == Some("127.0.0.1") {
+        let _ = url.set_host(Some("localhost"));
+    }
+    url.to_string()
 }
 
 fn open_url(url: &str) {
@@ -1282,4 +1315,41 @@ fn js_string(value: &str) -> String {
 
 fn urlencode(value: &str) -> String {
     url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn url(raw: &str) -> url::Url {
+        url::Url::parse(raw).unwrap()
+    }
+
+    #[test]
+    fn own_origin_is_the_splash_and_the_cockpit_on_the_spawned_port() {
+        assert!(is_own_origin(&url("tauri://localhost/index.html"), 0));
+        assert!(is_own_origin(&url("http://tauri.localhost/"), 4321));
+        assert!(is_own_origin(&url("http://127.0.0.1:4321/p/x/tasks"), 4321));
+        assert!(is_own_origin(&url("http://localhost:4321/"), 4321));
+    }
+
+    #[test]
+    fn another_local_server_is_not_ours() {
+        assert!(!is_own_origin(&url("http://localhost:3000/"), 4321));
+        assert!(!is_own_origin(&url("http://127.0.0.1:4322/"), 4321));
+        assert!(!is_own_origin(&url("http://localhost/"), 4321));
+        assert!(!is_own_origin(&url("https://localhost:4321/"), 4321));
+        assert!(!is_own_origin(&url("https://example.com/"), 4321));
+        // No sidecar yet: nothing on loopback is trusted.
+        assert!(!is_own_origin(&url("http://127.0.0.1:4321/"), 0));
+    }
+
+    #[test]
+    fn browser_url_rewrites_the_host_only() {
+        assert_eq!(
+            browser_url(url("http://127.0.0.1:4321/p/a?from=127.0.0.1")),
+            "http://localhost:4321/p/a?from=127.0.0.1"
+        );
+        assert_eq!(browser_url(url("http://localhost:4321/x")), "http://localhost:4321/x");
+    }
 }

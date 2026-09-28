@@ -96,11 +96,14 @@ export interface PathHookResult {
  * second run looks for. Windows users are told the line; the PoC does not touch the registry.
  */
 export function ensurePathHook(dir: string, env: NodeJS.ProcessEnv = process.env): PathHookResult {
-  const line = `export PATH="${dir.replace(homedir(), '$HOME')}:$PATH" ${PATH_MARKER}`;
+  // The user's home comes from `env`, like every other path in this module: a caller (or a
+  // test) that points HOME elsewhere must never reach the real shell profile.
+  const home = env.HOME || homedir();
+  const line = `export PATH="${dir.replace(home, '$HOME')}:$PATH" ${PATH_MARKER}`;
   if (process.platform === 'win32') return { file: null, line: `setx PATH "%PATH%;${dir}"`, alreadyPresent: false };
   const shell = env.SHELL ?? '';
   const rc = shell.endsWith('/zsh') ? '.zshrc' : shell.endsWith('/bash') ? '.bashrc' : '.profile';
-  const file = join(homedir(), rc);
+  const file = join(home, rc);
   let current = '';
   try {
     current = readFileSync(file, 'utf8');

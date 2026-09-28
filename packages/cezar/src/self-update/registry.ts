@@ -2,7 +2,7 @@
  * npm registry reads for the self-updater. One document per package
  * (`https://registry.npmjs.org/<name>`), zod-validated at the boundary, cached in memory for a
  * few minutes. Silent on any failure — offline must degrade to "nothing known", never an error,
- * exactly like the boot-time check in `update-check.ts` (#368).
+ * exactly like the boot-time check it replaced (#368).
  */
 
 import { z } from 'zod';
