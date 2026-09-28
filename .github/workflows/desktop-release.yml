@@ -165,6 +165,27 @@ jobs:
           echo "apple=$HAS_APPLE" >> "$GITHUB_OUTPUT"
           echo "updater=$HAS_UPDATER_KEY" >> "$GITHUB_OUTPUT"
 
+      # Only when the secrets exist. An APPLE_CERTIFICATE that is present but EMPTY is not "no
+      # signing" to the bundler: it tries to import the empty certificate and the build fails.
+      - name: Hand over the Apple credentials
+        if: runner.os == 'macOS' && steps.signing.outputs.apple == 'true'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            {
+              echo "$name<<CEZAR_EOF_$name"
+              printenv "$name"
+              echo "CEZAR_EOF_$name"
+            } >> "$GITHUB_ENV"
+          done
+
       - name: Build and upload with tauri-action
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
@@ -173,13 +194,8 @@ jobs:
           # a build without it still ships installers, just none an installed shell will adopt.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # macOS signing + notarization (Developer ID). All-or-nothing.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # The APPLE_* variables arrive through "Hand over the Apple credentials" above, and
+          # only when they exist.
         with:
           projectPath: ${{ env.DESKTOP_DIR }}
           # A dry run names no release, and tauri-action then builds without uploading.
@@ -213,7 +229,12 @@ jobs:
           files=( $GLOB )
           if [ ${#files[@]} -eq 0 ]; then echo "::error::no bundle matched $GLOB"; exit 1; fi
           cp "${files[0]}" "$STABLE"
-          shasum -a 256 "$STABLE" > "$STABLE.sha256"
+          # `shasum` on macOS, `sha256sum` on Linux and in the Windows runner's bash.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$STABLE" > "$STABLE.sha256"
+          else
+            shasum -a 256 "$STABLE" > "$STABLE.sha256"
+          fi
           if [ "$DRY_RUN" = "true" ]; then
             echo "dry run: $STABLE is kept as a run artifact"
           else
