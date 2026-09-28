@@ -13,7 +13,14 @@ import {
   type BoundedPages,
 } from './cli.ts';
 import { PUSH_TIMEOUT_MS, preparePublish, tail } from './draft-pr.ts';
-import { FORGE_PR_DIFF_FILE_CAP, FORGE_PR_DIFF_JSON_CAP, FORGE_PR_PATCH_CAP } from './limits.ts';
+import {
+  FORGE_PR_DIFF_FILE_CAP,
+  FORGE_PR_DIFF_JSON_CAP,
+  FORGE_PR_PATCH_CAP,
+  TIMELINE_BUDGET_MS,
+  TIMELINE_MAX_PAGES,
+  TIMELINE_MIN_PAGE_MS,
+} from './limits.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
@@ -792,16 +799,10 @@ export const TIMELINE_EVENT_KINDS = new Set<ForgeTimelineEventKind>([
  *  thread with 150 comments and 100 events returns ~120 comments — silently removing contents
  *  from a §2-protected response. */
 export const TIMELINE_EVENT_CAP = 200;
-/** `gh api --paginate` has no page limit, so the timeline fetch hand-rolls a bounded loop. */
-export const TIMELINE_MAX_PAGES = 10;
-/** ONE budget shared by every page. `gh()`'s timeout is per invocation, so ten pages at the 15 s
- *  default would put the ceiling at 150 s — an order of magnitude worse than the single
- *  `--paginate` spawn this replaces. The loop tracks a deadline and passes what's left. */
-export const TIMELINE_BUDGET_MS = 15_000;
-/** Never spawn a page that cannot finish. A bare `remaining <= 0` guard catches only the exact
- *  boundary; the realistic case is 300 ms left, which spawns `gh` with a 300 ms timeout, throws,
- *  and is indistinguishable from a real endpoint failure. */
-export const TIMELINE_MIN_PAGE_MS = 2_000;
+/** The bounded-pagination budget (`TIMELINE_MAX_PAGES` / `TIMELINE_BUDGET_MS` /
+ *  `TIMELINE_MIN_PAGE_MS`) lives in `limits.ts`, shared with the GitLab adapter; re-exported here
+ *  under the names every existing importer already uses. */
+export { TIMELINE_BUDGET_MS, TIMELINE_MAX_PAGES, TIMELINE_MIN_PAGE_MS };
 /** `committed` messages are trimmed to their first line, then this. */
 const COMMIT_MESSAGE_CAP = 120;
 

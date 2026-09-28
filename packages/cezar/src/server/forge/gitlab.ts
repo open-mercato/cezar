@@ -13,14 +13,18 @@ import {
   GH_CHECKS_MAX,
   GH_SEARCH_MAX,
   GithubPrNotFoundError,
-  TIMELINE_BUDGET_MS,
   TIMELINE_EVENT_CAP,
-  TIMELINE_MAX_PAGES,
-  TIMELINE_MIN_PAGE_MS,
   THREAD_ENTRY_CAP,
 } from './github.ts';
 import type { ParsedRemote } from './index.ts';
-import { FORGE_PR_DIFF_FILE_CAP, FORGE_PR_DIFF_JSON_CAP, FORGE_PR_PATCH_CAP } from './limits.ts';
+import {
+  FORGE_PR_DIFF_FILE_CAP,
+  FORGE_PR_DIFF_JSON_CAP,
+  FORGE_PR_PATCH_CAP,
+  TIMELINE_BUDGET_MS,
+  TIMELINE_MAX_PAGES,
+  TIMELINE_MIN_PAGE_MS,
+} from './limits.ts';
 import type {
   DraftPrInput,
   DraftPrOutcome,
