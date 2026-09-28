@@ -40,6 +40,8 @@ avatars, GitHub", and the violet one as an avatar/social variant.
 - `scripts/build-readme-hero.mjs` — generates `docs/hero/hero-{lang}-{light,dark}.svg`.
   The copy lives in the script, every line's width is measured from a font-metrics table
   and pinned with `textLength`, and the script fails if a line exceeds the box.
+- One CI step (`node scripts/build-readme-hero.mjs --check`, before `npm ci` since it needs
+  no dependencies) so a hand-edited SVG cannot silently fork from the generator.
 - Box width is 380 px so the image barely scales down in GitHub's ~330 px mobile column:
   the headline lands at ≈26 px and the description at ≈19 px there, against 16 px body
   text, and at 30/22 px on desktop — roughly the `<h1>`/`<h2>` sizes the hero had before.
@@ -75,6 +77,7 @@ PR: #1131
 
 - [x] 1.1 Probe what GitHub's sanitizer allows for sizing, and record the result — b009c80b
 - [x] 1.2 Add `scripts/build-readme-hero.mjs` and generate the six hero SVGs — adf64e33
+- [x] 1.3 Guard the generated assets against drift with a CI step
 
 ### Phase 2: READMEs
 
@@ -83,4 +86,5 @@ PR: #1131
 ### Phase 3: Verification
 
 - [x] 3.1 Verify the rendered branch README: hero anchor-free, `<picture>` intact, nav anchors resolve — adf64e33
-- [ ] 3.2 Human QA: open the branch README on a phone and in dark mode
+- [x] 3.2 Verify the drift guard: clean tree passes, a hand-edited SVG exits 1
+- [ ] 3.3 Human QA: open the branch README on a phone and in dark mode
