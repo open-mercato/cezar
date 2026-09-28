@@ -360,14 +360,17 @@ jobs:
             gh release upload "$TAG" desktop-latest.json --clobber --repo "$REPO"
             gh release delete-asset "$TAG" latest.json --yes --repo "$REPO" || true
             echo "updater manifest published"
+          elif gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' | grep -qx desktop-latest.json; then
+            # A re-run of this job alone: the first attempt already renamed it.
+            echo "updater manifest already published as desktop-latest.json"
           else
-            echo "::warning::no updater manifest — TAURI_SIGNING_PRIVATE_KEY is not configured, installed shells will not see this release"
+            echo "::warning::no updater manifest on $TAG — installed shells will not see this release. Is TAURI_SIGNING_PRIVATE_KEY configured?"
           fi
           gh release edit "$TAG" --draft=false --latest=false --repo "$REPO"
 
       # `releases/latest/download/…` follows the repo's "latest" release, and that is cezar's own
       # `v*` release — which carries no installers. The permanent URLs therefore hang off a
-      # ROLLING release, `desktop-latest`, whose tag and assets are replaced on every shell release.
+      # ROLLING release, `desktop-latest`, whose assets are replaced on every shell release.
       - name: Refresh the rolling desktop-latest release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -390,7 +393,9 @@ jobs:
           gh release download "$TAG" --repo "$REPO" --pattern desktop-latest.json --dir rolling 2>/dev/null || true
           SHA=$(gh api "repos/$REPO/commits/$TAG" --jq .sha)
           if gh release view desktop-latest --repo "$REPO" >/dev/null 2>&1; then
-            gh api -X PATCH "repos/$REPO/git/refs/tags/desktop-latest" -f sha="$SHA" -F force=true >/dev/null
+            # The `desktop-latest` TAG stays where the first release put it. Moving a tag is a
+            # ref update the workflow's token is refused (HTTP 403), and nothing reads the tag:
+            # the download links go by release and asset name, and the notes name the version.
             gh release edit desktop-latest --repo "$REPO" --title "cezar desktop (latest: v$VERSION)" \
               --notes "Rolling pointer to the newest desktop release, [$TAG](https://github.com/$REPO/releases/tag/$TAG). Download links on this page never change." \
               --latest=false
