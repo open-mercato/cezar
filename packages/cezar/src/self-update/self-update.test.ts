@@ -1,9 +1,9 @@
 import { existsSync, mkdirSync, mkdtempSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { activate, activeId, assertSafeId, detectInstallKind, installId, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
+import { currentEntry, activate, activeId, assertSafeId, detectInstallKind, installId, listInstalled, versionDir, versionEntry, versionsDir, writeManifest } from './layout.ts';
 import { fetchPackageDocument, registryPath } from './registry.ts';
 import { restartArgs } from './restart.ts';
 import { classifyVersion, compareVersions, isNewer } from './semver.ts';
@@ -66,11 +66,17 @@ describe('managed layout', () => {
 
     activate('0.11.0', env);
     expect(activeId(env)).toBe('0.11.0');
-    expect(readlinkSync(join(versionsDir(env), 'current'))).toBe('0.11.0');
+    // The link's NAME is the id on every platform; its target is relative on POSIX and
+    // absolute on Windows, where `current` is a junction.
+    expect(basename(readlinkSync(join(versionsDir(env), 'current')))).toBe('0.11.0');
+    expect(existsSync(currentEntry(env))).toBe(true);
 
     activate('0.11.1+local', env);
     expect(activeId(env)).toBe('0.11.1+local');
     expect(listInstalled(env).find((entry) => entry.active)?.id).toBe('0.11.1+local');
+    // Replacing a link leaves the version it used to point at in place.
+    expect(existsSync(currentEntry(env))).toBe(true);
+    expect(existsSync(versionEntry('0.11.0', env))).toBe(true);
     expect(existsSync(join(versionsDir(env), `.current.${process.pid}.tmp`))).toBe(false);
     expect(() => activate('9.9.9', env)).toThrow(/not installed/);
   });
