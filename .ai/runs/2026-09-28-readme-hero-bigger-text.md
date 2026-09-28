@@ -77,7 +77,7 @@ PR: #1131
 
 - [x] 1.1 Probe what GitHub's sanitizer allows for sizing, and record the result — b009c80b
 - [x] 1.2 Add `scripts/build-readme-hero.mjs` and generate the six hero SVGs — adf64e33
-- [x] 1.3 Guard the generated assets against drift with a CI step
+- [x] 1.3 Guard the generated assets against drift with a CI step — 9bbefeef
 
 ### Phase 2: READMEs
 
@@ -86,5 +86,5 @@ PR: #1131
 ### Phase 3: Verification
 
 - [x] 3.1 Verify the rendered branch README: hero anchor-free, `<picture>` intact, nav anchors resolve — adf64e33
-- [x] 3.2 Verify the drift guard: clean tree passes, a hand-edited SVG exits 1
+- [x] 3.2 Verify the drift guard: clean tree passes, a hand-edited SVG exits 1 — 9bbefeef
 - [ ] 3.3 Human QA: open the branch README on a phone and in dark mode
