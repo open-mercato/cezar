@@ -1,9 +1,13 @@
 <p align="center">
-  <img src="docs/brand/cezar-icon-violet.svg" alt="cezar" width="96" />
+  <img src="docs/brand/cezar-icon-black.svg" alt="" width="104" />
 </p>
 
 <p align="center">
-  <b>Cezar：協調數百個 AI 編碼代理，全天候 24/7。</b>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/hero/hero-zh-TW-dark.svg" />
+    <img src="docs/hero/hero-zh-TW-light.svg" width="380"
+      alt="Cezar：協調數百個 AI 編碼代理，全天候 24/7。一個面向 Claude Code、Codex、OpenCode 及其他編碼代理的控制台。在本機或 VPS 上執行代理，自動化多步驟工作流程，並讓它們在你離開時繼續工作。" />
+  </picture>
 </p>
 
 <p align="center">
@@ -18,12 +22,6 @@
 </p>
 
 > 本文譯自 README.md @ 33aee0ee；如有出入，以英文版為準。
-
-<p align="center">
-  <b>一個面向 Claude Code、Codex、OpenCode 及其他編碼代理的控制台。</b><br />
-  在本機或 VPS 上執行代理，自動化多步驟工作流程，<br />
-  並讓它們在你離開時繼續工作。
-</p>
 
 <p align="center">
   <a href="LICENSE">
