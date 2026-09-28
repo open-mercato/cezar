@@ -74,15 +74,15 @@ PR: #1131
 ### Phase 1: Direction
 
 - [x] 1.1 Probe what GitHub's sanitizer allows for sizing — b009c80b
-- [x] 1.2 Check how conductor-oss/conductor builds its hero (16 headings, 16 anchors)
-- [x] 1.3 Drop the drawn-text approach: remove `docs/hero/`, the generator and its CI step
+- [x] 1.2 Check how conductor-oss/conductor builds its hero (16 headings, 16 anchors) — 2064eb37
+- [x] 1.3 Drop the drawn-text approach: remove `docs/hero/`, the generator and its CI step — 2064eb37
 
 ### Phase 2: READMEs
 
-- [x] 2.1 Black brand icon in all three READMEs
-- [x] 2.2 Headline back to `<h1>`, description back to `<h2>`, in all three READMEs
+- [x] 2.1 Black brand icon in all three READMEs — 2064eb37
+- [x] 2.2 Headline back to `<h1>`, description back to `<h2>`, in all three READMEs — 2064eb37
 
 ### Phase 3: Verification
 
-- [x] 3.1 Verify the rendered branch README: headings anchored as expected, nav anchors resolve, no dangling references to the removed assets
+- [x] 3.1 Verify the rendered branch README: headings anchored as expected, nav anchors resolve, no dangling references to the removed assets — 2064eb37
 - [ ] 3.2 Human QA: open the branch README on a phone and in dark mode
