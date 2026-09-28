@@ -199,14 +199,31 @@ jobs:
           # so it sits beside the installers as `desktop-latest.json`.
           includeUpdaterJson: ${{ !inputs.dry_run && steps.signing.outputs.updater == 'true' }}
           updaterJsonKeepUniversal: false
+          # macOS without a Developer ID: sign AD-HOC (`signingIdentity: "-"`). Unsigned is not an
+          # option — the linker's own signature does not seal the bundle, and macOS reports a
+          # downloaded app like that as "damaged", with no way for the user to allow it. An
+          # ad-hoc signature gets the ordinary "could not verify" prompt and Open Anyway.
           # Release bundles per platform. `createUpdaterArtifacts` only here (never in the
           # checked-in config) so a local `tauri build` does not demand the signing key.
           args: >-
             ${{ matrix.args }}
-            --config '{"bundle":{"targets":${{ runner.os == 'macOS' && '["app","dmg"]' || runner.os == 'Windows' && '["nsis"]' || '["appimage","deb"]' }},"createUpdaterArtifacts":${{ steps.signing.outputs.updater == 'true' }}}}'
+            --config '{"bundle":{"targets":${{ runner.os == 'macOS' && '["app","dmg"]' || runner.os == 'Windows' && '["nsis"]' || '["appimage","deb"]' }},"createUpdaterArtifacts":${{ steps.signing.outputs.updater == 'true' }}${{ runner.os == 'macOS' && steps.signing.outputs.apple != 'true' && ',"macOS":{"signingIdentity":"-"}' || '' }}}}'
 
       # Stable, versionless copies: the landing page's Download button and the package-manager
       # manifests link these, so shipping a version never means editing a link.
+      # The bundle must be SEALED, whoever signed it: this is the check that fails on the build
+      # macOS calls damaged.
+      - name: Verify the macOS bundle's signature
+        if: runner.os == 'macOS'
+        shell: bash
+        working-directory: ${{ env.DESKTOP_DIR }}
+        run: |
+          shopt -s nullglob
+          apps=( src-tauri/target/*/release/bundle/macos/*.app )
+          if [ ${#apps[@]} -eq 0 ]; then echo "::error::no .app bundle found"; exit 1; fi
+          codesign --verify --deep --strict --verbose=2 "${apps[0]}"
+          codesign -dv "${apps[0]}" 2>&1 | grep -E "Signature|TeamIdentifier|Sealed"
+
       - name: Upload the versionless installer
         shell: bash
         working-directory: ${{ env.DESKTOP_DIR }}
