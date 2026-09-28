@@ -686,6 +686,21 @@ describe('GitLab driver — listComments with timeline events', () => {
     expect(data.events).toHaveLength(8);
   });
 
+  it('leaves no markup in a renamed subject, however the note nests or splits its tags', async () => {
+    // Guard, not a regression test: a single strip pass already reaches the fixpoint for this
+    // regex. It pins that a hostile title rename yields text, never a reassembled tag.
+    routeGlabApi({
+      notes: paged([{ ...NOTE_RENAMED, body: '<p>changed title from a to <scr<b>ipt>x</scr<i>ipt><<b>img src=y></p>' }]),
+      resource_label_events: paged([]),
+      resource_state_events: paged([]),
+    });
+    const driver = createGitlabDriver(freshRoot(), parsed());
+    const data = await driver.listComments!('pr', 3950);
+    const subject = data.events?.find((e) => e.kind === 'renamed')?.subject;
+    expect(subject).toBeDefined();
+    expect(subject).not.toMatch(/<[^>]*>/);
+  });
+
   it('drops an unmapped system note and an unknown state event', async () => {
     routeGlabApi({
       notes: paged([NOTE_UNMAPPED_COMMIT, NOTE_UNMAPPED_REVIEW_REQUEST]),

@@ -423,7 +423,17 @@ function isoOrNull(raw: string): string | null {
  *  into `body`. Stripping tags recovers the plain "changed title from X to Y" text regardless of
  *  how much of X and Y the diff highlighted, without parsing the diff markup itself. */
 function stripHtml(body: string): string {
-  return body.replace(/<[^>]+>/g, '');
+  // Repeated to a fixpoint (CodeQL js/incomplete-multi-character-sanitization). With this regex one
+  // pass already is one — every `<` that has a later `>` is consumed — so the loop costs a single
+  // extra comparison; it keeps that guarantee explicit rather than resting on the regex's shape.
+  // The result is only ever matched against `SYSTEM_NOTE_RULES` and rendered as React text.
+  let plain = body;
+  let previous: string;
+  do {
+    previous = plain;
+    plain = plain.replace(/<[^>]+>/g, '');
+  } while (plain !== previous);
+  return plain;
 }
 
 /** Table-driven, conservative system-note → event mapping (spec Step 3.3): a note whose stripped
