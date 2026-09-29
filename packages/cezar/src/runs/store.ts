@@ -108,6 +108,16 @@ const queuedMessageSchema = z.object({
   createdAt: z.string(),
 });
 
+/** One authoritative PR association for a task. Older records project their scalar fields
+ * into this list on first append, so no migration is needed. */
+const prRefSchema = z.object({
+  number: z.number().int().positive().max(MAX_REF),
+  url: z.string().url().optional(),
+  origin: z.enum(['created', 'marker', 'legacy', 'derived']),
+  at: z.string().datetime(),
+});
+export type RunPrRef = z.infer<typeof prRefSchema>;
+
 /** Exported for `./run-index.ts`, the read-only reader of the same file. Nothing else should
  *  parse `runs.json` — see `reconcileLoadedRun` for why a second parser is a correctness risk. */
 export const runRecordSchema = z.object({
@@ -281,6 +291,8 @@ export const runRecordSchema = z.object({
    *  regex-extracted from the task prompt, upgradable by the namer's
    *  cross-checked output. Display tier — never gates actions. */
   prNumber: z.number().optional(),
+  /** Ordered, deduplicated PR associations. Optional for pre-list runs.json records. */
+  prRefs: z.array(prRefSchema).max(8).optional().catch(undefined),
   issueNumber: z.number().optional(),
   /** Provenance for an `issueNumber` seeded by referenced-issue discovery.
    *  Persisted so ambiguity can revoke only the janitor's own value, including
@@ -604,6 +616,64 @@ function refUrlNumber(url: string | undefined): number | undefined {
   if (!url) return undefined;
   const n = Number(url.split('/').pop());
   return Number.isInteger(n) && n > 0 && n < MAX_REF ? n : undefined;
+}
+
+const PR_REF_CAP = 8;
+const PR_REF_RANK: Record<RunPrRef['origin'], number> = {
+  created: 0,
+  marker: 1,
+  legacy: 2,
+  derived: 3,
+};
+
+function legacyPrRefs(run: RunRecord): RunPrRef[] {
+  const at = run.createdAt;
+  const refs: RunPrRef[] = [];
+  const created = refUrlNumber(run.pullRequestUrl);
+  if (created !== undefined) refs.push({ number: created, url: run.pullRequestUrl, origin: 'created', at });
+  const declared = run.markerRefs?.pr;
+  const referenced = refUrlNumber(run.referencedPullRequestUrl);
+  if (declared !== undefined) refs.push({ number: declared, url: run.referencedPullRequestUrl, origin: 'marker', at });
+  else if (referenced !== undefined && referenced !== created) refs.push({ number: referenced, url: run.referencedPullRequestUrl, origin: 'legacy', at });
+  if (run.prNumber !== undefined && !refs.some((ref) => ref.number === run.prNumber)) {
+    refs.push({ number: run.prNumber, origin: 'derived', at });
+  }
+  return refs;
+}
+
+function primaryPrRef(refs: RunPrRef[]): RunPrRef | undefined {
+  return refs.reduce<RunPrRef | undefined>((best, ref) =>
+    !best || PR_REF_RANK[ref.origin] < PR_REF_RANK[best.origin] ? ref : best,
+  undefined);
+}
+
+function appendPrRefToRun(run: RunRecord, ref: Omit<RunPrRef, 'at'> & { at?: string }): boolean {
+  const hadList = !!run.prRefs;
+  const refs = run.prRefs ?? legacyPrRefs(run);
+  const at = ref.at ?? new Date().toISOString();
+  const existing = refs.find((candidate) => candidate.number === ref.number);
+  let changed = !hadList;
+  if (existing) {
+    if (!existing.url && ref.url) {
+      existing.url = ref.url;
+      changed = true;
+    }
+  } else {
+    refs.push({ ...ref, at });
+    changed = true;
+    while (refs.length > PR_REF_CAP) {
+      const primary = primaryPrRef(refs);
+      const removable = refs.findIndex((candidate) => candidate !== primary && candidate.origin === 'derived');
+      refs.splice(removable >= 0 ? removable : primary ? refs.findIndex((candidate) => candidate !== primary) : 0, 1);
+    }
+  }
+  run.prRefs = refs;
+  const primary = primaryPrRef(refs);
+  const nextNumber = primary?.number;
+  if (run.prNumber !== nextNumber) changed = true;
+  if (nextNumber === undefined) delete run.prNumber;
+  else run.prNumber = nextNumber;
+  return changed;
 }
 
 /**
@@ -931,6 +1001,16 @@ export class RunStore extends EventEmitter {
       normalized.askParked = undefined;
     }
     Object.assign(run, this.redactPatch(normalized, id));
+    // Keep legacy writers (including workflow resume/naming paths) in sync without requiring
+    // every caller to know about the additive list. The list's provenance still decides the
+    // compatibility scalar, so an inferred number cannot displace a declared/created one.
+    if (normalized.pullRequestUrl) {
+      const number = refUrlNumber(normalized.pullRequestUrl);
+      if (number !== undefined) appendPrRefToRun(run, { number, url: normalized.pullRequestUrl, origin: 'created' });
+    }
+    if (normalized.prNumber !== undefined) {
+      appendPrRefToRun(run, { number: normalized.prNumber, origin: 'derived' });
+    }
     this.touch(run);
     return run;
   }
@@ -1174,6 +1254,7 @@ export class RunStore extends EventEmitter {
         const created = CREATED_PR_RE.test(claim) ? createdPrUrl(`${claim} ${haystack}`) : undefined;
         if (created) {
           this.updateRun(runId, { pullRequestUrl: created });
+          this.recordPrRef(runId, { number: refUrlNumber(created)!, url: created, origin: 'created' });
           // Adopting the created tier can RELEASE a declaration the referenced tier was holding
           // (see `referencedPrDeclaration`), so re-resolve here too: the about-PR must come back
           // whether the marker arrived before the creation evidence or after it.
@@ -1299,9 +1380,7 @@ export class RunStore extends EventEmitter {
     // `prNumber` is the about-PR as well (it is what paints a numeric-only chip), so a
     // re-declaration naming the created PR only FILLS it — it never overwrites the number the
     // task came in with, which is still the PR this task is about.
-    if (refs.pr !== undefined && (run.prNumber === undefined || refs.pr !== refUrlNumber(run.pullRequestUrl))) {
-      run.prNumber = refs.pr;
-    }
+    if (refs.pr !== undefined) this.recordPrRef(runId, { number: refs.pr, origin: 'marker' });
     if (refs.issue !== undefined) {
       run.issueNumber = refs.issue;
       delete run.referencedIssueNumberSeeded;
@@ -1323,6 +1402,14 @@ export class RunStore extends EventEmitter {
       );
     }
     this.touch(run);
+    return run;
+  }
+
+  /** Record an authoritative PR association and recompute the compatibility scalar projection. */
+  recordPrRef(runId: string, ref: Omit<RunPrRef, 'at'> & { at?: string }): RunRecord | undefined {
+    const run = this.runs.get(runId);
+    if (!run || !Number.isInteger(ref.number) || ref.number <= 0 || ref.number >= MAX_REF) return run;
+    if (appendPrRefToRun(run, ref)) this.touch(run);
     return run;
   }
 

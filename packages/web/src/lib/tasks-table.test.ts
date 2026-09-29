@@ -197,6 +197,20 @@ describe('finishedRunCount', () => {
 })
 
 describe('taskPrUrl', () => {
+  it('projects the primary PR from the ordered association list', () => {
+    const r = run({
+      prRefs: [
+        { number: 7, origin: 'marker', at: '2026-01-01T00:00:00.000Z' },
+        { number: 8, origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
+      ],
+      prNumber: 7,
+    })
+    expect(taskReferences(r, 'https://github.com/o/r')).toEqual([
+      { kind: 'PR', number: 7, url: 'https://github.com/o/r/pull/7' },
+      { kind: 'PR', number: 8, url: 'https://github.com/o/r/pull/8' },
+    ])
+  })
+
   it('prefers the PR the task created over the one it referenced', () => {
     const r = run({
       pullRequestUrl: 'https://github.com/o/r/pull/7',

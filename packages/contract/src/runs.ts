@@ -30,6 +30,15 @@ import { dispatchIntentSchema, dispatchSchema } from './dispatch.ts';
 
 // ---- the record --------------------------------------------------------------------------
 
+/** One authoritative PR association; optional for compatibility with older run records. */
+export const runPrRefSchema = z.object({
+  number: z.number().int().positive(),
+  url: z.string().url().optional(),
+  origin: z.enum(['created', 'marker', 'legacy', 'derived']),
+  at: z.string(),
+});
+export type RunPrRef = z.infer<typeof runPrRefSchema>;
+
 export const runStatusSchema = z.enum([
   'queued',
   'running',
@@ -233,6 +242,7 @@ export const runRecordSchema = z.object({
   referencedPullRequestUrl: z.string().optional(),
   /** The PR/issue number this task is ABOUT (task auto-naming spec) — display tier only. */
   prNumber: z.number().optional(),
+  prRefs: z.array(runPrRefSchema).max(8).optional(),
   issueNumber: z.number().optional(),
   /** Server-side provenance: referenced-issue discovery currently owns `issueNumber`. */
   referencedIssueNumberSeeded: z.boolean().optional(),
@@ -384,6 +394,7 @@ export const runIndexEntrySchema = z.object({
   pullRequestUrl: z.string().optional(),
   referencedPullRequestUrl: z.string().optional(),
   prNumber: z.number().optional(),
+  prRefs: z.array(runPrRefSchema).max(8).optional(),
   issueNumber: z.number().optional(),
   referencedIssueUrl: z.string().optional(),
   markerRefs: z.object({ pr: z.number().optional(), issue: z.number().optional() }).optional(),

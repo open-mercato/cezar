@@ -133,7 +133,27 @@ export function githubRepoBase(remote: string | undefined): string | undefined {
  *  Action gates (Draft PR, Create PR→View PR) must keep reading `pullRequestUrl` directly:
  *  a task that reviewed PR X must still be able to open its own PR from its branch. */
 export function taskPrUrl(run: TaskReferenceInput): string | undefined {
-  return prUrls(run)[0]
+  return taskPrRefs(run)[0]?.url ?? prUrls(run)[0]
+}
+
+export interface TaskPrRef {
+  number: number
+  url?: string
+}
+
+/** Ordered PR associations, with a compatibility projection for records written before prRefs. */
+export function taskPrRefs(run: TaskReferenceInput, repoBase?: string): TaskPrRef[] {
+  if (!run.prRefs?.length) {
+    return prUrls(run)
+      .map((url) => ({ number: Number(prNumber(url)), url }))
+      .filter((ref) => Number.isInteger(ref.number) && ref.number > 0)
+  }
+  const rank = { created: 0, marker: 1, legacy: 2, derived: 3 } as const
+  const refs = [...run.prRefs].sort((a, b) => rank[a.origin] - rank[b.origin])
+  return refs.map((ref) => ({
+    number: ref.number,
+    url: ref.url ?? synthesizeUrl('PR', ref.number, repoBase),
+  }))
 }
 
 /**
@@ -187,6 +207,7 @@ export type TaskReferenceInput = Pick<
   | 'pullRequestUrl'
   | 'referencedPullRequestUrl'
   | 'prNumber'
+  | 'prRefs'
   | 'issueNumber'
   | 'referencedIssueUrl'
   | 'markerRefs'
@@ -246,16 +267,18 @@ export interface TaskReference {
  * Deduped by kind+number, so one reference reached through two fields stays one chip.
  */
 export function taskReferences(run: TaskReferenceInput, repoBase?: string): TaskReference[] {
-  const prs = prUrls(run)
+  const prs = run.prRefs?.length
+    ? taskPrRefs(run, repoBase).map((ref) => ({ number: ref.number, url: ref.url }))
+    : prUrls(run).map((url) => ({ url, number: Number(prNumber(url)) || undefined }))
   const declared = run.markerRefs?.pr
   const sources: { kind: TaskReference['kind']; url?: string; number?: number }[] = [
     // The uncorroborated declaration, ahead of everything (see above). When a URL below does name
     // it, this entry is omitted entirely rather than added and deduped — that keeps the ORDER the
     // ordinary case had, with the created PR first.
-    ...(declared === undefined || prs.some((url) => prNumber(url) === String(declared))
+    ...(declared === undefined || prs.some((ref) => ref.number === declared)
       ? []
       : [{ kind: 'PR' as const, number: declared }]),
-    ...prs.map((url) => ({ kind: 'PR' as const, url })),
+    ...prs.map((ref) => ({ kind: 'PR' as const, url: ref.url, number: ref.number })),
     // Numeric-only: a reference known by number before any URL was scraped. `repoBase` turns it
     // into a real link — see the synthesis note below.
     { kind: 'PR', number: run.prNumber },
