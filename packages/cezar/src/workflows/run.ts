@@ -3665,7 +3665,8 @@ export class RunManager {
         // hoisted out of the branch below because the heartbeat at the end of this handler
         // needs to know whether the turn parked.
         const nudged =
-          dispatchTurn.rePrompted || (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false);
+          !monitoring &&
+          (dispatchTurn.rePrompted || (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false));
         // Compaction alone never means the user owns the next action (#955). Tried LAST, so
         // every marker, the dispatch rules and the autonomous nudge keep their precedence —
         // the twin of `runAgentStep`'s call, through the one helper both sites share.
@@ -3679,8 +3680,8 @@ export class RunManager {
             // `CEZ:ASK` → park `waiting` (attention) AND surface the structured
             // question as an ask card (#473). `CEZ:MONITORING` → non-attention
             // `running`/`activity:'monitoring'` (#490). Both share the waiting
-            // lifecycle (free the slot, keep the idle timer); the autonomous
-            // nudge above still wins over either.
+            // lifecycle (free the slot, keep the idle timer). Monitoring is
+            // checked before the autonomous nudge, so it remains non-attention.
             if (ask) this.recordAsk(runId, sink, ask);
             if (monitoring) {
               this.store.updateRun(runId, { status: 'running', activity: 'monitoring' });
@@ -4525,7 +4526,8 @@ export class RunManager {
         // the second ask. For every non-autonomous run `tryAutonomousNudge` returns at its first
         // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
-          dispatchTurn.rePrompted || (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false);
+          !monitoring &&
+          (dispatchTurn.rePrompted || (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false));
         // The compaction continuation (#955), through the same helper `runContinuation` calls.
         // Deliberately NOT gated on `waiting`: that flag is about who the turn hands control
         // to, and an ordinary intermediate step never hands control to anyone — it is closed
