@@ -7,7 +7,12 @@ import { workspaceQueryKeys } from '@/api/queries'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 
 const applySelfUpdate = vi.hoisted(() => vi.fn())
-vi.mock('@/api/client', async (original) => ({ ...(await original<typeof import('@/api/client')>()), applySelfUpdate }))
+const setSelfUpdateChannel = vi.hoisted(() => vi.fn())
+vi.mock('@/api/client', async (original) => ({
+  ...(await original<typeof import('@/api/client')>()),
+  applySelfUpdate,
+  setSelfUpdateChannel,
+}))
 
 const status: SelfUpdateStatus = {
   version: '0.12.0',
@@ -255,6 +260,7 @@ describe('SelfUpdateDialog', () => {
       latest: { stable: '0.13.0', nightly: null },
       installed: [
         { id: '0.13.0+cez-abc', version: '0.13.0', source: 'link', branch: 'cez/abc', installedAt: '2026-09-29T08:00:00.000Z', active: true },
+        { id: '0.13.0', version: '0.13.0', source: 'registry', installedAt: '2026-09-29T07:00:00.000Z', active: false },
       ],
     })
     const card = (await screen.findByRole('dialog')).querySelector('[data-slot="self-update-latest"]')!
@@ -264,6 +270,36 @@ describe('SelfUpdateDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to v0.13.0' }))
     await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledTimes(1))
     expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0')
+  })
+
+  // "Back to" promises a version already on disk; a nightly never installed is a download.
+  it('offers to install the newest release when it is not on disk', async () => {
+    applySelfUpdate.mockClear()
+    applySelfUpdate.mockReturnValue(new Promise(() => {}))
+    renderDialog({
+      version: '0.13.0',
+      channel: 'nightly',
+      latest: { stable: '0.13.0', nightly: '0.13.0-nightly.20260929.55' },
+      installed: [
+        { id: '0.13.0+cez-abc', version: '0.13.0', source: 'link', branch: 'cez/abc', installedAt: '2026-09-29T08:00:00.000Z', active: true },
+        { id: '0.13.0', version: '0.13.0', source: 'registry', installedAt: '2026-09-29T07:00:00.000Z', active: false },
+      ],
+    })
+    await screen.findByRole('dialog')
+    expect(screen.queryByRole('button', { name: /^Back to/ })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Install v0.13.0-nightly.20260929.55 & restart' }))
+    await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledTimes(1))
+    expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0-nightly.20260929.55')
+  })
+
+  // A server started before the development channel existed answers 400 — say so, and why.
+  it('shows why switching to development failed', async () => {
+    setSelfUpdateChannel.mockRejectedValue(new Error('body must be { channel: "stable" | "nightly" }'))
+    renderDialog()
+    fireEvent.click(await screen.findByRole('radio', { name: 'Development' }))
+    const dialog = await screen.findByRole('dialog')
+    await waitFor(() => expect(dialog.textContent).toContain('Could not switch the channel'))
+    expect(dialog.textContent).toContain('restart cezar')
   })
 
   it('shows no development panel on a release channel', async () => {

@@ -135,6 +135,17 @@ export function SelfUpdateDialog({
               </p>
             ) : null}
 
+            {setChannel.error ? (
+              <p className="text-[12.5px] text-danger">
+                Could not switch the channel: {setChannel.error.message}
+                {/* The cockpit is read from disk on every request, the server only at boot: a rebuilt
+                    worktree can show a channel its still-running server has never heard of. */}
+                {setChannel.variables === 'development'
+                  ? ' The running cezar server predates the Development channel — restart cezar to load it.'
+                  : null}
+              </p>
+            ) : null}
+
             {apply.error ? <p className="text-[12.5px] text-danger">{apply.error.message}</p> : null}
 
             {data.job ? <JobPanel data={data} /> : null}
@@ -229,6 +240,8 @@ function LatestCard({
   if (dev || data.channel === 'development') {
     // Development never offers an update; the way back to releases is the channel toggle.
     const release = data.channel === 'development' ? null : data.latest[data.channel]
+    // "Back to" only when that release is really on disk; otherwise it is a download.
+    const releaseInstalled = release !== null && data.installed.some((entry) => entry.source === 'registry' && entry.id === release)
     return (
       <div
         data-slot="self-update-latest"
@@ -268,7 +281,7 @@ function LatestCard({
           ) : null}
           {release ? (
             <Button size="sm" onClick={() => onApply(release)} disabled={!data.canSelfUpdate || applying || jobBusy}>
-              Back to v{release}
+              {releaseInstalled ? `Back to v${release}` : `Install v${release} & restart`}
             </Button>
           ) : null}
         </div>
