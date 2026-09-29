@@ -62,6 +62,7 @@ import {
   formatCost,
   scheduledResume,
   taskReference,
+  taskReferences,
   usageCells,
   workflowLabel,
   type UsageCell,
@@ -1160,10 +1161,13 @@ export function TasksOverviewRoute() {
       // reference), so asking about the others would be a request for something never shown.
       projectId === undefined
         ? []
-        : (runs.data ?? []).flatMap((run) => {
-            const reference = taskReference(run)
-            return reference ? [{ projectId, kind: reference.kind, number: reference.number }] : []
-          }),
+        : (runs.data ?? []).flatMap((run) =>
+            taskReferences(run).map((reference) => ({
+              projectId,
+              kind: reference.kind,
+              number: reference.number,
+            })),
+          ),
     [runs.data, projectId],
   )
 

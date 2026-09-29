@@ -3,10 +3,11 @@ import type { ApiRun } from '@open-mercato/cezar-api-client'
 
 import { useProjectRun } from '@/api/queries'
 import { ReferenceChip, useCloseReferenceCard } from '@/components/reference-chip'
+import { useReferenceStatusLookup } from '@/components/reference-status'
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { runTitle } from '@/lib/task-groups'
-import { taskReferences } from '@/lib/tasks-table'
+import { prioritizeTaskReferences, taskReferences } from '@/lib/tasks-table'
 import { useAskAnswer } from '@/routes/task-thread/ask-answer'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
@@ -141,6 +142,7 @@ export function TaskReferenceChip({
    *  there is room for words in a panel wherever the row it hangs off is. */
   compact?: boolean
 }) {
+  const { lookup, projectId } = useReferenceStatusLookup()
   // The caller supplies the already-resolved primary (including a repoBase-synthesized URL).
   // Add only additional PRs when that primary is a PR; an issue chip must not suddenly grow an
   // unrelated PR from the run's history, and preserving the supplied primary keeps synthesized
@@ -154,7 +156,16 @@ export function TaskReferenceChip({
               (!!candidate.url && !!reference.url && candidate.url !== reference.url)),
         )
       : []
-  const chips = [reference, ...additional]
+  const chips =
+    reference.number === undefined
+      ? [reference, ...additional]
+      : prioritizeTaskReferences(
+          [{ ...reference, number: reference.number }, ...additional],
+          (candidate) =>
+            projectId
+              ? lookup({ projectId, kind: candidate.kind, number: candidate.number }).status
+              : undefined,
+        )
   return (
     <>
       {chips.map((item, index) => (

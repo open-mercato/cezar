@@ -1,4 +1,9 @@
-import type { ProcessUsage, RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
+import type {
+  ProcessUsage,
+  ReferenceStatus,
+  RunRecord,
+  RunStatus,
+} from '@open-mercato/cezar-api-client'
 import { groupTitle, runTitle, type ListView } from '@/lib/task-groups'
 
 /**
@@ -218,6 +223,22 @@ export interface TaskReference {
   kind: 'PR' | 'Issue'
   number: number
   url?: string
+}
+
+/** Keep historical associations visible, but do not let a PR authoritatively closed without a
+ * merge outrank a live or merged association. Unknown/loading statuses preserve stored order. */
+export function prioritizeTaskReferences(
+  references: readonly TaskReference[],
+  statusOf: (reference: TaskReference) => ReferenceStatus | undefined,
+): TaskReference[] {
+  return references
+    .map((reference, index) => ({ reference, index }))
+    .sort((a, b) => {
+      const aClosed = a.reference.kind === 'PR' && statusOf(a.reference) === 'closed'
+      const bClosed = b.reference.kind === 'PR' && statusOf(b.reference) === 'closed'
+      return Number(aClosed) - Number(bClosed) || a.index - b.index
+    })
+    .map(({ reference }) => reference)
 }
 
 /**

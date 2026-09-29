@@ -14,6 +14,7 @@ import {
   taskPrUrl,
   taskIssueUrl,
   taskReferences,
+  prioritizeTaskReferences,
   usageCells,
   workflowLabel,
 } from '@/lib/tasks-table'
@@ -259,6 +260,19 @@ describe('taskPrUrl', () => {
 
 describe('taskReferences', () => {
   const REPO = 'https://github.com/o/r'
+
+  it('moves only known closed PRs behind live and merged references', () => {
+    const refs = [
+      { kind: 'PR' as const, number: 10 },
+      { kind: 'PR' as const, number: 11 },
+      { kind: 'Issue' as const, number: 12 },
+    ]
+    expect(
+      prioritizeTaskReferences(refs, (reference) =>
+        reference.number === 10 ? 'closed' : reference.number === 11 ? 'merged' : 'completed',
+      ),
+    ).toEqual([refs[1], refs[2], refs[0]])
+  })
 
   it('keeps same-number PRs from different repositories distinct', () => {
     expect(
