@@ -166,6 +166,7 @@ describe('workspace runs index API', () => {
       'issueNumber',
       'referencedIssueUrl',
       'markerRefs',
+      'prRefs',
       'costUsd',
       'peakRssBytes',
       'peakProcCount',

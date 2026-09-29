@@ -6172,6 +6172,7 @@ export function createApp(deps: ServerDeps) {
     for (const number of [run.prNumber, run.issueNumber, run.markerRefs?.pr, run.markerRefs?.issue]) {
       if (typeof number === 'number' && Number.isInteger(number) && number > 0) numbers.push(number);
     }
+    for (const ref of run.prRefs ?? []) numbers.push(ref.number);
     return numbers;
   };
 
@@ -6209,6 +6210,7 @@ export function createApp(deps: ServerDeps) {
       ? { referencedPullRequestUrl: run.referencedPullRequestUrl }
       : {}),
     ...(run.prNumber !== undefined ? { prNumber: run.prNumber } : {}),
+    ...(run.prRefs !== undefined ? { prRefs: run.prRefs } : {}),
     ...(run.issueNumber !== undefined ? { issueNumber: run.issueNumber } : {}),
     ...(run.referencedIssueUrl !== undefined ? { referencedIssueUrl: run.referencedIssueUrl } : {}),
     ...(run.markerRefs !== undefined ? { markerRefs: run.markerRefs } : {}),
