@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import type { ApiRun } from '@open-mercato/cezar-api-client'
 
 import { useProjectRun } from '@/api/queries'
@@ -6,6 +6,7 @@ import { ReferenceChip, useCloseReferenceCard } from '@/components/reference-chi
 import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toaster'
 import { runTitle } from '@/lib/task-groups'
+import { taskReferences } from '@/lib/tasks-table'
 import { useAskAnswer } from '@/routes/task-thread/ask-answer'
 import { resolveConflictsPrompt } from '@/routes/task-thread/run-actions'
 
@@ -140,13 +141,21 @@ export function TaskReferenceChip({
    *  there is room for words in a panel wherever the row it hangs off is. */
   compact?: boolean
 }) {
+  const references = taskReferences(run)
+  const chips = references.length > 0 ? references : [reference]
   return (
-    <ReferenceChip
-      reference={reference}
-      taskTitle={runTitle(run)}
-      conflictAction={<ResolveConflictsButton run={run} prNumber={reference.number} />}
-      className={className}
-      compact={compact}
-    />
+    <span className="inline-flex items-center gap-1">
+      {chips.map((item, index) => (
+        <Fragment key={`${item.kind}-${item.number ?? item.url ?? index}`}>
+          <ReferenceChip
+            reference={item}
+            taskTitle={runTitle(run)}
+            conflictAction={<ResolveConflictsButton run={run} prNumber={item.number} />}
+            className={className}
+            compact={compact}
+          />
+        </Fragment>
+      ))}
+    </span>
   )
 }
