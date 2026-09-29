@@ -292,14 +292,24 @@ export function taskReferences(run: TaskReferenceInput, repoBase?: string): Task
   for (const source of sources) {
     const number = source.url ? Number(prNumber(source.url)) : source.number
     if (!number || !Number.isInteger(number)) continue
-    const key = `${source.kind}#${number}`
-    if (seen.has(key)) continue
-    seen.add(key)
     // A number with no URL becomes one from the PROJECT's own repo — the same synthesis rule
     // `taskIssueUrl` already applies, and the same hard limit: only ever the project's repo,
     // never a URL scraped from a transcript, which routinely names another repository (#526).
     // Without a `repoBase` the chip stays inert text rather than linking somewhere invented.
     const url = source.url ?? synthesizeUrl(source.kind, number, repoBase)
+    const existingIndex = references.findIndex(
+      (reference) =>
+        reference.kind === source.kind &&
+        reference.number === number &&
+        (!reference.url || !url || reference.url === url),
+    )
+    if (existingIndex >= 0) {
+      if (!references[existingIndex]!.url && url) references[existingIndex] = { ...references[existingIndex]!, url }
+      continue
+    }
+    const key = `${source.kind}#${number}#${url ?? ''}`
+    if (seen.has(key)) continue
+    seen.add(key)
     references.push({ kind: source.kind, number, ...(url ? { url } : {}) })
   }
   return references

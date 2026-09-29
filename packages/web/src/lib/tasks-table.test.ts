@@ -260,6 +260,22 @@ describe('taskPrUrl', () => {
 describe('taskReferences', () => {
   const REPO = 'https://github.com/o/r'
 
+  it('keeps same-number PRs from different repositories distinct', () => {
+    expect(
+      taskReferences(
+        run({
+          prRefs: [
+            { number: 7, url: `${REPO}/pull/7`, origin: 'created', at: '2026-01-01T00:00:00.000Z' },
+            { number: 7, url: 'https://github.com/other/r/pull/7', origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
+          ],
+        } as never),
+      ),
+    ).toEqual([
+      { kind: 'PR', number: 7, url: `${REPO}/pull/7` },
+      { kind: 'PR', number: 7, url: 'https://github.com/other/r/pull/7' },
+    ])
+  })
+
   it('returns every reference a task has, strongest first', () => {
     // The real multi-reference case: a review task opened on an issue, ABOUT one PR, having
     // created another. All three are true at once.

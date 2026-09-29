@@ -150,7 +150,8 @@ export function TaskReferenceChip({
       ? taskReferences(run).filter(
           (candidate) =>
             candidate.kind === 'PR' &&
-            (candidate.number !== reference.number || candidate.url !== reference.url),
+            (candidate.number !== reference.number ||
+              (!!candidate.url && !!reference.url && candidate.url !== reference.url)),
         )
       : []
   const chips = [reference, ...additional]
