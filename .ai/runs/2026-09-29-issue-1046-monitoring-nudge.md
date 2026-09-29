@@ -39,8 +39,8 @@ continue caps, and statuses; explain budget-brake parks in the cockpit.
 
 ### Phase 3: Cause 2 budget explanation
 
-- [x] 3.1 Derive a budget-stop attention label from persisted dispatch facts without changing status or schema. — pending commit
-- [x] 3.2 Render spent/ceiling explanation in the run header and paused dock, with UI regressions. — pending commit
+- [x] 3.1 Derive a budget-stop attention label from persisted dispatch facts without changing status or schema. — 3b37b792
+- [x] 3.2 Render spent/ceiling explanation in the run header and paused dock, with UI regressions. — 3b37b792
 
 Follow-up correction: `rePrompted` must retain precedence over the monitoring park in both handlers, because `handleDispatchTurn` may already have delivered an inbox prompt during a monitoring-marked turn. Regression `dispatch-engine.test.ts` fails pre-fix (`activity` is `monitoring`) and passes after the correction.
 
@@ -68,5 +68,5 @@ cap, dispatch, and budget behavior must remain unchanged.
 
 ### Phase 3: Cause 2 budget explanation
 
-- [x] 3.1 Derive a budget-stop attention label from persisted dispatch facts without changing status or schema. — pending commit
-- [x] 3.2 Render spent/ceiling explanation in the run header and paused dock, with UI regressions. — pending commit
+- [x] 3.1 Derive a budget-stop attention label from persisted dispatch facts without changing status or schema. — 3b37b792
+- [x] 3.2 Render spent/ceiling explanation in the run header and paused dock, with UI regressions. — 3b37b792
