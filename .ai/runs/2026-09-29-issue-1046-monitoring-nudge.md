@@ -30,8 +30,8 @@ continue caps, and statuses; leave Cause 2 untouched.
 
 ### Phase 2: Verification and handoff
 
-- [ ] 2.1 Prove the regression tests fail against the pre-fix implementation,
-      then run targeted tests and the full configured validation gate.
+- [x] 2.1 Prove the regression tests fail against the pre-fix implementation,
+      then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; full `npm test` has an unrelated projects API repo-shape failure.
 - [ ] 2.2 Run the authoritative PR review/autofix pass and record the outcome.
 
 ## Risks
@@ -51,5 +51,5 @@ cap, dispatch, and budget behavior must remain unchanged.
 
 ### Phase 2: Verification and handoff
 
-- [ ] 2.1 Prove the regression tests fail against the pre-fix implementation, then run targeted tests and the full configured validation gate.
+- [x] 2.1 Prove the regression tests fail against the pre-fix implementation, then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; full `npm test` has an unrelated projects API repo-shape failure.
 - [ ] 2.2 Run the authoritative PR review/autofix pass and record the outcome.
