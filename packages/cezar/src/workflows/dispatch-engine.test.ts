@@ -440,8 +440,13 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       mkdirSync(inbox, { recursive: true });
       writeFileSync(join(inbox, 'from-parent.md'), '# Redirect\n\nKeep going with the parent\'s latest instruction.\n');
 
-      await waitFor(child.id, () => notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end')), 40_000);
+      // The note is persisted immediately after sendMessage accepts the delivery, while the
+      // mock's stdin writer may flush its JSON line a tick later. Wait for the actual inbound
+      // evidence before asking `delivered` to parse the file; otherwise the regression itself
+      // races the fixture and can report a false failure under suite load.
+      await waitFor(child.id, () => stdin(stdinFile).includes('## Tree inbox'), 40_000);
       expect(delivered(stdinFile, '## Tree inbox')).toContain('from-parent.md');
+      expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(true);
       expect(store.getRun(child.id)?.activity).toBeUndefined();
     }, 60_000);
 

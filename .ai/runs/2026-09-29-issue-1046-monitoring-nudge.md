@@ -36,6 +36,8 @@ continue caps, and statuses; leave Cause 2 untouched.
 
 Follow-up correction: `rePrompted` must retain precedence over the monitoring park in both handlers, because `handleDispatchTurn` may already have delivered an inbox prompt during a monitoring-marked turn. Regression `dispatch-engine.test.ts` fails pre-fix (`activity` is `monitoring`) and passes after the correction.
 
+Reviewer follow-up: the regression now waits for the mock stdin file to contain the delivered inbox block before parsing it; the delivery note can precede that asynchronous file flush under suite load. The product invariant remains asserted, and the test still fails without the `rePrompted` precedence fix.
+
 ## Risks
 
 The two near-identical turn-end handlers can drift. Tests must exercise both.
