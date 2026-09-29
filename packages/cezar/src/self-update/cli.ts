@@ -75,12 +75,20 @@ async function installCommand(opts: SelfUpdateCliOptions): Promise<number> {
 async function updateCommand(opts: SelfUpdateCliOptions): Promise<number> {
   const { service } = opts;
   const requested = opts.channel;
-  if (requested !== undefined && requested !== 'stable' && requested !== 'nightly') {
-    console.error(`  --channel must be stable or nightly (got ${requested})`);
+  if (requested !== undefined && requested !== 'stable' && requested !== 'nightly' && requested !== 'development') {
+    console.error(`  --channel must be stable, nightly or development (got ${requested})`);
     return 1;
   }
   if (requested) await service.setChannel(requested);
   const channel = await service.channel();
+  if (channel === 'development' && !opts.version) {
+    // Development follows no dist-tag: there is no "newest" to update to.
+    console.log('\n  channel development — nothing to update to. Pick a build by hand:');
+    console.log('    cezar link [<worktree>] --use   run a cezar worktree');
+    console.log('    cezar update <version>           install a release or a PR preview (e.g. 0.13.0-pr1169.1234)');
+    console.log('    cezar update --channel stable    go back to releases\n');
+    return 0;
+  }
   const status = await service.status({ refresh: true });
   if (!status.checkedAt) {
     console.error('  ✗ the npm registry did not answer — offline?');

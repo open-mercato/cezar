@@ -5,12 +5,13 @@
  * restart (re-exec, or exit for a supervisor to relaunch — see `restart.ts`).
  */
 
-import type { SelfUpdateJob, SelfUpdateStatus, UpdateChannel } from '@open-mercato/cezar-contract';
+import type { SelfUpdateDevelopment, SelfUpdateJob, SelfUpdateStatus, UpdateChannel } from '@open-mercato/cezar-contract';
 
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { installFromLocal, installFromRegistry } from './installer.ts';
 import { discoverCheckouts } from './checkouts.ts';
 import { activate, detectInstallKind, findInstalled, linkCheckout, listInstalled, packageRootOf, type InstallKind } from './layout.ts';
+import { CEZAR_REPO, fetchOpenPulls, OpenPullsCache, type OpenPulls } from './pulls.ts';
 import { distTagFor, RegistryCache, type PackageDocument } from './registry.ts';
 import { classifyVersion, isNewer } from './semver.ts';
 
@@ -33,6 +34,8 @@ export interface SelfUpdateDeps {
   readOnly?: boolean;
   env?: NodeJS.ProcessEnv;
   registry?: RegistryCache;
+  /** cezar's open pull requests, for the development channel. Defaults to GitHub. */
+  pulls?: () => Promise<OpenPulls>;
 }
 
 export class SelfUpdateBusyError extends Error {
@@ -46,18 +49,21 @@ export class SelfUpdateService {
   private readonly registry: RegistryCache;
   private readonly env: NodeJS.ProcessEnv;
   private job: SelfUpdateJob | null = null;
+  private readonly pulls: OpenPullsCache;
 
   constructor(private readonly deps: SelfUpdateDeps) {
     this.env = deps.env ?? process.env;
     this.installKind = detectInstallKind(deps.entry, this.env);
     this.registry = deps.registry ?? new RegistryCache(deps.pkgName);
+    this.pulls = new OpenPullsCache(deps.pulls ?? (() => fetchOpenPulls(CEZAR_REPO, { env: this.env })));
   }
 
   /** The configured channel: workspace config wins, then `CEZ_UPDATE_CHANNEL`, then stable. */
   async channel(): Promise<UpdateChannel> {
     const config = await loadWorkspaceConfig();
     if (config.updateChannel) return config.updateChannel;
-    return this.env.CEZ_UPDATE_CHANNEL === 'nightly' ? 'nightly' : 'stable';
+    const seed = this.env.CEZ_UPDATE_CHANNEL;
+    return seed === 'nightly' || seed === 'development' ? seed : 'stable';
   }
 
   async setChannel(channel: UpdateChannel): Promise<void> {
@@ -70,8 +76,10 @@ export class SelfUpdateService {
    *  `latestVersion` reports and the version chip pulses for. */
   async updateAvailable(refresh = false): Promise<string | null> {
     const doc = refresh ? await this.registry.refresh() : await this.registry.get();
-    if (!doc) return null;
-    const target = doc.distTags[distTagFor(await this.channel())];
+    const channel = await this.channel();
+    // Development runs whatever was picked by hand; nothing is ever "newer" than a worktree.
+    if (!doc || channel === 'development') return null;
+    const target = doc.distTags[distTagFor(channel)];
     return target && isNewer(target, this.deps.version) ? target : null;
   }
 
@@ -89,12 +97,9 @@ export class SelfUpdateService {
     const installedIds = new Set(installed.map((entry) => entry.id));
     const stable = doc?.distTags.latest ?? null;
     const nightly = doc?.distTags.nightly ?? null;
-    const target = channel === 'stable' ? stable : nightly;
+    const target = channel === 'stable' ? stable : channel === 'nightly' ? nightly : null;
     const { canSelfUpdate, reason } = this.capability();
     const trim = this.deps.trimPaths?.() ?? false;
-    // Linking a checkout runs whatever is in it: a local-machine gesture, never offered (or
-    // accepted — see `apply`) by a hosted cockpit, and never worth a git call there.
-    const checkouts = trim ? [] : await discoverCheckouts(this.env).catch(() => []);
     return {
       version: this.deps.version,
       installKind: this.installKind,
@@ -115,14 +120,6 @@ export class SelfUpdateService {
         ...(entry.branch ? { branch: entry.branch } : {}),
         ...(entry.checkout && !trim ? { checkout: entry.checkout } : {}),
       })),
-      checkouts: checkouts.map((checkout) => ({
-        id: checkout.id,
-        branch: checkout.branch,
-        version: checkout.version,
-        worktree: checkout.worktree,
-        built: checkout.built,
-        linked: checkout.linked,
-      })),
       // Previews (`-pr123.`, `-develop.`) are noise in a picker meant for stable ↔ nightly
       // moves; the PoC lists stable releases and nightlies only.
       available: (doc?.versions ?? [])
@@ -136,6 +133,53 @@ export class SelfUpdateService {
         })),
       job: this.job,
       activeRuns: this.deps.activeRuns?.() ?? 0,
+    };
+  }
+
+  /**
+   * What the development channel picks from: cezar's own worktrees and the open pull requests
+   * with a published preview build. Worktrees only on a local cockpit — linking a checkout runs
+   * whatever is in it, a local-machine gesture a hosted cockpit neither offers nor accepts (see
+   * `linkDiscovered`), and never worth a git call there.
+   */
+  async development(opts: { refresh?: boolean } = {}): Promise<SelfUpdateDevelopment> {
+    const trim = this.deps.trimPaths?.() ?? false;
+    const [checkouts, pulls, doc] = await Promise.all([
+      trim ? Promise.resolve([]) : discoverCheckouts(this.env).catch(() => []),
+      this.pulls.get(opts.refresh),
+      opts.refresh ? this.registry.refresh() : this.registry.get(),
+    ]);
+    const installedIds = new Set(listInstalled(this.env).map((entry) => entry.id));
+    const publishedAt = (version: string) => doc?.versions.find((entry) => entry.version === version)?.publishedAt ?? null;
+    const prByBranch = new Map(pulls.items.map((pull) => [pull.branch, pull.number]));
+    return {
+      checkouts: checkouts.map((checkout) => ({
+        id: checkout.id,
+        branch: checkout.branch,
+        version: checkout.version,
+        worktree: checkout.worktree,
+        built: checkout.built,
+        linked: checkout.linked,
+        commit: checkout.commit,
+        builtAt: checkout.builtAt,
+        stale: checkout.stale,
+        task: checkout.task,
+        pr: prByBranch.get(checkout.branch) ?? null,
+      })),
+      pulls: {
+        available: pulls.available,
+        ...(pulls.reason ? { reason: pulls.reason } : {}),
+        repo: CEZAR_REPO,
+        items: pulls.items.map((pull) => {
+          const version = doc?.distTags[`pr-${pull.number}`] ?? null;
+          return {
+            ...pull,
+            version,
+            publishedAt: version ? publishedAt(version) : null,
+            installed: version ? installedIds.has(version) : false,
+          };
+        }),
+      },
     };
   }
 

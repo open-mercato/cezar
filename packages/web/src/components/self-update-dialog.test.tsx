@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-import type { SelfUpdateStatus } from '@open-mercato/cezar-api-client'
+import type { SelfUpdateDevelopment, SelfUpdateStatus } from '@open-mercato/cezar-api-client'
 import { workspaceQueryKeys } from '@/api/queries'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 
@@ -32,9 +32,84 @@ const status: SelfUpdateStatus = {
   activeRuns: 0,
 }
 
+const development: SelfUpdateDevelopment = {
+  checkouts: [
+    {
+      id: '0.13.0+cez-abc',
+      branch: 'cez/abc',
+      version: '0.13.0',
+      worktree: '/r/wt/abc',
+      built: true,
+      linked: true,
+      commit: { sha: 'a1b2c3d', subject: 'fix(self-update): label worktrees', at: '2026-09-29T08:00:00.000Z' },
+      builtAt: '2026-09-29T08:05:00.000Z',
+      stale: false,
+      task: { id: 'abc', title: 'Switch the desktop app to a worktree', status: 'review' },
+      pr: 1170,
+    },
+    {
+      id: '0.13.0+cez-def',
+      branch: 'cez/def',
+      version: '0.13.0',
+      worktree: '/r/wt/def',
+      built: true,
+      linked: false,
+      commit: { sha: 'd4e5f6a', subject: 'feat: landing check', at: '2026-09-29T07:00:00.000Z' },
+      builtAt: '2026-09-29T06:00:00.000Z',
+      stale: true,
+      task: { id: 'def', title: 'Landing check core', status: 'done' },
+      pr: null,
+    },
+    {
+      id: '0.13.0+cez-ghi',
+      branch: 'cez/ghi',
+      version: '0.13.0',
+      worktree: '/r/wt/ghi',
+      built: false,
+      linked: false,
+      commit: null,
+      builtAt: null,
+      stale: false,
+      task: null,
+      pr: null,
+    },
+  ],
+  pulls: {
+    available: true,
+    repo: 'open-mercato/cezar',
+    items: [
+      {
+        number: 1169,
+        title: 'feat(web): surface the landing-check verdict',
+        author: 'michal-codes',
+        branch: 'feat/landing-check-ui',
+        draft: false,
+        updatedAt: '2026-09-29T13:42:23Z',
+        url: 'https://github.com/open-mercato/cezar/pull/1169',
+        version: '0.13.0-pr1169.1300',
+        publishedAt: '2026-09-29T13:50:00Z',
+        installed: false,
+      },
+      {
+        number: 1160,
+        title: 'docs(adr): outbound PII guard',
+        author: 'marcinorocz',
+        branch: 'feat/outbound-pii-guard',
+        draft: true,
+        updatedAt: '2026-09-29T08:33:23Z',
+        url: 'https://github.com/open-mercato/cezar/pull/1160',
+        version: null,
+        publishedAt: null,
+        installed: false,
+      },
+    ],
+  },
+}
+
 function renderDialog(overrides: Partial<SelfUpdateStatus> = {}, props: { autoApply?: string; onOpenChange?: (open: boolean) => void } = {}) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   queryClient.setQueryData(workspaceQueryKeys.selfUpdate, { ...status, ...overrides })
+  queryClient.setQueryData(workspaceQueryKeys.selfUpdateDevelopment, development)
   return render(
     <QueryClientProvider client={queryClient}>
       <SelfUpdateDialog open onOpenChange={props.onOpenChange ?? (() => {})} autoApply={props.autoApply} />
@@ -95,22 +170,79 @@ describe('SelfUpdateDialog', () => {
     })
   })
 
-  // Developing cezar: the worktrees of a registered cezar repo are one pick away, and the one
-  // running is named in the header by its branch.
-  it('offers cezar worktrees and names a linked one by its branch', async () => {
+  it('offers three channels, and development in place of the release picker', async () => {
+    renderDialog({ channel: 'development' })
+    const dialog = await screen.findByRole('dialog')
+    expect(screen.getByRole('radio', { name: 'Development' }).getAttribute('aria-checked')).toBe('true')
+    expect(dialog.querySelector('[data-slot="self-update-development"]')).toBeTruthy()
+    expect(dialog.querySelector('[data-slot="self-update-picker"]')).toBeNull()
+    // Development follows no tag: never "newest", never an update button.
+    expect(dialog.textContent).not.toContain('newest')
+    expect(screen.queryByRole('button', { name: /Update & restart/ })).toBeNull()
+  })
+
+  // Forty `cez/<id8>` branches are indistinguishable by name: each row leads with the task.
+  it('tells worktrees apart by task, commit, PR and build state', async () => {
     renderDialog({
+      channel: 'development',
       installed: [
         { id: '0.13.0+cez-abc', version: '0.13.0', source: 'link', branch: 'cez/abc', installedAt: '2026-09-29T08:00:00.000Z', active: true },
       ],
-      checkouts: [
-        { id: '0.13.0+cez-abc', branch: 'cez/abc', version: '0.13.0', worktree: '/r/wt/abc', built: true, linked: true },
-        { id: '0.13.0+cez-def', branch: 'cez/def', version: '0.13.0', worktree: '/r/wt/def', built: false, linked: false },
+    })
+    const list = await screen.findByRole('listbox', { name: 'Worktrees' })
+    const rows = within(list).getAllByRole('option')
+    expect(rows).toHaveLength(3)
+    expect(rows[0]!.textContent).toContain('Switch the desktop app to a worktree')
+    expect(rows[0]!.textContent).toContain('#1170')
+    expect(rows[0]!.textContent).toContain('current')
+    expect(rows[1]!.textContent).toContain('needs rebuild')
+    expect(rows[1]!.textContent).toContain('d4e5f6a')
+    expect(rows[2]!.textContent).toContain('not built')
+    expect(rows[2]!.getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByText('worktree · cez/abc')).toBeTruthy()
+  })
+
+  it('filters worktrees by task title and switches to the picked one', async () => {
+    applySelfUpdate.mockClear()
+    applySelfUpdate.mockReturnValue(new Promise(() => {}))
+    renderDialog({ channel: 'development' })
+    fireEvent.change(await screen.findByRole('textbox', { name: 'Filter' }), { target: { value: 'landing' } })
+    const rows = within(screen.getByRole('listbox', { name: 'Worktrees' })).getAllByRole('option')
+    expect(rows).toHaveLength(1)
+    fireEvent.click(rows[0]!)
+    fireEvent.click(screen.getByRole('button', { name: 'Switch & restart' }))
+    await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledTimes(1))
+    expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0+cez-def')
+  })
+
+  it('installs an open pull request\'s preview build, and lists one without a build as unpickable', async () => {
+    applySelfUpdate.mockClear()
+    applySelfUpdate.mockReturnValue(new Promise(() => {}))
+    renderDialog({ channel: 'development' })
+    fireEvent.click(await screen.findByRole('tab', { name: /Pull requests/ }))
+    const list = screen.getByRole('listbox', { name: 'Pull requests' })
+    // A PR without a build is hidden until asked for.
+    expect(within(list).getAllByRole('option')).toHaveLength(1)
+    fireEvent.click(within(list).getByRole('button', { name: /1 more without a preview build/ }))
+    const rows = within(list).getAllByRole('option')
+    expect(rows[1]!.textContent).toContain('no build')
+    expect(rows[1]!.getAttribute('aria-disabled')).toBe('true')
+    fireEvent.click(rows[0]!)
+    fireEvent.click(screen.getByRole('button', { name: 'Install & restart' }))
+    await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledTimes(1))
+    expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0-pr1169.1300')
+  })
+
+  it('names a running PR build in the header and the card', async () => {
+    renderDialog({
+      version: '0.13.0-pr1169.1300',
+      installed: [
+        { id: '0.13.0-pr1169.1300', version: '0.13.0-pr1169.1300', source: 'registry', installedAt: '2026-09-29T14:00:00.000Z', active: true },
       ],
     })
     const dialog = await screen.findByRole('dialog')
-    expect(dialog.textContent).toContain('worktree · cez/abc')
-    expect(dialog.querySelector('[data-slot="self-update-checkouts"]')).toBeTruthy()
-    expect(screen.getByRole('combobox', { name: 'Worktree' })).toBeTruthy()
+    expect(dialog.textContent).toContain('PR #1169 build')
+    expect(dialog.querySelector('[data-slot="self-update-latest"]')!.textContent).toContain('preview build of PR #1169, not a release.')
   })
 
   // A worktree shares its version number with the release it forked from; calling it "the
@@ -134,10 +266,10 @@ describe('SelfUpdateDialog', () => {
     expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0')
   })
 
-  it('shows no worktree section when there are none', async () => {
+  it('shows no development panel on a release channel', async () => {
     renderDialog()
     const dialog = await screen.findByRole('dialog')
-    expect(dialog.querySelector('[data-slot="self-update-checkouts"]')).toBeNull()
+    expect(dialog.querySelector('[data-slot="self-update-development"]')).toBeNull()
   })
 
   it('stays open while an install is running', async () => {

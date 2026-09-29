@@ -115,6 +115,7 @@ import type {
   WorkspaceConfigResponse,
   WorkspaceUiState,
   SkillsUpdateState,
+  SelfUpdateDevelopment,
   SelfUpdateStatus,
   UpdateChannel,
   TrackerAssociation,
@@ -2248,7 +2249,15 @@ export async function refreshSelfUpdate(): Promise<SelfUpdateStatus> {
   return unwrap(await cez.api.v1.workspace['self-update'].refresh.$post({}), '/workspace/self-update/refresh')
 }
 
-/** Persist the release channel (`stable` ↔ `nightly`) in `~/.cezar/config.json`. */
+/** The development channel's pickers: cezar worktrees and open PRs with a preview build. */
+export async function getSelfUpdateDevelopment(opts?: ReadOptions & { refresh?: boolean }): Promise<SelfUpdateDevelopment> {
+  return unwrap(
+    await cez.api.v1.workspace['self-update'].development.$get({ query: opts?.refresh ? { refresh: '1' } : {} }, init(opts)),
+    '/workspace/self-update/development',
+  )
+}
+
+/** Persist the release channel (`stable`, `nightly` or `development`) in `~/.cezar/config.json`. */
 export async function setSelfUpdateChannel(channel: UpdateChannel): Promise<SelfUpdateStatus> {
   return unwrap(
     await cez.api.v1.workspace['self-update'].channel.$put({ json: { channel } }),

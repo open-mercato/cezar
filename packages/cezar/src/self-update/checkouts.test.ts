@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -127,5 +127,49 @@ describe('linked checkouts', () => {
 
     linkCheckout(found[0]!.packageRoot, 'main', env);
     expect((await discoverCheckouts(env))[0]).toMatchObject({ linked: true, id: '0.13.0+main' });
+  });
+
+  // Forty `cez/<id8>` branches read the same: discovery names each by the task that owns it, its
+  // last commit, and whether the build predates that commit — newest work first.
+  it('labels worktrees with their task, last commit and build age, newest commit first', async () => {
+    const repo = join(home, 'repo');
+    fakeCheckout(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    writeFileSync(join(repo, '.gitignore'), 'dist\nweb/dist\n.ai\n');
+    git(repo, 'add', '.');
+    execFileSync('git', ['commit', '-q', '-m', 'init'], {
+      cwd: repo,
+      env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_COMMITTER_DATE: '2026-09-01T10:00:00Z' },
+    });
+    const task = join(repo, '.ai', 'cezar', 'worktrees', 'abc12345-run');
+    git(repo, 'worktree', 'add', '-q', '-b', 'cez/abc12345', task);
+    fakeCheckout(task);
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'feat: the newer work'], {
+      cwd: task,
+      env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_COMMITTER_DATE: '2026-09-20T10:00:00Z' },
+    });
+    // Built before its last commit.
+    const old = new Date('2026-09-10T10:00:00Z');
+    utimesSync(join(task, 'packages', 'cezar', 'dist', 'index.js'), old, old);
+    writeFileSync(
+      join(repo, '.ai', 'cezar', 'runs.json'),
+      JSON.stringify([
+        { id: 'abc12345-run', title: 'raw prompt', titleSummary: 'Fix the version dialog', status: 'review', worktreePath: task, branch: 'cez/abc12345' },
+        { id: 'broken' },
+        'not a row',
+      ]),
+    );
+    mkdirSync(env.CEZ_HOME!, { recursive: true });
+    writeFileSync(join(env.CEZ_HOME!, 'config.json'), JSON.stringify({ projects: [{ id: 'cezar', root: realpathSync(repo) }] }));
+
+    const found = await discoverCheckouts(env);
+    expect(found.map((c) => c.branch)).toEqual(['cez/abc12345', 'main']);
+    expect(found[0]).toMatchObject({
+      task: { id: 'abc12345-run', title: 'Fix the version dialog', status: 'review' },
+      commit: { subject: 'feat: the newer work', at: '2026-09-20T10:00:00.000Z' },
+      builtAt: '2026-09-10T10:00:00.000Z',
+      stale: true,
+    });
+    expect(found[1]).toMatchObject({ task: null, commit: { subject: 'init' }, stale: false });
   });
 });

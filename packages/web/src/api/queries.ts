@@ -61,6 +61,7 @@ import {
   getWorkspaceUiState,
   getSkillsUpdate,
   getSelfUpdate,
+  getSelfUpdateDevelopment,
   refreshSelfUpdate,
   setSelfUpdateChannel,
   applySelfUpdate,
@@ -394,6 +395,7 @@ export const workspaceQueryKeys = {
   skillsUpdate: (projectId: string) => ['workspace', 'skills-update', projectId] as const,
   /** cezar's own updater via `GET /api/v1/workspace/self-update` (self-update PoC). */
   selfUpdate: ['workspace', 'self-update'] as const,
+  selfUpdateDevelopment: ['workspace', 'self-update', 'development'] as const,
   /** One directory listing from `GET /api/fs/browse` (step 4.2's folder picker). Keyed by the
    *  browsed path — `null` is the browse root, whose absolute location only the server knows.
    *  Not scope-led: there is one filesystem behind the workspace, not one per project. */
@@ -1400,6 +1402,25 @@ export function useSelfUpdate(enabled = true) {
     queryFn: ({ signal }) => getSelfUpdate({ signal }),
     enabled,
     refetchInterval: (query) => (query.state.data?.job?.status === 'running' ? 1_000 : false),
+  })
+}
+
+/** The development channel's worktrees and PR builds — fetched only while that channel's
+ *  panel is on screen (a git call per worktree plus a GitHub round trip). */
+export function useSelfUpdateDevelopment(enabled = true) {
+  return useQuery({
+    queryKey: workspaceQueryKeys.selfUpdateDevelopment,
+    queryFn: ({ signal }) => getSelfUpdateDevelopment({ signal }),
+    enabled,
+    staleTime: 30_000,
+  })
+}
+
+export function useRefreshSelfUpdateDevelopment() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => getSelfUpdateDevelopment({ refresh: true }),
+    onSuccess: (state) => queryClient.setQueryData(workspaceQueryKeys.selfUpdateDevelopment, state),
   })
 }
 

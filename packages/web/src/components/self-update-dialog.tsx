@@ -22,6 +22,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
+import { DevelopmentPanel, pullOfVersion } from './self-update-development'
+
 /**
  * The dialog behind the footer's version chip (self-update PoC): which channel cezar follows,
  * whether something newer is out, and a picker over every stable release and nightly so a
@@ -112,15 +114,17 @@ export function SelfUpdateDialog({
               applying={apply.isPending}
             />
 
-            <VersionPicker
-              data={data}
-              picked={picked}
-              onPick={setPicked}
-              onApply={(version) => apply.mutate(version)}
-              applying={apply.isPending}
-            />
-
-            <CheckoutPicker data={data} onApply={(id) => apply.mutate(id)} applying={apply.isPending} />
+            {data.channel === 'development' ? (
+              <DevelopmentPanel data={data} onApply={(target) => apply.mutate(target)} applying={apply.isPending} />
+            ) : (
+              <VersionPicker
+                data={data}
+                picked={picked}
+                onPick={setPicked}
+                onApply={(version) => apply.mutate(version)}
+                applying={apply.isPending}
+              />
+            )}
 
             {!data.canSelfUpdate ? <InstallHint data={data} /> : null}
 
@@ -146,7 +150,14 @@ export function SelfUpdateDialog({
 const CHANNELS: { value: UpdateChannel; label: string }[] = [
   { value: 'stable', label: 'Stable' },
   { value: 'nightly', label: 'Nightly' },
+  { value: 'development', label: 'Development' },
 ]
+
+const CHANNEL_HINTS: Record<UpdateChannel, string> = {
+  stable: 'Tagged releases.',
+  nightly: 'A fresh build of main every night.',
+  development: 'A cezar worktree or an open pull request. Never updates on its own.',
+}
 
 function ChannelToggle({
   data,
@@ -162,7 +173,7 @@ function ChannelToggle({
       <div className="min-w-0">
         <div className="text-[13px] font-semibold">Release channel</div>
         <div className="text-[12px] text-muted-foreground">
-          {data.channel === 'stable' ? 'Tagged releases.' : 'A fresh build of main every night.'}
+          {CHANNEL_HINTS[data.channel]}
         </div>
       </div>
       <div
@@ -213,34 +224,48 @@ function LatestCard({
   // release: "newest version" would be a claim about code cezar did not ship. Offer the channel's
   // newest release as the way back instead.
   const active = data.installed.find((entry) => entry.active)
-  const dev = active?.source === 'link' || active?.source === 'local' ? active : null
-  if (dev) {
-    const release = data.latest[data.channel] ?? null
+  const pr = active?.source === 'registry' ? pullOfVersion(active.version) : null
+  const dev = active && (active.source === 'link' || active.source === 'local' || pr !== null) ? active : null
+  if (dev || data.channel === 'development') {
+    // Development never offers an update; the way back to releases is the channel toggle.
+    const release = data.channel === 'development' ? null : data.latest[data.channel]
     return (
       <div
         data-slot="self-update-latest"
         className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5"
       >
         <div className="min-w-0 text-[13px]">
-          {dev.source === 'link' ? (
+          {dev?.source === 'link' ? (
             <>
               Running worktree <span className="font-semibold">{dev.branch ?? dev.id}</span>, not a release.
             </>
-          ) : (
+          ) : dev?.source === 'local' ? (
             <>Running a local build, not a release.</>
+          ) : pr !== null ? (
+            <>
+              Running the preview build of <span className="font-semibold">PR #{pr}</span>, not a release.
+            </>
+          ) : (
+            <>
+              Running <span className="font-semibold">v{data.version}</span>. Pick a worktree or a pull request below.
+            </>
           )}
           <div className="text-[11.5px] text-muted-foreground">
-            {!data.checkedAt
-              ? 'The npm registry has not answered yet.'
-              : release
-                ? `Newest ${data.channel}: v${release} · checked ${new Date(data.checkedAt).toLocaleTimeString()}`
-                : `checked ${new Date(data.checkedAt).toLocaleTimeString()}`}
+            {data.channel === 'development'
+              ? 'Switch the channel back to Stable or Nightly to follow releases again.'
+              : !data.checkedAt
+                ? 'The npm registry has not answered yet.'
+                : release
+                  ? `Newest ${data.channel}: v${release} · checked ${new Date(data.checkedAt).toLocaleTimeString()}`
+                  : `checked ${new Date(data.checkedAt).toLocaleTimeString()}`}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
-            {checking ? 'Checking…' : 'Check again'}
-          </Button>
+          {data.channel !== 'development' ? (
+            <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
+              {checking ? 'Checking…' : 'Check again'}
+            </Button>
+          ) : null}
           {release ? (
             <Button size="sm" onClick={() => onApply(release)} disabled={!data.canSelfUpdate || applying || jobBusy}>
               Back to v{release}
@@ -369,73 +394,9 @@ function ActiveBadge({ data }: { data: SelfUpdateStatus | undefined }) {
   const active = data?.installed.find((entry) => entry.active)
   if (active?.source === 'local') return <Badge variant="outline">local build</Badge>
   if (active?.source === 'link') return <Badge variant="outline">worktree · {active.branch ?? active.id}</Badge>
+  const pr = active ? pullOfVersion(active.version) : null
+  if (pr !== null) return <Badge variant="outline">PR #{pr} build</Badge>
   return null
-}
-
-/**
- * cezar's own worktrees (a registered cezar repo's `git worktree list`), so a developer can run
- * the desktop app — or this cockpit — on any task branch: applying one links the checkout into
- * `~/.cezar/versions` (no copy) and restarts into it. Only built worktrees can be picked.
- */
-function CheckoutPicker({
-  data,
-  onApply,
-  applying,
-}: {
-  data: SelfUpdateStatus
-  onApply: (id: string) => void
-  applying: boolean
-}) {
-  const [picked, setPicked] = useState('')
-  const checkouts = data.checkouts ?? []
-  if (checkouts.length === 0) return null
-  const jobBusy = data.job?.status === 'running' || data.job?.status === 'restarting'
-  const activeId = data.installed.find((entry) => entry.active)?.id
-  const selected = checkouts.find((checkout) => checkout.id === picked)
-  return (
-    <div data-slot="self-update-checkouts" className="flex min-w-0 flex-col gap-2">
-      <div className="text-[13px] font-semibold">
-        Run a worktree <span className="font-normal text-muted-foreground">· development</span>
-      </div>
-      <div className="flex min-w-0 items-center gap-2">
-        <Select value={picked} onValueChange={setPicked} disabled={jobBusy}>
-          <SelectTrigger size="sm" aria-label="Worktree" className="w-0 min-w-0 flex-1 text-[13px]">
-            <SelectValue placeholder="Choose a cezar worktree" />
-          </SelectTrigger>
-          <SelectContent className="max-h-72">
-            {checkouts.map((checkout) => (
-              <SelectItem key={checkout.worktree} value={checkout.id} disabled={!checkout.built || !checkout.id}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <span className="truncate">{checkout.branch}</span>
-                  <span className="text-muted-foreground">v{checkout.version}</span>
-                  {checkout.id === activeId ? (
-                    <Badge variant="secondary">current</Badge>
-                  ) : !checkout.built ? (
-                    <Badge variant="outline">not built</Badge>
-                  ) : checkout.linked ? (
-                    <Badge variant="outline">linked</Badge>
-                  ) : null}
-                </span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          size="sm"
-          variant="contrast"
-          onClick={() => selected && onApply(selected.id)}
-          disabled={!selected || selected.id === activeId || !data.canSelfUpdate || applying || jobBusy}
-        >
-          Switch &amp; restart
-        </Button>
-      </div>
-      <p className="truncate text-[11.5px] text-muted-foreground" title={selected?.worktree}>
-        {selected
-          ? selected.worktree
-          : 'Linked, not copied: rebuild the worktree (npm run build) and restart to run new code.'}
-      </p>
-    </div>
-  )
 }
 
 function InstallHint({ data }: { data: SelfUpdateStatus }) {

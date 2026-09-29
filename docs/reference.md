@@ -302,7 +302,7 @@ Useful environment variables:
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
 | `CEZ_SKILLS_AUTO_UPDATE=0` | Disable automatic checks and updates for upstream-CLI-tracked Open Mercato skill installations. On by default; a saved global Skills setting overrides this environment default. Checks are delayed, bounded, cached, and non-blocking. |
-| `CEZ_UPDATE_CHANNEL=nightly` | Release channel the self-updater follows: `stable` (npm `latest`, the default) or `nightly`. A channel saved from the version chip's dialog overrides this seed. |
+| `CEZ_UPDATE_CHANNEL=nightly` | Release channel the self-updater follows: `stable` (npm `latest`, the default), `nightly`, or `development` (no automatic updates; pick a cezar worktree or an open PR's preview build by hand). A channel saved from the version chip's dialog overrides this seed. |
 | `CEZ_SUPERVISED=1` | A supervisor relaunches cezar (the desktop shell sets `CEZ_DESKTOP=1`, which implies it): after an update the process exits with status 75 instead of re-exec'ing itself, so the supervisor starts the new version. Off by default. |
 | `CEZ_AUTONOMOUS_DEFAULT=0` | Seed the New Task Autonomous default (`0` or `1`). Without a seed, skills default on and workflows off; a saved global Resources setting overrides it. |
 | `CEZ_WORKTREE_DEFAULT=1` | Seed the New Task Worktree default (`0` or `1`). Without a seed, eligible runs default on; a saved global Resources setting overrides it. |
@@ -691,8 +691,15 @@ symlink to the worktree's `packages/cezar`, so it runs straight off the worktree
 A worktree has to be built before you can switch to it (`npm install && npm run build` in it).
 Then pick one of:
 
-- **Cockpit**: open the version chip. The **Run a worktree** picker lists every worktree of every
-  registered cezar repo (task worktrees included). Pick one and choose **Switch & restart**.
+- **Cockpit**: open the version chip and switch the release channel to **Development**. The
+  **Worktrees** tab lists every worktree of every registered cezar repo (task worktrees included),
+  newest commit first, each with its task title, last commit, open PR and build age (a build older
+  than the last commit is marked **needs rebuild**). The filter matches task, branch, commit
+  subject or `#PR`. Pick one and choose **Switch & restart**. The **Pull requests** tab lists
+  cezar's open pull requests with the preview build CI published for them (npm dist-tag
+  `pr-<N>`); pick one and choose **Install & restart**. A PR without a build (a fork, CI not green
+  yet) is listed but cannot be picked. The development channel never offers updates on its own;
+  switch back to **Stable** or **Nightly** to follow releases again.
 - **Desktop menu**: **Cezar ▸ Versions** lists linked worktrees by branch
   (`cez/cb28888e — 0.13.0 (worktree)`). Clicking one switches and restarts.
 - **Terminal**:

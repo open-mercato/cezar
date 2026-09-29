@@ -8,7 +8,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
@@ -30,6 +30,12 @@ export interface CezarCheckout {
   /** The id this checkout has (when linked) or would get (when not yet). */
   id: string;
   linked: boolean;
+  commit: { sha: string; subject: string; at: string } | null;
+  builtAt: string | null;
+  /** Built, but the last commit is newer than the build. */
+  stale: boolean;
+  /** The cezar task that owns the worktree, from the repo's own run index. */
+  task: { id: string; title: string; status: string } | null;
 }
 
 function packageVersion(dir: string): string | null {
@@ -51,6 +57,54 @@ export function cezarPackageRoot(worktree: string): string | null {
 
 export function isBuilt(packageRoot: string): boolean {
   return existsSync(join(packageRoot, 'dist', 'index.js')) && existsSync(join(packageRoot, 'web', 'dist', 'index.html'));
+}
+
+/** When the server build was last written — the older of the two halves would be more honest,
+ *  but `npm run build` writes both in one go and the server is what a restart picks up. */
+function builtAtOf(packageRoot: string): string | null {
+  try {
+    return statSync(join(packageRoot, 'dist', 'index.js')).mtime.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/** HEAD's sha, subject and commit time. Null when git cannot answer. */
+async function lastCommit(worktree: string): Promise<{ sha: string; subject: string; at: string } | null> {
+  try {
+    const { stdout } = await exec('git', ['log', '-1', '--format=%h%x1f%cI%x1f%s'], { cwd: worktree, timeout: 5_000 });
+    const [sha, at, subject] = stdout.trim().split('\x1f');
+    return sha && at ? { sha, subject: subject ?? '', at: new Date(at).toISOString() } : null;
+  } catch {
+    return null;
+  }
+}
+
+interface TaskRow {
+  id: string;
+  title: string;
+  status: string;
+  worktree: string | null;
+  branch: string | null;
+}
+
+/** The display fields of a repo's run index (`.ai/cezar/runs.json`), read leniently: this is a
+ *  label lookup, not the store — a row it cannot read is simply not a label. */
+function tasksOf(root: string): TaskRow[] {
+  try {
+    const rows = JSON.parse(readFileSync(join(root, '.ai', 'cezar', 'runs.json'), 'utf8')) as unknown;
+    if (!Array.isArray(rows)) return [];
+    const str = (value: unknown) => (typeof value === 'string' && value ? value : null);
+    return rows.flatMap((row: Record<string, unknown>) => {
+      const id = str(row?.id);
+      const title = str(row?.titleSummary) ?? str(row?.title) ?? str(row?.task);
+      if (!id || !title) return [];
+      const worktree = str(row.worktreePath);
+      return [{ id, title, status: str(row.status) ?? 'unknown', worktree: worktree ? real(worktree) : null, branch: str(row.branch) }];
+    });
+  } catch {
+    return [];
+  }
 }
 
 /** `git worktree list --porcelain` → [path, branch]. Never throws: not a repo is no worktrees. */
@@ -91,18 +145,21 @@ export async function branchOf(worktree: string): Promise<string> {
 
 /**
  * Every cezar checkout reachable from the project registry (and from existing links, so a repo
- * that was never registered but was linked once keeps showing its siblings). Newest-looking
- * first is not knowable cheaply; the order is the registry's, then git's.
+ * that was never registered but was linked once keeps showing its siblings), newest commit
+ * first, each with what it takes to tell it apart: its task, its last commit, its build age.
  */
 export async function discoverCheckouts(env: NodeJS.ProcessEnv = process.env): Promise<CezarCheckout[]> {
   const config = await loadWorkspaceConfig(workspaceConfigPath(env));
   const links = listLinks(env);
   const roots = [...config.projects.map((project) => project.root), ...links.map((link) => link.checkout).filter((p): p is string => !!p)];
   const seen = new Set<string>();
-  const out: CezarCheckout[] = [];
+  const found: Omit<CezarCheckout, 'commit'>[] = [];
   for (const root of roots) {
     if (!existsSync(root) || !cezarPackageRoot(root)) continue;
-    for (const tree of await worktreesOf(root)) {
+    const trees = await worktreesOf(root);
+    // Task worktrees live under the main checkout, whose run index names them.
+    const tasks = trees.length > 0 ? tasksOf(trees[0]!.path) : [];
+    for (const tree of trees) {
       const worktree = real(tree.path);
       if (seen.has(worktree)) continue;
       seen.add(worktree);
@@ -111,18 +168,31 @@ export async function discoverCheckouts(env: NodeJS.ProcessEnv = process.env): P
       if (!packageRoot || !version) continue;
       const branch = tree.branch ?? worktree.split(/[\\/]/).filter(Boolean).pop() ?? 'checkout';
       const link = links.find((entry) => entry.checkout === packageRoot);
-      out.push({
+      const task = tasks.find((row) => row.worktree === worktree) ?? (tree.branch ? tasks.find((row) => row.branch === tree.branch) : undefined);
+      const built = isBuilt(packageRoot);
+      found.push({
         packageRoot,
         worktree,
         branch,
         version,
-        built: isBuilt(packageRoot),
+        built,
+        builtAt: built ? builtAtOf(packageRoot) : null,
+        stale: false,
+        task: task ? { id: task.id, title: task.title, status: task.status } : null,
         id: link?.id ?? safeLinkId(version, branch),
         linked: !!link,
       });
     }
   }
-  return out;
+  const out = await Promise.all(
+    found.map(async (checkout): Promise<CezarCheckout> => {
+      const commit = await lastCommit(checkout.worktree);
+      const stale = !!(checkout.builtAt && commit && commit.at > checkout.builtAt);
+      return { ...checkout, commit, stale };
+    }),
+  );
+  // Newest work first: that is the branch a developer is most likely reaching for.
+  return out.sort((a, b) => (b.commit?.at ?? '').localeCompare(a.commit?.at ?? ''));
 }
 
 function safeLinkId(version: string, branch: string): string {
