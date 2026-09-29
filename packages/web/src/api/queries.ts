@@ -85,6 +85,7 @@ import {
   putAgentConfigFile,
   retryProviderAuth,
   searchTrackerItems,
+  startLandingCheck,
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
@@ -1640,6 +1641,30 @@ export function useContinueRun(id: string, projectId?: string) {
   return useMutation({
     mutationFn: (opts: ContinueOptions = {}) =>
       projectId === undefined ? continueRun(id, opts) : continueProjectRun(projectId, id, opts),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
+  })
+}
+
+/**
+ * Start a landing check for a run (`POST /api/runs/:id/land-check`, spec
+ * `.ai/specs/2026-09-29-landing-check.md`) — the ordinary trigger and the acknowledgement
+ * round-trip's second half, which carries the `preview.subjectDigest` the operator saw.
+ *
+ * Nothing is optimistic, deliberately: the answer is the id of a check run the server just
+ * created, so there is no cached row to patch — the caller navigates to it. An ack whose digest
+ * no longer matches is not an error either: it answers 201 and the NEW check previews again, so
+ * the honest render is whatever that run records. The invalidation is for the tab that asked, so
+ * the invoking run's own "Landing check" link can pick the new check up without waiting for the
+ * SSE event that may already have arrived.
+ *
+ * Errors are the CALLER's to surface (a 409 means another check is already in flight, and its
+ * words are written for the person who pressed the button).
+ */
+export function useStartLandingCheck() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, acknowledge }: { id: string; acknowledge?: string }) =>
+      startLandingCheck(id, acknowledge !== undefined ? { acknowledge: { digest: acknowledge } } : {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all }),
   })
 }

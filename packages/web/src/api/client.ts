@@ -67,6 +67,8 @@ import type {
   HostUsage,
   AttachmentInput,
   LaunchKeyResponse,
+  LandingCheckInput,
+  LandingCheckResponse,
   MessageInput,
   EditQueuedMessageResponse,
   MessageResponse,
@@ -1480,6 +1482,32 @@ export async function createRunPr(id: string): Promise<CreatePrResponse> {
       param: { projectId: queryScope(), id: encodeURIComponent(id) },
     }),
     runPath(id, '/pr'),
+  )
+}
+
+/**
+ * Start a landing check for run `:id` (spec `.ai/specs/2026-09-29-landing-check.md`): freeze the
+ * run's own branch tip, create the check run in a scratch worktree, and answer 201 with that
+ * run's id — the check executes later, in its own slot. `:id` is the run whose combination is
+ * being checked, which for the acknowledgement round-trip is the INVOKING run behind a foreign
+ * preview, never the check run itself.
+ *
+ * An empty body is the ordinary trigger: the engine derives the sources from the tree's ledger and
+ * the plan from the frozen base. `{ acknowledge: { digest } }` is the second half of the trust
+ * model — the `preview.subjectDigest` the operator saw — and is honoured only while the subject
+ * still hashes to it; a moved subject answers 201 as well and previews again instead of running.
+ * The one refusal is 409: a landing check already in flight for the project, verbatim in ApiError.
+ */
+export async function startLandingCheck(
+  id: string,
+  input: LandingCheckInput = {},
+): Promise<LandingCheckResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs[':id']['land-check'].$post({
+      param: { projectId: queryScope(), id: encodeURIComponent(id) },
+      json: input,
+    }),
+    runPath(id, '/land-check'),
   )
 }
 

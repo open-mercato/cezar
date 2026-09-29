@@ -459,7 +459,12 @@ const countLines = (text: string): number => text.split('\n').length
  * auto-scrolled as deltas append until the user scrolls up. Once finished, long output clamps
  * behind a bottom fade with an explicit "Show all N lines" expansion.
  */
-function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
+/**
+ * The clamped, tail-preserving output block inside a tool card. Exported for the landing check's
+ * card (spec 2026-09-29-landing-check PR 5), which renders the SAME kind of command output —
+ * the check-output idiom — for commands that are not agent tool calls.
+ */
+export function ToolOutput({ text, streaming }: { text: string; streaming: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
   const stickRef = useRef(true)

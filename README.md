@@ -153,7 +153,10 @@ There are guides for [Ubuntu VPS](docs/server-install/ubuntu-vps.md) and [macOS 
 1. **You describe a task.** Type it, attach files, or start from a GitHub issue.
 2. **cezar runs a workflow** (agent steps plus shell checks) in a new git worktree, using your agent CLI.
 3. **The cockpit streams every step live.** If a check fails, the agent tries again and sees the error.
-4. **You check the result.** Read the diff, send notes back, or open a draft PR.
+4. **You check the result.** A changed run settles `done` with the diff left in its
+   worktree — read it, send notes back, or open a draft PR. Turn the review gate on
+   (`CEZ_REVIEW_GATE=1`, or Settings → Agents) if you'd rather a changed,
+   non-autonomous run stop at `review` and wait for you.
 
 A workflow is a small YAML file in `.ai/cezar/workflows/`:
 

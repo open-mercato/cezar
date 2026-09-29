@@ -7,6 +7,7 @@ import {
   mergeRun,
   parseGlobalEvent,
   parseWorkspaceEvent,
+  READ_TIME_RUN_FIELDS,
   type GlobalEvent,
 } from './events'
 import type { ApiRun, RunRecord } from '@open-mercato/cezar-api-client'
@@ -156,6 +157,15 @@ describe('applyRunEvent', () => {
     expect(next?.[0]?.usage).toEqual(SAMPLE)
     expect(next?.[0]?.status).toBe('done')
   })
+
+  it('keeps the read-time stale marker the GET attached — the stream record has no such field', () => {
+    // The exact PR #1169 regression: opening an unread check (or Mark all read, rename, pin,
+    // archive) emits a bare `run` record, and before the fix that event dropped the marker.
+    const list: ApiRun[] = [{ ...run('r1'), landingCheckStale: true }]
+    const next = applyRunEvent(list, run('r1', { status: 'done' }))
+    expect(next?.[0]?.landingCheckStale).toBe(true)
+    expect(next?.[0]?.status).toBe('done')
+  })
 })
 
 describe('mergeRun', () => {
@@ -163,6 +173,33 @@ describe('mergeRun', () => {
     expect(mergeRun({ ...run('r1'), usage: SAMPLE }, run('r1', { status: 'done' })).usage).toEqual(SAMPLE)
     expect(mergeRun(run('r1'), run('r1')).usage).toBeUndefined()
     expect(mergeRun(undefined, run('r1')).usage).toBeUndefined()
+  })
+
+  it('carries the stale marker over, and invents none when there was none', () => {
+    const stale: ApiRun = { ...run('r1'), landingCheckStale: true }
+    expect(mergeRun(stale, run('r1', { status: 'done' })).landingCheckStale).toBe(true)
+    expect(mergeRun(run('r1'), run('r1')).landingCheckStale).toBeUndefined()
+    expect(mergeRun(undefined, run('r1')).landingCheckStale).toBeUndefined()
+  })
+
+  it('carries EVERY read-time field — the guard for the next one that gets forgotten', () => {
+    // Keyed on the read-time keys of `ApiRun` — what a stream `RunRecord` does not carry — so a
+    // NEW read-time field is a compile error until it has a row here. The loop walks this map, not
+    // `READ_TIME_RUN_FIELDS`, so a row `mergeRun` fails to fold (one missing from that list, say)
+    // is red below. It cannot see a field the server attaches but `ApiRun` never declares.
+    const values: Record<Exclude<keyof ApiRun, keyof RunRecord>, unknown> = {
+      usage: SAMPLE,
+      landingCheckStale: true,
+    }
+    for (const field of Object.keys(values) as Array<keyof typeof values>) {
+      const previous = { ...run('r1'), [field]: values[field] } as ApiRun
+      expect(mergeRun(previous, run('r1', { status: 'done' }))[field]).toEqual(values[field])
+    }
+  })
+
+  it('does not invent a read-time key the cached run never had', () => {
+    const merged = mergeRun(run('r1'), run('r1', { status: 'done' }))
+    for (const field of READ_TIME_RUN_FIELDS) expect(field in merged).toBe(false)
   })
 })
 

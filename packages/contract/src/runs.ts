@@ -129,6 +129,164 @@ export const processUsageSchema = z.object({
 });
 export type ProcessUsage = z.infer<typeof processUsageSchema>;
 
+// ---- the landing check (spec `.ai/specs/2026-09-29-landing-check.md`) ----------------------
+
+/**
+ * The `landingCheck` object on a run record: what combination was checked, against which
+ * commands, and what happened. Written on the CHECK run — an ordinary run of its own, so cancel,
+ * the NDJSON transcript, SSE, retention and the worktree lifecycle all come from the run
+ * machinery — and it names the run it was invoked for as `ofRunId`.
+ *
+ * It is an additive OPTIONAL field on `runRecordSchema`, never a new `RunStatus`: `runs.json` is
+ * parsed as ONE `z.array(runRecordSchema)`, so an unknown enum would drop the whole index.
+ *
+ * The record is written in two stages, which is why `commands` is optional: the FROZEN SUBJECT
+ * is persisted before the first merge (a ref that moves mid-run cannot change what was checked),
+ * and the resolved command plan lands with the verdict once the subject has been materialized.
+ * A run that never got that far therefore carries a subject and nothing else, and the shape has
+ * to stay parseable either way.
+ */
+export const landingCheckSchema = z.object({
+  /** The run this check was invoked for — the one whose branch tip is the subject's base. */
+  ofRunId: z.string(),
+  subject: z.object({
+    /** The invoking run's branch (provenance); `HEAD` when that run has no branch of its own. */
+    baseRef: z.string(),
+    /** That ref's commit, frozen at request time. The check worktree starts HERE. */
+    baseSha: z.string(),
+    /** The sources, resolved by name and applied BY SHA, in the order they are merged. */
+    sources: z.array(z.object({ ref: z.string(), sha: z.string() })),
+    /** Where the order came from: the request/CLI list, or the tree's own dispatch ledger. */
+    order: z.enum(['explicit', 'ledger']),
+    /** The resulting commit's tree — the verdict's IDENTITY. Absent until materialized. */
+    treeSha: z.string().optional(),
+    /**
+     * Candidates the derivation left out and why, so "why is my child not in the subject" is
+     * answerable from the record. An empty child names `empty`, never `already-landed`: its tip
+     * equals its fork point, which makes it an ANCESTOR of the parent tip without being landed.
+     */
+    excluded: z
+      .array(
+        z.object({
+          runId: z.string(),
+          sha: z.string().optional(),
+          reason: z.enum([
+            'unknown-run',
+            'not-terminal',
+            'review',
+            'failed',
+            'missing-ref',
+            'empty',
+            'already-landed',
+            'duplicate',
+          ]),
+        }),
+      )
+      .optional(),
+  }),
+  /** Where the plan came from and the digest over it — absent until it is resolved. */
+  commands: z
+    .object({
+      source: z.enum(['explicit', 'agentic-config', 'package-json', 'none']),
+      digest: z.string(),
+      changedVsBase: z.boolean().optional(),
+      /** The script BODIES the digest covers, so the record says what was pinned, not just a hash. */
+      resolvedBodies: z.record(z.string(), z.string()).optional(),
+    })
+    .optional(),
+  /**
+   * The caller's own request, carried verbatim so a QUEUED check — or one recovered after a
+   * restart — resolves the same plan it was asked for. Only what cannot be re-derived lives here:
+   * the explicit SOURCES are already resolved into `subject.sources` by sha, which is the pin
+   * that matters.
+   */
+  request: z
+    .object({
+      commands: z.array(z.string()).optional(),
+      /**
+       * A foreign-subject acknowledgement, carried verbatim from the request that created this
+       * check run. It has to live on the record for the same reason `commands` does: the subject
+       * is materialized later, in the check run's own execution (and, after a restart, in a new
+       * process), so the digest the caller acknowledged cannot be kept in memory. Its VALUE is
+       * what makes the brake honest — the digest is recomputed over the frozen subject before
+       * anything runs, and only an equal one unlocks execution.
+       */
+      acknowledge: z.object({ digest: z.string() }).optional(),
+    })
+    .optional(),
+  /** The install step, when the frozen base declares a manifest. Run FIRST, never green on failure. */
+  install: z
+    .object({
+      argv: z.array(z.string()),
+      exitCode: z.number().nullable(),
+      outcome: z.enum(['passed', 'failed', 'not-run']),
+    })
+    .optional(),
+  /** The acknowledgement of a foreign subject (spec's trust model); nothing writes it yet. */
+  ack: z.object({ digest: z.string(), at: z.string() }).optional(),
+  /** The preview a foreign subject gets instead of execution; nothing writes it yet. */
+  preview: z
+    .object({
+      subjectDigest: z.string(),
+      authors: z.array(z.string()),
+      commands: z.array(z.string()),
+      installArgv: z.array(z.string()).optional(),
+      headSha: z.string(),
+      diffStat: z.string().optional(),
+    })
+    .optional(),
+  verdict: z.enum(['passed', 'failed', 'conflict', 'nothing-to-check', 'could-not-run']).optional(),
+  /** Why, when the verdict is not `passed`: `dry-run`, `timeout`, `install-failed`, `no-commands`,
+   *  `commands-changed-vs-base`, `source-missing`, `unsupported-platform`, `tree-moved`, … */
+  reason: z.string().optional(),
+  results: z
+    .array(
+      z.object({
+        command: z.string(),
+        exitCode: z.number().nullable(),
+        outcome: z.enum(['passed', 'failed', 'not-run', 'could-not-run']),
+        startedAt: z.string(),
+        finishedAt: z.string().optional(),
+      }),
+    )
+    .optional(),
+  /** The env variable NAMES the check ran with — never values. */
+  envNames: z.array(z.string()).optional(),
+  /** The user the check ran as. */
+  user: z.string().optional(),
+});
+export type LandingCheck = z.infer<typeof landingCheckSchema>;
+
+/**
+ * `POST /runs/:id/land-check` — the request. Both keys are optional: the engine derives the
+ * subject from the tree's own dispatch ledger and the plan from the frozen base when they are
+ * absent. `.strict()`, because a misspelled `source` here is a filter that did not fire, and the
+ * engine would then check whatever the ledger says while the caller believes otherwise.
+ */
+export const landingCheckInputSchema = z
+  .object({
+    /** Explicit sources, merged in this order. Replaces the ledger-derived candidate set. */
+    sources: z.array(z.string().min(1).max(120)).max(24).optional(),
+    /** Explicit commands. Replaces the repo's declared list; still base-pinned and drift-checked. */
+    commands: z.array(z.string().min(1).max(200)).max(12).optional(),
+    /**
+     * The acknowledgement of a foreign subject: the `preview.subjectDigest` the caller saw. The
+     * check re-freezes and re-materializes the subject, recomputes the digest and proceeds only
+     * when the two are equal — a moved subject previews again instead of running. An ack on a
+     * subject that is NOT foreign is inert: nothing needed acknowledging, so nothing is recorded.
+     */
+    acknowledge: z.object({ digest: z.string().min(1).max(64) }).optional(),
+  })
+  .strict();
+export type LandingCheckInput = z.infer<typeof landingCheckInputSchema>;
+
+/** The check run's id, plus the run it checks — 201, before a single command has run. */
+export const landingCheckResponseSchema = z.object({
+  runId: z.string(),
+  ofRunId: z.string(),
+});
+export type LandingCheckResponse = z.infer<typeof landingCheckResponseSchema>;
+
 /**
  * The stored run record, as `runs.json` holds it (`src/runs/store.ts`).
  *
@@ -206,6 +364,12 @@ export const runRecordSchema = z.object({
    * always has.
    */
   dispatch: dispatchSchema.optional(),
+  /**
+   * Present on a LANDING CHECK run (spec `.ai/specs/2026-09-29-landing-check.md`): the frozen
+   * subject, the resolved command plan and the verdict. Absent on every ordinary run — which is
+   * what makes it additive — and on a check run before its subject was frozen.
+   */
+  landingCheck: landingCheckSchema.optional(),
   status: runStatusSchema,
   /** `monitoring` while `status === 'running'` and the agent is working on downstream work.
    *  Absent on old runs; cleared on resume/end. */
@@ -310,6 +474,14 @@ export type RunRecord = z.infer<typeof runRecordSchema>;
  */
 export const apiRunSchema = runRecordSchema.extend({
   usage: processUsageSchema.optional(),
+  /**
+   * Read-time staleness of a landing check (spec `.ai/specs/2026-09-29-landing-check.md`): the
+   * recorded source or base sha no longer matches what its ref resolves to, so the verdict is
+   * about content that moved. Derived on the way out of `GET /runs` and `GET /runs/:id` — like
+   * `usage`, never persisted, and absent on every run without a verdict. The stored verdict text
+   * is never rewritten.
+   */
+  landingCheckStale: z.boolean().optional(),
 });
 export type ApiRun = z.infer<typeof apiRunSchema>;
 

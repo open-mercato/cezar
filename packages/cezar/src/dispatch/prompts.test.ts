@@ -43,6 +43,15 @@ describe('the dispatch prompt', () => {
     expect(DISPATCH_PROMPT).toMatch(/At most 4 children in flight/);
   });
 
+  it('names the landing check verb: freeze + merge + gate on the combination, verdict is evidence not a gate', () => {
+    expect(DISPATCH_PROMPT).toContain('cez task land-check');
+    // The old sentence told the parent to re-run the checks by hand — an instruction no engine
+    // code ever executed (0 `check-output` events across the run store). The verb replaces it.
+    expect(DISPATCH_PROMPT).toMatch(/verdict is recorded evidence, not a gate/);
+    expect(DISPATCH_PROMPT).toMatch(/a check that could not run is not green/);
+    expect(DISPATCH_PROMPT).not.toContain("re-running the repository's checks after each");
+  });
+
   it('treats a report as a claim and keeps the Guard and the tree directory', () => {
     expect(DISPATCH_PROMPT).toMatch(/A report is a CLAIM/);
     expect(DISPATCH_PROMPT).toContain('CEZ:ASK');

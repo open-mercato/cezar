@@ -7,11 +7,11 @@
   },
   "validation": {
     "commands": [
-      "npm run typecheck",
-      "npm test",
       "npm run test:unit",
       "npm run build",
-      "npm run test:package"
+      "npm run typecheck",
+      "npm run test:package",
+      "npm test"
     ]
   },
   "labels": {

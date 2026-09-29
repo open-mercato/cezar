@@ -38,6 +38,7 @@ import { AcceptCelebration, ReviewPanel } from './review-panel'
 import { queuePosition } from './run-actions'
 import { RunHeader } from './run-header'
 import { AskCard } from './ask-card'
+import { LandingCheckCard } from './landing-check-card'
 import { useRunRecordReconcile } from './run-reconcile'
 import { useActiveProviderAvailability } from './active-provider'
 import { ThreadLoading } from './thread-loading'
@@ -327,6 +328,14 @@ export function ThreadView({
       {/* Row spacing lives on each thread row (pb-2.5, both render modes measure alike);
           this gap only separates the sections — rows, empty state, footer, review panel. */}
       <div className="mx-auto flex w-full max-w-[var(--measure)] flex-1 flex-col gap-2.5 px-3 py-3 md:gap-3.5 md:px-6 md:py-5">
+        {/* The landing check's verdict, on the CHECK run's own thread (spec
+            2026-09-29-landing-check PR 5): the frozen subject, the verdict and the per-command
+            rows. Ordinary runs render nothing here — `landingCheck` is absent on every run that
+            is not a check, which is what makes this additive. The rows take their tails from the
+            transcript events the route already holds, so no second fetch and no new stream. */}
+        {run.landingCheck !== undefined ? (
+          <LandingCheckCard run={run} events={history?.visibleEvents ?? []} />
+        ) : null}
         {history ? (
           <HistoryBoundary
             hasOlder={history.hasOlder}
