@@ -1,4 +1,4 @@
-# Fix issue #1046 Cause 1: preserve monitoring before autonomous nudges
+# Fix issue #1046: monitoring precedence and budget-stop explanation
 
 ## Goal
 
@@ -28,14 +28,14 @@ continue caps, and statuses; explain budget-brake parks in the cockpit.
 ### Phase 1: Minimal runtime fix
 
 - [x] 1.1 Gate autonomous nudges behind `!monitoring` in both turn-end paths. — a7dc62fd
-- [x] 1.2 Update focused regression coverage for first-session and continuation
+- [x] 1.2 Update focused regression coverage for first-session and continuation — b13ddbdc
       autonomous monitoring turns. — a7dc62fd
 
 ### Phase 2: Verification and handoff
 
-- [x] 2.1 Prove the regression tests fail against the pre-fix implementation,
-      then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; full `npm test` has an unrelated projects API repo-shape failure.
-- [ ] 2.2 Run the authoritative PR review/autofix pass and record the outcome.
+- [x] 2.1 Prove the regression tests fail against the pre-fix implementation, — b13ddbdc
+      then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; latest full clean `npm test` passes 8398 tests with one unrelated task-changes scroller failure (supersedes the earlier environment failure).
+- [x] 2.2 Run the authoritative PR review/autofix pass and record the outcome. — b13ddbdc
 
 ### Phase 3: Cause 2 budget explanation
 
@@ -52,7 +52,17 @@ The two near-identical turn-end handlers can drift. Tests must exercise both.
 The change is intentionally limited to the nudge precedence; existing timer,
 cap, dispatch, and budget behavior must remain unchanged.
 
+## Final verification
+
+Independent review task `690e9ba5` approved `b13ddbdc1e1862c6a1f5e081b8cde43a01ba9e2a` with no actionable findings.
+
+Independent combined monitoring/UI tests 150/150 and typecheck passed. Author unit 36/36, build/check-pack and package 17/17 passed. Full clean suite: 8398 passed, one unrelated task-changes scroller failure. Real-browser QA confirmed NEEDS YOU is preserved with budget reached, spent/ceiling, and continuation guidance. [Screenshot and scenario](https://github.com/open-mercato/cezar/pull/1150#issuecomment-5882291411).
+
+GitHub author self-approval is unavailable. QA sign-off remains a merge gate; ready status does not waive it.
+
 ## Progress
+
+PR: #1150
 
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
@@ -63,8 +73,8 @@ cap, dispatch, and budget behavior must remain unchanged.
 
 ### Phase 2: Verification and handoff
 
-- [x] 2.1 Prove the regression tests fail against the pre-fix implementation, then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; full `npm test` has an unrelated projects API repo-shape failure.
-- [ ] 2.2 Run the authoritative PR review/autofix pass and record the outcome.
+- [x] 2.1 Prove the regression tests fail against the pre-fix implementation, then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; latest full clean `npm test` passes 8398 tests with one unrelated task-changes scroller failure (supersedes the earlier environment failure).
+- [x] 2.2 Run the authoritative PR review/autofix pass and record the outcome. — b13ddbdc
 
 ### Phase 3: Cause 2 budget explanation
 
