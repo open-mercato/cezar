@@ -203,8 +203,28 @@ describe('SelfUpdateDialog', () => {
     expect(rows[1]!.textContent).toContain('needs rebuild')
     expect(rows[1]!.textContent).toContain('d4e5f6a')
     expect(rows[2]!.textContent).toContain('not built')
-    expect(rows[2]!.getAttribute('aria-disabled')).toBe('true')
+    // Not built is pickable: the switch builds it first.
+    expect(rows[2]!.getAttribute('aria-disabled')).toBe('false')
     expect(screen.getByText('worktree · cez/abc')).toBeTruthy()
+  })
+
+  it('builds an unbuilt worktree before switching, and rebuilds the running one on request', async () => {
+    applySelfUpdate.mockClear()
+    applySelfUpdate.mockReturnValue(new Promise(() => {}))
+    renderDialog({
+      channel: 'development',
+      installed: [
+        { id: '0.13.0+cez-def', version: '0.13.0', source: 'link', branch: 'cez/def', installedAt: '2026-09-29T08:00:00.000Z', active: true },
+      ],
+    })
+    const rows = within(await screen.findByRole('listbox', { name: 'Worktrees' })).getAllByRole('option')
+    fireEvent.click(rows[1]!)
+    expect(screen.getByRole('button', { name: 'Rebuild & restart' })).toBeTruthy()
+    fireEvent.click(rows[2]!)
+    expect(screen.getByText(/Not built yet — runs npm run build in \/r\/wt\/ghi first/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Build & switch' }))
+    await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledTimes(1))
+    expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0+cez-ghi')
   })
 
   it('filters worktrees by task title and switches to the picked one', async () => {
@@ -215,7 +235,8 @@ describe('SelfUpdateDialog', () => {
     const rows = within(screen.getByRole('listbox', { name: 'Worktrees' })).getAllByRole('option')
     expect(rows).toHaveLength(1)
     fireEvent.click(rows[0]!)
-    fireEvent.click(screen.getByRole('button', { name: 'Switch & restart' }))
+    // Built before its last commit: the switch rebuilds it.
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild & switch' }))
     await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledTimes(1))
     expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0+cez-def')
   })

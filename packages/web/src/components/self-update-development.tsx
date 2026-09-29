@@ -74,8 +74,15 @@ export function DevelopmentPanel({
   const pickedCheckout = tab === 'worktrees' ? checkouts.find((checkout) => checkout.id === picked) : undefined
   const pickedPull = tab === 'pulls' ? pulls?.items.find((pull) => pull.version && pull.version === picked) : undefined
   const target = pickedCheckout?.id ?? pickedPull?.version ?? null
-  const targetIsActive = !!target && target === active?.id
-  const actionLabel = pickedPull && !pickedPull.installed ? 'Install & restart' : 'Switch & restart'
+  // An unbuilt or stale worktree is built on the server before the switch — even the one that is
+  // running, which is how "rebuild what I am on" is spelled.
+  const needsBuild = !!pickedCheckout && (!pickedCheckout.built || pickedCheckout.stale)
+  const targetIsActive = !!target && target === active?.id && !needsBuild
+  const actionLabel = pickedPull && !pickedPull.installed
+    ? 'Install & restart'
+    : needsBuild
+      ? `${pickedCheckout!.built ? 'Rebuild' : 'Build'} & ${pickedCheckout!.id === active?.id ? 'restart' : 'switch'}`
+      : 'Switch & restart'
 
   return (
     <div data-slot="self-update-development" className="flex min-w-0 flex-col gap-2">
@@ -179,13 +186,13 @@ export function DevelopmentPanel({
       <div className="flex min-w-0 items-center justify-between gap-2">
         <p className="min-w-0 truncate text-[11.5px] text-muted-foreground" title={pickedCheckout?.worktree}>
           {pickedCheckout
-            ? pickedCheckout.stale
-              ? `Built before its last commit — run npm run build in ${pickedCheckout.worktree} for the newest code.`
+            ? needsBuild
+              ? `${pickedCheckout.built ? 'Built before its last commit' : 'Not built yet'} — runs npm run build in ${pickedCheckout.worktree} first (about a minute).`
               : pickedCheckout.worktree
             : pickedPull
               ? `Installs ${pickedPull.version} from npm.`
               : tab === 'worktrees'
-                ? 'Linked, not copied: rebuild a worktree (npm run build) and restart to run its new code.'
+                ? 'Linked, not copied: a worktree that is not built, or built before its last commit, is built before the switch.'
                 : 'Preview builds CI publishes for green same-repo pull requests.'}
         </p>
         <Button
@@ -252,13 +259,12 @@ function CheckoutRow({
 }) {
   const headline = checkout.task?.title ?? checkout.commit?.subject ?? checkout.branch
   return (
-    <Row selected={selected} disabled={!checkout.built || !checkout.id} onSelect={onSelect} title={checkout.worktree}>
+    <Row selected={selected} disabled={!checkout.id} onSelect={onSelect} title={checkout.worktree}>
       <div className="flex min-w-0 items-center gap-2">
         <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{headline}</span>
         {checkout.pr ? <Badge variant="outline">#{checkout.pr}</Badge> : null}
-        {active ? (
-          <Badge variant="secondary">current</Badge>
-        ) : !checkout.built ? (
+        {active ? <Badge variant="secondary">current</Badge> : null}
+        {!checkout.built ? (
           <Badge variant="outline">not built</Badge>
         ) : checkout.stale ? (
           <Badge variant="outline">needs rebuild</Badge>

@@ -14,6 +14,7 @@ import { promisify } from 'node:util';
 
 import { workspaceConfigPath } from '../paths.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
+import { runNpm } from './installer.ts';
 import { linkId, listLinks, PACKAGE_NAME } from './layout.ts';
 
 const exec = promisify(execFile);
@@ -201,4 +202,44 @@ function safeLinkId(version: string, branch: string): string {
   } catch {
     return '';
   }
+}
+
+/** `npm install` is due when the checkout has never installed, or its lockfile changed since. */
+function needsInstall(worktree: string): boolean {
+  try {
+    const installed = statSync(join(worktree, 'node_modules', '.package-lock.json')).mtimeMs;
+    return statSync(join(worktree, 'package-lock.json')).mtimeMs > installed;
+  } catch {
+    return !existsSync(join(worktree, 'node_modules'));
+  }
+}
+
+/**
+ * Build a checkout so it can be linked: `npm install` when its dependencies are missing or out of
+ * date, then the server and cockpit builds. The workspace layout skips the root `build`'s
+ * `check:pack` tarball gate — it proves the release tarball, which a link never uses.
+ */
+export async function buildCheckout(
+  checkout: Pick<CezarCheckout, 'worktree' | 'packageRoot'>,
+  onLog: (line: string) => void,
+  npm: typeof runNpm = runNpm,
+): Promise<void> {
+  const { worktree, packageRoot } = checkout;
+  if (needsInstall(worktree)) {
+    onLog(`npm install in ${worktree}`);
+    await npm(['install', '--no-audit', '--no-fund'], worktree, onLog);
+  }
+  const scripts = (() => {
+    try {
+      return (JSON.parse(readFileSync(join(worktree, 'package.json'), 'utf8')) as { scripts?: Record<string, string> }).scripts ?? {};
+    } catch {
+      return {};
+    }
+  })();
+  const steps = packageRoot !== worktree && scripts['build:server'] && scripts['build:web'] ? ['build:server', 'build:web'] : ['build'];
+  for (const step of steps) {
+    onLog(`npm run ${step} in ${worktree}`);
+    await npm(['run', step], worktree, onLog);
+  }
+  if (!isBuilt(packageRoot)) throw new Error(`${worktree} built, but dist/index.js or web/dist is still missing`);
 }

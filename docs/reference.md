@@ -688,14 +688,18 @@ points at. A **linked checkout** puts a worktree there without copying it: the v
 symlink to the worktree's `packages/cezar`, so it runs straight off the worktree (and its own
 `node_modules`), and every rebuild is live on the next restart.
 
-A worktree has to be built before you can switch to it (`npm install && npm run build` in it).
-Then pick one of:
+A worktree has to be built to run. The cockpit does that for you; the desktop menu and the
+terminal need it done by hand (`npm install && npm run build` in the worktree). Pick one of:
 
 - **Cockpit**: open the version chip and switch the release channel to **Development**. The
   **Worktrees** tab lists every worktree of every registered cezar repo (task worktrees included),
   newest commit first, each with its task title, last commit, open PR and build age (a build older
   than the last commit is marked **needs rebuild**). The filter matches task, branch, commit
-  subject or `#PR`. Pick one and choose **Switch & restart**. The **Pull requests** tab lists
+  subject or `#PR`. Pick one and choose **Switch & restart**. A worktree marked **not built** or
+  **needs rebuild** offers **Build & switch** / **Rebuild & switch** instead: cezar runs
+  `npm install` (when its dependencies are missing or its lockfile changed) and the server and
+  cockpit builds in the worktree, with the output in the dialog, then switches. Picking the
+  running worktree while it needs a rebuild offers **Rebuild & restart**. The **Pull requests** tab lists
   cezar's open pull requests with the preview build CI published for them (npm dist-tag
   `pr-<N>`); pick one and choose **Install & restart**. A PR without a build (a fork, CI not green
   yet) is listed but cannot be picked. The development channel never offers updates on its own;

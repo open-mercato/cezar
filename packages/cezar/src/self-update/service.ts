@@ -9,7 +9,7 @@ import type { SelfUpdateDevelopment, SelfUpdateJob, SelfUpdateStatus, UpdateChan
 
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { installFromLocal, installFromRegistry } from './installer.ts';
-import { discoverCheckouts } from './checkouts.ts';
+import { buildCheckout, discoverCheckouts } from './checkouts.ts';
 import { activate, detectInstallKind, findInstalled, linkCheckout, listInstalled, packageRootOf, type InstallKind } from './layout.ts';
 import { CEZAR_REPO, fetchOpenPulls, OpenPullsCache, type OpenPulls } from './pulls.ts';
 import { distTagFor, RegistryCache, type PackageDocument } from './registry.ts';
@@ -36,6 +36,8 @@ export interface SelfUpdateDeps {
   registry?: RegistryCache;
   /** cezar's open pull requests, for the development channel. Defaults to GitHub. */
   pulls?: () => Promise<OpenPulls>;
+  /** Builds an unbuilt or stale checkout before it is linked. Defaults to npm in the worktree. */
+  buildCheckout?: typeof buildCheckout;
 }
 
 export class SelfUpdateBusyError extends Error {
@@ -256,8 +258,10 @@ export class SelfUpdateService {
     void (async () => {
       try {
         const installed = findInstalled(target, this.env);
-        const id = installed ? installed.id : ((await this.linkDiscovered(target, log)) ?? (await installFromRegistry(target, { onLog: log, env: this.env })).id);
-        if (installed) log(`${id} is already installed`);
+        // A linked checkout goes through discovery too: it may need a rebuild before it runs.
+        const linked = !installed || installed.source === 'link' ? await this.linkDiscovered(target, log) : null;
+        const id = linked ?? installed?.id ?? (await installFromRegistry(target, { onLog: log, env: this.env })).id;
+        if (installed && !linked) log(`${id} is already installed`);
         activate(id, this.env);
         log(`activated ${id}`);
         job.status = 'restarting';
@@ -275,14 +279,18 @@ export class SelfUpdateService {
     return job;
   }
 
-  /** A checkout `status()` offers under `target`: link it and return its id. Null when no
-   *  checkout answers to that id — the target is then a registry version. Hosted cockpits never
-   *  get here with a checkout id: `forwardOnlyRefusal` rejects it (build metadata is not newer). */
+  /** A checkout `status()` offers under `target`: build it when it is unbuilt or older than its
+   *  last commit, link it and return its id. Null when no checkout answers to that id — the
+   *  target is then an installed entry or a registry version. Hosted cockpits never get here
+   *  with a checkout id: `forwardOnlyRefusal` rejects it (build metadata is not newer). */
   private async linkDiscovered(target: string, log: (line: string) => void): Promise<string | null> {
     if (this.deps.trimPaths?.()) return null;
     const checkout = (await discoverCheckouts(this.env)).find((entry) => entry.id === target);
     if (!checkout) return null;
-    if (!checkout.built) throw new Error(`${checkout.worktree} is not built — run \`npm run build\` there first`);
+    if (!checkout.built || checkout.stale) {
+      log(`${checkout.built ? 'rebuilding' : 'building'} ${checkout.branch} first`);
+      await (this.deps.buildCheckout ?? buildCheckout)(checkout, log);
+    }
     log(`linking ${checkout.packageRoot} (${checkout.branch})`);
     return linkCheckout(checkout.packageRoot, checkout.branch, this.env).id;
   }

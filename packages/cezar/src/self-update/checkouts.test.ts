@@ -2,9 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { cezarPackageRoot, discoverCheckouts } from './checkouts.ts';
+import { buildCheckout, cezarPackageRoot, discoverCheckouts } from './checkouts.ts';
+import { SelfUpdateService } from './service.ts';
 import { activate, activeId, branchSlug, currentEntry, linkCheckout, linkId, listInstalled, listLinks, removeInstalled, versionDir, versionsDir } from './layout.ts';
 
 /** A built cezar monorepo checkout: packages/cezar with dist/index.js and web/dist/index.html. */
@@ -171,5 +172,61 @@ describe('linked checkouts', () => {
       stale: true,
     });
     expect(found[1]).toMatchObject({ task: null, commit: { subject: 'init' }, stale: false });
+  });
+
+  it('builds a checkout: npm install only when dependencies are missing, then server and cockpit', async () => {
+    const worktree = join(home, 'wt');
+    const pkg = fakeCheckout(worktree, '0.13.0', false);
+    writeFileSync(join(worktree, 'package.json'), JSON.stringify({ scripts: { build: 'x', 'build:server': 'x', 'build:web': 'x' } }));
+    const calls: string[] = [];
+    const npm = async (args: string[]) => {
+      calls.push(args.slice(0, 2).join(' '));
+      if (args[1] === 'build:web') fakeCheckout(worktree);
+    };
+    await buildCheckout({ worktree, packageRoot: pkg }, () => {}, npm);
+    expect(calls).toEqual(['install --no-audit', 'run build:server', 'run build:web']);
+
+    mkdirSync(join(worktree, 'node_modules'), { recursive: true });
+    calls.length = 0;
+    await buildCheckout({ worktree, packageRoot: pkg }, () => {}, npm);
+    expect(calls).toEqual(['run build:server', 'run build:web']);
+
+    await expect(buildCheckout({ worktree: home, packageRoot: join(home, 'nothing') }, () => {}, async () => {})).rejects.toThrow(/still missing/);
+  });
+
+  // "not built" and "needs rebuild" used to be dead ends in the picker: switching now builds first.
+  it('apply() builds an unbuilt worktree, then links, activates and restarts into it', async () => {
+    const repo = join(home, 'repo');
+    fakeCheckout(repo);
+    git(repo, 'init', '-q', '-b', 'main');
+    writeFileSync(join(repo, '.gitignore'), 'dist\nweb/dist\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'init');
+    const task = join(home, 'wt-task');
+    git(repo, 'worktree', 'add', '-q', '-b', 'cez/abc12345', task);
+    mkdirSync(env.CEZ_HOME!, { recursive: true });
+    writeFileSync(join(env.CEZ_HOME!, 'config.json'), JSON.stringify({ projects: [{ id: 'cezar', root: realpathSync(repo) }] }));
+
+    const built: string[] = [];
+    let restarted = false;
+    const svc = new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: '0.13.0',
+      entry: join(versionsDir(env), 'current', 'node_modules', '@open-mercato', 'cezar', 'dist', 'index.js'),
+      restart: () => (restarted = true),
+      env,
+      buildCheckout: async (checkout, log) => {
+        log('built');
+        built.push(checkout.worktree);
+        fakeCheckout(checkout.worktree);
+      },
+    });
+    const job = svc.apply('0.13.0+cez-abc12345');
+    await vi.waitFor(() => expect(job.status).toBe('restarting'));
+    expect(job.error).toBeUndefined();
+    expect(built).toEqual([realpathSync(task)]);
+    expect(job.log).toContain('building cez/abc12345 first');
+    expect(activeId(env)).toBe('0.13.0+cez-abc12345');
+    await vi.waitFor(() => expect(restarted).toBe(true));
   });
 });
