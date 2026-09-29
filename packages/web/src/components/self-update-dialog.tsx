@@ -209,6 +209,47 @@ function LatestCard({
   applying: boolean
 }) {
   const jobBusy = data.job?.status === 'running' || data.job?.status === 'restarting'
+  // A linked worktree or a local build shares its version number with a release but is not that
+  // release: "newest version" would be a claim about code cezar did not ship. Offer the channel's
+  // newest release as the way back instead.
+  const active = data.installed.find((entry) => entry.active)
+  const dev = active?.source === 'link' || active?.source === 'local' ? active : null
+  if (dev) {
+    const release = data.latest[data.channel] ?? null
+    return (
+      <div
+        data-slot="self-update-latest"
+        className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5"
+      >
+        <div className="min-w-0 text-[13px]">
+          {dev.source === 'link' ? (
+            <>
+              Running worktree <span className="font-semibold">{dev.branch ?? dev.id}</span>, not a release.
+            </>
+          ) : (
+            <>Running a local build, not a release.</>
+          )}
+          <div className="text-[11.5px] text-muted-foreground">
+            {!data.checkedAt
+              ? 'The npm registry has not answered yet.'
+              : release
+                ? `Newest ${data.channel}: v${release} · checked ${new Date(data.checkedAt).toLocaleTimeString()}`
+                : `checked ${new Date(data.checkedAt).toLocaleTimeString()}`}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
+            {checking ? 'Checking…' : 'Check again'}
+          </Button>
+          {release ? (
+            <Button size="sm" onClick={() => onApply(release)} disabled={!data.canSelfUpdate || applying || jobBusy}>
+              Back to v{release}
+            </Button>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
   const target = data.updateAvailable
   return (
     <div

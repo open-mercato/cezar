@@ -113,6 +113,27 @@ describe('SelfUpdateDialog', () => {
     expect(screen.getByRole('combobox', { name: 'Worktree' })).toBeTruthy()
   })
 
+  // A worktree shares its version number with the release it forked from; calling it "the
+  // newest stable version" would vouch for code cezar never shipped.
+  it('does not call a running worktree the newest release, and offers the way back', async () => {
+    applySelfUpdate.mockClear()
+    applySelfUpdate.mockReturnValue(new Promise(() => {}))
+    renderDialog({
+      version: '0.13.0',
+      latest: { stable: '0.13.0', nightly: null },
+      installed: [
+        { id: '0.13.0+cez-abc', version: '0.13.0', source: 'link', branch: 'cez/abc', installedAt: '2026-09-29T08:00:00.000Z', active: true },
+      ],
+    })
+    const card = (await screen.findByRole('dialog')).querySelector('[data-slot="self-update-latest"]')!
+    expect(card.textContent).not.toContain('newest stable version')
+    expect(card.textContent).toContain('Running worktree cez/abc, not a release.')
+    expect(card.textContent).toContain('Newest stable: v0.13.0')
+    fireEvent.click(screen.getByRole('button', { name: 'Back to v0.13.0' }))
+    await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledTimes(1))
+    expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0')
+  })
+
   it('shows no worktree section when there are none', async () => {
     renderDialog()
     const dialog = await screen.findByRole('dialog')
