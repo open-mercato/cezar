@@ -21,6 +21,7 @@ import { Composer } from '@/components/composer/composer'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
+import { budgetStop } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
@@ -182,6 +183,7 @@ export function ThreadView({
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
   const plan = latestPlanEntries(currentThread)
+  const budget = budgetStop(run)
   const planTally = plan !== undefined && plan.length > 0 ? planCounts(plan) : undefined
   // The Agents dock's data: the current fan-out's sub-agents, or [] when there is none to
   // show (#474). Derived from the same reduced turns the thread renders — no new subscription.
@@ -454,7 +456,15 @@ export function ThreadView({
               dock says so before the composer offers a Continue nobody needs to press. */}
           <AutoResumeHint run={run} />
 
-          {run.status === 'waiting' ? (
+          {budget ? (
+            <div
+              data-slot="budget-hint"
+              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
+            >
+              <StatusDot tone="pending" pulse />
+              Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            </div>
+          ) : run.status === 'waiting' ? (
             <div
               data-slot="paused-hint"
               className="flex items-center gap-2 px-1 text-xs text-muted-foreground"

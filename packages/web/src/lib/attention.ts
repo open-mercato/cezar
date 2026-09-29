@@ -76,7 +76,21 @@ function isUnseen(_run: AttentionInput): boolean {
  *  surfaces that only have a status — the compare view's `GroupVariant` columns — can use the
  *  same canonical function instead of inventing a second status-to-tone mapping. `activity` is
  *  optional (#490), so status-only callers keep working unchanged. */
-export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt'>
+export type AttentionInput = Pick<RunRecord, 'status' | 'activity' | 'autoResumeAt' | 'dispatch' | 'costUsd'>
+
+export type BudgetStop = {
+  spent: number
+  ceiling: number
+}
+
+/** The dispatch brake is intentionally still an attention state: the user must decide whether
+ * to send a message after spending reaches the child's ceiling. This helper only explains the
+ * existing persisted brake; it does not alter the engine's stop or resume behavior. */
+export function budgetStop(run: Pick<RunRecord, 'status' | 'dispatch' | 'costUsd'>): BudgetStop | undefined {
+  const ceiling = run.dispatch?.overBudget ? run.dispatch.budgetUsd : undefined
+  if (run.status !== 'waiting' || ceiling === undefined) return undefined
+  return { spent: run.costUsd ?? 0, ceiling }
+}
 
 /**
  * `RunRecord` → attention.
@@ -108,7 +122,12 @@ export function deriveAttention(run: AttentionInput): Attention {
     return { bucket: 'error', tone: 'danger', pulse: false, label: 'failed' }
   }
   if (run.status === 'waiting') {
-    return { bucket: 'waiting', tone: 'pending', pulse: true, label: 'needs you' }
+    return {
+      bucket: 'waiting',
+      tone: 'pending',
+      pulse: true,
+      label: budgetStop(run)?.ceiling !== undefined ? 'budget reached' : 'needs you',
+    }
   }
   if (run.status === 'review') {
     return { bucket: 'waiting', tone: 'violet', pulse: true, label: 'needs review' }

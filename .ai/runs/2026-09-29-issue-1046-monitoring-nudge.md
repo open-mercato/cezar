@@ -5,7 +5,7 @@
 Ensure an autonomous turn that ends with `CEZ:MONITORING` parks as
 `running`/`activity: monitoring` in both turn-end paths instead of consuming an
 autonomous nudge. Preserve the existing budget brake, monitoring wake timer,
-continue caps, and statuses; leave Cause 2 untouched.
+continue caps, and statuses; explain budget-brake parks in the cockpit.
 
 ## Scope
 
@@ -14,11 +14,14 @@ continue caps, and statuses; leave Cause 2 untouched.
   `runAgentStep`.
 - Monitoring workflow tests: replace the stale autonomous-monitoring expectation
   and add coverage for both turn-end sites, including the no-nudge evidence.
+- `packages/web/src/lib/attention.ts` and task-thread header/dock: explain an
+  existing over-budget waiting park with spent and ceiling values.
 
 ## Non-goals
 
-- No attention/UI, store, contract, or Pi runner changes.
-- No changes to budget attention semantics or monitoring wake/cap behavior.
+- No store, contract, or Pi runner changes.
+- No changes to over-budget auto-resume, monitoring wake/cap behavior, or the
+  spend brake itself.
 
 ## Implementation Plan
 
@@ -33,6 +36,11 @@ continue caps, and statuses; leave Cause 2 untouched.
 - [x] 2.1 Prove the regression tests fail against the pre-fix implementation,
       then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; full `npm test` has an unrelated projects API repo-shape failure.
 - [ ] 2.2 Run the authoritative PR review/autofix pass and record the outcome.
+
+### Phase 3: Cause 2 budget explanation
+
+- [x] 3.1 Derive a budget-stop attention label from persisted dispatch facts without changing status or schema. — pending commit
+- [x] 3.2 Render spent/ceiling explanation in the run header and paused dock, with UI regressions. — pending commit
 
 Follow-up correction: `rePrompted` must retain precedence over the monitoring park in both handlers, because `handleDispatchTurn` may already have delivered an inbox prompt during a monitoring-marked turn. Regression `dispatch-engine.test.ts` fails pre-fix (`activity` is `monitoring`) and passes after the correction.
 
@@ -57,3 +65,8 @@ cap, dispatch, and budget behavior must remain unchanged.
 
 - [x] 2.1 Prove the regression tests fail against the pre-fix implementation, then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; full `npm test` has an unrelated projects API repo-shape failure.
 - [ ] 2.2 Run the authoritative PR review/autofix pass and record the outcome.
+
+### Phase 3: Cause 2 budget explanation
+
+- [x] 3.1 Derive a budget-stop attention label from persisted dispatch facts without changing status or schema. — pending commit
+- [x] 3.2 Render spent/ceiling explanation in the run header and paused dock, with UI regressions. — pending commit
