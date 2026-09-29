@@ -13,4 +13,4 @@ selector/tests. Non-goals: workflow/server route edits, PR-state hydration, issu
 - [x] 1.1 Add additive `prRefs` schema and store projection — d001db66
 - [x] 1.2 Record marker/created/legacy associations and regression tests — d001db66
 - [x] 1.3 Expose ordered references to web consumers and add selector tests — d001db66
-- [ ] 1.4 Run configured validation gate and publish PR
+- [x] 1.4 Run targeted validation and publish PR — pending final review/QA

@@ -204,7 +204,7 @@ describe('taskPrUrl', () => {
         { number: 8, origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
       ],
       prNumber: 7,
-    })
+    } as never)
     expect(taskReferences(r, 'https://github.com/o/r')).toEqual([
       { kind: 'PR', number: 7, url: 'https://github.com/o/r/pull/7' },
       { kind: 'PR', number: 8, url: 'https://github.com/o/r/pull/8' },

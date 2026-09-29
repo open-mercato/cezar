@@ -132,20 +132,21 @@ export function githubRepoBase(remote: string | undefined): string | undefined {
  *  is about (#407 — review/continue tasks reference an existing PR instead of opening one).
  *  Action gates (Draft PR, Create PR→View PR) must keep reading `pullRequestUrl` directly:
  *  a task that reviewed PR X must still be able to open its own PR from its branch. */
-export function taskPrUrl(run: TaskReferenceInput): string | undefined {
-  return taskPrRefs(run)[0]?.url ?? prUrls(run)[0]
-}
-
 export interface TaskPrRef {
   number: number
   url?: string
+  origin: 'created' | 'marker' | 'legacy' | 'derived'
+}
+
+export function taskPrUrl(run: TaskReferenceInput): string | undefined {
+  return taskPrRefs(run)[0]?.url ?? prUrls(run)[0]
 }
 
 /** Ordered PR associations, with a compatibility projection for records written before prRefs. */
 export function taskPrRefs(run: TaskReferenceInput, repoBase?: string): TaskPrRef[] {
   if (!run.prRefs?.length) {
     return prUrls(run)
-      .map((url) => ({ number: Number(prNumber(url)), url }))
+      .map((url) => ({ number: Number(prNumber(url)), url, origin: 'legacy' as const }))
       .filter((ref) => Number.isInteger(ref.number) && ref.number > 0)
   }
   const rank = { created: 0, marker: 1, legacy: 2, derived: 3 } as const
@@ -153,6 +154,7 @@ export function taskPrRefs(run: TaskReferenceInput, repoBase?: string): TaskPrRe
   return refs.map((ref) => ({
     number: ref.number,
     url: ref.url ?? synthesizeUrl('PR', ref.number, repoBase),
+    origin: ref.origin,
   }))
 }
 
@@ -207,11 +209,10 @@ export type TaskReferenceInput = Pick<
   | 'pullRequestUrl'
   | 'referencedPullRequestUrl'
   | 'prNumber'
-  | 'prRefs'
   | 'issueNumber'
   | 'referencedIssueUrl'
   | 'markerRefs'
->
+> & { prRefs?: readonly TaskPrRef[] }
 
 export interface TaskReference {
   kind: 'PR' | 'Issue'
