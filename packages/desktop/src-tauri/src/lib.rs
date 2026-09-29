@@ -339,12 +339,24 @@ fn installed_versions() -> Vec<InstalledVersion> {
             let version = manifest.get("version").and_then(|v| v.as_str()).unwrap_or(&id).to_string();
             let source = manifest.get("source").and_then(|v| v.as_str()).unwrap_or("registry");
             let installed_at = manifest.get("installedAt").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let label = if source == "local" { format!("{version} (local build)") } else { version };
+            let label = version_label(&version, source, manifest.get("branch").and_then(|v| v.as_str()));
             rows.push((installed_at, InstalledVersion { active: active.as_deref() == Some(id.as_str()), id, label }));
         }
     }
     rows.sort_by(|a, b| b.0.cmp(&a.0));
     rows.into_iter().map(|(_, row)| row).collect()
+}
+
+/// How the Versions submenu names an install: a local build says so, and a linked checkout
+/// (`cezar link`, a worktree run in place) reads as its branch — that is what a developer
+/// switching between task worktrees is looking for.
+fn version_label(version: &str, source: &str, branch: Option<&str>) -> String {
+    match (source, branch) {
+        ("local", _) => format!("{version} (local build)"),
+        ("link", Some(branch)) => format!("{branch} — {version} (worktree)"),
+        ("link", None) => format!("{version} (worktree)"),
+        _ => version.to_string(),
+    }
 }
 
 /// Rebuild the Versions submenu from disk: a check item per install, the active one checked.
@@ -609,6 +621,13 @@ pub fn run() {
                         eprintln!("[geometry] resized to physical {}x{}", size.width, size.height);
                     }
                     shell_for_events.geometry_dirty.store(true, Ordering::SeqCst);
+                }
+                // `cezar link` / `cezar use` in a terminal change what is installed behind the
+                // app's back; coming back to the window is the moment the list must be true.
+                WindowEvent::Focused(true) => {
+                    let app = window.app_handle().clone();
+                    let shell = shell_for_events.clone();
+                    let _ = window.app_handle().run_on_main_thread(move || refresh_versions_menu(&app, &shell));
                 }
                 WindowEvent::CloseRequested { .. } => {
                     if let Some(webview) = window.get_webview_window("main") {
@@ -1476,6 +1495,14 @@ mod tests {
     /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
     /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
     /// onto the brand row (shell 0.1.1).
+    #[test]
+    fn a_linked_worktree_reads_as_its_branch() {
+        assert_eq!(version_label("0.13.0", "link", Some("cez/cb28888e")), "cez/cb28888e — 0.13.0 (worktree)");
+        assert_eq!(version_label("0.13.0", "link", None), "0.13.0 (worktree)");
+        assert_eq!(version_label("0.13.0", "local", None), "0.13.0 (local build)");
+        assert_eq!(version_label("0.13.0", "registry", None), "0.13.0");
+    }
+
     #[test]
     fn the_version_switcher_needs_something_to_switch_to() {
         assert!(!switcher_has_choices(0));

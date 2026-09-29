@@ -17,13 +17,17 @@ export const installKindSchema = z.enum(['managed', 'global-npm', 'npx', 'checko
 export type InstallKind = z.infer<typeof installKindSchema>;
 
 /** One entry under `~/.cezar/versions/`. `id` is the directory name; a local build carries a
- *  `+local` suffix so it never collides with the registry version it was built from. */
+ *  `+local` suffix so it never collides with the registry version it was built from, and a
+ *  linked checkout (`link`, `cezar link`) a `+<branch>` one. */
 export const installedVersionSchema = z.object({
   id: z.string(),
   version: z.string(),
-  source: z.enum(['registry', 'local']),
+  source: z.enum(['registry', 'local', 'link']),
   installedAt: z.string(),
   active: z.boolean(),
+  /** `link` only: the checkout's branch, and its package root (absent in hosted mode). */
+  branch: z.string().optional(),
+  checkout: z.string().optional(),
 });
 export type InstalledVersion = z.infer<typeof installedVersionSchema>;
 
@@ -39,6 +43,19 @@ export const availableVersionSchema = z.object({
 export type AvailableVersion = z.infer<typeof availableVersionSchema>;
 
 export const selfUpdateJobStatusSchema = z.enum(['running', 'failed', 'restarting']);
+
+/** A cezar checkout (a worktree of a registered cezar repo) the cockpit can switch to by
+ *  applying its `id` — linked on the spot, no copy, no publish. Only built ones can be applied.
+ *  Always empty in hosted mode. */
+export const cezarCheckoutSchema = z.object({
+  id: z.string(),
+  branch: z.string(),
+  version: z.string(),
+  worktree: z.string(),
+  built: z.boolean(),
+  linked: z.boolean(),
+});
+export type CezarCheckout = z.infer<typeof cezarCheckoutSchema>;
 
 /** The one in-flight or last-finished install job. `log` is npm's own output, line by line,
  *  capped server-side. `restarting` means the new version is activated and the process is about
@@ -76,6 +93,8 @@ export const selfUpdateStatusSchema = z.object({
   checkedAt: z.string().nullable(),
   installed: z.array(installedVersionSchema),
   available: z.array(availableVersionSchema),
+  /** Optional so an older server's answer still parses. */
+  checkouts: z.array(cezarCheckoutSchema).optional(),
   job: selfUpdateJobSchema.nullable(),
   /** Runs in flight across the workspace — a restart interrupts them (boot recovery re-queues). */
   activeRuns: z.number().int().min(0),

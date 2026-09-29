@@ -681,6 +681,36 @@ npm run uninstall-as-command    # removes cezar / cez / cezar-cli / cezar-run (e
   link/snapshot install replaces it; `uninstall-as-command` removes ours, and
   `npm i -g @open-mercato/cezar` brings the published one back.
 
+### Run the desktop app (or `cezar`) on a worktree
+
+The desktop app and the managed `cezar` launcher both run whatever `~/.cezar/versions/current`
+points at. A **linked checkout** puts a worktree there without copying it: the version entry is a
+symlink to the worktree's `packages/cezar`, so it runs straight off the worktree (and its own
+`node_modules`), and every rebuild is live on the next restart.
+
+A worktree has to be built before you can switch to it (`npm install && npm run build` in it).
+Then pick one of:
+
+- **Cockpit**: open the version chip. The **Run a worktree** picker lists every worktree of every
+  registered cezar repo (task worktrees included). Pick one and choose **Switch & restart**.
+- **Desktop menu**: **Cezar ▸ Versions** lists linked worktrees by branch
+  (`cez/cb28888e — 0.13.0 (worktree)`). Clicking one switches and restarts.
+- **Terminal**:
+
+  ```bash
+  cezar link [<dir>] --use   # link the checkout (default: cwd) and make it current
+  cezar versions             # installs, links, and cezar worktrees not linked yet
+  cezar use 0.13.0           # back to a published release
+  cezar unlink <id>          # forget a link (the worktree is untouched)
+  ```
+
+  The desktop app picks up a terminal switch on its next start, and the Versions menu refreshes
+  when the window regains focus.
+
+Links are hidden from the lists once their worktree is deleted. Switch away before you remove a
+worktree the app is running from. Cockpits in hosted mode never list worktrees and never link
+one. Releases older than this feature ignore links, but the desktop menu still switches from them.
+
 ### In-checkout scripts
 
 ```bash

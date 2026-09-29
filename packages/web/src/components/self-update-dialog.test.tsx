@@ -95,6 +95,30 @@ describe('SelfUpdateDialog', () => {
     })
   })
 
+  // Developing cezar: the worktrees of a registered cezar repo are one pick away, and the one
+  // running is named in the header by its branch.
+  it('offers cezar worktrees and names a linked one by its branch', async () => {
+    renderDialog({
+      installed: [
+        { id: '0.13.0+cez-abc', version: '0.13.0', source: 'link', branch: 'cez/abc', installedAt: '2026-09-29T08:00:00.000Z', active: true },
+      ],
+      checkouts: [
+        { id: '0.13.0+cez-abc', branch: 'cez/abc', version: '0.13.0', worktree: '/r/wt/abc', built: true, linked: true },
+        { id: '0.13.0+cez-def', branch: 'cez/def', version: '0.13.0', worktree: '/r/wt/def', built: false, linked: false },
+      ],
+    })
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.textContent).toContain('worktree · cez/abc')
+    expect(dialog.querySelector('[data-slot="self-update-checkouts"]')).toBeTruthy()
+    expect(screen.getByRole('combobox', { name: 'Worktree' })).toBeTruthy()
+  })
+
+  it('shows no worktree section when there are none', async () => {
+    renderDialog()
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.querySelector('[data-slot="self-update-checkouts"]')).toBeNull()
+  })
+
   it('stays open while an install is running', async () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})))
     const onOpenChange = vi.fn()

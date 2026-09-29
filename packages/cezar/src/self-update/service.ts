@@ -9,7 +9,8 @@ import type { SelfUpdateJob, SelfUpdateStatus, UpdateChannel } from '@open-merca
 
 import { loadWorkspaceConfig, mergeWriteWorkspaceConfig } from '../workspace/config.ts';
 import { installFromLocal, installFromRegistry } from './installer.ts';
-import { activate, detectInstallKind, findInstalled, listInstalled, packageRootOf, type InstallKind } from './layout.ts';
+import { discoverCheckouts } from './checkouts.ts';
+import { activate, detectInstallKind, findInstalled, linkCheckout, listInstalled, packageRootOf, type InstallKind } from './layout.ts';
 import { distTagFor, RegistryCache, type PackageDocument } from './registry.ts';
 import { classifyVersion, isNewer } from './semver.ts';
 
@@ -91,6 +92,9 @@ export class SelfUpdateService {
     const target = channel === 'stable' ? stable : nightly;
     const { canSelfUpdate, reason } = this.capability();
     const trim = this.deps.trimPaths?.() ?? false;
+    // Linking a checkout runs whatever is in it: a local-machine gesture, never offered (or
+    // accepted — see `apply`) by a hosted cockpit, and never worth a git call there.
+    const checkouts = trim ? [] : await discoverCheckouts(this.env).catch(() => []);
     return {
       version: this.deps.version,
       installKind: this.installKind,
@@ -108,6 +112,16 @@ export class SelfUpdateService {
         source: entry.source,
         installedAt: entry.installedAt,
         active: entry.active,
+        ...(entry.branch ? { branch: entry.branch } : {}),
+        ...(entry.checkout && !trim ? { checkout: entry.checkout } : {}),
+      })),
+      checkouts: checkouts.map((checkout) => ({
+        id: checkout.id,
+        branch: checkout.branch,
+        version: checkout.version,
+        worktree: checkout.worktree,
+        built: checkout.built,
+        linked: checkout.linked,
       })),
       // Previews (`-pr123.`, `-develop.`) are noise in a picker meant for stable ↔ nightly
       // moves; the PoC lists stable releases and nightlies only.
@@ -181,8 +195,9 @@ export class SelfUpdateService {
   }
 
   /**
-   * Install `target` (a registry version, or an already-installed id such as `0.11.1+local`),
-   * activate it and restart. Returns as soon as the job is started; progress is on `status()`.
+   * Install `target` (a registry version, an already-installed id such as `0.11.1+local`, or the
+   * id of a built cezar checkout `status()` lists — linked on the spot), activate it and restart.
+   * Returns as soon as the job is started; progress is on `status()`.
    */
   apply(target: string): SelfUpdateJob {
     if (this.job?.status === 'running' || this.job?.status === 'restarting') throw new SelfUpdateBusyError();
@@ -197,7 +212,7 @@ export class SelfUpdateService {
     void (async () => {
       try {
         const installed = findInstalled(target, this.env);
-        const id = installed ? installed.id : (await installFromRegistry(target, { onLog: log, env: this.env })).id;
+        const id = installed ? installed.id : ((await this.linkDiscovered(target, log)) ?? (await installFromRegistry(target, { onLog: log, env: this.env })).id);
         if (installed) log(`${id} is already installed`);
         activate(id, this.env);
         log(`activated ${id}`);
@@ -214,6 +229,18 @@ export class SelfUpdateService {
       }
     })();
     return job;
+  }
+
+  /** A checkout `status()` offers under `target`: link it and return its id. Null when no
+   *  checkout answers to that id — the target is then a registry version. Hosted cockpits never
+   *  get here with a checkout id: `forwardOnlyRefusal` rejects it (build metadata is not newer). */
+  private async linkDiscovered(target: string, log: (line: string) => void): Promise<string | null> {
+    if (this.deps.trimPaths?.()) return null;
+    const checkout = (await discoverCheckouts(this.env)).find((entry) => entry.id === target);
+    if (!checkout) return null;
+    if (!checkout.built) throw new Error(`${checkout.worktree} is not built — run \`npm run build\` there first`);
+    log(`linking ${checkout.packageRoot} (${checkout.branch})`);
+    return linkCheckout(checkout.packageRoot, checkout.branch, this.env).id;
   }
 
   /** `cezar install` from a checkout or the npx cache: pack the running package into the managed

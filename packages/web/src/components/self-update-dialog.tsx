@@ -88,9 +88,7 @@ export function SelfUpdateDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span>cezar {data ? `v${data.version}` : ''}</span>
-            {data?.installed.find((entry) => entry.active)?.source === 'local' ? (
-              <Badge variant="outline">local build</Badge>
-            ) : null}
+            <ActiveBadge data={data} />
           </DialogTitle>
           <DialogDescription className="sr-only">Update cezar, pick a release channel or switch versions.</DialogDescription>
         </DialogHeader>
@@ -121,6 +119,8 @@ export function SelfUpdateDialog({
               onApply={(version) => apply.mutate(version)}
               applying={apply.isPending}
             />
+
+            <CheckoutPicker data={data} onApply={(id) => apply.mutate(id)} applying={apply.isPending} />
 
             {!data.canSelfUpdate ? <InstallHint data={data} /> : null}
 
@@ -319,6 +319,79 @@ function VersionPicker({
       </div>
       <p className="text-[11.5px] text-muted-foreground">
         Any version, older ones included. Installed versions stay on disk, so switching back is instant.
+      </p>
+    </div>
+  )
+}
+
+function ActiveBadge({ data }: { data: SelfUpdateStatus | undefined }) {
+  const active = data?.installed.find((entry) => entry.active)
+  if (active?.source === 'local') return <Badge variant="outline">local build</Badge>
+  if (active?.source === 'link') return <Badge variant="outline">worktree · {active.branch ?? active.id}</Badge>
+  return null
+}
+
+/**
+ * cezar's own worktrees (a registered cezar repo's `git worktree list`), so a developer can run
+ * the desktop app — or this cockpit — on any task branch: applying one links the checkout into
+ * `~/.cezar/versions` (no copy) and restarts into it. Only built worktrees can be picked.
+ */
+function CheckoutPicker({
+  data,
+  onApply,
+  applying,
+}: {
+  data: SelfUpdateStatus
+  onApply: (id: string) => void
+  applying: boolean
+}) {
+  const [picked, setPicked] = useState('')
+  const checkouts = data.checkouts ?? []
+  if (checkouts.length === 0) return null
+  const jobBusy = data.job?.status === 'running' || data.job?.status === 'restarting'
+  const activeId = data.installed.find((entry) => entry.active)?.id
+  const selected = checkouts.find((checkout) => checkout.id === picked)
+  return (
+    <div data-slot="self-update-checkouts" className="flex min-w-0 flex-col gap-2">
+      <div className="text-[13px] font-semibold">
+        Run a worktree <span className="font-normal text-muted-foreground">· development</span>
+      </div>
+      <div className="flex min-w-0 items-center gap-2">
+        <Select value={picked} onValueChange={setPicked} disabled={jobBusy}>
+          <SelectTrigger size="sm" aria-label="Worktree" className="w-0 min-w-0 flex-1 text-[13px]">
+            <SelectValue placeholder="Choose a cezar worktree" />
+          </SelectTrigger>
+          <SelectContent className="max-h-72">
+            {checkouts.map((checkout) => (
+              <SelectItem key={checkout.worktree} value={checkout.id} disabled={!checkout.built || !checkout.id}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="truncate">{checkout.branch}</span>
+                  <span className="text-muted-foreground">v{checkout.version}</span>
+                  {checkout.id === activeId ? (
+                    <Badge variant="secondary">current</Badge>
+                  ) : !checkout.built ? (
+                    <Badge variant="outline">not built</Badge>
+                  ) : checkout.linked ? (
+                    <Badge variant="outline">linked</Badge>
+                  ) : null}
+                </span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Button
+          size="sm"
+          variant="contrast"
+          onClick={() => selected && onApply(selected.id)}
+          disabled={!selected || selected.id === activeId || !data.canSelfUpdate || applying || jobBusy}
+        >
+          Switch &amp; restart
+        </Button>
+      </div>
+      <p className="truncate text-[11.5px] text-muted-foreground" title={selected?.worktree}>
+        {selected
+          ? selected.worktree
+          : 'Linked, not copied: rebuild the worktree (npm run build) and restart to run new code.'}
       </p>
     </div>
   )
