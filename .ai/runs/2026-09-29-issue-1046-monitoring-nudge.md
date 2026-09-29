@@ -34,6 +34,8 @@ continue caps, and statuses; leave Cause 2 untouched.
       then run targeted tests and the full configured validation gate. — focused suites, typecheck, unit, build, and package gate pass; full `npm test` has an unrelated projects API repo-shape failure.
 - [ ] 2.2 Run the authoritative PR review/autofix pass and record the outcome.
 
+Follow-up correction: `rePrompted` must retain precedence over the monitoring park in both handlers, because `handleDispatchTurn` may already have delivered an inbox prompt during a monitoring-marked turn. Regression `dispatch-engine.test.ts` fails pre-fix (`activity` is `monitoring`) and passes after the correction.
+
 ## Risks
 
 The two near-identical turn-end handlers can drift. Tests must exercise both.
