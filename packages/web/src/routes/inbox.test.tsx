@@ -133,7 +133,17 @@ function stubFetch(
       // The runner/model pills (#401) read the host's backends and the per-runner defaults.
       if (method === 'GET' && path === '/api/v1/health') return jsonResponse(health(backends))
       if (method === 'GET' && path === '/api/v1/providers/status') return jsonResponse(providers)
-      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
+      if (method === 'GET' && path === '/api/v1/models?runner=codex') return jsonResponse({
+        runner: 'codex',
+        models: [{
+          id: 'gpt-future',
+          label: 'gpt-future',
+          description: 'Newest',
+          reasoningEfforts: [{ id: 'high', description: 'Thorough reasoning' }],
+        }],
+        source: 'live',
+        stale: false,
+      })
       if (method === 'GET' && path === '/api/v1/models?runner=claude') return jsonResponse({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
       if (path === '/api/v1/models?runner=cursor') return jsonResponse({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (method === 'GET' && path === '/api/v1/config') {
@@ -428,7 +438,7 @@ describe('Run — backend selection (#401)', () => {
     await waitFor(() => expect(startBody(sent, 't1')).toEqual({ runner: 'codex' }))
   })
 
-  it('a model pick rides along with the runner', async () => {
+  it('a model and effort pick ride along with the runner', async () => {
     const sent = stubFetch({}, TODOS, ['claude', 'codex'])
     renderInbox()
 
@@ -438,10 +448,12 @@ describe('Run — backend selection (#401)', () => {
 
     await pick(card, 'runner-pill', 'codex')
     await pick(card, 'model-pill', 'gpt-future')
+    await waitFor(() => expect(card.querySelector('[data-slot="effort-pill"]')).not.toBeNull())
+    await pick(card, 'effort-pill', 'high')
     fireEvent.click(card.querySelector('[data-action="todo-run"]')!)
 
     await waitFor(() =>
-      expect(startBody(sent, 't1')).toEqual({ runner: 'codex', model: 'gpt-future' }),
+      expect(startBody(sent, 't1')).toEqual({ runner: 'codex', model: 'gpt-future', reasoningEffort: 'high' }),
     )
   })
 

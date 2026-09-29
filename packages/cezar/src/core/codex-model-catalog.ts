@@ -8,7 +8,7 @@ import {
   spawnCodexAppServer,
   type CodexAppServerMessage,
 } from './codex-app-server-transport.ts';
-import type { ModelOption } from './runner-model-catalog.ts';
+import type { ModelOption, ReasoningEffortOption } from './runner-model-catalog.ts';
 
 export interface CodexModelDiscoveryOptions {
   cwd: string;
@@ -22,6 +22,10 @@ const modelSchema = z.object({
   displayName: z.string().optional(),
   description: z.string().optional(),
   hidden: z.boolean().optional(),
+  // App Server added object entries after initially returning a string array. Keep both values
+  // opaque at the page boundary so one malformed capability never drops the whole model catalog.
+  supportedReasoningEfforts: z.unknown().optional(),
+  defaultReasoningEffort: z.unknown().optional(),
 }).passthrough();
 
 const pageSchema = z.object({
@@ -109,10 +113,14 @@ async function discoverPages(rpc: CodexAppServerRpc): Promise<ModelOption[]> {
       if (!id || model.hidden || ids.has(id)) continue;
       if (models.length >= MAX_MODELS) throw new Error('Codex model discovery exceeded the size limit');
       ids.add(id);
+      const reasoningEfforts = normalizeReasoningEfforts(model.supportedReasoningEfforts);
+      const defaultReasoningEffort = normalizeReasoningEffort(model.defaultReasoningEffort);
       models.push({
         id,
         label: model.displayName?.trim() || id,
         description: model.description ?? '',
+        ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
+        ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
       });
     }
 
@@ -126,4 +134,37 @@ async function discoverPages(rpc: CodexAppServerRpc): Promise<ModelOption[]> {
   }
 
   throw new Error('Codex model discovery exceeded the page limit');
+}
+
+/** Normalize both App Server effort-list formats without treating malformed metadata as fatal. */
+function normalizeReasoningEfforts(value: unknown): ReasoningEffortOption[] {
+  if (!Array.isArray(value)) return [];
+  const efforts: ReasoningEffortOption[] = [];
+  const ids = new Set<string>();
+  for (const entry of value) {
+    const normalized = normalizeReasoningEffortOption(entry);
+    if (!normalized || ids.has(normalized.id)) continue;
+    ids.add(normalized.id);
+    efforts.push(normalized);
+  }
+  return efforts;
+}
+
+function normalizeReasoningEffortOption(value: unknown): ReasoningEffortOption | undefined {
+  if (typeof value === 'string') {
+    const id = value.trim();
+    return id ? { id, description: '' } : undefined;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const id = normalizeReasoningEffort(record.reasoningEffort);
+  if (!id) return undefined;
+  return {
+    id,
+    description: typeof record.description === 'string' ? record.description.trim() : '',
+  };
+}
+
+function normalizeReasoningEffort(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
