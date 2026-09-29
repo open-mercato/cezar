@@ -869,6 +869,23 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     expect(store.getRun(run.id)?.prRefs?.[0]?.url).toBe('https://github.com/open-mercato/cezar/pull/42');
   });
 
+  it('preserves legacy scalar associations before a replacement patch is applied', () => {
+    const { store, run } = freshRun();
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/7' });
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/8' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([7, 8]);
+  });
+
+  it('keeps same-number PRs from different repositories as separate links', () => {
+    const { store, run } = freshRun();
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/o/r/pull/7', origin: 'created' });
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/other/r/pull/7', origin: 'marker' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.url)).toEqual([
+      'https://github.com/o/r/pull/7',
+      'https://github.com/other/r/pull/7',
+    ]);
+  });
+
   it('marker numbers land on the record and persist', () => {
     const { store, run } = freshRun();
     store.applyMarkerRefs(run.id, { pr: 442, issue: 433 });
@@ -1054,7 +1071,7 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     );
   });
 
-  it('a declaration naming some OTHER PR still overrides the fuzzy tier', () => {
+  it('a declaration naming some OTHER PR stays alongside the created PR', () => {
     const { store, run } = freshRun('task');
     store.appendEvent(run.id, {
       type: 'result',
@@ -1062,7 +1079,9 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     });
     store.applyMarkerRefs(run.id, { pr: 500 });
     const loaded = store.getRun(run.id);
-    expect(loaded?.prNumber).toBe(500);
+    // Created provenance is stronger than a later marker; both remain reachable in prRefs.
+    expect(loaded?.prNumber).toBe(42);
+    expect(loaded?.prRefs?.map((ref) => ref.number)).toEqual([42, 500]);
     expect(loaded?.referencedPullRequestUrl).toBeUndefined(); // no candidate ends in /500
   });
 });

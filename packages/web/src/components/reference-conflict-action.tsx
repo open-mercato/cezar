@@ -141,12 +141,23 @@ export function TaskReferenceChip({
    *  there is room for words in a panel wherever the row it hangs off is. */
   compact?: boolean
 }) {
-  const references = taskReferences(run)
-  const chips = references.length > 0 ? references : [reference]
+  // The caller supplies the already-resolved primary (including a repoBase-synthesized URL).
+  // Add only additional PRs when that primary is a PR; an issue chip must not suddenly grow an
+  // unrelated PR from the run's history, and preserving the supplied primary keeps synthesized
+  // links reachable on surfaces that do not carry project metadata.
+  const additional =
+    reference.kind === 'PR'
+      ? taskReferences(run).filter(
+          (candidate) =>
+            candidate.kind === 'PR' &&
+            (candidate.number !== reference.number || candidate.url !== reference.url),
+        )
+      : []
+  const chips = [reference, ...additional]
   return (
-    <span className="inline-flex items-center gap-1">
+    <>
       {chips.map((item, index) => (
-        <Fragment key={`${item.kind}-${item.number ?? item.url ?? index}`}>
+        <Fragment key={`${item.kind}-${item.number ?? 'unknown'}-${item.url ?? index}`}>
           <ReferenceChip
             reference={item}
             taskTitle={runTitle(run)}
@@ -156,6 +167,6 @@ export function TaskReferenceChip({
           />
         </Fragment>
       ))}
-    </span>
+    </>
   )
 }

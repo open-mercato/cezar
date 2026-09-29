@@ -633,7 +633,16 @@ function legacyPrRefs(run: RunRecord): RunPrRef[] {
   if (created !== undefined) refs.push({ number: created, url: run.pullRequestUrl, origin: 'created', at });
   const declared = run.markerRefs?.pr;
   const referenced = refUrlNumber(run.referencedPullRequestUrl);
-  if (declared !== undefined) refs.push({ number: declared, url: run.referencedPullRequestUrl, origin: 'marker', at });
+  if (declared !== undefined) {
+    refs.push({
+      number: declared,
+      ...(referenced === declared && run.referencedPullRequestUrl
+        ? { url: run.referencedPullRequestUrl }
+        : {}),
+      origin: 'marker',
+      at,
+    });
+  }
   else if (referenced !== undefined && referenced !== created) refs.push({ number: referenced, url: run.referencedPullRequestUrl, origin: 'legacy', at });
   if (run.prNumber !== undefined && !refs.some((ref) => ref.number === run.prNumber)) {
     refs.push({ number: run.prNumber, origin: 'derived', at });
@@ -651,9 +660,17 @@ function appendPrRefToRun(run: RunRecord, ref: Omit<RunPrRef, 'at'> & { at?: str
   const hadList = !!run.prRefs;
   const refs = run.prRefs ?? legacyPrRefs(run);
   const at = ref.at ?? new Date().toISOString();
-  const existing = refs.find((candidate) => candidate.number === ref.number);
+  const existing = refs.find(
+    (candidate) =>
+      candidate.number === ref.number &&
+      (!candidate.url || !ref.url || candidate.url === ref.url),
+  );
   let changed = !hadList;
   if (existing) {
+    if (PR_REF_RANK[ref.origin] < PR_REF_RANK[existing.origin]) {
+      existing.origin = ref.origin;
+      changed = true;
+    }
     if (!existing.url && ref.url) {
       existing.url = ref.url;
       changed = true;
@@ -1000,6 +1017,10 @@ export class RunStore extends EventEmitter {
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
     }
+    // Seed the list from the old values BEFORE applying a patch. Callers that update a scalar
+    // projection often provide the replacement URL/number in the same patch; seeding afterward
+    // would make the historical association unrecoverable.
+    if (!run.prRefs && !normalized.prRefs) run.prRefs = legacyPrRefs(run);
     Object.assign(run, this.redactPatch(normalized, id));
     // Keep legacy writers (including workflow resume/naming paths) in sync without requiring
     // every caller to know about the additive list. The list's provenance still decides the
