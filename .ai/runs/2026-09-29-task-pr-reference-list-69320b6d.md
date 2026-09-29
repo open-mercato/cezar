@@ -10,7 +10,7 @@ selector/tests. Non-goals: workflow/server route edits, PR-state hydration, issu
 
 ### Phase 1: persistence and selector
 
-- [x] 1.1 Add additive `prRefs` schema and store projection
-- [x] 1.2 Record marker/created/legacy associations and regression tests
-- [x] 1.3 Expose ordered references to web consumers and add selector tests
+- [x] 1.1 Add additive `prRefs` schema and store projection — d001db66
+- [x] 1.2 Record marker/created/legacy associations and regression tests — d001db66
+- [x] 1.3 Expose ordered references to web consumers and add selector tests — d001db66
 - [ ] 1.4 Run configured validation gate and publish PR

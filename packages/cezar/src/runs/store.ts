@@ -1377,9 +1377,8 @@ export class RunStore extends EventEmitter {
       ...(refs.pr !== undefined ? { pr: refs.pr } : {}),
       ...(refs.issue !== undefined ? { issue: refs.issue } : {}),
     };
-    // `prNumber` is the about-PR as well (it is what paints a numeric-only chip), so a
-    // re-declaration naming the created PR only FILLS it — it never overwrites the number the
-    // task came in with, which is still the PR this task is about.
+    // `prNumber` remains a compatibility projection; the ordered list decides which association
+    // is primary, while `referencedPullRequestUrl` retains its existing marker semantics below.
     if (refs.pr !== undefined) this.recordPrRef(runId, { number: refs.pr, origin: 'marker' });
     if (refs.issue !== undefined) {
       run.issueNumber = refs.issue;
