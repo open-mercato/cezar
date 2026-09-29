@@ -57,11 +57,29 @@ describe('AppShell', () => {
     expect(within(screen.getByRole('main')).getByText('route content')).toBeTruthy()
   })
 
-  it('renders the brand tile from the shared /icon.svg asset', () => {
+  // Brand guideline ("Znak z nazwą"): the mark WITHOUT its tile, in the text colour, beside the
+  // lowercase name in Chakra Petch SemiBold — 26px over 19px with a gap of 0.6 × the type size.
+  it('renders the brand lockup: the tile-less mark beside the lowercase name', () => {
     renderShell('/')
-    const tile = document.querySelector('[data-slot="brand-tile"]') as HTMLImageElement | null
-    expect(tile).toBeTruthy()
-    expect(tile!.getAttribute('src')).toBe('/icon.svg')
+    const lockup = sidebar().querySelector('[data-slot="brand-lockup"]') as HTMLElement | null
+    expect(lockup).toBeTruthy()
+    expect(lockup!.style.gap).toBe('11.4px')
+
+    const mark = lockup!.querySelector('[data-slot="brand-mark"]') as SVGElement | null
+    expect(mark).toBeTruthy()
+    expect(mark!.getAttribute('height')).toBe('26')
+    expect(mark!.getAttribute('fill')).toBe('currentColor')
+    // No tile: polygons only, no rect behind them and no <img> of the tiled icon.
+    expect(mark!.querySelectorAll('polygon')).toHaveLength(4)
+    expect(mark!.querySelector('rect')).toBeNull()
+    expect(sidebar().querySelector('img[src="/icon.svg"]')).toBeNull()
+
+    const name = lockup!.querySelector('[data-slot="brand-name"]') as HTMLElement | null
+    expect(name?.textContent).toBe('cezar')
+    expect(name!.style.fontSize).toBe('19px')
+    expect(name!.style.fontFamily).toBe('var(--brand)')
+    expect(name!.className).toContain('font-semibold')
+    expect(name!.className).toContain('tracking-normal')
   })
 
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
@@ -425,6 +443,51 @@ describe('AppShell', () => {
       cleanup()
       renderShell('/p/shop/', { projectGroups: <p>groups</p> })
       expect(allTasks()!.getAttribute('aria-current')).toBeNull()
+    })
+  })
+
+  /**
+   * Dashboard and All tasks stack directly against each other, so they are peers: one row
+   * height, one type scale, one violet icon. Dashboard shipped with its own inline class string
+   * and drifted to a taller row with a grey icon; these pin the pair together.
+   */
+  describe('top-level doors read as peers', () => {
+    const dashboard = () => document.querySelector('[data-slot="dashboard-link"]') as HTMLElement
+    const allTasks = () => document.querySelector('[data-slot="all-tasks-link"]') as HTMLElement
+
+    /** The shared skin, minus the active-state background either row adds on its own page. */
+    const skin = (el: HTMLElement) => [...el.classList].filter(c => c !== 'bg-muted').sort()
+
+    it('paints both rows from the same class string', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      expect(skin(dashboard())).toEqual(skin(allTasks()))
+    })
+
+    it('gives both rows the touch height that relaxes to 36px on desktop', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      for (const row of [dashboard(), allTasks()]) {
+        expect(row.classList.contains('h-11')).toBe(true)
+        expect(row.classList.contains('md:h-9')).toBe(true)
+        // The drifted Dashboard row was `min-h-11` with no desktop override — 8px taller than
+        // the row beneath it at every width above `md`.
+        expect(row.classList.contains('min-h-11')).toBe(false)
+      }
+    })
+
+    it('gives both icons the violet accent', () => {
+      renderShell('/', { projectGroups: <p>groups</p> })
+      for (const row of [dashboard(), allTasks()]) {
+        const icon = row.querySelector('svg') as SVGElement
+        expect(icon).not.toBeNull()
+        expect(icon.getAttribute('class')).toContain('text-violet/70')
+      }
+    })
+
+    it('brings its own icon to full strength on its own page', () => {
+      renderShell('/dashboard', { projectGroups: <p>groups</p> })
+      const icon = dashboard().querySelector('svg') as SVGElement
+      expect(icon.getAttribute('class')).toContain('text-violet')
+      expect(icon.getAttribute('class')).not.toContain('text-violet/70')
     })
   })
 

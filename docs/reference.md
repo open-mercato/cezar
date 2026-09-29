@@ -87,7 +87,7 @@ One browser window, with live task updates over Server-Sent Events:
 | **Workflows** | Build a chain by drag-ordering skills, save it as portable YAML, import/export, or delete. Built-ins always come back. |
 | **Settings** | Appearance (dark/light theme, accent, density), agent backends, notifications, and the skills catalog. |
 
-The cockpit is a React app served pre-built from the package — `npx cezar-cli`
+The cockpit is a React app served pre-built from the package — `npx cezar-run`
 still means no build step and no dev server on your machine — with a dark/light
 theme, a ⌘K command palette, and bookmarklets that launch a task straight from
 a GitHub page.
@@ -297,11 +297,14 @@ Useful environment variables:
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
 | `CEZ_JUNIE_BIN=/path/to/junie` | Override which `junie` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
+| `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
 | `CEZ_SKILLS_AUTO_UPDATE=0` | Disable automatic checks and updates for upstream-CLI-tracked Open Mercato skill installations. On by default; a saved global Skills setting overrides this environment default. Checks are delayed, bounded, cached, and non-blocking. |
+| `CEZ_UPDATE_CHANNEL=nightly` | Release channel the self-updater follows: `stable` (npm `latest`, the default) or `nightly`. A channel saved from the version chip's dialog overrides this seed. |
+| `CEZ_SUPERVISED=1` | A supervisor relaunches cezar (the desktop shell sets `CEZ_DESKTOP=1`, which implies it): after an update the process exits with status 75 instead of re-exec'ing itself, so the supervisor starts the new version. Off by default. |
 | `CEZ_AUTONOMOUS_DEFAULT=0` | Seed the New Task Autonomous default (`0` or `1`). Without a seed, skills default on and workflows off; a saved global Resources setting overrides it. |
 | `CEZ_WORKTREE_DEFAULT=1` | Seed the New Task Worktree default (`0` or `1`). Without a seed, eligible runs default on; a saved global Resources setting overrides it. |
 | `CEZ_DISABLE_REPO_LOCK=1` | **Dangerous escape hatch:** allow any run executing in the repository root — an explicit `worktree=false` run, non-Git degradation, or a continuation whose worktree cannot be restored — to proceed without Cezar’s repository-root lease. Agents can overwrite each other’s files or Git state; isolated worktree runs are unaffected. Off by default; only the exact value `1` enables it. |
@@ -362,6 +365,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 | **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
 | **Junie** _(experimental)_ | [`junie`](https://junie.jetbrains.com/cli) | `junie --acp=true` — the real Agent Client Protocol over stdio, the same transport JetBrains IDEs use. | Ignores `allowedTools`; every permission is auto-approved. |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
+| **Cursor** | [`agent`](https://cursor.com/docs/cli/overview) (Cursor Agent CLI) | Headless print mode: `agent -p --force --trust --output-format stream-json`. Continue is fresh-session in v1 (print mode exits per turn). Its documented output carries no token/cost figures, so a Cursor run's header always reads zero tokens and no cost — that is the backend not reporting usage, not the run using nothing. | Ignores `allowedTools`; `--force` / `--trust` auto-approves tool use for unattended runs. |
 | **pi** _(experimental)_ | [`pi`](https://github.com/badlogic/pi-mono) | Persistent `--mode rpc` over JSONL; models are picked with the `provider/model` convention. | Maps `allowedTools` onto pi's `--tools` allowlist; a configured `bashAllowlist` disables Bash because pi cannot express command-prefix rules. |
 
 > ⚠️ **Junie, OpenCode and pi support are experimental.** All three runners work
@@ -373,8 +377,8 @@ On startup cezar probes which CLIs are installed and the cockpit only offers
 the backends it found — install any one of the five and you're operational.
 
 **Models come from your own machine.** The model picker does not ship a list of
-vendor releases that goes stale between cezar versions. For Claude, Codex, Junie
-and OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
+vendor releases that goes stale between cezar versions. For Claude, Codex, Cursor, Junie and
+OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
 Code's `list_models` control request; the Codex app-server's `model/list`;
 Junie's ACP `session/new` config options; `opencode models`) and shows exactly
 that, in that order — so a model your account gained yesterday is selectable
@@ -432,12 +436,12 @@ strategy**, and never escalates silently: every privileged command is printed
 and verified, and it ends with a real authenticated end-to-end check.
 
 ```bash
-npx cezar-cli server-install   --platform ubuntu-vps   # stand it up
-npx cezar-cli server-deploy    --platform ubuntu-vps   # roll out a new version (reload the service)
-npx cezar-cli server-uninstall --platform ubuntu-vps   # reverse it
+npx cezar-run server-install   --platform ubuntu-vps   # stand it up
+npx cezar-run server-deploy    --platform ubuntu-vps   # roll out a new version (reload the service)
+npx cezar-run server-uninstall --platform ubuntu-vps   # reverse it
 
 # host a SECOND cockpit for another domain on the same box (ubuntu-vps):
-npx cezar-cli server-install   --platform ubuntu-vps --domain shop.example.com
+npx cezar-run server-install   --platform ubuntu-vps --domain shop.example.com
 ```
 
 On `ubuntu-vps` a single host can run several independent cockpits — add
@@ -449,7 +453,7 @@ nginx already owns `:80/:443`, cezar's would fight it for the ports. Install the
 service only and let your proxy front it:
 
 ```bash
-npx cezar-cli server-install --platform ubuntu-vps \
+npx cezar-run server-install --platform ubuntu-vps \
   --external-proxy --domain cezar.example.com --bind-host 172.17.0.1
 ```
 
@@ -577,7 +581,7 @@ Every night we publish the trunk to npm, so the features landing in the next
 release are one command away:
 
 ```bash
-npx cezar-cli@nightly      # everything merged as of last night
+npx cezar-run@nightly      # everything merged as of last night
 ```
 
 **Come build this with us.** cezar is shaped by the people who run it on real
@@ -593,9 +597,9 @@ can be rough, a flag or a screen may change under you, and something occasionall
 breaks in a way no test caught. Nothing is at risk beyond your patience — every
 task runs in its own git worktree and cezar never auto-merges — but if you need a
 boring day, stay on the stable release. Pin a nightly you liked with its exact
-version (`npx cezar-cli@0.9.2-nightly.20260813.126` — the cockpit prints the
+version (`npx cezar-run@0.9.2-nightly.20260813.126` — the cockpit prints the
 version it booted, and the date in it tells you how old the build is), and drop
-back to stable any time with a plain `npx cezar-cli`.
+back to stable any time with a plain `npx cezar-run`.
 
 ### Preview builds
 
@@ -604,13 +608,13 @@ Every green CI run also publishes an installable npm snapshot
 merged yet:
 
 ```bash
-npx cezar-cli@develop      # current develop head
+npx cezar-run@develop      # current develop head
 ```
 
 Every pull request gets its own preview too — the CI bot posts a sticky comment
 on the PR with the exact pinned version to copy-paste
-(`npx cezar-cli@<version>-pr<N>.<run>`). Nightlies and previews are all
-prerelease versions under their own dist-tags; a plain `npx cezar-cli` always
+(`npx cezar-run@<version>-pr<N>.<run>`). Nightlies and previews are all
+prerelease versions under their own dist-tags; a plain `npx cezar-run` always
 resolves to the latest stable release.
 
 ---
@@ -638,7 +642,7 @@ npm install
 npm run build
 ```
 
-**4. Install as a global command** — build + put `cezar` / `cez` / `cezar-cli` on
+**4. Install as a global command** — build + put `cezar` / `cez` / `cezar-cli` / `cezar-run` on
 your PATH pointing at *this checkout*:
 
 ```bash
@@ -651,7 +655,7 @@ Now `cd` into any other repo and run it:
 ```bash
 cd ~/some-other-project
 cezar            # cockpit for that repo, straight off your checkout
-cezar-cli --help # same binary; the name matches `npx cezar-cli`
+cezar-run --help # same binary; the name matches `npx cezar-run`
 ```
 
 **5. The change loop**
@@ -665,7 +669,7 @@ cezar-cli --help # same binary; the name matches `npx cezar-cli`
 **6. Uninstall**
 
 ```bash
-npm run uninstall-as-command    # removes cezar / cez / cezar-cli (either flavor)
+npm run uninstall-as-command    # removes cezar / cez / cezar-cli / cezar-run (either flavor)
 ```
 
 **7. Troubleshooting**

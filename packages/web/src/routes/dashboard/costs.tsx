@@ -341,7 +341,7 @@ function CostPeriod({
       >
         <SheetContent
           {...sheetPosition}
-          className="w-full overflow-y-auto sm:max-w-xl [&>button]:min-h-11 [&>button]:min-w-11"
+          className="w-full overflow-y-auto sm:max-w-xl"
           onCloseAutoFocus={(event) => {
             event.preventDefault()
             trigger.restore()

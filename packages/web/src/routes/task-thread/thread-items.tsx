@@ -322,6 +322,7 @@ const PROVIDER_LABEL: Record<ThreadProviderAuthRequired['provider'], string> = {
   codex: 'Codex',
   junie: 'Junie',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   pi: 'pi',
 }
 

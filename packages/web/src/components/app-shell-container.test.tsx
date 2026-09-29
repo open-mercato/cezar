@@ -69,6 +69,7 @@ const PROVIDERS: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'disconnected', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -427,6 +428,7 @@ describe('sidebar wiring', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'not-installed', enabled: true },
           { provider: 'opencode', status: 'disconnected', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -446,6 +448,7 @@ describe('sidebar wiring', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'disconnected', enabled: true, authFailureId: 'open-1' },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })

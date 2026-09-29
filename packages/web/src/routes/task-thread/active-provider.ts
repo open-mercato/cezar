@@ -7,6 +7,7 @@ const PROVIDER_LABEL: Record<Runner, string> = {
   codex: 'Codex',
   junie: 'Junie',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   pi: 'pi',
 }
 

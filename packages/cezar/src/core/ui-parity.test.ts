@@ -3,7 +3,7 @@
  *
  * The spec (`.ai/specs/2026-07-14-cockpit-ui-redesign.md` §"Backend parity
  * requirement") demands that every capability in the parity matrix is
- * emitted by EVERY backend, so the GUI degrades per-capability, never
+ * emitted by every first-class backend, so the GUI degrades per-capability, never
  * per-backend. This table test asserts it over the golden fixtures' expected
  * outputs (the hand-verified wire-faithful contract for each mapper): if a
  * future mapper change drops a capability — or a new fixture set forgets to
@@ -48,7 +48,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'pi', 'junie'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -74,12 +74,13 @@ function hasToolStatus(events: UiEvent[], status: string): boolean {
   return items(events).some((item) => item.kind === 'tool' && item.status === status);
 }
 
-/** The parity matrix (spec §"Backend parity requirement"): capability → predicate over a
- *  backend's full v2 fixture output. Every row here is required from EVERY backend — no
- *  per-backend exemption list. "sub-agent task items" is asserted separately below, the one
- *  row where junie has a protocol-level gap not yet reconciled with the documented hard rule
- *  (see module doc). */
-const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) => boolean]> = [
+/** The parity matrix (spec §"Backend parity requirement"): capability →
+ *  predicate over a backend's full v2 fixture output, plus the backends known NOT to
+ *  reach that cell (documented gap, not a bug) — same precedent as the sub-agent
+ *  NESTING exclusion below. */
+const CAPABILITIES: ReadonlyArray<
+  [name: string, produced: (events: UiEvent[]) => boolean, except?: ReadonlyArray<(typeof BACKENDS)[number]>]
+> = [
   [
     'plan.updated with entries (TodoWrite / todoList / todowrite)',
     (events) => events.some((e) => e.type === 'plan.updated' && e.entries.length > 0),
@@ -92,6 +93,9 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   [
     'reasoning items (thinking / reasoning items / reasoning parts)',
     (events) => items(events).some((item) => item.kind === 'reasoning' && item.text.trim() !== ''),
+    // Cursor's docs are explicit: "`thinking` events are suppressed in print mode and will
+    // not appear in any output format" (cursor.com/docs/cli/reference/output-format).
+    ['cursor'],
   ],
   [
     'structured diffs (Edit input / fileChange.changes / patch parts)',
@@ -100,6 +104,9 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
   [
     'usage.updated with raw token counts',
     (events) => events.some((e) => e.type === 'usage.updated' && e.usage.total > 0),
+    // Cursor's documented terminal `result` frame has no `usage` field — only
+    // {type, subtype, is_error, duration_ms, duration_api_ms, result, session_id, request_id}.
+    ['cursor'],
   ],
   [
     'turn.completed with per-turn directional usage',
@@ -107,14 +114,17 @@ const CAPABILITIES: ReadonlyArray<[name: string, produced: (events: UiEvent[]) =
       events.some(
         (e) => e.type === 'turn.completed' && (e.usage?.input ?? 0) > 0 && (e.usage?.output ?? 0) > 0,
       ),
+    // Same absent `result.usage` as the row above.
+    ['cursor'],
   ],
   ['turn.completed with a stopReason', (events) => events.some((e) => e.type === 'turn.completed' && e.stopReason !== undefined)],
 ] as const;
 
-describe('protocol v2 backend parity (every mapper emits every matrix capability)', () => {
+describe('protocol v2 backend parity (all first-class mappers emit every matrix capability)', () => {
   for (const backend of BACKENDS) {
     const events = fixtureEvents(backend);
-    for (const [name, produced] of CAPABILITIES) {
+    for (const [name, produced, except] of CAPABILITIES) {
+      if (except?.includes(backend)) continue;
       it(`${backend} produces ${name}`, () => {
         expect(produced(events)).toBe(true);
       });
@@ -142,13 +152,10 @@ describe('protocol v2 backend parity (every mapper emits every matrix capability
 
   // Sub-agent NESTING rides on parentItemId where the wire attributes work
   // to its parent: claude `parent_tool_use_id` and opencode child-session
-  // parts under a `subtask`. Codex's wire has no parent attribution — its
-  // matrix cell is the review-mode task items asserted above (a substitute
-  // AGENT_PROTOCOL.md §9 item 7 does document). junie's cell is the same
-  // gap as "sub-agent task items" above: no confirmed wire shape for
-  // `nativeSubagentSessions` at all, nested or otherwise — see the comment on
-  // that loop for why this is an open gap, not a documented exception.
-  for (const backend of BACKENDS.filter((b) => b !== 'codex' && b !== 'pi' && b !== 'junie')) {
+  // parts under a `subtask`. Codex and Cursor print-mode wire have no parent
+  // attribution, and pi's RPC protocol carries no parent-item id either —
+  // all three's matrix cell is the task-kind tool items asserted above.
+  for (const backend of ['claude', 'opencode'] as const) {
     it(`${backend} nests sub-agent work via parentItemId`, () => {
       expect(items(fixtureEvents(backend)).some((item) => item.parentItemId !== undefined)).toBe(true);
     });
