@@ -35,10 +35,30 @@ export function useAgentAccounts(): AgentAccountChoices {
   const repoRoot = repo.data?.info?.root
   return {
     accounts,
-    repoAccount: (repoRoot ? profiles.data?.selections?.[repoRoot] : undefined) as
-      | Partial<Record<Runner, string>>
-      | undefined,
+    repoAccount: resolveRepoAccounts(
+      repoRoot ? profiles.data?.selections?.[repoRoot] : undefined,
+      profiles.data?.defaults,
+    ),
   }
+}
+
+/**
+ * What an untouched pick resolves to per runner: the repo's own selection, else the machine-wide
+ * default — the order the server's `selectionFor` resolves in. Leaving the machine-wide default out
+ * made the pill read "claude · Default" in a repo with no selection of its own while the server ran
+ * the task on the machine-wide account instead.
+ */
+export function resolveRepoAccounts(
+  selection: Partial<Record<string, string>> | undefined,
+  defaults: Partial<Record<string, string>> | undefined,
+): Partial<Record<Runner, string>> | undefined {
+  const resolved: Partial<Record<string, string>> = {}
+  for (const source of [defaults, selection]) {
+    for (const [runner, account] of Object.entries(source ?? {})) {
+      if (account) resolved[runner] = account
+    }
+  }
+  return Object.keys(resolved).length > 0 ? (resolved as Partial<Record<Runner, string>>) : undefined
 }
 
 /** Does `runner` have a choice of login to make at all? One login is not a choice. */
