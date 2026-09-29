@@ -24,9 +24,9 @@ continue caps, and statuses; leave Cause 2 untouched.
 
 ### Phase 1: Minimal runtime fix
 
-- [ ] 1.1 Gate autonomous nudges behind `!monitoring` in both turn-end paths.
-- [ ] 1.2 Update focused regression coverage for first-session and continuation
-      autonomous monitoring turns.
+- [x] 1.1 Gate autonomous nudges behind `!monitoring` in both turn-end paths. — a7dc62fd
+- [x] 1.2 Update focused regression coverage for first-session and continuation
+      autonomous monitoring turns. — a7dc62fd
 
 ### Phase 2: Verification and handoff
 
@@ -46,8 +46,8 @@ cap, dispatch, and budget behavior must remain unchanged.
 
 ### Phase 1: Minimal runtime fix
 
-- [ ] 1.1 Gate autonomous nudges behind `!monitoring` in both turn-end paths.
-- [ ] 1.2 Update focused regression coverage for first-session and continuation autonomous monitoring turns.
+- [x] 1.1 Gate autonomous nudges behind `!monitoring` in both turn-end paths. — a7dc62fd
+- [x] 1.2 Update focused regression coverage for first-session and continuation autonomous monitoring turns. — a7dc62fd
 
 ### Phase 2: Verification and handoff
 
