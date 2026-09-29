@@ -242,15 +242,15 @@ function LatestCard({
     const release = data.channel === 'development' ? null : data.latest[data.channel]
     // "Back to" only when that release is really on disk; otherwise it is a download.
     const releaseInstalled = release !== null && data.installed.some((entry) => entry.source === 'registry' && entry.id === release)
+    // Stacked rather than side by side: branch names and nightly versions are long enough to
+    // squeeze a one-row layout into a narrow word-per-line column.
     return (
-      <div
-        data-slot="self-update-latest"
-        className="flex items-center justify-between gap-3 rounded-md border border-border bg-card px-3 py-2.5"
-      >
-        <div className="min-w-0 text-[13px]">
+      <div data-slot="self-update-latest" className="flex flex-col gap-2 rounded-md border border-border bg-card px-3 py-2.5">
+        <div className="min-w-0 text-[13px] break-words">
           {dev?.source === 'link' ? (
             <>
-              Running worktree <span className="font-semibold">{dev.branch ?? dev.id}</span>, not a release.
+              Running worktree <span className="font-mono text-[12.5px] font-semibold">{dev.branch ?? dev.id}</span>, not
+              a release.
             </>
           ) : dev?.source === 'local' ? (
             <>Running a local build, not a release.</>
@@ -263,26 +263,40 @@ function LatestCard({
               Running <span className="font-semibold">v{data.version}</span>. Pick a worktree or a pull request below.
             </>
           )}
-          <div className="text-[11.5px] text-muted-foreground">
-            {data.channel === 'development'
-              ? 'Switch the channel back to Stable or Nightly to follow releases again.'
-              : !data.checkedAt
-                ? 'The npm registry has not answered yet.'
-                : release
-                  ? `Newest ${data.channel}: v${release} · checked ${new Date(data.checkedAt).toLocaleTimeString()}`
-                  : `checked ${new Date(data.checkedAt).toLocaleTimeString()}`}
-          </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <div className="min-w-0 text-[11.5px] break-words text-muted-foreground">
+            {data.channel === 'development' ? (
+              'Switch the channel back to Stable or Nightly to follow releases again.'
+            ) : !data.checkedAt ? (
+              'The npm registry has not answered yet.'
+            ) : (
+              <>
+                {release ? (
+                  <>
+                    Newest {data.channel}: <span className="font-mono text-foreground">v{release}</span> ·{' '}
+                  </>
+                ) : null}
+                checked {new Date(data.checkedAt).toLocaleTimeString()}
+              </>
+            )}
+          </div>
           {data.channel !== 'development' ? (
-            <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
-              {checking ? 'Checking…' : 'Check again'}
-            </Button>
-          ) : null}
-          {release ? (
-            <Button size="sm" onClick={() => onApply(release)} disabled={!data.canSelfUpdate || applying || jobBusy}>
-              {releaseInstalled ? `Back to v${release}` : `Install v${release} & restart`}
-            </Button>
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
+                {checking ? 'Checking…' : 'Check again'}
+              </Button>
+              {release ? (
+                <Button
+                  size="sm"
+                  aria-label={releaseInstalled ? `Back to v${release}` : `Install v${release} & restart`}
+                  onClick={() => onApply(release)}
+                  disabled={!data.canSelfUpdate || applying || jobBusy}
+                >
+                  {releaseInstalled ? 'Switch back' : 'Install & restart'}
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
