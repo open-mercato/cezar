@@ -19,6 +19,8 @@ export interface TaskCliIo {
   fetch: typeof fetch;
   log: (line: string) => void;
   error: (line: string) => void;
+  /** The `--wait` poll interval. Injectable so a test can fast-forward without real seconds. */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 const USAGE = `cez task — dispatch cezar tasks from inside a task (on by default; CEZ_DISPATCH=0 on the cockpit turns it off)
@@ -30,7 +32,12 @@ const USAGE = `cez task — dispatch cezar tasks from inside a task (on by defau
                   [--verdict approve|changes|reject] [--suggestions "…"]… [--confidence <0-1>]
                   [--side-effect "…"]… [--error "…"]… [--next "…"]
   cez task list                       the tree this task belongs to, with status and cost
-  cez task tree <run id>              the tree rooted at (or containing) another run`;
+  cez task tree <run id>              the tree rooted at (or containing) another run
+  cez task land-check [<run id>] [--sources a,b] [--commands "…"] [--wait]
+                                      freeze this task's branch tip, merge the tree's eligible
+                                      children onto it by sha in a fresh worktree and run the
+                                      repository's gate on the combination; prints the check
+                                      run's id (--wait follows it to the verdict)`;
 
 function base(env: TaskCliEnv): { url: string; scope: string } | null {
   const url = env.CEZ_API_URL?.replace(/\/+$/, '');
@@ -162,6 +169,56 @@ export async function runTaskCommand(
         if (!response.ok) throw new Error(`report refused — ${await readError(response)}`);
         io.log(`report recorded — status ${values.status}${values.verdict ? `, verdict ${values.verdict}` : ''}. It is delivered to your parent when this task settles.`);
         return 0;
+      }
+      case 'land-check': {
+        const { values, positionals } = parseArgs({
+          args: rest,
+          allowPositionals: true,
+          options: {
+            sources: { type: 'string' },
+            commands: { type: 'string', multiple: true },
+            wait: { type: 'boolean' },
+          },
+        });
+        const runId = positionals[0] ?? env.CEZ_TASK_ID;
+        if (!runId) throw new Error('a run id is required (or CEZ_TASK_ID must be set): cez task land-check [<run id>]');
+        const sources = (values.sources ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
+        // One flag occurrence is one command; a multi-line value is several. Commas stay literal
+        // — a command may legitimately contain one, and a source ref never does.
+        const commands = (values.commands ?? []).flatMap((entry) => entry.split('\n')).map((entry) => entry.trim()).filter(Boolean);
+        const response = await io.fetch(`${api.scope}/runs/${encodeURIComponent(runId)}/land-check`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            ...(sources.length ? { sources } : {}),
+            ...(commands.length ? { commands } : {}),
+          }),
+        });
+        if (!response.ok) throw new Error(`landing check refused — ${await readError(response)}`);
+        const started = (await response.json()) as { runId: string; ofRunId: string };
+        const page = env.CEZ_PROJECT_ID
+          ? ` — ${api.url}/p/${encodeURIComponent(env.CEZ_PROJECT_ID)}/tasks/${encodeURIComponent(started.runId)}`
+          : '';
+        io.log(`landing check ${started.runId} started for ${started.ofRunId}${page}`);
+        if (!values.wait) return 0;
+        // `--wait` follows the CHECK RUN to its recorded verdict. Only `passed` is green; every
+        // other verdict (`failed`, `conflict`, `nothing-to-check`, `could-not-run`) exits 1 — a
+        // check that could not run is not a check that passed.
+        const sleep = io.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+        for (;;) {
+          const poll = await io.fetch(`${api.scope}/runs/${encodeURIComponent(started.runId)}`);
+          if (!poll.ok) throw new Error(`landing check ${started.runId} could not be followed — ${await readError(poll)}`);
+          const run = (await poll.json()) as { status?: string; landingCheck?: { verdict?: string; reason?: string } };
+          const verdict = run.landingCheck?.verdict;
+          if (verdict) {
+            io.log(`landing check verdict — ${verdict}${run.landingCheck?.reason ? ` (${run.landingCheck.reason})` : ''}`);
+            return verdict === 'passed' ? 0 : 1;
+          }
+          if (['done', 'failed', 'cancelled', 'review'].includes(run.status ?? '')) {
+            throw new Error(`landing check ${started.runId} settled ${run.status} without recording a verdict`);
+          }
+          await sleep(2_000);
+        }
       }
       case 'list':
       case 'tree': {

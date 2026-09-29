@@ -202,7 +202,9 @@ export function queuePositions(runs: readonly RunRecord[]): Map<string, number> 
  * ISO-8601 strings compare lexicographically because every timestamp cezar writes is UTC
  * (`toISOString()` → trailing `Z`), the same reason `read-state.ts` compares them directly.
  */
-export function sortRuns(runs: readonly RunRecord[], view: ListView): RunRecord[] {
+/** Type-preserving: the Tasks table hands in `ApiRun[]` and its rows keep the read-time keys
+ *  (`landingCheckStale`) the API attached, instead of widening them back to `RunRecord`. */
+export function sortRuns<T extends RunRecord>(runs: readonly T[], view: ListView): T[] {
   return runs
     .filter((run) => (view === 'archived' ? run.archived : !run.archived))
     .sort((a, b) => {

@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
 import { createQueryClient } from '@/api/query-client'
-import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
+import type { ApiRun, LandingCheck, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
 import { RunHeader } from './run-header'
@@ -1584,5 +1584,66 @@ describe('dispatch lines', () => {
     renderHeader(run('running', { dispatch: { rootRunId: 'r1' } }))
     await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
+  })
+})
+
+describe('landing-check line (spec 2026-09-29-landing-check, PR 5 sign-off d)', () => {
+  const line = () => document.querySelector('[data-slot="landing-check-line"]')
+  const link = () => document.querySelector('[data-slot="landing-check-link"]')
+  const chip = () => document.querySelector('[data-slot="landing-check-link"] [data-slot="landing-check-chip"]')
+
+  // Typed against the contract: an untyped literal widens `order` to `string` and a
+  // discriminant consumer can no longer narrow on it (the repo's documented `as const` trap).
+  const check = (over: Partial<LandingCheck> = {}): LandingCheck => ({
+    ofRunId: 'r1',
+    subject: { baseRef: 'cez/r1', baseSha: 'a'.repeat(40), sources: [], order: 'ledger' },
+    ...over,
+  })
+
+  it('says nothing on a run nothing was checked for', async () => {
+    stubFetch()
+    renderHeader(run('running'))
+    await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
+    expect(line()).toBeNull()
+  })
+
+  it('links the invoking run to its check run, wearing the verdict', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          run('done', { id: 'c1', landingCheck: check({ verdict: 'passed' }) }),
+          run('done', { id: 'other' }),
+        ]),
+    })
+    renderHeader(run('running', { id: 'r1' }))
+    await waitFor(() => expect(link()).not.toBeNull())
+    expect(link()?.getAttribute('href')).toBe('/tasks/c1')
+    expect(chip()?.getAttribute('data-state')).toBe('passed')
+  })
+
+  it('shows the stale marker on a verdict whose subject moved', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([run('done', { id: 'c1', landingCheckStale: true, landingCheck: check({ verdict: 'conflict' }) })]),
+    })
+    renderHeader(run('running', { id: 'r1' }))
+    await waitFor(() => expect(link()).not.toBeNull())
+    expect(chip()?.getAttribute('data-state')).toBe('stale')
+    expect(link()?.textContent).toContain('conflict')
+    expect(link()?.textContent).toContain('stale')
+  })
+
+  it('links the newest check and counts the earlier ones', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          run('done', { id: 'newest', landingCheck: check({ verdict: 'failed' }) }),
+          run('done', { id: 'older', landingCheck: check({ verdict: 'passed' }) }),
+        ]),
+    })
+    renderHeader(run('running', { id: 'r1' }))
+    await waitFor(() => expect(link()).not.toBeNull())
+    expect(link()?.getAttribute('href')).toBe('/tasks/newest')
+    expect(line()?.textContent).toContain('+1 earlier')
   })
 })

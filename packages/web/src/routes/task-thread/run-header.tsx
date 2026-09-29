@@ -38,6 +38,7 @@ import {
 } from '@/api/queries'
 import { DEFAULT_AGENT_ACCOUNT_ID, type ApiRun, type OpenTarget } from '@open-mercato/cezar-api-client'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { LandingCheckChip } from '@/components/landing-check-chip'
 import { TitleEditInput, useTitleEditor, type TitleEditor } from '@/components/editable-title'
 import { Pill } from '@/components/pill'
 import { ReferenceChip } from '@/components/reference-chip'
@@ -251,6 +252,7 @@ function RunHeaderView({
             are what the run IS doing right now, not metadata about how it started. */}
         <DispatchParentLine run={run} />
         <DispatchChildrenLine run={run} />
+        <LandingCheckLine run={run} />
 
         <div data-slot="run-tabs" className="mt-1.5 flex items-end gap-1 md:mt-2.5">
           <TabLink to={`/tasks/${run.id}`} active={tab === 'session'}>
@@ -935,6 +937,45 @@ function DispatchChildrenLine({ run }: { run: ApiRun }) {
           )
         })}
       </span>
+    </div>
+  )
+}
+
+/**
+ * "Landing check <chip>" — the invoking run's link to the check run its tree started (spec
+ * `.ai/specs/2026-09-29-landing-check.md` § UI/UX: "the invoking run's row links to the check
+ * run"). Derived from the run list this page already holds, exactly like `DispatchChildrenLine`
+ * above, so it needs no new endpoint and stays live over the run stream; the check run is looked
+ * up by `landingCheck.ofRunId`, never by title.
+ *
+ * Newest first (the list is createdAt DESC): a tree may accumulate several checks over time, and
+ * the one worth opening is the latest — older ones are counted, not listed, because a header
+ * that grew a history would push the thread off the screen.
+ */
+function LandingCheckLine({ run }: { run: ApiRun }) {
+  const runs = useRuns()
+  const checks = (runs.data ?? []).filter((candidate) => candidate.landingCheck?.ofRunId === run.id)
+  const latest = checks[0]
+  if (latest === undefined) return null
+  return (
+    <div
+      data-slot="landing-check-line"
+      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+    >
+      <span className="shrink-0">Landing check</span>
+      <Link
+        to={`/tasks/${latest.id}`}
+        data-slot="landing-check-link"
+        data-run-id={latest.id}
+        className="inline-flex min-w-0 items-center gap-1.5 truncate hover:text-foreground"
+      >
+        <LandingCheckChip
+          landingCheck={latest.landingCheck}
+          stale={latest.landingCheckStale === true}
+          status={latest.status}
+        />
+      </Link>
+      {checks.length > 1 ? <span className="shrink-0 text-soft-foreground">+{checks.length - 1} earlier</span> : null}
     </div>
   )
 }

@@ -90,7 +90,7 @@ export function workflowLabel(run: RunRecord): string {
  * raw `title` hidden behind a summary: matching on text the table never displays makes rows
  * appear for no visible reason.
  */
-export function filterRuns(runs: readonly RunRecord[], query: string): RunRecord[] {
+export function filterRuns<T extends RunRecord>(runs: readonly T[], query: string): T[] {
   const needle = query.trim().toLowerCase()
   if (!needle) return [...runs]
   return runs.filter((run) =>

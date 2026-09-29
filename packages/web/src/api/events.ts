@@ -161,15 +161,43 @@ export function applyRunDeleted(list: ApiRun[] | undefined, id: string): ApiRun[
 }
 
 /**
+ * Every `ApiRun` field the server attaches only when it ANSWERS A READ, and never on the global
+ * `run` event, whose payload is a bare `RunRecord`:
+ *
+ *  - `usage` — the live sample `withUsage` folds into `GET /api/runs`;
+ *  - `landingCheckStale` — the read-time marker that a landing check's recorded subject has moved.
+ *
+ * ONE list, deliberately. Two ways of getting this wrong have both shipped here: carrying one
+ * field explicitly (`usage`) while the next one (`landingCheckStale`) is silently erased by every
+ * status event — which un-staled a stale verdict, the must-fix of PR #1169's review — and the
+ * sibling failure where the code carries a field no test guards. `mergeRun` below folds THIS list
+ * and `events.test.ts` is keyed on it, so a new read-time field is one row here, and forgetting
+ * the row is a red test rather than a marker that quietly disappears under the next live event.
+ */
+export const READ_TIME_RUN_FIELDS = ['usage', 'landingCheckStale'] as const
+
+/**
  * The stream's record over the cached one.
  *
- * `usage` is carried over rather than dropped: the global `run` event is a bare `RunRecord`, while
- * `GET /api/runs` answers with the live sample attached (`withUsage`). An absent field on the wire
- * means "this message doesn't carry it", not "there is none" — overwriting would blink the sample
- * out on every status change. Freshness for it comes from the `usage` ticks either way.
+ * Read-time fields are carried over rather than dropped: an absent field on the wire means "this
+ * message doesn't carry it", not "there is none". Overwriting would blink the live usage sample
+ * out on every status change, and would present a stale landing-check verdict as current — the
+ * `run` event's bare record has no way to say either thing. Freshness still comes from the server
+ * paths that own them (the `usage` ticks, and the next authoritative `GET /api/runs`).
+ *
+ * The no-carry case returns `run` itself, so an ordinary status event keeps the wire object's
+ * identity and does not re-render every list on screen.
  */
 export function mergeRun(previous: ApiRun | undefined, run: RunRecord): ApiRun {
-  return previous?.usage ? { ...run, usage: previous.usage } : run
+  if (previous === undefined) return run
+  const carried: Partial<ApiRun> = {}
+  for (const field of READ_TIME_RUN_FIELDS) {
+    const value = previous[field]
+    // `Object.assign` rather than `carried[field] = value`: a union key in TypeScript writes to
+    // the INTERSECTION of the two property types, and neither field's value is that.
+    if (value !== undefined) Object.assign(carried, { [field]: value })
+  }
+  return Object.keys(carried).length > 0 ? { ...run, ...carried } : run
 }
 
 // ---- live usage --------------------------------------------------------------------------

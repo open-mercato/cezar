@@ -19,6 +19,7 @@ import {
   toPastedContent,
   type PastedContent,
 } from './run.ts';
+import { mockAgentWithRealChecks } from './mock-agent.testkit.ts';
 import {
   attachmentExtension,
   isAttachmentMediaType,
@@ -504,16 +505,19 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
   let argsFile: string;
   let stdinFile: string;
   const savedEnv: Record<string, string | undefined> = {};
+  // The `hold-slot` fixtures below are REAL check steps — a run holds the only
+  // workspace slot with a live child process — so the agent is mocked through
+  // `CEZ_CLAUDE_BIN` rather than `CEZ_DRY_RUN` (which spawns nothing for a check).
+  let restoreMockAgent: () => void = () => undefined;
 
   beforeAll(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-pasted-'));
     dataDir = join(repoRoot, '.ai/cezar');
     argsFile = join(repoRoot, 'mock-args.ndjson');
     stdinFile = join(repoRoot, 'mock-stdin.ndjson');
-    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
     savedEnv.CEZ_MOCK_ARGS_FILE = process.env.CEZ_MOCK_ARGS_FILE;
     savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
-    process.env.CEZ_DRY_RUN = '1';
+    restoreMockAgent = mockAgentWithRealChecks();
     process.env.CEZ_MOCK_ARGS_FILE = argsFile;
     process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
@@ -527,6 +531,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
   });
 
   afterAll(() => {
+    restoreMockAgent();
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

@@ -26,9 +26,10 @@ import { Link, useNavigate } from '@/lib/project-router'
 import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
 import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRuns } from '@/api/queries'
-import type { RunRecord } from '@open-mercato/cezar-api-client'
+import type { ApiRun, RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
 import { DiffStatLabel } from '@/components/diff-stat'
+import { LandingCheckChip } from '@/components/landing-check-chip'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
 import { useListView } from '@/components/list-view'
@@ -100,7 +101,7 @@ export function TasksOverview({
 }: {
   /** Undefined while `/api/runs` has not answered: the header renders, the body stays empty —
    *  an empty state before we know there are no runs would be a lie. */
-  runs: RunRecord[] | undefined
+  runs: ApiRun[] | undefined
   view: ListView
   onViewChange: (view: ListView) => void
   onArchiveFinished: () => void
@@ -553,7 +554,7 @@ function TableRow({
   columns,
   expandedColumns,
 }: {
-  run: RunRecord
+  run: ApiRun
   /** Nesting level under the task that dispatched this one; 0 for a top-level row. */
   depth: number
   /** How many tasks THIS one dispatched — the row's "N subtasks" note. */
@@ -659,7 +660,7 @@ function TaskTableCell({
 }: {
   column: TaskColumnDefinition
   expanded: boolean
-  run: RunRecord
+  run: ApiRun
   depth: number
   childCount: number
   subtasksExpanded: boolean
@@ -786,7 +787,7 @@ function TitleCell({
   onRename,
   onTogglePin,
 }: {
-  run: RunRecord
+  run: ApiRun
   depth: number
   childCount: number
   subtasksExpanded: boolean
@@ -849,6 +850,15 @@ function TitleCell({
           {dispatchKindLabel(run)}
         </span>
       ) : null}
+      {/* The landing check's verdict (spec 2026-09-29-landing-check PR 5): a check run says what
+          the combined change checked and how it went; every other run renders nothing, because
+          `landingCheck` is absent on it. Renders nothing at all when there is no check — the
+          component itself owns that test, so the row needs no second one. */}
+      <LandingCheckChip
+        landingCheck={run.landingCheck}
+        stale={run.landingCheckStale === true}
+        status={run.status}
+      />
       {/* What this task dispatched, counted rather than listed — and, since #1110, the accordion
           handle for the rows the count stands for: collapsed by default, this click unfolds them. */}
       {subtasks ? (
@@ -905,7 +915,7 @@ function UsageTds({
   cpuExpanded,
   memoryExpanded,
 }: {
-  run: RunRecord
+  run: ApiRun
   cpuExpanded: boolean
   memoryExpanded: boolean
 }) {
@@ -952,7 +962,7 @@ function TaskCard({
   showCost,
   onTogglePin,
 }: {
-  run: RunRecord
+  run: ApiRun
   /** Nesting level under the task that dispatched this one; 0 for a top-level card. */
   depth: number
   childCount: number
@@ -1017,6 +1027,13 @@ function TaskCard({
             {dispatchKindLabel(run)}
           </span>
         ) : null}
+        {/* Same verdict chip as the table's Task cell (spec 2026-09-29-landing-check PR 5). */}
+        <LandingCheckChip
+          landingCheck={run.landingCheck}
+          stale={run.landingCheckStale === true}
+          status={run.status}
+          className="mt-px"
+        />
         {/* Same handle as the table's Task cell (#1110) — the dispatched children are the cards
             this unfolds below. The card's own click already steps around `a, button`. */}
         {subtasks ? (
