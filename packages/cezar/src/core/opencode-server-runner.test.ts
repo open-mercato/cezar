@@ -7,18 +7,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from './agent-runner.ts';
 import {
   KILL_GRACE_MS,
+  OPENCODE_AUTO_APPROVE_CONFIG,
   OpencodeServerRunner,
   TURN_IDLE_GRACE_MS,
+  withAutoApprove,
 } from './opencode-server-runner.ts';
 
-const spawnHook = vi.hoisted(() => ({ override: null as null | (() => unknown) }));
+const spawnHook = vi.hoisted(() => ({ override: null as null | ((...args: unknown[]) => unknown) }));
 
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
   return {
     ...actual,
     spawn: (...args: Parameters<typeof actual.spawn>) =>
-      spawnHook.override ? spawnHook.override() : actual.spawn(...args),
+      spawnHook.override ? spawnHook.override(...args) : actual.spawn(...args),
   };
 });
 
@@ -350,4 +352,69 @@ describe('#897 a turn that outlives its prompt POST', () => {
     expect(types(events).filter((t) => t === 'turn-end')).toHaveLength(1);
     expect(Date.now() - started).toBeLessThan(TURN_IDLE_GRACE_MS);
   }, 30_000);
+});
+
+/**
+ * Headless runs can answer no approval prompt, and an unanswered `ask`
+ * stalls the turn: `external_directory` and `doom_loop` default to `ask`,
+ * so a worktree agent touching cezar's own state outside its cwd hung every
+ * time it did. The runner therefore serves the child an inline auto-approve
+ * config unless the run brings one.
+ */
+describe('opencode serve auto-approve env', () => {
+  function spawnEnvFor(specEnv?: Record<string, string>): NodeJS.ProcessEnv | undefined {
+    const emitter = new EventEmitter();
+    const child = Object.assign(emitter, {
+      stdin: new PassThrough(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
+      exitCode: null as number | null,
+      signalCode: null as NodeJS.Signals | null,
+      killed: false,
+      pid: 5150,
+      kill: () => true,
+    }) as unknown as ChildProcessWithoutNullStreams;
+    let captured: { env?: NodeJS.ProcessEnv } | undefined;
+    spawnHook.override = (...args: unknown[]) => {
+      captured = (args[2] ?? {}) as { env?: NodeJS.ProcessEnv };
+      return child;
+    };
+    try {
+      const session = new OpencodeServerRunner({ bin: 'opencode', timeoutMs: 0 }).startSession({
+        userPrompt: 'do it',
+        cwd: process.cwd(),
+        ...(specEnv ? { env: specEnv } : {}),
+      });
+      void session.result.catch(() => undefined);
+      session.end();
+      return captured?.env;
+    } finally {
+      spawnHook.override = null;
+    }
+  }
+
+  it('defaults OPENCODE_CONFIG_CONTENT to permission allow', () => {
+    expect(spawnEnvFor()?.OPENCODE_CONFIG_CONTENT).toBe(OPENCODE_AUTO_APPROVE_CONFIG);
+    expect(JSON.parse(OPENCODE_AUTO_APPROVE_CONFIG)).toEqual({ permission: 'allow' });
+  });
+
+  it('keeps an explicit per-run OPENCODE_CONFIG_CONTENT', () => {
+    const custom = '{"permission":{"bash":"ask"}}';
+    expect(spawnEnvFor({ OPENCODE_CONFIG_CONTENT: custom })?.OPENCODE_CONFIG_CONTENT).toBe(custom);
+  });
+
+  it('keeps the other per-run vars alongside the default', () => {
+    const env = spawnEnvFor({ MOCK_NO_EVENT_BUS: '1' });
+    expect(env?.MOCK_NO_EVENT_BUS).toBe('1');
+    expect(env?.OPENCODE_CONFIG_CONTENT).toBe(OPENCODE_AUTO_APPROVE_CONFIG);
+  });
+
+  it('treats an empty value as absent', () => {
+    expect(withAutoApprove({ OPENCODE_CONFIG_CONTENT: '' }).OPENCODE_CONFIG_CONTENT).toBe(
+      OPENCODE_AUTO_APPROVE_CONFIG,
+    );
+    expect(withAutoApprove(undefined)).toEqual({
+      OPENCODE_CONFIG_CONTENT: OPENCODE_AUTO_APPROVE_CONFIG,
+    });
+  });
 });
