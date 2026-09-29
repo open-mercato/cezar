@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { trackerKindSchema } from './tracker.ts';
 
 /**
  * The project-registry family: `GET/POST/PATCH/DELETE /api/v1/projects`, the folder picker
@@ -45,6 +46,8 @@ export const projectListEntrySchema = z.object({
    * way a project-scoped view can. With this, every reference it shows is a link.
    */
   repoUrl: z.string().optional(),
+  /** Saved read-only issue tracker association, classified locally by the server. */
+  tracker: trackerKindSchema.optional(),
   /** Per-project cap on concurrently running tasks (spec 2026-07-22). Omitted = inherit the
    *  workspace `resources.maxParallel`; a number pins this project. */
   maxParallel: z.number().optional(),

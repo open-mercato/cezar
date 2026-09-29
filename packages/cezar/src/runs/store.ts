@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { StreamRedaction } from './stream-redaction.ts';
 import { collectSecretValues, redactDeep, redactSecrets } from '../core/secret-redaction.ts';
 // Sibling module, files only — a draft belongs to a run and is deleted with it (#939).
 import { deleteRunDrafts } from './drafts.ts';
@@ -12,7 +13,7 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema } from '@open-mercato/cezar-contract';
+import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -40,7 +41,7 @@ export type StepStatus =
 const usageCounterSchema = z.number().finite().nonnegative();
 
 /**
- * A runner id as it may appear in a PERSISTED record, normalized to the three
+ * A runner id as it may appear in a PERSISTED record, normalized to the
  * ids the rest of cezar speaks (#547).
  *
  * `claude-cli` is the legacy spelling of `claude` — still a member of
@@ -52,11 +53,11 @@ const usageCounterSchema = z.number().finite().nonnegative();
  *
  * Parse-and-fold rather than widen: the legacy id is accepted on the way in and
  * collapsed to `claude`, so no consumer, wire type or contract schema ever sees
- * a fourth runner. The narrowing is one-way and permanent (the index is
+ * an extra runner. The narrowing is one-way and permanent (the index is
  * re-serialized from the parsed records), which is what "old run records
  * normalise identically to `claude`" in `core/model-identity.ts` has always
  * claimed. Use ONLY for read-back of stored state — request bodies, settings and
- * workflow step defs stay the three selectable ids (`RunnerId`), because nothing
+ * workflow step defs stay the selectable ids (`RunnerId`), because nothing
  * should be able to ASK for the legacy spelling.
  */
 const storedRunnerSchema = z
@@ -195,6 +196,26 @@ export const runRecordSchema = z.object({
       receiptId: z.string(),
       trigger: z.enum(['schedule', 'catch-up', 'manual']),
       occurrenceAt: z.string(),
+    })
+    .optional(),
+  /** Provenance for a task a tracker (Jira/Linear) automation launched. Its own key, same reason
+   *  as `automationTrigger`: a pre-tracker cezar strips it instead of failing the whole index.
+   *  The optional association binds credentials to the exact source, scope and connection
+   *  that fired the run. Legacy records without that snapshot receive no tracker credentials.
+   *  No secret is stored on this record. */
+  automationTracker: z
+    .object({
+      automationId: z.string(),
+      automationRevision: z.number().int().positive(),
+      receiptId: z.string(),
+      provider: z.enum(['jira', 'linear']),
+      association: trackerAssociationSchema.optional(),
+      eventId: z.string().optional(),
+      event: trackerAutomationEventSchema.optional(),
+      timestamp: z.string().optional(),
+      change: z.object({ fromId: z.string().optional(), toId: z.string().optional(), labelId: z.string().optional(), labelName: z.string().optional() }).optional(),
+      key: z.string(),
+      url: z.string().url(),
     })
     .optional(),
   /** This run's place in a dispatch tree (spec 2026-09-10-dispatch): root, parent, kind,
@@ -711,6 +732,12 @@ export class RunStore extends EventEmitter {
   /** Ids this process removed on purpose — see `forget`, which is the only thing that writes it. */
   private forgotten = new Set<string>();
   private saveTimer: NodeJS.Timeout | null = null;
+  // Preserve failed-load evidence even after a later save rewrites the index. A workspace
+  // summary must not call an owner that silently dropped records a complete empty project.
+  private indexReadHealth: { state: 'complete' | 'unavailable'; omittedRuns: number; reason?: string } = { state: 'complete', omittedRuns: 0 };
+
+  getIndexReadHealth() { return { ...this.indexReadHealth }; }
+
   /** The repository this project IS (#945), armed after `open()` by `setRepoHandle`. Undefined
    *  until it arrives and `null` when it cannot be known — both mean "unscoped", which is
    *  exactly the pre-#945 behavior. */
@@ -734,8 +761,11 @@ export class RunStore extends EventEmitter {
           for (const run of parsed.data) {
             store.runs.set(run.id, reconcileLoadedRun(run, opts));
           }
+        } else {
+          store.indexReadHealth = { state: 'unavailable', omittedRuns: Array.isArray(raw) ? raw.length : 0, reason: 'Task index could not be loaded by this server' };
         }
       } catch {
+        store.indexReadHealth = { state: 'unavailable', omittedRuns: 0, reason: 'Task index could not be loaded by this server' };
         // corrupt index — start fresh; event files stay on disk untouched
       }
     }
@@ -803,6 +833,16 @@ export class RunStore extends EventEmitter {
 
   listRuns(): RunRecord[] {
     return [...this.runs.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /** Fresh durable evidence for receipt reconciliation; never replaces live in-memory runs. */
+  listPersistedRuns(): RunRecord[] {
+    try {
+      return z.array(runRecordSchema).parse(JSON.parse(readFileSync(join(this.dataDir, 'runs.json'), 'utf8')));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw new Error('Could not read persisted runs to verify automation delivery.');
+    }
   }
 
   getRun(id: string): RunRecord | undefined {
@@ -890,7 +930,7 @@ export class RunStore extends EventEmitter {
     if (normalized.status && normalized.status !== 'waiting') {
       normalized.askParked = undefined;
     }
-    Object.assign(run, this.redactPatch(normalized));
+    Object.assign(run, this.redactPatch(normalized, id));
     this.touch(run);
     return run;
   }
@@ -911,12 +951,13 @@ export class RunStore extends EventEmitter {
    */
   private redactPatch(
     patch: Partial<Omit<RunRecord, 'id' | 'steps'>>,
+    runId: string,
   ): Partial<Omit<RunRecord, 'id' | 'steps'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
     const out = { ...patch };
     for (const field of ['title', 'titleSummary', 'error'] as const) {
       const value = out[field];
-      if (typeof value === 'string') out[field] = this.redactText(value);
+      if (typeof value === 'string') out[field] = this.redactText(value, runId);
     }
     return out;
   }
@@ -928,10 +969,10 @@ export class RunStore extends EventEmitter {
    * over SSE, so an unscrubbed copy leaked to `runs.json` AND to the browser.
    * The remaining fields are ids, enums, counters and timestamps.
    */
-  private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>): Partial<Omit<StepState, 'id'>> {
+  private redactStepPatch(patch: Partial<Omit<StepState, 'id'>>, runId: string): Partial<Omit<StepState, 'id'>> {
     if (process.env.CEZ_REDACT_SECRETS === '0') return patch;
     if (typeof patch.error !== 'string') return patch;
-    return { ...patch, error: this.redactText(patch.error) };
+    return { ...patch, error: this.redactText(patch.error, runId) };
   }
 
   /** Append a step to an existing run (used by "Continue" — spec 003). */
@@ -946,7 +987,7 @@ export class RunStore extends EventEmitter {
     const run = this.runs.get(runId);
     const step = run?.steps.find((s) => s.id === stepId);
     if (!run || !step) return;
-    Object.assign(step, this.redactStepPatch(patch));
+    Object.assign(step, this.redactStepPatch(patch, runId));
     run.tokensUsed = run.steps.reduce((sum, s) => sum + s.tokensUsed, 0);
     const startedAgentSteps = run.steps.filter((candidate) => candidate.kind === 'agent' && candidate.iterations > 0);
     const directionalComplete =
@@ -971,7 +1012,8 @@ export class RunStore extends EventEmitter {
       ? startedAgentSteps.reduce((sum, candidate) => sum + (candidate.outputTokens ?? 0), 0)
       : undefined;
     const cost = run.steps.reduce((sum, s) => sum + (s.costUsd ?? 0), 0);
-    run.costUsd = cost > 0 ? cost : undefined;
+    // A reported zero is still a measurement; an unreported run is not free.
+    run.costUsd = run.steps.some((s) => s.costUsd !== undefined) ? cost : undefined;
     this.touch(run);
   }
 
@@ -1102,11 +1144,12 @@ export class RunStore extends EventEmitter {
   appendEvent(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
     const run = this.runs.get(runId);
     if (!run) throw new Error(`unknown run: ${runId}`);
+    this.drainStreamRedaction(runId, event);
     const seq = this.nextSeq(runId);
     // Scrub credentials before the event touches disk or the live wire (#427):
     // tool-result output is persisted verbatim and served back over the API, so
     // a secret in an agent's command output would otherwise land in `.ai/cezar/`.
-    const full: RunEvent = this.redact({ ...event, seq, ts: new Date().toISOString() });
+    const full: RunEvent = this.redact({ ...event, seq, ts: new Date().toISOString() }, runId);
     // Sync append keeps event order without a write queue; local NDJSON
     // appends at agent-event rates are effectively free.
     appendFileSync(this.eventsPath(runId), `${JSON.stringify(full)}\n`, 'utf8');
@@ -1292,9 +1335,21 @@ export class RunStore extends EventEmitter {
    * (gaps are fine — dedup compares with `>`).
    */
   emitEphemeral(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): RunEvent {
-    const full: RunEvent = this.redact({ ...event, seq: this.nextSeq(runId), ts: new Date().toISOString() });
+    this.drainStreamRedaction(runId, event);
+    const full: RunEvent = this.redact({ ...event, seq: this.nextSeq(runId), ts: new Date().toISOString() }, runId);
     this.emit('event', { runId, event: full });
     return full;
+  }
+
+  private readonly streamRedaction = new StreamRedaction();
+
+  private drainStreamRedaction(runId: string, event: { type: string; stepId?: string; [key: string]: unknown }): void {
+    for (const tail of this.streamRedaction.drain(runId, event)) {
+      // Bypass transform: a terminal proper prefix must be released, not held again.
+      const safe = process.env.CEZ_REDACT_SECRETS === '0' ? tail : redactDeep(tail, this.secretsForRun(runId));
+      const full = { ...safe, seq: this.nextSeq(runId), ts: new Date().toISOString() };
+      this.emit('event', { runId, event: full });
+    }
   }
 
   /** Lazily-collected concrete secret values from the host env (#427). */
@@ -1304,16 +1359,39 @@ export class RunStore extends EventEmitter {
    * Scrub known credential values / token shapes from an event before it is
    * persisted or fanned out. On by default; `CEZ_REDACT_SECRETS=0` opts out.
    */
-  private redact(event: RunEvent): RunEvent {
+  private redact(event: RunEvent, runId: string): RunEvent {
     if (process.env.CEZ_REDACT_SECRETS === '0') return event;
-    return redactDeep(event, this.hostSecrets());
+    const secrets = this.secretsForRun(runId);
+    return redactDeep(this.streamRedaction.transform(runId, event, secrets), secrets) as RunEvent;
   }
 
   /** Best-effort scrub of one free-text string bound for `runs.json`. Honors
    *  the `CEZ_REDACT_SECRETS=0` opt-out itself so every caller inherits it. */
-  private redactText(text: string): string {
+  private redactText(text: string, runId?: string): string {
     if (process.env.CEZ_REDACT_SECRETS === '0') return text;
-    return redactSecrets(text, this.hostSecrets());
+    return redactSecrets(text, this.secretsForRun(runId));
+  }
+
+  /** Capture safe text before asynchronous derived work can outlive this run's registry. */
+  redactRunText(runId: string, text: string): string { return this.redactText(text, runId); }
+
+  private readonly runSecrets = new Map<string, readonly string[]>();
+
+  /** Memory only: register before spawn; retain through the final event drain. */
+  registerRunSecrets(runId: string, values: readonly string[]): void {
+    if (values.length === 0) return;
+    this.runSecrets.set(runId, [...new Set([...(this.runSecrets.get(runId) ?? []), ...values.filter(Boolean)])]
+      .sort((a, b) => b.length - a.length));
+  }
+
+  clearRunSecrets(runId: string): void {
+    this.runSecrets.delete(runId);
+    this.streamRedaction.clear(runId);
+  }
+
+  private secretsForRun(runId?: string): readonly string[] {
+    return [...this.hostSecrets(), ...(runId ? this.runSecrets.get(runId) ?? [] : [])]
+      .sort((a, b) => b.length - a.length);
   }
 
   private hostSecrets(): readonly string[] {
@@ -1361,12 +1439,12 @@ export class RunStore extends EventEmitter {
   }
 
   /** Write the index out now (used on shutdown). */
-  flush(): void {
+  flush(options: { throwOnError?: boolean } = {}): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
     }
-    this.saveNow();
+    this.saveNow(options.throwOnError);
   }
 
   // ---- internals -----------------------------------------------------------
@@ -1451,13 +1529,14 @@ export class RunStore extends EventEmitter {
     this.saveTimer.unref?.();
   }
 
-  private saveNow(): void {
+  private saveNow(throwOnError = false): void {
     const indexPath = join(this.dataDir, 'runs.json');
     const tmpPath = `${indexPath}.tmp`;
     try {
       writeFileSync(tmpPath, JSON.stringify(this.mergeWithIndexOnDisk(indexPath), null, 2), 'utf8');
       renameSync(tmpPath, indexPath);
     } catch (err) {
+      if (throwOnError) throw new Error('Could not persist automation run provenance; the launch was not confirmed.');
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[cez] failed to save runs.json: ${message}`);
     }

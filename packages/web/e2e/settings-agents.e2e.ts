@@ -27,10 +27,14 @@ const configFile = resolve(dataDir, 'config.json')
 let browser: AgentBrowser
 let baseUrl: string
 let previousConfig: string | null = null
+let modelsLocked = false
 
-beforeAll(() => {
+const RUNNER_IDS = ['claude', 'codex', 'opencode', 'pi'] as const
+
+beforeAll(async () => {
   baseUrl = readTestEnv().baseUrl
   previousConfig = existsSync(configFile) ? readFileSync(configFile, 'utf8') : null
+  modelsLocked = ((await fetch(`${baseUrl}/api/v1/config`).then((response) => response.json())) as ConfigAnswer).modelsLocked
   browser = AgentBrowser.open(sessionId)
   browser.setViewport(DESKTOP.width, DESKTOP.height)
 })
@@ -47,6 +51,7 @@ interface ConfigAnswer {
   defaultRunner: string
   systemPrompt: string | null
   defaultModels: Record<string, string>
+  modelsLocked: boolean
 }
 
 /** The PUT behind a control is fire-and-forget from the UI's point of view — poll the additive
@@ -80,8 +85,13 @@ describe('settings → agents against the live dry-run server', () => {
   it('renders every knob, agent-agnostically named', () => {
     gotoAgents()
     browser.waitForFunction(`document.querySelector('[data-slot="agents-base-branch"]') !== null`)
-    expect(browser.count('[data-slot="agents-runner"] [role="radio"]')).toBe(3)
-    expect(browser.count('[data-slot="agents-model"]')).toBe(3)
+    for (const runner of RUNNER_IDS) {
+      expect(browser.count(`[data-slot="agents-runner"] [role="radio"][data-value="${runner}"]`)).toBe(1)
+      expect(browser.count(`[data-slot="agents-model"][data-runner="${runner}"]`)).toBe(1)
+    }
+    expect(browser.count('[data-slot="agents-model"]')).toBe(RUNNER_IDS.length)
+    expect(browser.count(`${modelsLocked ? 'output' : 'select'}[data-slot="agents-model"]`)).toBe(RUNNER_IDS.length)
+    expect(browser.count(`${modelsLocked ? 'select' : 'output'}[data-slot="agents-model"]`)).toBe(0)
     expect(browser.count('[data-slot="agents-system-prompt"]')).toBe(1)
     // The dry-run repo is a git checkout, so the base-branch picker is the real control.
     expect(browser.count('[data-slot="agents-base-branch"]')).toBe(1)
@@ -91,10 +101,14 @@ describe('settings → agents against the live dry-run server', () => {
     gotoAgents()
     browser.click('[data-slot="agents-runner"] [data-value="codex"]')
     await waitForConfig((c) => c.defaultRunner === 'codex')
+    // The saved API value can arrive before the query invalidation updates the controlled UI.
+    browser.waitForFunction(`document.querySelector('[data-slot="agents-runner"] [data-value="codex"][aria-checked="true"]') !== null`)
     expect(browser.count('[data-slot="agents-runner"] [data-value="codex"][aria-checked="true"]')).toBe(1)
   })
 
-  it('per-runner model preset: select writes the runner key, others untouched', async () => {
+  it('per-runner model preset: select writes the runner key, others untouched', async ({ skip }) => {
+    if (modelsLocked) skip('model selection is locked by CEZ_AGENT_MODELS_LOCKED')
+    gotoAgents()
     setSelect('[data-slot="agents-model"][data-runner="claude"]', 'opus')
     const config = await waitForConfig((c) => c.defaultModels.claude === 'opus')
     expect(config.defaultModels.codex).toBeUndefined()
@@ -121,11 +135,32 @@ describe('settings → agents against the live dry-run server', () => {
   })
 
   it('a cold load renders the persisted knobs — the form is a view of config.json', async () => {
+    const seeded = {
+      defaultRunner: 'codex',
+      systemPrompt: 'Always add tests. (e2e)',
+      ...(modelsLocked ? {} : { defaultModels: { claude: 'opus' } }),
+    }
+    const response = await fetch(`${baseUrl}/api/v1/config`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(seeded),
+    })
+    expect(response.ok).toBe(true)
+    await waitForConfig((config) =>
+      config.defaultRunner === 'codex'
+      && config.systemPrompt === 'Always add tests. (e2e)'
+      && (modelsLocked || config.defaultModels.claude === 'opus'))
+
     gotoAgents()
     expect(browser.count('[data-slot="agents-runner"] [data-value="codex"][aria-checked="true"]')).toBe(1)
-    expect(
-      String(browser.evaluate(`document.querySelector('[data-slot="agents-model"][data-runner="claude"]').value`)),
-    ).toBe('opus')
+    if (modelsLocked) {
+      expect(browser.count('output[data-slot="agents-model"][data-runner="claude"]')).toBe(1)
+      expect(String(browser.text('output[data-slot="agents-model"][data-runner="claude"]')).trim()).not.toBe('')
+    } else {
+      expect(
+        String(browser.evaluate(`document.querySelector('[data-slot="agents-model"][data-runner="claude"]').value`)),
+      ).toBe('opus')
+    }
     expect(
       String(browser.evaluate(`document.querySelector('[data-slot="agents-system-prompt"]').value`)),
     ).toBe('Always add tests. (e2e)')

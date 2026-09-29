@@ -136,6 +136,22 @@ describe('useRunnerModels', () => {
     expect(fetchMock.mock.calls.at(-1)?.[0]).toBe(`/api/v1/models?runner=${runner}`)
   })
 
+  it('loads the OpenCode catalog from its own cache entry (#794)', async () => {
+    fetchMock.mockResolvedValue(json({ runner: 'opencode', models: [{ id: 'openai/gpt-5.4', label: 'openai/gpt-5.4', description: 'via openai' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels('opencode'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.models[0]?.id).toBe('openai/gpt-5.4')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=opencode')
+  })
+
+  it('loads the Cursor catalog from its own cache entry (#807)', async () => {
+    fetchMock.mockResolvedValue(json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false }))
+    const { result } = renderHook(() => useRunnerModels('cursor'), { wrapper: wrapper() })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data?.models[0]?.id).toBe('composer-2.5')
+    expect(fetchMock.mock.calls.at(-1)?.[0]).toBe('/api/v1/models?runner=cursor')
+  })
+
   // The other half of the `enabled` guard: a caller that only MIGHT render the pills (the
   // thread's Continue) must not fetch a catalog it will never show.
   it('never fetches while disabled', async () => {
@@ -143,6 +159,22 @@ describe('useRunnerModels', () => {
     await waitFor(() => expect(result.current.fetchStatus).toBe('idle'))
     expect(result.current.data).toBeUndefined()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('one runner erroring does not affect a separate hook instance for another runner (#807)', async () => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/v1/models?runner=codex') {
+        return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'Future', description: '' }], source: 'live', stale: false })
+      }
+      if (url === '/api/v1/models?runner=cursor') return new Response('boom', { status: 500 })
+      return new Promise<never>(() => {})
+    })
+    const { result: codex } = renderHook(() => useRunnerModels('codex'), { wrapper: wrapper() })
+    const { result: cursor } = renderHook(() => useRunnerModels('cursor'), { wrapper: wrapper() })
+    await waitFor(() => expect(cursor.current.isError).toBe(true), { timeout: 5000 })
+    await waitFor(() => expect(codex.current.isSuccess).toBe(true))
+    expect(codex.current.data?.models[0]?.id).toBe('gpt-future')
   })
 })
 
@@ -152,7 +184,8 @@ describe('provider status workspace query', () => {
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'disconnected', enabled: true, hint: 'Run codex login.' },
       { provider: 'opencode', status: 'not-installed', enabled: true },
-    ],
+      { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
   }
 
   afterEach(() => {
@@ -253,7 +286,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     fetchMock.mockResolvedValue(json(refreshed))
     const client = createQueryClient()
@@ -284,7 +318,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-1', hint: 'Reconnect.' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
 
     await act(async () => deferred.resolve(json(PROVIDERS)))
@@ -312,7 +347,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-1', hint: 'Reconnect.' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
 
     await act(async () => deferred.resolve(json(PROVIDERS)))
@@ -329,7 +365,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: false },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     fetchMock.mockResolvedValue(json(confirmed))
     const client = createQueryClient()
@@ -357,7 +394,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'retry-1', hint: 'Reconnect.' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
     const { result } = renderHook(() => useRetryProviderAuth(), {
       wrapper: ({ children }: { children: ReactNode }) => (
@@ -372,7 +410,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'sse-2', hint: 'Reconnect again.' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
 
     await act(async () => deferred.resolve(json(PROVIDERS)))
@@ -389,7 +428,8 @@ describe('provider status workspace query', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'not-installed', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     }
     fetchMock.mockResolvedValue(new Response(JSON.stringify({ error: 'stale incident' }), { status: 409 }))
     const client = createQueryClient()

@@ -61,6 +61,11 @@ function SheetContent({
         data-slot="sheet-content"
         className={cn(
           "fixed z-50 flex flex-col gap-4 bg-background shadow-modal transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in data-[state=open]:duration-500",
+          // The close button is positioned absolutely, so nothing else reserves its footprint and
+          // header text wraps straight underneath it. Pad the header past `right-4` + the button's
+          // 44px target. This has to come from here rather than SheetHeader's own base classes:
+          // headers pass their own `px-*`, which tailwind-merge would drop a base `pr-*` for.
+          showCloseButton && "[&_[data-slot=sheet-header]]:pr-16",
           side === "right" &&
             "inset-y-0 right-0 h-full w-3/4 border-l data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm",
           side === "left" &&
@@ -75,7 +80,9 @@ function SheetContent({
       >
         {children}
         {showCloseButton && (
-          <SheetPrimitive.Close className="absolute top-4 right-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
+          // `size-11` is the WCAG 2.5.8 touch target, and it is what the header reserve above is
+          // measured against — keep the two in step when changing either.
+          <SheetPrimitive.Close className="absolute top-4 right-4 grid size-11 place-items-center rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
             <XIcon className="size-4" />
             <span className="sr-only">Close</span>
           </SheetPrimitive.Close>

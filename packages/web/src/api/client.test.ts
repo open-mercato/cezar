@@ -70,7 +70,8 @@ const VALID_PROVIDER_STATUS = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'disconnected', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
-  ],
+    { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
 }
 
 /** The (path, init) the client actually asked for. */
@@ -132,6 +133,7 @@ describe('request shapes', () => {
     { name: 'getRunnerModels', call: () => getRunnerModels('codex'), path: '/api/v1/models?runner=codex', method: 'GET' },
     { name: 'getRunnerModels(claude)', call: () => getRunnerModels('claude'), path: '/api/v1/models?runner=claude', method: 'GET' },
     { name: 'getRunnerModels(opencode)', call: () => getRunnerModels('opencode'), path: '/api/v1/models?runner=opencode', method: 'GET' },
+    { name: 'getRunnerModels(cursor)', call: () => getRunnerModels('cursor'), path: '/api/v1/models?runner=cursor', method: 'GET' },
     { name: 'getRuns', call: () => getRuns(), path: '/api/v1/runs', method: 'GET' },
     { name: 'getRun', call: () => getRun('run-1'), path: '/api/v1/runs/run-1', method: 'GET' },
     { name: 'getRunDiff', call: () => getRunDiff('run-1'), path: '/api/v1/runs/run-1/diff', method: 'GET' },
@@ -382,7 +384,8 @@ describe('response parsing', () => {
         { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true, raw: 'private' },
         { provider: 'claude', status: 'connected', enabled: false, account: 'private@example.test' },
         { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1', raw: 'private' },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
 
     await expect(getProviderStatus()).resolves.toEqual({
@@ -390,7 +393,8 @@ describe('response parsing', () => {
         { provider: 'claude', status: 'connected', enabled: false },
         { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-1' },
         { provider: 'opencode', status: 'unknown', hint: 'Try again.', enabled: true },
-      ],
+        { provider: 'cursor', status: 'not-installed', enabled: true },
+        ],
     })
   })
 
@@ -405,6 +409,7 @@ describe('response parsing', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'codex', status: 'future-state' },
           { provider: 'opencode', status: 'connected' },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     ],
@@ -415,6 +420,7 @@ describe('response parsing', () => {
           { provider: 'claude', status: 'connected' },
           { provider: 'claude', status: 'disconnected' },
           { provider: 'opencode', status: 'connected' },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     ],
@@ -424,6 +430,7 @@ describe('response parsing', () => {
         providers: [
           { provider: 'claude', status: 'connected' },
           { provider: 'codex', status: 'connected' },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     ],

@@ -70,7 +70,7 @@ export interface ThreadAsk {
 export interface ThreadProviderAuthRequired {
   kind: 'provider-auth-required'
   id: string
-  provider: 'claude' | 'codex' | 'opencode' | 'pi'
+  provider: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi'
   authFailureId: string
 }
 
@@ -101,6 +101,9 @@ export interface ThreadState {
   turns: ThreadTurn[]
   /** v2 `session.ended` — the last one wins (each step runs its own session). */
   sessionEnded?: { reason: StopReason; message?: string }
+  /** Wall clock of the newest stamped event — any kind, deltas included. The live Working…
+   *  indicator reads it as "last activity", so a quiet session is told apart from a busy one. */
+  lastEventAt?: string
 }
 
 export interface ThreadReduceOptions {
@@ -214,7 +217,7 @@ function stamp(value: unknown): string | undefined {
 }
 
 function providerId(value: unknown): ThreadProviderAuthRequired['provider'] | undefined {
-  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'pi'
+  return value === 'claude' || value === 'codex' || value === 'opencode' || value === 'cursor' || value === 'pi'
     ? value
     : undefined
 }
@@ -349,6 +352,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
    *  it client-side (only one ask is ever pending — the agent asks once, then
    *  parks `waiting` until the user answers). */
   let pendingAsk: ThreadAsk | undefined
+  let lastEventAt: string | undefined
 
   const newTurn = (sourceSeq?: number): DraftTurn => {
     turnSeq += 1
@@ -398,6 +402,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
   }
 
   for (const event of events) {
+    lastEventAt = stamp(event.ts) ?? lastEventAt
     switch (event.type) {
       // ---- turn boundaries ------------------------------------------------------------
       case 'user-message': {
@@ -738,6 +743,7 @@ export function reduceThread(events: RunEvent[], options: ThreadReduceOptions = 
       }
     }),
     ...(sessionEnded !== undefined ? { sessionEnded } : {}),
+    ...(lastEventAt !== undefined ? { lastEventAt } : {}),
   }
 }
 

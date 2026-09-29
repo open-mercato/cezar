@@ -73,8 +73,11 @@ import {
 import {
   clearStartedDraft,
   composerRunModeNote,
+  handOffComposition,
+  readAttachments,
   readDraft,
   resolveComposerRunMode,
+  writeAttachments,
   writeDraft,
   type NewTaskDraft,
 } from './new-task-draft'
@@ -155,6 +158,17 @@ export function NewTaskRoute() {
   const update = (patch: Partial<NewTaskDraft>) =>
     setDraft((current) => ({ ...current, ...patch }))
 
+  // The composer's attachments, controlled from here (#1018). `/new` used to leave them to the
+  // composer's own uncontrolled state, which meant a pasted screenshot lived only as long as the
+  // component — and swapping the project pill REMOUNTS this route (`NewTaskProjectRoute` keys on
+  // the id), so the picture vanished with the prompt. The store behind this is in-memory and
+  // per-project: multi-MB base64 still has no business in localStorage, but surviving a scope
+  // swap costs nothing.
+  const [images, setImages] = useState(() => readAttachments(draftProjectId))
+  useEffect(() => {
+    writeAttachments(images, draftProjectId)
+  }, [images, draftProjectId])
+
   // ---- effective picker values (rules in new-task-form.ts, mirrored from legacy) -----------
   const recentSources = uiState.data?.recentSources
   // Memoized so the picker gets a STABLE array identity across renders that don't actually
@@ -170,6 +184,16 @@ export function NewTaskRoute() {
   // The registry the project pill offers. Empty while it loads or when it errors — the pill
   // simply does not render, which is the honest state: there is no second project to offer.
   const projectList = projects.data?.projects ?? []
+  /**
+   * A URL project id → the id the draft and attachment stores are keyed by.
+   *
+   * The boot project mounts UNSCOPED (the step-3.1 invariant), so its key is `null` — the same
+   * rule `ProjectScopeRoute` applies on the way in. Resolved from the same `bootProject` field
+   * both sides read, so the hand-off below cannot write the departing composition under a key
+   * the arriving mount will not look at.
+   */
+  const scopeKeyOf = (id: string): string | null =>
+    projects.data?.bootProject === id ? null : id
   const sourcesReady =
     skills.data !== undefined && workflows.data !== undefined && !uiState.isPending
   // The draft's pick alone — a fresh `/new` selects nothing (see `resolveSource` for what the
@@ -603,6 +627,8 @@ export function NewTaskRoute() {
           onSubmit={submit}
           value={draft.text}
           onValueChange={(text) => update({ text })}
+          images={images}
+          onImagesChange={setImages}
           autoFocus
           placeholder="Describe a task for the agent — / for skills…"
           ariaLabel="Describe a task for the agent"
@@ -630,7 +656,14 @@ export function NewTaskRoute() {
                   projectId={urlProjectId}
                   // An explicit `/p/<id>` target: the scoped navigate wrapper passes already
                   // scoped paths through untouched, so this is a genuine cross-project jump.
-                  onPick={(next) => navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })}
+                  onPick={(next) => {
+                    // What is in the box comes along (#1018). Before the navigate, because the
+                    // route remounts on the way in and reads the arriving project's draft the
+                    // moment it does. `handOffComposition` decides whether the move happens —
+                    // it refuses to overwrite an unsent draft already waiting over there.
+                    handOffComposition(draftProjectId, scopeKeyOf(next))
+                    navigate(`/p/${encodeURIComponent(next)}/new`, { replace: true })
+                  }}
                 />
               ) : null}
               <SourcePill

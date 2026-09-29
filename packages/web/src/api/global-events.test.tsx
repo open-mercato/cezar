@@ -1,5 +1,9 @@
-import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, render, renderHook, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router'
+import { TaskRow } from '@/routes/dashboard/rows'
+import { dashboardTruthRevision, reconcileDashboardTruth } from './dashboard-truth'
+import { dashboardLive } from './dashboard-live'
+import { QueryClientProvider, QueryObserver, type QueryClient } from '@tanstack/react-query'
+import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -110,6 +114,7 @@ const CONNECTED_PROVIDERS: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: false },
     { provider: 'opencode', status: 'connected', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -424,6 +429,53 @@ describe('useGlobalEvents — run events', () => {
     expect(indexRefreshes).toHaveLength(1)
   })
 
+  it('invalidates dashboard summaries across scopes but never on usage frames', async () => {
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+    source.emit('usage', JSON.stringify({ project: 'other', usage: {}, sentAt: '2026-09-18T00:00:00.000Z', samples: [] }))
+    await new Promise(resolve => setTimeout(resolve, 300))
+    expect(invalidate.mock.calls.some(([options]) => options?.queryKey?.[1] === 'dashboard')).toBe(false)
+    source.emit('run', stampedRun(runRecord('r9', { status: 'done' }), 'other'))
+    await vi.waitFor(() => expect(invalidate.mock.calls.some(([options]) => options?.queryKey?.[1] === 'dashboard')).toBe(true))
+    const options = invalidate.mock.calls.find(([options]) => options?.queryKey?.[1] === 'dashboard')![0]!
+    expect(options.predicate!({ queryKey: ['workspace', 'dashboard', 'feed', 'github'] } as never)).toBe(false)
+    expect(options.predicate!({ queryKey: ['workspace', 'dashboard', 'automations'] } as never)).toBe(false)
+  })
+
+  it('disables retained task links only for a removed project and restores a re-added project', () => {
+    const { source } = mount()
+    const row = { ...runRecord('retained'), projectId: 'removed-feed-project' }
+    render(<MemoryRouter><TaskRow row={row} /><TaskRow row={{ ...row, projectId: 'still-present', title: 'Other project' }} /></MemoryRouter>)
+    const link = screen.getByRole('link', { name: 'retained' })
+    expect(link.getAttribute('aria-disabled')).toBeNull()
+    const beforeRemoval = dashboardTruthRevision()
+    source.emit('project-removed', JSON.stringify({ id: row.projectId }))
+    expect(link.getAttribute('aria-disabled')).toBe('true')
+    expect(link.getAttribute('tabindex')).toBe('-1')
+    expect(screen.getByRole('link', { name: 'Other project' }).getAttribute('aria-disabled')).toBeNull()
+    act(() => reconcileDashboardTruth(beforeRemoval, [row]))
+    expect(link.getAttribute('aria-disabled')).toBe('true')
+    act(() => reconcileDashboardTruth(dashboardTruthRevision(), []))
+    expect(link.getAttribute('aria-disabled')).toBe('true')
+    expect(screen.getByRole('link', { name: 'Other project' }).getAttribute('aria-disabled')).toBeNull()
+    source.emit('project-added', JSON.stringify({ project: { id: row.projectId } }))
+    expect(link.getAttribute('aria-disabled')).toBeNull()
+    source.emit('project-removed', JSON.stringify({ id: row.projectId }))
+    expect(link.getAttribute('aria-disabled')).toBe('true')
+    act(() => reconcileDashboardTruth(dashboardTruthRevision(), [row]))
+    expect(link.getAttribute('aria-disabled')).toBeNull()
+  })
+
+  it('keeps cross-project sample freshness and clears removed projects', () => {
+    const { source } = mount()
+    const sampledAt = '2026-09-18T00:00:00.000Z'
+    source.emit('usage', JSON.stringify({ project: 'other', usage: { r9: SAMPLE }, samples: [{ projectId: 'other', runId: 'r9', sampledAt, ...SAMPLE }], sentAt: sampledAt }))
+    expect(dashboardLive.getSnapshot().samples.some(s => s.projectId === 'other')).toBe(true)
+    expect(usage.get()).toEqual({})
+    source.emit('project-removed', JSON.stringify({ id: 'other' }))
+    expect(dashboardLive.getSnapshot().samples.some(s => s.projectId === 'other')).toBe(false)
+  })
+
   it('ignores a malformed frame and keeps serving the next one', async () => {
     client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [])
     const { source } = mount()
@@ -579,6 +631,7 @@ describe('useGlobalEvents — provider status', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     const latched = {
@@ -592,6 +645,7 @@ describe('useGlobalEvents — provider status', () => {
         },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     vi.mocked(fetch).mockReturnValueOnce(initial.promise).mockReturnValueOnce(replacement.promise)
@@ -638,6 +692,7 @@ describe('useGlobalEvents — provider status', () => {
         { provider: 'claude', status: 'connected', enabled: true },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     const onlyClaudeIncident = {
@@ -645,6 +700,7 @@ describe('useGlobalEvents — provider status', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-a' },
         { provider: 'codex', status: 'connected', enabled: true },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     const bothIncidents = {
@@ -652,6 +708,7 @@ describe('useGlobalEvents — provider status', () => {
         { provider: 'claude', status: 'disconnected', enabled: true, authFailureId: 'incident-a' },
         { provider: 'codex', status: 'disconnected', enabled: true, authFailureId: 'incident-b' },
         { provider: 'opencode', status: 'connected', enabled: true },
+      { provider: 'cursor', status: 'not-installed', enabled: true },
       ],
     }
     vi.mocked(fetch)
@@ -1119,4 +1176,26 @@ describe('GlobalEventsProvider', () => {
     const view = render(<Probe />)
     expect(view.getByTestId('probe').textContent).toBe('0')
   })
+})
+
+
+it.each(['event', 'reconnect', 'visibility'])('discards old project/tracker requests after %s', async trigger => {
+  const keys = [workspaceQueryKeys.projects, ['tracker', BOOT, 'association']] as const
+  const controls = keys.map((queryKey) => {
+    let resolveOld!: (value: string) => void
+    const old = new Promise<string>((resolve) => { resolveOld = resolve })
+    const read = vi.fn().mockReturnValueOnce(old).mockResolvedValue('new')
+    const observer = new QueryObserver(client, { queryKey, queryFn: read })
+    const unsubscribe = observer.subscribe(() => {})
+    return { queryKey, read, resolveOld, unsubscribe }
+  })
+  try {
+    const { source } = mount()
+    if (trigger === 'event') source.emit('tracker-changed', JSON.stringify({ project: BOOT }))
+    else if (trigger === 'reconnect') { source.open(); source.drop(); source.open() }
+    else { setVisibility('hidden'); setVisibility('visible') }
+    await waitFor(() => controls.forEach(({ read }) => expect(read).toHaveBeenCalledTimes(2)))
+    await act(async () => controls.forEach(({ resolveOld }) => resolveOld('old')))
+    controls.forEach(({ queryKey }) => expect(client.getQueryData(queryKey)).toBe('new'))
+  } finally { controls.forEach(({ unsubscribe }) => unsubscribe()) }
 })

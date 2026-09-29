@@ -1,11 +1,12 @@
 import { memo, useMemo, type ReactNode } from 'react'
 import { useLocation } from 'react-router'
 
-import { useHealth, useProjectRuns, useProjects, useRuns, useSkillsUpdate, useTodos } from '@/api/queries'
+import { useHealth, useProjectRuns, useProjects, useRunsForProject, useSkillsUpdate, useTodos } from '@/api/queries'
 import type { HealthResponse, SkillsUpdateState } from '@open-mercato/cezar-api-client'
 import { AppShell, type RepoChip } from '@/components/app-shell'
 import { CommandPalette } from '@/components/command-palette'
 import { ListViewProvider } from '@/components/list-view'
+import { HostUsageWidget } from '@/components/host-usage-widget'
 import { ProviderBannerContainer } from '@/components/provider-banner-container'
 import { ProjectGroups } from '@/components/project-groups'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
@@ -68,15 +69,17 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   // mobile drawer, and grouped sidebar). Routes reuse this TanStack Query cache entry.
   const skillsUpdate = useSkillsUpdate(projectId ?? '', projectId !== null)
   const skillsUpdateAvailable = skillsUpdateMarkerOf(skillsUpdate.data)
-  // Unread done items (#unread-done-items) for the Tasks badge. Reads the same active-scope run
-  // list the sidebar quick-list and Tasks table already hold — one cache entry, no extra fetch.
-  const unreadDoneCountSelector = useMemo(() => unreadDoneCount, [])
-  const runs = useRuns(unreadDoneCountSelector)
   const registry = useProjects().data
   const titleContext = pageTitleContext(pathname)
   const bootProjectId = registry?.bootProject ?? health.data?.bootProject ?? null
+  // Unread done items (#unread-done-items) for the Tasks badge. This shell sits ABOVE the routed
+  // project provider, so name the URL project explicitly instead of reading the module scope.
+  const unreadDoneCountSelector = useMemo(() => unreadDoneCount, [])
+  const runs = useRunsForProject(projectId, bootProjectId, unreadDoneCountSelector)
   const isBootProject = projectId !== null && projectId === bootProjectId
   const activeProject = registry?.projects.find((project) => project.id === projectId)
+  const bootProject = registry?.projects.find((project) => project.id === bootProjectId)
+  const tracker = projectId === null ? bootProject?.tracker : activeProject?.tracker
   const titleRunId = titleContext.taskId
   const titleLabel = useProjectRuns(
     projectId ?? '',
@@ -118,6 +121,11 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
   )
   const banner = useMemo(() => <ProviderBannerContainer />, [])
   const taskQuickList = useMemo(() => <TaskQuickListContainer />, [])
+  // The sidebar glance. Created here, not inside `AppShell`, because the shell stays presentational
+  // and QueryClient-free: the widget's own wrapper evaluates the viewport and transport gates and
+  // mounts nothing below `md` or in remote, so neither the CSS-hidden column nor a hosted cockpit
+  // ever pays for a sample it cannot show.
+  const hostWidget = useMemo(() => <HostUsageWidget />, [])
   const projectGroups = useMemo(
     () =>
       projects ? (
@@ -168,9 +176,11 @@ export const AppShellContainer = memo(function AppShellContainer({ children }: {
         inboxAvailable={inboxAvailable}
         // Hidden unless health reports the opt-in automations capability (#801).
         automationsAvailable={automationsAvailable}
+        tracker={tracker}
         banner={banner}
         singleProject={health.data?.capabilities.singleProject === true}
         taskQuickList={taskQuickList}
+        hostWidget={hostWidget}
         // Present only in a multi-project workspace; `AppShell` renders the flat nav and the
         // quick-list above whenever this slot is absent.
         projectGroups={projectGroups}

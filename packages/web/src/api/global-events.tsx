@@ -1,3 +1,7 @@
+import { dashboardProjectTransition, dashboardTransition } from './dashboard-truth'
+import { dashboardWorkspaceUsageSchema } from '@open-mercato/cezar-api-client'
+import { dashboardLive } from './dashboard-live'
+import { trackerChangedEventSchema } from '@open-mercato/cezar-api-client'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { createContext, useContext, useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 
@@ -73,7 +77,7 @@ const EVENT_NAMES = ['run', 'run-deleted', 'todos', 'usage', 'ping'] as const
  * projects query (the sidebar grows/loses a group without a reload) and fan out to whoever
  * subscribed via `onWorkspaceEvent`.
  */
-const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change'] as const
+const WORKSPACE_EVENT_NAMES = ['project-added', 'project-removed', 'checkout-progress', 'automation-change', 'tracker-changed'] as const
 
 type WorkspaceEventName = (typeof WORKSPACE_EVENT_NAMES)[number]
 
@@ -317,16 +321,30 @@ async function reconcile(queryClient: QueryClient): Promise<void> {
     // Events happened while we were disconnected, and the index is cross-project — nothing else
     // here covers it.
     workspaceQueryKeys.runsIndex,
+    workspaceQueryKeys.dashboard,
     queryKeys.todos,
     queryKeys.health,
     // The worktree panel's list/total (#483) — a run finishing or a reclaim changes it.
     queryKeys.worktrees,
     workspaceQueryKeys.providerStatus,
+    // Host totals (spec 2026-09-20-host-resource-telemetry): a remote cockpit's only refresh is
+    // this reconcile, so the Machine card must be in the list — the local cockpit ignores it
+    // because its frames arrive over the `host` topic.
+    workspaceQueryKeys.hostUsage,
     ['run-history', activeScope] as const,
     ['run-history-context', activeScope] as const,
   ] as const
   const invalidations = Promise.allSettled(
     [
+      // Visible tracker lists own their first-page watch; refetching an infinite query here
+      // would reload every loaded page on visibility/SSE reconnect and defeat pagination protection.
+      Promise.all([
+        queryClient.cancelQueries({ queryKey: ['tracker'], predicate: q => q.queryKey[2] !== 'items' || q.getObserversCount() === 0 }),
+        queryClient.cancelQueries({ queryKey: workspaceQueryKeys.projects }),
+      ]).then(() => Promise.all([
+        queryClient.invalidateQueries({ queryKey: ['tracker'], predicate: q => q.queryKey[2] !== 'items' || q.getObserversCount() === 0 }),
+        queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+      ])),
       ...cachedProjectScopes(queryClient)
         .filter((scope) => scope !== activeScope)
         .flatMap((scope) => eventQueryKeys(scope).map((queryKey) =>
@@ -433,6 +451,18 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     if (typeof Source !== 'function') return
 
     let source: EventSource | null = null
+    let dashboardTimer: ReturnType<typeof setTimeout> | undefined
+    let dashboardMax: ReturnType<typeof setTimeout> | undefined
+    const refreshDashboard = () => {
+      clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
+      dashboardTimer = undefined; dashboardMax = undefined
+      void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard, refetchType: document.visibilityState === 'hidden' ? 'none' : 'active', predicate: q => q.queryKey[2] !== 'telemetry' && q.queryKey[2] !== 'automations' && !(q.queryKey[2] === 'feed' && q.queryKey[3] === 'github') })
+    }
+    const stageDashboardRefresh = () => {
+      clearTimeout(dashboardTimer)
+      dashboardTimer = setTimeout(refreshDashboard, 250)
+      dashboardMax ??= setTimeout(refreshDashboard, 1000)
+    }
     const runsIndexRefresher = createRunsIndexRefresher(queryClient)
     const inactiveProjectRefresher = createInactiveProjectRefresher(queryClient)
     const runEventBatcher = createRunEventBatcher(
@@ -542,6 +572,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
     }
 
     const connect = (): void => {
+      dashboardLive.connected(false)
       source?.close()
       // A fresh socket resets the clock: its first frames are still on the way, so it must not be
       // judged dead before any of them land.
@@ -558,6 +589,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // would only ask the same questions twice. Every later open is a *re*connect — we were
         // disconnected, events happened without us, and the cache is now a guess.
         if (everOpened) reconcileNow()
+        dashboardLive.connected(true)
         everOpened = true
       })
 
@@ -575,6 +607,17 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           // the namer had rewritten stayed stale until the next tick, and the tick does not run
           // in a background tab, so coming back to one showed yesterday's rows until a reload.
           runsIndexRefresher.onEvent(parsed.event)
+          if (parsed.event.type === 'run' || parsed.event.type === 'run-deleted') {
+            stageDashboardRefresh()
+            if (parsed.project) dashboardTransition(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run)
+            if (parsed.project && (parsed.event.type === 'run-deleted' || parsed.event.run.status !== 'running')) dashboardLive.remove(parsed.project, parsed.event.type === 'run-deleted' ? parsed.event.id : parsed.event.run.id)
+          }
+          if (name === 'usage') {
+            try {
+              const metadata = dashboardWorkspaceUsageSchema.safeParse(JSON.parse((event as MessageEvent<string>).data))
+              if (metadata.success) dashboardLive.replace(metadata.data.project, metadata.data.samples ?? [], metadata.data.sentAt)
+            } catch { /* malformed frame leaves the last good sample to expire */ }
+          }
           // Another project's news never patches the active scope. Its own cache is marked stale
           // in a debounced batch so a later project switch refetches truth without cross-project
           // bleed. `ping` (project null) always passes — liveness is not project-owned.
@@ -602,12 +645,32 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
           } catch {
             return
           }
+          if (name === 'tracker-changed') {
+            if (!trackerChangedEventSchema.safeParse(payload).success) return
+            // Cancel old requests before refetch: a replacement must not resurrect old tickets.
+            void Promise.all([
+              queryClient.cancelQueries({ queryKey: ['tracker'] }),
+              queryClient.cancelQueries({ queryKey: workspaceQueryKeys.projects }),
+            ]).then(() => Promise.all([
+              queryClient.invalidateQueries({ queryKey: ['tracker'] }),
+              queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+            ]))
+          }
           // A registry mutation changes the sidebar for every open tab, not just the one that
           // clicked. `checkout-progress` is deliberately NOT in this branch: a clone emits a
           // line every few hundred ms, and re-listing the registry on each would turn one clone
           // into a request flood (the dialog's own success handler invalidates once, at the end).
-          if (name !== 'checkout-progress' && name !== 'automation-change') {
+          if (name !== 'checkout-progress' && name !== 'automation-change' && name !== 'tracker-changed') {
+            if (payload && typeof payload === 'object') {
+              if (name === 'project-removed' && 'id' in payload && typeof payload.id === 'string') {
+                dashboardProjectTransition(payload.id, true)
+                dashboardLive.remove(payload.id)
+              } else if (name === 'project-added' && 'project' in payload && payload.project && typeof payload.project === 'object' && 'id' in payload.project && typeof payload.project.id === 'string') {
+                dashboardProjectTransition(payload.project.id, false)
+              }
+            }
             void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects })
+            void queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.dashboard, refetchType: document.visibilityState === 'hidden' ? 'none' : 'active' })
           }
           for (const listener of [...workspaceListeners]) listener(name, payload)
         })
@@ -638,6 +701,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
         // what a restarting server produces (the request is answered with a non-2xx while it
         // boots). Nothing would ever reopen it, so the cockpit would sit there looking live and
         // showing yesterday's state.
+        dashboardLive.connected(false)
         if (current.readyState === CLOSED) reopenLater()
       })
     }
@@ -665,6 +729,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       reopenTimer = undefined
       const current = source
       source = null
+      dashboardLive.connected(false)
       current?.close()
     }
 
@@ -696,6 +761,8 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       disposed = true
       clearTimeout(reopenTimer)
       clearInterval(livenessTimer)
+      dashboardLive.connected(false)
+      clearTimeout(dashboardTimer); clearTimeout(dashboardMax)
       runsIndexRefresher.cancel()
       inactiveProjectRefresher.cancel()
       runEventBatcher.cancel()
@@ -708,6 +775,7 @@ export function useGlobalEvents(usage: UsageStore, url: string = SSE_URL): void 
       // dropped reference leaks a connection per remount, and StrictMode remounts every effect.
       const current = source
       source = null
+      dashboardLive.connected(false)
       current?.close()
     }
   }, [queryClient, usage, url])

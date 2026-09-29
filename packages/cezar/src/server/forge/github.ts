@@ -20,6 +20,7 @@ import type {
   ForgePrStatus,
   ForgePrDiffResult,
   ForgeRefKind,
+  ForgeRecentCreatedData,
   ForgeSearchData,
   ForgeTimelineEvent,
   ForgeTimelineEventKind,
@@ -242,6 +243,11 @@ const mergePrSchema = z.object({
   mergeable: z.string().nullish(),
   mergeStateStatus: z.string().nullish(),
   reviewDecision: z.string().nullish(),
+  statusCheckRollup: z.array(mergeCheckSchema).nullish(),
+});
+/** The check detail, fetched on its OWN `gh pr view` call (#969) so that a token which cannot read
+ *  `statusCheckRollup`'s contexts loses only the detail, never the merge state around it. */
+const mergeChecksSchema = z.object({
   statusCheckRollup: z.array(mergeCheckSchema).nullish(),
 });
 const repoMergePolicySchema = z.object({
@@ -487,6 +493,19 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
 
 function firstLine(s: string): string {
   return s.split('\n').find((l) => l.trim().length > 0)?.trim() ?? 'gh failed';
+}
+
+/**
+ * The line of a `gh` failure that says WHY, not just that it failed (#969).
+ *
+ * Node prefixes a failed subprocess with `Command failed: <the whole argv>` and puts the forge's
+ * own message on the lines after it. `firstLine` therefore reports the command back at the reader —
+ * which is how "your token cannot read check runs" came out looking like a GitHub outage. This
+ * skips that preamble whenever there is something behind it, and falls back to it when there isn't.
+ */
+export function whyLine(s: string): string {
+  const lines = s.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  return lines.find((l) => !/^Command failed:/i.test(l)) ?? lines[0] ?? 'gh failed';
 }
 
 // ---- search across states (#730) -------------------------------------------
@@ -2652,6 +2671,9 @@ function mergeCheckState(check: z.infer<typeof mergeCheckSchema>): ForgePrCheck[
   return 'unknown';
 }
 
+/** The single row an `aggregate` check tier collapses to — see `ForgePrMergeState['checksTier']`. */
+export const AGGREGATE_CHECK_NAME = 'All checks';
+
 export function normalizeMergeState(
   raw: unknown,
   policyRaw: unknown,
@@ -2659,6 +2681,7 @@ export function normalizeMergeState(
     readable: false,
     requiredChecks: [],
   },
+  checkTier: { tier: ForgePrMergeState['checksTier']; reason?: string } = { tier: 'detailed' },
 ): ForgePrMergeState {
   const pr = mergePrSchema.parse(raw);
   const policy = repoMergePolicySchema.parse(policyRaw);
@@ -2681,7 +2704,12 @@ export function normalizeMergeState(
   const checks: ForgePrCheck[] = (pr.statusCheckRollup ?? []).map((check) => ({
     name: check.name,
     state: mergeCheckState(check),
-    required: requirements.readable ? requirements.requiredChecks.includes(check.name) : null,
+    // An `aggregate` row stands for every check at once, required ones included, so its
+    // requiredness is unknowable — never `false`, which would read as "not required".
+    required:
+      checkTier.tier === 'aggregate' || !requirements.readable
+        ? null
+        : requirements.requiredChecks.includes(check.name),
     ...(check.detailsUrl?.startsWith('https://') || check.detailsUrl?.startsWith('http://')
       ? { url: check.detailsUrl }
       : {}),
@@ -2713,6 +2741,13 @@ export function normalizeMergeState(
   } else if (reviewDecision === 'changes-requested' || reviewDecision === 'review-required') {
     eligibility = 'blocked';
     blockers.push({ code: 'reviews', message: reviewDecision === 'changes-requested' ? 'Changes were requested.' : 'A required review is missing.' });
+  } else if (checkTier.tier === 'none') {
+    // Empty `checks` here means "never found out", not "no CI" — never let that read as ready.
+    eligibility = 'unknown';
+    blockers.push({
+      code: 'checks-unknown',
+      message: 'This token cannot read the checks on this pull request.',
+    });
   } else if (reviewDecision === 'unknown' || !requirements.readable) {
     eligibility = 'unknown';
     blockers.push({
@@ -2749,6 +2784,8 @@ export function normalizeMergeState(
     mergeable,
     reviewDecision,
     checks,
+    checksTier: checkTier.tier,
+    ...(checkTier.reason ? { checksReason: checkTier.reason } : {}),
     methods,
     defaultMethod,
     eligibility,
@@ -2758,7 +2795,68 @@ export function normalizeMergeState(
   };
 }
 
-async function fetchPrMergeState(
+/** What one attempt at the check tier came back with — the rollup rows plus how they were read. */
+type MergeChecksTier = {
+  tier: ForgePrMergeState['checksTier'];
+  rollup: Array<z.infer<typeof mergeCheckSchema>>;
+  reason?: string;
+};
+
+/**
+ * The check tier for the merge panel, fetched independently of the merge state's core fields
+ * (#969).
+ *
+ * `gh pr view --json statusCheckRollup` expands `CheckRun` contexts, and reading a check run needs
+ * the `checks` scope — which fine-grained PATs cannot grant, because they have no Checks permission
+ * at all. On such a token `gh` exits 1 with empty stdout, which is why this call is kept out of the
+ * one that carries `mergeable`, `mergeStateStatus` and `reviewDecision`.
+ *
+ * The fallback is the aggregate `statusCheckRollup { state }` on the head commit — the one part of
+ * the tier the same token CAN read, and already what the list-row glyphs use (`fetchPrChecks`). It
+ * collapses to a single row so the eligibility ladder still sees a red CI as red. Only when that
+ * fails too does the tier go dark, and then it says so rather than looking like "no CI".
+ */
+async function fetchMergeChecks(
+  repoRoot: string,
+  repoRef: GithubRepoRef,
+  number: number,
+): Promise<MergeChecksTier> {
+  try {
+    const out = await gh(repoRoot, ['pr', 'view', String(number), '--json', 'statusCheckRollup']);
+    return { tier: 'detailed', rollup: mergeChecksSchema.parse(JSON.parse(out)).statusCheckRollup ?? [] };
+  } catch (error) {
+    const reason = whyLine(error instanceof Error ? error.message : String(error));
+    const runGraphql: GraphqlRunner = (query, variables) => {
+      const args = ['api', 'graphql', '-f', `query=${query}`];
+      for (const [key, value] of Object.entries(variables)) args.push('-f', `${key}=${value}`);
+      return gh(repoRoot, args);
+    };
+    const glyphs = await fetchPrChecks(runGraphql, repoRef.owner, repoRef.repo, [number]);
+    // Absent key = the aggregate query failed too; `null` = it answered "this head has no CI".
+    if (!(number in glyphs)) return { tier: 'none', rollup: [], reason };
+    const glyph = glyphs[number] ?? null;
+    if (glyph === null) return { tier: 'aggregate', rollup: [], reason };
+    return {
+      tier: 'aggregate',
+      reason,
+      rollup: [
+        {
+          name: AGGREGATE_CHECK_NAME,
+          // Back into the rollup's own vocabulary so `mergeCheckState` stays the single mapper.
+          state: glyph === 'passing' ? 'SUCCESS' : glyph === 'failing' ? 'FAILURE' : 'PENDING',
+        },
+      ],
+    };
+  }
+}
+
+/** Test hook — the merge-state cache would otherwise leak state across cases in one process. */
+export function __clearMergeStateCacheForTests(): void {
+  mergeStateCache.clear();
+}
+
+/** Exported for unit tests (#969): the split-call behaviour is only observable end to end. */
+export async function fetchPrMergeState(
   repoRoot: string,
   repoRef: GithubRepoRef | null,
   number: number,
@@ -2792,12 +2890,16 @@ async function fetchPrMergeState(
   const hit = mergeStateCache.get(key);
   if (!refresh && hit && Date.now() - hit.at < MERGE_CACHE_MS) return hit.value;
   try {
+    // The core fields ONLY (#969) — `statusCheckRollup` is deliberately absent. It used to ride
+    // along here, and on a token that cannot read its contexts `gh` exits 1 with empty stdout,
+    // taking `mergeable`, `mergeStateStatus` and `reviewDecision` down with it even though the same
+    // token reads all three. The check detail now has its own call, and its own way to degrade.
     const prOut = await gh(repoRoot, [
       'pr', 'view', String(number), '--json',
-      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision,statusCheckRollup',
+      'number,title,url,state,isDraft,headRefName,baseRefName,headRefOid,mergeable,mergeStateStatus,reviewDecision',
     ]);
     const parsedPr = mergePrSchema.parse(JSON.parse(prOut));
-    const [policyOut, requiredChecks] = await Promise.all([
+    const [policyOut, requiredChecks, checks] = await Promise.all([
       gh(repoRoot, ['api', `repos/${repoRef.owner}/${repoRef.repo}`]),
       gh(repoRoot, [
         'api',
@@ -2807,15 +2909,24 @@ async function fetchPrMergeState(
       ])
         .then((output) => ({ readable: true, requiredChecks: z.array(z.string()).parse(JSON.parse(output)) }))
         .catch(() => ({ readable: false, requiredChecks: [] as string[] })),
+      fetchMergeChecks(repoRoot, repoRef, number),
     ]);
     const value: ForgePrMergeStateResult = {
       available: true,
-      mergeState: normalizeMergeState(parsedPr, JSON.parse(policyOut), requiredChecks),
+      mergeState: normalizeMergeState(
+        { ...parsedPr, statusCheckRollup: checks.rollup },
+        JSON.parse(policyOut),
+        requiredChecks,
+        { tier: checks.tier, ...(checks.reason ? { reason: checks.reason } : {}) },
+      ),
     };
     mergeStateCache.set(key, { at: Date.now(), value });
     return value;
   } catch (error) {
-    return { available: false, reason: firstLine(error instanceof Error ? error.message : String(error)) };
+    // `whyLine`, not `firstLine`: a reason of "Command failed: gh pr view 353 --json …" is the
+    // command echoed back, and reads like an outage. The line after it says what actually went
+    // wrong (#969).
+    return { available: false, reason: whyLine(error instanceof Error ? error.message : String(error)) };
   }
 }
 
@@ -2879,6 +2990,7 @@ export function mergePreflightAllowed(current: ForgePrMergeState, overrideRules 
 
 /** owner/repo parsed out of the origin remote — feeds `viewUrl`. */
 export interface GithubRepoRef {
+  host?: string;
   owner: string;
   repo: string;
 }
@@ -2891,6 +3003,8 @@ const GH_PR_STATES: Record<string, ForgePrStatus['state']> = {
 export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | null): ForgeDriver {
   return {
     kind: 'github',
+
+    recentCreated: (kind, sinceDate) => recentGithubCreated(repoRoot, repoRef, kind, sinceDate),
 
     detect: () => detectGithub(repoRoot),
     detectCached: () => detectGithubCached(repoRoot),
@@ -2949,4 +3063,46 @@ export function createGithubDriver(repoRoot: string, repoRef: GithubRepoRef | nu
       }
     },
   };
+}
+
+
+const ghCreatedSchema = z.object({
+  number: z.number().int().positive(), title: z.string(), created_at: z.iso.datetime(),
+  html_url: z.url().refine((url) => /^https?:\/\//.test(url)),
+});
+
+/** Search's explicit created ordering includes subsequently closed issues and merged PRs.
+ * No user query reaches this operation; every qualifier is validated before building argv. */
+async function recentGithubCreated(
+  root: string, ref: GithubRepoRef | null, kind: 'issue' | 'pr', sinceDate: string,
+): Promise<ForgeRecentCreatedData> {
+  if (!ref || !/^[a-zA-Z0-9.-]+$/.test(ref.host ?? 'github.com') ||
+      !/^[a-zA-Z0-9_.-]+$/.test(ref.owner) || !/^[a-zA-Z0-9_.-]+$/.test(ref.repo) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(sinceDate) || !Number.isFinite(Date.parse(sinceDate))) {
+    return { available: false, reason: 'GitHub repository or creation date is invalid', items: [] };
+  }
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { available: true, truncated: false, items: [{
+      number: kind === 'issue' ? 101 : 102,
+      title: kind === 'issue' ? 'Dashboard example issue' : 'Dashboard example pull request',
+      createdAt: new Date().toISOString(),
+      url: `https://${ref.host ?? 'github.com'}/${ref.owner}/${ref.repo}/${kind === 'issue' ? 'issues' : 'pull'}/${kind === 'issue' ? 101 : 102}`,
+    }] };
+  }
+  try {
+    const output = await gh(root, [
+      'api', '--hostname', ref.host ?? 'github.com', '--method', 'GET', 'search/issues',
+      '-f', `q=repo:${ref.owner}/${ref.repo} is:${kind} created:>=${sinceDate}`,
+      '-f', 'sort=created', '-f', 'order=desc', '-f', 'per_page=30',
+    ]);
+    const parsed = z.object({ items: z.array(ghCreatedSchema), incomplete_results: z.boolean().optional() }).parse(JSON.parse(output));
+    const items = parsed.items.slice(0, 30).map((item) => ({
+      number: item.number, title: item.title, createdAt: item.created_at, url: item.html_url,
+    }));
+    return { available: true, items, truncated: parsed.items.length >= 30 || parsed.incomplete_results === true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { available: false, items: [], reason: /ENOENT/.test(message)
+      ? 'gh CLI not found — install it and run `gh auth login`' : firstLine(message) };
+  }
 }

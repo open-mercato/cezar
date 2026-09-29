@@ -108,9 +108,10 @@ export class ScheduleRunner {
     const lease = this.handle.store.acquireLease();
     if (!lease) return { result: 'lease-held', occurrenceAt: occurrence.at };
     try {
+      if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const reserved: AutomationReceipt = { ...receipt, status: 'reserved', error: undefined, updatedAt: new Date(now).toISOString() };
       this.handle.store.appendReceipt(reserved);
-      return await this.launchReserved(definition, occurrence, reserved, now, { advance: false });
+      return await this.launchReserved(definition, occurrence, reserved, now, { advance: false }, lease);
     } finally {
       lease.release();
     }
@@ -131,6 +132,7 @@ export class ScheduleRunner {
       return { result: 'lease-held', occurrenceAt: occurrence.at };
     }
     try {
+      if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const eventId = occurrence.trigger === 'manual' ? `manual:${occurrence.at}` : `schedule:${occurrence.at}`;
       const receipt = store.reserveReceipt({ automationId: definition.id, revision: definition.revision, eventId, occurrenceAt: occurrence.at });
       if (!receipt) {
@@ -138,7 +140,7 @@ export class ScheduleRunner {
         if (options.advance) this.advance(definition, Date.parse(occurrence.at), now);
         return { result: 'duplicate', occurrenceAt: occurrence.at };
       }
-      return await this.launchReserved(definition, occurrence, receipt, now, options);
+      return await this.launchReserved(definition, occurrence, receipt, now, options, lease);
     } finally {
       lease.release();
       try { store.maybeCompact(); } catch { /* append-only state remains readable; next fire retries */ }
@@ -151,6 +153,7 @@ export class ScheduleRunner {
     receipt: AutomationReceipt,
     now: number,
     options: { advance: boolean },
+    lease: { isValid(): boolean },
   ): Promise<ScheduleFireOutcome> {
     const { store } = this.handle;
     if (!this.handle.launch) {
@@ -161,8 +164,12 @@ export class ScheduleRunner {
     const started = Date.now();
     const result: AutomationLogRecord['result'] = occurrence.trigger === 'schedule' ? 'launched' : occurrence.trigger;
     try {
+      if (!lease.isValid()) throw new Error('automation schedule lease was lost');
       const launched = await this.handle.launch(definition, occurrence, receipt.receiptId);
+      // The task side effect is now real. Even if the lease heartbeat was lost
+      // while awaiting it, persist the run id so a successor cannot retry it.
       store.appendReceipt({ ...receipt, status: 'launched', runId: launched.runId, updatedAt: new Date(this.now()).toISOString() });
+      if (!lease.isValid()) return { result, runId: launched.runId, occurrenceAt: occurrence.at };
       store.appendLog({
         automationId: definition.id, revision: definition.revision, result,
         reason: reasonFor(occurrence, this.handle.timeZone),
@@ -178,6 +185,10 @@ export class ScheduleRunner {
       this.handle.onChange?.(definition.id, definition.revision);
       return { result, runId: launched.runId, occurrenceAt: occurrence.at };
     } catch (error) {
+      // Do not let an owner that lost its guard publish failure state after a
+      // successor has taken over. The reserved receipt remains the successor's
+      // durable hand-off rather than being rewritten by the stale process.
+      if (!lease.isValid()) return { result: 'lease-held', occurrenceAt: occurrence.at };
       const message = error instanceof Error ? error.message : String(error);
       store.appendReceipt({ ...receipt, status: 'launch-error', error: message, updatedAt: new Date(this.now()).toISOString() });
       store.appendLog({ automationId: definition.id, revision: definition.revision, result: 'failed', reason: message, receiptId: receipt.receiptId, durationMs: Date.now() - started });

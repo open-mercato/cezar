@@ -184,6 +184,21 @@ export interface ForgePrMergeState {
   mergeable: 'mergeable' | 'conflicting' | 'unknown';
   reviewDecision: 'approved' | 'changes-requested' | 'review-required' | 'unknown';
   checks: ForgePrCheck[];
+  /**
+   * How much of the check tier the token could actually read (#969):
+   *
+   * - `detailed` — one row per check, names and links included.
+   * - `aggregate` — only the rolled-up state was readable, collapsed into a single row. A
+   *   fine-grained PAT lands here: `statusCheckRollup`'s `CheckRun` contexts need the `checks`
+   *   scope, which fine-grained PATs cannot grant at all, while `statusCheckRollup { state }`
+   *   stays readable.
+   * - `none` — neither was readable; `checks` is empty because nothing was found out, NOT because
+   *   the pull request has no CI.
+   */
+  checksTier: 'detailed' | 'aggregate' | 'none';
+  /** Why the check tier degraded — the first line of the failure, for the panel to show. Absent
+   *  when `checksTier` is `detailed`. */
+  checksReason?: string;
   methods: ForgeMergeMethod[];
   defaultMethod: ForgeMergeMethod | null;
   eligibility: 'ready' | 'blocked' | 'pending' | 'unauthorized' | 'terminal' | 'unknown';
@@ -254,8 +269,21 @@ export interface DraftPrInput {
   handoffText: string;
 }
 
+/** Purpose-specific creation feed; independent of open lists and relevance search. */
+export interface ForgeRecentCreatedData {
+  available: boolean;
+  reason?: string;
+  items: Array<{ number: number; title: string; createdAt: string; url: string }>;
+  truncated?: boolean;
+}
+
 export interface ForgeDriver {
   readonly kind: ForgeKind;
+  /** Workspace dashboard's Recent results feed (optional, same rationale as `searchItems`): a
+   *  driver without it simply has no creation feed, and callers must go through `resolveForge`
+   *  to reach one — never construct a driver directly, or a future forge silently bypasses the
+   *  host allowlist that keeps this feed from mistaking a non-GitHub remote for GitHub. */
+  recentCreated?(kind: 'issue' | 'pr', sinceDate: string): Promise<ForgeRecentCreatedData>;
   /** Cheap, cached availability probe. May shell out (used by the GitHub tab). */
   detect(): Promise<ForgeAvailability>;
   /** Non-blocking availability for the health path: cached result, or null while warming — never

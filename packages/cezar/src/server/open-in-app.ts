@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import type { RunnerId } from '../core/agent-runner.ts';
 import { claudeShellCommand } from '../core/claude-bin.ts';
-import { quoteExecutable } from '../core/shell-env.ts';
+import { isShellEmbeddable, quoteExecutable } from '../core/shell-env.ts';
 import { openInTerminal, refuseSpawnUnderTest } from './open-in-terminal.ts';
 import { isWsl, translateToWindowsPath } from './wsl.ts';
 
@@ -135,6 +135,7 @@ const AGENT_CLIS: Array<{ runner: RunnerId; label: string; icon: string; bin: st
   { runner: 'claude', label: 'Claude CLI', icon: 'claude', bin: 'claude', envBin: () => claudeShellCommand() ?? undefined },
   { runner: 'codex', label: 'Codex CLI', icon: 'codex', bin: 'codex', envBin: () => process.env.CEZ_CODEX_BIN },
   { runner: 'opencode', label: 'OpenCode', icon: 'opencode', bin: 'opencode', envBin: () => process.env.CEZ_OPENCODE_BIN },
+  { runner: 'cursor', label: 'Cursor Agent', icon: 'cursor', bin: 'agent', envBin: () => process.env.CEZ_CURSOR_AGENT_BIN },
   { runner: 'pi', label: 'pi CLI', icon: 'pi', bin: 'pi', envBin: () => process.env.CEZ_PI_BIN },
 ];
 
@@ -161,6 +162,9 @@ export function withResolvedClaudeBin(
   if (runner !== 'claude' || resolved === null) return command;
   // `command` is `claude` or `claude --resume <id>` (`resumeCommand`); leave anything else alone.
   if (command !== 'claude' && !command.startsWith('claude ')) return command;
+  // A path this shell cannot be given without mangling (see `quoteExecutable`'s win32 caveat):
+  // keep the bare `claude`, which still works wherever the opened terminal finds one itself.
+  if (!isShellEmbeddable(resolved, platform)) return command;
   return quoteExecutable(resolved, platform) + command.slice('claude'.length);
 }
 

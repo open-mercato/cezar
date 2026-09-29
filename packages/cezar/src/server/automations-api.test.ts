@@ -50,6 +50,20 @@ describe('GitHub automation API', () => {
     body: JSON.stringify(body),
   });
 
+  it('reports unavailable tracker event options without exposing credentials', async () => {
+    const response = await apiRequest(app(), '/api/v1/tracker/automation-options');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ available: false, code: 'not_configured' });
+  });
+
+  it('requires an explicit tracker event and refuses an unbound association', async () => {
+    const missing = await apiRequest(app(), '/api/v1/automations', json({ name: 'tracker', kind: 'tracker', task: { prompt: 'test' } }));
+    expect(missing.status).toBe(400);
+    expect(await missing.json()).toMatchObject({ error: expect.stringContaining('Choose an event') });
+    const invalid = await apiRequest(app(), '/api/v1/automations', json({ name: 'tracker', kind: 'tracker', task: { prompt: 'test' }, trackerTrigger: { events: ['pull_request.opened'], association: { kind: 'jira', externalId: 'P', externalName: 'Project', source: { id: 's', webUrl: 'https://example.atlassian.net' } } } }));
+    expect(invalid.status).toBe(400);
+  });
+
   it('creates paused definitions and rejects malformed bounds', async () => {
     const bad = await apiRequest(app(), '/api/v1/automations', json({ ...input, intervalSeconds: 5 }));
     expect(bad.status).toBe(400);

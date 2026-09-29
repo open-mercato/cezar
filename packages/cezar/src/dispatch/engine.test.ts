@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { RunRecord } from '../runs/store.ts';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { RunStore, type RunRecord } from '../runs/store.ts';
 import {
   MAX_CHILDREN_IN_FLIGHT,
   MAX_PENDING_REPORTS,
@@ -81,6 +84,43 @@ describe('remainingBudgetUsd', () => {
   it('charges a settled child with no recorded cost its full ceiling — a data gap never under-charges', () => {
     const children = [record({ id: 'c1', status: 'failed', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 2 } })];
     expect(remainingBudgetUsd(parent(5, 0), children)).toBeCloseTo(3);
+  });
+
+  it('keeps the reservation when a stored zero aggregate includes an unreported executed step', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cez-dispatch-cost-'));
+    const store = RunStore.open(dir);
+    try {
+      const child = store.createRun({
+        title: 'Partial costs', task: 't', workflow: 'build',
+        steps: [
+          { id: 'a', name: 'A', kind: 'agent' },
+          { id: 'b', name: 'B', kind: 'agent' },
+          { id: 'unused', name: 'Unused', kind: 'agent' },
+        ],
+      });
+      child.status = 'done';
+      child.dispatch = { rootRunId: 'p', parentRunId: 'p', budgetUsd: 2 };
+      store.updateStep(child.id, 'a', { iterations: 1, costUsd: 0 });
+      store.updateStep(child.id, 'b', { iterations: 1, tokensUsed: 10000 });
+      expect(child.costUsd).toBe(0); // Keep the dashboard's reported amount truthful.
+      expect(remainingBudgetUsd(parent(5, 0), [child])).toBe(3);
+      store.flush();
+      expect(remainingBudgetUsd(parent(5, 0), [RunStore.open(dir).getRun(child.id)!])).toBe(3);
+      store.updateStep(child.id, 'b', { costUsd: 0 });
+      expect(remainingBudgetUsd(parent(5, 0), [child])).toBe(3);
+      child.status = 'running';
+      expect(remainingBudgetUsd(parent(5, 0), [child])).toBe(3);
+    } finally {
+      store.flush();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a settled child’s reservation for zero reports with unknown completeness', () => {
+    const child = record({ id: 'c1', status: 'done', dispatch: { rootRunId: 'm', parentRunId: 'p', budgetUsd: 2 } });
+    expect(remainingBudgetUsd(parent(5, 0), [child])).toBe(3);
+    expect(remainingBudgetUsd(parent(5, 0), [{ ...child, costUsd: 0 }])).toBe(3);
+    expect(remainingBudgetUsd(parent(5, 0), [{ ...child, status: 'running', costUsd: 0 }])).toBe(3);
   });
 });
 

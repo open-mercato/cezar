@@ -43,4 +43,23 @@ describe('withResolvedClaudeBin', () => {
     expect(withResolvedClaudeBin('claude', 'claude', 'win32', 'C:\\Program Files\\claude.exe'))
       .toBe('"C:\\Program Files\\claude.exe"');
   });
+
+  /**
+   * `quoteExecutable`'s win32 branch prefixes `^` to `"%&!`, which is not a cmd.exe escape —
+   * inside double quotes `^` is inert, so the path comes back corrupted (`R&D` -> `R^&D`) or,
+   * for `"`, broken outright. Rather than change that (provider-auth's `loginCommand` pins it),
+   * the handoff keeps the bare `claude`, which the opened terminal can still resolve itself.
+   */
+  it.each([
+    ['an ampersand, which quoting would corrupt', 'C:\\Users\\R&D\\claude.exe'],
+    ['a percent, which still expands inside the quotes', 'C:\\a%PATH%\\claude.exe'],
+    ['a quote, which ends the argument', 'C:\\a"b\\claude.exe'],
+  ])('falls back to the bare command on win32 for a path with %s', (_why, resolved) => {
+    expect(withResolvedClaudeBin('claude --resume x', 'claude', 'win32', resolved))
+      .toBe('claude --resume x');
+  });
+
+  it('falls back to the bare command for a control character in the path on posix', () => {
+    expect(withResolvedClaudeBin('claude', 'claude', 'linux', '/tmp/cl\nau/claude')).toBe('claude');
+  });
 });

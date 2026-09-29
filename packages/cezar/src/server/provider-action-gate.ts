@@ -11,6 +11,7 @@ const LABEL: Record<ProviderId, string> = {
   claude: 'Claude Code',
   codex: 'Codex',
   opencode: 'OpenCode',
+  cursor: 'Cursor',
   pi: 'pi',
 };
 

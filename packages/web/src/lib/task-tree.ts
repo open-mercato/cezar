@@ -110,15 +110,26 @@ export function buildTaskTree<T extends TaskTreeInput>(runs: readonly T[]): Task
   return roots
 }
 
-/** The tree as a flat list in render order: every node immediately followed by its subtree. */
+/**
+ * The tree as a flat list in render order: every node immediately followed by its subtree.
+ *
+ * `isExpanded` is the accordion (#1110): a parent whose id it rejects keeps its OWN row — with
+ * `childCount`/`descendantCount` intact, so the row can still say "4 subtasks" — and drops its
+ * subtree from the list. The rule lives here, beside the nesting rule, for the same reason the
+ * nesting rule does: every surface that folds must fold identically. Omitted, everything is
+ * expanded — the pre-accordion behavior, and what a caller with no fold UI still wants.
+ */
 export function flattenTaskTree<T extends TaskTreeInput>(
   nodes: readonly TaskTreeNode<T>[],
+  isExpanded?: (id: string) => boolean,
 ): TaskTreeNode<T>[] {
   const flat: TaskTreeNode<T>[] = []
   const walk = (level: readonly TaskTreeNode<T>[]) => {
     for (const node of level) {
       flat.push(node)
-      walk(node.children)
+      if (node.children.length === 0 || isExpanded === undefined || isExpanded(node.run.id)) {
+        walk(node.children)
+      }
     }
   }
   walk(nodes)
@@ -128,10 +139,13 @@ export function flattenTaskTree<T extends TaskTreeInput>(
 /**
  * `buildTaskTree` + `flattenTaskTree` — what a row-per-run renderer actually wants: the same runs
  * the caller passed, reordered so each child follows its parent, each carrying its `depth` and
- * its subtask count.
+ * its subtask count, minus the subtrees `isExpanded` keeps folded.
  */
-export function taskTreeRows<T extends TaskTreeInput>(runs: readonly T[]): TaskTreeNode<T>[] {
-  return flattenTaskTree(buildTaskTree(runs))
+export function taskTreeRows<T extends TaskTreeInput>(
+  runs: readonly T[],
+  isExpanded?: (id: string) => boolean,
+): TaskTreeNode<T>[] {
+  return flattenTaskTree(buildTaskTree(runs), isExpanded)
 }
 
 /** "3 subtasks" — the count a parent row prints, or null when the run dispatched nothing. */
