@@ -1365,7 +1365,12 @@ export function createApp(deps: ServerDeps) {
   app.onError((err, c) => {
     if (err instanceof HTTPException) return err.getResponse();
     console.error(err);
-    reportError(err, { source: 'server', route: c.req.routePath, method: c.req.method });
+    reportError(err, {
+      source: 'server',
+      'http.method': c.req.method,
+      'http.route': c.req.routePath,
+      'http.project_scoped': c.req.path.startsWith('/api/v1/p/'),
+    }, { code: 'http_handler_failed' });
     return c.text('Internal Server Error', 500);
   });
 
@@ -6351,6 +6356,21 @@ export function createApp(deps: ServerDeps) {
   });
   deps.onDispose?.(() => { offDashboardRegistry(); dashboard.dispose(); });
 
+  // The server's half of a cockpit error: is the bundle that page runs still the one being
+  // served? A page kept open across a rebuild or self-update asks for chunks that no longer
+  // exist — the stale-shell failure a WebKit "Importing a module script failed" usually is.
+  const servedBuildContext = (entry: unknown): Record<string, string | boolean> => {
+    const ctx: Record<string, string | boolean> = { 'server.version': version };
+    if (typeof entry !== 'string' || !isSafeAssetFilename(entry)) return ctx;
+    try {
+      ctx['build.entry_served'] = readFileSync(join(distDir, 'index.html'), 'utf8').includes(`/assets/${entry}`);
+      ctx['build.entry_exists'] = existsSync(join(distDir, 'assets', entry));
+    } catch {
+      ctx['build.entry_served'] = false; // no web/dist at all
+    }
+    return ctx;
+  };
+
   // Anonymous cockpit telemetry (opt-out, CEZ_TELEMETRY=0). The telemetry worker sends no CORS
   // headers, so the browser reports through here; both answer 204 whether or not telemetry is
   // on, and only a closed set of page names is forwarded.
@@ -6372,7 +6392,16 @@ export function createApp(deps: ServerDeps) {
         const err = new Error(body.message);
         err.name = body.type;
         err.stack = body.stack;
-        reportError(err, { source: 'cockpit', handler: body.handler });
+        reportError(
+          err,
+          {
+            ...body.context,
+            source: 'cockpit',
+            handler: body.handler,
+            ...servedBuildContext(body.context?.['build.entry']),
+          },
+          { code: body.code, fingerprint: body.fingerprint },
+        );
         return c.body(null, 204);
       },
     );

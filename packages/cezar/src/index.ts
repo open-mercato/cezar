@@ -40,7 +40,7 @@ import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
-import { flushTelemetry, initTelemetry, reportError, track } from './telemetry.ts';
+import { flushTelemetry, initTelemetry, registerTelemetryContext, reportError, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 
@@ -251,7 +251,9 @@ async function serveCommand(
   // Anonymous telemetry, opt-out (CEZ_TELEMETRY=0). The monitor listener
   // observes a crash without changing Node's exit behavior.
   initTelemetry({ version });
-  process.on('uncaughtExceptionMonitor', (err, origin) => reportError(err, { handler: origin }));
+  process.on('uncaughtExceptionMonitor', (err, origin) =>
+    reportError(err, { source: 'process', handler: origin }, { code: 'uncaught_exception' }),
+  );
   track('app_start');
 
   const checks = await detectEnvironment();
@@ -308,6 +310,18 @@ async function serveCommand(
     update.latest = latest;
     const how = selfUpdate.installKind === 'managed' ? 'update from the cockpit or: cezar update' : `restart with: npx ${pkgName}@latest`;
     console.log(`\n  ⬆ cezar ${latest} is available (running ${version}) — ${how}\n`);
+  });
+  // What the process is doing, on every error report (a wide event, not a bare message).
+  registerTelemetryContext(() => {
+    const runs = store.listRuns();
+    const count = (status: string) => runs.filter((r) => r.status === status).length;
+    return {
+      'app.install_kind': selfUpdate.installKind,
+      'runs.running': count('running'),
+      'runs.waiting': count('waiting'),
+      'runs.queued': count('queued'),
+      'runs.total': runs.length,
+    };
   });
   // SECURITY: cezar executes agents. A non-loopback bind exposes that box to
   // whatever can reach the interface, and cezar itself has NO auth — it is only
