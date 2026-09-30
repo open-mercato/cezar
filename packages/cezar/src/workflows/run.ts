@@ -375,6 +375,14 @@ interface ActiveRun {
    *  going until it signals done or the safety cap is hit. */
   autonomous?: boolean;
   autoContinues?: number;
+  /** Consecutive turn-ends that produced no agent output (no text and no tool
+   *  calls). The empty-turn breaker in `tryAutonomousNudge` parks the run when
+   *  this reaches `MAX_CONSECUTIVE_EMPTY_TURNS` — a stuck agent answering every
+   *  nudge with an instantly-ending empty turn would otherwise spin the nudge
+   *  loop at full speed, each iteration doing the turn-end git/diff/namer work.
+   *  In-memory per unattended stretch, like `autoContinues`: a human Continue
+   *  rebuilds the state and restarts the count. */
+  emptyTurnStreak?: number;
   /** Consecutive compaction-ended turns this session has been continued through (#955),
    *  bounded by `MAX_COMPACTION_CONTINUES`. Unlike `autoContinues` this is NOT a lifetime
    *  budget: any turn that ends for another reason resets it, because that turn is the proof
@@ -452,6 +460,16 @@ interface ActiveRun {
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
  *  Exported so the tests assert against the real cap instead of restating `40`. */
 export const MAX_AUTO_CONTINUES = 40;
+/** Consecutive output-free turns after which an autonomous run parks instead of
+ *  taking another nudge. A turn counts as empty when the agent emitted no text
+ *  AND made no tool calls — a stuck agent answering every nudge with an
+ *  instantly-ending empty turn spins `tryAutonomousNudge` at full speed, and
+ *  every iteration pays the turn-end git/diff/namer/SSE work (live incident:
+ *  tens of thousands of empty turns wedged the host). Five tolerates the odd
+ *  blank turn while stopping a tight spin in seconds; the run parks `waiting`,
+ *  so a user message resumes it with a fresh streak. Exported so the tests
+ *  assert against the real threshold instead of restating `5`. */
+export const MAX_CONSECUTIVE_EMPTY_TURNS = 5;
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
  *  RECOGNISES this string to answer a nudge with `CEZ:DONE` (it matches the opening words, since
  *  the nudge carries no `mock:` marker of its own). Rewording it without updating that mock does
@@ -3506,6 +3524,7 @@ export class RunManager {
       cwd,
       autonomous: record?.autonomous === true,
       autoContinues: 0,
+      emptyTurnStreak: 0,
     };
     this.active.set(runId, state);
     this.starting.delete(runId);
@@ -3587,6 +3606,10 @@ export class RunManager {
 
     let stepCost = 0;
     let turnText = '';
+    // Whether the current turn made any tool calls — with `turnText` this is
+    // what the empty-turn breaker reads, and it resets with it. Tracked in
+    // BOTH turn-end handlers so the two cannot drift.
+    let turnHadToolCall = false;
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, stepId);
     const onEvent = (event: AgentEvent) => {
@@ -3606,6 +3629,7 @@ export class RunManager {
         if (text) this.store.appendEvent(runId, { type: 'text', text, stepId });
         return;
       }
+      if (event.type === 'tool-call') turnHadToolCall = true;
       this.store.appendEvent(runId, { ...event, stepId });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -3667,7 +3691,11 @@ export class RunManager {
           !ask &&
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
+        // Snapshot BEFORE the reset below: the empty-turn breaker reads the
+        // finished turn's output, and both halves clear for the next turn here.
+        const turnWasEmpty = turnText.trim() === '' && !turnHadToolCall;
         turnText = '';
+        turnHadToolCall = false;
         for (const note of askNotes) this.store.appendEvent(runId, { type: 'note', ...note, stepId });
         if (done) {
           // Goal achieved (agent contract, #347) — same as in runAgentStep.
@@ -3683,7 +3711,7 @@ export class RunManager {
         // needs to know whether the turn parked.
         const nudged =
           dispatchTurn.rePrompted ||
-          (!monitoring && (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn) : false));
+          (!monitoring && (sessionOpen ? this.tryAutonomousNudge(runId, state, stepId, ask, dispatchTurn, turnWasEmpty) : false));
         // Compaction alone never means the user owns the next action (#955). Tried LAST, so
         // every marker, the dispatch rules and the autonomous nudge keep their precedence —
         // the twin of `runAgentStep`'s call, through the one helper both sites share.
@@ -3954,6 +3982,7 @@ export class RunManager {
       cwd: this.repoRoot,
       autonomous: input.autonomous === true,
       autoContinues: 0,
+      emptyTurnStreak: 0,
     };
     this.active.set(runId, state);
     this.starting.delete(runId);
@@ -4420,6 +4449,8 @@ export class RunManager {
     const startTokens = stepRecord?.tokensUsed ?? 0;
     let stepCost = stepRecord?.costUsd ?? 0;
     let turnText = '';
+    // Twin of `runContinuation`'s flag — see there for what it feeds.
+    let turnHadToolCall = false;
     let sessionError: string | undefined;
     const sink = this.makeUiSink(runId, step.id);
     const onEvent = (event: AgentEvent) => {
@@ -4439,6 +4470,7 @@ export class RunManager {
         if (text) emit({ type: 'text', text, stepId: step.id });
         return;
       }
+      if (event.type === 'tool-call') turnHadToolCall = true;
       emit({ ...event, stepId: step.id });
       if (event.type === 'error') {
         sessionError ??= event.message;
@@ -4517,7 +4549,10 @@ export class RunManager {
           !dispatchTurn.overBudget &&
           (dispatchTurn.dispatched || endsWithMonitoringMarker(turnText));
         const parksWorkflow = !interactive && (ask !== null || monitoring);
+        // Twin of `runContinuation`'s snapshot — see there for what it feeds.
+        const turnWasEmpty = turnText.trim() === '' && !turnHadToolCall;
         turnText = '';
+        turnHadToolCall = false;
         for (const note of askNotes) emit({ type: 'note', stepId: step.id, ...note });
         if (done) {
           // Goal achieved (agent contract, #347): close the session instead
@@ -4547,7 +4582,7 @@ export class RunManager {
         // line, so the park below behaves exactly as #917 designed it.
         const autoContinued =
           dispatchTurn.rePrompted ||
-          (!monitoring && (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn) : false));
+          (!monitoring && (waiting ? this.tryAutonomousNudge(runId, state, step.id, ask, dispatchTurn, turnWasEmpty) : false));
         // The compaction continuation (#955), through the same helper `runContinuation` calls.
         // Deliberately NOT gated on `waiting`: that flag is about who the turn hands control
         // to, and an ordinary intermediate step never hands control to anyone — it is closed
@@ -5271,6 +5306,10 @@ export class RunManager {
     stepId: string,
     ask: AskRequest | null,
     dispatchTurn: DispatchTurnResult,
+    // True when the finished turn produced no agent output — no text and no
+    // tool calls. Both turn-end handlers snapshot this before clearing the
+    // accumulators for the next turn.
+    turnEmpty: boolean,
   ): boolean {
     if (!state.autonomous) return false;
     // Three dispatch exceptions (spec 2026-09-10-dispatch), each closing a hole the nudge would
@@ -5286,6 +5325,25 @@ export class RunManager {
     if (dispatchTurn.hasDispatch && ask) return false;
     if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     if (state.cancelled) return false;
+    // Empty-turn breaker: a turn with no text and no tool calls is a stuck agent answering the
+    // nudge with an instantly-ending turn. Nudging it again spins the loop at full speed, and
+    // every iteration pays the turn-end git/diff/namer/SSE work — the shape that wedged a host
+    // on tens of thousands of empty turns. Park after MAX_CONSECUTIVE_EMPTY_TURNS instead; the
+    // run waits `waiting`, so a user message resumes it with a fresh streak. Any turn with
+    // output resets the streak — including a repeated question, which keeps its own guard below.
+    if (turnEmpty) {
+      state.emptyTurnStreak = (state.emptyTurnStreak ?? 0) + 1;
+      if (state.emptyTurnStreak >= MAX_CONSECUTIVE_EMPTY_TURNS) {
+        this.store.appendEvent(runId, {
+          type: 'note',
+          stepId,
+          message: `autonomous — ${MAX_CONSECUTIVE_EMPTY_TURNS} consecutive turns produced no output, so the run parks instead of continuing`,
+        });
+        return false;
+      }
+    } else {
+      state.emptyTurnStreak = 0;
+    }
     // A question repeated verbatim after a nudge is not a preference the agent can settle on
     // its own — it is a blocker (the cockpit refused `cez task create`, a login is missing) that
     // the nudge would merely make it work around, at full cost, until the cap. Park the run on

@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { RunStore, type RunRecord } from '../runs/store.ts';
-import { AUTONOMOUS_NUDGE, MAX_AUTO_CONTINUES, RunManager } from './run.ts';
+import { AUTONOMOUS_NUDGE, MAX_AUTO_CONTINUES, MAX_CONSECUTIVE_EMPTY_TURNS, RunManager } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 const run = promisify(execFile);
@@ -260,6 +260,56 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     // The run keeps going rather than parking on the question it just overrode.
     await waitFor(record.id, (r) => r?.status === 'done');
   }, 40_000);
+
+  it('parks an autonomous run whose turns stay empty instead of nudging it to the cap', async () => {
+    // The live-incident shape: a stuck agent answers every nudge with an
+    // instantly-ending empty turn (no text, no tool calls), and each turn end
+    // pays the git/diff/namer work — tens of thousands of iterations wedged
+    // the host. The breaker parks after MAX_CONSECUTIVE_EMPTY_TURNS.
+    const statuses = trackStatuses();
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:empty sit there silently',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    // Nudges fire for every empty turn UNTIL the streak trips — one fewer nudge
+    // than the threshold, which proves the park came from the breaker and not
+    // from MAX_AUTO_CONTINUES.
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_EMPTY_TURNS - 1);
+    const parked = notesMatching(record.id, 'consecutive turns produced no output');
+    expect(parked).toHaveLength(1);
+    expect(String(parked[0]?.message)).toContain(String(MAX_CONSECUTIVE_EMPTY_TURNS));
+    expect(parked[0]?.stepId).toBe('task');
+    expect(statuses).toContain('waiting');
+    // The park hands the run back exactly as a non-autonomous turn end does.
+    expect(store.getRun(record.id)?.activity).toBeUndefined();
+  }, 90_000);
+
+  it('parks an empty-turning autonomous CONTINUATION instead of nudging it to the cap', async () => {
+    // The twin turn-end handler (`runContinuation` builds its own ActiveRun and
+    // snapshots the turn itself) must feed the breaker the same way — the
+    // half-fix AGENTS.md warns about would park fresh runs while every
+    // Continue kept spinning.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:done first pass',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, (r) => r?.status === 'done');
+
+    expect(manager.continueRun(record.id, { text: 'mock:empty keep sitting silently' })).toEqual({
+      ok: true,
+    });
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_EMPTY_TURNS - 1);
+    const parked = notesMatching(record.id, 'consecutive turns produced no output');
+    expect(parked).toHaveLength(1);
+    expect(parked[0]?.stepId).toMatch(/^continue-/);
+  }, 90_000);
 
   it('keeps the nudge text the dry-run mock recognises', () => {
     // `scripts/mock-claude.mjs` ends a nudged turn with CEZ:DONE by matching the OPENING WORDS
