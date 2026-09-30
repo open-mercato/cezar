@@ -33,7 +33,7 @@ export function DevelopmentPanel({
 }) {
   const dev = useSelfUpdateDevelopment()
   const refresh = useRefreshSelfUpdateDevelopment()
-  const [tab, setTab] = useState<Tab>('worktrees')
+  const [chosenTab, setTab] = useState<Tab>('worktrees')
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<string | null>(null)
   // Most open PRs have no build (a fork waiting on CI approval): listing them by default buries
@@ -43,6 +43,10 @@ export function DevelopmentPanel({
   const active = data.installed.find((entry) => entry.active)
   const checkouts = dev.data?.checkouts ?? []
   const pulls = dev.data?.pulls
+  // No cezar clone among the registered projects: the Worktrees tab would only ever be empty, so
+  // it is not offered and pull requests are all there is.
+  const hasWorktrees = !dev.data || checkouts.length > 0
+  const tab: Tab = hasWorktrees ? chosenTab : 'pulls'
 
   const needle = query.trim().toLowerCase()
   const shownCheckouts = useMemo(
@@ -90,9 +94,9 @@ export function DevelopmentPanel({
         <div role="tablist" aria-label="Development builds" className="flex rounded-md border border-border bg-muted/40 p-0.5">
           {(
             [
-              { value: 'worktrees', label: 'Worktrees', count: checkouts.length },
-              { value: 'pulls', label: 'Pull requests', count: (pulls?.items.length ?? 0) - unbuilt },
-            ] as const
+              ...(hasWorktrees ? [{ value: 'worktrees', label: 'Worktrees', count: checkouts.length } as const] : []),
+              { value: 'pulls', label: 'Pull requests', count: (pulls?.items.length ?? 0) - unbuilt } as const,
+            ]
           ).map((entry) => (
             <button
               key={entry.value}
@@ -134,7 +138,7 @@ export function DevelopmentPanel({
         ) : tab === 'worktrees' ? (
           shownCheckouts.length === 0 ? (
             <p className="px-3 py-3 text-[12.5px] text-muted-foreground">
-              {checkouts.length === 0 ? 'No cezar worktree found in the registered projects.' : 'Nothing matches.'}
+              Nothing matches.
             </p>
           ) : (
             shownCheckouts.map((checkout) => (

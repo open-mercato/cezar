@@ -111,10 +111,13 @@ const development: SelfUpdateDevelopment = {
   },
 }
 
-function renderDialog(overrides: Partial<SelfUpdateStatus> = {}, props: { autoApply?: string; onOpenChange?: (open: boolean) => void } = {}) {
+function renderDialog(
+  overrides: Partial<SelfUpdateStatus> = {},
+  props: { autoApply?: string; onOpenChange?: (open: boolean) => void; development?: SelfUpdateDevelopment } = {},
+) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   queryClient.setQueryData(workspaceQueryKeys.selfUpdate, { ...status, ...overrides })
-  queryClient.setQueryData(workspaceQueryKeys.selfUpdateDevelopment, development)
+  queryClient.setQueryData(workspaceQueryKeys.selfUpdateDevelopment, props.development ?? development)
   return render(
     <QueryClientProvider client={queryClient}>
       <SelfUpdateDialog open onOpenChange={props.onOpenChange ?? (() => {})} autoApply={props.autoApply} />
@@ -257,6 +260,14 @@ describe('SelfUpdateDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Install & restart' }))
     await waitFor(() => expect(applySelfUpdate).toHaveBeenCalledTimes(1))
     expect(applySelfUpdate.mock.calls[0]?.[0]).toBe('0.13.0-pr1169.1300')
+  })
+
+  // A user with no cezar clone registered has nothing to pick from locally.
+  it('hides the Worktrees tab when no cezar worktree exists, and lists pull requests', async () => {
+    renderDialog({ channel: 'development' }, { development: { ...development, checkouts: [] } })
+    expect(await screen.findByRole('listbox', { name: 'Pull requests' })).toBeTruthy()
+    expect(screen.queryByRole('tab', { name: /Worktrees/ })).toBeNull()
+    expect(screen.getByRole('tab', { name: /Pull requests/ }).getAttribute('aria-selected')).toBe('true')
   })
 
   it('names a running PR build in the header and the card', async () => {
