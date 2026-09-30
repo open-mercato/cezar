@@ -106,7 +106,7 @@ import { useDraft } from './thread-draft'
  */
 /** Which run-detail tab this header instance sits above — drives the active underline.
  *  A prop rather than a route match so the header stays testable with a bare render. */
-export type RunTab = 'session' | 'changes' | 'commits' | 'files'
+export type RunTab = 'session' | 'changes' | 'commits' | 'files' | 'graph'
 
 /** Which runs the reader has expanded the phone-width meta row for (#765). A module-level map for
  *  the same reason `WorkflowSteps` keeps one (`openByRun` in step-rail.tsx) — and it has to be BOTH
@@ -271,6 +271,12 @@ function RunHeaderView({
           <TabLink to={`/tasks/${run.id}/files`} active={tab === 'files'}>
             Files
           </TabLink>
+          {/* The live workflow graph — every run with a definition: a step list opens as its graph. */}
+          {run.workflowDef ? (
+            <TabLink to={`/tasks/${run.id}/graph`} active={tab === 'graph'}>
+              Graph
+            </TabLink>
+          ) : null}
 
           <div data-slot="run-actions" className="ml-auto hidden items-center gap-1 pb-1 md:flex">
             {flags.finish ? (
