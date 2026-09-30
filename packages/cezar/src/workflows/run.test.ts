@@ -625,6 +625,23 @@ describe('RunManager.continueRun override', () => {
     expect(calls[0]?.[2]).toBe('sess-1');
   });
 
+  it('an omitted account never resumes a session another login owns', () => {
+    // Live run eab924c7: a Continue switched the run to `default` in a fresh session that
+    // recorded no session id, so the next plain Continue found the ORIGINAL step's session and
+    // resumed it under the account the user had switched away from.
+    const id = resumableRun();
+    store.updateStep(id, 's1', { backend: 'claude', profileId: 'klaudiusz' });
+    store.updateRun(id, { agentProfile: 'default' });
+    const calls: unknown[][] = [];
+    (manager as unknown as { runContinuation: (...args: unknown[]) => Promise<void> }).runContinuation = async (...args) => {
+      calls.push(args);
+    };
+
+    expect(manager.continueRun(id, { text: 'follow-up' })).toEqual({ ok: true });
+    expect(calls[0]?.[2]).toBeUndefined();
+    expect(store.getRun(id)?.agentProfile).toBe('default');
+  });
+
   it('an omitted account preserves the one the run is on (backward compat)', () => {
     const id = resumableRun();
     store.updateRun(id, { agentProfile: 'klaudiusz' });
@@ -2902,6 +2919,29 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     // Delivery-only: the transcript still shows what the user actually typed.
     const typed = eventsOf(id).find((e) => e.type === 'user-message' && e.stepId === 'continue-1');
     expect(typed?.text).toBe('/demo-review look at the diff');
+  }, 40_000);
+
+  it('an account-switching Continue records its session, so the NEXT Continue stays on that account', async () => {
+    // Live run eab924c7: the switch opened a fresh session that recorded no id (Claude emits
+    // no `session` event), and the following Continue resumed the original step's session —
+    // under the login the user had switched away from.
+    const id = await finishedRun();
+    const original = store.getRun(id)?.steps.find((s) => s.id === 'task');
+    store.updateStep(id, 'task', { profileId: 'klaudiusz' });
+    expect(manager.continueRun(id, { agentProfile: 'default' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+    const fresh = store.getRun(id)?.steps.find((s) => s.id === 'continue-1');
+    expect(fresh?.sessionId).toBeDefined();
+    expect(fresh?.sessionId).not.toBe(original?.sessionId);
+    expect(fresh?.profileId).toBe('default');
+
+    expect(manager.finish(id)).toBe(true);
+    await waitFor(() => ['done', 'review'].includes(store.getRun(id)?.status ?? ''));
+    expect(manager.continueRun(id, { text: 'follow-up' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(id)?.status === 'waiting');
+    const next = store.getRun(id)?.steps.find((s) => s.id === 'continue-2');
+    expect(next?.sessionId).toBe(fresh?.sessionId);
+    expect(next?.profileId).toBe('default');
   }, 40_000);
 
   it('expands a FOLLOW-UP delivered into the reopened continuation session', async () => {
