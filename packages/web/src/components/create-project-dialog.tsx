@@ -71,8 +71,11 @@ export function CreateProjectDialog({
   }, [])
 
   const ownersData = owners.data
-  const githubAvailable = ownersData?.available === true
-  const ownerOptions = useMemo(() => (ownersData?.available ? ownersData.owners : []), [ownersData])
+  const githubAvailable = ownersData?.available === true && Array.isArray(ownersData.owners) && ownersData.owners.length > 0
+  const ownerOptions = useMemo(
+    () => (ownersData?.available && Array.isArray(ownersData.owners) ? ownersData.owners : []),
+    [ownersData],
+  )
   // The personal account is first, so it is the default until the user picks an organisation.
   const effectiveOwner = ownerOptions.some((o) => o.login === owner) ? owner : (ownerOptions[0]?.login ?? '')
   const github = useGithub && githubAvailable
@@ -171,9 +174,11 @@ export function CreateProjectDialog({
 
           {owners.isPending ? (
             <p className="text-[12px] text-muted-foreground">Checking GitHub…</p>
-          ) : ownersData && !ownersData.available ? (
+          ) : !githubAvailable ? (
             <p data-slot="create-github-unavailable" className="text-[12px] text-muted-foreground">
-              {ownersData.reason}
+              {ownersData && !ownersData.available
+                ? ownersData.reason
+                : 'Could not read your GitHub accounts — the project will be created locally only.'}
             </p>
           ) : null}
 

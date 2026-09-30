@@ -151,6 +151,7 @@ import {
   queryScope,
   runHistoryContextSchema,
   runHistoryPageSchema,
+  githubOwnersResponseSchema,
 } from '@open-mercato/cezar-api-client'
 import type { Ok, OkJson } from '@open-mercato/cezar-api-client'
 import type { ClientResponse } from 'hono/client'
@@ -1328,9 +1329,15 @@ export async function createProject(input: CreateProjectInput): Promise<Register
   return unwrap(await cez.api.v1.projects.create.$post({ json: input }), '/projects/create')
 }
 
-/** Who a new GitHub repository may belong to (`GET /api/projects/github-owners`). Workspace-level. */
+/** Who a new GitHub repository may belong to (`GET /api/projects/github-owners`). Workspace-level.
+ *  Validated, not cast: the dialog iterates `owners`, so a body of another shape — a server
+ *  started before the owner cards, a proxy — must reject the query rather than throw mid-render. */
 export async function getGithubOwners(opts?: ReadOptions): Promise<GithubOwnersResponse> {
-  return unwrap(await cez.api.v1.projects['github-owners'].$get({}, init(opts)), '/projects/github-owners')
+  return unwrapValidated(
+    await cez.api.v1.projects['github-owners'].$get({}, init(opts)),
+    '/projects/github-owners',
+    githubOwnersResponseSchema,
+  )
 }
 
 /**

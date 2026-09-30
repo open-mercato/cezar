@@ -54,7 +54,7 @@ const PROJECT: ProjectListEntry = {
 const posted: Record<string, unknown>[] = []
 
 function serve(
-  owners: GithubOwnersResponse = {
+  owners: GithubOwnersResponse | Record<string, unknown> = {
     available: true,
     owners: [
       { login: 'octo', personal: true, avatarUrl: 'https://avatars.githubusercontent.com/u/1' },
@@ -184,6 +184,18 @@ describe('CreateProjectDialog', () => {
     serve({ available: false, reason: 'gh CLI not found — install it and run `gh auth login`' })
     renderDialog()
     await waitFor(() => expect(slot('create-github-unavailable')?.textContent).toContain('gh CLI not found'))
+    expect((slot('create-github') as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(nameInput(), { target: { value: 'fresh' } })
+    fireEvent.click(createButton())
+    await waitFor(() => expect(posted).toHaveLength(1))
+    expect(posted[0]).not.toHaveProperty('github')
+  })
+
+  it('an owners body of another shape (a server from before the owner cards) degrades to local-only, never a crash', async () => {
+    serve({ available: true, login: 'octo', orgs: ['acme'] })
+    renderDialog()
+    await waitFor(() => expect(slot('create-github-unavailable')?.textContent).toContain('locally only'))
+    expect(ownerCards()).toHaveLength(0)
     expect((slot('create-github') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(nameInput(), { target: { value: 'fresh' } })
     fireEvent.click(createButton())

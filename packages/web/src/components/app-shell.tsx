@@ -18,6 +18,7 @@ import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { CreateProjectDialog } from '@/components/create-project-dialog'
+import { DialogErrorBoundary } from '@/components/dialog-error-boundary'
 import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
@@ -945,9 +946,21 @@ function AddProjectMenu() {
           New project…
         </DropdownMenuItem>
       </DropdownMenuContent>
-      {browsing ? <AddProjectDialog open onOpenChange={setBrowsing} /> : null}
-      {cloning ? <CloneProjectDialog open onOpenChange={setCloning} /> : null}
-      {creating ? <CreateProjectDialog open onOpenChange={setCreating} /> : null}
+      {browsing ? (
+        <DialogErrorBoundary label="Open local folder" onError={() => setBrowsing(false)}>
+          <AddProjectDialog open onOpenChange={setBrowsing} />
+        </DialogErrorBoundary>
+      ) : null}
+      {cloning ? (
+        <DialogErrorBoundary label="Clone from GitHub" onError={() => setCloning(false)}>
+          <CloneProjectDialog open onOpenChange={setCloning} />
+        </DialogErrorBoundary>
+      ) : null}
+      {creating ? (
+        <DialogErrorBoundary label="New project" onError={() => setCreating(false)}>
+          <CreateProjectDialog open onOpenChange={setCreating} />
+        </DialogErrorBoundary>
+      ) : null}
     </DropdownMenu>
   )
 }
