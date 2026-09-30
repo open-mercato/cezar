@@ -1,6 +1,6 @@
 import { useSheetState, useSheetPosition, newSheetSelection, useSheetTrigger } from './sheet-state'
 import { useDashboardTruth } from '@/api/dashboard-truth'
-import { MetricContent, metricSurface, widgetHeading } from './presentation'
+import { DisclosureChevron, disclosureSummary, FilterSelect, filterLabel, MetricContent, metricAccents, metricSurface, widgetHeader, widgetHeading } from './presentation'
 import { formatHours as hours } from './format'
 import { CircleHelp, Activity, CheckCheck, CircleAlert, ChevronRight } from 'lucide-react'
 import { useDashboardLive } from '@/api/dashboard-live'
@@ -23,6 +23,7 @@ import { deriveAttention } from '@/lib/attention'
 import { StatusDot } from '@/components/status-dot'
 import { Coverage } from './rows'
 import { ExportRows } from './export-rows'
+import { OutcomeInsights } from './insights'
 import { useDashboardFilter } from './url-filter'
 
 const labels = {
@@ -32,10 +33,10 @@ const labels = {
   failed: 'Failed outcomes',
 }
 const metricTints = {
-  'needs-you': 'from-violet/10',
-  running: 'from-info/10',
-  completed: 'from-success/10',
-  failed: 'from-danger/10',
+  'needs-you': metricAccents.violet,
+  running: metricAccents.info,
+  completed: metricAccents.success,
+  failed: metricAccents.danger,
 }
 const metricIcons = {
   'needs-you': CircleHelp,
@@ -81,25 +82,28 @@ export function Overview({
   const complete = data?.coverage.projects.every((p) => p.state === 'complete')
   const overview = (
     <Card className="gap-0 py-0">
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b p-4">
+      <div className={widgetHeader}>
         <h2 className={widgetHeading}>Workspace overview</h2>
-        <label className="flex items-center gap-2 text-sm">
+        <label className={filterLabel}>
           Outcomes period
-          <select
+          <FilterSelect
             value={period}
             onChange={(e) => {
               setPeriod(e.target.value === '30d' ? '30d' : '7d')
               setSelection(null)
             }}
-            className="min-h-11 rounded-md border bg-background px-3 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
           >
             <option value="7d">Last 7 days</option>
             <option value="30d">Last 30 days</option>
-          </select>
+          </FilterSelect>
         </label>
       </div>
-      <div className="space-y-3 p-4">
-        {query.isPending && <p role="status">Loading overview…</p>}
+      <div className="space-y-4 p-4">
+        {query.isPending && (
+          <p role="status" className="text-sm text-muted-foreground">
+            Loading overview…
+          </p>
+        )}
         {query.isError && (
           <p role="alert">
             {data ? 'Showing previous results. ' : ''}Could not refresh overview.{' '}
@@ -110,7 +114,7 @@ export function Overview({
         )}
         {data && (
           <>
-            <p className="text-sm">
+            <p className="text-sm text-muted-foreground">
               {data.metrics.needsYou
                 ? `${data.metrics.needsYou} tasks require your input or review.`
                 : complete && live.connected && !query.isError
@@ -130,7 +134,7 @@ export function Overview({
                     data-outcome-trigger
                     data-export-keep
                     variant="outline"
-                    className={`${metricSurface} h-auto min-h-24 flex-col items-start gap-0 whitespace-normal text-left ${group === 'failed' && value === 0 ? 'from-muted/40' : metricTints[group]}`}
+                    className={`${metricSurface} group/metric h-auto min-h-24 flex-col items-start gap-0 whitespace-normal text-left font-normal ${value === 0 ? metricAccents.neutral : metricTints[group]}`}
                     onClick={(event) => {
                       if (onCurrent && (group === 'running' || group === 'needs-you'))
                         onCurrent(group, event.currentTarget)
@@ -149,32 +153,50 @@ export function Overview({
                     </MetricContent>
                     <span
                       data-export-exclude
-                      className="mt-3 flex items-center gap-1 text-xs font-medium"
+                      className="mt-4 flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors group-hover/metric:text-foreground"
                     >
-                      View tasks <ChevronRight className="size-3" aria-hidden="true" />
+                      View tasks{' '}
+                      <ChevronRight
+                        className="size-3 transition-transform group-hover/metric:translate-x-0.5 motion-reduce:transition-none"
+                        aria-hidden="true"
+                      />
                     </span>
                   </Button>
                 )
               })}
             </div>
-            <p className="text-sm">
-              Median cycle time <strong>{hours(data.metrics.medianCycleHours)}</strong> ·{' '}
-              {data.metrics.timedTasks}/{data.metrics.completed} completed tasks have valid
-              timings.{' '}
-              <Button variant="ghost" onClick={() => open('completed')}>
-                Inspect completed tasks
-              </Button>
-            </p>
-            <p className="text-xs text-muted-foreground">
-              <time dateTime={data.asOf} title={new Date(data.asOf).toLocaleString()}>
-                Updated {shortAge(data.asOf)} ago
-              </time>
-            </p>
+            <OutcomeInsights period={period} active={active} />
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t pt-3">
+              <p className="text-sm text-muted-foreground">
+                Median cycle time{' '}
+                <strong className="font-mono font-semibold text-foreground">
+                  {hours(data.metrics.medianCycleHours)}
+                </strong>{' '}
+                · {data.metrics.timedTasks}/{data.metrics.completed} completed tasks have valid
+                timings.{' '}
+                <Button
+                  variant="ghost"
+                  className="h-auto px-1.5 py-1 text-sm text-foreground underline-offset-4 hover:underline"
+                  onClick={() => open('completed')}
+                >
+                  Inspect completed tasks
+                </Button>
+              </p>
+              <p className="font-mono text-[11px] text-soft-foreground">
+                <time dateTime={data.asOf} title={new Date(data.asOf).toLocaleString()}>
+                  Updated {shortAge(data.asOf)} ago
+                </time>
+              </p>
+            </div>
             <details className="text-xs text-muted-foreground">
-              <summary data-export-heading="Metric definitions" className="cursor-pointer py-2">
+              <summary
+                data-export-heading="Metric definitions"
+                className={`${disclosureSummary} py-1`}
+              >
+                <DisclosureChevron />
                 How these metrics work
               </summary>
-              <p>
+              <p className="mt-1 max-w-prose pl-5 leading-relaxed">
                 Outcomes use finish dates, including archived tasks. Scheduled retries are
                 excluded from failed outcomes. Period includes today at your current fixed UTC
                 offset.
@@ -201,16 +223,18 @@ export function Overview({
   const portfolio = data && (
     <div>
       <Card
-        className="gap-3 p-4"
+        className="gap-0 py-0"
         data-export-context={`Outcomes: Last ${period === '7d' ? 7 : 30} calendar days; workload: current state`}
       >
-        <h2 className={widgetHeading}>Projects</h2>
-        <p className="text-xs text-muted-foreground">
+        <div className={widgetHeader}>
+          <h2 className={widgetHeading}>Projects</h2>
+        </div>
+        <p className="px-4 pt-3 text-xs text-muted-foreground">
           Current workload and outcomes for the selected period. Sorted by tasks needing you,
           then running tasks. Counts include subtasks.
         </p>
         <div
-          className="overflow-x-auto"
+          className="overflow-x-auto px-1 pb-2"
           role="region"
           aria-label="Project outcomes"
           tabIndex={0}
@@ -222,7 +246,7 @@ export function Overview({
                   (label) => (
                     <th
                       key={label}
-                      className={`whitespace-nowrap px-3 py-2 font-medium ${label === 'Project' ? '' : 'text-right'}`}
+                      className={`whitespace-nowrap px-3 py-2 font-mono text-[11px] font-medium uppercase tracking-[0.1em] text-soft-foreground ${label === 'Project' ? '' : 'text-right'}`}
                     >
                       {label}
                     </th>
@@ -236,7 +260,7 @@ export function Overview({
                   (p) => p.projectId === project.projectId,
                 )
                 return (
-                  <tr key={project.projectId} className="border-t">
+                  <tr key={project.projectId} className="border-t transition-colors hover:bg-muted/30">
                     <td className="px-3 py-2">
                       <Link
                         className="font-medium hover:underline"
