@@ -108,6 +108,9 @@ describe('createProject', () => {
     for (const opts of [
       { name: '../escape' },
       { name: '.hidden' },
+      { name: 'my project' },
+      { name: 'zażółć' },
+      { name: 'a'.repeat(101) },
       { name: 'ok', github: { owner: '--flag' } },
       { name: 'ok', github: { owner: 'a/b' } },
       { name: 'ok', github: { owner: 'acme', template: 'https://gitlab.com/a/b' } },
@@ -161,16 +164,32 @@ describe('createProject', () => {
 });
 
 describe('listGithubOwners', () => {
-  it('lists the login plus orgs, sorted and deduped', async () => {
+  it('lists the user first, then orgs sorted and deduped, with avatars and descriptions', async () => {
     const run: CommandRunner = async (_cmd, args) =>
-      args[1] === 'user' ? { ok: true, stdout: 'octo\n' } : { ok: true, stdout: 'zeta\nacme\nacme\n' };
-    expect(await listGithubOwners(run)).toEqual({ available: true, login: 'octo', orgs: ['acme', 'zeta'] });
+      args[1] === 'user'
+        ? { ok: true, stdout: 'octo\thttps://avatars.githubusercontent.com/u/1\n' }
+        : {
+            ok: true,
+            stdout:
+              'zeta\thttps://avatars.githubusercontent.com/u/3\t\n' +
+              'acme\thttps://avatars.githubusercontent.com/u/2\tBuilds\\nrockets\n' +
+              'acme\thttps://avatars.githubusercontent.com/u/2\tBuilds\\nrockets\n' +
+              'octo\thttps://avatars.githubusercontent.com/u/1\t\n',
+          };
+    expect(await listGithubOwners(run)).toEqual({
+      available: true,
+      owners: [
+        { login: 'octo', personal: true, avatarUrl: 'https://avatars.githubusercontent.com/u/1' },
+        { login: 'acme', personal: false, avatarUrl: 'https://avatars.githubusercontent.com/u/2', description: 'Builds rockets' },
+        { login: 'zeta', personal: false, avatarUrl: 'https://avatars.githubusercontent.com/u/3' },
+      ],
+    });
   });
 
-  it('keeps the personal account when the org listing fails', async () => {
+  it('drops a non-https avatar and keeps the personal account when the org listing fails', async () => {
     const run: CommandRunner = async (_cmd, args) =>
-      args[1] === 'user' ? { ok: true, stdout: 'octo\n' } : { ok: false, error: 'missing read:org' };
-    expect(await listGithubOwners(run)).toEqual({ available: true, login: 'octo', orgs: [] });
+      args[1] === 'user' ? { ok: true, stdout: 'octo\tjavascript:alert(1)\n' } : { ok: false, error: 'missing read:org' };
+    expect(await listGithubOwners(run)).toEqual({ available: true, owners: [{ login: 'octo', personal: true }] });
   });
 
   it('degrades when gh is missing or unauthenticated', async () => {
@@ -264,10 +283,17 @@ describe('POST /api/v1/projects/create', () => {
     expect((await post(null)).status).toBe(400);
     expect((await post({ name: '' })).status).toBe(400);
     expect((await post({ name: '../x' })).status).toBe(400);
+    expect((await post({ name: 'has space' })).status).toBe(400);
   });
 
   it('GET /api/v1/projects/github-owners answers the dry-run owners', async () => {
     const res = await apiRequest(makeApp(), '/api/v1/projects/github-owners');
-    expect(await res.json()).toEqual({ available: true, login: 'dry-run-user', orgs: ['dry-run-org'] });
+    expect(await res.json()).toMatchObject({
+      available: true,
+      owners: [
+        { login: 'dry-run-user', personal: true },
+        { login: 'dry-run-org', personal: false },
+      ],
+    });
   });
 });

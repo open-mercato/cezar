@@ -1,10 +1,10 @@
-import { LockIcon, SettingsIcon } from 'lucide-react'
+import { CircleCheckIcon, LockIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Link as RouterLink, useNavigate } from 'react-router'
+import { useNavigate } from 'react-router'
 
 import { onWorkspaceEvent } from '@/api/global-events'
 import { useCreateProject, useGithubOwners, useProjects } from '@/api/queries'
-import type { CheckoutProgressEvent } from '@open-mercato/cezar-api-client'
+import { GITHUB_REPO_NAME_PATTERN, type CheckoutProgressEvent, type GithubOwner } from '@open-mercato/cezar-api-client'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -17,6 +17,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { cn } from '@/lib/utils'
+
+/** Typing a space gives a dash, the way GitHub's own new-repository form suggests it: the name is
+ *  the folder AND the repository, so it follows GitHub's naming rules from the first keystroke. */
+function toRepoName(input: string): string {
+  return input.trimStart().replace(/\s+/g, '-')
+}
 
 /**
  * "Add project → New project…" (spec 2026-09-29-create-new-project).
@@ -65,19 +72,24 @@ export function CreateProjectDialog({
 
   const ownersData = owners.data
   const githubAvailable = ownersData?.available === true
-  const ownerOptions = useMemo(
-    () => (ownersData?.available ? [ownersData.login, ...ownersData.orgs.filter((o) => o !== ownersData.login)] : []),
-    [ownersData],
-  )
-  const effectiveOwner = owner !== '' && ownerOptions.includes(owner) ? owner : (ownerOptions[0] ?? '')
+  const ownerOptions = useMemo(() => (ownersData?.available ? ownersData.owners : []), [ownersData])
+  // The personal account is first, so it is the default until the user picks an organisation.
+  const effectiveOwner = ownerOptions.some((o) => o.login === owner) ? owner : (ownerOptions[0]?.login ?? '')
   const github = useGithub && githubAvailable
 
   const trimmedName = name.trim()
+  const nameValid = GITHUB_REPO_NAME_PATTERN.test(trimmedName)
+  const nameError =
+    trimmedName === '' || nameValid
+      ? null
+      : trimmedName.length > 100
+        ? 'At most 100 characters.'
+        : 'Use letters, digits, “.”, “-” and “_” only.'
   const projectsDir = projects.data?.projectsDir ?? ''
-  const target = trimmedName === '' ? '' : `${projectsDir.replace(/\/+$/, '')}/${trimmedName}`
+  const target = nameValid ? `${projectsDir.replace(/\/+$/, '')}/${trimmedName}` : ''
 
   const submit = () => {
-    if (trimmedName === '' || create.isPending) return
+    if (!nameValid || create.isPending) return
     if (useGithub && owners.isPending) return
     setProgress(null)
     const trimmedTemplate = template.trim()
@@ -119,38 +131,27 @@ export function CreateProjectDialog({
             placeholder="my-project"
             value={name}
             disabled={busy}
-            onChange={(event) => setName(event.target.value)}
+            aria-invalid={nameError !== null}
+            aria-describedby="create-name-hint"
+            onChange={(event) => setName(toRepoName(event.target.value))}
             onKeyDown={(event) => {
               if (event.key === 'Enter') submit()
             }}
           />
-          <div className="flex min-w-0 items-center gap-1">
+          {nameError ? (
+            <p id="create-name-hint" data-slot="create-name-error" className="text-[12px] text-danger">
+              {nameError}
+            </p>
+          ) : (
             <p
+              id="create-name-hint"
               data-slot="create-target"
-              className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-soft-foreground"
+              className="min-w-0 truncate font-mono text-[11.5px] text-soft-foreground"
               title={target}
             >
               {target}
             </p>
-            {busy ? (
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="size-7"
-                aria-label="Edit checkout root"
-                title="Edit checkout root"
-                disabled
-              >
-                <SettingsIcon className="size-3.5" aria-hidden="true" />
-              </Button>
-            ) : (
-              <Button asChild variant="ghost" size="icon-sm" className="size-7">
-                <RouterLink to="/settings/global/projects" aria-label="Edit checkout root" title="Edit checkout root">
-                  <SettingsIcon className="size-3.5" aria-hidden="true" />
-                </RouterLink>
-              </Button>
-            )}
-          </div>
+          )}
         </div>
 
         <div className="grid gap-3 rounded-md border border-border p-3">
@@ -178,23 +179,7 @@ export function CreateProjectDialog({
 
           {github ? (
             <>
-              <div className="grid gap-1.5">
-                <Label htmlFor="create-owner">Owner</Label>
-                <select
-                  id="create-owner"
-                  data-slot="create-owner"
-                  value={effectiveOwner}
-                  disabled={busy}
-                  onChange={(event) => setOwner(event.target.value)}
-                  className="block w-full rounded-md border border-input bg-card px-3 py-1.5 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50"
-                >
-                  {ownerOptions.map((o) => (
-                    <option key={o} value={o}>
-                      {o}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <OwnerPicker owners={ownerOptions} value={effectiveOwner} disabled={busy} onChange={setOwner} />
               <div className="grid gap-1.5">
                 <Label htmlFor="create-template">Template (optional)</Label>
                 <Input
@@ -231,7 +216,7 @@ export function CreateProjectDialog({
           </Button>
           <Button
             data-slot="create-confirm"
-            disabled={trimmedName === '' || busy || (useGithub && owners.isPending)}
+            disabled={!nameValid || busy || (useGithub && owners.isPending)}
             onClick={submit}
           >
             {busy ? 'Creating…' : 'Create'}
@@ -239,5 +224,124 @@ export function CreateProjectDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/**
+ * The owner cards: avatar, login, and "Personal account" or the organisation's description, the
+ * selected one outlined and checked. A radio group — arrow keys move between cards, the way a
+ * native `<select>` would have.
+ */
+function OwnerPicker({
+  owners,
+  value,
+  disabled,
+  onChange,
+}: {
+  owners: GithubOwner[]
+  value: string
+  disabled: boolean
+  onChange: (login: string) => void
+}) {
+  const refs = useRef<(HTMLButtonElement | null)[]>([])
+  const move = (from: number, delta: number) => {
+    if (owners.length === 0) return
+    const next = (from + delta + owners.length) % owners.length
+    const login = owners[next]?.login
+    if (login === undefined) return
+    onChange(login)
+    refs.current[next]?.focus()
+  }
+  return (
+    <div className="grid gap-1.5">
+      <span id="create-owner-label" className="text-sm font-medium">
+        Owner
+      </span>
+      <div
+        role="radiogroup"
+        aria-labelledby="create-owner-label"
+        data-slot="create-owner"
+        className="-mx-1 grid max-h-64 gap-2 overflow-y-auto px-1 py-0.5"
+      >
+        {owners.map((o, index) => {
+          const selected = o.login === value
+          return (
+            <button
+              key={o.login}
+              ref={(el) => {
+                refs.current[index] = el
+              }}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              tabIndex={selected ? 0 : -1}
+              disabled={disabled}
+              data-slot="create-owner-option"
+              data-owner={o.login}
+              onClick={() => onChange(o.login)}
+              onKeyDown={(event) => {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+                  event.preventDefault()
+                  move(index, 1)
+                } else if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+                  event.preventDefault()
+                  move(index, -1)
+                }
+              }}
+              className={cn(
+                'flex w-full items-center gap-3 rounded-lg border bg-card px-3 py-2.5 text-left outline-none transition-colors',
+                'focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:opacity-50',
+                selected ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50',
+              )}
+            >
+              <OwnerAvatar owner={o} />
+              <span className="grid min-w-0 flex-1 gap-0.5">
+                <span className="flex items-center gap-1.5 truncate text-sm font-semibold">
+                  {o.login}
+                  {selected ? <CircleCheckIcon className="size-4 shrink-0 text-primary" aria-hidden="true" /> : null}
+                </span>
+                {o.personal ? (
+                  <span className="text-[12px] text-muted-foreground">Personal account</span>
+                ) : o.description ? (
+                  <span className="line-clamp-2 text-[12px] text-muted-foreground">{o.description}</span>
+                ) : null}
+              </span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/** A 36 px avatar with a letter fallback — never a broken-image glyph. Organisations are rounded
+ *  squares and people are circles, as on GitHub. */
+function OwnerAvatar({ owner }: { owner: GithubOwner }) {
+  const [failed, setFailed] = useState(false)
+  const shape = owner.personal ? 'rounded-full' : 'rounded-md'
+  if (owner.avatarUrl && !failed) {
+    return (
+      <img
+        src={owner.avatarUrl}
+        alt=""
+        width={36}
+        height={36}
+        loading="lazy"
+        onError={() => setFailed(true)}
+        data-slot="create-owner-avatar"
+        className={cn('size-9 shrink-0 bg-muted', shape)}
+      />
+    )
+  }
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        'flex size-9 shrink-0 items-center justify-center bg-muted text-sm font-semibold text-muted-foreground uppercase',
+        shape,
+      )}
+    >
+      {owner.login.slice(0, 1)}
+    </span>
   )
 }

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { GITHUB_REPO_NAME_PATTERN, type GithubOwner, type GithubOwnersResponse } from '@open-mercato/cezar-contract';
 import { cleanupCheckout, isValidCheckoutName, parseRepoRef, type CheckoutProgressEvent } from './checkout.ts';
 
 /**
@@ -155,8 +156,15 @@ const GH_MISSING = 'gh CLI not found — install it and run `gh auth login`';
 
 export async function createProject(opts: CreateProjectOptions): Promise<CreateProjectResult> {
   const name = opts.name.trim();
-  if (!isValidCheckoutName(name)) {
-    return { ok: false, status: 400, error: `not a valid project name: ${name.slice(0, 200)}` };
+  // GitHub's repository-name rules, even for a local-only project: the name is
+  // the folder AND (now or later) the repo, and GitHub would silently rewrite
+  // anything else — `my project` becomes `my-project` there but not on disk.
+  if (!GITHUB_REPO_NAME_PATTERN.test(name) || !isValidCheckoutName(name)) {
+    return {
+      ok: false,
+      status: 400,
+      error: `not a valid project name: ${name.slice(0, 200)} — use letters, digits, ".", "-" and "_" only, no spaces`,
+    };
   }
   let slug: string | undefined;
   let template: string | undefined;
@@ -264,37 +272,63 @@ export async function createProject(opts: CreateProjectOptions): Promise<CreateP
   return { ok: true, target, name, ...(slug ? { slug } : {}) };
 }
 
-/** `GET /api/v1/projects/github-owners` — who a new repository may belong to. */
-export type GithubOwnersResult = { available: true; login: string; orgs: string[] } | { available: false; reason: string };
-
-export async function listGithubOwners(run?: CommandRunner): Promise<GithubOwnersResult> {
+/** `GET /api/v1/projects/github-owners` — who a new repository may belong to:
+ *  the signed-in user first, then their organisations, each with its avatar
+ *  (and an org's description) for the dialog's owner cards. */
+export async function listGithubOwners(run?: CommandRunner): Promise<GithubOwnersResponse> {
   if (!run && process.env.CEZ_DRY_RUN === '1') {
-    return { available: true, login: 'dry-run-user', orgs: ['dry-run-org'] };
+    return {
+      available: true,
+      owners: [
+        { login: 'dry-run-user', personal: true },
+        { login: 'dry-run-org', personal: false, description: 'CEZ_DRY_RUN=1 fake organisation' },
+      ],
+    };
   }
   const exec = run ?? spawnCommandRunner;
   const cwd = process.cwd();
   const [user, orgs] = await Promise.all([
-    exec('gh', ['api', 'user', '--jq', '.login'], { cwd }).catch((err: unknown) => ({ ok: false as const, error: errText(err) })),
-    exec('gh', ['api', 'user/orgs', '--paginate', '--jq', '.[].login'], { cwd }).catch((err: unknown) => ({
+    exec('gh', ['api', 'user', '--jq', '[.login, .avatar_url // ""] | @tsv'], { cwd }).catch((err: unknown) => ({
       ok: false as const,
       error: errText(err),
     })),
+    exec('gh', ['api', 'user/orgs', '--paginate', '--jq', '.[] | [.login, .avatar_url // "", .description // ""] | @tsv'], {
+      cwd,
+    }).catch((err: unknown) => ({ ok: false as const, error: errText(err) })),
   ]);
   if (!user.ok) {
     if ('notFound' in user && user.notFound) return { available: false, reason: GH_MISSING };
     return { available: false, reason: `gh is not authenticated — run \`gh auth login\` (${user.error.split('\n')[0] ?? ''})` };
   }
-  const login = user.stdout.trim();
-  if (!OWNER_SEGMENT.test(login)) return { available: false, reason: 'gh returned no GitHub login' };
+  const me = parseOwnerLine(user.stdout.split('\n')[0] ?? '', true);
+  if (!me) return { available: false, reason: 'gh returned no GitHub login' };
   // An org listing failure (e.g. a token without read:org) still leaves the
   // personal account — degrade to that rather than hide GitHub entirely.
-  const orgList = orgs.ok
-    ? orgs.stdout
-        .split('\n')
-        .map((s) => s.trim())
-        .filter((s) => OWNER_SEGMENT.test(s))
-    : [];
-  return { available: true, login, orgs: [...new Set(orgList)].sort((a, b) => a.localeCompare(b)) };
+  const orgOwners = new Map<string, GithubOwner>();
+  if (orgs.ok) {
+    for (const line of orgs.stdout.split('\n')) {
+      const org = parseOwnerLine(line, false);
+      if (org && org.login !== me.login) orgOwners.set(org.login, org);
+    }
+  }
+  const sorted = [...orgOwners.values()].sort((a, b) => a.login.localeCompare(b.login));
+  return { available: true, owners: [me, ...sorted] };
+}
+
+/** One `login<TAB>avatar[<TAB>description]` line from `gh --jq … | @tsv`.
+ *  Only https avatars are passed on — the cockpit renders them as `<img src>`. */
+function parseOwnerLine(line: string, personal: boolean): GithubOwner | null {
+  const [login = '', avatar = '', ...rest] = line.split('\t');
+  const trimmed = login.trim();
+  if (!OWNER_SEGMENT.test(trimmed)) return null;
+  // `@tsv` escapes tabs/newlines inside a field as `\t`/`\n`; fold them to spaces.
+  const description = rest.join(' ').replace(/\\[tnr]/g, ' ').replace(/\s+/g, ' ').trim();
+  return {
+    login: trimmed,
+    personal,
+    ...(avatar.trim().startsWith('https://') ? { avatarUrl: avatar.trim() } : {}),
+    ...(description !== '' ? { description: description.slice(0, 200) } : {}),
+  };
 }
 
 function errText(err: unknown): string {

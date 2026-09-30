@@ -2882,7 +2882,7 @@ export function createApp(deps: ServerDeps) {
     // `{ error, reason }` degradation as the clone route above.
     .get('/projects/github-owners', async (c) => c.json(await listGithubOwners(deps.projectCommandRunner)))
 
-    .post('/projects/create', jsonZodValidator(() => createProjectInputSchema, { message: 'name must be a non-empty project name' }), async (c) => {
+    .post('/projects/create', jsonZodValidator(() => createProjectInputSchema, { message: 'project name must be a valid GitHub repository name — letters, digits, ".", "-" and "_" only, no spaces' }), async (c) => {
       if (capabilities().singleProject) {
         return c.json(singleProjectRefusal('adding projects'), 409);
       }

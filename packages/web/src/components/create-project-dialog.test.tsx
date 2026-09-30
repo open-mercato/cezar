@@ -54,7 +54,13 @@ const PROJECT: ProjectListEntry = {
 const posted: Record<string, unknown>[] = []
 
 function serve(
-  owners: GithubOwnersResponse = { available: true, login: 'octo', orgs: ['acme'] },
+  owners: GithubOwnersResponse = {
+    available: true,
+    owners: [
+      { login: 'octo', personal: true, avatarUrl: 'https://avatars.githubusercontent.com/u/1' },
+      { login: 'acme', personal: false, description: 'Builds rockets' },
+    ],
+  },
   create: () => Promise<Response> = async () => json({ project: PROJECT }),
 ): void {
   posted.length = 0
@@ -92,19 +98,25 @@ function renderDialog() {
 const slot = (name: string) => document.querySelector(`[data-slot="${name}"]`) as HTMLElement | null
 const nameInput = () => slot('create-name') as HTMLInputElement
 const createButton = () => slot('create-confirm') as HTMLButtonElement
+const ownerCards = () => [...document.querySelectorAll<HTMLButtonElement>('[data-slot="create-owner-option"]')]
+const selectedOwner = () => ownerCards().find((card) => card.getAttribute('aria-checked') === 'true')?.dataset.owner
 
 describe('CreateProjectDialog', () => {
   it('creates a private GitHub repo under the chosen org, with no visibility field', async () => {
     serve()
     const { onOpenChange } = renderDialog()
     await waitFor(() => expect(slot('create-owner')).toBeTruthy())
-    const owner = slot('create-owner') as HTMLSelectElement
-    expect([...owner.options].map((o) => o.value)).toEqual(['octo', 'acme'])
-    expect(owner.value).toBe('octo')
+    // The personal account comes first and is the default; each card shows avatar and subtitle.
+    expect(ownerCards().map((card) => card.dataset.owner)).toEqual(['octo', 'acme'])
+    expect(selectedOwner()).toBe('octo')
+    expect(ownerCards()[0]?.textContent).toContain('Personal account')
+    expect(ownerCards()[0]?.querySelector('img')?.getAttribute('src')).toBe('https://avatars.githubusercontent.com/u/1')
+    expect(ownerCards()[1]?.textContent).toContain('Builds rockets')
 
-    fireEvent.change(nameInput(), { target: { value: ' fresh ' } })
+    fireEvent.change(nameInput(), { target: { value: ' fresh' } })
     expect(slot('create-target')?.textContent).toBe('~/cezar/projects/fresh')
-    fireEvent.change(owner, { target: { value: 'acme' } })
+    fireEvent.click(ownerCards()[1] as HTMLButtonElement)
+    expect(selectedOwner()).toBe('acme')
     fireEvent.click(createButton())
 
     await waitFor(() => expect(posted).toHaveLength(1))
@@ -112,6 +124,37 @@ describe('CreateProjectDialog', () => {
     expect(JSON.stringify(posted[0])).not.toMatch(/visib|public/i)
     await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
     expect(document.querySelector('[data-testid="location"]')?.textContent).toBe('/p/fresh/')
+  })
+
+  it('keeps the name a valid GitHub repository name', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(slot('create-owner')).toBeTruthy())
+    fireEvent.change(nameInput(), { target: { value: 'my new project' } })
+    expect(nameInput().value).toBe('my-new-project')
+    expect(slot('create-target')?.textContent).toBe('~/cezar/projects/my-new-project')
+    fireEvent.change(nameInput(), { target: { value: 'zażółć' } })
+    expect(slot('create-name-error')?.textContent).toContain('letters, digits')
+    expect(createButton().disabled).toBe(true)
+    fireEvent.keyDown(nameInput(), { key: 'Enter' })
+    expect(posted).toHaveLength(0)
+  })
+
+  it('arrow keys move the owner selection', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(ownerCards()).toHaveLength(2))
+    fireEvent.keyDown(ownerCards()[0] as HTMLButtonElement, { key: 'ArrowDown' })
+    expect(selectedOwner()).toBe('acme')
+    fireEvent.keyDown(ownerCards()[1] as HTMLButtonElement, { key: 'ArrowDown' })
+    expect(selectedOwner()).toBe('octo')
+  })
+
+  it('has no link away to settings', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(slot('create-owner')).toBeTruthy())
+    expect(document.querySelector('[data-slot="create-project-dialog"] a')).toBeNull()
   })
 
   it('passes a template when one is given', async () => {

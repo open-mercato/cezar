@@ -25,9 +25,9 @@ start a project from nothing. Starting one means leaving the cockpit to `git ini
 
 ## Design
 
-`POST /api/projects/create` `{ name, github?: { owner, template? }, checkoutId? }` —
-workspace-level, same guards and target rule as `/api/projects/checkout`
-(`src/server/create-project.ts` reuses `checkout.ts`'s name validation, its
+`POST /api/v1/projects/create` `{ name, github?: { owner, template? }, checkoutId? }` —
+workspace-level, same guards and target rule as `/api/v1/projects/checkout`
+(`packages/cezar/src/server/create-project.ts` reuses `checkout.ts`'s name validation, its
 ownership-token `mkdir`, and its guarded `cleanupCheckout`). Progress is emitted as
 `checkout-progress` events keyed by `checkoutId`; success registers through the same
 `registerFolder` (`source: checkout` when GitHub-backed, `local` otherwise).
@@ -44,8 +44,18 @@ ownership-token `mkdir`, and its guarded `cleanupCheckout`). Progress is emitted
 A failure cleans up the local folder only. If the GitHub repository was already created,
 the error says so; cezar never deletes remote repositories.
 
-`GET /api/projects/github-owners` → `{ available: true, login, orgs }` from `gh api user`
-and `gh api user/orgs`, or `{ available: false, reason }` (no `gh`, unauthenticated).
+**Name.** The name must be a valid GitHub repository name (`GITHUB_REPO_NAME_PATTERN` in
+`packages/contract`: letters, digits, `.`, `-`, `_`, at most 100 characters, not `.`/`..`) —
+even for a local-only project, because it is the folder AND (now or later) the repository,
+and GitHub would silently rewrite anything else. The dialog turns a typed space into `-`,
+as GitHub's own form suggests, and blocks Create with an inline hint for anything else.
+
+`GET /api/v1/projects/github-owners` → `{ available: true, owners: [{ login, personal,
+avatarUrl?, description? }] }` from `gh api user` and `gh api user/orgs` — the personal
+account first, then organisations sorted by login — or `{ available: false, reason }`
+(no `gh`, unauthenticated). Only `https://` avatars are passed on. The dialog renders the
+owners as selectable cards (avatar, login, "Personal account" or the org description),
+the personal account selected by default; it links nowhere else.
 A failed org listing degrades to the personal account. `CEZ_DRY_RUN=1` fakes every `gh`
 call and runs real `git`.
 
