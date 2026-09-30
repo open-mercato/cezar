@@ -207,16 +207,13 @@ describe('CreateProjectDialog', () => {
     await waitFor(() => expect(document.querySelectorAll('[data-slot="create-template-suggestion"]').length).toBeGreaterThan(5))
     fireEvent.change(input, { target: { value: 'obsidian' } })
     const options = [...document.querySelectorAll<HTMLElement>('[data-slot="create-template-suggestion"]')]
-    expect(options.map((o) => o.dataset.template)).toEqual([
-      'obsidianmd/obsidian-sample-plugin',
-      'obsidianmd/obsidian-sample-theme',
-    ])
+    expect(options.map((o) => o.dataset.template)).toEqual(['andrewmcodes/obsidian-beginner-vault-template'])
     fireEvent.mouseDown(options[0] as HTMLElement)
-    expect(input.value).toBe('obsidianmd/obsidian-sample-plugin')
+    expect(input.value).toBe('andrewmcodes/obsidian-beginner-vault-template')
 
     fireEvent.click(createButton())
     await waitFor(() => expect(posted).toHaveLength(1))
-    expect(posted[0]).toMatchObject({ github: { owner: 'octo', template: 'obsidianmd/obsidian-sample-plugin' } })
+    expect(posted[0]).toMatchObject({ github: { owner: 'octo', template: 'andrewmcodes/obsidian-beginner-vault-template' } })
   })
 
   it('arrow keys and Enter pick a suggestion; a pasted owner/repo works too', async () => {

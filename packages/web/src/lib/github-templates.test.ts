@@ -13,7 +13,14 @@ describe('GitHub template suggestions', () => {
     expect(filterTemplateSuggestions('')).toHaveLength(GITHUB_TEMPLATE_SUGGESTIONS.length)
     expect(filterTemplateSuggestions('github/codespaces-nextjs')).toHaveLength(GITHUB_TEMPLATE_SUGGESTIONS.length)
     expect(filterTemplateSuggestions('PYTHON').map((s) => s.slug)).toContain('microsoft/python-package-template')
-    expect(filterTemplateSuggestions('electron').map((s) => s.slug)).toEqual(['electron/electron-quick-start'])
+    expect(filterTemplateSuggestions('hono').map((s) => s.slug)).toEqual(['w3cj/hono-open-api-starter'])
+    expect(filterTemplateSuggestions('knowledge').map((s) => s.slug)).toEqual([
+      'andrewmcodes/obsidian-beginner-vault-template',
+    ])
+    expect(filterTemplateSuggestions('vue').map((s) => s.slug)).toEqual([
+      'antfu-collective/vitesse',
+      'nuxt-ui-templates/starter-vue',
+    ])
     expect(filterTemplateSuggestions('no-such-template-anywhere')).toEqual([])
   })
 })

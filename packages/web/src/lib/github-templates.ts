@@ -6,7 +6,8 @@
  * Every entry must be a GitHub TEMPLATE repository (`is_template: true`) and not archived —
  * `gh repo create --template` refuses anything else. Checked with
  * `gh api repos/<slug> --jq '[.is_template, .archived]'` on 2026-09-30; re-check when editing.
- * Preference goes to repos the framework's own organisation (or GitHub) publishes.
+ * Preference goes to repos the framework's own organisation (or GitHub) publishes; Hono, Vite,
+ * Vue and Vite+ publish none, so those entries are the most-used active community templates.
  */
 export interface GithubTemplateSuggestion {
   /** `owner/repo`, exactly what the field is filled with. */
@@ -23,11 +24,17 @@ export const GITHUB_TEMPLATE_SUGGESTIONS: readonly GithubTemplateSuggestion[] = 
     label: 'Next.js admin dashboard',
     description: 'Postgres, Auth.js and Tailwind (Vercel)',
   },
-  { slug: 'github/codespaces-react', label: 'React', description: 'React single-page app (GitHub)' },
+  { slug: 'github/codespaces-react', label: 'React + Vite', description: 'React single-page app (GitHub)' },
+  { slug: 'antfu-collective/vitesse', label: 'Vue + Vite', description: 'Opinionated Vue starter (Vitesse)' },
+  { slug: 'nuxt-ui-templates/starter-vue', label: 'Vue + Nuxt UI', description: 'Vue + Vite with Nuxt UI (Nuxt)' },
+  { slug: 'mugnavo/cove', label: 'Vite+', description: 'TanStack Start on Vite+ (vp), Better Auth' },
+  { slug: 'w3cj/hono-open-api-starter', label: 'Hono', description: 'Type-safe JSON API with OpenAPI docs' },
   { slug: 'github/codespaces-express', label: 'Express', description: 'Node.js web server (GitHub)' },
-  { slug: 'obsidianmd/obsidian-sample-plugin', label: 'Obsidian plugin', description: 'Community plugin starter (Obsidian)' },
-  { slug: 'obsidianmd/obsidian-sample-theme', label: 'Obsidian theme', description: 'Theme starter (Obsidian)' },
-  { slug: 'electron/electron-quick-start', label: 'Electron app', description: 'Minimal desktop app (Electron)' },
+  {
+    slug: 'andrewmcodes/obsidian-beginner-vault-template',
+    label: 'Obsidian vault',
+    description: 'Your own knowledge base in Markdown',
+  },
   {
     slug: 'chibat/chrome-extension-typescript-starter',
     label: 'Chrome extension',
