@@ -236,9 +236,15 @@ describe('linked checkouts', () => {
       entry: join(versionsDir(env), 'current', 'node_modules', '@open-mercato', 'cezar', 'dist', 'index.js'),
       restart: () => {},
       env,
+      // The clones are built, but a commit landing in a later second than the build reads as
+      // stale; never let that reach a real npm run.
+      buildCheckout: async (checkout) => {
+        fakeCheckout(checkout.worktree);
+      },
     });
     const job = svc.apply(before.get(b)!);
-    await vi.waitFor(() => expect(job.status).toBe('restarting'));
+    await vi.waitFor(() => expect(job.status).toBe('restarting'), { timeout: 5_000 });
+    expect(job.error).toBeUndefined();
     expect(activeId(env)).toBe(before.get(b));
     expect(listLinks(env).find((link) => link.id === before.get(b))?.checkout).toBe(join(b, 'packages', 'cezar'));
     // Linking B under its suffixed id leaves A's plain id free — and both stay put.
