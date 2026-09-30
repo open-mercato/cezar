@@ -31,6 +31,18 @@ const API_URL = `https://api.github.com/repos/${REPO}`;
 const TIMEOUT_MS = 5_000;
 /** Six hours. A star count moves slowly and nothing here depends on it being exact. */
 export const STAR_CACHE_TTL_MS = 6 * 60 * 60_000;
+/**
+ * Fifteen minutes, and the reason a FAILED read is remembered too.
+ *
+ * `fetchedAtMs` only advances on success, so without this the failure path has no cache at all:
+ * an offline or proxied machine pays the full `TIMEOUT_MS` on every cockpit load forever, and a
+ * rate-limited IP (60/h unauthenticated) keeps spending requests into the very `403` that is
+ * telling it to stop. `inFlight` collapses a concurrent burst, never a sequential one.
+ *
+ * Shorter than the success TTL on purpose — offline is usually temporary and the cost of being
+ * wrong here is one quiet chip, not a stale number.
+ */
+export const STAR_FAILURE_BACKOFF_MS = 15 * 60_000;
 
 export interface StarCount {
   /** `false` whenever there is no number to show — offline, rate-limited, or promos silenced.
@@ -137,6 +149,9 @@ export interface StarCountReaderOptions {
 export class StarCountReader {
   private count: number | null = null;
   private fetchedAtMs = 0;
+  /** `null` — not `0` — means "never failed": a `now()` near the epoch (every test clock) would
+   *  otherwise read as a failure one tick ago and suppress the very first request. */
+  private failedAtMs: number | null = null;
   private inFlight: Promise<number | null> | null = null;
   private diskRead = false;
 
@@ -158,7 +173,7 @@ export class StarCountReader {
     if (this.count !== null && this.now() - this.fetchedAtMs < STAR_CACHE_TTL_MS) {
       return { available: true, count: this.count, url: CEZAR_REPO_URL };
     }
-    const fresh = await this.refresh();
+    const fresh = this.backingOff() ? null : await this.refresh();
     // A failed refresh falls back to whatever is still held: a stale number beats no number,
     // and "no number" here would make the chip disappear on the first flaky minute.
     const count = fresh ?? this.count;
@@ -175,13 +190,21 @@ export class StarCountReader {
     this.fetchedAtMs = entry.fetchedAtMs;
   }
 
+  /** Whether the last attempt failed recently enough that another one is not worth its timeout. */
+  private backingOff(): boolean {
+    return this.failedAtMs !== null && this.now() - this.failedAtMs < STAR_FAILURE_BACKOFF_MS;
+  }
+
   /** Always goes to GitHub, and never twice at once — a burst of cockpit tabs is one request. */
   private async refresh(): Promise<number | null> {
     if (this.inFlight) return this.inFlight;
     this.inFlight = fetchStarCount(this.fetchImpl).then(async (count) => {
-      if (count !== null) {
+      if (count === null) {
+        this.failedAtMs = this.now();
+      } else {
         this.count = count;
         this.fetchedAtMs = this.now();
+        this.failedAtMs = null;
         await writeDisk(this.cachePath, { count, fetchedAtMs: this.fetchedAtMs });
       }
       this.inFlight = null;

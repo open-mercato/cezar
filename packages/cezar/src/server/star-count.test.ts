@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CEZAR_REPO_URL,
   STAR_CACHE_TTL_MS,
+  STAR_FAILURE_BACKOFF_MS,
   StarCountReader,
   fetchStarCount,
   starAskSilenced,
@@ -166,6 +167,53 @@ describe('star count — the reader', () => {
       available: false,
       url: CEZAR_REPO_URL,
     });
+  });
+
+  it('remembers a FAILURE too, so an offline machine does not re-spend the timeout every read', async () => {
+    let clock = 1_000_000;
+    const fetchImpl = stubFetch([boom(), ok({ stargazers_count: 7 })]);
+    const r = new StarCountReader({ fetchImpl, cachePath, env: {}, now: () => clock });
+
+    await expect(r.read()).resolves.toEqual({ available: false, url: CEZAR_REPO_URL });
+    expect(fetchImpl.calls).toBe(1);
+
+    // Every read inside the backoff window is answered from the remembered failure — no second
+    // five-second timeout for a cockpit that reloads while the machine is still offline.
+    clock += STAR_FAILURE_BACKOFF_MS - 1;
+    await expect(r.read()).resolves.toEqual({ available: false, url: CEZAR_REPO_URL });
+    expect(fetchImpl.calls).toBe(1);
+
+    // And it is a backoff, not a give-up: past the window the next read tries again.
+    clock += 2;
+    await expect(r.read()).resolves.toMatchObject({ count: 7 });
+    expect(fetchImpl.calls).toBe(2);
+  });
+
+  it('keeps serving a stale disk count through the backoff window rather than a blank chip', async () => {
+    writeFileSync(cachePath, JSON.stringify({ count: 400, fetchedAtMs: 0 }), 'utf8');
+    let clock = STAR_CACHE_TTL_MS * 10;
+    const fetchImpl = stubFetch([boom()]);
+    const r = new StarCountReader({ fetchImpl, cachePath, env: {}, now: () => clock });
+
+    await expect(r.read()).resolves.toMatchObject({ available: true, count: 400 });
+    clock += 60_000;
+    await expect(r.read()).resolves.toMatchObject({ available: true, count: 400 });
+    expect(fetchImpl.calls).toBe(1);
+  });
+
+  it('clears the backoff on a success, so one bad minute cannot mute the next six hours', async () => {
+    let clock = 1_000_000;
+    const fetchImpl = stubFetch([boom(), ok({ stargazers_count: 21 }), ok({ stargazers_count: 22 })]);
+    const r = new StarCountReader({ fetchImpl, cachePath, env: {}, now: () => clock });
+
+    await r.read();
+    clock += STAR_FAILURE_BACKOFF_MS + 1;
+    await expect(r.read()).resolves.toMatchObject({ count: 21 });
+
+    // Past the TTL the reader refetches normally — the earlier failure left nothing behind.
+    clock += STAR_CACHE_TTL_MS + 1;
+    await expect(r.read()).resolves.toMatchObject({ count: 22 });
+    expect(fetchImpl.calls).toBe(3);
   });
 
   it('caches under the global ~/.cache/cez directory, like every other cezar cache', () => {

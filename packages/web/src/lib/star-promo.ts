@@ -56,9 +56,9 @@ export const STAR_TOAST_SEEN_KEY = 'cez:star-toast-seen'
  */
 export function formatStarCount(count: number): string {
   if (!Number.isFinite(count) || count < 0) return '0'
-  const n = Math.floor(count)
-  if (n < 1000) return String(n)
-  const thousands = n / 1000
+  const stars = Math.floor(count)
+  if (stars < 1000) return String(stars)
+  const thousands = stars / 1000
   // `toFixed` rounds half-up, which would print `1000k` at 999_950. Truncate instead: the count
   // is decoration, and understating it by a hair beats a number that cannot exist.
   const truncated = Math.floor(thousands * 10) / 10
