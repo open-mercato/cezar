@@ -110,6 +110,8 @@ reading a newer run's events degrades to the generic wrench rather than breaking
 
 ## Progress
 
+PR: #1202
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: Give skills their own tool kind
