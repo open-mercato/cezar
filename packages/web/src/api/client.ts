@@ -98,6 +98,7 @@ import type {
   RunnerModelCatalogResponse,
   RunRecord,
   RunsIndexResponse,
+  StarCountPayload,
   WorktreeEntry,
   SaveWorkflowInput,
   SaveWorkflowResponse,
@@ -419,6 +420,13 @@ const runPath = (id: string, suffix = ''): string => `/runs/${encodeURIComponent
 /** Version, update check, repo/branch, and the tool probes behind the Tools menu. */
 export async function getHealth(opts?: ReadOptions): Promise<HealthResponse> {
   return unwrap(await cez.api.v1.health.$get({}, init(opts)), '/health')
+}
+
+/** cezar's own GitHub star count, behind the sidebar's ⭐ ask. Workspace-level: the number is
+ *  about cezar, never about the project on screen. `available: false` is the ordinary offline
+ *  answer and the chip renders nothing for it. */
+export async function getStarCount(opts?: ReadOptions): Promise<StarCountPayload> {
+  return unwrap(await cez.api.v1['star-count'].$get({}, init(opts)), '/star-count')
 }
 
 /** Host-local catalog for one discovery runner (`claude`, `codex`, `opencode`, `cursor` — #794, #784).
