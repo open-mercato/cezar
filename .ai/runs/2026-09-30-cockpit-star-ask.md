@@ -115,8 +115,8 @@ counts, so a cold boot with a finished run in the list stays silent.
 
 ### Phase 1: The star count, server-side
 
-- [ ] 1.1 Star count service with disk cache and total failure tolerance
-- [ ] 1.2 Contract schema, `GET /api/v1/star-count`, BC inventory
+- [x] 1.1 Star count service with disk cache and total failure tolerance — aaa8b499
+- [x] 1.2 Contract schema, `GET /api/v1/star-count`, BC inventory — 29f1bd76
 
 ### Phase 2: The terminal banner line
 
