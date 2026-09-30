@@ -205,6 +205,9 @@ describe('CreateProjectDialog', () => {
     const input = slot('create-template') as HTMLInputElement
     fireEvent.focus(input)
     await waitFor(() => expect(document.querySelectorAll('[data-slot="create-template-suggestion"]').length).toBeGreaterThan(5))
+    // Rendered inside the dialog, never portalled out of it: the dialog's scroll lock would
+    // swallow wheel/touch scrolling on a list outside its DOM.
+    expect(slot('create-project-dialog')?.contains(slot('create-template-suggestions'))).toBe(true)
     fireEvent.change(input, { target: { value: 'obsidian' } })
     const options = [...document.querySelectorAll<HTMLElement>('[data-slot="create-template-suggestion"]')]
     expect(options.map((o) => o.dataset.template)).toEqual(['andrewmcodes/obsidian-beginner-vault-template'])
