@@ -1,6 +1,6 @@
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -50,7 +50,14 @@ import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
-import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
+import {
+  autosaveCommit,
+  createWorktree,
+  resolveBaseRef,
+  worktreeChangedPaths,
+  worktreeDiff,
+  worktreeShortstat,
+} from '../git-worktree.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -363,6 +370,12 @@ interface ActiveRun {
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
   autosaveTimer?: NodeJS.Timeout;
+  /** Check-owned path snapshots; changed content transfers ownership back to the agent. */
+  autosaveExcludedPaths: Map<string, string>;
+  /** Periodic autosave must not race a command before its ownership snapshot exists. */
+  checkInProgress: boolean;
+  /** A failed checkpoint cannot safely distinguish agent work from check residue. */
+  autosaveCheckpointBlocked: boolean;
   cancellationTimer?: NodeJS.Timeout;
   /* The screenshot counter lives on `RunManager.queuedImageSeq` (#472), keyed by
    * run id — a queued run persists attachments with no `ActiveRun` at all. */
@@ -932,6 +945,10 @@ interface PersistedAttachments {
  */
 export class RunManager {
   private readonly active = new Map<string, ActiveRun>();
+  /** Check ownership survives a parked continuation without persisting transient state. */
+  private readonly checkArtifactSnapshots = new Map<string, Map<string, string>>();
+  /** A failed checkpoint remains unsafe when a parked run is continued. */
+  private readonly autosaveCheckpointBlockedRuns = new Set<string>();
   // Queue + `starting` set (spec 006, janitor's pump() pattern): `starting`
   // covers the window between shifting a run off the queue and the run
   // registering in `active`, so parallel-slot counting is never racy.
@@ -3489,7 +3506,11 @@ export class RunManager {
       cwd,
       autonomous: record?.autonomous === true,
       autoContinues: 0,
+      autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
+      checkInProgress: false,
+      autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
     };
+    this.checkArtifactSnapshots.set(runId, state.autosaveExcludedPaths);
     this.active.set(runId, state);
     this.starting.delete(runId);
     if (state.cwd === this.repoRoot) {
@@ -3917,8 +3938,13 @@ export class RunManager {
       this.recordUsagePeaks(runId, state);
       this.clearIdleTimer(state);
       this.clearAutosaveTimer(state);
-      if (!state.cancelled && this.active.get(runId) === state && state.cwd !== this.repoRoot) {
-        await autosaveCommit(state.cwd, 'turn end');
+      if (
+        !state.cancelled &&
+        !state.autosaveCheckpointBlocked &&
+        this.active.get(runId) === state &&
+        state.cwd !== this.repoRoot
+      ) {
+        await autosaveCommit(state.cwd, 'turn end', await currentCheckExclusions(state.cwd, state.autosaveExcludedPaths));
       }
       this.dropActive(runId, state);
     }
@@ -3934,7 +3960,11 @@ export class RunManager {
       cwd: this.repoRoot,
       autonomous: input.autonomous === true,
       autoContinues: 0,
+      autosaveExcludedPaths: this.checkArtifactSnapshots.get(runId) ?? new Map(),
+      checkInProgress: false,
+      autosaveCheckpointBlocked: this.autosaveCheckpointBlockedRuns.has(runId),
     };
+    this.checkArtifactSnapshots.set(runId, state.autosaveExcludedPaths);
     this.active.set(runId, state);
     this.starting.delete(runId);
     const emit = (event: { type: string; stepId?: string; [k: string]: unknown }) => {
@@ -4204,7 +4234,35 @@ export class RunManager {
         continue;
       }
 
-      const { ok, output } = await this.runCheckStep(state, step, emit);
+      // Check commands are allowed to generate tracked output, but that output
+      // is verification residue rather than agent work. Save the agent's state
+      // before the command, then keep the command's changed paths excluded from
+      // later autosaves while leaving those files dirty for inspection.
+      const checkpoint =
+        state.cwd === this.repoRoot
+          ? 'nothing-to-do'
+          : await autosaveCommit(
+              state.cwd,
+              'turn end',
+              await currentCheckExclusions(state.cwd, state.autosaveExcludedPaths),
+            );
+      const checkpointSafe = checkpoint === 'committed' || checkpoint === 'nothing-to-do';
+      state.autosaveCheckpointBlocked = !checkpointSafe;
+      if (checkpointSafe) this.autosaveCheckpointBlockedRuns.delete(runId);
+      else this.autosaveCheckpointBlockedRuns.add(runId);
+      let checkResult: { ok: boolean; output: string };
+      state.checkInProgress = true;
+      try {
+        checkResult = await this.runCheckStep(state, step, emit);
+      } finally {
+        if (checkpointSafe && state.cwd !== this.repoRoot) {
+          await captureCheckArtifacts(state.cwd, state.autosaveExcludedPaths);
+        }
+        // Keep the periodic timer fenced until the ownership snapshot is complete;
+        // captureCheckArtifacts yields while reading git status.
+        state.checkInProgress = false;
+      }
+      const { ok, output } = checkResult;
       if (state.cancelled) break;
       if (ok) {
         this.finishStep(runId, step.id, 'done', undefined, emit);
@@ -4251,8 +4309,17 @@ export class RunManager {
 
     // Final autosave: the branch always ends holding the finished state.
     this.clearAutosaveTimer(state);
-    if (!state.cancelled && this.active.get(runId) === state && state.cwd !== this.repoRoot) {
-      await autosaveCommit(state.cwd, 'run finalize');
+    if (
+      !state.cancelled &&
+      !state.autosaveCheckpointBlocked &&
+      this.active.get(runId) === state &&
+      state.cwd !== this.repoRoot
+    ) {
+      await autosaveCommit(
+        state.cwd,
+        'run finalize',
+        await currentCheckExclusions(state.cwd, state.autosaveExcludedPaths),
+      );
     }
 
     // The cancellation grace timer may have retired this owner while the async
@@ -5456,8 +5523,18 @@ export class RunManager {
     if (!periodicAutosaveEnabled()) return;
     if (state.cwd === this.repoRoot || state.autosaveTimer) return;
     state.autosaveTimer = setInterval(() => {
-      if (this.active.get(runId) !== state || state.cancelled) return;
-      void autosaveCommit(state.cwd, 'periodic');
+      if (this.active.get(runId) !== state || state.cancelled || state.checkInProgress || state.autosaveCheckpointBlocked) return;
+      void currentCheckExclusions(state.cwd, state.autosaveExcludedPaths).then((excluded) => {
+        if (
+          this.active.get(runId) !== state ||
+          state.cancelled ||
+          state.checkInProgress ||
+          state.autosaveCheckpointBlocked
+        ) {
+          return 'nothing-to-do' as const;
+        }
+        return autosaveCommit(state.cwd, 'periodic', excluded);
+      });
     }, AUTOSAVE_INTERVAL_MS);
     state.autosaveTimer.unref?.();
   }
@@ -5528,6 +5605,27 @@ function findLastAgentStepIndex(workflow: WorkflowDef): number {
     if (step && stepKind(step) === 'agent') return i;
   }
   return -1;
+}
+
+function fileSnapshot(dir: string, path: string): string {
+  try {
+    return createHash('sha256').update(readFileSync(join(dir, path))).digest('hex');
+  } catch {
+    return 'missing-or-unreadable';
+  }
+}
+
+async function currentCheckExclusions(dir: string, owned: Map<string, string>): Promise<string[]> {
+  const exclusions: string[] = [];
+  for (const [path, snapshot] of owned) {
+    if (fileSnapshot(dir, path) === snapshot) exclusions.push(path);
+    else owned.delete(path); // later agent edits reclaim ownership of this path
+  }
+  return exclusions;
+}
+
+async function captureCheckArtifacts(dir: string, owned: Map<string, string>): Promise<void> {
+  for (const path of await worktreeChangedPaths(dir)) owned.set(path, fileSnapshot(dir, path));
 }
 
 function applyTemplate(template: string, task: string): string {

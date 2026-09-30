@@ -317,7 +317,11 @@ function hasConflictMarkers(text: string): boolean {
  * markers: the incident behind #471 was an autosave capturing a half-resolved
  * merge, and a blind `git add -A` would do it again.
  */
-export async function autosaveCommit(dir: string, reason: AutosaveReason): Promise<AutosaveResult> {
+export async function autosaveCommit(
+  dir: string,
+  reason: AutosaveReason,
+  excludedPaths: readonly string[] = [],
+): Promise<AutosaveResult> {
   const status = await git(dir, ['status', '--porcelain']);
   if (!status.ok || !status.stdout.trim()) return 'nothing-to-do';
   const unresolved = await unresolvedConflicts(dir, status.stdout);
@@ -330,6 +334,24 @@ export async function autosaveCommit(dir: string, reason: AutosaveReason): Promi
     return 'refused';
   }
   await git(dir, ['add', '-A']);
+  // Command/check steps may leave useful artifacts in the worktree. Keep those
+  // paths dirty for inspection, while allowing the agent's checkpoint to be
+  // committed alongside them. The paths are passed as argv entries, never
+  // interpolated into a shell command.
+  let exclusionResetFailed = false;
+  for (const path of excludedPaths) {
+    const reset = await git(dir, ['reset', '--quiet', '--', path]);
+    if (!reset.ok) exclusionResetFailed = true;
+  }
+  if (exclusionResetFailed) {
+    // A failed path reset means we cannot prove which staged files belong to
+    // the command. Clear the index without touching the worktree, then defer
+    // the checkpoint rather than committing an unsafe mix of changes.
+    await git(dir, ['reset', '--quiet']);
+    return 'failed';
+  }
+  const staged = await git(dir, ['diff', '--cached', '--quiet']);
+  if (staged.ok) return 'nothing-to-do';
   // Commit as the CURRENT git user, so the branch's commits (and any PR opened from it) are
   // attributed to the real author and pass CLA / attribution checks. The old hardcoded
   // `cezar <cezar@local>` identity made every autosave look like a non-GitHub user. Fall back to
@@ -346,6 +368,25 @@ export async function autosaveCommit(dir: string, reason: AutosaveReason): Promi
     `cezar autosave (${reason})`,
   ]);
   return commit.ok ? 'committed' : 'failed';
+}
+
+/** Return paths currently changed in the worktree, including untracked files. */
+export async function worktreeChangedPaths(dir: string): Promise<string[]> {
+  const status = await git(dir, ['status', '--porcelain=v1', '--untracked-files=all', '-z']);
+  if (!status.ok) return [];
+  const records = status.stdout.split('\0').filter(Boolean);
+  const paths: string[] = [];
+  for (let i = 0; i < records.length; i++) {
+    const entry = records[i] as string;
+    paths.push(entry.slice(3));
+    // Porcelain -z emits the destination and source paths of renames/copies as
+    // adjacent NUL records; the second record has no XY prefix.
+    if (entry[0] === 'R' || entry[0] === 'C' || entry[1] === 'R' || entry[1] === 'C') {
+      const source = records[++i];
+      if (source) paths.push(source);
+    }
+  }
+  return paths.filter(Boolean);
 }
 
 /**
