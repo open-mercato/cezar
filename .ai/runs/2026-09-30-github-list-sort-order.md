@@ -100,4 +100,18 @@ Give the cockpit's GitHub tab a one-click way to flip the Issues / Pull requests
 
 ### Phase 4: gate
 
-- [ ] 4.1 Full validation gate green
+- [x] 4.1 Full validation gate green — see the run log below
+
+## Validation log
+
+Run 2026-09-30 with `TMPDIR`/`TMP`/`TEMP` and every `CEZ_*` variable cleared (the cockpit exports
+them into the worktree, which otherwise fails two unrelated `workflows/` suites on the zero-config
+env assertion):
+
+| Command | Result |
+| --- | --- |
+| `npm run typecheck` | pass |
+| `npm test` | 501/501 files, 8490/8490 tests, 0 failures |
+| `npm run test:unit` | 0 failures |
+| `npm run build` | pass (`check:pack ok — 697 files`) |
+| `npm run test:package` | 17/17 pass |
