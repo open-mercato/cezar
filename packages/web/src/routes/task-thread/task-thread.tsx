@@ -21,6 +21,7 @@ import { Composer } from '@/components/composer/composer'
 import { StatusDot } from '@/components/status-dot'
 import { Button } from '@/components/ui/button'
 import { useKeyboardInsetVar } from '@/lib/keyboard-inset'
+import { budgetStop } from '@/lib/attention'
 import { isUnread } from '@/lib/read-state'
 import { taskIssueUrl, taskPrUrl } from '@/lib/tasks-table'
 import { cn, isHttpUrl } from '@/lib/utils'
@@ -182,6 +183,7 @@ export function ThreadView({
   // The dock's data: the latest plan snapshot across turns (full replacement — an emptied
   // plan hides the dock and the header mirror alike).
   const plan = latestPlanEntries(currentThread)
+  const budget = budgetStop(run)
   const planTally = plan !== undefined && plan.length > 0 ? planCounts(plan) : undefined
   // The Agents dock's data: the current fan-out's sub-agents, or [] when there is none to
   // show (#474). Derived from the same reduced turns the thread renders — no new subscription.
@@ -362,7 +364,9 @@ export function ThreadView({
         {/* Live session heartbeat: while the engine owns the turn (`running`), a spinner tails
             the thread so quiet gaps between bursts don't read as "finished". `waiting` hands
             off to the dock's reply hint, `queued` to the placeholder above — so `running` only. */}
-        {run.status === 'running' ? <WorkingIndicator /> : null}
+        {run.status === 'running' ? (
+          <WorkingIndicator since={liveTurnStart(run, currentThread)} lastActivityAt={currentThread.lastEventAt} />
+        ) : null}
 
         {/* Closed states read as the body's last line; the WAITING state lives in the dock
             (mockup `.paused-hint`), right above the composer it is asking the user to use. */}
@@ -443,15 +447,24 @@ export function ThreadView({
           <AgentsDock key={`agents:${run.id}`} runId={run.id} agents={agents} onSelect={setOpenAgentId} />
 
           {plan !== undefined && plan.length > 0 ? (
-            // Keyed by run id: the collapse default re-derives per task (see PlanDock).
-            <PlanDock key={run.id} runId={run.id} entries={plan} />
+            // Keyed by run id: the collapse default re-derives per task (see PlanDock). Settled
+            // on the same rule as the Agents dock: a closed session never advances the plan.
+            <PlanDock key={run.id} runId={run.id} entries={plan} settled={runIsTerminal} />
           ) : null}
 
           {/* A usage-limit stop is the one `failed` state that is still going somewhere — the
               dock says so before the composer offers a Continue nobody needs to press. */}
           <AutoResumeHint run={run} />
 
-          {run.status === 'waiting' ? (
+          {budget ? (
+            <div
+              data-slot="budget-hint"
+              className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
+            >
+              <StatusDot tone="pending" pulse />
+              Budget reached — spent ${budget.spent.toFixed(2)} of ${budget.ceiling.toFixed(2)}; send a message to continue.
+            </div>
+          ) : run.status === 'waiting' ? (
             <div
               data-slot="paused-hint"
               className="flex items-center gap-2 px-1 text-xs text-muted-foreground"
@@ -577,6 +590,16 @@ function HistoryBoundary({
       </span>
     </div>
   )
+}
+
+/** Where the Working… counter starts: the open turn's start; between turns (a turn completed but
+ *  the run is still `running` — the next step spinning up), the moment that turn closed; with no
+ *  turn at all yet, the run's own start. */
+export function liveTurnStart(run: ApiRun, thread: ThreadState): string | undefined {
+  const last = thread.turns.at(-1)
+  if (last === undefined) return run.startedAt
+  if (last.completed === undefined) return last.startedAt ?? run.startedAt
+  return last.completed.ts ?? run.startedAt
 }
 
 /** The queued run's honest empty state (legacy #351): a queued run has emitted nothing, so

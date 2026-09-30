@@ -6,6 +6,25 @@ import { RunStore } from './store.ts';
 
 import type { RunRecord } from './store.ts';
 
+/** Every store a case opens schedules its debounced runs.json write 300ms out, and every case
+ *  removes its data dir in `afterEach` — so the timer fires into a deleted directory and logs
+ *  "failed to save runs.json" after the case settled. A log landing while the worker tears down
+ *  fails the whole run (`EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was
+ *  pending`, the 0.13.0 release run). Cancel what is still pending once each case ends. */
+const openedStores = new Set<RunStore>();
+const openStore = RunStore.open.bind(RunStore);
+RunStore.open = (dataDir, opts) => {
+  const store = openStore(dataDir, opts);
+  openedStores.add(store);
+  return store;
+};
+afterEach(() => {
+  for (const store of openedStores) {
+    clearTimeout((store as unknown as { saveTimer: NodeJS.Timeout | null }).saveTimer ?? undefined);
+  }
+  openedStores.clear();
+});
+
 /** A minimal pre-#389 record, exactly as an old runs.json holds it — no
  *  titleSummary, no diffStat. Loading it must keep working (additive proof). */
 const LEGACY_RUN = {
@@ -830,6 +849,43 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     return { store, run };
   };
 
+  it('keeps earlier PR associations when a follow-up declaration arrives', () => {
+    const { store, run } = freshRun('Address GitHub pull request #4326');
+    store.applyMarkerRefs(run.id, { pr: 4326 });
+    store.applyMarkerRefs(run.id, { pr: 5366 });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([4326, 5366]);
+    expect(store.getRun(run.id)?.prNumber).toBe(4326);
+  });
+
+  it('deduplicates repeated declarations and preserves a URL when it arrives later', () => {
+    const { store, run } = freshRun();
+    store.applyMarkerRefs(run.id, { pr: 42 });
+    store.recordPrRef(run.id, {
+      number: 42,
+      url: 'https://github.com/open-mercato/cezar/pull/42',
+      origin: 'marker',
+    });
+    expect(store.getRun(run.id)?.prRefs).toHaveLength(1);
+    expect(store.getRun(run.id)?.prRefs?.[0]?.url).toBe('https://github.com/open-mercato/cezar/pull/42');
+  });
+
+  it('preserves legacy scalar associations before a replacement patch is applied', () => {
+    const { store, run } = freshRun();
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/7' });
+    store.updateRun(run.id, { pullRequestUrl: 'https://github.com/o/r/pull/8' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.number)).toEqual([7, 8]);
+  });
+
+  it('keeps same-number PRs from different repositories as separate links', () => {
+    const { store, run } = freshRun();
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/o/r/pull/7', origin: 'created' });
+    store.recordPrRef(run.id, { number: 7, url: 'https://github.com/other/r/pull/7', origin: 'marker' });
+    expect(store.getRun(run.id)?.prRefs?.map((ref) => ref.url)).toEqual([
+      'https://github.com/o/r/pull/7',
+      'https://github.com/other/r/pull/7',
+    ]);
+  });
+
   it('marker numbers land on the record and persist', () => {
     const { store, run } = freshRun();
     store.applyMarkerRefs(run.id, { pr: 442, issue: 433 });
@@ -939,9 +995,8 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     expect(loaded?.referencedPullRequestUrl).toBe(
       'https://github.com/open-mercato/open-mercato/pull/4326',
     );
-    // The about-number too: it is what paints a numeric-only chip, and the created PR already
-    // has a field of its own.
-    expect(loaded?.prNumber).toBe(4326);
+    // The compatibility projection follows the created tier; the about PR remains in prRefs.
+    expect(loaded?.prNumber).toBe(5366);
     expect(loaded?.markerRefs?.pr).toBe(5366);
   });
 
@@ -1016,7 +1071,7 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     );
   });
 
-  it('a declaration naming some OTHER PR still overrides the fuzzy tier', () => {
+  it('a declaration naming some OTHER PR stays alongside the created PR', () => {
     const { store, run } = freshRun('task');
     store.appendEvent(run.id, {
       type: 'result',
@@ -1024,7 +1079,9 @@ describe('RunStore — agent-declared marker refs (spec 2026-07-18-task-ref-mark
     });
     store.applyMarkerRefs(run.id, { pr: 500 });
     const loaded = store.getRun(run.id);
-    expect(loaded?.prNumber).toBe(500);
+    // Created provenance is stronger than a later marker; both remain reachable in prRefs.
+    expect(loaded?.prNumber).toBe(42);
+    expect(loaded?.prRefs?.map((ref) => ref.number)).toEqual([42, 500]);
     expect(loaded?.referencedPullRequestUrl).toBeUndefined(); // no candidate ends in /500
   });
 });
@@ -1810,6 +1867,25 @@ describe('RunStore — the legacy `claude-cli` runner id (#547)', () => {
     expect(store.getRun('modern')?.runner).toBe('codex');
   });
 
+  it('a `cursor` record and a `claude-cli` record round-trip together — neither evicts the file (#807)', () => {
+    // The regression this guards: widening `storedRunnerSchema` for the fourth backend without
+    // keeping the legacy `claude-cli` member (or vice versa) would make one of the two records
+    // a parse failure, and since the loader `safeParse`s the WHOLE array, that drops every run
+    // in the file — not just the one carrying the id neither side kept.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: 'legacy-cli', runner: 'claude-cli' },
+        { ...LEGACY_RUN, id: 'cursor-run', runner: 'cursor' },
+      ]),
+      'utf8',
+    );
+
+    const store = RunStore.open(dataDir);
+    expect(store.getRun('legacy-cli')?.runner).toBe('claude');
+    expect(store.getRun('cursor-run')?.runner).toBe('cursor');
+  });
+
   it('rewrites the folded id on the next save, so the narrowing is one-way', () => {
     writeFileSync(
       join(dataDir, 'runs.json'),
@@ -1967,5 +2043,151 @@ describe('RunStore — pinned tasks (#935)', () => {
     const store = RunStore.open(dataDir);
     expect(store.getRun('no-pin')?.pinned).toBeUndefined();
     expect(store.getRun('hand-pinned')?.pinned).toBe(true);
+  });
+});
+
+describe('RunStore — a save never drops another process’s runs', () => {
+  let dataDir: string;
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'cez-store-'));
+  });
+
+  afterEach(() => {
+    rmSync(dataDir, { recursive: true, force: true });
+  });
+
+  const newRun = (store: RunStore, title: string): string =>
+    store.createRun({ title, workflow: 'quick-task', task: title, steps: [] }).id;
+
+  const idsOnDisk = (): string[] =>
+    (JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[]).map((r) => r.id);
+
+  const recordOnDisk = (id: string): RunRecord | undefined =>
+    (JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[]).find(
+      (r) => r.id === id,
+    );
+
+  it('keeps the run a second process started — the cockpit-plus-`cezar run` case', () => {
+    // The reported symptom exactly: a cockpit is already open (store A) when a headless
+    // `cezar run` (store B) opens the same data directory and starts a task. A's next save
+    // used to serialize its own map over the whole file, so B's run left an .ndjson behind
+    // with nothing in the index pointing at it.
+    const cockpit = RunStore.open(dataDir);
+    const fromCockpit = newRun(cockpit, 'started in the cockpit');
+    cockpit.flush();
+
+    const headless = RunStore.open(dataDir);
+    const fromHeadless = newRun(headless, 'started by cezar run');
+    headless.flush();
+
+    cockpit.updateRun(fromCockpit, { status: 'running' });
+    cockpit.flush();
+
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([fromCockpit, fromHeadless]));
+  });
+
+  it('adopts an id it has never seen and keeps its own version of one it holds', () => {
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    // Another process rewrote the index: a staler copy of a run we hold, plus one we have
+    // never heard of.
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([
+        { ...LEGACY_RUN, id: mine, title: 'a staler copy from the other process' },
+        { ...LEGACY_RUN, id: 'foreign-1', title: 'only the other process knows this one' },
+      ]),
+      'utf8',
+    );
+    store.flush();
+
+    expect(recordOnDisk(mine)?.title).toBe('mine');
+    expect(recordOnDisk('foreign-1')?.title).toBe('only the other process knows this one');
+  });
+
+  it('does not lose our runs to an index it cannot parse', () => {
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    writeFileSync(join(dataDir, 'runs.json'), '{ this is not json', 'utf8');
+    store.flush();
+
+    expect(idsOnDisk()).toContain(mine);
+  });
+
+  it('keeps an adopted run across later saves, not only the save that adopted it', () => {
+    // `saveNow` skips re-reading an index it recognizes as its own last write, so what it
+    // remembered has to include the records it adopted — otherwise the second save drops the
+    // foreign run again and the bug comes back one tick later.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ ...LEGACY_RUN, id: 'foreign-1' }]),
+      'utf8',
+    );
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+
+    store.updateRun(mine, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+  });
+
+  it('picks up a write that lands after our own save', () => {
+    // The other half of that cache: a signature that no longer matches must force the re-read.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    store.flush();
+
+    const onDisk = JSON.parse(readFileSync(join(dataDir, 'runs.json'), 'utf8')) as RunRecord[];
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([...onDisk, { ...LEGACY_RUN, id: 'arrived-later' }]),
+      'utf8',
+    );
+
+    store.updateRun(mine, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'arrived-later']));
+  });
+
+  it('one unreadable row on disk costs only itself', () => {
+    // Records are validated one at a time here, unlike `open()`'s whole-array parse, so a single
+    // hand-mangled row does not take the other process's good records down with it.
+    const store = RunStore.open(dataDir);
+    const mine = newRun(store, 'mine');
+    writeFileSync(
+      join(dataDir, 'runs.json'),
+      JSON.stringify([{ id: 'garbage', title: 42 }, { ...LEGACY_RUN, id: 'foreign-1' }]),
+      'utf8',
+    );
+    store.flush();
+
+    expect(idsOnDisk()).toEqual(expect.arrayContaining([mine, 'foreign-1']));
+    expect(idsOnDisk()).not.toContain('garbage');
+  });
+
+  it('a deleted run stays deleted — the merge never resurrects it', () => {
+    // The one way this merge could be worse than the bug it fixes: the index we re-read is
+    // the one WE wrote a moment ago, so a deletion would come straight back as a record
+    // whose event file `deleteRun` has already removed.
+    const store = RunStore.open(dataDir);
+    const kept = newRun(store, 'kept');
+    const doomed = newRun(store, 'doomed');
+    store.flush();
+
+    expect(store.deleteRun(doomed)).toBe(true);
+    store.flush();
+    expect(idsOnDisk()).toEqual([kept]);
+
+    // And it stays gone on every later save, not just the one that removed it.
+    store.updateRun(kept, { status: 'running' });
+    store.flush();
+    expect(idsOnDisk()).toEqual([kept]);
   });
 });

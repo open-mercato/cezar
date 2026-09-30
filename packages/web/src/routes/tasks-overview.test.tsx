@@ -1184,8 +1184,10 @@ describe('TasksOverviewRoute — wired to the app', () => {
 /**
  * Task dispatch in the list (spec `.ai/specs/2026-09-10-dispatch.md`): a child task renders
  * NESTED under the task that dispatched it, in that task's own place in the ordering — never as
- * a second top-level row. The nesting rule itself is table-tested in `lib/task-tree.test.ts`;
- * what is worth a DOM test is that both layouts of this page actually paint it.
+ * a second top-level row — and FOLDED by default behind the parent's subtask chip (#1110). The
+ * nesting and folding rules themselves are table-tested in `lib/task-tree.test.ts`; what is
+ * worth a DOM test is that both layouts of this page actually paint them, and that the chip
+ * actually toggles.
  */
 describe('dispatched subtasks nest under their parent', () => {
   const rowIds = () =>
@@ -1193,8 +1195,10 @@ describe('dispatched subtasks nest under their parent', () => {
       row.getAttribute('data-run-id'),
     )
   const depthOf = (id: string) => tableRow(id)?.getAttribute('data-depth')
+  const toggleOf = (el: Element | null) =>
+    el?.querySelector<HTMLButtonElement>('[data-slot="subtask-toggle"]') ?? null
 
-  it('puts a child directly under its parent, indented, wherever the parent sorted', () => {
+  it('folds a child behind its parent by default; the chip unfolds it in the parent’s place', () => {
     renderOverview({
       runs: [
         run({ id: 'newer', createdAt: ago(1_000) }),
@@ -1202,13 +1206,24 @@ describe('dispatched subtasks nest under their parent', () => {
         run({ id: 'child', createdAt: ago(10_000), dispatch: { rootRunId: 'parent', parentRunId: 'parent' } }),
       ],
     })
+    // Collapsed on arrival: the parent's row stands alone, wearing the count.
+    expect(rowIds()).toEqual(['newer', 'parent'])
+    const toggle = toggleOf(tableRow('parent'))
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+
+    fireEvent.click(toggle as HTMLButtonElement)
     // `child` is newer than `parent` and would sort above it on its own — it follows its parent.
     expect(rowIds()).toEqual(['newer', 'parent', 'child'])
     expect(depthOf('parent')).toBe('0')
     expect(depthOf('child')).toBe('1')
+    expect(toggleOf(tableRow('parent'))?.getAttribute('aria-expanded')).toBe('true')
+
+    // The accordion closes the same way it opened.
+    fireEvent.click(toggleOf(tableRow('parent')) as HTMLButtonElement)
+    expect(rowIds()).toEqual(['newer', 'parent'])
   })
 
-  it('counts the subtasks on the parent row and nothing on a childless one', () => {
+  it('counts the subtasks on the parent row and offers no toggle on a childless one', () => {
     renderOverview({
       runs: [
         run({ id: 'p' }),
@@ -1217,9 +1232,10 @@ describe('dispatched subtasks nest under their parent', () => {
         run({ id: 'alone' }),
       ],
     })
-    expect(tableRow('p')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('2 subtasks')
-    expect(tableRow('alone')?.querySelector('[data-slot="subtask-count"]')).toBeNull()
-    expect(tableRow('c1')?.querySelector('[data-slot="subtask-count"]')).toBeNull()
+    expect(toggleOf(tableRow('p'))?.textContent).toBe('2 subtasks')
+    expect(toggleOf(tableRow('alone'))).toBeNull()
+    fireEvent.click(toggleOf(tableRow('p')) as HTMLButtonElement)
+    expect(toggleOf(tableRow('c1'))).toBeNull()
   })
 
   // The rule that keeps a filtered list honest — a row must never vanish because the search
@@ -1232,19 +1248,46 @@ describe('dispatched subtasks nest under their parent', () => {
     expect(depthOf('orphan')).toBe('0')
   })
 
-  it('nests the card view identically — the two layouts are one list at two widths', () => {
+  // A search must never hide its own answer: while a query is live, every fold is open, so a
+  // matching child under a matching parent is on screen rather than behind a collapsed chip.
+  it('a live search overrides the fold so a nested match stays visible', () => {
+    renderOverview({
+      runs: [
+        run({ id: 'p', title: 'shared needle parent' }),
+        run({ id: 'c', title: 'shared needle child', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
+      ],
+    })
+    expect(rowIds()).toEqual(['p'])
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), {
+      target: { value: 'needle' },
+    })
+    expect(rowIds()).toEqual(['p', 'c'])
+    // Clearing the search folds the untouched accordion back to its default.
+    fireEvent.change(screen.getByRole('textbox', { name: 'Search tasks' }), {
+      target: { value: '' },
+    })
+    expect(rowIds()).toEqual(['p'])
+  })
+
+  it('nests and folds the card view identically — the two layouts are one list at two widths', () => {
     renderOverview({
       runs: [
         run({ id: 'p' }),
         run({ id: 'c', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
       ],
     })
-    const ids = [...document.querySelectorAll('[data-slot="task-card"]')].map((el) =>
-      el.getAttribute('data-run-id'),
-    )
-    expect(ids).toEqual(['p', 'c'])
+    const ids = () =>
+      [...document.querySelectorAll('[data-slot="task-card"]')].map((el) =>
+        el.getAttribute('data-run-id'),
+      )
+    expect(ids()).toEqual(['p'])
+    const toggle = toggleOf(card('p'))
+    expect(toggle?.textContent).toBe('1 subtask')
+    fireEvent.click(toggle as HTMLButtonElement)
+    expect(ids()).toEqual(['p', 'c'])
     expect(card('c')?.getAttribute('data-depth')).toBe('1')
-    expect(card('p')?.querySelector('[data-slot="subtask-count"]')?.textContent).toBe('1 subtask')
+    // One state, two layouts: the same click opened the table's fold too.
+    expect(tableRow('c')).not.toBeNull()
   })
 
   // The chip that tells a dispatched row from a typed one: its kind, next to the title, in both
@@ -1257,6 +1300,7 @@ describe('dispatched subtasks nest under their parent', () => {
         run({ id: 'imp', dispatch: { rootRunId: 'p', parentRunId: 'p' } }),
       ],
     })
+    fireEvent.click(toggleOf(tableRow('p')) as HTMLButtonElement)
     const kindOf = (el: Element | null | undefined) =>
       el?.querySelector('[data-slot="dispatch-kind"]')?.textContent ?? null
     expect(kindOf(tableRow('rev'))).toBe('review')

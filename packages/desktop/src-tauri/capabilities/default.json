@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "default",
+  "description": "The splash page, and the cockpit served by the local sidecar. The cockpit gets exactly what the overlay title bar needs \u2014 start a drag, toggle maximize on double-click \u2014 plus the shell's own update command behind the title strip's pill, and nothing else.",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:*",
+      "http://localhost:*"
+    ]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "core:window:allow-internal-toggle-maximize",
+    "allow-update-cezar-command",
+    "allow-retry-start",
+    "allow-show-versions-menu"
+  ]
+}

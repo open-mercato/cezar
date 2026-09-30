@@ -5,6 +5,7 @@ const HOME: AgentHomePaths = {
   claude: '/home/u/.claude',
   codex: '/home/u/.codex',
   opencodeConfig: '/home/u/.config/opencode',
+  cursor: '/home/u/.cursor',
 };
 
 describe('agent-config catalog', () => {
@@ -32,12 +33,18 @@ describe('agent-config catalog', () => {
     expect(proj.resolve('/repo', HOME)).toBe('/repo/.claude/settings.json');
   });
 
-  it('honours the injected home dirs (so $CODEX_HOME / $XDG_CONFIG_HOME flow through)', () => {
+  it('honours the injected home dirs (so $CODEX_HOME / $XDG_CONFIG_HOME / $CURSOR_CONFIG_DIR flow through)', () => {
     expect(findConfigFile('codex.user.config')!.resolve('/repo', HOME)).toBe('/home/u/.codex/config.toml');
     expect(findConfigFile('opencode.user.config')!.resolve('/repo', HOME)).toBe(
       '/home/u/.config/opencode/opencode.json',
     );
     expect(findConfigFile('claude.user.settings')!.resolve('/repo', HOME)).toBe('/home/u/.claude/settings.json');
+    expect(findConfigFile('cursor.user.settings')!.resolve('/repo', HOME)).toBe(
+      '/home/u/.cursor/cli-config.json',
+    );
+    expect(findConfigFile('cursor.project.settings')!.resolve('/repo', HOME)).toBe('/repo/.cursor/cli.json');
+    expect(findConfigFile('cursor.user.mcp')!.resolve('/repo', HOME)).toBe('/home/u/.cursor/mcp.json');
+    expect(findConfigFile('cursor.project.mcp')!.resolve('/repo', HOME)).toBe('/repo/.cursor/mcp.json');
   });
 
   it('marks only Claude’s gitignored personal layer as seeded', () => {
@@ -60,6 +67,8 @@ describe('agent-config catalog', () => {
       'claude.project.mcp',
       'codex.project.config',
       'codex.user.config',
+      'cursor.project.mcp',
+      'cursor.user.mcp',
       'opencode.project.config',
       'opencode.user.config',
     ]);

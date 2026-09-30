@@ -86,6 +86,42 @@ describe('openInTerminal env (spec 2026-07-29-agent-profiles)', () => {
 });
 
 /**
+ * CodeQL alert #18 — the native win32 branch hands `cwd` to `cmd /c start`, and libuv leaves a
+ * space-free argument unquoted, so a worktree path carrying `&` would run a second command.
+ * Both cases stay spawn-free: the refusal returns before any launcher, and a clean path is proven
+ * to REACH the launcher by the #820 guard throwing.
+ */
+describe('openInTerminal on win32 (BatBadBut, alert #18)', () => {
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+  const saved = process.env.CEZ_ALLOW_TEST_SPAWN;
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', platform);
+    if (saved === undefined) delete process.env.CEZ_ALLOW_TEST_SPAWN;
+    else process.env.CEZ_ALLOW_TEST_SPAWN = saved;
+  });
+  const onWindows = () => {
+    Object.defineProperty(process, 'platform', { ...platform, value: 'win32' });
+    delete process.env.CEZ_ALLOW_TEST_SPAWN;
+  };
+
+  it.each([
+    String.raw`C:\dev\a&calc`,
+    String.raw`C:\dev\a|calc`,
+    String.raw`C:\dev\a^b`,
+    String.raw`C:\dev\%COMSPEC%`,
+    String.raw`C:\dev\a!b`,
+  ])('refuses a worktree path cmd would interpret: %s', async (cwd) => {
+    onWindows();
+    await expect(openInTerminal(cwd, ':')).resolves.toBe(false);
+  });
+
+  it('still launches for an ordinary path, spaces and parentheses included', async () => {
+    onWindows();
+    await expect(openInTerminal(String.raw`C:\Program Files (x86)\dev\proj`, ':')).rejects.toThrow(/refusing to spawn/);
+  });
+});
+
+/**
  * #820 — the backstop. A test that reaches a real launcher opens a window on the developer's
  * machine; the suite once left a Terminal sitting in a fixture directory it had already deleted.
  * The guard makes that omission impossible to commit, because it fails loudly instead of

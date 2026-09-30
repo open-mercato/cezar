@@ -57,21 +57,27 @@ async function makeFixture(version = '0.1.5'): Promise<string> {
   );
   await writeFile(join(root, 'packages', 'cezar', 'index.js'), 'export {};\n');
 
-  await mkdir(join(root, 'alias-cezar'));
-  await writeFile(
-    join(root, 'alias-cezar', 'package.json'),
-    `${JSON.stringify(
-      {
-        name: 'fake-alias',
-        version,
-        files: ['bin.js'],
-        dependencies: { '@scope/fake-root': `^${version}` },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await writeFile(join(root, 'alias-cezar', 'bin.js'), '#!/usr/bin/env node\n');
+  // Both unscoped aliases, each its own npx-resolvable package.
+  for (const [dir, name] of [
+    ['alias-cezar', 'fake-alias'],
+    ['alias-cezar-run', 'fake-run-alias'],
+  ] as const) {
+    await mkdir(join(root, dir));
+    await writeFile(
+      join(root, dir, 'package.json'),
+      `${JSON.stringify(
+        {
+          name,
+          version,
+          files: ['bin.js'],
+          dependencies: { '@scope/fake-root': `^${version}` },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await writeFile(join(root, dir, 'bin.js'), '#!/usr/bin/env node\n');
+  }
   return root;
 }
 
@@ -109,7 +115,11 @@ test('a patch bump stamps every manifest, keeps the caret ranges, and emits the 
     );
     assert.ok(
       stdout.indexOf('@scope/fake-root') < stdout.indexOf('fake-alias'),
-      'the alias must be published last',
+      'the aliases must be published after the service',
+    );
+    assert.ok(
+      stdout.indexOf('@scope/fake-root') < stdout.indexOf('fake-run-alias'),
+      'the aliases must be published after the service',
     );
 
     const clientPkg = await readPkg(root, 'packages', 'api-client');
@@ -120,6 +130,9 @@ test('a patch bump stamps every manifest, keeps the caret ranges, and emits the 
     assert.equal(aliasPkg.version, '0.1.6');
     // Caret, not an exact pin — the stable-release contract, on both edges.
     assert.deepEqual(aliasPkg.dependencies, { '@scope/fake-root': '^0.1.6' });
+    const runAliasPkg = await readPkg(root, 'alias-cezar-run');
+    assert.equal(runAliasPkg.version, '0.1.6');
+    assert.deepEqual(runAliasPkg.dependencies, { '@scope/fake-root': '^0.1.6' });
     assert.deepEqual(cezarPkg.devDependencies, { '@scope/fake-client': '^0.1.6' });
 
     // The workspace root publishes nothing and must be left exactly as it was.
@@ -130,6 +143,8 @@ test('a patch bump stamps every manifest, keeps the caret ranges, and emits the 
     assert.match(output, /^version=0\.1\.6$/m);
     assert.match(output, /^published=false$/m);
     assert.match(output, /^dryRun=true$/m);
+    // The release notes' install command reads this output.
+    assert.match(output, /^runAliasName=fake-run-alias$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -158,12 +173,13 @@ test('a private package is stamped but never published', { timeout: 120_000 }, a
       !/npm publish[^\n]*\(@scope\/fake-client\)/.test(stdout),
       'a private package must not be published',
     );
-    // The other two still publish.
+    // The rest still publish.
     assert.match(stdout, /\(@scope\/fake-root\)/);
     assert.match(stdout, /\(fake-alias\)/);
+    assert.match(stdout, /\(fake-run-alias\)/);
 
     const output = await readFile(join(root, 'github-output.txt'), 'utf8');
-    assert.match(output, /^publishedNames=@scope\/fake-root,fake-alias$/m);
+    assert.match(output, /^publishedNames=@scope\/fake-root,fake-alias,fake-run-alias$/m);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

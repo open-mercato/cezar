@@ -116,9 +116,22 @@ function lastMarkerCandidate(turnText: string, keyword: string): string | null {
  * (`CEZ:MONITORING` after a dispatch, `CEZ:DONE` after a report). They are protocol, not JSON, and
  * a candidate that runs to end-of-text would otherwise carry them into `JSON.parse` — a failure
  * `closeUnbalancedJson` cannot repair, because nothing is unbalanced.
+ *
+ * Peeled line by line rather than with one anchored regex: the old
+ * `/(?:\s*\n\s*CEZ:(?:MONITORING|DONE)\s*)+$/` let three `\s*` runs fight over the same newlines,
+ * so a turn ending in a few thousand blank lines backtracked cubically — 8,000 newlines held the
+ * server's event loop for 85 s (CodeQL js/redos, alert #10). Only a marker on its OWN line is
+ * dropped, as before.
  */
 function trimTrailingControlMarkers(candidate: string): string {
-  return candidate.replace(/(?:\s*\n\s*CEZ:(?:MONITORING|DONE)\s*)+$/, '').trimEnd();
+  let text = candidate.trimEnd();
+  for (;;) {
+    const newline = text.lastIndexOf('\n');
+    if (newline < 0) return text;
+    const line = text.slice(newline + 1).trim();
+    if (line !== 'CEZ:MONITORING' && line !== 'CEZ:DONE') return text;
+    text = text.slice(0, newline).trimEnd();
+  }
 }
 
 /**

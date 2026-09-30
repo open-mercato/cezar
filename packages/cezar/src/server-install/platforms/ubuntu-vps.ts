@@ -71,6 +71,14 @@ async function curlCode(ctx: InstallContext, args: string[], opts?: { input?: st
   return r.stdout.trim() || '000';
 }
 
+/** Capture an HTTP response body and status without putting credentials in argv. */
+async function curlResponse(ctx: InstallContext, args: string[], opts?: { input?: string }): Promise<{ code: string; body: string }> {
+  const r = await ctx.runner.capture('curl', ['-s', ...args, '-w', '\n%{http_code}'], opts);
+  const lines = r.stdout.split('\n');
+  const code = lines.pop()?.trim() || '000';
+  return { code, body: lines.join('\n') };
+}
+
 /**
  * Name of the process listening on `port`, or null when nothing is. Best effort
  * (`ss` output varies, and without root the process name may be hidden) — used
@@ -774,6 +782,7 @@ export function systemdUnit(
   scope: 'user' | 'system',
   execStart: string,
   bindHost?: string,
+  instanceId?: string,
 ): string {
   const userLine = scope === 'system' ? `User=${userInfo().username}\n` : '';
   const installTarget = scope === 'system' ? 'multi-user.target' : 'default.target';
@@ -799,7 +808,7 @@ Wants=network-online.target
 Type=simple
 ${userLine}WorkingDirectory=${repoRoot}
 Environment=CEZ_REMOTE=1
-Environment=PATH=${sysd(pathDirs.join(':'))}
+${instanceId ? `Environment=CEZ_INSTANCE_ID=${sysd(instanceId)}\n` : ''}Environment=PATH=${sysd(pathDirs.join(':'))}
 ExecStart=${sysd(execStart)} serve --no-open --port ${port}${sysd(bind)}
 Restart=on-failure
 RestartSec=5
@@ -973,7 +982,7 @@ const autostartStep: InstallStep = {
         mkdirSync(join(homedir(), '.config', 'systemd', 'user'), { recursive: true });
         writeFileSync(
           unitPath,
-          systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'user', execStart, ctx.state.bindHost),
+          systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'user', execStart, ctx.state.bindHost, ctx.state.instanceId),
           'utf8',
         );
         await ctx.runner.interactive('systemctl', ['--user', 'daemon-reload']);
@@ -1008,7 +1017,7 @@ const autostartStep: InstallStep = {
     await writeFileStep(ctx, {
       description: 'Install the cezar systemd unit, start it now, and enable it at boot.',
       path: `/etc/systemd/system/${UNIT_NAME}`,
-      content: systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'system', execStart, ctx.state.bindHost),
+      content: systemdUnit(ctx.repoRoot, ctx.state.primaryPort, 'system', execStart, ctx.state.bindHost, ctx.state.instanceId),
       extra: `systemctl daemon-reload && systemctl enable --now ${UNIT_NAME}`,
       verify: (c) => verifyCommand(c, 'systemctl', ['is-enabled', UNIT_NAME]),
     });
@@ -1151,20 +1160,35 @@ const identityStep: InstallStep = {
     //    from stdin (curl -K -) so they never land in argv. `null` = not testable
     //    (a resume where the plaintext password is no longer in memory).
     let authedOk: boolean | null = null;
+    let identityOk: boolean | null = null;
     const cred = ctx.prefs.cockpit;
     if (cred) {
       // curl's config format requires `\` and `"` escaped inside the quoted
       // value — both are legal password characters; unescaped they break the
       // config parse and fail a WORKING install with "bad credentials".
       const curlCfgQuote = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      const code = await curlCode(ctx, [...tls, ...host, '-K', '-', base], {
+      const curlArgs = [...tls, ...host, '-K', '-', base];
+      const code = await curlCode(ctx, curlArgs, {
         input: `user = "${curlCfgQuote(cred.user)}:${curlCfgQuote(cred.password)}"\n`,
       });
       authedOk = /^[23]\d\d$/.test(code);
+      if (authedOk && ctx.state.instanceId) {
+        const health = await curlResponse(ctx, [...tls, ...host, '-K', '-', `${base}api/v1/health`], {
+          input: `user = "${curlCfgQuote(cred.user)}:${curlCfgQuote(cred.password)}"\n`,
+        });
+        try {
+          const payload = JSON.parse(health.body) as { instanceId?: unknown };
+          if (health.code.match(/^[23]\d\d$/) && typeof payload.instanceId === 'string') {
+            identityOk = payload.instanceId === ctx.state.instanceId;
+          }
+        } catch {
+          // Older or non-cezar responders make identity inconclusive.
+        }
+      }
     }
 
     const url = ctx.state.publicUrl ?? `http://<this-server>`;
-    const coreOk = upstreamUp && authEnforced && authedOk !== false;
+    const coreOk = upstreamUp && authEnforced && authedOk !== false && identityOk !== false;
     if (coreOk) {
       ctx.ui.success(
         `Cockpit is live at ${url} — ${authedOk ? 'an authenticated request reached cezar' : 'auth is enforced and cezar is up'}. ` +
@@ -1176,6 +1200,9 @@ const identityStep: InstallStep = {
             're-run: cezar server-install --platform ubuntu-vps --reconfigure ssl',
         );
       }
+      if (ctx.state.instanceId && identityOk === null) {
+        ctx.ui.warn('The cockpit is reachable, but the instance identity check could not run (older or invalid health payload).');
+      }
       return { artifacts: [] };
     }
 
@@ -1183,6 +1210,7 @@ const identityStep: InstallStep = {
     if (!upstreamUp) problems.push(`cezar is not listening on 127.0.0.1:${port} — the service is down, so nginx returns 502`);
     if (!authEnforced) problems.push(`nginx did not challenge an anonymous request (got "${anonCode}") — basic auth may not be active`);
     if (authedOk === false) problems.push('an authenticated request did not reach cezar (bad credentials, or the upstream is down)');
+    if (identityOk === false) problems.push(`the cockpit answering on 127.0.0.1:${port} is serving another install, not this one`);
     ctx.ui.error(
       `The cockpit is NOT fully working yet:\n` +
         problems.map((p) => `  • ${p}`).join('\n') +

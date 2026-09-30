@@ -16,6 +16,8 @@ import type {
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { disclaimedCommand } from './disclaim-spawn.ts';
+import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
 import {
@@ -48,7 +50,8 @@ export interface ClaudeCliRunnerOptions {
 
 /**
  * The claude binary a spawn should use: an explicit override, else `CEZ_CLAUDE_BIN`, else the
- * bundled mock under `CEZ_DRY_RUN`, else `claude` on PATH.
+ * bundled mock under `CEZ_DRY_RUN`, else `claude` on PATH or at a known install location
+ * (`resolveClaudeBin`).
  *
  * Exported so model discovery (`claude-model-catalog.ts`) resolves the executable exactly the
  * way execution does — the catalog and the runs it feeds cannot disagree about which CLI, and
@@ -58,7 +61,8 @@ export function resolveClaudeExecutable(override?: string): string {
   if (override) return override;
   // CEZ_DRY_RUN=1 swaps in the bundled mock so the cockpit / store /
   // GUI can be exercised without a logged-in claude or burning tokens.
-  return process.env.CEZ_CLAUDE_BIN ?? (process.env.CEZ_DRY_RUN === '1' ? mockClaudePath() : 'claude');
+  if (process.env.CEZ_CLAUDE_BIN) return process.env.CEZ_CLAUDE_BIN;
+  return process.env.CEZ_DRY_RUN === '1' ? mockClaudePath() : resolveClaudeBin();
 }
 
 /**
@@ -103,10 +107,9 @@ export class ClaudeCliRunner implements AgentRunner {
 
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = nodeSpawn(this.bin, args, {
-        cwd: spec.cwd,
-        env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
-      });
+      const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      const [file, argv] = disclaimedCommand(this.bin, args, env);
+      child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       throw wrapSpawnError(err, this.bin);
     }
@@ -115,6 +118,7 @@ export class ClaudeCliRunner implements AgentRunner {
     let autoEndTimer: NodeJS.Timeout | undefined;
     let eofTermTimer: NodeJS.Timeout | undefined;
     let eofKillTimer: NodeJS.Timeout | undefined;
+    let hardKillTimer: NodeJS.Timeout | undefined;
 
     // Protocol v2 emission — additive alongside v1 (`onEvent` keeps flowing
     // byte-identical); the channel is `opts.onUiEvent` (RunManager wiring
@@ -195,6 +199,15 @@ export class ClaudeCliRunner implements AgentRunner {
       if (!hasExited()) signalChild('SIGTERM');
     };
 
+    const hardStop = (): void => {
+      interrupt();
+      if (hardKillTimer || hasExited()) return;
+      hardKillTimer = setTimeout(() => {
+        if (!hasExited()) signalChild('SIGKILL');
+      }, 1_000);
+      hardKillTimer.unref?.();
+    };
+
     // Seed the first user message — the same path every follow-up takes.
     // Pasted task screenshots (spec.images) ride along as leading blocks.
     sendMessage([...(spec.images ?? []), { type: 'text', text: spec.userPrompt }]);
@@ -266,7 +279,7 @@ export class ClaudeCliRunner implements AgentRunner {
           }
 
           if (msg.type === 'result') {
-            if (typeof msg.total_cost_usd === 'number' && msg.total_cost_usd > 0) {
+            if (typeof msg.total_cost_usd === 'number' && Number.isFinite(msg.total_cost_usd) && msg.total_cost_usd >= 0) {
               onEvent?.({ type: 'cost', usd: msg.total_cost_usd });
             }
             onEvent?.({ type: 'turn-end' });
@@ -283,6 +296,7 @@ export class ClaudeCliRunner implements AgentRunner {
       } finally {
         if (deadline) clearTimeout(deadline);
         if (killTimer) clearTimeout(killTimer);
+        if (hardKillTimer) clearTimeout(hardKillTimer);
         if (autoEndTimer) clearTimeout(autoEndTimer);
         stdinOpen = false;
       }
@@ -335,6 +349,7 @@ export class ClaudeCliRunner implements AgentRunner {
       sendMessage,
       end,
       interrupt,
+      hardStop,
       pid: child.pid,
       get open() {
         return stdinOpen;

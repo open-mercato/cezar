@@ -63,6 +63,7 @@ export const workspaceConfigResponseSchema = z.object({
       claude: z.string().optional(),
       codex: z.string().optional(),
       opencode: z.string().optional(),
+      cursor: z.string().optional(),
       pi: z.string().optional(),
     }).optional(),
   }),
@@ -96,6 +97,7 @@ export const setWorkspaceConfigInputSchema = z.object({
           claude: z.string().trim().min(1).max(200).nullable().optional(),
           codex: z.string().trim().min(1).max(200).nullable().optional(),
           opencode: z.string().trim().min(1).max(200).nullable().optional(),
+          cursor: z.string().trim().min(1).max(200).nullable().optional(),
           pi: z.string().trim().min(1).max(200).nullable().optional(),
         })
         .optional(),
@@ -204,7 +206,31 @@ export const workspaceLastLocationSchema = z.strictObject({
 });
 export type WorkspaceLastLocation = z.infer<typeof workspaceLastLocationSchema>;
 
+/** Optional dashboard preferences; old/new clients preserve unknown keys. */
+// Reserve room for every supported widget in addition to the future-ID budget.
+const dashboardKnownTileIds = new Set(['fleet', 'needsYou', 'recent', 'usage', 'trends', 'overview', 'portfolio', 'automations']);
+const dashboardTileOrderSchema = z.array(z.string().min(1).max(64))
+  .max(200 + dashboardKnownTileIds.size)
+  .refine(items => items.filter(id => !dashboardKnownTileIds.has(id)).length <= 200, 'Too many unknown dashboard tiles')
+  .refine(items => new Set(items).size === items.length, 'Duplicate dashboard tile');
+export const dashboardPreferencesInputSchema = z.looseObject({
+  order: dashboardTileOrderSchema.optional(),
+  tiles: z.looseObject({ automations: z.boolean().optional(), fleet: z.boolean().optional(), needsYou: z.boolean().optional(), recent: z.boolean().optional(), usage: z.boolean().optional(), trends: z.boolean().optional() }).optional(),
+});
+export const dashboardPreferencesSchema = z.looseObject({
+  order: dashboardTileOrderSchema.catch([]).optional(),
+  tiles: z.looseObject({
+    automations: z.boolean().catch(true).optional(),
+    fleet: z.boolean().catch(true).optional(),
+    needsYou: z.boolean().catch(true).optional(),
+    recent: z.boolean().catch(true).optional(),
+    usage: z.boolean().catch(true).optional(),
+    trends: z.boolean().catch(true).optional(),
+  }).catch({}).optional(),
+}).catch({});
+
 export const workspaceUiStateSchema = z.looseObject({
+  dashboard: dashboardPreferencesSchema.optional(),
   sidebar: z
     .looseObject({
       /** LEGACY — the sidebar's per-project collapse map (step 3.3). Still accepted and still
@@ -234,6 +260,7 @@ export const workspaceUiStateSchema = z.looseObject({
       claude: z.string().optional(),
       codex: z.string().optional(),
       opencode: z.string().optional(),
+      cursor: z.string().optional(),
       pi: z.string().optional(),
     })
     .optional(),
@@ -268,6 +295,7 @@ const TASK_TABLE_MAX_COLUMNS = 50;
 export const setWorkspaceUiStateInputSchema = z
   .looseObject({
     ...workspaceUiStateSchema.shape,
+    dashboard: dashboardPreferencesInputSchema.optional(),
     sidebar: z
       .looseObject({
         collapsed: z
@@ -328,6 +356,7 @@ export const runnerModelsSchema = z.object({
   claude: z.string().optional(),
   codex: z.string().optional(),
   opencode: z.string().optional(),
+  cursor: z.string().optional(),
   pi: z.string().optional(),
 });
 export type RunnerModels = z.infer<typeof runnerModelsSchema>;
@@ -375,6 +404,7 @@ export const setConfigInputSchema = z.object({
       claude: z.string().trim().max(200).nullable().optional(),
       codex: z.string().trim().max(200).nullable().optional(),
       opencode: z.string().trim().max(200).nullable().optional(),
+      cursor: z.string().trim().max(200).nullable().optional(),
       pi: z.string().trim().max(200).nullable().optional(),
     })
     .optional(),
@@ -486,11 +516,11 @@ export type ProviderConnectResponse = z.infer<typeof providerConnectResponseSche
 /**
  * The runners whose model list is discovered from the host rather than hard-coded: Codex through
  * its app-server protocol, OpenCode through its own `models` listing (#794), Claude through the
- * CLI's `list_models` control request (#784). A runner absent here has no discovery path and
+ * CLI's `list_models` control request (#784), and Cursor through its CLI model listing. A runner absent here has no discovery path and
  * 400s, so the client compiles against exactly what the route accepts. One definition, used by
  * the route's query validator and by the cockpit's picker.
  */
-export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode']);
+export const modelDiscoveryRunnerSchema = z.enum(['claude', 'codex', 'opencode', 'cursor']);
 export type ModelDiscoveryRunner = z.infer<typeof modelDiscoveryRunnerSchema>;
 export const MODEL_DISCOVERY_RUNNERS: readonly ModelDiscoveryRunner[] =
   modelDiscoveryRunnerSchema.options;
@@ -507,7 +537,7 @@ export const runnerModelOptionSchema = z.object({
 });
 export type RunnerModelOption = z.infer<typeof runnerModelOptionSchema>;
 
-/** `GET /api/v1/models?runner=claude|codex|opencode` — the models discovered from that runner's
+/** `GET /api/v1/models?runner=claude|codex|opencode|cursor` — the models discovered from that runner's
  *  own host installation, plus how fresh the answer is. Never an error: an unavailable CLI
  *  degrades to `source: 'unavailable'` with a `reason`. */
 export const runnerModelCatalogResponseSchema = z.object({

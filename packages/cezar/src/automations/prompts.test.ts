@@ -1,3 +1,4 @@
+import { trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
 import { describe, expect, it } from 'vitest';
 import { automationDefinitionObjectSchema, automationDefinitionSchema, automationEventSchema } from './types.ts';
 import {
@@ -32,7 +33,7 @@ describe('the definition reference', () => {
   it('names every event the storage schema accepts, and no other', () => {
     for (const event of automationEventSchema.options) expect(AUTOMATION_SCHEMA_REFERENCE).toContain(event);
     const mentioned = AUTOMATION_SCHEMA_REFERENCE.match(/\b(?:pull_request|issue)\.[a-z_]+/g) ?? [];
-    for (const event of new Set(mentioned)) expect(automationEventSchema.options).toContain(event);
+    for (const event of new Set(mentioned)) expect([...automationEventSchema.options, ...trackerAutomationEventSchema.options]).toContain(event);
   });
 
   it('names every top-level, filter and task key of the storage schema', () => {
@@ -119,4 +120,17 @@ describe('the built-in skill body', () => {
     expect(CREATE_AUTOMATION_SKILL_BODY).toMatch(/ask one precise question and stop/);
     expect(CREATE_AUTOMATION_SKILL_BODY).toMatch(/do not add cron jobs, GitHub Actions, webhooks or polling scripts/);
   });
+});
+
+it('gives one consistent tracker CLI path and a valid tracker example', () => {
+  for (const text of [AUTOMATION_SCHEMA_REFERENCE, AUTOMATIONS_PROMPT, CREATE_AUTOMATION_SKILL_BODY]) {
+    expect(text).toContain('tracker');
+    expect(text).not.toMatch(/not creatable through this CLI|hand-author|current workflow "status"/);
+    expect(text).toContain('automation-options');
+  }
+  const marker = AUTOMATION_SCHEMA_REFERENCE.indexOf('"kind": "tracker",');
+  const start = AUTOMATION_SCHEMA_REFERENCE.lastIndexOf('\n{', marker) + 1;
+  const end = AUTOMATION_SCHEMA_REFERENCE.indexOf('\n}', marker) + 2;
+  const example = JSON.parse(AUTOMATION_SCHEMA_REFERENCE.slice(start, end));
+  expect(automationDefinitionSchema.safeParse({ ...example, id: 'tracker-example', revision: 1, createdAt: '2026-09-19T00:00:00.000Z', updatedAt: '2026-09-19T00:00:00.000Z' }).success).toBe(true);
 });

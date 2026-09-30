@@ -20,12 +20,61 @@
  *  everywhere (they would break the line-based launch script and are never a real path). */
 const CONTROL_CHARS_RE = /[\u0000-\u001f\u007f]/;
 /** `cmd.exe` has no escape inside a quoted `set` argument: `"` ends the quote and `%`/`!` expand.
- *  A path containing one is pathological, so refusing is honest rather than limiting. */
+ *  A path containing one is pathological, so refusing is honest rather than limiting.
+ *  Scope: {@link renderEnvPrefix}'s `set "NAME=value"` assignments only. Executable quoting has
+ *  its own, wider set — {@link WIN32_QUOTE_REWRITES_RE}, which adds `&`. */
 const WIN32_UNSAFE_RE = /["%!]/;
+
+/**
+ * Every character {@link quoteExecutable} rewrites on win32 — `"`, `%` and `!` because they stay
+ * live inside the quotes, and `&` which does not, so rewriting it only corrupts the value. None
+ * of them survives the round trip intact, which is what {@link isShellEmbeddable} reports.
+ *
+ * Single source of truth for both: `quoteExecutable` does the rewriting through the `g` variant
+ * derived below, `isShellEmbeddable` tests through this one, so the gate cannot drift from the
+ * behaviour it is gating. The derivation carries `flags` across as well as `source`, so adding a
+ * flag here cannot silently apply to only one of the two.
+ */
+const WIN32_QUOTE_REWRITES_RE = /[%&!"]/;
+const WIN32_QUOTE_REWRITES_ALL_RE = new RegExp(
+  WIN32_QUOTE_REWRITES_RE.source,
+  `${WIN32_QUOTE_REWRITES_RE.flags}g`,
+);
 
 /** POSIX single-quoting — the `'\''` dance, so any character but a control one is inert. */
 export function shellQuote(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * Quote a binary PATH so a shell runs it as one word — the resolved `claude` can live under
+ * `/Users/Jane Doe/.local/bin`, and an unquoted space there would split into two arguments.
+ * `cmd.exe` needs its own handling, which is why this is not just {@link shellQuote}.
+ *
+ * KNOWN LIMITATION on win32: the `^`-prefixing below is not actually an escape. Inside a
+ * `cmd.exe` double-quoted argument `^` is inert, so a path containing `"`, `%` or `!` comes back
+ * corrupted rather than protected — `C:\Users\R&D\claude.exe` becomes `C:\Users\R^&D\claude.exe`,
+ * and {@link WIN32_QUOTE_REWRITES_RE} above names every character with no escape to reach for.
+ * (That is the set this function rewrites, `&` included — the narrower `WIN32_UNSAFE_RE` covers
+ * only {@link renderEnvPrefix}'s `set` assignments.) Callers that can degrade should gate on
+ * {@link isShellEmbeddable} first; this behaviour is preserved as-is because `provider-auth`'s
+ * `loginCommand` pins it.
+ */
+export function quoteExecutable(executable: string, platform: NodeJS.Platform): string {
+  if (platform === 'win32') return `"${executable.replace(WIN32_QUOTE_REWRITES_ALL_RE, '^$&')}"`;
+  return shellQuote(executable);
+}
+
+/**
+ * Can `value` be embedded in a shell command on `platform` and come back out unchanged?
+ *
+ * The gate {@link quoteExecutable} cannot apply to itself: `provider-auth`'s `loginCommand`
+ * pins its current (lossy) win32 output, so new callers opt in to correctness here instead of
+ * emitting a path the shell would read differently than intended.
+ */
+export function isShellEmbeddable(value: string, platform: NodeJS.Platform): boolean {
+  if (CONTROL_CHARS_RE.test(value)) return false;
+  return platform === 'win32' ? !WIN32_QUOTE_REWRITES_RE.test(value) : true;
 }
 
 /**

@@ -3,6 +3,7 @@ import type {
   WorkspaceLastLocation,
 } from '@open-mercato/cezar-api-client'
 
+import { orderProjects } from './project-order'
 import { pathnameProjectId } from './project-router'
 
 export type LocationParts = Pick<Location, 'pathname' | 'search' | 'hash'>
@@ -124,6 +125,33 @@ export function locationToRestore(
   if (!projectIsAvailable) return null
 
   return `${location.pathname}${location.search ?? ''}${location.hash ?? ''}`
+}
+
+/**
+ * Where a bare `/` lands when there is nothing remembered to restore.
+ *
+ * The boot project, as it always was — EXCEPT when the registry does not list it. That is the
+ * unregistered launch folder: `/api/v1/projects` stops listing it once the user has projects
+ * (the seed-once rule, so starting cezar somewhere never adds a row behind their back), and
+ * opening the cockpit on a project with no sidebar row would be the same takeover by another
+ * route. The registry's own lead row — most recently opened, the sidebar's order — is the
+ * honest landing instead; `missing` roots are skipped for the same reason a remembered location
+ * pointing at one is not restored.
+ *
+ * Falls back to the boot project whenever there is no better answer (registry unavailable, or
+ * every row missing): it is the one project this server can always serve.
+ */
+export function bareRootLanding(
+  registry: ProjectsResponse | undefined,
+  bootProject: string,
+): string {
+  if (registry === undefined) return bootProject
+  const { projects } = registry
+  if (projects.length === 0 || projects.some((project) => project.id === bootProject)) {
+    return bootProject
+  }
+  const usable = projects.filter((project) => project.status !== 'missing')
+  return orderProjects(usable, [])[0]?.id ?? bootProject
 }
 
 /** `left` is deliberately `unknown`: the comparison's caller reads it back out of storage, where

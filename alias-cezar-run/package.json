@@ -1,0 +1,16 @@
+{
+  "name": "cezar-run",
+  "version": "0.13.0",
+  "description": "Alias for @open-mercato/cezar — so `npx cezar-run` just works. Local cockpit for running and tracking AI agent tasks in your repo.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "cezar-run": "bin.js"
+  },
+  "dependencies": {
+    "@open-mercato/cezar": "^0.13.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

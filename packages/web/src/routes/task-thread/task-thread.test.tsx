@@ -15,9 +15,9 @@ import type {
   RunStatus,
 } from '@open-mercato/cezar-api-client'
 
-import { TaskThreadRoute, ThreadView } from './task-thread'
+import { TaskThreadRoute, ThreadView, liveTurnStart } from './task-thread'
 import { buildTranscriptRows, mainTranscriptSections } from './session-transcript'
-import { reduceThread } from './thread-state'
+import { reduceThread, type ThreadTurn } from './thread-state'
 
 afterEach(() => {
   cleanup()
@@ -37,6 +37,7 @@ function renderView(
       { provider: 'claude', status: 'connected', enabled: true },
       { provider: 'codex', status: 'not-installed', enabled: true },
       { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
     ],
   },
   health: Partial<HealthResponse> = {},
@@ -118,6 +119,32 @@ describe('ThreadView', () => {
     expect(screen.getByRole('link', { name: 'Open provider settings' }).getAttribute('href')).toBe(
       '/settings/agents#providers',
     )
+  })
+
+  it('a running run clocks its open turn and last activity on the Working… line; a closed run shows none', () => {
+    // Only `Date` is faked: the header's queries and the indicator's interval keep real timers.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      vi.setSystemTime(new Date('2026-07-14T12:01:00.000Z'))
+      const events = [
+        { ...line(1, 'turn.started', { turnId: 'turn_1' }), ts: '2026-07-14T12:00:00.000Z' },
+        {
+          ...line(2, 'item.completed', {
+            item: { kind: 'message', id: 'item_1', role: 'assistant', text: 'Working on it.' },
+          }),
+          ts: '2026-07-14T12:00:40.000Z',
+        },
+      ]
+      renderView(<ThreadView run={run('running')} thread={reduceThread(events, { activeTurn: true })} />)
+      expect(document.querySelector('[data-slot="working-elapsed"]')?.textContent).toBe('1m 00s')
+      expect(document.querySelector('[data-slot="working-last-activity"]')?.textContent).toContain('(20s ago)')
+
+      cleanup()
+      renderView(<ThreadView run={run('done')} thread={reduceThread(events)} />)
+      expect(document.querySelector('[data-slot="working-indicator"]')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('an issue-subject closed run links its DISCOVERED issue URL, never the incidental PR (#526)', () => {
@@ -234,6 +261,23 @@ describe('ThreadView', () => {
     expect(textarea.placeholder).toBe('Reply — / for skills, @ for files…')
   })
 
+  it('budget-stopped waiting → explains the spend brake with spent and ceiling', () => {
+    renderView(
+      <ThreadView
+        run={run('waiting', {
+          costUsd: 20.83,
+          dispatch: { rootRunId: 'root', budgetUsd: 10, overBudget: true },
+        })}
+        thread={reduceThread(EVENTS)}
+      />,
+    )
+    expect(document.querySelector('[data-slot="budget-hint"]')?.textContent).toContain(
+      'Budget reached — spent $20.83 of $10.00; send a message to continue.',
+    )
+    expect(document.querySelector('[data-slot="paused-hint"]')).toBeNull()
+    expect(document.querySelector('[data-slot="pill"]')?.textContent).toContain('budget reached')
+  })
+
   it('failed by a usage limit → the dock says when it resumes itself, and links the setting', () => {
     renderView(
       <ThreadView
@@ -342,6 +386,7 @@ describe('ThreadView', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+        { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     )
@@ -1087,6 +1132,31 @@ describe('ThreadView', () => {
     expect(document.querySelector('[data-slot="step-rail"]')).toBeNull()
   })
 
+  // Regression (run 4eb1a980): codex ended its last turn at "1/4" without a final
+  // `plan.updated`, and the finished run kept pulsing "in progress" above a closed session.
+  it.each([
+    ['running', false],
+    ['done', true],
+    ['review', true],
+  ] as const)('a %s run → the plan dock settled=%s', (status, settled) => {
+    const withPlan: RunEvent[] = [
+      ...EVENTS,
+      line(8, 'plan.updated', {
+        entries: [
+          { content: 'Merge main', status: 'completed' },
+          { content: 'Resolve conflicts', status: 'in_progress' },
+          { content: 'Push', status: 'pending' },
+        ],
+      }),
+    ]
+    renderView(<ThreadView run={run(status)} thread={reduceThread(withPlan)} />)
+    const dock = document.querySelector('[data-slot="plan-dock"]')!
+    expect(dock.getAttribute('data-settled')).toBe(settled ? 'true' : null)
+    expect(dock.querySelector('[data-slot="plan-tag"]') === null).toBe(settled)
+    expect(dock.querySelector('.animate-pulse') === null).toBe(settled)
+    expect(dock.querySelector('[data-slot="plan-unfinished"]') !== null).toBe(settled)
+  })
+
   it('plan-kind tool cards stay out of the thread — the dock is their surface (#382)', () => {
     const todoInput = {
       todos: [
@@ -1338,5 +1408,29 @@ describe('TaskThreadRoute — read receipts', () => {
     visit('r1')
     await waitFor(() => expect(posted(sent, '/api/v1/runs/r1/read')).toBe(1))
     expect(await screen.findByRole('button', { name: 'Mark unread' })).not.toBeNull()
+  })
+})
+
+describe('liveTurnStart — where the Working… counter starts', () => {
+  const run = { startedAt: '2026-09-23T09:00:00.000Z' } as ApiRun
+  const turn = (extra: Partial<ThreadTurn>): ThreadTurn => ({ id: 't', items: [], ...extra })
+
+  it('uses the open turn’s start', () => {
+    expect(liveTurnStart(run, { turns: [turn({ startedAt: '2026-09-23T10:00:00.000Z' })] })).toBe(
+      '2026-09-23T10:00:00.000Z',
+    )
+  })
+
+  it('between turns, counts from when the last one closed', () => {
+    const closed = turn({
+      startedAt: '2026-09-23T10:00:00.000Z',
+      completed: { stopReason: 'end_turn', ts: '2026-09-23T10:05:00.000Z' },
+    })
+    expect(liveTurnStart(run, { turns: [closed] })).toBe('2026-09-23T10:05:00.000Z')
+  })
+
+  it('falls back to the run’s own start', () => {
+    expect(liveTurnStart(run, { turns: [] })).toBe(run.startedAt)
+    expect(liveTurnStart(run, { turns: [turn({})] })).toBe(run.startedAt)
   })
 })

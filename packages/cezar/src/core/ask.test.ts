@@ -331,6 +331,24 @@ describe('marker anchoring (last occurrence, trailing control lines)', () => {
     expect(parseAskMarkerResult(`Pick one.\nCEZ:ASK ${askJson}\nCEZ:DONE`).kind).toBe('valid');
   });
 
+  it('peels several trailing control lines, blank lines and indentation included', () => {
+    const text = `Pick one.\nCEZ:ASK ${askJson}\n\n  CEZ:MONITORING  \n\nCEZ:DONE\n`;
+    expect(parseAskMarkerResult(text).kind).toBe('valid');
+  });
+
+  it('keeps a control word that shares a line with other text', () => {
+    expect(parseAskMarkerResult(`CEZ:ASK ${askJson} CEZ:DONE`).kind).toBe('invalid-json');
+  });
+
+  // CodeQL js/redos (#10): the old anchored regex backtracked cubically over trailing newlines —
+  // 4,000 of them took ~13 s, 8,000 took 85 s, all of it on the server's event loop.
+  it('trims a turn ending in thousands of blank lines in linear time', () => {
+    const text = `CEZ:ASK {${'\n'.repeat(4000)}x`;
+    const started = performance.now();
+    expect(parseAskMarkerResult(text).kind).toBe('invalid-json');
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
   it('still diagnoses prose that trails the keyword as invalid-json', () => {
     expect(parseAskMarkerResult('I might use CEZ:ASK later on.').kind).toBe('invalid-json');
   });

@@ -11,7 +11,7 @@ import {
 
 import { useHealth, useProjects } from './api/queries'
 import { ProjectScopeProvider } from './api/project-scope-context'
-import { locationToRestore, readStoredLastLocation } from './lib/last-location'
+import { bareRootLanding, locationToRestore, readStoredLastLocation } from './lib/last-location'
 import { Navigate as ScopedNavigate, stripProjectPrefix } from './lib/project-router'
 import { AutomationsLoading } from './routes/automations/automations-loading'
 import { CompareLoading } from './routes/compare-loading'
@@ -33,6 +33,11 @@ import {
 } from './routes/settings/settings-shell'
 import { TasksOverviewRoute } from './routes/tasks-overview'
 import { GlobalTasksRoute } from './routes/global-tasks'
+
+// Dashboard charts, drag controls and exports are paid for only on this route.
+const DashboardRoute = lazy(() =>
+  import('./routes/dashboard').then((m) => ({ default: m.DashboardRoute })),
+)
 
 /** Lazy ON PURPOSE: the thread view carries the markdown stack (Streamdown + remark/rehype,
  *  ~140 KB gz) — as a static import it would sit in the main bundle every visitor pays for
@@ -70,6 +75,9 @@ const RepoGitRoute = lazy(() =>
  *  stack the thread carries — thread-chunk weight the home screen must not pay. */
 const GithubRoute = lazy(() =>
   import('./routes/github/github').then((m) => ({ default: m.GithubRoute })),
+)
+const TrackerRoute = lazy(() =>
+  import('./routes/tracker/tracker').then((m) => ({ default: m.TrackerRoute })),
 )
 
 /** Lazy because the builder carries dnd-kit (R6 Step 1.6) — drag machinery only this surface
@@ -254,6 +262,15 @@ function LegacyPathRedirect() {
       resolvedBoot,
     )
     if (restored !== null) return <Navigate to={restored} replace />
+
+    // Nothing remembered. The boot folder is the landing project only while the registry lists
+    // it: since `/api/v1/projects` stopped listing an unregistered boot folder once the user has
+    // projects (the seed-once rule), landing there would open the cockpit on a project with no
+    // sidebar row — the launch folder quietly taking over a workspace the user filled on purpose.
+    // The most recently opened registered project is what the sidebar leads with, so it is what
+    // a bare launch opens. `/p/<bootProject>/` and every legacy deep link below still resolve.
+    const landing = bareRootLanding(projects.data, boot)
+    if (landing !== boot) return <Navigate to={`/p/${encodeURIComponent(landing)}/`} replace />
   }
 
   // A bare `/p` (or `/p/`) names no project — send it to the boot project's home rather than
@@ -277,10 +294,12 @@ const PAGE_TITLE_ROUTES = [
   // The global page. It is not project-scoped, so it never carries a `/p/` prefix to strip —
   // but it goes through the same table, because the browser title is one mechanism.
   { pattern: '/tasks', pageLabel: 'All tasks' },
+  { pattern: '/dashboard', pageLabel: 'Dashboard' },
   { pattern: '/new', pageLabel: 'New task' },
   { pattern: '/compare/:groupId', pageLabel: 'Compare' },
   { pattern: '/git/*', pageLabel: 'Git' },
   { pattern: '/github/*', pageLabel: 'GitHub' },
+  { pattern: '/tracker/*', pageLabel: 'Tracker' },
   { pattern: '/automations/*', pageLabel: 'Automations' },
   { pattern: '/skills', pageLabel: 'Skills' },
   { pattern: '/inbox', pageLabel: 'Inbox' },
@@ -420,6 +439,14 @@ export const AppRoutes = memo(function AppRoutes() {
           }
         />
         <Route
+          path="tracker"
+          element={<Suspense fallback={<ScopeResolving />}><TrackerRoute /></Suspense>}
+        />
+        <Route
+          path="tracker/:id"
+          element={<Suspense fallback={<ScopeResolving />}><TrackerRoute /></Suspense>}
+        />
+        <Route
           path="github/prs"
           element={
             <Suspense fallback={<GithubLoading />}>
@@ -557,6 +584,7 @@ export const AppRoutes = memo(function AppRoutes() {
           keep redirecting to the boot project's thread (`LegacyPathRedirect` below owns it).
           React Router ranks this static segment above that `*`, so the two never compete. */}
       <Route path="/tasks" element={<GlobalTasksRoute />} />
+      <Route path="/dashboard" element={<Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading dashboard…</div>}><DashboardRoute /></Suspense>} />
 
       {/* Global settings (multi-project spec, step 3.5) — the one cockpit area that is NOT
           under `/p/:projectId`, because nothing here belongs to a project: appearance and

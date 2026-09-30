@@ -93,7 +93,7 @@ for (const step of steps) {
 }
 
 if (mode === 'uninstall') {
-  console.log('install-as-command: global cezar / cez / cezar-cli removed.');
+  console.log('install-as-command: global cezar / cez / cezar-cli / cezar-run removed.');
   process.exit(0);
 }
 

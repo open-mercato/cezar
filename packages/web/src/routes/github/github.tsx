@@ -33,6 +33,7 @@ import type {
   GithubPrMergeState,
   UiState,
 } from '@open-mercato/cezar-api-client'
+import { IssueBrowserLayout } from '@/components/issue-browser-layout'
 import { CenteredState } from '@/components/centered-state'
 import { Diff, type DiffFileChange } from '@/components/diff'
 import type { EnginePick } from '@/components/engine-pills'
@@ -450,20 +451,7 @@ export function GithubRoute({
   )
 
   return (
-    // Bounded to the viewport (`h-full min-h-0`) so the PAGE never scrolls — each pane owns its
-    // own scroll (`overflow-y-auto`), so scrolling starts inside the issues/PR list (and the
-    // detail), and the list header stays pinned. `overscroll-contain` keeps a pane's scroll from
-    // chaining out to the shell.
-    <div data-route="github" className="flex h-full min-h-0 items-stretch">
-      {/* List pane. Below md it IS the page when no item is in the URL, and yields entirely
-          to the detail when one is — the same two-surfaces-one-URL rule the git tabs use. */}
-      <section
-        data-slot="gh-list"
-        className={cn(
-          'w-full min-h-0 flex-col overflow-y-auto overscroll-contain border-border md:flex md:w-[360px] md:shrink-0 md:border-r',
-          n === undefined ? 'flex' : 'hidden',
-        )}
-      >
+    <IssueBrowserLayout name="gh" route="github" selected={n !== undefined} list={<>
         <header data-slot="gh-header" className="sticky top-0 z-10 border-b border-border bg-background/95 px-4 pt-3 backdrop-blur">
           <div className="flex min-w-0 items-center gap-2.5">
             <h1 className="text-lg font-semibold">GitHub</h1>
@@ -581,16 +569,7 @@ export function GithubRoute({
             </ul>
           </div>
         ) : null}
-      </section>
-
-      {/* Detail pane. Hidden below md until an item is in the URL. */}
-      <section
-        data-slot="gh-detail"
-        className={cn(
-          'min-w-0 min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain',
-          n === undefined ? 'hidden md:flex' : 'flex',
-        )}
-      >
+    </>} detail={<>
         {selected ? (
           <GithubDetail
             item={selected}
@@ -630,8 +609,7 @@ export function GithubRoute({
             }
           />
         )}
-      </section>
-    </div>
+    </>} />
   )
 }
 
@@ -1034,7 +1012,7 @@ function GithubMergeBox({ number }: { number: number }) {
               <MergeRequirementIcon state={conflictState} />
               <span>Conflicts: {state.mergeable === 'conflicting' ? 'present' : state.mergeable === 'mergeable' ? 'none' : 'unknown'}</span>
             </li>
-            {state.checks.length === 0 ? <li>No checks configured</li> : state.checks.map((check) => (
+            {state.checks.length === 0 && state.checksTier !== 'none' ? <li>No checks configured</li> : state.checks.map((check) => (
               <li key={check.name} className="flex items-center justify-between gap-3">
                 <span className="flex min-w-0 items-center gap-2">
                   <MergeRequirementIcon state={check.state} />
@@ -1043,7 +1021,25 @@ function GithubMergeBox({ number }: { number: number }) {
                 {check.url && isHttpUrl(check.url) ? <a href={check.url} target="_blank" rel="noopener noreferrer" className="text-muted-foreground underline">details</a> : null}
               </li>
             ))}
-            {state.blockers.map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
+            {/* What the token could NOT read (#969). A fine-grained PAT cannot expand
+                `statusCheckRollup` into CheckRun contexts — there is no permission to grant — so
+                the panel says which tier it is showing instead of passing a degraded read off as
+                the whole truth, or (tier `none`) an empty list off as "no CI". */}
+            {state.checksTier === 'aggregate' || state.checksTier === 'none' ? (
+              <li data-slot="gh-merge-checks-degraded" className="flex items-start gap-2">
+                <MergeRequirementIcon state="unknown" />
+                <span className="min-w-0">
+                  {state.checksTier === 'aggregate'
+                    ? 'Only the rolled-up check state is readable here — per-check detail is not.'
+                    : 'This token cannot read the checks on this pull request.'}
+                  {state.checksReason ? <span className="mt-0.5 block break-words text-soft-foreground">{state.checksReason}</span> : null}
+                </span>
+              </li>
+            ) : null}
+            {/* The row above already said `checks-unknown`, with the reason — don't say it twice. */}
+            {state.blockers
+              .filter((blocker) => !(blocker.code === 'checks-unknown' && state.checksTier === 'none'))
+              .map((blocker) => <li key={blocker.code} className="text-soft-foreground">{blocker.message}</li>)}
           </ul>
           {state.canOverride ? (
             <label className="mt-4 flex cursor-pointer items-start gap-2 rounded-md border border-warning/40 bg-warning/5 p-3 text-xs">
@@ -1065,7 +1061,7 @@ function GithubMergeBox({ number }: { number: number }) {
                 aria-label="Merge method"
                 value={selectedMethod ?? ''}
                 onChange={(event) => setMethod(event.target.value as GithubMergeMethod)}
-                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm"
+                className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
               >
                 {state.methods.map((candidate) => <option key={candidate} value={candidate}>{mergeLabels[candidate]}</option>)}
               </select>
@@ -1147,7 +1143,7 @@ function GithubPrChanges({ item }: { item: GithubItem }) {
       <div className="mt-4 grid min-w-0 gap-4 lg:grid-cols-[240px_minmax(0,1fr)]">
         <aside className="min-w-0">
           <input aria-label="Filter changed files" value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter files…" className="min-h-11 w-full rounded-md border border-input bg-background px-3 text-sm" />
-          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm lg:hidden">
+          <select aria-label="Select changed file" value={selected ?? ''} onChange={(e) => setSelected(e.target.value)} className="mt-2 min-h-11 w-full rounded-md border border-input bg-background px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 lg:hidden">
             {files.map((file) => <option key={file.path}>{file.path}</option>)}
           </select>
           <ul className="mt-2 hidden max-h-[60vh] overflow-auto lg:block">

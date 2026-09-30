@@ -160,4 +160,88 @@ describe('readAccountIdentity', () => {
     expect(identity.available).toBe(false);
     expect(identity.reason).toContain('outside its config folder');
   });
+
+  describe('cursor', () => {
+    it('reads email, name and plan from agent status/about JSON — named fields only', async () => {
+      const identity = await readAccountIdentity('cursor', join(home, '.cursor'), {
+        runCommand: async (args) => {
+          if (args[0] === 'status') {
+            return {
+              stdout: JSON.stringify({
+                status: 'authenticated',
+                isAuthenticated: true,
+                hasAccessToken: true,
+                hasRefreshToken: true,
+                accessToken: 'tok-should-not-surface',
+                userInfo: {
+                  email: 'me@example.com',
+                  userId: 99,
+                  firstName: 'Me',
+                  lastName: 'Cursor',
+                },
+              }),
+              stderr: '',
+              exitCode: 0,
+            };
+          }
+          return {
+            stdout: JSON.stringify({
+              cliVersion: '2026.08.04',
+              subscriptionTier: 'Pro',
+              userEmail: 'me@example.com',
+              refreshToken: 'refresh-should-not-surface',
+            }),
+            stderr: '',
+            exitCode: 0,
+          };
+        },
+      });
+      expect(identity).toEqual({
+        available: true,
+        fields: [
+          { label: 'Email', value: 'me@example.com' },
+          { label: 'Name', value: 'Me Cursor' },
+          { label: 'Plan', value: 'Pro' },
+        ],
+      });
+      const rendered = JSON.stringify(identity);
+      expect(rendered).not.toContain('tok-should-not-surface');
+      expect(rendered).not.toContain('refresh-should-not-surface');
+      expect(rendered).not.toContain('"userId"');
+    });
+
+    it('names an API-key login when status is unauthenticated but CURSOR_API_KEY is set', async () => {
+      const previous = process.env.CURSOR_API_KEY;
+      process.env.CURSOR_API_KEY = 'key-should-not-surface';
+      try {
+        const identity = await readAccountIdentity('cursor', join(home, '.cursor'), {
+          runCommand: async () => ({
+            stdout: JSON.stringify({ status: 'unauthenticated', isAuthenticated: false }),
+            stderr: '',
+            exitCode: 0,
+          }),
+        });
+        expect(identity).toEqual({
+          available: true,
+          fields: [{ label: 'Login', value: 'API key (CURSOR_API_KEY)' }],
+        });
+        expect(JSON.stringify(identity)).not.toContain('key-should-not-surface');
+      } finally {
+        if (previous === undefined) delete process.env.CURSOR_API_KEY;
+        else process.env.CURSOR_API_KEY = previous;
+      }
+    });
+
+    it('says not signed in when the CLI reports unauthenticated', async () => {
+      const identity = await readAccountIdentity('cursor', join(home, '.cursor'), {
+        runCommand: async () => ({
+          stdout: JSON.stringify({ status: 'unauthenticated', isAuthenticated: false }),
+          stderr: '',
+          exitCode: 0,
+        }),
+      });
+      expect(identity.available).toBe(false);
+      expect(identity.reason).toContain('Not signed in');
+    });
+  });
 });

@@ -20,8 +20,9 @@ interface TimerState {
 }
 
 interface TimerSeam {
-  armAutosave(state: TimerState): void;
+  armAutosave(runId: string, state: TimerState): void;
   clearAutosaveTimer(state: TimerState): void;
+  active: Map<string, unknown>;
 }
 
 /**
@@ -35,6 +36,7 @@ describe('periodic autosave gate (#471)', () => {
   let store: RunStore;
   let manager: TimerSeam;
   let worktreePath: string;
+  let runId: string;
   const savedEnv = process.env.CEZ_AUTOSAVE;
 
   beforeAll(async () => {
@@ -46,7 +48,8 @@ describe('periodic autosave gate (#471)', () => {
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     manager = new RunManager(store, repoRoot) as unknown as TimerSeam;
     const record = store.createRun({ title: 't', workflow: 'quick-task', task: 't', steps: [] });
-    worktreePath = (await createWorktree(repoRoot, record.id, 'main')).path;
+    runId = record.id;
+    worktreePath = (await createWorktree(repoRoot, runId, 'main')).path;
   });
 
   afterAll(() => {
@@ -71,21 +74,23 @@ describe('periodic autosave gate (#471)', () => {
   it('does not arm the timer when the env is off (default)', () => {
     delete process.env.CEZ_AUTOSAVE;
     const state: TimerState = { cancelled: false, interrupt: () => undefined, cwd: worktreePath };
-    manager.armAutosave(state);
+    manager.armAutosave(runId, state);
     expect(state.autosaveTimer).toBeUndefined();
   });
 
   it('arms the timer when CEZ_AUTOSAVE=1, but never for a repo-root run', () => {
     process.env.CEZ_AUTOSAVE = '1';
     const state: TimerState = { cancelled: false, interrupt: () => undefined, cwd: worktreePath };
-    manager.armAutosave(state);
+    manager.active.set(runId, state);
+    manager.armAutosave(runId, state);
     expect(state.autosaveTimer).toBeDefined();
-    manager.armAutosave(state); // idempotent — the second call must not double-arm
+    manager.armAutosave(runId, state); // idempotent — the second call must not double-arm
     manager.clearAutosaveTimer(state);
     expect(state.autosaveTimer).toBeUndefined();
 
     const rootState: TimerState = { cancelled: false, interrupt: () => undefined, cwd: repoRoot };
-    manager.armAutosave(rootState);
+    manager.armAutosave(runId, rootState);
+    manager.active.delete(runId);
     expect(rootState.autosaveTimer).toBeUndefined();
   });
 

@@ -10,7 +10,7 @@
 // already committed). It stamps every manifest in the release set (intra-release
 // dependencies kept as caret ranges so a stable cezar-cli follows compatible impl
 // releases), then publishes them in DEPENDENCY ORDER — api-client, then the
-// service, then the alias — always with `--tag latest`. Publishing a dependent
+// service, then the aliases — always with `--tag latest`. Publishing a dependent
 // before its dependency would briefly advertise a version that is not on the
 // registry yet.
 //
@@ -52,6 +52,7 @@ const dirs = {
   apiClient: path.join(repoRoot, 'packages/api-client'),
   cezar: path.join(repoRoot, 'packages/cezar'),
   alias: path.join(repoRoot, 'alias-cezar'),
+  runAlias: path.join(repoRoot, 'alias-cezar-run'),
 };
 
 const readManifest = (dir) => JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
@@ -77,6 +78,7 @@ const manifests = {
   apiClient: readManifest(dirs.apiClient),
   cezar: readManifest(dirs.cezar),
   alias: readManifest(dirs.alias),
+  runAlias: readManifest(dirs.runAlias),
 };
 
 // The service manifest is the base: it is the package whose version the release is named after.
@@ -97,8 +99,8 @@ if (!dryRun && !token) {
 }
 
 const stamped = stampStableManifests(manifests, version);
-for (const key of ['contract', 'apiClient', 'cezar', 'alias']) writeManifest(dirs[key], stamped[key]);
-const stampedNames = ['contract', 'apiClient', 'cezar', 'alias'].map((key) => stamped[key].name);
+for (const key of ['contract', 'apiClient', 'cezar', 'alias', 'runAlias']) writeManifest(dirs[key], stamped[key]);
+const stampedNames = ['contract', 'apiClient', 'cezar', 'alias', 'runAlias'].map((key) => stamped[key].name);
 console.log(
   `release: stamped ${stampedNames.join(' + ')} to ${version} (bump ${bump}, dist-tag latest${dryRun ? ', dry run' : ''})`,
 );
@@ -133,7 +135,7 @@ const publish = (dir, label) => {
 // exactly this reason. A `private` manifest is stamped above but never published: it is part of
 // the release (its version moves, its pins are rewritten) without being on the registry.
 const published = [];
-for (const key of ['contract', 'apiClient', 'cezar', 'alias']) {
+for (const key of ['contract', 'apiClient', 'cezar', 'alias', 'runAlias']) {
   if (!isPublishable(stamped[key])) {
     console.log(`release: ${stamped[key].name} is private — stamped to ${version}, not published.`);
     continue;
@@ -150,5 +152,7 @@ emitOutput({
   rootName: stamped.cezar.name,
   apiClientName: stamped.apiClient.name,
   aliasName: stamped.alias.name,
+  // The documented npx spelling — the release notes' install command uses it.
+  runAliasName: stamped.runAlias.name,
   publishedNames: published.join(','),
 });

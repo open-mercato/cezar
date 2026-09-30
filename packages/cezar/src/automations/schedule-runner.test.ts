@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from 'node:fs/promises';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -52,6 +53,21 @@ describe('ScheduleRunner', () => {
       consecutiveFailures: 0,
     });
   });
+
+  it('keeps a successful run id when the guard is compromised during awaited launch', async () => {
+    const { dir, store, definition, clock } = await setup();
+    const launch = vi.fn(async () => {
+      rmSync(join(dir, 'automation-poll.lock.guard'), { recursive: true, force: true });
+      await new Promise(resolve => setTimeout(resolve, 1_300));
+      return { runId: 'run-after-guard-loss' };
+    });
+    const runner = new ScheduleRunner({ projectId: 'p', store, timeZone: 'UTC', launch, now: clock.now });
+    runner.dueAt(definition);
+    clock.set(FIRST_RUN + 1_000);
+    const outcome = await runner.fire(definition);
+    expect(outcome).toMatchObject({ result: 'launched', runId: 'run-after-guard-loss' });
+    expect(store.latestReceipts().get(`nightly:schedule:${new Date(FIRST_RUN).toISOString()}`)).toMatchObject({ status: 'launched', runId: 'run-after-guard-loss' });
+  }, 6_000);
 
   it('catches up ONE missed occurrence after a gap and never bursts — daily', async () => {
     const { store, definition, runner, launch, clock } = await setup();

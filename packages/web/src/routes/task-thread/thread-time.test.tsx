@@ -7,6 +7,7 @@ import {
   TurnTime,
   clockLabel,
   dayLabel,
+  elapsedSince,
   exactLabel,
   localDayKey,
   turnDuration,
@@ -163,5 +164,26 @@ describe('thread-time components', () => {
     // "Today" is the anchor a returning reader wants; the date follows so it is not just relative.
     expect(row().getAttribute('aria-label')).toContain('Today, ')
     expect(row().getAttribute('aria-label')).toContain(String(now.getFullYear()))
+  })
+})
+
+describe('elapsedSince — the live Working… counter', () => {
+  const start = '2026-09-23T10:00:00.000Z'
+  const at = (iso: string) => new Date(iso).getTime()
+
+  it('reads in the same shape as the closed turn duration', () => {
+    expect(elapsedSince(start, at('2026-09-23T10:00:07.900Z'))).toBe('7s')
+    expect(elapsedSince(start, at('2026-09-23T10:04:12.000Z'))).toBe('4m 12s')
+    expect(elapsedSince(start, at('2026-09-23T11:04:00.000Z'))).toBe('1h 04m')
+  })
+
+  it('floors, so the counter never shows a second that has not passed yet', () => {
+    expect(elapsedSince(start, at('2026-09-23T10:00:00.999Z'))).toBe('0s')
+  })
+
+  it('renders nothing for a missing, bad or future stamp', () => {
+    expect(elapsedSince(undefined, at(start))).toBeUndefined()
+    expect(elapsedSince('not a date', at(start))).toBeUndefined()
+    expect(elapsedSince('2026-09-23T10:00:05.000Z', at(start))).toBeUndefined()
   })
 })

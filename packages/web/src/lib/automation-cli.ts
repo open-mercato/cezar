@@ -1,4 +1,4 @@
-import { cronOf, type AutomationDispatch, type AutomationEvent, type AutomationFilters, type AutomationSchedule } from '@open-mercato/cezar-api-client'
+import { cronOf, type AutomationDefinition, type AutomationDispatch, type AutomationEvent, type AutomationFilters, type AutomationSchedule } from '@open-mercato/cezar-api-client'
 
 /**
  * The editor's "Copy as CLI" card (spec 2026-09-14-automations-redesign Q1): the flag form of
@@ -12,7 +12,8 @@ import { cronOf, type AutomationDispatch, type AutomationEvent, type AutomationF
  */
 export interface CliDefinition {
   name: string
-  kind: 'github' | 'schedule'
+  kind: 'github' | 'schedule' | 'tracker'
+  trackerTrigger?: AutomationDefinition['trackerTrigger']
   schedule?: AutomationSchedule
   events?: AutomationEvent[]
   intervalSeconds?: number
@@ -38,6 +39,7 @@ export function everyFlag(seconds: number): string {
 }
 
 export function flagExpressible(definition: CliDefinition): boolean {
+  if (definition.kind === 'tracker') return false
   if (definition.kind === 'schedule') return !!definition.schedule
   if (!definition.events?.length) return false
   const filters = definition.filters ?? {}
@@ -82,7 +84,9 @@ export function cliJsonOf(definition: CliDefinition): string {
     kind: definition.kind,
     ...(definition.kind === 'schedule'
       ? { schedule: definition.schedule }
-      : { events: definition.events, intervalSeconds: definition.intervalSeconds ?? 300, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }),
+      : definition.kind === 'tracker'
+        ? { trackerTrigger: definition.trackerTrigger, intervalSeconds: definition.intervalSeconds ?? 1800, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }
+        : { events: definition.events, intervalSeconds: definition.intervalSeconds ?? 300, filters: { lookbackDays: 7, maxRecords: 25, ...definition.filters } }),
     task: definition.task,
     ...(definition.enable ? { enable: true } : {}),
   }
