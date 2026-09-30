@@ -135,5 +135,5 @@ counts, so a cold boot with a finished run in the list stays silent.
 
 ### Phase 5: Docs and the gate
 
-- [ ] 5.1 `.env.example` + `docs/reference.md`
-- [ ] 5.2 Full validation gate green
+- [x] 5.1 `.env.example` + `docs/reference.md` — bef54161
+- [x] 5.2 Full validation gate green — verified at bef54161
