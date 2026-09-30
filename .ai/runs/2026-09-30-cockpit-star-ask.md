@@ -111,6 +111,8 @@ counts, so a cold boot with a finished run in the list stays silent.
 
 ## Progress
 
+PR: #1200
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: The star count, server-side
@@ -136,4 +138,4 @@ counts, so a cold boot with a finished run in the list stays silent.
 ### Phase 5: Docs and the gate
 
 - [x] 5.1 `.env.example` + `docs/reference.md` — bef54161
-- [x] 5.2 Full validation gate green — verified at bef54161
+- [x] 5.2 Full validation gate green — verified at d26e45cf (after the origin/main merge and the review fixes)
