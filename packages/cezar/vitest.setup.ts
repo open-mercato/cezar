@@ -24,7 +24,7 @@ if (!process.env.GIT_CONFIG_COUNT) {
   process.env.GIT_CONFIG_VALUE_0 = 'false'
 }
 
-const sandboxHome =mkdtempSync(join(realpathSync(tmpdir()), 'cez-vitest-home-'))
+const sandboxHome = mkdtempSync(join(realpathSync(tmpdir()), 'cez-vitest-home-'))
 
 const pinSandboxHome = (): void => {
   if (!process.env.CEZ_HOME) process.env.CEZ_HOME = sandboxHome
