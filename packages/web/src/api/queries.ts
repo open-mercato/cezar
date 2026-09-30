@@ -8,6 +8,8 @@ import {
   ApiError,
   browseFs,
   checkoutProject,
+  createProject,
+  getGithubOwners,
   connectProvider,
   continueRun,
   continueProjectRun,
@@ -102,6 +104,7 @@ import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
 import type {
   CheckoutProjectInput,
+  CreateProjectInput,
   CreateAgentProfileInput,
   ApiRun,
   HealthResponse,
@@ -406,6 +409,8 @@ export const workspaceQueryKeys = {
   models: (runner: string) => ['workspace', 'models', runner] as const,
   providerStatus: ['workspace', 'providers', 'status'] as const,
   projects: ['workspace', 'projects'] as const,
+  /** `GET /api/projects/github-owners` — the new-project dialog's owner picker. */
+  githubOwners: ['workspace', 'github-owners'] as const,
   /** The cross-project task index behind ⌘K. Workspace-led for the same reason the registry is:
    *  it answers for every project at once, so no scope owns it. */
   runsIndex: ['workspace', 'runs-index'] as const,
@@ -856,6 +861,29 @@ export function useCheckoutProject() {
     mutationFn: (input: CheckoutProjectInput) => checkoutProject(input),
     retry: false,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+  })
+}
+
+/** Create a new project (`POST /api/projects/create`). Same invalidation and no-retry rule as
+ *  `useCheckoutProject`: a retry would race the server's cleanup and land on the 409, or worse,
+ *  try to create the GitHub repository twice. */
+export function useCreateProject() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateProjectInput) => createProject(input),
+    retry: false,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: workspaceQueryKeys.projects }),
+  })
+}
+
+/** The GitHub accounts (login + orgs) a new repo may belong to. Cached for the session: org
+ *  membership does not change while a dialog is open, and each probe is two `gh api` calls. */
+export function useGithubOwners() {
+  return useQuery({
+    queryKey: workspaceQueryKeys.githubOwners,
+    queryFn: ({ signal }) => getGithubOwners({ signal }),
+    staleTime: 5 * 60_000,
+    retry: false,
   })
 }
 

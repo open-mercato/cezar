@@ -167,6 +167,33 @@ export const checkoutProjectInputSchema = z.object({
 });
 export type CheckoutProjectInput = z.infer<typeof checkoutProjectInputSchema>;
 
+/**
+ * `POST /api/v1/projects/create` (spec 2026-09-29-create-new-project) — a fresh git repo at
+ * `<projectsDir>/<name>`. `github` present ⇒ also a new GitHub repository under `owner`, which is
+ * ALWAYS private: there is deliberately no visibility field, and one must never be added.
+ * `template` (`owner/repo` or a GitHub URL) generates the repo from a template instead of starting
+ * empty. Progress arrives as `checkout-progress`, keyed by `checkoutId`, like the clone flow.
+ */
+export const createProjectInputSchema = z.object({
+  name: z.string().trim().min(1).max(128),
+  github: z
+    .object({
+      owner: z.string().trim().min(1).max(64),
+      template: z.string().trim().max(512).optional(),
+    })
+    .optional(),
+  checkoutId: z.string().trim().max(128).optional(),
+});
+export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
+
+/** `GET /api/v1/projects/github-owners` — the accounts a new repo may belong to. Never an error:
+ *  no `gh`, or an unauthenticated one, answers `available: false` with the reason. */
+export const githubOwnersResponseSchema = z.discriminatedUnion('available', [
+  z.object({ available: z.literal(true), login: z.string(), orgs: z.array(z.string()) }),
+  z.object({ available: z.literal(false), reason: z.string() }),
+]);
+export type GithubOwnersResponse = z.infer<typeof githubOwnersResponseSchema>;
+
 /** One directory in a `GET /api/v1/fs/browse` listing (multi-project spec, step 4.1). `path` is
  *  absolute — same-origin route, like `ProjectListEntry.root`. */
 export const fsBrowseDirSchema = z.object({

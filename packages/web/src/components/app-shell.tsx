@@ -1,6 +1,7 @@
 import {
   FolderIcon,
   FolderOpenIcon,
+  FolderPlusIcon,
   LayersIcon,
   LayoutDashboardIcon,
   MenuIcon,
@@ -16,6 +17,7 @@ import { Link as RouterLink, NavLink, matchPath, useLocation } from 'react-route
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
+import { CreateProjectDialog } from '@/components/create-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
@@ -895,7 +897,8 @@ function GlobalSettingsLink({
  * The "Add project" dropdown beside the New task CTA (multi-project spec, "Sidebar → Header").
  *
  * "Open local folder…" opens the folder-browser dialog (step 4.2); "Clone from GitHub…" opens
- * the checkout dialog (step 4.3).
+ * the checkout dialog (step 4.3); "New project…" opens the create dialog (spec
+ * 2026-09-29-create-new-project) — a fresh git repo, optionally a new private GitHub repo.
  *
  * Neither item is gh-gated here, deliberately. The spec's "disabled with a reason when `gh` is
  * unavailable" would mean reading `GET /api/health` from this component — and the dialogs are
@@ -912,6 +915,7 @@ function GlobalSettingsLink({
 function AddProjectMenu() {
   const [browsing, setBrowsing] = React.useState(false)
   const [cloning, setCloning] = React.useState(false)
+  const [creating, setCreating] = React.useState(false)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -936,9 +940,14 @@ function AddProjectMenu() {
           <GithubIcon aria-hidden="true" />
           Clone from GitHub…
         </DropdownMenuItem>
+        <DropdownMenuItem data-slot="add-project-create" onSelect={() => setCreating(true)}>
+          <FolderPlusIcon aria-hidden="true" />
+          New project…
+        </DropdownMenuItem>
       </DropdownMenuContent>
       {browsing ? <AddProjectDialog open onOpenChange={setBrowsing} /> : null}
       {cloning ? <CloneProjectDialog open onOpenChange={setCloning} /> : null}
+      {creating ? <CreateProjectDialog open onOpenChange={setCreating} /> : null}
     </DropdownMenu>
   )
 }

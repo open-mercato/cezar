@@ -32,6 +32,8 @@ import type {
   CancelResponse,
   ChangesPayload,
   CheckoutProjectInput,
+  CreateProjectInput,
+  GithubOwnersResponse,
   ConfigResponse,
   ReclaimWorktreesResponse,
   RemoveWorktreeResponse,
@@ -1314,6 +1316,21 @@ export async function registerProject(root: string): Promise<RegisterProjectResp
  */
 export async function checkoutProject(input: CheckoutProjectInput): Promise<RegisterProjectResponse> {
   return unwrap(await cez.api.v1.projects.checkout.$post({ json: input }), '/projects/checkout')
+}
+
+/**
+ * Create a new project — a fresh git repo, optionally backed by a new private GitHub repo
+ * (`POST /api/projects/create`, spec 2026-09-29-create-new-project). Same contract as
+ * `checkoutProject`: every non-2xx is a failure whose `{ error }` the dialog shows verbatim, and
+ * progress arrives as `checkout-progress` keyed by `input.checkoutId`.
+ */
+export async function createProject(input: CreateProjectInput): Promise<RegisterProjectResponse> {
+  return unwrap(await cez.api.v1.projects.create.$post({ json: input }), '/projects/create')
+}
+
+/** Who a new GitHub repository may belong to (`GET /api/projects/github-owners`). Workspace-level. */
+export async function getGithubOwners(opts?: ReadOptions): Promise<GithubOwnersResponse> {
+  return unwrap(await cez.api.v1.projects['github-owners'].$get({}, init(opts)), '/projects/github-owners')
 }
 
 /**

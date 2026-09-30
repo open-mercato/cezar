@@ -221,6 +221,8 @@ import {
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/ui-state.ts';
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
+import { createProjectInputSchema } from '@open-mercato/cezar-contract';
+import { createProject, listGithubOwners, type CommandRunner } from './create-project.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
@@ -320,6 +322,10 @@ export interface ServerDeps {
    *  route's guards, cleanup and error surfacing are exercised for real
    *  against real temp dirs, without a network or a `gh` binary. */
   cloneRunner?: CloneRunner;
+  /** How `POST /api/projects/create` and `GET /api/projects/github-owners`
+   *  run `git`/`gh` (spec 2026-09-29-create-new-project). Defaults to real
+   *  commands (or the `CEZ_DRY_RUN=1` fake); injected by tests. */
+  projectCommandRunner?: CommandRunner;
   /** Host-wide model discovery service. Tests inject a deterministic adapter. */
   modelCatalog?: RunnerModelCatalog;
   /** Host-wide provider authentication discovery. Tests inject deterministic probes. */
@@ -2865,6 +2871,45 @@ export function createApp(deps: ServerDeps) {
       }
       // The checkout dialog only clones GitHub repositories (`checkoutSchema`).
       track('project_added', { label: 'github' }, { sid: deviceSid(c.req.header('x-cezar-sid')) });
+      return c.json(registered.body, 200);
+    })
+
+    // ---- new project (spec 2026-09-29-create-new-project) ------------------
+    // "Add project → New project": a fresh git repo at `<projectsDir>/<name>`,
+    // optionally backed by a new PRIVATE GitHub repository (never public — the
+    // body has no visibility field to set), optionally generated from a
+    // template. Same progress stream, same `registerFolder` commit, same
+    // `{ error, reason }` degradation as the clone route above.
+    .get('/projects/github-owners', async (c) => c.json(await listGithubOwners(deps.projectCommandRunner)))
+
+    .post('/projects/create', jsonZodValidator(() => createProjectInputSchema, { message: 'name must be a non-empty project name' }), async (c) => {
+      if (capabilities().singleProject) {
+        return c.json(singleProjectRefusal('adding projects'), 409);
+      }
+      const { name, github, checkoutId } = c.req.valid('json');
+      const result = await createProject({
+        name,
+        github,
+        checkoutId,
+        projectsDir: expandTilde(await workspaceProjectsDir()),
+        onProgress: (event) => workspaceEvents.emit('checkout-progress', event),
+        signal: c.req.raw.signal,
+        ...(deps.projectCommandRunner ? { run: deps.projectCommandRunner } : {}),
+      });
+      if (!result.ok) {
+        return c.json(
+          'reason' in result ? { error: result.error, reason: result.reason } : { error: result.error },
+          result.status,
+        );
+      }
+      // GitHub-backed projects register as `checkout` (they have an origin the
+      // clone flow would also produce); a local-only repo is `local`.
+      const registered = await registerFolder(result.target, result.slug ? 'checkout' : 'local');
+      if (registered.status !== 200) {
+        const { body } = registered;
+        const error = 'error' in body && body.error ? body.error : 'could not register the new project';
+        return c.json({ error: `${error} (the project is at ${result.target})` }, registered.status);
+      }
       return c.json(registered.body, 200);
     });
 
