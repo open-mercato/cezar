@@ -126,6 +126,28 @@ describe('CreateProjectDialog', () => {
     expect(document.querySelector('[data-testid="location"]')?.textContent).toBe('/p/fresh/')
   })
 
+  it('puts the owner cards in their own column beside the form, and drops it without GitHub', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(ownerCards()).toHaveLength(2))
+    const column = slot('create-owners-column')
+    expect(column?.contains(slot('create-owner'))).toBe(true)
+    expect(column?.contains(nameInput())).toBe(false)
+    expect(column?.textContent).toContain('Select organization')
+    expect(slot('create-layout')?.className).toContain('md:grid-cols-')
+    // Switching GitHub off keeps the column (no layout jump) but disables the cards.
+    fireEvent.click(slot('create-github') as HTMLButtonElement)
+    expect(ownerCards().every((card) => card.disabled)).toBe(true)
+  })
+
+  it('without gh there is no owner column — a single-column form', async () => {
+    serve({ available: false, reason: 'gh CLI not found' })
+    renderDialog()
+    await waitFor(() => expect(slot('create-github-unavailable')).toBeTruthy())
+    expect(slot('create-owners-column')).toBeNull()
+    expect(slot('create-layout')?.className).not.toContain('md:grid-cols-')
+  })
+
   it('keeps the name a valid GitHub repository name', async () => {
     serve()
     renderDialog()
@@ -173,7 +195,7 @@ describe('CreateProjectDialog', () => {
     renderDialog()
     await waitFor(() => expect(slot('create-owner')).toBeTruthy())
     fireEvent.click(slot('create-github') as HTMLButtonElement)
-    expect(slot('create-owner')).toBeNull()
+    expect(ownerCards().every((card) => card.disabled)).toBe(true)
     fireEvent.change(nameInput(), { target: { value: 'fresh' } })
     fireEvent.click(createButton())
     await waitFor(() => expect(posted).toHaveLength(1))

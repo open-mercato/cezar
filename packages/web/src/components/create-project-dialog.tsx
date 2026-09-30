@@ -39,13 +39,7 @@ function toRepoName(input: string): string {
  * Same conventions as the clone dialog: progress is `checkout-progress` filtered to this
  * dialog's own id, and errors are the server's words, verbatim.
  */
-export function CreateProjectDialog({
-  open,
-  onOpenChange,
-}: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-}) {
+export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [name, setName] = useState('')
   const [useGithub, setUseGithub] = useState(true)
   const [owner, setOwner] = useState('')
@@ -71,7 +65,8 @@ export function CreateProjectDialog({
   }, [])
 
   const ownersData = owners.data
-  const githubAvailable = ownersData?.available === true && Array.isArray(ownersData.owners) && ownersData.owners.length > 0
+  const githubAvailable =
+    ownersData?.available === true && Array.isArray(ownersData.owners) && ownersData.owners.length > 0
   const ownerOptions = useMemo(
     () => (ownersData?.available && Array.isArray(ownersData.owners) ? ownersData.owners : []),
     [ownersData],
@@ -101,7 +96,12 @@ export function CreateProjectDialog({
         name: trimmedName,
         checkoutId,
         ...(github
-          ? { github: { owner: effectiveOwner, ...(trimmedTemplate === '' ? {} : { template: trimmedTemplate }) } }
+          ? {
+              github: {
+                owner: effectiveOwner,
+                ...(trimmedTemplate === '' ? {} : { template: trimmedTemplate }),
+              },
+            }
           : {}),
       },
       {
@@ -115,9 +115,17 @@ export function CreateProjectDialog({
 
   const busy = create.isPending
 
+  // Two columns from `md` up — the owner cards on the left, the form on the right — whenever
+  // there are owners to pick (or they are still loading, so the layout does not jump when they
+  // arrive). Without GitHub the dialog is the single-column form. Below `md` it all stacks.
+  const showOwners = owners.isPending || githubAvailable
+
   return (
     <Dialog open={open} onOpenChange={(next) => (busy ? undefined : onOpenChange(next))}>
-      <DialogContent data-slot="create-project-dialog" className="sm:max-w-lg">
+      <DialogContent
+        data-slot="create-project-dialog"
+        className={cn('max-h-[calc(100dvh-2rem)] overflow-y-auto', showOwners ? 'md:max-w-3xl' : undefined)}
+      >
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
           <DialogDescription>
@@ -125,95 +133,117 @@ export function CreateProjectDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-1.5">
-          <Label htmlFor="create-name">Name</Label>
-          <Input
-            id="create-name"
-            data-slot="create-name"
-            autoFocus
-            placeholder="my-project"
-            value={name}
-            disabled={busy}
-            aria-invalid={nameError !== null}
-            aria-describedby="create-name-hint"
-            onChange={(event) => setName(toRepoName(event.target.value))}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') submit()
-            }}
-          />
-          {nameError ? (
-            <p id="create-name-hint" data-slot="create-name-error" className="text-[12px] text-danger">
-              {nameError}
-            </p>
-          ) : (
-            <p
-              id="create-name-hint"
-              data-slot="create-target"
-              className="min-w-0 truncate font-mono text-[11.5px] text-soft-foreground"
-              title={target}
-            >
-              {target}
-            </p>
-          )}
-        </div>
-
-        <div className="grid gap-3 rounded-md border border-border p-3">
-          <div className="flex items-center justify-between gap-3">
-            <Label htmlFor="create-github" className="flex items-center gap-1.5">
-              <LockIcon className="size-3.5" aria-hidden="true" />
-              Create a private GitHub repository
-            </Label>
-            <Switch
-              id="create-github"
-              data-slot="create-github"
-              checked={github}
-              disabled={busy || !githubAvailable}
-              onCheckedChange={setUseGithub}
-            />
-          </div>
-
-          {owners.isPending ? (
-            <p className="text-[12px] text-muted-foreground">Checking GitHub…</p>
-          ) : !githubAvailable ? (
-            <p data-slot="create-github-unavailable" className="text-[12px] text-muted-foreground">
-              {ownersData && !ownersData.available
-                ? ownersData.reason
-                : 'Could not read your GitHub accounts — the project will be created locally only.'}
-            </p>
+        <div
+          data-slot="create-layout"
+          className={cn('grid gap-6', showOwners ? 'md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]' : undefined)}
+        >
+          {showOwners ? (
+            <div data-slot="create-owners-column" className="min-w-0 md:border-r md:border-border md:pr-6">
+              {githubAvailable ? (
+                <OwnerPicker
+                  owners={ownerOptions}
+                  value={effectiveOwner}
+                  disabled={busy || !github}
+                  onChange={setOwner}
+                />
+              ) : (
+                <OwnerPickerLoading />
+              )}
+            </div>
           ) : null}
 
-          {github ? (
-            <>
-              <OwnerPicker owners={ownerOptions} value={effectiveOwner} disabled={busy} onChange={setOwner} />
-              <div className="grid gap-1.5">
-                <Label htmlFor="create-template">Template (optional)</Label>
-                <Input
-                  id="create-template"
-                  data-slot="create-template"
-                  placeholder="owner/repo or https://github.com/owner/repo"
-                  value={template}
-                  disabled={busy}
-                  onChange={(event) => setTemplate(event.target.value)}
+          <div className="grid min-w-0 content-start gap-4">
+            <div className="grid gap-1.5">
+              <Label htmlFor="create-name">Name</Label>
+              <Input
+                id="create-name"
+                data-slot="create-name"
+                autoFocus
+                placeholder="my-project"
+                value={name}
+                disabled={busy}
+                aria-invalid={nameError !== null}
+                aria-describedby="create-name-hint"
+                onChange={(event) => setName(toRepoName(event.target.value))}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') submit()
+                }}
+              />
+              {nameError ? (
+                <p id="create-name-hint" data-slot="create-name-error" className="text-[12px] text-danger">
+                  {nameError}
+                </p>
+              ) : (
+                <p
+                  id="create-name-hint"
+                  data-slot="create-target"
+                  className="min-w-0 truncate font-mono text-[11.5px] text-soft-foreground"
+                  title={target}
+                >
+                  {target}
+                </p>
+              )}
+            </div>
+
+            <div className="grid gap-3 rounded-md border border-border p-3">
+              <div className="flex items-center justify-between gap-3">
+                <Label htmlFor="create-github" className="flex items-center gap-1.5">
+                  <LockIcon className="size-3.5" aria-hidden="true" />
+                  Create a private GitHub repository
+                </Label>
+                <Switch
+                  id="create-github"
+                  data-slot="create-github"
+                  checked={github}
+                  disabled={busy || !githubAvailable}
+                  onCheckedChange={setUseGithub}
                 />
               </div>
-              <p className="text-[12px] text-muted-foreground">
-                The repository is created as <strong>private</strong> — you can change its visibility on GitHub.
+
+              {owners.isPending ? (
+                <p className="text-[12px] text-muted-foreground">Checking GitHub…</p>
+              ) : !githubAvailable ? (
+                <p data-slot="create-github-unavailable" className="text-[12px] text-muted-foreground">
+                  {ownersData && !ownersData.available
+                    ? ownersData.reason
+                    : 'Could not read your GitHub accounts — the project will be created locally only.'}
+                </p>
+              ) : null}
+
+              {github ? (
+                <>
+                  <div className="grid gap-1.5">
+                    <Label htmlFor="create-template">Template (optional)</Label>
+                    <Input
+                      id="create-template"
+                      data-slot="create-template"
+                      placeholder="owner/repo or https://github.com/owner/repo"
+                      value={template}
+                      disabled={busy}
+                      onChange={(event) => setTemplate(event.target.value)}
+                    />
+                  </div>
+                  <p className="text-[12px] text-muted-foreground">
+                    Created as <strong>private</strong> under <strong>{effectiveOwner}</strong> — you can change its
+                    visibility on GitHub.
+                  </p>
+                </>
+              ) : null}
+            </div>
+
+            {busy ? (
+              <p data-slot="create-progress" className="truncate font-mono text-[11.5px] text-muted-foreground">
+                {progress ?? 'Starting…'}
               </p>
-            </>
-          ) : null}
+            ) : null}
+
+            {create.isError ? (
+              <p data-slot="create-error" className="whitespace-pre-line text-[13px] text-danger">
+                {create.error instanceof Error ? create.error.message : 'could not create the project'}
+              </p>
+            ) : null}
+          </div>
         </div>
-
-        {busy ? (
-          <p data-slot="create-progress" className="truncate font-mono text-[11.5px] text-muted-foreground">
-            {progress ?? 'Starting…'}
-          </p>
-        ) : null}
-
-        {create.isError ? (
-          <p data-slot="create-error" className="whitespace-pre-line text-[13px] text-danger">
-            {create.error instanceof Error ? create.error.message : 'could not create the project'}
-          </p>
-        ) : null}
 
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={() => onOpenChange(false)}>
@@ -258,15 +288,18 @@ function OwnerPicker({
     refs.current[next]?.focus()
   }
   return (
-    <div className="grid gap-1.5">
-      <span id="create-owner-label" className="text-sm font-medium">
-        Owner
+    <div className="grid gap-3">
+      <span
+        id="create-owner-label"
+        className="text-[12px] font-semibold tracking-wider text-muted-foreground uppercase"
+      >
+        Select organization
       </span>
       <div
         role="radiogroup"
         aria-labelledby="create-owner-label"
         data-slot="create-owner"
-        className="-mx-1 grid max-h-64 gap-2 overflow-y-auto px-1 py-0.5"
+        className="-mx-1 grid max-h-64 gap-2 overflow-y-auto px-1 py-0.5 md:max-h-[26rem]"
       >
         {owners.map((o, index) => {
           const selected = o.login === value
@@ -315,6 +348,23 @@ function OwnerPicker({
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/** Placeholder cards while `gh` is asked for the accounts, so the column does not pop in. */
+function OwnerPickerLoading() {
+  return (
+    <div className="grid gap-3" data-slot="create-owners-loading" aria-hidden="true">
+      <span className="text-[12px] font-semibold tracking-wider text-muted-foreground uppercase">
+        Select organization
+      </span>
+      {[0, 1].map((i) => (
+        <div key={i} className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
+          <span className="size-9 shrink-0 animate-pulse rounded-full bg-muted" />
+          <span className="h-3 w-24 animate-pulse rounded bg-muted" />
+        </div>
+      ))}
     </div>
   )
 }
