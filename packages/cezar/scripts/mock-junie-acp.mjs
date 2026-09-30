@@ -5,8 +5,10 @@
 // exercised without a logged-in Junie or burning tokens, and doubles as the
 // fixture for the runner wiring tests in junie-runner.test.ts:
 // initialize/authenticate/session/new/set_config_option handshake, one
-// scripted turn (a message + a command tool call), a turn failure, and a
-// session/cancel → cancelled-response flow.
+// scripted turn (a message + a command tool call), a turn failure, a
+// session/request_permission round-trip (`mock:permission`, which echoes the
+// chosen optionId back as the turn's text), and a session/cancel →
+// cancelled-response flow.
 //
 // `MOCK_JUNIE_IGNORE_EOF=1` switches to the #703 teardown shape instead: the
 // process stays deaf to stdin EOF and handles SIGTERM itself, exiting 143
@@ -18,6 +20,7 @@ const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
 const rl = createInterface({ input: process.stdin });
 
 let pendingPromptId = null;
+let pendingPermission = null;
 
 const ignoreEof = process.env.MOCK_JUNIE_IGNORE_EOF === '1';
 if (ignoreEof) {
@@ -34,6 +37,19 @@ rl.on('line', (line) => {
   try {
     msg = JSON.parse(line);
   } catch {
+    return;
+  }
+
+  if (pendingPermission && msg.id === 'perm-1' && msg.method === undefined) {
+    const { promptId, sessionId } = pendingPermission;
+    pendingPermission = null;
+    const chosen = msg.result?.outcome?.optionId ?? `error: ${msg.error?.message ?? 'none'}`;
+    emit({ method: 'session/update', params: { sessionId, update: {
+      sessionUpdate: 'agent_message_chunk',
+      messageId: 'msg-perm',
+      content: { type: 'text', text: `permission: ${chosen}` },
+    } } });
+    emit({ id: promptId, result: { stopReason: 'end_turn', usage: { inputTokens: 5, outputTokens: 1, totalTokens: 6, cachedReadTokens: 0, cachedWriteTokens: 0 } } });
     return;
   }
 
@@ -109,6 +125,21 @@ rl.on('line', (line) => {
 
     if (text.includes('mock:turn-failed')) {
       emit({ id: msg.id, error: { code: -32000, message: 'model unavailable' } });
+      return;
+    }
+    if (text.includes('mock:permission')) {
+      // ACP leaves option order to the agent — list the persistent grant FIRST so the
+      // runner's preference for `allow_once` is proven, not an accident of ordering.
+      pendingPermission = { promptId: msg.id, sessionId };
+      emit({ id: 'perm-1', method: 'session/request_permission', params: {
+        sessionId,
+        toolCall: { toolCallId: 'call-perm', title: 'rm -rf build', kind: 'execute' },
+        options: [
+          { optionId: 'always', name: 'Always allow', kind: 'allow_always' },
+          { optionId: 'once', name: 'Allow once', kind: 'allow_once' },
+          { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+        ],
+      } });
       return;
     }
     if (text.includes('mock:hang')) {

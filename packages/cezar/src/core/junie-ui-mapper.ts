@@ -56,17 +56,13 @@
  * `nativeSubagentSessions`, but that capability has no published wire shape at
  * all (unlike `agent_thought_chunk`/`plan`, which at least have a schema this
  * mapper can implement ahead of observing them). ui-parity.test.ts's
- * "sub-agent task items" row and sub-agent nesting are therefore left unsatisfied
- * for junie today — a known, tracked gap against the documented "every backend,
- * every row" hard rule (`BACKWARD_COMPATIBILITY.md` §7, `AGENT_PROTOCOL.md` §9 item
- * 7), NOT a sanctioned exception: a narrow, documented substitute for this exact gap
- * was drafted into both files during PR #1111's review but reverted for lack of a
- * maintainer's explicit sign-off on amending a protected surface (see that PR's
- * review ⚠️ WARNING). See ui-parity.test.ts's own comment for the resolution path:
- *  - sub-agent nesting (`parentItemId`) — same gap: no wire shape exists, so
+ * "sub-agent task items" row and sub-agent nesting therefore exclude junie through
+ * the documented path for a capability that "provably cannot exist on that backend's
+ * own wire format" (`BACKWARD_COMPATIBILITY.md` §7): a cited, row-scoped `except` in
+ * the `CAPABILITIES` table (`AGENT_PROTOCOL.md` §6), as cursor's rows do.
+ *  - sub-agent nesting (`parentItemId`) — same reason: no wire shape exists, so
  *    no nesting is attempted; a spawned sub-agent (should one ever surface as
- *    a `tool_call`) renders as a flat, unnested item, structurally excluded from
- *    that row's loop rather than through any doc-sanctioned substitute.
+ *    a `tool_call`) renders as a flat, unnested item.
  *
  * Robustness rule (shared with every other mapper): input is untrusted wire
  * data, so this mapper never throws — malformed frames map to zero events.
@@ -269,7 +265,8 @@ function mapMessageChunk(
   const openBefore = state.openMessage;
   const continuesOpenById =
     rawMessageId === undefined && openBefore !== null && openBefore.kind === itemKind;
-  const noIdCounter = continuesOpenById ? state.noIdCounter : state.noIdCounter + 1;
+  const mintsNoId = rawMessageId === undefined && !continuesOpenById;
+  const noIdCounter = mintsNoId ? state.noIdCounter + 1 : state.noIdCounter;
   const messageId = rawMessageId ?? (continuesOpenById ? openBefore!.id : `junie-${itemKind}-no-id-${noIdCounter}`);
   state = { ...state, noIdCounter };
 

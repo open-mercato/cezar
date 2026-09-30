@@ -24,21 +24,13 @@
  * replacing the schema-derived one — re-check this the next time junie's ACP surface
  * or model lineup changes materially.
  *
- * "sub-agent task items" and its nesting cell are NOT currently satisfied for junie:
- * junie's wire is unmodified core ACP, which has no `task` tool-call kind and no
- * published shape for `nativeSubagentSessions` at all (see the module doc) — a
- * genuine protocol gap, not an assumption or a missing fixture, so no fixture (real
- * or schema-derived) could satisfy it today. `BACKWARD_COMPATIBILITY.md` §7 and
- * `AGENT_PROTOCOL.md` §9 item 7, as written, do NOT carve out an exception for this:
- * a documented narrow substitute for exactly this gap was drafted and applied to both
- * files during PR #1111's review, but a maintainer's explicit sign-off on amending a
- * protected surface was still outstanding at merge time (see that PR's review ⚠️
- * WARNING), so the doc amendment was reverted rather than landed on a reviewer bot's
- * say-so. junie is excluded from the two loops below ANYWAY, structurally (an explicit
- * filter, never a reusable `exempt` flag on the capability table) — this is a known,
- * open gap against the documented hard rule, tracked in PR #1111, pending either a
- * maintainer's explicit approval of the drafted amendment or a future junie/ACP
- * revision that actually publishes the missing wire shape.
+ * "sub-agent task items" and its nesting cell cannot exist on junie's wire:
+ * junie speaks unmodified core ACP, whose `tool_call.kind` enum has no `task` value
+ * and which publishes no wire shape for `nativeSubagentSessions` (see
+ * `junie-ui-mapper.ts`'s module doc). That is `BACKWARD_COMPATIBILITY.md` §7's
+ * "provably cannot exist on that backend's own wire format", so junie takes the
+ * documented path — a cited, row-scoped `except` in `CAPABILITIES` (`AGENT_PROTOCOL.md`
+ * §6), the same one cursor uses.
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -102,6 +94,14 @@ const CAPABILITIES: ReadonlyArray<
     (events) => items(events).some((item) => item.kind === 'tool' && (item.diffs?.length ?? 0) > 0),
   ],
   [
+    'sub-agent task items (Task / review-mode items / subtask parts)',
+    (events) => items(events).some((item) => item.kind === 'tool' && item.toolKind === 'task'),
+    // junie's `tool_call.kind` is unmodified core ACP — read/edit/delete/move/search/execute/
+    // think/fetch/other, no `task` (agentclientprotocol.com/protocol/schema#toolkind) — and
+    // `nativeSubagentSessions` has no published wire shape, so there is nothing to map.
+    ['junie'],
+  ],
+  [
     'usage.updated with raw token counts',
     (events) => events.some((e) => e.type === 'usage.updated' && e.usage.total > 0),
     // Cursor's documented terminal `result` frame has no `usage` field — only
@@ -131,30 +131,13 @@ describe('protocol v2 backend parity (all first-class mappers emit every matrix 
     }
   }
 
-  // "sub-agent task items" — every backend except junie: claude/codex/opencode/pi each map their
-  // own bespoke sub-agent tool name onto cezar's `task` ToolKind EXTENSION (not part of ACP
-  // itself). junie speaks unmodified core ACP, whose `tool_call.kind` enum has no `task` value
-  // and no published shape for `nativeSubagentSessions` — a genuine protocol-level gap, not an
-  // assumption or a missing fixture (see `junie-ui-mapper.ts`'s module doc). `BACKWARD_COMPATIBILITY.md`
-  // §7 and `AGENT_PROTOCOL.md` §9 item 7, as currently written, do NOT exempt this row — a
-  // documented substitute for exactly this gap was drafted during PR #1111's review but reverted
-  // for lack of a maintainer's sign-off on amending a protected surface (see that PR's ⚠️ WARNING).
-  // junie is excluded from this loop by explicit filter (never a reusable per-backend `exempt`
-  // flag on the table) as a known, tracked gap against the documented hard rule, not a sanctioned
-  // exception — resolve by either a maintainer approving the drafted amendment, or a future
-  // junie/ACP revision that actually publishes a `task`-shaped wire capability.
-  for (const backend of BACKENDS.filter((b) => b !== 'junie')) {
-    it(`${backend} produces sub-agent task items (Task / review-mode items / subtask parts)`, () => {
-      const produced = items(fixtureEvents(backend)).some((item) => item.kind === 'tool' && item.toolKind === 'task');
-      expect(produced).toBe(true);
-    });
-  }
-
   // Sub-agent NESTING rides on parentItemId where the wire attributes work
   // to its parent: claude `parent_tool_use_id` and opencode child-session
   // parts under a `subtask`. Codex and Cursor print-mode wire have no parent
   // attribution, and pi's RPC protocol carries no parent-item id either —
-  // all three's matrix cell is the task-kind tool items asserted above.
+  // all three's matrix cell is the task-kind tool items asserted above. junie
+  // (core ACP) has no parent attribution either, and its task-kind substitute
+  // is excluded above for the same protocol reason.
   for (const backend of ['claude', 'opencode'] as const) {
     it(`${backend} nests sub-agent work via parentItemId`, () => {
       expect(items(fixtureEvents(backend)).some((item) => item.parentItemId !== undefined)).toBe(true);

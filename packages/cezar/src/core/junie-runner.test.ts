@@ -63,6 +63,19 @@ describe('JunieRunner against the mock ACP process', () => {
     expect(events).toContainEqual({ type: 'turn-end' });
   }, 15_000);
 
+  it('answers session/request_permission with allow_once even when allow_always is listed first', async () => {
+    const runner = new JunieRunner({ bin: mockBin, timeoutMs: 0 });
+    const session = runner.startSession(
+      { userPrompt: 'mock:permission', cwd: process.cwd() },
+      () => {},
+      { autoEndAfterFirstTurn: true },
+    );
+
+    const result = await session.result;
+
+    expect(result.text).toBe('permission: once');
+  }, 15_000);
+
   it('fails loud when a bad model id is rejected by session/set_config_option (#9)', async () => {
     const runner = new JunieRunner({ bin: mockBin, timeoutMs: 0 });
     const session = runner.startSession(

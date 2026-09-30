@@ -448,15 +448,15 @@ class JunieSession implements AgentSession {
 
   /** junie's ACP approval channel — never observed firing live with
    *  `brave_mode: 'on'` (see the mapper's module doc), but answered per
-   *  protocol rather than left to hang the turn: pick the first "allow"
-   *  option, matching cezar's zero-config full-auto posture on every other
-   *  backend (#430). */
+   *  protocol rather than left to hang the turn: grant it, matching cezar's
+   *  zero-config full-auto posture on every other backend (#430). Prefer
+   *  `allow_once` over `allow_always` whatever order the agent lists them in —
+   *  per-run full-auto must not persist a grant that outlives the run. */
   private handlePermissionRequest(id: number | string, params: Record<string, unknown>): void {
-    const options = Array.isArray(params.options) ? params.options : [];
-    const allow = options.find(
-      (option): option is Record<string, unknown> =>
-        isRecord(option) && typeof option.kind === 'string' && option.kind.startsWith('allow'),
-    );
+    const options = (Array.isArray(params.options) ? params.options : []).filter(isRecord);
+    const allow =
+      options.find((option) => option.kind === 'allow_once') ??
+      options.find((option) => option.kind === 'allow_always');
     const optionId = allow ? stringField(allow, 'optionId') : undefined;
     if (!optionId) {
       this.rpc.respond({ id, error: { code: -32602, message: 'no allow option offered' } });

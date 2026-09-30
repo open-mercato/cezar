@@ -231,11 +231,11 @@ const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // set `CLAUDE_CODE_USE_BEDROCK=1` for Claude Code, plus Claude's own config dir.
   pi: ['PI_', ...MULTI_PROVIDER_PREFIXES],
   // junie's default auth (JetBrains account) lives entirely under `~/.junie/`
-  // (already reachable via the base `HOME` allowlist — no env var needed), but
-  // it also supports BYOK across the same provider set opencode/pi do
-  // (`--anthropic-api-key` etc, confirmed in `junie --help`), so it needs the
-  // same multi-provider credential surface for that path to work.
-  junie: ['JUNIE_', ...MULTI_PROVIDER_PREFIXES],
+  // (already reachable via the base `HOME` allowlist — no env var needed). Its BYOK
+  // path is CLI flags (`--anthropic-api-key=<text>` etc, `junie --help`), which
+  // cezar never passes, and nothing documents junie reading the provider env vars —
+  // so no provider prefix is granted on the strength of a flag.
+  junie: ['JUNIE_'],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the

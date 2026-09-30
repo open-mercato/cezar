@@ -70,7 +70,13 @@ export class JunieAcpRpc {
   private nextId = 1;
   private readonly pending = new Map<number, PendingRequest>();
 
-  constructor(readonly child: ChildProcessWithoutNullStreams) {}
+  constructor(readonly child: ChildProcessWithoutNullStreams) {
+    // A write to a child that already exited reports EPIPE as an async 'error' event, not
+    // a throw, so the try/catch in `write` cannot see it. Unhandled, it crashes the host —
+    // and `discoverJunieModels` reaches `endJunieAcp` on every provider-status probe. The
+    // read/exit path owns settlement.
+    child.stdin.on('error', () => {});
+  }
 
   allocateId(): number {
     return this.nextId++;
