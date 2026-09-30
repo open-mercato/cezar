@@ -90,8 +90,8 @@ Give the cockpit's GitHub tab a one-click way to flip the Issues / Pull requests
 
 ### Phase 2: remember the choice
 
-- [ ] 2.1 Additive `githubSort` key in the contract and the server ui-state schema
-- [ ] 2.2 Server ui-state round-trip test for `githubSort`
+- [x] 2.1 Additive `githubSort` key in the contract and the server ui-state schema — 044510fb
+- [x] 2.2 Server ui-state round-trip test for `githubSort` — 044510fb
 
 ### Phase 3: the toggle
 
