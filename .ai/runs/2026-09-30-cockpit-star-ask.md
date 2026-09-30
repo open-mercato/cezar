@@ -124,8 +124,8 @@ counts, so a cold boot with a finished run in the list stays silent.
 
 ### Phase 3: The sidebar ⭐ button
 
-- [ ] 3.1 `formatStarCount` + `useStarCount()`
-- [ ] 3.2 `StarChip` in the sidebar footer
+- [x] 3.1 `formatStarCount` + `useStarCount()` — 8b8e9aa6
+- [x] 3.2 `StarChip` in the sidebar footer — edfa631e
 
 ### Phase 4: The one-time toast
 
