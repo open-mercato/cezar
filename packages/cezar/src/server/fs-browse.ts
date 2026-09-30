@@ -70,6 +70,16 @@ export type BrowseResult =
 const MAX_ENTRIES = 1000;
 
 /**
+ * Home folders macOS guards with a privacy prompt (Files & Folders, Media & Apple Music,
+ * Photos, Full Disk Access). Opening the picker at `~` must not LOOK INSIDE them: the `.git`
+ * probe below is a read inside the folder, and in the desktop app it made macOS ask "Cezar
+ * would like to access Apple Music…" (and Documents, Desktop, Downloads…) before the user
+ * clicked anything. They are still listed; opening one is the user's choice, and so is the
+ * prompt that follows. Their `isRepo` is simply `false`.
+ */
+const PRIVACY_PROTECTED_HOME_DIRS = new Set(['Desktop', 'Documents', 'Downloads', 'Library', 'Movies', 'Music', 'Pictures']);
+
+/**
  * Expand the configured browse root. The workspace owns this independently
  * from the checkout root, so browsing never follows a clone-destination edit.
  */
@@ -208,6 +218,7 @@ export async function browseDirectory(opts: {
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .sort((a, b) => a.name.localeCompare(b.name));
   const truncated = candidates.length > MAX_ENTRIES;
+  const inHome = real === (await realpathOrNull(expandTilde('~')));
 
   const dirs: FsBrowseDir[] = [];
   for (const entry of candidates.slice(0, MAX_ENTRIES)) {
@@ -228,7 +239,7 @@ export async function browseDirectory(opts: {
       // way the operator's filesystem reads, and navigating into it re-runs
       // the containment check from scratch.
       path: childPath,
-      isRepo: await exists(join(childPath, '.git')),
+      isRepo: inHome && PRIVACY_PROTECTED_HOME_DIRS.has(entry.name) ? false : await exists(join(childPath, '.git')),
     });
   }
 
