@@ -85,8 +85,8 @@ Give the cockpit's GitHub tab a one-click way to flip the Issues / Pull requests
 
 ### Phase 1: pure sort helper
 
-- [ ] 1.1 Add `GithubSort` + `sortGithubItems` to `github-filter.ts`
-- [ ] 1.2 Table tests for `sortGithubItems`
+- [x] 1.1 Add `GithubSort` + `sortGithubItems` to `github-filter.ts` — d2eff80c
+- [x] 1.2 Table tests for `sortGithubItems` — d2eff80c
 
 ### Phase 2: remember the choice
 
