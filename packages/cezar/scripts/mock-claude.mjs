@@ -9,7 +9,40 @@ import { createInterface } from 'node:readline';
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const emit = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+const write = (obj) => process.stdout.write(`${JSON.stringify(obj)}\n`);
+
+// `--include-partial-messages` → every text/thinking block of an assistant
+// frame is streamed first as `stream_event` deltas, the way the real CLI does:
+// block start, deltas, the whole-block assistant frame, block stop.
+const partialMessages = process.argv.includes('--include-partial-messages');
+
+function streamedBlocks(obj) {
+  if (!partialMessages || obj?.type !== 'assistant' || !Array.isArray(obj.message?.content)) return [];
+  return obj.message.content.flatMap((block, index) => {
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text !== '') {
+      return [{ index, start: { type: 'text', text: '' }, deltaType: 'text_delta', key: 'text', text: block.text }];
+    }
+    if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim() !== '') {
+      return [{ index, start: { type: 'thinking', thinking: '', signature: '' }, deltaType: 'thinking_delta', key: 'thinking', text: block.thinking }];
+    }
+    return [];
+  });
+}
+
+function emit(obj) {
+  const blocks = streamedBlocks(obj);
+  const envelope = { session_id: obj?.session_id, parent_tool_use_id: obj?.parent_tool_use_id ?? null };
+  for (const block of blocks) {
+    write({ type: 'stream_event', event: { type: 'content_block_start', index: block.index, content_block: block.start }, ...envelope });
+    for (const piece of block.text.match(/\S+\s*|\s+/g) ?? [block.text]) {
+      write({ type: 'stream_event', event: { type: 'content_block_delta', index: block.index, delta: { type: block.deltaType, [block.key]: piece } }, ...envelope });
+    }
+  }
+  write(obj);
+  for (const block of blocks) {
+    write({ type: 'stream_event', event: { type: 'content_block_stop', index: block.index }, ...envelope });
+  }
+}
 
 // Testability hook: CEZ_MOCK_ARGS_FILE=<path> appends the argv this mock was
 // spawned with (one JSON array per line), so tests and dry-run proofs can
