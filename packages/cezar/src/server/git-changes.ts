@@ -26,20 +26,53 @@ interface GitResult {
   stderr: string;
 }
 
+/** Hard cap on a single git invocation's stdout/stderr. Sized well above the per-file
+ *  `PATCH_CAP` (200_000) times a realistic file count — a working tree with hundreds of
+ *  sizeable changes can legitimately produce tens of MB of raw `--patch` output before
+ *  `assemblePayload` gets a chance to truncate each file down to its cap. */
+const MAX_GIT_OUTPUT = 128 * 1024 * 1024;
+
+/** Node's maxBuffer error code has moved before (`STDOUT`/`STDERR_MAXBUFFER` → `STDIO_MAXBUFFER`
+ *  across Node versions) — match on the stable `MAXBUFFER` substring instead of an exact code. */
+function isMaxBufferError(err: unknown): boolean {
+  const code = err && typeof err === 'object' && 'code' in err ? String((err as NodeJS.ErrnoException).code) : '';
+  return code.includes('MAXBUFFER');
+}
+
 /** Run git, never throw — degradation is the caller's policy. `env` overrides (e.g. a scratch
- *  `GIT_INDEX_FILE`) merge over the process env. */
-function git(cwd: string, args: string[], env?: Record<string, string>): Promise<GitResult> {
+ *  `GIT_INDEX_FILE`) merge over the process env.
+ *
+ *  A `maxBuffer` overflow kills the subprocess and hands back a truncated `stdout` — for `git
+ *  diff --patch` that truncated text is itself a `diff --git a/... b/...` header, so treating it
+ *  as "git's own words" (the policy above) surfaced the cut-off diff as a bogus git error. Detect
+ *  the overflow by its Node error code and report the real cause instead. */
+function git(
+  cwd: string,
+  args: string[],
+  env?: Record<string, string>,
+  maxBuffer: number = MAX_GIT_OUTPUT,
+): Promise<GitResult> {
   return new Promise((resolvePromise) => {
     execFile(
       'git',
       args,
       {
         cwd,
-        maxBuffer: 32 * 1024 * 1024,
+        maxBuffer,
         encoding: 'utf8',
         ...(env ? { env: { ...process.env, ...env } } : {}),
       },
-      (err, stdout, stderr) => resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
+      (err, stdout, stderr) => {
+        if (isMaxBufferError(err)) {
+          resolvePromise({
+            ok: false,
+            stdout: '',
+            stderr: `git ${args[0]} output exceeded the ${Math.round(maxBuffer / (1024 * 1024))}MB cap — too much uncommitted content to diff at once`,
+          });
+          return;
+        }
+        resolvePromise({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' });
+      },
     );
   });
 }
@@ -259,10 +292,13 @@ export async function collectChanges(
     intentToAdd?: boolean;
     taskBranch?: string;
     runStartedAt?: string;
+    /** Override for the `git diff` exec's stdout cap — test-only knob (default `MAX_GIT_OUTPUT`). */
+    maxOutputBytes?: number;
   } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
   const patchCap = opts.patchCap ?? PATCH_CAP;
+  const maxOutputBytes = opts.maxOutputBytes ?? MAX_GIT_OUTPUT;
   // `git add -N .` (intent-to-add) makes untracked files appear in the diff, but it MUTATES the
   // index — fine in a task worktree cezar owns, but forbidden on the user's real main tree (a
   // read-only GET must never stage files, #major-index-mutation). When `intentToAdd` is false we
@@ -295,11 +331,11 @@ export async function collectChanges(
       },
     );
 
-    const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env);
+    const nameStatus = await git(dir, ['diff', '--name-status', '-z', '-M', base], env, maxOutputBytes);
     if (!nameStatus.ok) return { ok: false, error: gitReason(nameStatus, 'git diff failed') };
-    const numstat = await git(dir, ['diff', '--numstat', '-z', '-M', base], env);
+    const numstat = await git(dir, ['diff', '--numstat', '-z', '-M', base], env, maxOutputBytes);
     if (!numstat.ok) return { ok: false, error: gitReason(numstat, 'git diff failed') };
-    const patchOut = await git(dir, ['diff', '--patch', '-M', '--no-color', base], env);
+    const patchOut = await git(dir, ['diff', '--patch', '-M', '--no-color', base], env, maxOutputBytes);
     if (!patchOut.ok) return { ok: false, error: gitReason(patchOut, 'git diff failed') };
 
     return {
