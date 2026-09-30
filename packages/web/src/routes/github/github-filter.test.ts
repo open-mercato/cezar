@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 
 import type { GithubItem } from '@open-mercato/cezar-api-client'
 
-import { allLabels, filterGithubItems, labelChipStyle, shouldSearchForge } from './github-filter'
+import {
+  allLabels,
+  filterGithubItems,
+  labelChipStyle,
+  shouldSearchForge,
+  sortGithubItems,
+} from './github-filter'
 
 const item = (over: Partial<GithubItem> & Pick<GithubItem, 'number' | 'title'>): GithubItem => ({
   kind: 'issue',
@@ -47,6 +53,65 @@ describe('filterGithubItems', () => {
 
   it('empty filter returns everything', () => {
     expect(filterGithubItems(items, {})).toHaveLength(3)
+  })
+})
+
+describe('sortGithubItems', () => {
+  const aged = [
+    item({ number: 10, title: 'oldest', createdAt: '2026-01-05T00:00:00Z' }),
+    item({ number: 30, title: 'newest', createdAt: '2026-03-05T00:00:00Z' }),
+    item({ number: 20, title: 'middle', createdAt: '2026-02-05T00:00:00Z' }),
+  ]
+
+  it('puts the most recent first for `newest`', () => {
+    expect(sortGithubItems(aged, 'newest').map((i) => i.number)).toEqual([30, 20, 10])
+  })
+
+  it('puts the longest-waiting first for `oldest` — the whole point of the toggle', () => {
+    expect(sortGithubItems(aged, 'oldest').map((i) => i.number)).toEqual([10, 20, 30])
+  })
+
+  // Sorting, not reversing: the cross-state search hits arrive in GitHub's best-match order, so
+  // `newest` has to be an active sort there rather than a no-op that leaves relevance order alone.
+  it('sorts by age even when the input order is unrelated to age', () => {
+    const byRelevance = [aged[2], aged[0], aged[1]]
+    expect(sortGithubItems(byRelevance, 'newest').map((i) => i.number)).toEqual([30, 20, 10])
+    expect(sortGithubItems(byRelevance, 'oldest').map((i) => i.number)).toEqual([10, 20, 30])
+  })
+
+  it('breaks `createdAt` ties on the number, so the order never depends on the input order', () => {
+    const sameSecond = [
+      item({ number: 7, title: 'a', createdAt: '2026-04-01T09:00:00Z' }),
+      item({ number: 9, title: 'b', createdAt: '2026-04-01T09:00:00Z' }),
+      item({ number: 8, title: 'c', createdAt: '2026-04-01T09:00:00Z' }),
+    ]
+    expect(sortGithubItems(sameSecond, 'newest').map((i) => i.number)).toEqual([9, 8, 7])
+    expect(sortGithubItems(sameSecond, 'oldest').map((i) => i.number)).toEqual([7, 8, 9])
+    // …and shuffling the input cannot change either answer.
+    const shuffled = [sameSecond[1], sameSecond[2], sameSecond[0]]
+    expect(sortGithubItems(shuffled, 'newest').map((i) => i.number)).toEqual([9, 8, 7])
+  })
+
+  it('never mutates the caller — the input is the query cache’s own array', () => {
+    const source = [...aged]
+    sortGithubItems(source, 'oldest')
+    expect(source.map((i) => i.number)).toEqual([10, 30, 20])
+  })
+
+  it('keeps an empty or unparseable createdAt deterministic instead of NaN-comparing it', () => {
+    const ragged = [
+      item({ number: 2, title: 'dated', createdAt: '2026-01-01T00:00:00Z' }),
+      item({ number: 1, title: 'blank', createdAt: '' }),
+      item({ number: 3, title: 'junk', createdAt: 'not-a-date' }),
+    ]
+    // Plain string order: '' < '2026-…' < 'not-a-date'. The only promise is that it is total and
+    // repeatable — a missing timestamp must not scramble the rows around it.
+    expect(sortGithubItems(ragged, 'oldest').map((i) => i.number)).toEqual([1, 2, 3])
+    expect(sortGithubItems(ragged, 'newest').map((i) => i.number)).toEqual([3, 2, 1])
+  })
+
+  it('returns an empty array for an empty list', () => {
+    expect(sortGithubItems([], 'oldest')).toEqual([])
   })
 })
 

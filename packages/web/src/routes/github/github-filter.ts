@@ -38,6 +38,39 @@ export function filterGithubItems(
   })
 }
 
+/** Which end of the backlog the list starts at. `newest` is the default and matches what
+ *  `gh {issue,pr} list` already returns, so it is the no-op order. */
+export type GithubSort = 'newest' | 'oldest'
+
+/**
+ * Order items by creation time — `newest` first (the default) or `oldest` first.
+ *
+ * The forge already answers created-descending, so `newest` is a no-op on a fresh payload. Sorting
+ * anyway rather than reversing only for `oldest` is deliberate: the tab also renders cross-state
+ * search hits, which come back in GitHub's *best-match* order, and `Array.prototype.reverse` on
+ * those would produce "worst match first" rather than an age order. One comparator gives both
+ * lists the same, explainable rule.
+ *
+ * Ties break on `number`, descending for `newest` and ascending for `oldest`. Bulk-opened PRs
+ * really do share a `createdAt` to the second, and `Array.prototype.sort` is only stable with
+ * respect to the input order — which, for the search hits, is relevance and therefore changes
+ * under the user as they type. The tiebreak makes the rendered order a function of the item set
+ * alone, so rows never reshuffle between renders.
+ *
+ * Returns a NEW array: the input is the react-query cache's own array, and sorting it in place
+ * would mutate cached payload behind the query client's back.
+ */
+export function sortGithubItems(items: readonly GithubItem[], sort: GithubSort): GithubItem[] {
+  // `localeCompare` would apply collation rules to what is an ISO-8601 timestamp; these sort
+  // correctly as plain strings, and an unparseable/empty `createdAt` still lands somewhere
+  // deterministic instead of becoming `NaN` the way `Date.parse` would.
+  const direction = sort === 'oldest' ? 1 : -1
+  return [...items].sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? -direction : direction
+    return (a.number - b.number) * direction
+  })
+}
+
 /**
  * Should the tab stop re-filtering what it already holds and ask the forge instead (#730)?
  *
