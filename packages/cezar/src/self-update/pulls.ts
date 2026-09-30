@@ -136,21 +136,18 @@ export class OpenPullsCache {
   async get(refresh = false): Promise<OpenPulls> {
     if (!refresh && this.value && Date.now() - this.at < CACHE_TTL_MS) return this.value;
     if (this.inFlight) return this.inFlight;
-    this.inFlight = this.load().then((value) => {
-      // Keep the last good list over a failed refresh.
-      if (value.available || !this.value) {
-        this.value = value;
-        this.at = Date.now();
-      }
-      this.inFlight = null;
-      return this.value!;
-    });
+    this.inFlight = this.load()
+      .then((value) => {
+        // Keep the last good list over a failed refresh.
+        if (value.available || !this.value) {
+          this.value = value;
+          this.at = Date.now();
+        }
+        return this.value!;
+      })
+      .finally(() => {
+        this.inFlight = null;
+      });
     return this.inFlight;
   }
-}
-
-/** The PR number a preview version was cut for (`0.13.0-pr1169.1234` → 1169), else null. */
-export function pullOfVersion(version: string): number | null {
-  const match = /-pr(\d+)\./.exec(version);
-  return match ? Number(match[1]) : null;
 }

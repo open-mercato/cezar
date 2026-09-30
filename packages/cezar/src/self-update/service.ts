@@ -281,8 +281,9 @@ export class SelfUpdateService {
 
   /** A checkout `status()` offers under `target`: build it when it is unbuilt or older than its
    *  last commit, link it and return its id. Null when no checkout answers to that id — the
-   *  target is then an installed entry or a registry version. Hosted cockpits never get here
-   *  with a checkout id: `forwardOnlyRefusal` rejects it (build metadata is not newer). */
+   *  target is then an installed entry or a registry version. A hosted cockpit never builds or
+   *  links here (`trimPaths`); at most it activates a link the host itself created, and only one
+   *  `forwardOnlyRefusal` lets through. */
   private async linkDiscovered(target: string, log: (line: string) => void): Promise<string | null> {
     if (this.deps.trimPaths?.()) return null;
     const checkout = (await discoverCheckouts(this.env)).find((entry) => entry.id === target);
@@ -292,7 +293,7 @@ export class SelfUpdateService {
       await (this.deps.buildCheckout ?? buildCheckout)(checkout, log);
     }
     log(`linking ${checkout.packageRoot} (${checkout.branch})`);
-    return linkCheckout(checkout.packageRoot, checkout.branch, this.env).id;
+    return linkCheckout(checkout.packageRoot, checkout.branch, this.env, checkout.id).id;
   }
 
   /** `cezar install` from a checkout or the npx cache: pack the running package into the managed

@@ -8,14 +8,14 @@
  */
 
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { workspaceConfigPath } from '../paths.ts';
 import { loadWorkspaceConfig } from '../workspace/config.ts';
 import { runNpm } from './installer.ts';
-import { linkId, listLinks, PACKAGE_NAME } from './layout.ts';
+import { linkId, listLinks, PACKAGE_NAME, readManifest, suffixedLinkId } from './layout.ts';
 
 const exec = promisify(execFile);
 
@@ -180,11 +180,12 @@ export async function discoverCheckouts(env: NodeJS.ProcessEnv = process.env): P
         builtAt: built ? builtAtOf(packageRoot) : null,
         stale: false,
         task: task ? { id: task.id, title: task.title, status: task.status } : null,
-        id: link?.id ?? safeLinkId(version, branch),
+        id: link?.id ?? '',
         linked: !!link,
       });
     }
   }
+  assignUniqueIds(found, links, env);
   const out = await Promise.all(
     found.map(async (checkout): Promise<CezarCheckout> => {
       const commit = await lastCommit(checkout.worktree);
@@ -194,6 +195,35 @@ export async function discoverCheckouts(env: NodeJS.ProcessEnv = process.env): P
   );
   // Newest work first: that is the branch a developer is most likely reaching for.
   return out.sort((a, b) => (b.commit?.at ?? '').localeCompare(a.commit?.at ?? ''));
+}
+
+/**
+ * Give every unlinked checkout an id no other checkout or install answers to: `apply` resolves a
+ * target by id, so two clones on `main` (or `cez/foo` beside `cez-foo`) sharing
+ * `<version>+main` would let a pick of one build and run the other. Links keep theirs; the
+ * first unlinked checkout on a slug keeps the plain id, later ones get `linkCheckout`'s
+ * path-hash suffix — which `linkDiscovered` then passes back so the link lands under it.
+ */
+function assignUniqueIds(found: Omit<CezarCheckout, 'commit'>[], links: { id: string; checkout?: string }[], env: NodeJS.ProcessEnv): void {
+  const owner = new Map<string, string>();
+  for (const link of links) owner.set(link.id, link.checkout ?? '');
+  for (const checkout of found) {
+    if (checkout.linked) continue;
+    const base = safeLinkId(checkout.version, checkout.branch);
+    if (!base) continue;
+    // Taken by another checkout, or by any install on disk (`+local` builds included).
+    const taken = owner.get(base) ?? (readManifest(base, env) ? '' : undefined);
+    checkout.id = taken === undefined || taken === checkout.packageRoot ? base : safeSuffixed(base, checkout.packageRoot);
+    if (checkout.id) owner.set(checkout.id, checkout.packageRoot);
+  }
+}
+
+function safeSuffixed(base: string, packageRoot: string): string {
+  try {
+    return suffixedLinkId(base, packageRoot);
+  } catch {
+    return '';
+  }
 }
 
 function safeLinkId(version: string, branch: string): string {
@@ -237,9 +267,26 @@ export async function buildCheckout(
     }
   })();
   const steps = packageRoot !== worktree && scripts['build:server'] && scripts['build:web'] ? ['build:server', 'build:web'] : ['build'];
-  for (const step of steps) {
-    onLog(`npm run ${step} in ${worktree}`);
-    await npm(['run', step], worktree, onLog);
+  // A rebuild of the worktree cezar is running from empties the `web/dist` it serves (vite's
+  // `emptyOutDir`): keep a copy, so a build that fails leaves the old cockpit, not none.
+  const webDist = join(packageRoot, 'web', 'dist');
+  const backup = join(packageRoot, 'web', '.dist-before-build');
+  rmSync(backup, { recursive: true, force: true });
+  if (existsSync(join(webDist, 'index.html'))) cpSync(webDist, backup, { recursive: true });
+  try {
+    for (const step of steps) {
+      onLog(`npm run ${step} in ${worktree}`);
+      await npm(['run', step], worktree, onLog);
+    }
+    if (!isBuilt(packageRoot)) throw new Error(`${worktree} built, but dist/index.js or web/dist is still missing`);
+  } catch (error) {
+    if (existsSync(backup) && !existsSync(join(webDist, 'index.html'))) {
+      rmSync(webDist, { recursive: true, force: true });
+      renameSync(backup, webDist);
+      onLog('the build failed — restored the previous cockpit build');
+    }
+    throw error;
+  } finally {
+    rmSync(backup, { recursive: true, force: true });
   }
-  if (!isBuilt(packageRoot)) throw new Error(`${worktree} built, but dist/index.js or web/dist is still missing`);
 }

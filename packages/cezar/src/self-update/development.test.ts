@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchOpenPulls, OpenPullsCache, pullOfVersion, type OpenPull, type OpenPulls } from './pulls.ts';
+import { fetchOpenPulls, OpenPullsCache, type OpenPull, type OpenPulls } from './pulls.ts';
 import { RegistryCache } from './registry.ts';
 import { SelfUpdateService } from './service.ts';
 
@@ -18,13 +18,6 @@ const pull = (number: number, updatedAt: string, branch = `feat/${number}`): Ope
 });
 
 describe('open pull requests', () => {
-  it('reads the PR a preview version was cut for', () => {
-    expect(pullOfVersion('0.13.0-pr1169.1300')).toBe(1169);
-    expect(pullOfVersion('0.9.2-pr743.1156.2')).toBe(743);
-    expect(pullOfVersion('0.13.0-nightly.20260929.55')).toBeNull();
-    expect(pullOfVersion('0.13.0')).toBeNull();
-  });
-
   it('asks gh first, newest update first', async () => {
     const result = await fetchOpenPulls('o/r', { env: {}, gh: async () => [pull(1, '2026-09-01T00:00:00Z'), pull(2, '2026-09-02T00:00:00Z')] });
     expect(result).toEqual({ available: true, items: [pull(2, '2026-09-02T00:00:00Z'), pull(1, '2026-09-01T00:00:00Z')] });
