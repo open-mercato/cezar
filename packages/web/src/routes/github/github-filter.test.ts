@@ -57,11 +57,10 @@ describe('filterGithubItems', () => {
 })
 
 describe('sortGithubItems', () => {
-  const aged = [
-    item({ number: 10, title: 'oldest', createdAt: '2026-01-05T00:00:00Z' }),
-    item({ number: 30, title: 'newest', createdAt: '2026-03-05T00:00:00Z' }),
-    item({ number: 20, title: 'middle', createdAt: '2026-02-05T00:00:00Z' }),
-  ]
+  const oldest = item({ number: 10, title: 'oldest', createdAt: '2026-01-05T00:00:00Z' })
+  const middle = item({ number: 20, title: 'middle', createdAt: '2026-02-05T00:00:00Z' })
+  const newest = item({ number: 30, title: 'newest', createdAt: '2026-03-05T00:00:00Z' })
+  const aged = [oldest, newest, middle]
 
   it('puts the most recent first for `newest`', () => {
     expect(sortGithubItems(aged, 'newest').map((i) => i.number)).toEqual([30, 20, 10])
@@ -74,22 +73,20 @@ describe('sortGithubItems', () => {
   // Sorting, not reversing: the cross-state search hits arrive in GitHub's best-match order, so
   // `newest` has to be an active sort there rather than a no-op that leaves relevance order alone.
   it('sorts by age even when the input order is unrelated to age', () => {
-    const byRelevance = [aged[2], aged[0], aged[1]]
+    const byRelevance = [middle, oldest, newest]
     expect(sortGithubItems(byRelevance, 'newest').map((i) => i.number)).toEqual([30, 20, 10])
     expect(sortGithubItems(byRelevance, 'oldest').map((i) => i.number)).toEqual([10, 20, 30])
   })
 
   it('breaks `createdAt` ties on the number, so the order never depends on the input order', () => {
-    const sameSecond = [
-      item({ number: 7, title: 'a', createdAt: '2026-04-01T09:00:00Z' }),
-      item({ number: 9, title: 'b', createdAt: '2026-04-01T09:00:00Z' }),
-      item({ number: 8, title: 'c', createdAt: '2026-04-01T09:00:00Z' }),
-    ]
-    expect(sortGithubItems(sameSecond, 'newest').map((i) => i.number)).toEqual([9, 8, 7])
-    expect(sortGithubItems(sameSecond, 'oldest').map((i) => i.number)).toEqual([7, 8, 9])
+    const tiedAt = '2026-04-01T09:00:00Z'
+    const seven = item({ number: 7, title: 'a', createdAt: tiedAt })
+    const eight = item({ number: 8, title: 'c', createdAt: tiedAt })
+    const nine = item({ number: 9, title: 'b', createdAt: tiedAt })
+    expect(sortGithubItems([seven, nine, eight], 'newest').map((i) => i.number)).toEqual([9, 8, 7])
+    expect(sortGithubItems([seven, nine, eight], 'oldest').map((i) => i.number)).toEqual([7, 8, 9])
     // …and shuffling the input cannot change either answer.
-    const shuffled = [sameSecond[1], sameSecond[2], sameSecond[0]]
-    expect(sortGithubItems(shuffled, 'newest').map((i) => i.number)).toEqual([9, 8, 7])
+    expect(sortGithubItems([nine, eight, seven], 'newest').map((i) => i.number)).toEqual([9, 8, 7])
   })
 
   it('never mutates the caller — the input is the query cache’s own array', () => {
