@@ -22,6 +22,8 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 
+import { DevelopmentPanel, pullOfVersion } from './self-update-development'
+
 /**
  * The dialog behind the footer's version chip (self-update PoC): which channel cezar follows,
  * whether something newer is out, and a picker over every stable release and nightly so a
@@ -88,9 +90,7 @@ export function SelfUpdateDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <span>cezar {data ? `v${data.version}` : ''}</span>
-            {data?.installed.find((entry) => entry.active)?.source === 'local' ? (
-              <Badge variant="outline">local build</Badge>
-            ) : null}
+            <ActiveBadge data={data} />
           </DialogTitle>
           <DialogDescription className="sr-only">Update cezar, pick a release channel or switch versions.</DialogDescription>
         </DialogHeader>
@@ -114,13 +114,17 @@ export function SelfUpdateDialog({
               applying={apply.isPending}
             />
 
-            <VersionPicker
-              data={data}
-              picked={picked}
-              onPick={setPicked}
-              onApply={(version) => apply.mutate(version)}
-              applying={apply.isPending}
-            />
+            {data.channel === 'development' ? (
+              <DevelopmentPanel data={data} onApply={(target) => apply.mutate(target)} applying={apply.isPending} />
+            ) : (
+              <VersionPicker
+                data={data}
+                picked={picked}
+                onPick={setPicked}
+                onApply={(version) => apply.mutate(version)}
+                applying={apply.isPending}
+              />
+            )}
 
             {!data.canSelfUpdate ? <InstallHint data={data} /> : null}
 
@@ -128,6 +132,17 @@ export function SelfUpdateDialog({
               <p className="rounded-md border border-pending/50 bg-pending/10 px-3 py-2 text-[12.5px] text-foreground">
                 {data.activeRuns} task{data.activeRuns === 1 ? ' is' : 's are'} running. A restart interrupts
                 them; cezar re-queues or resumes them on the way back up.
+              </p>
+            ) : null}
+
+            {setChannel.error ? (
+              <p className="text-[12.5px] text-danger">
+                Could not switch the channel: {setChannel.error.message}
+                {/* The cockpit is read from disk on every request, the server only at boot: a rebuilt
+                    worktree can show a channel its still-running server has never heard of. */}
+                {setChannel.variables === 'development'
+                  ? ' The running cezar server predates the Development channel — restart cezar to load it.'
+                  : null}
               </p>
             ) : null}
 
@@ -146,7 +161,14 @@ export function SelfUpdateDialog({
 const CHANNELS: { value: UpdateChannel; label: string }[] = [
   { value: 'stable', label: 'Stable' },
   { value: 'nightly', label: 'Nightly' },
+  { value: 'development', label: 'Development' },
 ]
+
+const CHANNEL_HINTS: Record<UpdateChannel, string> = {
+  stable: 'Tagged releases.',
+  nightly: 'A fresh build of main every night.',
+  development: 'A cezar worktree or an open pull request. Never updates on its own.',
+}
 
 function ChannelToggle({
   data,
@@ -162,7 +184,7 @@ function ChannelToggle({
       <div className="min-w-0">
         <div className="text-[13px] font-semibold">Release channel</div>
         <div className="text-[12px] text-muted-foreground">
-          {data.channel === 'stable' ? 'Tagged releases.' : 'A fresh build of main every night.'}
+          {CHANNEL_HINTS[data.channel]}
         </div>
       </div>
       <div
@@ -209,6 +231,77 @@ function LatestCard({
   applying: boolean
 }) {
   const jobBusy = data.job?.status === 'running' || data.job?.status === 'restarting'
+  // A linked worktree or a local build shares its version number with a release but is not that
+  // release: "newest version" would be a claim about code cezar did not ship. Offer the channel's
+  // newest release as the way back instead.
+  const active = data.installed.find((entry) => entry.active)
+  const pr = active?.source === 'registry' ? pullOfVersion(active.version) : null
+  const dev = active && (active.source === 'link' || active.source === 'local' || pr !== null) ? active : null
+  if (dev || data.channel === 'development') {
+    // Development never offers an update; the way back to releases is the channel toggle.
+    const release = data.channel === 'development' ? null : data.latest[data.channel]
+    // "Back to" only when that release is really on disk; otherwise it is a download.
+    const releaseInstalled = release !== null && data.installed.some((entry) => entry.source === 'registry' && entry.id === release)
+    // Stacked rather than side by side: branch names and nightly versions are long enough to
+    // squeeze a one-row layout into a narrow word-per-line column.
+    return (
+      <div data-slot="self-update-latest" className="flex flex-col gap-2 rounded-md border border-border bg-card px-3 py-2.5">
+        <div className="min-w-0 text-[13px] break-words">
+          {dev?.source === 'link' ? (
+            <>
+              Running worktree <span className="font-mono text-[12.5px] font-semibold">{dev.branch ?? dev.id}</span>, not
+              a release.
+            </>
+          ) : dev?.source === 'local' ? (
+            <>Running a local build, not a release.</>
+          ) : pr !== null ? (
+            <>
+              Running the preview build of <span className="font-semibold">PR #{pr}</span>, not a release.
+            </>
+          ) : (
+            <>
+              Running <span className="font-semibold">v{data.version}</span>. Pick a worktree or a pull request below.
+            </>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+          <div className="min-w-0 text-[11.5px] break-words text-muted-foreground">
+            {data.channel === 'development' ? (
+              'Switch the channel back to Stable or Nightly to follow releases again.'
+            ) : !data.checkedAt ? (
+              'The npm registry has not answered yet.'
+            ) : (
+              <>
+                {release ? (
+                  <>
+                    Newest {data.channel}: <span className="font-mono text-foreground">v{release}</span> ·{' '}
+                  </>
+                ) : null}
+                checked {new Date(data.checkedAt).toLocaleTimeString()}
+              </>
+            )}
+          </div>
+          {data.channel !== 'development' ? (
+            <div className="ml-auto flex shrink-0 items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={onCheck} disabled={checking || jobBusy}>
+                {checking ? 'Checking…' : 'Check again'}
+              </Button>
+              {release ? (
+                <Button
+                  size="sm"
+                  aria-label={releaseInstalled ? `Back to v${release}` : `Install v${release} & restart`}
+                  onClick={() => onApply(release)}
+                  disabled={!data.canSelfUpdate || applying || jobBusy}
+                >
+                  {releaseInstalled ? 'Switch back' : 'Install & restart'}
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
   const target = data.updateAvailable
   return (
     <div
@@ -322,6 +415,15 @@ function VersionPicker({
       </p>
     </div>
   )
+}
+
+function ActiveBadge({ data }: { data: SelfUpdateStatus | undefined }) {
+  const active = data?.installed.find((entry) => entry.active)
+  if (active?.source === 'local') return <Badge variant="outline">local build</Badge>
+  if (active?.source === 'link') return <Badge variant="outline">worktree · {active.branch ?? active.id}</Badge>
+  const pr = active ? pullOfVersion(active.version) : null
+  if (pr !== null) return <Badge variant="outline">PR #{pr} build</Badge>
+  return null
 }
 
 function InstallHint({ data }: { data: SelfUpdateStatus }) {
