@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { SelfUpdateDevelopment, SelfUpdateStatus } from '@open-mercato/cezar-api-client'
 import { workspaceQueryKeys } from '@/api/queries'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
+import { pullOfVersion } from '@/components/self-update-development'
 
 const applySelfUpdate = vi.hoisted(() => vi.fn())
 const setSelfUpdateChannel = vi.hoisted(() => vi.fn())
@@ -252,7 +253,7 @@ describe('SelfUpdateDialog', () => {
     const list = screen.getByRole('listbox', { name: 'Pull requests' })
     // A PR without a build is hidden until asked for.
     expect(within(list).getAllByRole('option')).toHaveLength(1)
-    fireEvent.click(within(list).getByRole('button', { name: /1 more without a preview build/ }))
+    fireEvent.click(screen.getByRole('button', { name: /1 more without a preview build/ }))
     const rows = within(list).getAllByRole('option')
     expect(rows[1]!.textContent).toContain('no build')
     expect(rows[1]!.getAttribute('aria-disabled')).toBe('true')
@@ -349,5 +350,14 @@ describe('SelfUpdateDialog', () => {
     )
     fireEvent.click(await screen.findByRole('button', { name: /close/i }))
     expect(onOpenChange).not.toHaveBeenCalled()
+  })
+})
+
+describe('pullOfVersion', () => {
+  it('reads the PR a preview version was cut for', () => {
+    expect(pullOfVersion('0.13.0-pr1169.1300')).toBe(1169)
+    expect(pullOfVersion('0.9.2-pr743.1156.2')).toBe(743)
+    expect(pullOfVersion('0.13.0-nightly.20260929.55')).toBeNull()
+    expect(pullOfVersion('0.13.0')).toBeNull()
   })
 })

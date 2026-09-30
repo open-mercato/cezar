@@ -216,7 +216,7 @@ export interface LinkResult {
  * checkout replaces its previous entry (the version or branch may have moved since); a
  * DIFFERENT checkout that would get the same id gets a path-derived suffix instead.
  */
-export function linkCheckout(packageRoot: string, branch: string, env: NodeJS.ProcessEnv = process.env): LinkResult {
+export function linkCheckout(packageRoot: string, branch: string, env: NodeJS.ProcessEnv = process.env, preferredId?: string): LinkResult {
   let root = resolve(packageRoot);
   try {
     root = realpathSync(root);
@@ -237,9 +237,13 @@ export function linkCheckout(packageRoot: string, branch: string, env: NodeJS.Pr
   for (const entry of installed) {
     if (entry.checkout === root && entry.id !== activeId(env)) removeInstalled(entry.id, env);
   }
-  let id = linkId(version, branch);
+  // Discovery may already have told this checkout apart from a sibling on the same slug
+  // (`preferredId`, the suffixed form): link it under the id the picker showed.
+  const base = linkId(version, branch);
+  const suffixed = suffixedLinkId(base, root);
+  let id = preferredId === suffixed ? suffixed : base;
   const clash = readManifest(id, env);
-  if (clash && clash.checkout !== root) id = assertSafeId(`${id}.${shortHash(root)}`);
+  if (clash && clash.checkout !== root) id = suffixed;
 
   const scopeDir = join(versionDir(id, env), 'node_modules', ...PACKAGE_NAME.split('/').slice(0, -1));
   const link = join(scopeDir, PACKAGE_NAME.split('/').pop()!);
@@ -263,6 +267,11 @@ export function listLinks(env: NodeJS.ProcessEnv = process.env): InstalledEntry[
     if (manifest?.source === 'link') out.push({ ...manifest, id: name, active: name === active });
   }
   return out;
+}
+
+/** The id a checkout gets when `base` already belongs to another checkout or install. */
+export function suffixedLinkId(base: string, packageRoot: string): string {
+  return assertSafeId(`${base}.${shortHash(packageRoot)}`);
 }
 
 function shortHash(value: string): string {

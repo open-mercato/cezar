@@ -130,27 +130,28 @@ export function DevelopmentPanel({
         className="h-8 text-[13px]"
       />
 
-      <div role="listbox" aria-label={tab === 'worktrees' ? 'Worktrees' : 'Pull requests'} className="max-h-72 min-h-24 overflow-y-auto rounded-md border border-border">
+      {/* Status lines and the "show unbuilt" toggle sit beside the listbox, not in it: a listbox
+          may only hold options. */}
+      <div className="max-h-72 min-h-24 overflow-y-auto rounded-md border border-border">
         {dev.isPending ? (
           <p className="px-3 py-3 text-[12.5px] text-muted-foreground">Looking for worktrees and pull requests…</p>
         ) : dev.error ? (
           <p className="px-3 py-3 text-[12.5px] text-danger">{dev.error.message}</p>
         ) : tab === 'worktrees' ? (
-          shownCheckouts.length === 0 ? (
-            <p className="px-3 py-3 text-[12.5px] text-muted-foreground">
-              Nothing matches.
-            </p>
-          ) : (
-            shownCheckouts.map((checkout) => (
-              <CheckoutRow
-                key={checkout.worktree}
-                checkout={checkout}
-                active={checkout.id === active?.id}
-                selected={picked === checkout.id}
-                onSelect={() => setPicked(checkout.id)}
-              />
-            ))
-          )
+          <>
+            {shownCheckouts.length === 0 ? <p className="px-3 py-3 text-[12.5px] text-muted-foreground">Nothing matches.</p> : null}
+            <div role="listbox" aria-label="Worktrees">
+              {shownCheckouts.map((checkout) => (
+                <CheckoutRow
+                  key={checkout.worktree}
+                  checkout={checkout}
+                  active={checkout.id === active?.id}
+                  selected={picked === checkout.id}
+                  onSelect={() => setPicked(checkout.id)}
+                />
+              ))}
+            </div>
+          </>
         ) : (
           <>
             {pulls && !pulls.available ? <p className="px-3 py-2 text-[12px] text-muted-foreground">{pulls.reason}</p> : null}
@@ -163,20 +164,22 @@ export function DevelopmentPanel({
                     : 'No open pull request has a preview build.'}
               </p>
             ) : null}
-            {shownPulls.map((pull) => (
-              <PullRow
-                key={pull.number}
-                pull={pull}
-                active={!!pull.version && pull.version === active?.id}
-                selected={!!pull.version && picked === pull.version}
-                onSelect={() => pull.version && setPicked(pull.version)}
-              />
-            ))}
+            <div role="listbox" aria-label="Pull requests">
+              {shownPulls.map((pull) => (
+                <PullRow
+                  key={pull.number}
+                  pull={pull}
+                  active={!!pull.version && pull.version === active?.id}
+                  selected={!!pull.version && picked === pull.version}
+                  onSelect={() => pull.version && setPicked(pull.version)}
+                />
+              ))}
+            </div>
             {unbuilt > 0 ? (
               <button
                 type="button"
                 onClick={() => setShowUnbuilt((value) => !value)}
-                className="w-full px-3 py-2 text-left text-[12px] text-muted-foreground hover:text-foreground"
+                className="w-full border-t border-border px-3 py-2 text-left text-[12px] text-muted-foreground hover:text-foreground"
               >
                 {showUnbuilt
                   ? `Hide the ${unbuilt} without a preview build`

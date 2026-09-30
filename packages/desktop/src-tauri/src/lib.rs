@@ -454,7 +454,7 @@ fn version_newer(candidate: &str, current: &str) -> bool {
 fn check_cezar_update(app: &AppHandle, shell: &Shell) {
     let running = shell.running_version.lock().unwrap().clone();
     let Some(running) = running else { return };
-    let tag = release_tag();
+    let Some(tag) = release_tag() else { return };
     let mut command = tool_command(npm_program(), &["view", &format!("{PACKAGE}@{tag}"), "version", "--json"]);
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null());
     let Ok(output) = command.output() else { return };
@@ -877,6 +877,13 @@ fn require_node(window: &WebviewWindow) -> bool {
 /// npm's output to the splash. On success with a sidecar running, asks the supervisor loop to
 /// relaunch. Returns whether the install succeeded.
 fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
+    // The development channel never replaces the build picked by hand; only a machine with no
+    // cezar at all gets the newest release, so the app can start.
+    let tag = match release_tag() {
+        Some(tag) => tag,
+        None if resolve_entry().is_none() => "latest",
+        None => return false,
+    };
     if shell.updating.swap(true, Ordering::SeqCst) {
         return false;
     }
@@ -884,7 +891,6 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
         shell.updating.store(false, Ordering::SeqCst);
         return false;
     };
-    let tag = release_tag();
     let versions = cezar_home().join("versions");
     splash_reset(&window, title, &format!("{PACKAGE}@{tag} → {}", versions.display()));
 
@@ -939,16 +945,23 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
     ok
 }
 
-/// `updateChannel` from `~/.cezar/config.json` → the npm dist-tag; `latest` when unset.
-fn release_tag() -> &'static str {
+/// `updateChannel` from `~/.cezar/config.json` → the npm dist-tag; `latest` when unset. `None`
+/// for `development`: a worktree or PR build picked by hand follows no tag, so nothing is ever
+/// offered or installed over it.
+fn release_tag() -> Option<&'static str> {
     let config = cezar_home().join("config.json");
     let channel = std::fs::read_to_string(config)
         .ok()
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
         .and_then(|json| json.get("updateChannel").and_then(|value| value.as_str()).map(str::to_owned));
-    match channel.as_deref() {
-        Some("nightly") => "nightly",
-        _ => "latest",
+    channel_tag(channel.as_deref())
+}
+
+fn channel_tag(channel: Option<&str>) -> Option<&'static str> {
+    match channel {
+        Some("nightly") => Some("nightly"),
+        Some("development") => None,
+        _ => Some("latest"),
     }
 }
 
@@ -1495,6 +1508,14 @@ mod tests {
     /// The legacy inset rule matches `div`s under the app shell, and the strip and the row this
     /// script adds ARE `div`s under the app shell. Inset too, the row pushed the version chip
     /// onto the brand row (shell 0.1.1).
+    #[test]
+    fn the_development_channel_follows_no_dist_tag() {
+        assert_eq!(channel_tag(Some("development")), None);
+        assert_eq!(channel_tag(Some("nightly")), Some("nightly"));
+        assert_eq!(channel_tag(Some("stable")), Some("latest"));
+        assert_eq!(channel_tag(None), Some("latest"));
+    }
+
     #[test]
     fn a_linked_worktree_reads_as_its_branch() {
         assert_eq!(version_label("0.13.0", "link", Some("cez/cb28888e")), "cez/cb28888e — 0.13.0 (worktree)");

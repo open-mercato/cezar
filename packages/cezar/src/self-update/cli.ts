@@ -85,7 +85,7 @@ async function updateCommand(opts: SelfUpdateCliOptions): Promise<number> {
     // Development follows no dist-tag: there is no "newest" to update to.
     console.log('\n  channel development — nothing to update to. Pick a build by hand:');
     console.log('    cezar link [<worktree>] --use   run a cezar worktree');
-    console.log('    cezar update <version>           install a release or a PR preview (e.g. 0.13.0-pr1169.1234)');
+    console.log('    cezar update --version <version> install a release or a PR preview (e.g. 0.13.0-pr1169.1234)');
     console.log('    cezar update --channel stable    go back to releases\n');
     return 0;
   }

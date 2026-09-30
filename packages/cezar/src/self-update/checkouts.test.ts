@@ -194,6 +194,57 @@ describe('linked checkouts', () => {
     await expect(buildCheckout({ worktree: home, packageRoot: join(home, 'nothing') }, () => {}, async () => {})).rejects.toThrow(/still missing/);
   });
 
+  it('a failed rebuild keeps the cockpit build the running server serves', async () => {
+    const worktree = join(home, 'wt');
+    const pkg = fakeCheckout(worktree, '0.13.0', true);
+    writeFileSync(join(worktree, 'package.json'), JSON.stringify({ scripts: { 'build:server': 'x', 'build:web': 'x' } }));
+    mkdirSync(join(worktree, 'node_modules'), { recursive: true });
+    const npm = async (args: string[]) => {
+      if (args[1] !== 'build:web') return;
+      rmSync(join(pkg, 'web', 'dist'), { recursive: true, force: true }); // vite's emptyOutDir
+      throw new Error('vite exited with 1');
+    };
+    await expect(buildCheckout({ worktree, packageRoot: pkg }, () => {}, npm)).rejects.toThrow(/vite exited/);
+    expect(existsSync(join(pkg, 'web', 'dist', 'index.html'))).toBe(true);
+    expect(existsSync(join(pkg, 'web', '.dist-before-build'))).toBe(false);
+  });
+
+  // Two clones on `main` both slug to `0.13.0+main`; `apply` resolves by id, so a shared id let a
+  // pick of one clone build and run the other.
+  it('gives two checkouts on the same branch distinct ids, and apply() runs the one picked', async () => {
+    const clone = (name: string) => {
+      const repo = join(home, name);
+      fakeCheckout(repo);
+      git(repo, 'init', '-q', '-b', 'main');
+      git(repo, 'add', '.');
+      git(repo, 'commit', '-q', '-m', `init ${name}`);
+      return realpathSync(repo);
+    };
+    const a = clone('a');
+    const b = clone('b');
+    mkdirSync(env.CEZ_HOME!, { recursive: true });
+    writeFileSync(join(env.CEZ_HOME!, 'config.json'), JSON.stringify({ projects: [{ id: 'a', root: a }, { id: 'b', root: b }] }));
+
+    const ids = async () => new Map((await discoverCheckouts(env)).map((c) => [c.worktree, c.id]));
+    const before = await ids();
+    expect(before.get(a)).toBe('0.13.0+main');
+    expect(before.get(b)).toMatch(/^0\.13\.0\+main\.[0-9a-z]+$/);
+
+    const svc = new SelfUpdateService({
+      pkgName: '@open-mercato/cezar',
+      version: '0.13.0',
+      entry: join(versionsDir(env), 'current', 'node_modules', '@open-mercato', 'cezar', 'dist', 'index.js'),
+      restart: () => {},
+      env,
+    });
+    const job = svc.apply(before.get(b)!);
+    await vi.waitFor(() => expect(job.status).toBe('restarting'));
+    expect(activeId(env)).toBe(before.get(b));
+    expect(listLinks(env).find((link) => link.id === before.get(b))?.checkout).toBe(join(b, 'packages', 'cezar'));
+    // Linking B under its suffixed id leaves A's plain id free — and both stay put.
+    expect(await ids()).toEqual(before);
+  });
+
   // "not built" and "needs rebuild" used to be dead ends in the picker: switching now builds first.
   it('apply() builds an unbuilt worktree, then links, activates and restarts into it', async () => {
     const repo = join(home, 'repo');
