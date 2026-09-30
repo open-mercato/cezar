@@ -362,6 +362,9 @@ interface ActiveRun {
   monitoringWakeTimer?: NodeJS.Timeout;
   monitoringWakeIntervalMinutes?: number;
   monitoringWakeups?: number;
+  /** A wake-timer fire was skipped because the run has in-flight children (the supervision
+   *  exemption in `armMonitoringWakeTimer`). Only gates the one-per-stretch note. */
+  monitoringWakeDeferred?: boolean;
   autosaveTimer?: NodeJS.Timeout;
   cancellationTimer?: NodeJS.Timeout;
   /* The screenshot counter lives on `RunManager.queuedImageSeq` (#472), keyed by
@@ -1975,10 +1978,13 @@ export class RunManager {
   private deliverOwnInbox(runId: string, state: ActiveRun, stepId: string, turnText: string): boolean {
     if (!state.autonomous || state.cancelled || !state.session?.open) return false;
     if (parseAskMarker(turnText) !== null) return false;
-    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    // The supervision exemption `tryAutonomousNudge` applies to the same budget: a commander
+    // hearing from its tree while children are in flight is supervising, not spinning.
+    const supervising = inFlightChildren(this.store.listRuns(), runId).length > 0;
+    if (!supervising && (state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     const digest = this.flushInbox(runId);
     if (!digest || !state.session.sendMessage([{ type: 'text', text: digest }])) return false;
-    state.autoContinues = (state.autoContinues ?? 0) + 1;
+    if (!supervising) state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
       stepId,
@@ -5515,6 +5521,27 @@ export class RunManager {
       state.monitoringWakeTimer = undefined;
       this.store.updateRun(runId, { monitoringWakeAt: undefined });
       if (!this.monitoring.has(runId) || !state.session?.open || state.cancelled) return;
+      // Supervision exemption (spec 2026-09-10-dispatch), the wake-timer twin of the one in
+      // `tryAutonomousNudge`: a commander parked on in-flight children is woken by their
+      // settle reports (`reportSettledChildToParent` resets this counter and delivers into the
+      // session), so a timed re-check has nothing to find — it only burns a turn and one of
+      // the 40 wake-ups, and a 5-minute default drained the cap in ~3h of healthy
+      // supervision. Re-arm without waking or counting, so the timer itself stays an exit: the
+      // first fire after the last child leaves flight (even one cancelled alone, which sends no
+      // report) wakes the run as before. A settled child's report and a user message still
+      // wake it immediately.
+      if (inFlightChildren(this.store.listRuns(), runId).length > 0) {
+        if (!state.monitoringWakeDeferred) {
+          state.monitoringWakeDeferred = true;
+          this.store.appendEvent(runId, {
+            type: 'note',
+            message: 'automatic monitoring wake-ups paused while subtasks are in flight — their reports wake the run',
+          });
+        }
+        this.armMonitoringWakeTimer(runId, state);
+        return;
+      }
+      state.monitoringWakeDeferred = false;
       const wakeups = state.monitoringWakeups ?? 0;
       if (wakeups >= MAX_AUTO_CONTINUES) {
         this.store.updateRun(runId, { monitoringWakeCapReached: true });
