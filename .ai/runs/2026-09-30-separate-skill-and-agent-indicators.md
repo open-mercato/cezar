@@ -35,14 +35,16 @@ reaches the history-hydration path too.
 - Skills consequently drop out of the Agents dock and out of the history root-episode retention —
   locked in with regression tests, not left implicit.
 - Mark skills separately in the UI: their own icon and title split in the transcript, plus a slim
-  Skills dock line naming the skill(s) governing the live run.
+  Skills dock line naming the skill(s) governing the run. Not gated on the run being live — a
+  finished run should still say which skill produced it, and unlike a fan-out there is nothing
+  transient to go stale.
 
 ## Non-goals
 
 - No change to sub-agent collection, nesting, the drill-down sheet, or the dock's visibility rules.
 - No new lifecycle for skills. A `Skill` call settles immediately and has no observable "running"
   phase, so the Skills dock deliberately shows **no `N/M` odometer** — inventing one would be a
-  fabricated progress signal. It names the active skill, nothing more.
+  fabricated progress signal. It names the skill, nothing more.
 - No change to how runs are launched with a skill or workflow, and no change to the run-level
   lifecycle lines (`run started — workflow …`).
 - Historical NDJSON recorded before this change still carries `toolKind: 'task'` for skills and is
@@ -97,6 +99,14 @@ reading a newer run's events degrades to the generic wrench rather than breaking
   shipping a client/server disagreement.
 - No browser is available on this machine (Chrome cannot launch), so the UI additions are verified
   by unit tests and code reading, not screenshots. Disclosed on the PR.
+- **Known consequence, deliberately not fixed here.** `pruneSettledHistory` in
+  `event-history.ts` only splices retained turn boundaries when the run has at least one root
+  episode, so a run with no root keeps every boundary in its `/context` response. That is the
+  pre-existing behavior of every run that dispatches no sub-agent; a skill-launched run used to
+  escape it only by accident, because the skill itself counted as a root. Such runs now get the
+  same treatment as the rest. The real defect is the retention walk's dependence on roots, which
+  predates this change — fixing it means reworking the fan-out carry-over semantics and does not
+  belong in this diff.
 
 ## Progress
 
