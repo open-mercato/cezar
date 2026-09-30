@@ -539,8 +539,12 @@ export function GithubRoute({
               Pull requests · {countLabel(gh.prs.length)}
             </TabLink>
           </div>
-          <div className="mt-2.5 flex items-center gap-2 pb-3">
-            <div className="relative min-w-0 flex-1">
+          {/* Wraps rather than squeezes: on a phone the sort control below is ~145px, and with
+              a non-wrapping row the search field shrank to about a quarter of its placeholder.
+              The field's `min-w` is what forces the wrap — `flex-1` alone would keep shrinking
+              it to nothing instead. Nothing wraps once there is room, so desktop is unchanged. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 pb-3">
+            <div className="relative min-w-[11rem] flex-1">
               <SearchIcon
                 aria-hidden="true"
                 className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-soft-foreground"
