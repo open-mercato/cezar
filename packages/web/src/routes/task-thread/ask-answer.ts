@@ -8,7 +8,7 @@ import {
   useActiveProviderAvailability,
   useExistingProviderAvailability,
 } from './active-provider'
-import { isRunActive, lastSessionId, runActionFlags } from './run-actions'
+import { isRunActive, lastSessionId } from './run-actions'
 
 /**
  * Which seam an AskUser answer travels on.
@@ -20,14 +20,16 @@ import { isRunActive, lastSessionId, runActionFlags } from './run-actions'
  *                the opening prompt of `POST /api/runs/:id/continue`, which reopens
  *                the last recorded session and appends the answer as a
  *                `user-message` — the very event that resolves the card.
- *  - `unavailable` — the run is closed and never recorded a session, so there is
- *                nothing to reopen and the answer has nowhere to go.
+ *
+ * There is no third, "nowhere to send it" mode any more: `/continue` reopens the recorded
+ * session when there is one and otherwise opens a fresh session briefed with the old one's
+ * transcript, so every closed run can still take an answer.
  */
-export type AskDeliveryMode = 'live' | 'resume' | 'unavailable'
+export type AskDeliveryMode = 'live' | 'resume'
 
-/** Why an answer cannot be delivered right now — `provider` is recoverable from
- *  Settings, `no-session` is terminal for this run. */
-export type AskBlockedReason = 'provider' | 'no-session'
+/** Why an answer cannot be delivered right now. Provider trouble only — and recoverable from
+ *  Settings, which is the point: nothing about a run's own state blocks an answer. */
+export type AskBlockedReason = 'provider'
 
 /** The idle timer closes the backend before the RunManager has finished settling
  *  the run record and releasing its active-run entry. A stale ask card can therefore
@@ -62,12 +64,11 @@ export async function resumeAfterIdleTeardown<T>(
 /**
  * The delivery route for one ask answer, as a pure function of the run record — the
  * same shape `runActionFlags` has, so a table test can pin it per status. Mirrors the
- * composer's own routing (`ThreadView`: a live/queued run sends, a closed one with a
- * session continues), which is exactly the seam the ask card was missing.
+ * composer's own routing (`ThreadView`: a live/queued run sends, a closed one continues),
+ * which is exactly the seam the ask card was missing.
  */
 export function askDeliveryMode(run: RunRecord): AskDeliveryMode {
-  if (isRunActive(run.status)) return 'live'
-  return runActionFlags(run).continueRun ? 'resume' : 'unavailable'
+  return isRunActive(run.status) ? 'live' : 'resume'
 }
 
 export interface AskAnswerDelivery {
@@ -122,20 +123,11 @@ export function useAskAnswer(run: ApiRun, projectId?: string): AskAnswerDelivery
   const deliveringRef = useRef(false)
 
   const mode = askDeliveryMode(run)
-  const providerBlocked =
-    mode === 'resume' ? !existingProvider.usable
-    : mode === 'live' ? !activeProvider.usable
-    : false
-  const blockedBy: AskBlockedReason | undefined =
-    mode === 'unavailable' ? 'no-session'
-    : providerBlocked ? 'provider'
+  const providerBlocked = mode === 'resume' ? !existingProvider.usable : !activeProvider.usable
+  const blockedBy: AskBlockedReason | undefined = providerBlocked ? 'provider' : undefined
+  const reason = providerBlocked
+    ? (mode === 'resume' ? existingProvider.reason : activeProvider.reason)
     : undefined
-  const reason =
-    blockedBy === 'no-session'
-      ? 'This session has ended and no agent session was recorded, so the answer cannot be delivered.'
-      : blockedBy === 'provider'
-        ? (mode === 'resume' ? existingProvider.reason : activeProvider.reason)
-        : undefined
 
   const resumeWith = (text: string) => {
     if (!existingProvider.usable) {

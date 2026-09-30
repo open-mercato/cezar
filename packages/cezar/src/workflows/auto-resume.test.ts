@@ -163,8 +163,13 @@ describe('a run stopped by a usage limit resumes itself', () => {
     first.dispose();
 
     // A due deadline on a run with no session left to resume: the reconcile arms it from the
-    // record, `continueRun` refuses with "no agent session to resume", and the promise has to go
-    // — a hint counting down to an instant that has passed is worse than no hint.
+    // record, `fireAutoResume` refuses, and the promise has to go — a hint counting down to an
+    // instant that has passed is worse than no hint.
+    //
+    // The refusal is the feature's OWN, not one it inherits: a user pressing Continue on this run
+    // gets a fresh session briefed with the previous transcript
+    // (`2026-09-11-continue-without-a-session.md`), and that is deliberately not something an
+    // unattended timer may decide hours later with nobody watching. The note is what says so.
     for (const step of store.getRun(record.id)?.steps ?? []) {
       store.updateStep(record.id, step.id, { sessionId: undefined });
     }
@@ -175,6 +180,14 @@ describe('a run stopped by a usage limit resumes itself', () => {
     await expect
       .poll(() => store.getRun(record.id)?.autoResumeAt, { timeout: 20_000 })
       .toBeUndefined();
+    expect(
+      store
+        .readEvents(record.id)
+        .some((event) => String(event.message ?? '').includes('no agent session to resume')),
+    ).toBe(true);
+    // …and it really did refuse, rather than starting a briefed session and clearing the deadline
+    // on the way in.
+    expect(store.getRun(record.id)?.steps.some((step) => step.id.startsWith('continue-'))).toBe(false);
   }, 40_000);
 
   it('holds the queue while the account is limited — the rest never start', async () => {

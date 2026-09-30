@@ -295,9 +295,13 @@ against a run already driven to `done`, so it is unaffected — confirmed, not a
 
 > **Superseded for the closed statuses.** A later change (the closed-composer prompt,
 > below in *Resolved assumptions* Q3) made the composer authorable on a closed run that
-> HAS a resumable session too, so that copy now survives only on a closed run with no
-> session to resume — where it reads `"Session closed — no session to resume."`. The
-> `queued` branch described here is unchanged.
+> HAS a resumable session too, so that copy survived only on a closed run with no
+> session to resume — where it read `"Session closed — no session to resume."`.
+> `2026-09-11-continue-without-a-session.md` then removed that last case as well: a closed
+> run with no session continues in a FRESH session briefed with the old one's transcript, so
+> the composer is authorable for every closed status and reads `"Continue in a new session —
+> the previous conversation is replayed to the agent…"` there. The `queued` branch described
+> here is unchanged.
 
 **Thread rows** — `buildThreadRows` (`task-thread.tsx:97-124`) already renders the
 initial prompt from the record rather than an event; stacked messages extend the same
@@ -552,7 +556,9 @@ send button IS Continue.
 - gated on `runActionFlags(run).continueRun` — a session to resume, exactly the gate the
   header's Continue button already used. A closed run with **no** session keeps a disabled
   composer, now reading `"Session closed — no session to resume."` (the old copy offered a
-  Continue that run could not perform).
+  Continue that run could not perform). *Superseded by
+  `2026-09-11-continue-without-a-session.md`: that gate dropped its `hasSession` half, so this
+  branch is authorable too and carries its own placeholder.*
 - an empty draft still posts no `text`, so one-click Continue is byte-identical to before.
 - `<ContinueAction>` became the `useContinueAction` hook: the runner/model pills moved into
   the enabled footer (`footerEnd`), so the typed prompt and the picked engine reach
