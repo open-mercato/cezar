@@ -30,6 +30,9 @@ use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod disclaim;
+pub use disclaim::disclaim_exec_if_asked;
+
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
@@ -966,6 +969,13 @@ fn spawn_sidecar(entry: &Path, port: u16, cwd: &Path, log: Arc<Mutex<VecDeque<St
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    // cezar starts agents through this binary so macOS privacy prompts name the agent, not the
+    // app (`disclaim.rs`). The cockpit server itself stays the app's own.
+    if cfg!(target_os = "macos") {
+        if let Ok(exe) = std::env::current_exe() {
+            command.env("CEZ_DISCLAIM_EXEC", exe);
+        }
+    }
     let mut child = command.spawn().map_err(|error| format!("could not start node: {error}"))?;
     for reader in [
         child.stdout.take().map(|out| Box::new(out) as Box<dyn Read + Send>),

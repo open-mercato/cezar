@@ -2,5 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    cezar_desktop_lib::disclaim_exec_if_asked();
     cezar_desktop_lib::run()
 }

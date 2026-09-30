@@ -303,6 +303,7 @@ version = "0.1.2"
 dependencies = [
  "ctrlc",
  "junction",
+ "libc",
  "serde",
  "serde_json",
  "tauri",

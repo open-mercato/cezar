@@ -20,6 +20,10 @@ url = "2"
 tauri-plugin-updater = "2"
 ctrlc = { version = "3", features = ["termination"] }
 
+# The macOS agent trampoline (`disclaim.rs`) calls posix_spawn directly.
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+
 # Windows links `current` with a junction — a directory link that needs no privilege.
 [target.'cfg(windows)'.dependencies]
 junction = "1"
