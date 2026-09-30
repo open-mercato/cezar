@@ -314,6 +314,17 @@ export const runRecordSchema = z.object({
    * like every other key.
    */
   workflowDef: workflowDefSchema.optional(),
+  /** A graph workflow's walk so far: loop counters and the edges taken, in order
+   *  (`<node>.<port>-><target>`). Absent on v1 runs. */
+  graphState: z
+    .object({
+      loops: z.record(z.string(), z.number()),
+      taken: z.array(z.string()),
+      /** The node being run (where a restart resumes); absent once the walk ended. */
+      cursor: z.string().optional(),
+      outputs: z.record(z.string(), z.record(z.string(), z.union([z.string(), z.number()]))).optional(),
+    })
+    .optional(),
 });
 export type RunRecord = z.infer<typeof runRecordSchema>;
 

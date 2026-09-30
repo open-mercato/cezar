@@ -392,6 +392,21 @@ export const runRecordSchema = z.object({
    *  `workflowStepSchema` only with that in mind: a narrowing here silently eats
    *  queued runs rather than degrading them. */
   workflowDef: workflowDefSchema.optional().catch(undefined),
+  /** Where a graph workflow's walk has been (spec 2026-09-30-workflow-node-editor, phase 3):
+   *  per-loop counters and every edge taken, in order, as `<node>.<port>-><target>` (`to` empty
+   *  when an unwired port ended the run). Written by `executeGraph` for the task view's live
+   *  graph; absent on v1 runs and on every record that predates it. Capped (`GRAPH_TAKEN_CAP`). */
+  graphState: z
+    .object({
+      loops: z.record(z.string(), z.number()),
+      taken: z.array(z.string()),
+      /** The node being run — where a restart resumes the walk. Absent once the walk ended. */
+      cursor: z.string().optional(),
+      /** `{{nodes.<id>.<field>}}` values so far, restored on resume. */
+      outputs: z.record(z.string(), z.record(z.string(), z.union([z.string(), z.number()]))).optional(),
+    })
+    .optional()
+    .catch(undefined),
 });
 
 export type StepState = z.infer<typeof stepStateSchema>;
