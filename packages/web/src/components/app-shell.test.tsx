@@ -384,7 +384,10 @@ describe('AppShell', () => {
         // "12.3k stars" is a worse answer to "how many" than the number itself.
         const label = chip()?.getAttribute('aria-label') ?? ''
         expect(label).toMatch(/star cezar on github/i)
-        expect(label).toContain('12,345')
+        // Formatted for the reader's own locale, so assert it the same way rather than pinning
+        // `12,345` — that spelling is a property of the test machine, not of this component.
+        expect(label).toContain(new Intl.NumberFormat().format(12_345))
+        expect(label).not.toContain('12.3k')
       })
 
       it('is shrink-0, leaving the version chip as the row\'s one elastic item (#876)', () => {

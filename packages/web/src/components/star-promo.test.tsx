@@ -84,6 +84,21 @@ describe('StarPromo', () => {
     expect(link.getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
   })
 
+  it('claims a PR only when the run actually opened one', () => {
+    // In cezar a run ends at the review gate with its diff in the worktree; pushing a draft PR
+    // is a separate, optional step, so most first runs have no PR to celebrate.
+    const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
+    patch([run({ status: 'done' })])
+    expect(toasts()[0]).toContain('First task done')
+    expect(toasts()[0]).not.toContain('PR')
+  })
+
+  it('says "First PR ready" when the run did open one', () => {
+    const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
+    patch([run({ status: 'done', pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/7' })])
+    expect(toasts()[0]).toContain('First PR ready')
+  })
+
   it('treats review as a success too — it is where a run that produced a PR parks', () => {
     const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
     patch([run({ status: 'review' })])

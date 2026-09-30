@@ -6,11 +6,11 @@ import type { ApiRun, RunStatus } from '@open-mercato/cezar-api-client'
 import {
   CEZAR_REPO_URL,
   STAR_TOAST_ACTION_LABEL,
-  STAR_TOAST_MESSAGE,
   STAR_TOAST_MS,
   diffSuccessTransition,
   hasSeenStarToast,
   markStarToastSeen,
+  starToastMessage,
 } from '@/lib/star-promo'
 import { toast } from '@/components/ui/toaster'
 
@@ -50,13 +50,13 @@ export function StarPromo() {
     const listHash = hashKey(queryKeys.runs.list())
 
     const observe = (runs: readonly ApiRun[] | undefined): void => {
-      const { succeeded, statuses } = diffSuccessTransition(statusesRef.current, runs)
+      const { succeeded, withPullRequest, statuses } = diffSuccessTransition(statusesRef.current, runs)
       statusesRef.current = statuses
       if (!succeeded || !allowedRef.current || hasSeenStarToast()) return
       // Marked BEFORE the toast is published. A throw between the two would cost one user the
       // ask; the other order would cost every user a toast that repeats forever.
       markStarToastSeen()
-      toast(STAR_TOAST_MESSAGE, {
+      toast(starToastMessage(withPullRequest), {
         action: { label: STAR_TOAST_ACTION_LABEL, href: CEZAR_REPO_URL },
         durationMs: STAR_TOAST_MS,
       })

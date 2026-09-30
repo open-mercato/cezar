@@ -14,12 +14,30 @@ import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 export const CEZAR_REPO_URL = 'https://github.com/open-mercato/cezar'
 
 /**
- * The toast, verbatim from the brief (rendered in English like the rest of the cockpit, which
- * has no i18n layer): "Pierwszy PR gotowy 🎉 Jeśli cezar oszczędził Ci czas, gwiazdka pomaga
- * innym go znaleźć".
+ * The toast, from the brief (rendered in English like the rest of the cockpit, which has no i18n
+ * layer): "Pierwszy PR gotowy 🎉 Jeśli cezar oszczędził Ci czas, gwiazdka pomaga innym go
+ * znaleźć".
  */
 export const STAR_TOAST_MESSAGE =
   'First PR ready 🎉 If cezar saved you time, a star helps others find it'
+
+/**
+ * The same ask for a run that finished without opening a PR.
+ *
+ * The brief named the TRIGGER as the first successful run and the COPY as "first PR ready", and
+ * in cezar those are not the same event: a run ends at the review gate with its diff in the
+ * worktree, and pushing a draft PR is a separate, optional step. Most first runs have no PR.
+ * Celebrating one that does not exist is the kind of small lie that costs exactly the goodwill
+ * this toast is asking for, so the opening clause follows the truth and the ask — the half that
+ * is always true — is word-for-word the same.
+ */
+export const STAR_TOAST_MESSAGE_NO_PR =
+  'First task done 🎉 If cezar saved you time, a star helps others find it'
+
+/** Which of the two the moment earns. */
+export function starToastMessage(withPullRequest: boolean): string {
+  return withPullRequest ? STAR_TOAST_MESSAGE : STAR_TOAST_MESSAGE_NO_PR
+}
 export const STAR_TOAST_ACTION_LABEL = 'Star on GitHub'
 /** Longer than an ordinary toast: this one asks the reader to do something, and the default five
  *  seconds is tuned for "that worked", not for a sentence plus a decision. Still auto-dismissing
@@ -107,6 +125,9 @@ const SUCCESS_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(['done', 're
 export interface SuccessTransition {
   /** `true` when some run ENTERED a successful terminal status in this observation. */
   succeeded: boolean
+  /** Whether one of those runs actually opened a pull request — which of the two messages the
+   *  moment has earned. `false` when it succeeded without one, which is the common case. */
+  withPullRequest: boolean
   /** The statuses to remember for the next observation. Rebuilt each time, so deleted runs fall
    *  out instead of accumulating. */
   statuses: Map<string, RunStatus>
@@ -128,11 +149,16 @@ export function diffSuccessTransition(
 ): SuccessTransition {
   const statuses = new Map<string, RunStatus>()
   let succeeded = false
+  let withPullRequest = false
   for (const run of runs ?? []) {
     statuses.set(run.id, run.status)
     const before = previous.get(run.id)
     if (before === undefined || before === run.status) continue
-    if (SUCCESS_STATUSES.has(run.status)) succeeded = true
+    if (!SUCCESS_STATUSES.has(run.status)) continue
+    succeeded = true
+    // Two runs can land in one observation. A PR is the more specific thing to celebrate, so
+    // any of them having one wins — never the last one seen.
+    if (run.pullRequestUrl) withPullRequest = true
   }
-  return { succeeded, statuses }
+  return { succeeded, withPullRequest, statuses }
 }

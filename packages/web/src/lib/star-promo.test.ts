@@ -4,11 +4,13 @@ import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 import {
   CEZAR_REPO_URL,
   STAR_TOAST_MESSAGE,
+  STAR_TOAST_MESSAGE_NO_PR,
   STAR_TOAST_SEEN_KEY,
   diffSuccessTransition,
   formatStarCount,
   hasSeenStarToast,
   markStarToastSeen,
+  starToastMessage,
 } from './star-promo'
 
 const run = (id: string, status: RunStatus): RunRecord => ({ id, status }) as RunRecord
@@ -144,7 +146,33 @@ describe('diffSuccessTransition', () => {
   })
 
   it('handles an absent list — the cache is empty before the first fetch lands', () => {
-    expect(diffSuccessTransition(new Map(), undefined)).toEqual({ succeeded: false, statuses: new Map() })
+    expect(diffSuccessTransition(new Map(), undefined)).toEqual({
+      succeeded: false,
+      withPullRequest: false,
+      statuses: new Map(),
+    })
+  })
+
+  it('reports whether the successful run actually opened a PR', () => {
+    const previous = new Map<string, RunStatus>([['a', 'running']])
+    expect(diffSuccessTransition(previous, [run('a', 'done')]).withPullRequest).toBe(false)
+    expect(
+      diffSuccessTransition(previous, [
+        { ...run('a', 'done'), pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1' },
+      ]).withPullRequest,
+    ).toBe(true)
+  })
+
+  it('prefers the PR when several runs land in one observation', () => {
+    const previous = new Map<string, RunStatus>([
+      ['a', 'running'],
+      ['b', 'running'],
+    ])
+    const result = diffSuccessTransition(previous, [
+      { ...run('a', 'done'), pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/1' },
+      run('b', 'review'),
+    ])
+    expect(result).toMatchObject({ succeeded: true, withPullRequest: true })
   })
 })
 
@@ -155,8 +183,23 @@ describe('the copy', () => {
     expect(STAR_TOAST_MESSAGE).toMatch(/find it/i)
   })
 
+  it('only claims a PR when there is one — most first runs never open one', () => {
+    expect(starToastMessage(true)).toBe(STAR_TOAST_MESSAGE)
+    expect(starToastMessage(true)).toMatch(/PR/)
+    expect(starToastMessage(false)).toBe(STAR_TOAST_MESSAGE_NO_PR)
+    expect(starToastMessage(false)).not.toMatch(/\bPR\b/)
+  })
+
+  it('keeps the ask itself word-for-word identical — only the opening clause moves', () => {
+    const ask = 'If cezar saved you time, a star helps others find it'
+    expect(STAR_TOAST_MESSAGE).toContain(ask)
+    expect(STAR_TOAST_MESSAGE_NO_PR).toContain(ask)
+  })
+
   it('promises nothing in return — a request, not a transaction', () => {
-    expect(STAR_TOAST_MESSAGE).not.toMatch(/\b(unlock|reward|free|upgrade|pro|premium|trial)\b/i)
+    for (const copy of [STAR_TOAST_MESSAGE, STAR_TOAST_MESSAGE_NO_PR]) {
+      expect(copy).not.toMatch(/\b(unlock|reward|free|upgrade|pro|premium|trial)\b/i)
+    }
   })
 
   it('points at cezar, over https', () => {

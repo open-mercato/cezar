@@ -42,7 +42,9 @@ export interface StarCount {
   url: string;
 }
 
-const UNAVAILABLE: StarCount = { available: false, url: CEZAR_REPO_URL };
+/** Frozen: `read()` hands this same object to every caller, and a shared mutable answer is a
+ *  bug waiting for its first mutator. */
+const UNAVAILABLE: StarCount = Object.freeze({ available: false, url: CEZAR_REPO_URL });
 
 /** The one field we want, validated at the boundary like every other `--json`/API read. */
 const repoSchema = z
@@ -70,7 +72,20 @@ export function starCachePath(home: string = homedir()): string {
  * no terminal line, no sidebar chip, no toast, and no request to github.com.
  */
 export function starAskSilenced(env: NodeJS.ProcessEnv = process.env): boolean {
-  return env.CEZ_NO_BANNER === '1';
+  if (env.CEZ_NO_BANNER === '1') return true;
+  // `npm test` is the fast unit gate: "no server, no browser", and it must stay that way
+  // (AGENTS.md § Validation). Every test today injects its own reader or its own `fetchImpl`, so
+  // nothing reaches github.com — but that is an accident of which routes the suite happens to
+  // request, and `createApp` hands a DEFAULT reader to every case that builds an app. The first
+  // test to call `GET /api/v1/star-count` without meaning to would make the unit gate networked
+  // and non-deterministic, and it would do so silently.
+  //
+  // Same shape and same reasoning as `assertCezarHomeWriteIsSandboxed` (src/paths.ts): under
+  // vitest, reaching the real outside world is a leaked test rather than intent. A case that
+  // genuinely wants the fetch path passes its own `fetchImpl` to `fetchStarCount`, which this
+  // does not gate — only the shared reader's default is closed off.
+  if (env.VITEST) return true;
+  return false;
 }
 
 /** One request, zod-validated, silent on every failure. `null` means "nothing known". */

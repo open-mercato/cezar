@@ -58,6 +58,23 @@ describe('star count — the off switch', () => {
     expect(starAskSilenced({ CEZ_NO_BANNER: '0' })).toBe(false);
     expect(starAskSilenced({})).toBe(false);
   });
+
+  it('is also silenced under vitest, so the unit gate can never become networked', () => {
+    // `createApp` hands a DEFAULT reader to every test that builds an app. Today no case
+    // requests `/api/v1/star-count`, so nothing reaches github.com — but that is an accident of
+    // which routes the suite happens to hit, and the first test to change that would silently
+    // make `npm test` networked and non-deterministic. Same guard shape as
+    // `assertCezarHomeWriteIsSandboxed`.
+    expect(starAskSilenced({ VITEST: 'true' })).toBe(true);
+    // And this very process is one, so the ambient default is closed:
+    expect(starAskSilenced()).toBe(true);
+  });
+
+  it('still lets a test drive the fetch path deliberately, with its own fetch', async () => {
+    // The guard closes the SHARED reader's default, not the wire read itself — otherwise the
+    // cases above could not cover the thing they exist to cover.
+    await expect(fetchStarCount(stubFetch([ok({ stargazers_count: 5 })]))).resolves.toBe(5);
+  });
 });
 
 describe('star count — the reader', () => {
