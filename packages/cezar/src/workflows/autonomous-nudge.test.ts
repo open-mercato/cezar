@@ -90,6 +90,10 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
   const nudgeNotes = (id: string): string[] =>
     notesMatching(id, 'autonomous — continuing').map((e) => String(e.message));
 
+  /** The `(n/40)` budget position a nudge note carries. */
+  const nudgeCounter = (message: string): number =>
+    Number(new RegExp(`\\((\\d+)\\/${MAX_AUTO_CONTINUES}\\)`).exec(message)?.[1] ?? NaN);
+
   /** Every status the record ever passed through — a park can be brief, so polling the record
    *  could miss it. The store is the SSE bus and emits one `run` event per update. */
   const trackStatuses = (): string[] => {
@@ -309,6 +313,76 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     const parked = notesMatching(record.id, 'consecutive turns produced no output');
     expect(parked).toHaveLength(1);
     expect(parked[0]?.stepId).toMatch(/^continue-/);
+  }, 90_000);
+
+  it('does not drain the nudge budget while children are in flight', async () => {
+    // Orchestrator shape: an autonomous commander supervising subtasks takes a
+    // nudged turn per wake-check for hours. Those turns must not consume the
+    // unattended-stretch budget, or no orchestration survives longer than
+    // MAX_AUTO_CONTINUES. Default mock follow-ups carry text, so every turn
+    // below is substantive — the breaker stays out of it by construction.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'orchestrate the subtasks',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    await waitFor(record.id, () => nudgeNotes(record.id).length >= 3);
+    // Synchronous with the run loop: no turn-end can slip in between the
+    // count and the child landing, so the frozen position is exact.
+    const drained = nudgeNotes(record.id).length;
+
+    const child = store.createRun({
+      title: 'subtask',
+      workflow: 'quick-task',
+      task: 'child work',
+      steps: [],
+    });
+    store.updateRun(child.id, {
+      status: 'running',
+      dispatch: { rootRunId: record.id, parentRunId: record.id },
+    });
+
+    // A stretch of supervised turns: the run neither parks nor advances the
+    // counter — every nudge note still shows the frozen position.
+    await waitFor(record.id, () => nudgeNotes(record.id).length >= drained + 8);
+    expect(store.getRun(record.id)?.status).toBe('running');
+    for (const message of nudgeNotes(record.id).slice(drained)) {
+      expect(nudgeCounter(message)).toBe(drained);
+    }
+
+    // The child settles: the exemption ends and the very next nudges drain again.
+    store.updateRun(child.id, { status: 'done' });
+    await waitFor(record.id, () =>
+      nudgeNotes(record.id).some((m) => nudgeCounter(m) >= drained + 1),
+    );
+    expect(store.getRun(record.id)?.status).toBe('running');
+  }, 120_000);
+
+  it('still parks a supervising run whose turns stay empty', async () => {
+    // The exemption shields the BUDGET, not silence: five straight silent
+    // turns park even with live children, or a stuck commander wedges the
+    // host behind them. A supervisor that narrates or polls never trips it.
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:empty supervise silently',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+    const child = store.createRun({
+      title: 'subtask',
+      workflow: 'quick-task',
+      task: 'child work',
+      steps: [],
+    });
+    store.updateRun(child.id, {
+      status: 'running',
+      dispatch: { rootRunId: record.id, parentRunId: record.id },
+    });
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(MAX_CONSECUTIVE_EMPTY_TURNS - 1);
+    expect(notesMatching(record.id, 'consecutive turns produced no output')).toHaveLength(1);
   }, 90_000);
 
   it('keeps the nudge text the dry-run mock recognises', () => {

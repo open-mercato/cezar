@@ -458,6 +458,8 @@ interface ActiveRun {
 }
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
+ *  Turns taken while the run has in-flight children don't consume it (the supervision exemption
+ *  in `tryAutonomousNudge`): a commander waiting on its subtasks is blocked, not spinning.
  *  Exported so the tests assert against the real cap instead of restating `40`. */
 export const MAX_AUTO_CONTINUES = 40;
 /** Consecutive output-free turns after which an autonomous run parks instead of
@@ -467,7 +469,9 @@ export const MAX_AUTO_CONTINUES = 40;
  *  every iteration pays the turn-end git/diff/namer/SSE work (live incident:
  *  tens of thousands of empty turns wedged the host). Five tolerates the odd
  *  blank turn while stopping a tight spin in seconds; the run parks `waiting`,
- *  so a user message resumes it with a fresh streak. Exported so the tests
+ *  so a user message resumes it with a fresh streak. Applies whether or not the run supervises
+ *  children — five straight silent turns are evidence of stuckness either way, and a healthy
+ *  supervisor narrates or polls. Exported so the tests
  *  assert against the real threshold instead of restating `5`. */
 export const MAX_CONSECUTIVE_EMPTY_TURNS = 5;
 /** The turn-end nudge text for `#autonomous`. Exported because `scripts/mock-claude.mjs`
@@ -5323,7 +5327,14 @@ export class RunManager {
     //  - the budget brake (Q6 ii): a run that has spent its ceiling stops spending.
     if (dispatchTurn.dispatched || dispatchTurn.overBudget) return false;
     if (dispatchTurn.hasDispatch && ask) return false;
-    if ((state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
+    // Supervision exemption (spec 2026-09-10-dispatch): a run with in-flight
+    // children is blocked on its subtasks, not spinning — its wake-check turns
+    // must not drain the unattended-stretch budget, or no orchestration
+    // survives longer than the cap. The empty-turn breaker below still
+    // applies: five straight silent turns park even a supervisor, so a stuck
+    // commander cannot wedge the host behind live children.
+    const supervising = inFlightChildren(this.store.listRuns(), runId).length > 0;
+    if (!supervising && (state.autoContinues ?? 0) >= MAX_AUTO_CONTINUES) return false;
     if (state.cancelled) return false;
     // Empty-turn breaker: a turn with no text and no tool calls is a stuck agent answering the
     // nudge with an instantly-ending turn. Nudging it again spins the loop at full speed, and
@@ -5358,7 +5369,9 @@ export class RunManager {
       return false;
     }
     if (!state.session?.sendMessage([{ type: 'text', text: AUTONOMOUS_NUDGE }])) return false;
-    state.autoContinues = (state.autoContinues ?? 0) + 1;
+    // Supervised turns don't consume budget (see above) — the counter freezes
+    // while children are in flight and resumes where it stood once they settle.
+    if (!supervising) state.autoContinues = (state.autoContinues ?? 0) + 1;
     this.store.appendEvent(runId, {
       type: 'note',
       stepId,
