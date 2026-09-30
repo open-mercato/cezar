@@ -81,6 +81,8 @@ Give the cockpit's GitHub tab a one-click way to flip the Issues / Pull requests
 
 ## Progress
 
+PR: #1201
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: pure sort helper
@@ -115,3 +117,19 @@ env assertion):
 | `npm run test:unit` | 0 failures |
 | `npm run build` | pass (`check:pack ok — 697 files`) |
 | `npm run test:package` | 17/17 pass |
+
+Re-run in full at `3436d2e6` after the two review fixes landed — same results, 0 failures.
+
+### Review pass
+
+`om-auto-review-pr 1201 --autofix` → **approve** (GitHub refuses a self-approval, so the verdict is
+a comment on the PR). Two minor findings, both fixed in `3436d2e6`:
+
+1. `mockGithub()` dated a higher issue/PR number as **older**, so the dry-run demo would render its
+   hand-written list inverted under the new default sort.
+2. The filter row could not wrap, so the new control squeezed the search field to ~86px on a 360px
+   viewport — the request came from a phone, and `CODE_REVIEW.md` requires mobile behavior to be
+   preserved.
+
+One nit left unchanged: a single render of `newest` before `ui-state` resolves, the same shape the
+remembered-tab feature (#417) already has.
