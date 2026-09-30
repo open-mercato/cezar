@@ -129,9 +129,9 @@ counts, so a cold boot with a finished run in the list stays silent.
 
 ### Phase 4: The one-time toast
 
-- [ ] 4.1 Toast action link and lifetime
-- [ ] 4.2 `star-promo.ts` — one-time flag, message, first-success detector
-- [ ] 4.3 `<StarPromo />` watcher mounted in `app.tsx`
+- [x] 4.1 Toast action link and lifetime — fba6d254
+- [x] 4.2 `star-promo.ts` — one-time flag, message, first-success detector — 8b8e9aa6
+- [x] 4.3 `<StarPromo />` watcher mounted in `app.tsx` — 288da252
 
 ### Phase 5: Docs and the gate
 
