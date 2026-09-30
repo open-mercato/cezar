@@ -179,15 +179,61 @@ describe('CreateProjectDialog', () => {
     expect(document.querySelector('[data-slot="create-project-dialog"] a')).toBeNull()
   })
 
-  it('passes a template when one is given', async () => {
+  it('starts empty by default and says so', async () => {
     serve()
     renderDialog()
-    await waitFor(() => expect(slot('create-template')).toBeTruthy())
+    await waitFor(() => expect(ownerCards()).toHaveLength(2))
+    expect(slot('create-start-empty')?.getAttribute('aria-checked')).toBe('true')
+    expect(slot('create-start-empty')?.textContent).toContain('One empty initial commit')
+    expect(slot('create-template')).toBeNull()
     fireEvent.change(nameInput(), { target: { value: 'fresh' } })
-    fireEvent.change(slot('create-template') as HTMLInputElement, { target: { value: 'acme/starter' } })
     fireEvent.click(createButton())
     await waitFor(() => expect(posted).toHaveLength(1))
-    expect(posted[0]).toMatchObject({ github: { owner: 'octo', template: 'acme/starter' } })
+    expect(posted[0]).toMatchObject({ github: { owner: 'octo' } })
+    expect((posted[0]?.github as Record<string, unknown>).template).toBeUndefined()
+  })
+
+  it('from a template: suggestions fill the field, and the template is sent', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(ownerCards()).toHaveLength(2))
+    fireEvent.change(nameInput(), { target: { value: 'fresh' } })
+    fireEvent.click(slot('create-start-template') as HTMLButtonElement)
+    // Nothing picked yet: Create waits for a template.
+    expect(createButton().disabled).toBe(true)
+
+    const input = slot('create-template') as HTMLInputElement
+    fireEvent.focus(input)
+    await waitFor(() => expect(document.querySelectorAll('[data-slot="create-template-suggestion"]').length).toBeGreaterThan(5))
+    fireEvent.change(input, { target: { value: 'obsidian' } })
+    const options = [...document.querySelectorAll<HTMLElement>('[data-slot="create-template-suggestion"]')]
+    expect(options.map((o) => o.dataset.template)).toEqual([
+      'obsidianmd/obsidian-sample-plugin',
+      'obsidianmd/obsidian-sample-theme',
+    ])
+    fireEvent.mouseDown(options[0] as HTMLElement)
+    expect(input.value).toBe('obsidianmd/obsidian-sample-plugin')
+
+    fireEvent.click(createButton())
+    await waitFor(() => expect(posted).toHaveLength(1))
+    expect(posted[0]).toMatchObject({ github: { owner: 'octo', template: 'obsidianmd/obsidian-sample-plugin' } })
+  })
+
+  it('arrow keys and Enter pick a suggestion; a pasted owner/repo works too', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(ownerCards()).toHaveLength(2))
+    fireEvent.click(slot('create-start-template') as HTMLButtonElement)
+    const input = slot('create-template') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'next' } })
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(input.value).toBe('github/codespaces-nextjs')
+    fireEvent.change(input, { target: { value: 'acme/starter' } })
+    fireEvent.change(nameInput(), { target: { value: 'fresh' } })
+    fireEvent.click(createButton())
+    await waitFor(() => expect(posted).toHaveLength(1))
+    expect(posted[0]).toMatchObject({ github: { template: 'acme/starter' } })
   })
 
   it('turning GitHub off creates a local-only repo', async () => {
@@ -196,6 +242,8 @@ describe('CreateProjectDialog', () => {
     await waitFor(() => expect(slot('create-owner')).toBeTruthy())
     fireEvent.click(slot('create-github') as HTMLButtonElement)
     expect(ownerCards().every((card) => card.disabled)).toBe(true)
+    // A template needs GitHub.
+    expect((slot('create-start-template') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.change(nameInput(), { target: { value: 'fresh' } })
     fireEvent.click(createButton())
     await waitFor(() => expect(posted).toHaveLength(1))

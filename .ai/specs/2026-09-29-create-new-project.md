@@ -16,7 +16,10 @@ start a project from nothing. Starting one means leaving the cockpit to `git ini
   the user's account or one of their organisations.
 - The GitHub repository is **always private**. There is no visibility choice in the
   dialog and no visibility field in the request; the user can change it on GitHub.
-- Optionally generate the repository from a GitHub template (`owner/repo` or URL).
+- "Start with" is an explicit choice: an **empty repository** (one empty initial commit,
+  no files) or, with GitHub on, **a GitHub template** (`owner/repo`, a URL, or one of the
+  suggested templates in `packages/web/src/lib/github-templates.ts` — each verified as a
+  non-archived template repository, since `gh repo create --template` accepts nothing else).
 
 ## Non-goals
 

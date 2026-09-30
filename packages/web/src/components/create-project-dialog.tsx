@@ -17,6 +17,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
+import { GithubTemplateInput } from '@/components/github-template-input'
 import { cn } from '@/lib/utils'
 
 /** Typing a space gives a dash, the way GitHub's own new-repository form suggests it: the name is
@@ -33,8 +34,8 @@ function toRepoName(input: string): string {
  * there is no visibility control here and the request has no field for one. Visibility is a
  * one-click change on GitHub; an accidentally public repository is not undoable.
  *
- * An optional template (`owner/repo` or a GitHub URL) generates the repository from a GitHub
- * template instead of starting empty.
+ * "Start with" is an explicit choice: an empty repository (one empty initial commit), or — with
+ * GitHub on — a GitHub template (`owner/repo`, a URL, or one of the suggested templates).
  *
  * Same conventions as the clone dialog: progress is `checkout-progress` filtered to this
  * dialog's own id, and errors are the server's words, verbatim.
@@ -44,6 +45,7 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
   const [useGithub, setUseGithub] = useState(true)
   const [owner, setOwner] = useState('')
   const [template, setTemplate] = useState('')
+  const [start, setStart] = useState<'empty' | 'template'>('empty')
   const [progress, setProgress] = useState<string | null>(null)
   const projects = useProjects()
   const owners = useGithubOwners()
@@ -86,9 +88,14 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
   const projectsDir = projects.data?.projectsDir ?? ''
   const target = nameValid ? `${projectsDir.replace(/\/+$/, '')}/${trimmedName}` : ''
 
+  // A template is a GitHub feature (`gh repo create --template`), so it applies only with GitHub on.
+  const fromTemplate = github && start === 'template'
+  const templateMissing = fromTemplate && template.trim() === ''
+
   const submit = () => {
     if (!nameValid || create.isPending) return
     if (useGithub && owners.isPending) return
+    if (templateMissing) return
     setProgress(null)
     const trimmedTemplate = template.trim()
     create.mutate(
@@ -99,7 +106,7 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
           ? {
               github: {
                 owner: effectiveOwner,
-                ...(trimmedTemplate === '' ? {} : { template: trimmedTemplate }),
+                ...(fromTemplate && trimmedTemplate !== '' ? { template: trimmedTemplate } : {}),
               },
             }
           : {}),
@@ -211,23 +218,40 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
               ) : null}
 
               {github ? (
-                <>
-                  <div className="grid gap-1.5">
-                    <Label htmlFor="create-template">Template (optional)</Label>
-                    <Input
-                      id="create-template"
-                      data-slot="create-template"
-                      placeholder="owner/repo or https://github.com/owner/repo"
-                      value={template}
-                      disabled={busy}
-                      onChange={(event) => setTemplate(event.target.value)}
-                    />
-                  </div>
-                  <p className="text-[12px] text-muted-foreground">
-                    Created as <strong>private</strong> under <strong>{effectiveOwner}</strong> — you can change its
-                    visibility on GitHub.
-                  </p>
-                </>
+                <p className="text-[12px] text-muted-foreground">
+                  Created as <strong>private</strong> under <strong>{effectiveOwner}</strong> — you can change its
+                  visibility on GitHub.
+                </p>
+              ) : null}
+            </div>
+
+            <div data-slot="create-start" className="grid gap-3 rounded-md border border-border p-4">
+              <span id="create-start-label" className="text-sm font-medium">
+                Start with
+              </span>
+              <div role="radiogroup" aria-labelledby="create-start-label" className="grid gap-2 sm:grid-cols-2">
+                <StartOption
+                  slot="create-start-empty"
+                  checked={!fromTemplate}
+                  disabled={busy}
+                  title="Empty repository"
+                  hint="One empty initial commit, no files."
+                  onSelect={() => setStart('empty')}
+                />
+                <StartOption
+                  slot="create-start-template"
+                  checked={fromTemplate}
+                  disabled={busy || !github}
+                  title="From a template"
+                  hint={github ? 'Copy a GitHub template repository.' : 'Needs a GitHub repository.'}
+                  onSelect={() => setStart('template')}
+                />
+              </div>
+              {fromTemplate ? (
+                <div className="grid gap-1.5">
+                  <Label htmlFor="create-template">Template</Label>
+                  <GithubTemplateInput id="create-template" value={template} disabled={busy} onChange={setTemplate} />
+                </div>
               ) : null}
             </div>
 
@@ -251,7 +275,7 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
           </Button>
           <Button
             data-slot="create-confirm"
-            disabled={!nameValid || busy || (useGithub && owners.isPending)}
+            disabled={!nameValid || busy || templateMissing || (useGithub && owners.isPending)}
             onClick={submit}
           >
             {busy ? 'Creating…' : 'Create'}
@@ -349,6 +373,42 @@ function OwnerPicker({
         })}
       </div>
     </div>
+  )
+}
+
+/** One of the two "Start with" choices — a radio rendered as a small card. */
+function StartOption({
+  slot,
+  checked,
+  disabled,
+  title,
+  hint,
+  onSelect,
+}: {
+  slot: string
+  checked: boolean
+  disabled: boolean
+  title: string
+  hint: string
+  onSelect: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      disabled={disabled}
+      data-slot={slot}
+      onClick={onSelect}
+      className={cn(
+        'grid gap-0.5 rounded-md border px-3 py-2 text-left outline-none transition-colors',
+        'focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50',
+        checked ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50',
+      )}
+    >
+      <span className="text-sm font-medium">{title}</span>
+      <span className="text-[12px] text-muted-foreground">{hint}</span>
+    </button>
   )
 }
 
