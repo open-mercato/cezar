@@ -120,7 +120,7 @@ counts, so a cold boot with a finished run in the list stays silent.
 
 ### Phase 2: The terminal banner line
 
-- [ ] 2.1 Star line in the `cezar serve` startup banner
+- [x] 2.1 Star line in the `cezar serve` startup banner — 68cfa3fe
 
 ### Phase 3: The sidebar ⭐ button
 
