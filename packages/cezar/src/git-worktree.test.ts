@@ -513,10 +513,17 @@ describe('resolveBaseRef (real git)', () => {
     expect(await resolveBaseRef(work, 'develop')).toBe('develop');
   });
 
+  /** Diverge local `develop` from origin: amend its tip locally, advance origin. */
+  async function divergeDevelop(work: string): Promise<void> {
+    await run('git', ['checkout', '-q', 'develop'], { cwd: work });
+    await run('git', [...GIT_ID, 'commit', '-q', '--amend', '-m', 'c3 amended locally'], { cwd: work });
+    await advanceOrigin(work);
+    await run('git', ['checkout', '-q', 'main'], { cwd: work });
+  }
+
   it('prefers origin/<base> when local and origin have DIVERGED', async () => {
     const work = await repoWithOrigin();
-    // Rewrite local develop onto an unrelated commit → neither is an ancestor.
-    await run('git', ['branch', '-f', 'develop', 'main'], { cwd: work });
+    await divergeDevelop(work);
     expect(await resolveBaseRef(work, 'develop')).toBe('origin/develop');
   });
 
@@ -587,15 +594,43 @@ describe('resolveBaseRef (real git)', () => {
 
     it('zero config: a checked-out branch that DIVERGED (rebased, not yet pushed) keeps the local work', async () => {
       const work = await repoWithOrigin();
+      await divergeDevelop(work);
       await run('git', ['checkout', '-q', 'develop'], { cwd: work });
-      await run('git', [...GIT_ID, 'commit', '-q', '--amend', '-m', 'c3 amended locally'], { cwd: work });
-      await advanceOrigin(work);
       expect(await chooseForkBase(work, 'develop', undefined, note)).toBe('develop');
+    });
+
+    it('zero config: a kept diverged branch still measures only the task\'s own changes', async () => {
+      const work = await repoWithOrigin();
+      await divergeDevelop(work);
+      const base = await chooseForkBase(work, 'develop', undefined, note);
+      await run('git', ['checkout', '-q', '-b', 'cez/x', base], { cwd: work });
+      writeFileSync(join(work, 'mine.txt'), 'z\n');
+      // Without the diverged tie-break in `freshestBaseRef` the diff re-anchors on
+      // origin/develop and the user's amended c3 counts as the task's work.
+      expect(await worktreeShortstat(work, base, { taskBranch: 'cez/x' })).toEqual({
+        adds: 1,
+        dels: 0,
+        files: 1,
+      });
+    });
+
+    it('zero config: a checked-out branch AHEAD of origin keeps its unpushed commits', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['checkout', '-q', 'develop'], { cwd: work });
+      writeFileSync(join(work, 'a.txt'), 'local-ahead\n');
+      await run('git', [...GIT_ID, 'commit', '-q', '-am', 'local only'], { cwd: work });
+      expect(await chooseForkBase(work, 'develop', undefined, note)).toBe('develop');
+    });
+
+    it('zero config: a local-only branch forks from itself', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['checkout', '-q', '-b', 'feature'], { cwd: work });
+      expect(await chooseForkBase(work, 'feature', undefined, note)).toBe('feature');
     });
 
     it('a configured base keeps the configured-base rule (diverged → origin)', async () => {
       const work = await repoWithOrigin();
-      await run('git', ['branch', '-f', 'develop', 'main'], { cwd: work });
+      await divergeDevelop(work);
       expect(await chooseForkBase(work, 'main', 'develop', note)).toBe('origin/develop');
     });
 

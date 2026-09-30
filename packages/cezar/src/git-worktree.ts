@@ -100,7 +100,11 @@ export function branchFor(runId: string): string {
  * `keepDiverged` is for the user's OWN checked-out branch (the zero-config
  * fork point): there a local branch that diverged from origin — rebased or
  * amended but not yet force-pushed — is the user's work, not staleness, so
- * origin wins only when local is strictly behind it (fast-forwardable).
+ * origin wins only when local is strictly behind it (fast-forwardable). A
+ * deliberate `reset --hard HEAD~N` that is not force-pushed yet also reads as
+ * "behind" — git cannot tell it from staleness — so such a task forks with the
+ * dropped commits back in; push the reset first. An own branch origin has
+ * never tracked is local-only work, so it skips the fetch round trip.
  */
 export async function resolveBaseRef(
   repoRoot: string,
@@ -108,9 +112,9 @@ export async function resolveBaseRef(
   opts: { keepDiverged?: boolean } = {},
 ): Promise<string | null> {
   if (!isSafeGitRef(base)) return null;
-  await fetchBase(repoRoot, base);
   const verify = (ref: string) =>
     git(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).then((r) => r.ok);
+  if (!opts.keepDiverged || (await verify(`origin/${base}`))) await fetchBase(repoRoot, base);
   const [hasLocal, hasRemote] = await Promise.all([verify(base), verify(`origin/${base}`)]);
   if (hasLocal && hasRemote) {
     // `--is-ancestor origin/<base> <base>` succeeds iff local is equal-or-ahead.
