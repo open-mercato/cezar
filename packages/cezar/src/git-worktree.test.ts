@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   branchFor,
+  chooseForkBase,
   createWorktree,
   parseShortstat,
   resolveBaseRef,
@@ -571,5 +572,45 @@ describe('resolveBaseRef (real git)', () => {
   it('refuses an option-like base ref', async () => {
     const repo = await fixtureRepo('cez-resolve-dashguard-');
     expect(await resolveBaseRef(repo, '--upload-pack=evil')).toBeNull();
+  });
+
+  describe('chooseForkBase (a new task\'s fork point)', () => {
+    const notes: string[] = [];
+    const note = (m: string) => void notes.push(m);
+
+    it('zero config: a checked-out branch that fell behind origin forks from the fetched origin tip', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['checkout', '-q', 'develop'], { cwd: work });
+      await advanceOrigin(work);
+      expect(await chooseForkBase(work, 'develop', undefined, note)).toBe('origin/develop');
+    });
+
+    it('zero config: a checked-out branch that DIVERGED (rebased, not yet pushed) keeps the local work', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['checkout', '-q', 'develop'], { cwd: work });
+      await run('git', [...GIT_ID, 'commit', '-q', '--amend', '-m', 'c3 amended locally'], { cwd: work });
+      await advanceOrigin(work);
+      expect(await chooseForkBase(work, 'develop', undefined, note)).toBe('develop');
+    });
+
+    it('a configured base keeps the configured-base rule (diverged → origin)', async () => {
+      const work = await repoWithOrigin();
+      await run('git', ['branch', '-f', 'develop', 'main'], { cwd: work });
+      expect(await chooseForkBase(work, 'main', 'develop', note)).toBe('origin/develop');
+    });
+
+    it('an unresolvable configured base notes it and falls back to the checked-out branch', async () => {
+      const work = await repoWithOrigin();
+      notes.length = 0;
+      expect(await chooseForkBase(work, 'main', 'no-such-branch', note)).toBe('main');
+      expect(notes).toEqual([
+        'configured base branch "no-such-branch" not found (locally or on origin) — using "main"',
+      ]);
+    });
+
+    it('a detached HEAD stays HEAD for createWorktree to pin', async () => {
+      const work = await repoWithOrigin();
+      expect(await chooseForkBase(work, 'HEAD', undefined, note)).toBe('HEAD');
+    });
   });
 });

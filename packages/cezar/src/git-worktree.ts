@@ -65,6 +65,8 @@ async function fetchBase(repoRoot: string, base: string): Promise<void> {
   const hasOrigin = await git(repoRoot, ['remote', 'get-url', 'origin']);
   if (!hasOrigin.ok) return;
   const refspec = `+refs/heads/${base}:refs/remotes/origin/${base}`;
+  // GIT_TERMINAL_PROMPT only silences git's own (HTTPS) prompts; an SSH remote
+  // can still ask on the controlling TTY — the timeout is what bounds that.
   await git(repoRoot, ['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', 'origin', refspec], {
     timeout: FETCH_TIMEOUT_MS,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
@@ -94,8 +96,17 @@ export function branchFor(runId: string): string {
  * goes stale AFTERWARDS too — agents fetch, they never pull — so every diff
  * re-applies the same rule at read time through `freshestBaseRef`
  * (`git-diff-base.ts`). Keep the two in agreement.
+ *
+ * `keepDiverged` is for the user's OWN checked-out branch (the zero-config
+ * fork point): there a local branch that diverged from origin — rebased or
+ * amended but not yet force-pushed — is the user's work, not staleness, so
+ * origin wins only when local is strictly behind it (fast-forwardable).
  */
-export async function resolveBaseRef(repoRoot: string, base: string): Promise<string | null> {
+export async function resolveBaseRef(
+  repoRoot: string,
+  base: string,
+  opts: { keepDiverged?: boolean } = {},
+): Promise<string | null> {
   if (!isSafeGitRef(base)) return null;
   await fetchBase(repoRoot, base);
   const verify = (ref: string) =>
@@ -104,11 +115,36 @@ export async function resolveBaseRef(repoRoot: string, base: string): Promise<st
   if (hasLocal && hasRemote) {
     // `--is-ancestor origin/<base> <base>` succeeds iff local is equal-or-ahead.
     const localCurrent = await git(repoRoot, ['merge-base', '--is-ancestor', `origin/${base}`, base]);
-    return localCurrent.ok ? base : `origin/${base}`;
+    if (localCurrent.ok) return base;
+    if (!opts.keepDiverged) return `origin/${base}`;
+    // `--is-ancestor <base> origin/<base>` succeeds iff local is strictly behind here.
+    const localBehind = await git(repoRoot, ['merge-base', '--is-ancestor', base, `origin/${base}`]);
+    return localBehind.ok ? `origin/${base}` : base;
   }
   if (hasLocal) return base;
   if (hasRemote) return `origin/${base}`;
   return null;
+}
+
+/**
+ * The ref a NEW task forks from: the configured base branch when it resolves,
+ * else the checked-out branch — itself refreshed against origin, but keeping
+ * local work that diverged from it (`keepDiverged`). A detached HEAD stays
+ * `HEAD`; `createWorktree` pins it to the commit. Never throws.
+ */
+export async function chooseForkBase(
+  repoRoot: string,
+  currentBranch: string,
+  configured: string | undefined,
+  note: (message: string) => void,
+): Promise<string> {
+  if (configured) {
+    const resolved = await resolveBaseRef(repoRoot, configured);
+    if (resolved) return resolved;
+    note(`configured base branch "${configured}" not found (locally or on origin) — using "${currentBranch}"`);
+  }
+  if (currentBranch === 'HEAD') return currentBranch;
+  return (await resolveBaseRef(repoRoot, currentBranch, { keepDiverged: true })) ?? currentBranch;
 }
 
 export function worktreePathFor(repoRoot: string, runId: string): string {

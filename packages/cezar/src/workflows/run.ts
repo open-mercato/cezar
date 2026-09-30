@@ -50,7 +50,7 @@ import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
-import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
+import { autosaveCommit, chooseForkBase, createWorktree, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -4025,30 +4025,21 @@ export class RunManager {
       // Fork from the configured base branch (config.json `baseBranch`, e.g.
       // `develop`) — also the target of the eventual draft PR. Unresolvable
       // (typo, not fetched) → note + the currently checked-out branch. Either
-      // way the base goes through `resolveBaseRef`, which fetches origin first
-      // so a new task forks from the newest tip, never a stale local ref.
+      // way the base goes through `resolveBaseRef` (`chooseForkBase`), which
+      // fetches origin first so a new task forks from the newest tip, never a
+      // stale local ref — while a checked-out branch that diverged from origin
+      // keeps the user's local work.
       //
       // A task that already recorded a fork point keeps it: its worktree is
       // reused as-is, and re-resolving against a since-changed config would
       // silently re-anchor the `merge-base` every diff/shortstat is measured
       // from, shifting "what did this task change" under an existing task.
       const recorded = this.store.getRun(runId)?.baseBranch;
-      let base = recorded ?? repo.branch;
-      const configured = recorded ? undefined : config.baseBranch;
-      if (configured) {
-        const resolved = await resolveBaseRef(this.repoRoot, configured);
-        if (resolved) {
-          base = resolved;
-        } else {
-          emit({
-            type: 'note',
-            message: `configured base branch "${configured}" not found (locally or on origin) — using "${repo.branch}"`,
-          });
-        }
-      }
-      if (!recorded && base === repo.branch && repo.branch !== 'HEAD') {
-        base = (await resolveBaseRef(this.repoRoot, repo.branch)) ?? repo.branch;
-      }
+      const base =
+        recorded ??
+        (await chooseForkBase(this.repoRoot, repo.branch, config.baseBranch, (message) =>
+          emit({ type: 'note', message }),
+        ));
       try {
         const wt = await createWorktree(this.repoRoot, runId, base);
         state.cwd = wt.path;
