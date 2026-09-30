@@ -40,6 +40,7 @@ import { initWorkspace } from './workspace/boot.ts';
 import { loadWorkspaceConfig } from './workspace/config.ts';
 import { runProjectsCommand } from './workspace/projects-cli.ts';
 import { WorkspaceSemaphore } from './workspace/semaphore.ts';
+import { flushTelemetry, initTelemetry, reportError, track } from './telemetry.ts';
 import { runTaskCommand } from './dispatch/task-cli.ts';
 import { runAutomationCommand } from './automations/automation-cli.ts';
 
@@ -247,6 +248,11 @@ async function serveCommand(
     workspaceEvents.emit('provider-status', status);
   });
   const version = readOwnVersion();
+  // Anonymous telemetry, opt-out (CEZ_TELEMETRY=0). The monitor listener
+  // observes a crash without changing Node's exit behavior.
+  initTelemetry({ version });
+  process.on('uncaughtExceptionMonitor', (err, origin) => reportError(err, { handler: origin }));
+  track('app_start');
 
   const checks = await detectEnvironment();
   const repo = await getRepoInfo(repoRoot);
@@ -346,9 +352,13 @@ async function serveCommand(
   // Silenced by CEZ_NO_BANNER=1 or by dismissing the cockpit's banner (#391).
   await printSkillsBanner(repoRoot);
 
+  let stopping = false;
   const shutdown = () => {
+    if (stopping) process.exit(0); // a second Ctrl-C never waits on telemetry
+    stopping = true;
     store.flush();
-    process.exit(0);
+    track('app_stop');
+    void flushTelemetry().finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

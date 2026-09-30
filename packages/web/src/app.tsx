@@ -12,6 +12,7 @@ import { ReferenceStatusRegistry } from './components/reference-status'
 import { RunNotifications } from './components/run-notifications'
 import { ThemeProvider } from './components/theme-provider'
 import { Toaster } from './components/ui/toaster'
+import { Telemetry } from './lib/telemetry'
 import { AppRoutes } from './routes'
 
 /** Real URLs, no basename: the cockpit is always mounted at the origin root, and the server
@@ -50,6 +51,8 @@ export function App() {
             <AppearanceProvider>
               <BrowserRouter>
                 <LastLocationController />
+                {/* Anonymous, opt-out page views + error hooks (CEZ_TELEMETRY=0). Renders nothing. */}
+                <Telemetry />
                 {/* At the root for the same reason the event stream is: the sidebar, the task table
                     and an open run header all paint PR/issue chips, often the SAME ones, and each
                     asking for itself was several round trips and a staggered wave of colour. They

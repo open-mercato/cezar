@@ -37,6 +37,7 @@ import { Hono, type Context } from 'hono';
 import type { Next } from 'hono';
 import { serve, type ServerType } from '@hono/node-server';
 import { bodyLimit } from 'hono/body-limit';
+import { HTTPException } from 'hono/http-exception';
 import { streamSSE } from 'hono/streaming';
 import { jsonZodValidator, paramZodValidator, queryZodValidator } from './validators.ts';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
@@ -214,6 +215,8 @@ import {
   withResolvedClaudeBin,
 } from './open-in-app.ts';
 import { createDraftPr } from './pr.ts';
+import { reportError, track } from '../telemetry.ts';
+import { telemetryErrorInputSchema, telemetryPageInputSchema } from '@open-mercato/cezar-contract';
 import { ProviderRuntimeAuthObserver } from './provider-auth-runtime.ts';
 import {
   providerForActiveRun,
@@ -1357,6 +1360,14 @@ export function createApp(deps: ServerDeps) {
   contexts.onContextBuilt((ctx) => providerRuntimeAuth.watch(ctx.store));
 
   const app = new Hono();
+
+  // Hono's default 500, plus an anonymous report (a no-op when telemetry is off).
+  app.onError((err, c) => {
+    if (err instanceof HTTPException) return err.getResponse();
+    console.error(err);
+    reportError(err, { source: 'server', route: c.req.routePath, method: c.req.method });
+    return c.text('Internal Server Error', 500);
+  });
 
   // Reject oversized request bodies before they reach any handler (#429). GETs
   // and SSE carry no body, so this only ever gates the mutating routes.
@@ -6340,6 +6351,32 @@ export function createApp(deps: ServerDeps) {
   });
   deps.onDispose?.(() => { offDashboardRegistry(); dashboard.dispose(); });
 
+  // Anonymous cockpit telemetry (opt-out, CEZ_TELEMETRY=0). The telemetry worker sends no CORS
+  // headers, so the browser reports through here; both answer 204 whether or not telemetry is
+  // on, and only a closed set of page names is forwarded.
+  const telemetryRoutes = new Hono()
+    .post(
+      '/telemetry/page',
+      jsonZodValidator(telemetryPageInputSchema, { message: 'invalid page' }),
+      (c) => {
+        track(`${c.req.valid('json').page}_view`);
+        return c.body(null, 204);
+      },
+    )
+    .use('/telemetry/error', bodyLimit({ maxSize: 32 * 1024 }))
+    .post(
+      '/telemetry/error',
+      jsonZodValidator(telemetryErrorInputSchema, { message: 'invalid error report' }),
+      (c) => {
+        const body = c.req.valid('json');
+        const err = new Error(body.message);
+        err.name = body.type;
+        err.stack = body.stack;
+        reportError(err, { source: 'cockpit', handler: body.handler });
+        return c.body(null, 204);
+      },
+    );
+
   // Workspace-level families answer for the whole workspace, so they are single-mount: never a
   // project-scoped spelling, which would be a second surface to protect with no consumer.
   const workspaceV1 = new Hono()
@@ -6355,7 +6392,8 @@ export function createApp(deps: ServerDeps) {
     .route('/', automationChecksRoutes)
     .route('/', runsIndexRoutes)
     .route('/', dashboardRoutes(dashboard, () => ({ tokens: capabilities().tokenUsageMetrics, cost: capabilities().costMetrics }), () => capabilities().automations))
-    .route('/', workspaceEventsRoutes);
+    .route('/', workspaceEventsRoutes)
+    .route('/', telemetryRoutes);
 
   // ---- mount ---------------------------------------------------------------
   // Scoped first, then the unscoped alias bound to the boot project. The paths are disjoint (no
