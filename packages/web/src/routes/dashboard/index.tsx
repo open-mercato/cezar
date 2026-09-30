@@ -23,7 +23,6 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet'
-import { CenteredState } from '@/components/centered-state'
 import { shortAge } from '@/lib/format'
 import { DashboardUsageCosts } from './costs'
 import { DashboardTrends } from './trends'
@@ -357,16 +356,16 @@ function DashboardView({ entryKey }: { entryKey: string }) {
               </Button>
             </p>
           )}
+          {/* A notice, not a full-view empty state: Backends & models stays on this view, so
+              "everything is hidden" would be false while a populated table sits below it. */}
           {view === 'costs' && !Object.values(tiles).some(Boolean) ? (
-            <CenteredState
-              icon={<LayoutDashboardIcon />}
-              title="All modules in this view are hidden"
-              actions={
-                <Button className="min-h-11" onClick={() => showViewTiles()}>
-                  Show all in {viewLabel}
-                </Button>
-              }
-            />
+            <p role="status" className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+              <LayoutDashboardIcon className="size-4" aria-hidden="true" />
+              Optional modules in this view are hidden.
+              <Button variant="outline" className="min-h-11" onClick={() => showViewTiles()}>
+                Show all in {viewLabel}
+              </Button>
+            </p>
           ) : null}
           {query.isPending && (tiles.fleet || tiles.needsYou) && (
             <p className="text-sm">Loading dashboard…</p>

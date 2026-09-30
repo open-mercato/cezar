@@ -2,10 +2,11 @@ import type { ComponentProps, ReactNode } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { shortAge } from '@/lib/format'
 
-// The landing's eyebrow: mono caps behind a violet `//`. The prefix is a pseudo-element so
-// it never reaches a heading's text (tests, screen readers, the export's module titles).
+// The landing's eyebrow: mono caps behind a violet `//` (`section-mark`, styles/index.css).
+// A pseudo-element keeps it out of textContent (tests, the export's module titles); its empty
+// alt text keeps it out of the accessible name.
 export const widgetHeading =
-  "font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground before:mr-1.5 before:tracking-normal before:text-violet before:content-['//']"
+  'section-mark font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground'
 // One header bar for every module, so the cards line up as a single system.
 export const widgetHeader =
   'flex min-h-12 flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b px-4 py-2.5'

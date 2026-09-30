@@ -44,10 +44,18 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
   if (!run.prRefs?.length && run.prNumber !== undefined && run.pullRequestUrl)
     prs.set(run.prNumber, true);
   const failedStep = [...run.steps].reverse().find((s) => s.status === 'failed');
-  const firstBackend = run.steps.find((s) => s.backend)?.backend;
+  // Attribute to what RAN, not what the task was created with: `runner` is fixed at start,
+  // while a step may override it, and `modelIdentity` is rewritten by every step from the
+  // step's own backend (workflows/run.ts). With one backend across the steps that ran,
+  // `modelIdentity` is that backend's model. With several, no single pair is true — say so.
+  const ran = [...new Set(run.steps.flatMap((s) => (s.backend ? [s.backend] : [])))];
+  const backend = ran.length > 1 ? 'mixed' : (ran[0] ?? run.runner ?? 'unknown');
   const costUsd = projectCostTask(projectId, run).costUsd;
   const automationId = run.automation?.automationId ?? run.automationTrigger?.automationId;
-  const model = run.modelIdentity ?? run.model;
+  const model =
+    backend === 'mixed'
+      ? undefined
+      : (run.modelIdentity ?? (backend === run.runner ? run.model : undefined));
   return {
     projectId,
     id: run.id,
@@ -73,7 +81,7 @@ export function projectInsightRow(projectId: string, run: RunRecord): InsightRow
           },
         }
       : {}),
-    backend: run.runner ?? firstBackend ?? 'unknown',
+    backend,
     ...(model ? { model } : {}),
     ...(costUsd !== undefined ? { costUsd } : {}),
     ...(automationId ? { automationId } : {}),
@@ -125,6 +133,9 @@ function costMetric(rows: InsightRow[]): DashboardCostMetric {
   return { value: values.length && Number.isFinite(sum) ? sum : null, reportedTasks: values.length };
 }
 const ACTIVE: RunStatus[] = ['queued', 'running', 'waiting', 'review'];
+/** In flight, waiting on a person, or parked until a usage limit resets. */
+const isActive = (r: InsightRow) =>
+  !r.archived && (ACTIVE.includes(r.status) || (r.status === 'failed' && !!r.autoResumeAt));
 
 /** Same window rule as the overview: local midnight `period - 1` days ago through now. */
 export function buildDashboardInsights(
@@ -229,7 +240,7 @@ export function buildDashboardInsights(
         tasks: group.length,
         done: group.filter((r) => r.status === 'done').length,
         failed: group.filter((r) => r.status === 'failed' && !r.autoResumeAt).length,
-        active: group.filter((r) => !r.archived && ACTIVE.includes(r.status)).length,
+        active: group.filter(isActive).length,
         ...(Number.isFinite(lastRunAt) ? { lastRunAt: new Date(lastRunAt).toISOString() } : {}),
         lastStatus: latest.status,
         ...(visibility.cost ? { costUsd: costMetric(group) } : {}),

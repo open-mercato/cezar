@@ -154,4 +154,45 @@ describe('dashboard insights', () => {
       },
     ]);
   });
+
+  it('credits the backend that ran, and never pairs a model with a backend that did not run it', () => {
+    const step = (backend: 'claude' | 'codex') => ({
+      id: backend,
+      name: backend,
+      kind: 'agent' as const,
+      status: 'done' as const,
+      iterations: 1,
+      tokensUsed: 0,
+      backend,
+    });
+    const result = build([
+      // Created on claude, the only step overridden onto codex: the identity is codex's.
+      run({ runner: 'claude', model: 'opus', modelIdentity: 'openai/gpt-5', steps: [step('codex')] }),
+      run({ runner: 'claude', modelIdentity: 'openai/gpt-5', steps: [step('claude'), step('codex')] }),
+      // No step recorded a backend (older record): fall back to the task's own pair.
+      run({ runner: 'claude', model: 'opus' }),
+    ]);
+    expect(result.backends.map((b) => [b.backend, b.model])).toEqual([
+      ['claude', 'opus'],
+      ['codex', 'openai/gpt-5'],
+      ['mixed', undefined],
+    ]);
+  });
+
+  it('keeps a task parked on a usage limit active, not vanished', () => {
+    const result = build([
+      run({
+        automationTrigger: {
+          automationId: 'nightly',
+          automationRevision: 1,
+          receiptId: 'x',
+          trigger: 'schedule',
+          occurrenceAt: '2026-09-29T02:00:00.000Z',
+        },
+        status: 'failed',
+        autoResumeAt: '2026-09-30T13:00:00.000Z',
+      }),
+    ]);
+    expect(result.automations[0]).toMatchObject({ tasks: 1, done: 0, failed: 0, active: 1 });
+  });
 });

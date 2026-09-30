@@ -4,13 +4,19 @@ import { MemoryRouter } from 'react-router'
 import type { DashboardInsights } from '@open-mercato/cezar-api-client'
 import { AutomationOutcomes, BackendComparison, OutcomeInsights } from './insights'
 
-const state = vi.hoisted(() => ({ cost: true, failures: true }))
+const state = vi.hoisted(() => ({ cost: true, failures: true, definitionsFailed: false, partial: false }))
 const insights = (): DashboardInsights => ({
   asOf: '2026-09-30T12:00:00.000Z',
   windowStart: '2026-09-24T00:00:00.000Z',
   period: '7d',
   visibility: { cost: state.cost, tokens: true },
-  coverage: { projects: [{ projectId: 'alpha', state: 'complete', omittedRuns: 0 }] },
+  coverage: {
+    projects: [
+      state.partial
+        ? { projectId: 'alpha', state: 'partial', omittedRuns: 2, reason: 'Some task records could not be read' }
+        : { projectId: 'alpha', state: 'complete', omittedRuns: 0 },
+    ],
+  },
   delivered: {
     completedTasks: 12,
     prsOpened: 4,
@@ -108,25 +114,32 @@ vi.mock('@/routes/automations/use-automations', () => ({
 }))
 vi.mock('./automations-data', () => ({
   useDashboardAutomations: () => ({
-    data: [
-      {
-        id: 'alpha',
-        name: 'Alpha',
-        data: {
-          timeZone: 'UTC',
-          automations: [
-            { id: 'nightly', name: 'Nightly triage', enabled: true, kind: 'schedule' },
-            { id: 'idle', name: 'Idle watcher', enabled: true, kind: 'schedule' },
-          ],
-        },
-      },
-    ],
+    data: state.definitionsFailed
+      ? [{ id: 'alpha', name: 'Alpha', error: 'Could not load automations' }]
+      : [
+          {
+            id: 'alpha',
+            name: 'Alpha',
+            data: {
+              timeZone: 'UTC',
+              automations: [
+                { id: 'nightly', name: 'Nightly triage', enabled: true, kind: 'schedule' },
+                { id: 'idle', name: 'Idle watcher', enabled: true, kind: 'schedule' },
+              ],
+            },
+          },
+        ],
+    isError: false,
+    registry: { isError: false },
+    retry: vi.fn(),
   }),
 }))
 afterEach(() => {
   cleanup()
   state.cost = true
   state.failures = true
+  state.definitionsFailed = false
+  state.partial = false
 })
 const show = (node: React.ReactNode) => render(<MemoryRouter>{node}</MemoryRouter>)
 
@@ -182,4 +195,40 @@ it('lists automation outcomes, including idle and removed automations', () => {
     '/p/alpha/automations/nightly',
   )
   expect(within(table).queryByRole('link', { name: 'gone' })).toBeNull()
+})
+
+it('never calls an automation removed when its definitions could not be read', () => {
+  state.definitionsFailed = true
+  show(<AutomationOutcomes />)
+  const table = screen.getByRole('region', { name: 'Automation outcomes' })
+  expect(within(table).queryByText(/Removed/)).toBeNull()
+  expect(within(table).getAllByText(/Details unavailable/)).toHaveLength(2)
+  expect(screen.getByRole('alert').textContent).toContain('Some automation details could not be loaded')
+  expect(screen.getByRole('button', { name: 'Retry automations' })).toBeTruthy()
+})
+
+it('marks the new cards as export modules', () => {
+  const { container } = show(
+    <>
+      <BackendComparison />
+      <AutomationOutcomes />
+    </>,
+  )
+  expect(
+    [...container.querySelectorAll<HTMLElement>('[data-dashboard-module]')].map(
+      (el) => el.dataset.dashboardModule,
+    ),
+  ).toEqual(['backends', 'automation-outcomes'])
+})
+
+it('qualifies every insight panel with its own coverage', () => {
+  state.partial = true
+  show(
+    <>
+      <OutcomeInsights period="7d" active />
+      <BackendComparison />
+      <AutomationOutcomes />
+    </>,
+  )
+  expect(screen.getAllByText('One project has incomplete coverage.')).toHaveLength(3)
 })

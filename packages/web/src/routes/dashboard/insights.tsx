@@ -15,6 +15,7 @@ import { shortAge } from '@/lib/format'
 import { useAutomationsGate } from '@/routes/automations/use-automations'
 import { useDashboardAutomations } from './automations-data'
 import { ExportRows } from './export-rows'
+import { Coverage } from './rows'
 import { formatAmount, formatHours } from './format'
 import { FilterSelect, filterLabel, Freshness, widgetHeader, widgetHeading } from './presentation'
 import { useDashboardFilter } from './url-filter'
@@ -78,6 +79,7 @@ export function OutcomeInsights({ period, active }: { period: Period; active: bo
   return (
     <div className="space-y-3">
       <InsightState query={query} />
+      {data && <Coverage coverage={data.coverage} retry={() => void query.refetch()} />}
       {data && (
         <div className="grid gap-3 lg:grid-cols-2">
           <Delivered data={data} />
@@ -223,6 +225,7 @@ const backendNames: Record<string, string> = {
   cursor: 'Cursor',
   pi: 'Pi',
   unknown: 'Unknown backend',
+  mixed: 'Mixed backends',
 }
 const backendName = (id: string) => backendNames[id] ?? id
 const percent = (part: number, whole: number) => (whole ? Math.round((part / whole) * 100) : 0)
@@ -234,6 +237,7 @@ export function BackendComparison() {
   const data = query.data
   const cost = data?.visibility.cost
   return (
+    <section data-dashboard-module="backends" className="min-w-0">
     <Card className="gap-0 py-0" data-export-context={`Backends: ${periodText(period)}; finished tasks`}>
       <div className={widgetHeader}>
         <h2 className={widgetHeading}>Backends & models</h2>
@@ -244,9 +248,10 @@ export function BackendComparison() {
         {data && (
           <>
             <p className="text-xs text-muted-foreground">
-              Tasks that finished done or failed in the period, by the backend and model that ran
-              them. Includes subtasks. Cost is reported USD only.
+              Tasks that finished done or failed in the period, by the backend and model their
+              steps ran on. Includes subtasks. Cost is reported USD only.
             </p>
+            <Coverage coverage={data.coverage} retry={() => void query.refetch()} />
             {data.backends.length ? (
               <div className="overflow-x-auto" role="region" aria-label="Backend comparison" tabIndex={0}>
                 <table className="w-full text-left text-sm">
@@ -289,6 +294,7 @@ export function BackendComparison() {
         )}
       </div>
     </Card>
+    </section>
   )
 }
 
@@ -300,7 +306,7 @@ function BackendRow({ stat: b, cost }: { stat: DashboardBackendStat; cost: boole
       <td className="px-3 py-2.5">
         <span className="block font-medium">{backendName(b.backend)}</span>
         <span className="block font-mono text-[11px] text-soft-foreground">
-          {b.model ?? 'default model'}
+          {b.backend === 'mixed' ? 'steps ran on different backends' : (b.model ?? 'default model')}
         </span>
       </td>
       <td className="px-3 py-2.5 text-right tabular-nums">{b.finished}</td>
@@ -340,7 +346,9 @@ type AutomationRow = {
   automationId: string
   name: string
   enabled?: boolean
-  removed: boolean
+  /** `removed` only when the project's definitions were READ and it is not among them; a
+   *  failed or pending read is `unknown` — never report a deletion we did not observe. */
+  definition: 'known' | 'removed' | 'unknown'
   stat?: DashboardAutomationStat
 }
 
@@ -361,12 +369,29 @@ export function AutomationOutcomes() {
         automationId: a.id,
         name: a.name,
         enabled: a.enabled,
-        removed: false,
+        definition: 'known',
       })
+  const read = new Set(
+    (definitions.data ?? []).flatMap((project) => (project.data && !project.error ? [project.id] : [])),
+  )
+  const detailsFailed =
+    definitions.isError ||
+    definitions.registry.isError ||
+    (definitions.data ?? []).some((project) => project.error)
   for (const stat of data?.automations ?? []) {
     const key = `${stat.projectId}\u0000${stat.automationId}`
     const known = rows.get(key)
-    rows.set(key, known ? { ...known, stat } : { ...stat, name: stat.automationId, removed: true, stat })
+    rows.set(
+      key,
+      known
+        ? { ...known, stat }
+        : {
+            ...stat,
+            name: stat.automationId,
+            definition: read.has(stat.projectId) ? 'removed' : 'unknown',
+            stat,
+          },
+    )
   }
   const sorted = [...rows.values()].sort(
     (a, b) =>
@@ -375,6 +400,7 @@ export function AutomationOutcomes() {
       a.name.localeCompare(b.name),
   )
   return (
+    <section data-dashboard-module="automation-outcomes" className="min-w-0">
     <Card className="gap-0 py-0" data-export-context={`Automation outcomes: tasks created in ${periodText(period)}`}>
       <div className={widgetHeader}>
         <h2 className={widgetHeading}>Automation outcomes</h2>
@@ -390,8 +416,17 @@ export function AutomationOutcomes() {
               <>
                 <p className="text-xs text-muted-foreground">
                   Tasks each automation created in the period and how they ended. Active means
-                  still running, queued or waiting on you.
+                  still running, queued, waiting on you, or waiting to resume after a usage limit.
                 </p>
+                <Coverage coverage={data.coverage} retry={() => void query.refetch()} />
+                {detailsFailed && (
+                  <p role="alert" className="text-sm">
+                    Some automation details could not be loaded. Their outcomes are shown by id.{' '}
+                    <Button variant="ghost" onClick={definitions.retry}>
+                      Retry automations
+                    </Button>
+                  </p>
+                )}
                 {sorted.length ? (
                   <div className="overflow-x-auto" role="region" aria-label="Automation outcomes" tabIndex={0}>
                     <table className="w-full text-left text-sm">
@@ -445,6 +480,7 @@ export function AutomationOutcomes() {
         )}
       </div>
     </Card>
+    </section>
   )
 }
 
@@ -463,7 +499,7 @@ function AutomationOutcome({
   return (
     <tr className="border-t transition-colors hover:bg-muted/30">
       <td className="px-3 py-2.5">
-        {row.removed ? (
+        {row.definition === 'removed' ? (
           <span className="block font-medium">{row.name}</span>
         ) : (
           <Link
@@ -476,7 +512,13 @@ function AutomationOutcome({
         <span className="flex items-center gap-1.5 text-xs text-soft-foreground">
           <StatusDot tone={row.enabled ? 'success' : 'neutral'} />
           {projectName(row.projectId)} ·{' '}
-          {row.removed ? 'Removed' : row.enabled ? 'Enabled' : 'Disabled'}
+          {row.definition === 'removed'
+            ? 'Removed'
+            : row.definition === 'unknown'
+              ? 'Details unavailable'
+              : row.enabled
+                ? 'Enabled'
+                : 'Disabled'}
         </span>
       </td>
       <td className={cell}>{zero(s?.tasks)}</td>
