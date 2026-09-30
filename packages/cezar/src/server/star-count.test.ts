@@ -20,7 +20,7 @@ function stubFetch(responses: Array<() => Promise<Response> | Response>): typeof
     index += 1;
     impl.calls = index;
     return make();
-  }) as typeof fetch & { calls: number };
+  }) as unknown as typeof fetch & { calls: number };
   impl.calls = 0;
   return impl;
 }
