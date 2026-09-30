@@ -131,7 +131,15 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
     <Dialog open={open} onOpenChange={(next) => (busy ? undefined : onOpenChange(next))}>
       <DialogContent
         data-slot="create-project-dialog"
-        className={cn('max-h-[calc(100dvh-2rem)] overflow-y-auto', showOwners ? 'md:max-w-3xl' : undefined)}
+        className={cn(
+          'max-h-[calc(100dvh-2rem)] overflow-y-auto',
+          // Desktop: a FIXED height, header/body/footer rows, each column scrolling on its own —
+          // so choosing "From a template", filtering the list or a long org list never resizes
+          // (and so never re-centres and shifts) the dialog.
+          showOwners
+            ? 'md:h-[min(50rem,calc(100dvh-4rem))] md:max-w-3xl md:grid-rows-[auto_minmax(0,1fr)_auto] md:overflow-hidden'
+            : undefined,
+        )}
       >
         <DialogHeader>
           <DialogTitle>New project</DialogTitle>
@@ -142,10 +150,16 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
 
         <div
           data-slot="create-layout"
-          className={cn('grid gap-6', showOwners ? 'md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]' : undefined)}
+          className={cn(
+            'grid gap-6',
+            showOwners ? 'md:min-h-0 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]' : undefined,
+          )}
         >
           {showOwners ? (
-            <div data-slot="create-owners-column" className="min-w-0 md:border-r md:border-border md:pr-6">
+            <div
+              data-slot="create-owners-column"
+              className="min-w-0 md:flex md:min-h-0 md:flex-col md:border-r md:border-border md:pr-6"
+            >
               {githubAvailable ? (
                 <OwnerPicker
                   owners={ownerOptions}
@@ -159,7 +173,13 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
             </div>
           ) : null}
 
-          <div className="grid min-w-0 content-start gap-4">
+          <div
+            data-slot="create-form-column"
+            className={cn(
+              'grid min-w-0 content-start gap-4',
+              showOwners ? 'md:-m-1 md:flex md:min-h-0 md:flex-col md:overflow-y-auto md:p-1' : undefined,
+            )}
+          >
             <div className="grid gap-1.5">
               <Label htmlFor="create-name">Name</Label>
               <Input
@@ -225,7 +245,10 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
               ) : null}
             </div>
 
-            <div data-slot="create-start" className="grid gap-3 rounded-md border border-border p-4">
+            <div
+              data-slot="create-start"
+              className="grid gap-3 rounded-md border border-border p-3 md:flex md:min-h-0 md:flex-1 md:flex-col"
+            >
               <span id="create-start-label" className="text-sm font-medium">
                 Start with
               </span>
@@ -235,7 +258,7 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
                   checked={!fromTemplate}
                   disabled={busy}
                   title="Empty repository"
-                  hint="One empty initial commit, no files."
+                  hint="One empty commit, no files."
                   onSelect={() => setStart('empty')}
                 />
                 <StartOption
@@ -243,12 +266,12 @@ export function CreateProjectDialog({ open, onOpenChange }: { open: boolean; onO
                   checked={fromTemplate}
                   disabled={busy || !github}
                   title="From a template"
-                  hint={github ? 'Copy a GitHub template repository.' : 'Needs a GitHub repository.'}
+                  hint={github ? 'Copy a GitHub template.' : 'Needs a GitHub repository.'}
                   onSelect={() => setStart('template')}
                 />
               </div>
               {fromTemplate ? (
-                <div className="grid gap-1.5">
+                <div className="grid gap-1.5 md:flex md:min-h-0 md:flex-1 md:flex-col">
                   <Label htmlFor="create-template">Template</Label>
                   <GithubTemplateInput id="create-template" value={template} disabled={busy} onChange={setTemplate} />
                 </div>
@@ -312,7 +335,7 @@ function OwnerPicker({
     refs.current[next]?.focus()
   }
   return (
-    <div className="grid gap-3">
+    <div className="grid gap-3 md:flex md:min-h-0 md:flex-1 md:flex-col">
       <span
         id="create-owner-label"
         className="text-[12px] font-semibold tracking-wider text-muted-foreground uppercase"
@@ -323,7 +346,7 @@ function OwnerPicker({
         role="radiogroup"
         aria-labelledby="create-owner-label"
         data-slot="create-owner"
-        className="-mx-1 grid max-h-64 gap-2 overflow-y-auto px-1 py-0.5 md:max-h-[26rem]"
+        className="-mx-1 grid max-h-64 content-start gap-2 overflow-y-auto px-1 py-0.5 md:max-h-none md:min-h-0 md:flex-1"
       >
         {owners.map((o, index) => {
           const selected = o.login === value

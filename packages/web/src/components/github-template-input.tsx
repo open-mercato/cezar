@@ -1,3 +1,4 @@
+import { CircleCheckIcon } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 
 import { Input } from '@/components/ui/input'
@@ -5,14 +6,13 @@ import { filterTemplateSuggestions } from '@/lib/github-templates'
 import { cn } from '@/lib/utils'
 
 /**
- * The template field of the new-project dialog: a free-form `owner/repo` / URL input that opens a
- * list of suggested GitHub templates on focus, filtered as you type. A combobox — the list is a
- * listbox the arrow keys move through and Enter picks from, and Escape closes it without
- * clearing what was typed. The input keeps focus throughout.
+ * The template field of the new-project dialog: a free-form `owner/repo` / URL input above an
+ * ALWAYS-VISIBLE list of suggested GitHub templates, filtered as you type, the chosen one marked.
+ * A combobox — the arrow keys move through the list and Enter picks.
  *
- * The list renders INLINE, under the input, not in a portalled popover: the dialog's scroll lock
- * swallows wheel and touch scrolling on anything outside the dialog's own DOM, which left a
- * portalled list unscrollable past its first rows.
+ * Always visible, not a dropdown: a list that appeared on focus and vanished on blur resized the
+ * dialog under the cursor. And inline, not a portalled popover: the dialog's scroll lock swallows
+ * wheel and touch scrolling on anything outside the dialog's own DOM.
  */
 export function GithubTemplateInput({
   value,
@@ -25,12 +25,11 @@ export function GithubTemplateInput({
   disabled: boolean
   id: string
 }) {
-  const [open, setOpen] = useState(false)
   const [active, setActive] = useState(-1)
   const listId = useId()
   const suggestions = filterTemplateSuggestions(value)
-  const showList = open && !disabled && suggestions.length > 0
   const listRef = useRef<HTMLUListElement>(null)
+  const chosenSlug = value.trim()
 
   // Keep the keyboard-highlighted row in view as the arrow keys move past the visible rows.
   useEffect(() => {
@@ -38,94 +37,103 @@ export function GithubTemplateInput({
     listRef.current?.querySelector(`[data-index="${active}"]`)?.scrollIntoView?.({ block: 'nearest' })
   }, [active])
 
+  // …and the chosen template, so a pick (or a pasted slug) is never marked out of sight.
+  useEffect(() => {
+    listRef.current?.querySelector('[aria-selected="true"]')?.scrollIntoView?.({ block: 'nearest' })
+  }, [chosenSlug])
+
   const pick = (slug: string) => {
+    if (disabled) return
     onChange(slug)
-    setOpen(false)
     setActive(-1)
   }
 
   return (
-    <div className="grid gap-1">
+    // On desktop the list takes whatever height the dialog's form column has left (and scrolls
+    // itself), never less than a few rows; on mobile it is a plain capped list.
+    <div className="grid gap-2 md:flex md:min-h-0 md:flex-1 md:flex-col">
       <Input
         id={id}
         data-slot="create-template"
         role="combobox"
-        aria-expanded={showList}
+        aria-expanded={suggestions.length > 0}
         aria-controls={listId}
         aria-autocomplete="list"
-        aria-activedescendant={showList && active >= 0 ? `${listId}-${active}` : undefined}
+        aria-activedescendant={active >= 0 ? `${listId}-${active}` : undefined}
         autoComplete="off"
         placeholder="Search, or paste owner/repo or a URL"
         value={value}
         disabled={disabled}
-        onFocus={() => setOpen(true)}
-        onClick={() => setOpen(true)}
-        onBlur={() => {
-          setOpen(false)
-          setActive(-1)
-        }}
+        onBlur={() => setActive(-1)}
         onChange={(event) => {
           onChange(event.target.value)
-          setOpen(true)
           setActive(-1)
         }}
         onKeyDown={(event) => {
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault()
-            setOpen(true)
             const delta = event.key === 'ArrowDown' ? 1 : -1
             setActive((i) => (suggestions.length === 0 ? -1 : (i + delta + suggestions.length) % suggestions.length))
-          } else if (event.key === 'Enter' && showList && active >= 0) {
+          } else if (event.key === 'Enter' && active >= 0) {
             event.preventDefault()
             const chosen = suggestions[active]
             if (chosen) pick(chosen.slug)
-          } else if (event.key === 'Escape' && showList) {
-            // Close the list only — the dialog's own Escape must not fire on the same press.
-            event.preventDefault()
-            event.stopPropagation()
-            setOpen(false)
           }
         }}
       />
-      {showList ? (
+      {suggestions.length > 0 ? (
         <ul
           ref={listRef}
           id={listId}
           role="listbox"
           aria-label="Suggested templates"
+          aria-disabled={disabled || undefined}
           data-slot="create-template-suggestions"
-          className="max-h-64 overflow-y-auto overscroll-contain rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-sm"
+          className={cn(
+            'max-h-56 overflow-y-auto overscroll-contain rounded-md border border-border p-1',
+            'md:max-h-none md:min-h-36 md:flex-1',
+            disabled ? 'pointer-events-none opacity-50' : undefined,
+          )}
         >
-          {suggestions.map((s, index) => (
-            <li
-              key={s.slug}
-              id={`${listId}-${index}`}
-              role="option"
-              aria-selected={index === active}
-              data-index={index}
-              data-slot="create-template-suggestion"
-              data-template={s.slug}
-              // mousedown + preventDefault: the input keeps focus, so its blur does not close the
-              // list before the pick lands.
-              onMouseDown={(event) => {
-                event.preventDefault()
-                pick(s.slug)
-              }}
-              onMouseEnter={() => setActive(index)}
-              className={cn(
-                'grid cursor-pointer gap-0.5 rounded-sm px-2 py-1.5',
-                index === active ? 'bg-accent text-accent-foreground' : undefined,
-              )}
-            >
-              <span className="flex min-w-0 items-baseline justify-between gap-2">
-                <span className="truncate text-sm font-medium">{s.label}</span>
-                <span className="shrink-0 text-[11px] text-muted-foreground">{s.description}</span>
-              </span>
-              <span className="truncate font-mono text-[11px] text-soft-foreground">{s.slug}</span>
-            </li>
-          ))}
+          {suggestions.map((s, index) => {
+            const chosen = s.slug === chosenSlug
+            return (
+              <li
+                key={s.slug}
+                id={`${listId}-${index}`}
+                role="option"
+                aria-selected={chosen}
+                data-index={index}
+                data-slot="create-template-suggestion"
+                data-template={s.slug}
+                // The pick is a click (so any activation works); mousedown only keeps focus in the input.
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => pick(s.slug)}
+                onMouseEnter={() => setActive(index)}
+                onMouseLeave={() => setActive(-1)}
+                className={cn(
+                  'grid cursor-pointer gap-0.5 rounded-sm border px-2 py-1.5',
+                  chosen ? 'border-primary bg-primary/5' : 'border-transparent',
+                  index === active && !chosen ? 'bg-accent text-accent-foreground' : undefined,
+                )}
+              >
+                <span className="flex min-w-0 items-baseline justify-between gap-2">
+                  <span className="flex shrink-0 items-center gap-1.5 text-sm font-medium">
+                    {s.label}
+                    {chosen ? <CircleCheckIcon className="size-3.5 shrink-0 text-primary" aria-hidden="true" /> : null}
+                  </span>
+                  <span className="min-w-0 truncate text-[11px] text-muted-foreground">{s.description}</span>
+                </span>
+                <span className="truncate font-mono text-[11px] text-soft-foreground">{s.slug}</span>
+              </li>
+            )
+          })}
         </ul>
-      ) : null}
+      ) : (
+        <p data-slot="create-template-no-match" className="px-1 text-[12px] text-muted-foreground">
+          No suggested template matches — any <span className="font-mono">owner/repo</span> or GitHub URL works.
+        </p>
+      )}
     </div>
   )
 }

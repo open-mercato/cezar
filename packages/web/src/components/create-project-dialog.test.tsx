@@ -184,7 +184,7 @@ describe('CreateProjectDialog', () => {
     renderDialog()
     await waitFor(() => expect(ownerCards()).toHaveLength(2))
     expect(slot('create-start-empty')?.getAttribute('aria-checked')).toBe('true')
-    expect(slot('create-start-empty')?.textContent).toContain('One empty initial commit')
+    expect(slot('create-start-empty')?.textContent).toContain('One empty commit')
     expect(slot('create-template')).toBeNull()
     fireEvent.change(nameInput(), { target: { value: 'fresh' } })
     fireEvent.click(createButton())
@@ -203,20 +203,35 @@ describe('CreateProjectDialog', () => {
     expect(createButton().disabled).toBe(true)
 
     const input = slot('create-template') as HTMLInputElement
-    fireEvent.focus(input)
-    await waitFor(() => expect(document.querySelectorAll('[data-slot="create-template-suggestion"]').length).toBeGreaterThan(5))
+    // Visible straight away — not only on focus — so nothing appears under the cursor later.
+    expect(document.querySelectorAll('[data-slot="create-template-suggestion"]').length).toBeGreaterThan(5)
     // Rendered inside the dialog, never portalled out of it: the dialog's scroll lock would
     // swallow wheel/touch scrolling on a list outside its DOM.
     expect(slot('create-project-dialog')?.contains(slot('create-template-suggestions'))).toBe(true)
     fireEvent.change(input, { target: { value: 'obsidian' } })
     const options = [...document.querySelectorAll<HTMLElement>('[data-slot="create-template-suggestion"]')]
     expect(options.map((o) => o.dataset.template)).toEqual(['andrewmcodes/obsidian-beginner-vault-template'])
-    fireEvent.mouseDown(options[0] as HTMLElement)
+    fireEvent.click(options[0] as HTMLElement)
     expect(input.value).toBe('andrewmcodes/obsidian-beginner-vault-template')
+    // After a pick the whole list stays (no dropdown to close), with the chosen template marked.
+    const marked = [...document.querySelectorAll<HTMLElement>('[data-slot="create-template-suggestion"]')].filter(
+      (o) => o.getAttribute('aria-selected') === 'true',
+    )
+    expect(marked.map((o) => o.dataset.template)).toEqual(['andrewmcodes/obsidian-beginner-vault-template'])
+    expect(document.querySelectorAll('[data-slot="create-template-suggestion"]').length).toBeGreaterThan(5)
 
     fireEvent.click(createButton())
     await waitFor(() => expect(posted).toHaveLength(1))
     expect(posted[0]).toMatchObject({ github: { owner: 'octo', template: 'andrewmcodes/obsidian-beginner-vault-template' } })
+  })
+
+  it('a query with no suggestion says any owner/repo works', async () => {
+    serve()
+    renderDialog()
+    await waitFor(() => expect(ownerCards()).toHaveLength(2))
+    fireEvent.click(slot('create-start-template') as HTMLButtonElement)
+    fireEvent.change(slot('create-template') as HTMLInputElement, { target: { value: 'acme/internal-starter' } })
+    expect(slot('create-template-no-match')?.textContent).toContain('owner/repo')
   })
 
   it('arrow keys and Enter pick a suggestion; a pasted owner/repo works too', async () => {
