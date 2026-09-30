@@ -95,8 +95,8 @@ Give the cockpit's GitHub tab a one-click way to flip the Issues / Pull requests
 
 ### Phase 3: the toggle
 
-- [ ] 3.1 Segmented Newest | Oldest control wired into the GitHub tab
-- [ ] 3.2 Component tests for the toggle and its persistence
+- [x] 3.1 Segmented Newest | Oldest control wired into the GitHub tab — 551b0ca3
+- [x] 3.2 Component tests for the toggle and its persistence — 551b0ca3
 
 ### Phase 4: gate
 
