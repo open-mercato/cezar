@@ -104,20 +104,20 @@ reading a newer run's events degrades to the generic wrench rather than breaking
 
 ### Phase 1: Give skills their own tool kind
 
-- [ ] 1.1 Add `'skill'` to the `ToolKind` union in both mirrors
-- [ ] 1.2 Map the `skill` tool to `toolKind: 'skill'` and update the expectation tables
+- [x] 1.1 Add `'skill'` to the `ToolKind` union in both mirrors — 06af9d00
+- [x] 1.2 Map the `skill` tool to `toolKind: 'skill'` and update the expectation tables — 06af9d00, 88ee8ea6
 
 ### Phase 2: Stop counting skills as agents
 
-- [ ] 2.1 Agents-dock regression test: a skill yields no dock row
-- [ ] 2.2 History regression test: a skill is not a retained root agent episode
+- [x] 2.1 Agents-dock regression test: a skill yields no dock row — 06af9d00
+- [x] 2.2 History regression test: a skill is not a retained root agent episode — 06af9d00
 
 ### Phase 3: Mark skills separately in the UI
 
-- [ ] 3.1 Distinct transcript icon and title split for a skill card
-- [ ] 3.2 `collectSkills` collector for the live run's skills
-- [ ] 3.3 Slim Skills dock mounted above the Agents dock
+- [x] 3.1 Distinct transcript icon and title split for a skill card — 06af9d00
+- [x] 3.2 `collectSkills` collector for the live run's skills — 06af9d00
+- [x] 3.3 Slim Skills dock mounted above the Agents dock — 06af9d00
 
 ### Phase 4: Validate
 
-- [ ] 4.1 Full validation gate green
+- [x] 4.1 Full validation gate green — 88ee8ea6
