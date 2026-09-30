@@ -218,11 +218,17 @@ type UiItem = UiMessageItem | UiReasoningItem | UiToolItem;
 `parent_tool_use_id`, opencode `subtask` parts, Codex collaboration receiver
 thread ids).
 
+`toolKind: 'task'` means a **subagent spawn** and nothing else — surfaces that count live
+fan-out (the cockpit's Agents dock, the history root-episode retention) key on it directly. A
+skill invocation is `toolKind: 'skill'`: instructions loaded into the current agent's turn, with
+no second agent behind it and no children to adopt. Conflating the two reports a fan-out that
+never happened (#1202).
+
 ### Enumerations
 
 ```ts
 type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined';
-type ToolKind   = 'read'|'edit'|'delete'|'move'|'search'|'execute'|'think'|'fetch'|'task'|'plan'|'other';
+type ToolKind   = 'read'|'edit'|'delete'|'move'|'search'|'execute'|'think'|'fetch'|'task'|'skill'|'plan'|'other';
 type StopReason = 'end_turn'|'max_tokens'|'refusal'|'cancelled'|'timeout'|'error';
 type PlanStatus = 'pending' | 'in_progress' | 'completed';
 ```
