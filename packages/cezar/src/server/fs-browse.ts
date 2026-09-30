@@ -60,7 +60,7 @@ export interface FsBrowseResponse {
 
 export type BrowseResult =
   | { ok: true; body: FsBrowseResponse }
-  | { ok: false; status: 400 | 404; error: string };
+  | { ok: false; status: 400 | 403 | 404; error: string };
 
 /**
  * Entry cap. A picker cannot usefully render more, and an unbounded listing
@@ -78,6 +78,9 @@ const MAX_ENTRIES = 1000;
  * prompt that follows. Their `isRepo` is simply `false`.
  */
 const PRIVACY_PROTECTED_HOME_DIRS = new Set(['Desktop', 'Documents', 'Downloads', 'Library', 'Movies', 'Music', 'Pictures']);
+
+/** The 403 a macOS privacy denial answers with; the picker offers System Settings beside it. */
+export const MACOS_PRIVACY_BLOCKED = 'macOS privacy settings do not allow cezar to read this folder.';
 
 /**
  * Expand the configured browse root. The workspace owns this independently
@@ -205,10 +208,21 @@ export async function browseDirectory(opts: {
   // existence of a file the caller was never shown.
   if (!info?.isDirectory()) return { ok: false, status: 404, error: 'no such directory' };
 
-  const entries = await readdir(real, { withFileTypes: true }).catch(() => null);
-  // Unreadable (mode 0300, permission-denied mount) — indistinguishable from
-  // absent, on purpose.
-  if (entries === null) return { ok: false, status: 404, error: 'no such directory' };
+  let readError: NodeJS.ErrnoException | null = null;
+  const entries = await readdir(real, { withFileTypes: true }).catch((error: NodeJS.ErrnoException) => {
+    readError = error;
+    return null;
+  });
+  if (entries === null) {
+    // macOS privacy (TCC) refuses with EPERM — a folder the parent listing already showed, that
+    // the user can unblock in System Settings. Saying "no such directory" there left them stuck.
+    if (process.platform === 'darwin' && (readError as NodeJS.ErrnoException | null)?.code === 'EPERM') {
+      return { ok: false, status: 403, error: MACOS_PRIVACY_BLOCKED };
+    }
+    // Unreadable otherwise (mode 0300, permission-denied mount) — indistinguishable from
+    // absent, on purpose.
+    return { ok: false, status: 404, error: 'no such directory' };
+  }
 
   const showHidden = opts.showHidden === true;
   const candidates = entries
