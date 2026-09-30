@@ -526,6 +526,42 @@ describe('resolveBaseRef (real git)', () => {
     expect(await resolveBaseRef(work, 'develop')).toBe('origin/develop');
   });
 
+  /** Advance `develop` on the origin repo behind `work`'s back. */
+  async function advanceOrigin(work: string): Promise<void> {
+    const origin = (await run('git', ['remote', 'get-url', 'origin'], { cwd: work })).stdout.trim();
+    writeFileSync(join(origin, 'a.txt'), 'upstream-new\n');
+    await run('git', [...GIT_ID, 'commit', '-q', '-am', 'c4'], { cwd: origin });
+  }
+
+  it('fetches origin first, so a base that advanced upstream forks from the NEW tip', async () => {
+    const work = await repoWithOrigin();
+    await advanceOrigin(work);
+    const origin = (await run('git', ['remote', 'get-url', 'origin'], { cwd: work })).stdout.trim();
+    const upstreamTip = (await run('git', ['rev-parse', 'develop'], { cwd: origin })).stdout.trim();
+
+    // Without the fetch, local develop == origin/develop (both stale) and the
+    // resolver would fork from the old tip.
+    expect(await resolveBaseRef(work, 'develop')).toBe('origin/develop');
+    const tracked = (await run('git', ['rev-parse', 'origin/develop'], { cwd: work })).stdout.trim();
+    expect(tracked).toBe(upstreamTip);
+  });
+
+  it('does not touch the network under CEZ_DRY_RUN=1', async () => {
+    const work = await repoWithOrigin();
+    await advanceOrigin(work);
+    const before = (await run('git', ['rev-parse', 'origin/develop'], { cwd: work })).stdout.trim();
+    const prev = process.env.CEZ_DRY_RUN;
+    process.env.CEZ_DRY_RUN = '1';
+    try {
+      expect(await resolveBaseRef(work, 'develop')).toBe('develop');
+    } finally {
+      if (prev === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = prev;
+    }
+    const after = (await run('git', ['rev-parse', 'origin/develop'], { cwd: work })).stdout.trim();
+    expect(after).toBe(before);
+  });
+
   it('returns the local name for a local-only branch, and null when neither exists', async () => {
     const repo = await fixtureRepo('cez-resolve-localonly-');
     expect(await resolveBaseRef(repo, 'main')).toBe('main');

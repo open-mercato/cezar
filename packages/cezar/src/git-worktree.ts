@@ -31,14 +31,43 @@ interface RegisteredWorktree {
 }
 
 /** Run git, never throw — degradation is the caller's policy. */
-function git(cwd: string, args: string[]): Promise<GitResult> {
+function git(
+  cwd: string,
+  args: string[],
+  opts: { timeout?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<GitResult> {
   return new Promise((resolve) => {
     execFile(
       'git',
       args,
-      { cwd, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8' },
+      { cwd, maxBuffer: 32 * 1024 * 1024, encoding: 'utf8', ...opts },
       (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );
+  });
+}
+
+/** Upper bound on the pre-fork fetch; a slow or unreachable remote must not stall task start. */
+const FETCH_TIMEOUT_MS = 15_000;
+
+/**
+ * Refresh `origin/<base>` so a new task forks from the newest upstream tip,
+ * not whatever the remote-tracking ref happened to hold at the last manual
+ * fetch. Best effort: no `origin`, offline, auth required or a timeout all
+ * leave the existing refs untouched. The explicit refspec updates the
+ * tracking ref even when the remote has a narrowed fetch config. Skipped under
+ * `CEZ_DRY_RUN=1`, which must stay network-free.
+ */
+async function fetchBase(repoRoot: string, base: string): Promise<void> {
+  if (process.env.CEZ_DRY_RUN === '1') return;
+  // The name is spliced into a refspec — only a well-formed branch name may be.
+  const wellFormed = await git(repoRoot, ['check-ref-format', `refs/heads/${base}`]);
+  if (!wellFormed.ok) return;
+  const hasOrigin = await git(repoRoot, ['remote', 'get-url', 'origin']);
+  if (!hasOrigin.ok) return;
+  const refspec = `+refs/heads/${base}:refs/remotes/origin/${base}`;
+  await git(repoRoot, ['fetch', '--quiet', '--no-tags', '--no-recurse-submodules', 'origin', refspec], {
+    timeout: FETCH_TIMEOUT_MS,
+    env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   });
 }
 
@@ -58,7 +87,8 @@ export function branchFor(runId: string): string {
  * merged into origin since then counts as the task's own changes — the phantom
  * 142k-line diff. `origin/<base>` is the source of truth for a review base, so
  * only keep the local ref when it is equal to or ahead of origin (unpushed base
- * commits); otherwise use origin.
+ * commits); otherwise use origin. `origin/<base>` is fetched first (best
+ * effort) so "up to date" means the remote as it is now, not at the last fetch.
  *
  * This answers the question once, when the worktree is forked. The local ref
  * goes stale AFTERWARDS too — agents fetch, they never pull — so every diff
@@ -67,6 +97,7 @@ export function branchFor(runId: string): string {
  */
 export async function resolveBaseRef(repoRoot: string, base: string): Promise<string | null> {
   if (!isSafeGitRef(base)) return null;
+  await fetchBase(repoRoot, base);
   const verify = (ref: string) =>
     git(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]).then((r) => r.ok);
   const [hasLocal, hasRemote] = await Promise.all([verify(base), verify(`origin/${base}`)]);

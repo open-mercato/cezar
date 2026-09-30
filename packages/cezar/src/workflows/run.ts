@@ -4024,7 +4024,9 @@ export class RunManager {
       });
       // Fork from the configured base branch (config.json `baseBranch`, e.g.
       // `develop`) — also the target of the eventual draft PR. Unresolvable
-      // (typo, not fetched) → note + the currently checked-out branch.
+      // (typo, not fetched) → note + the currently checked-out branch. Either
+      // way the base goes through `resolveBaseRef`, which fetches origin first
+      // so a new task forks from the newest tip, never a stale local ref.
       //
       // A task that already recorded a fork point keeps it: its worktree is
       // reused as-is, and re-resolving against a since-changed config would
@@ -4043,6 +4045,9 @@ export class RunManager {
             message: `configured base branch "${configured}" not found (locally or on origin) — using "${repo.branch}"`,
           });
         }
+      }
+      if (!recorded && base === repo.branch && repo.branch !== 'HEAD') {
+        base = (await resolveBaseRef(this.repoRoot, repo.branch)) ?? repo.branch;
       }
       try {
         const wt = await createWorktree(this.repoRoot, runId, base);
