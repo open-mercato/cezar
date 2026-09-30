@@ -2944,6 +2944,20 @@ describe('registry /skill expansion survives a continuation (#811)', () => {
     expect(next?.profileId).toBe('default');
   }, 40_000);
 
+  it('a fresh Continue that fails before spawning leaves no session id to resume', async () => {
+    // The pinned id is recorded before the preflight; a turn that never spawned created no
+    // conversation, so the next Continue must not try to `--resume` it.
+    const id = await finishedRun();
+    const tmp = join(repoRoot, '.ai/cezar/tmp');
+    rmSync(tmp, { recursive: true, force: true });
+    writeFileSync(tmp, 'not a directory', 'utf8');
+    expect(manager.continueRun(id, { runner: 'codex' })).toEqual({ ok: true });
+    await waitFor(() => store.getRun(id)?.status === 'failed');
+    const failed = store.getRun(id)?.steps.find((s) => s.id === 'continue-1');
+    expect(failed?.status).toBe('failed');
+    expect(failed?.sessionId).toBeUndefined();
+  }, 40_000);
+
   it('expands a FOLLOW-UP delivered into the reopened continuation session', async () => {
     const id = await finishedRun();
     expect(manager.continueRun(id, { text: 'keep going' })).toEqual({ ok: true });

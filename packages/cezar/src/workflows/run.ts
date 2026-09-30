@@ -3766,6 +3766,9 @@ export class RunManager {
         status: 'failed',
         error: message,
         finishedAt: failedAt,
+        // The fresh session pinned up front was never created: leaving its id on the step
+        // would make the next Continue `--resume` a conversation that does not exist.
+        ...(sessionId === undefined ? { sessionId: undefined } : {}),
       });
       this.store.updateRun(runId, {
         status: 'failed',
