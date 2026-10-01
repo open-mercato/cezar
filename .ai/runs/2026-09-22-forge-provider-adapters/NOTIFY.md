@@ -73,3 +73,8 @@
 - Phase 5 (5.1..5.12, e280b9a8..2347212c) fixed all of them; gate re-run fully green (7 709/7 709), lease test 5/5.
 - The implementation branch now carries the spec (5.12) because this fork has no spec PR to merge.
 - Escalated: routes.test.tsx scope-resolution fragility blocks a useProjects() subscriber in TasksOverviewRoute — pre-existing, needs its own issue.
+
+## 2026-10-01 — live verification and upstream PR
+- Live gitlab.com smoke (private project + subgroup project, glab 1.118) and a GitHub PR-build-vs-main comparison on a private repo: no GitHub regression; six defects found and fixed with failing-first tests (see HANDOFF.md).
+- Bookmarklet CSP caveat resolved for gitlab.com (verified live); self-managed remains untested.
+- Merged upstream main @ 93f1eea4 and opened open-mercato/cezar#1226 (Fixes #847, spec #848 carried byte-identical).

@@ -2,8 +2,8 @@
 
 **Date:** 2026-09-22
 **Slug:** forge-provider-adapters
-**Branch:** `feat/forge-provider-adapters` (fork `roszekF/cezar`; nothing is pushed to `open-mercato/cezar`)
-**Source spec:** `.ai/specs/2026-08-10-forge-provider-adapters.md` — carried on branch `spec/forge-provider-adapters` (upstream spec PR `open-mercato/cezar#848`, unmerged); materialized untracked in the worktree, never committed on this branch
+**Branch:** `feat/forge-provider-adapters` (fork `roszekF/cezar`) — upstream PR open-mercato/cezar#1226, implementing #847
+**Source spec:** `.ai/specs/2026-08-10-forge-provider-adapters.md` — upstream spec PR open-mercato/cezar#848; committed on this branch byte-identical to #848 (Step 5.12), so the two merge in either order
 **Base:** `main` @ `4763447f` (v0.11.1)
 **Engine:** om-auto-create-pr-loop (steps: 28, --loop: no)
 

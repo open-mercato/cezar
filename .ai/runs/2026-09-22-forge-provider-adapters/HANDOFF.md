@@ -1,29 +1,21 @@
 # Handoff — 2026-09-22-forge-provider-adapters
 
-**Last updated:** 2026-09-22T18:36:59Z
+**Last updated:** 2026-10-01
 **Branch:** feat/forge-provider-adapters (fork roszekF/cezar)
-**PR:** https://github.com/roszekF/cezar/pull/1 (ready for review)
-**Current phase/step:** complete — 31 plan rows + 13 fix rows done, final gate passed, review fixes landed
-**Last commit:** e340385d — test(runs): restore the partial forge mock in the repo-handle test
+**PR:** https://github.com/open-mercato/cezar/pull/1226 (upstream, ready for review; implements #847, spec #848). Development history and evidence: https://github.com/roszekF/cezar/pull/1
+**Current phase/step:** complete — merged with upstream main @ 93f1eea4, live-verified on gitlab.com and GitHub
+**Last commit:** see the PR head
 
 ## What just happened
-- Run complete. Phase 4 landed, the full gate passed, the end-of-run review returned request-changes with 6 majors (one introduced by Step 4.6 — GitHub Enterprise automations), all fixed and re-gated: 7 665/7 665 unit tests green.
+- Live smoke tests on gitlab.com (private project, and a project in a subgroup) and a side-by-side GitHub regression check against main. They found and fixed: unauthenticated private-project clone, glab 1.118 boxed errors read as "ERROR", deprecated NO_PROMPT, `/-/work_items/N` issue URLs, a "PR" label on GitLab MRs, and GitHub failure reasons that echoed the command instead of gh's message.
+- Bookmarklet verified against gitlab.com's live CSP (MR in a subgroup, and an issue).
+- Merged upstream main (25 commits); conflicts resolved keeping both sides; full gate green apart from the pre-existing intermittent Codex EPIPE in workflows/run.test.ts (reproduces on main).
 
 ## Next concrete action
-- Human review + QA on a real GitLab project (the PR carries needs-qa). Nothing is owed by the automation.
+- Upstream maintainer review of #1226. Nothing is owed by the automation.
 
 ## Blockers / open questions
-- none. Pushes go over HTTPS with gh credentials (SSH agent stopped signing): git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push https://github.com/roszekF/cezar.git feat/forge-provider-adapters
+- Not verified: a self-managed GitLab instance (including its admin-set CSP for the bookmarklet).
 
 ## Environment caveats
-- Dev runtime runnable: yes (npm ci done in the worktree)
-- Browser / UI checks: npm run test:e2e runs (needs network outside the sandbox) but ~35 specs fail on main on this machine; compare against the baseline worktree .ai/tmp/baseline-main-e2e (main @ 4763447f, npm ci done)
-- Database/migration state: n/a
-- The spec file .ai/specs/2026-08-10-forge-provider-adapters.md is UNTRACKED in the worktree — never commit it. Stage explicitly.
-- Push only to the `fork` remote (roszekF/cezar).
-- Executor rules + fixtures: /tmp/claude-1000/-home-filip-projects-open-mercato-cezar/a1014b58-6b67-4e84-86f9-50f8a6511a70/scratchpad/{executor-rules.md,glab-fixtures/} (session scratch; the rules are restated in PLAN.md conventions)
-- The GitLab adapter must call registerProjectCacheEvictor(...) (forge/cli.ts) for its per-root caches.
-
-## Worktree
-- Path: /home/filip/projects/open-mercato/cezar/.ai/tmp/om-auto-create-pr-loop/forge-provider-adapters-20260922-145945
-- Created this run: yes
+- Push only to the `fork` remote (roszekF/cezar); the upstream PR picks the branch up.
