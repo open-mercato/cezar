@@ -26,6 +26,8 @@
 </div>
 
 <p align="center">
+  <a href="https://cezar.run/">
+    <img alt="Website: cezar.run" src="https://img.shields.io/badge/website-cezar.run-9655FD" /></a>
   <a href="LICENSE">
     <img alt="MIT license" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@open-mercato/cezar">
@@ -60,6 +62,11 @@
 - 🧩&nbsp;Skills are Markdown files and workflows are short YAML files. Mix agents per step.
 - 🐙&nbsp;Run the agent straight on a GitHub issue or a GitLab issue/merge request — gitlab.com and self-managed both work. Nothing merges on its own.
 - 📂&nbsp;One cockpit for all your projects.
+- 📊&nbsp;A workspace dashboard shows what needs you, what is running and what finished across your projects.
+- 💸&nbsp;Track reported cost and token usage by project in **Usage & cost**.
+- ⏰&nbsp;Schedule recurring work or launch tasks from GitHub and supported tracker events with **Automations**.
+- 🌳&nbsp;Agents can delegate independent work to child tasks, each in its own worktree, and receive their reports in the parent session.
+- 🎫&nbsp;Connect **Jira or Linear** to browse issues and launch tasks from your project tracker.
 - 💾&nbsp;No database. Everything is saved as plain files in `.ai/cezar/`.
 
 ## Screenshots
@@ -88,6 +95,18 @@
 
 [![Skills + Autonomous: Pick a playbook, flip Autonomous and walk away.](docs/screenshots/skills-autonomous.png)](docs/screenshots/skills-autonomous.png)
 
+**Dashboard** — See what needs your input or review, what is running and what finished across your workspace.
+
+[![Dashboard: Workspace task counts, review requests and recent results.](docs/screenshots/dashboard.png)](docs/screenshots/dashboard.png)
+
+**Usage & cost** — Compare reported spend and token usage across projects.
+
+[![Usage and cost: Reported spend, input and output tokens, and a project breakdown.](docs/screenshots/usage-costs.png)](docs/screenshots/usage-costs.png)
+
+**Automations** — Schedule maintenance and reviews, and see the week ahead alongside GitHub triggers.
+
+[![Automations: A weekly calendar of scheduled tasks and a pull-request review trigger.](docs/screenshots/automation-calendar.png)](docs/screenshots/automation-calendar.png)
+
 **On your phone** — the same cockpit, from the task list to the diff.
 
 <table>
@@ -102,7 +121,7 @@
 
 You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
-[OpenCode](https://opencode.ai) or [pi](https://github.com/badlogic/pi-mono).
+[OpenCode](https://opencode.ai), [Cursor Agent](https://cursor.com/docs/cli/overview) or [pi](https://github.com/badlogic/pi-mono).
 `git`, `gh` and `glab` are optional — `gh` unlocks GitHub, `glab` unlocks GitLab (including self-managed); without either, cezar is plain-git.
 
 ```bash
@@ -151,6 +170,27 @@ steps:
 ```
 
 The built-in `quick-task` workflow runs with no setup.
+
+## Automations
+
+Turn repeatable work into an automation: check dependencies every morning, draft
+release notes on Fridays, or review each new pull request. Each match or scheduled
+occurrence launches an ordinary cezar task with the workflow and agent you choose.
+
+Create one in **Automations**, or ask the agent to set it up from a prompt.
+Preview event filters before enabling them. The list shows triggers, upcoming
+runs and recent outcomes; pause an automation whenever you need to.
+
+[![Automation list: Triggers, next runs and recent task outcomes.](docs/screenshots/automations.png)](docs/screenshots/automations.png)
+
+## Task dispatch
+
+For independent pieces of work, an agent can dispatch child tasks — for example,
+changes in separate modules or a fresh review of a finished branch. Each child
+gets its own worktree, appears under its parent in the task list and reports back
+into the parent session.
+cezar limits a parent to four children in flight; when a parent has a budget,
+its children share that budget. Nothing auto-merges.
 
 ## Documentation
 

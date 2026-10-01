@@ -97,14 +97,18 @@ const PROVIDERS_CONNECTED: ProviderStatusResponse = {
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'disconnected', enabled: true },
     { provider: 'opencode', status: 'not-installed', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
+/** Two usable runners (claude + codex). Cursor stays not-installed so multi-backend
+ *  scenarios stay a 2-choice pill unless a test opts Cursor in explicitly. */
 const PROVIDERS_MULTI: ProviderStatusResponse = {
   providers: [
     { provider: 'claude', status: 'connected', enabled: true },
     { provider: 'codex', status: 'connected', enabled: true },
     { provider: 'opencode', status: 'disconnected', enabled: true },
+    { provider: 'cursor', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -113,6 +117,7 @@ const PROVIDERS_NONE: ProviderStatusResponse = {
     { provider: 'claude', status: 'disconnected', enabled: true },
     { provider: 'codex', status: 'not-installed', enabled: true },
     { provider: 'opencode', status: 'disconnected', enabled: true },
+    { provider: 'cursor', status: 'disconnected', enabled: true },
   ],
 }
 
@@ -278,6 +283,7 @@ function serve(overrides: {
       // single shared answer would let a codex-only fixture stand in for claude's picker.
       if (url === '/api/v1/models?runner=codex') return json({ runner: 'codex', models: [{ id: 'gpt-future', label: 'gpt-future', description: 'Newest' }], source: 'live', stale: false })
       if (url === '/api/v1/models?runner=claude') return json({ runner: 'claude', models: [{ id: 'opus', label: 'opus', description: 'Opus 5' }, { id: 'sonnet', label: 'sonnet', description: 'Sonnet 5' }], source: 'live', stale: false })
+      if (url === '/api/v1/models?runner=cursor') return json({ runner: 'cursor', models: [{ id: 'composer-2.5', label: 'Composer 2.5', description: '' }], source: 'live', stale: false })
       if (url === '/api/v1/skills') return json(data.skills)
       if (url === '/api/v1/workflows' && method === 'GET') return json(data.workflows)
       if (url === '/api/v1/workflows' && method === 'POST') {
@@ -456,6 +462,7 @@ describe('picker data flows', () => {
           { provider: 'claude', status: 'connected', enabled: false },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'connected', enabled: false },
+          { provider: 'cursor', status: 'connected', enabled: false },
         ],
       },
     })
@@ -464,6 +471,39 @@ describe('picker data flows', () => {
 
     expect(document.querySelector('[data-slot="runner-pill"]')).toBeNull()
     expect(textarea().disabled).toBe(false)
+  })
+
+  it('offers Cursor in the runner pill when the provider is connected and enabled', async () => {
+    serve({
+      health: {
+        ...HEALTH,
+        checks: [
+          { name: 'claude', available: true },
+          { name: 'codex', available: true },
+          { name: 'cursor', available: true },
+          { name: 'git', available: true },
+        ],
+      },
+      providerStatus: {
+        providers: [
+          { provider: 'claude', status: 'connected', enabled: true },
+          { provider: 'codex', status: 'disconnected', enabled: true },
+          { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'connected', enabled: true },
+        ],
+      },
+    })
+    renderNewTask()
+    await pillReady()
+
+    const runnerPill = document.querySelector('[data-slot="runner-pill"]') as HTMLElement
+    await waitFor(() => expect(runnerPill).not.toBeNull())
+    fireEvent.pointerDown(runnerPill)
+    const options = await screen.findAllByRole('menuitemradio')
+    expect(options.map((option) => option.textContent)).toEqual([
+      expect.stringContaining('claude'),
+      expect.stringContaining('cursor'),
+    ])
   })
 
   it('drops a persisted model preset that belongs to another runner', async () => {
@@ -859,6 +899,7 @@ describe('provider authentication gate', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -890,6 +931,7 @@ describe('provider authentication gate', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -908,6 +950,7 @@ describe('provider authentication gate', () => {
           { provider: 'claude', status: 'unknown', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })
@@ -1528,6 +1571,7 @@ describe('bookmarklet auto-start', () => {
           { provider: 'claude', status: 'disconnected', enabled: true },
           { provider: 'codex', status: 'connected', enabled: true },
           { provider: 'opencode', status: 'not-installed', enabled: true },
+          { provider: 'cursor', status: 'not-installed', enabled: true },
         ],
       },
     })

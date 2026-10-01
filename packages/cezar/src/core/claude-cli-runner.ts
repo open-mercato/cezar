@@ -16,6 +16,7 @@ import type {
 export type { AgentSession, SessionOptions } from './agent-runner.ts';
 import { isSignalTerminationExit, trackChildExit } from './agent-runner.ts';
 import { buildChildEnv } from './agent-env.ts';
+import { disclaimedCommand } from './disclaim-spawn.ts';
 import { resolveClaudeBin } from './claude-bin.ts';
 import { costWeightedTokens, type RawUsage } from './usage.ts';
 import { readNdjson } from './ndjson.ts';
@@ -106,10 +107,9 @@ export class ClaudeCliRunner implements AgentRunner {
 
     let child: ChildProcessWithoutNullStreams;
     try {
-      child = nodeSpawn(this.bin, args, {
-        cwd: spec.cwd,
-        env: buildChildEnv({ backend: this.backend, extraEnv: spec.env }),
-      });
+      const env = buildChildEnv({ backend: this.backend, extraEnv: spec.env });
+      const [file, argv] = disclaimedCommand(this.bin, args, env);
+      child = nodeSpawn(file, argv, { cwd: spec.cwd, env });
     } catch (err) {
       throw wrapSpawnError(err, this.bin);
     }

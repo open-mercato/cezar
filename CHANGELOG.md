@@ -1,3 +1,36 @@
+# 0.13.0 (2026-09-28)
+
+## Highlights
+cezar learns to install and update itself. `cezar install` puts it under `~/.cezar/versions/` with a `current` link and launchers on `PATH`, `cezar update`, `cezar versions` and `cezar use` manage it from the terminal, and the cockpit's version chip opens a dialog that picks a release channel — stable or nightly — shows the newest version, installs it and restarts on the same port. Beside that arrives a desktop app: a Tauri 2 shell over the same local server, with installers for macOS, Windows, Debian and now Arch Linux published under permanent download links, and a release workflow that has been dry-run and fixed until it works — ad-hoc sealed macOS builds that open instead of reporting themselves damaged, a versionless `.deb`, and rolling links that refresh on every release rather than only the first. Cursor's `agent` CLI joins Claude, Codex and OpenCode as a first-class backend. The README is refreshed for 0.12.0 with new screenshots, a website pill and a heading-sized hero, and the brand now has written guidelines and logo files.
+
+## ✨ Features
+- ✨ A managed install and self-update: `cezar install`, `update`, `versions` and `use` keep versions under `~/.cezar/versions/`, and the cockpit's version chip installs any stable or nightly release and restarts on the same port. A desktop app (`packages/desktop`, Tauri 2) wraps the same local server. (#1132) *(@patzick)*
+- ✨ Cursor's `agent` CLI is a first-class backend on the same seam as Claude, Codex and OpenCode — protocol v2 events, health and Settings wiring, model discovery, and the bundled mock under `CEZ_DRY_RUN=1` (fixes #805). (#807) *(@dmarczydlo)*
+- ✨ The desktop shell ships an Arch Linux pacman package, built on the system's own WebKit so Omarchy, Manjaro and EndeavourOS get a working window. (#1140) *(@patzick)*
+
+## 🐛 Fixes
+- 🐛 macOS desktop builds without a Developer ID are sealed ad-hoc and verified, so the downloaded app opens instead of being reported as damaged. (#1138) *(@patzick)*
+- 🐛 In the desktop app the version chip sits in the title band beside the window controls instead of on top of the sidebar logo (shell 0.1.2). (#1144) *(@patzick)*
+
+## 📝 Specs & Documentation
+- 📝 Brand guidelines under `docs/brand/` — construction grid, colour versions, wordmark, clear space and misuse — with the logo files. (#1123) *(@zielivia)*
+- 📝 The README is refreshed for 0.12.0: new desktop and mobile screenshots, Dashboard, Usage & cost and Automations captured, and sections on Automations and Task dispatch. (#1136) *(@matwiatrzyk)*
+- 📝 The README hero no longer shows permalink icons on phones, keeps its heading-sized text, and carries the black brand icon. (#1130, #1131) *(@pat-lewczuk)*
+- 📝 A website pill in the badge row of all three READMEs links to cezar.run. (#1145) *(@pat-lewczuk)*
+
+## 🚀 CI/CD & Infrastructure
+- 🚀 The desktop release workflow gains a dry-run mode, reads the version from `tauri.conf.json`, and fixes the three defects that would have failed its first real run. (#1137) *(@patzick)*
+- 🚀 Refreshing the rolling `desktop-latest` links works on every release, not only the first — the workflow no longer tries to move a tag its token cannot update. (#1142) *(@patzick)*
+- 🚀 The Debian package is published under a versionless name, so its permanent download link matches every other installer's. (#1143) *(@patzick)*
+
+## 👥 Contributors
+
+- @patzick
+- @dmarczydlo
+- @zielivia
+- @matwiatrzyk
+- @pat-lewczuk
+
 # 0.12.0 (2026-09-27)
 
 ## Highlights

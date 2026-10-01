@@ -28,6 +28,8 @@
 > 本文译自 README.md @ 33aee0ee；如有出入，以英文版为准。
 
 <p align="center">
+  <a href="https://cezar.run/">
+    <img alt="官网：cezar.run" src="https://img.shields.io/badge/website-cezar.run-9655FD" /></a>
   <a href="LICENSE">
     <img alt="MIT 许可证" src="https://img.shields.io/badge/license-MIT-blue.svg" /></a>
   <a href="https://www.npmjs.com/package/@open-mercato/cezar">

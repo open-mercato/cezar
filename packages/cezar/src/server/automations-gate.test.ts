@@ -204,9 +204,11 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
       );
       try {
         await new Promise<void>((resolve) => server.once('listening', () => resolve()));
-        // The warm-up chain is `listProjects().then(…)`; a macrotask turn is enough for it to run
-        // to the point where it either starts the scheduler or returns early.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        // The warm-up chain is `listProjects().then(…)`. An expected start is WAITED for — a fixed
+        // pause is a bet on the machine, and a loaded one loses it. Only the opted-out case has
+        // nothing to wait for, so it keeps the pause: long enough for the chain to return early.
+        if (process.env.CEZ_AUTOMATIONS === '0') await new Promise((resolve) => setTimeout(resolve, 50));
+        else await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1), { timeout: 4000, interval: 10 });
       } finally {
         server.close();
       }
@@ -263,7 +265,10 @@ describe('automations gate (#801, default-on since spec 2026-09-14)', () => {
         await new Promise<void>((resolve) => server.once('listening', () => resolve()));
         // Same warm-up wait as "background scheduler" above: the re-baseline runs inside the
         // `listProjects().then(...)` chain, strictly before `automationScheduler.start()`.
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await vi.waitFor(() => expect(AutomationStore.open(dataDir).state(staleId)?.baselineAt).toBeTruthy(), {
+          timeout: 4000,
+          interval: 10,
+        });
       } finally {
         server.close();
       }

@@ -21,6 +21,9 @@ import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
+import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
+import { BrandLockup } from '@/components/brand-mark'
+import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { Button } from '@/components/ui/button'
@@ -50,13 +53,6 @@ import {
   writeStoredSidebarWidth,
 } from '@/lib/sidebar-width'
 import { cn } from '@/lib/utils'
-// The Open Mercato brand mark. A `public/` asset, not a bundled import: the service serves the
-// same file at this exact path (`GET /icon.svg` — the favicon index.html points at), so
-// a second, hashed URL for the same picture would be one cache entry too many. Vite serves
-// `public/` at the root in dev and copies it into the build, so the path holds in both.
-// Its own solid purple tile + rounded corners ARE the tile.
-const brandLogoUrl = '/icon.svg'
-
 /** Tailwind's `md`. The drawer is the `<md` affordance, so this must stay in step with the
  *  `md:hidden` / `md:flex` classes below — they are the same breakpoint expressed twice, once
  *  for CSS and once for the state machine. */
@@ -85,6 +81,10 @@ export type AppShellProps = {
   /** The npm registry's newer version, when the server's update check found one (#368). The
    *  chip grows a pulsing pending dot + tooltip; absent or equal to `version`, it stays plain. */
   latestVersion?: string | null
+  /** cezar's own GitHub star count for the footer's ⭐ ask. `null` — offline, rate-limited, or
+   *  promos silenced with `CEZ_NO_BANNER=1` — renders NO chip at all rather than an empty one:
+   *  a button asking to be clicked while admitting it cannot count is worse than no button. */
+  starCount?: number | null
   /** Step 3.3's grouped task quick-list. */
   taskQuickList?: ReactNode
   /** The sidebar's machine glance (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`):
@@ -190,6 +190,7 @@ export const AppShell = React.memo(function AppShell({
   skillsUpdateAvailable = false,
   version = null,
   latestVersion = null,
+  starCount = null,
   taskQuickList,
   hostWidget,
   toolsMenu,
@@ -281,6 +282,7 @@ export const AppShell = React.memo(function AppShell({
     skillsUpdateAvailable,
     version,
     latestVersion,
+    starCount,
     taskQuickList,
     hostWidget,
     toolsMenu,
@@ -288,13 +290,39 @@ export const AppShell = React.memo(function AppShell({
     singleProject,
   }
 
+  const desktop = useDesktopShell()
+
   return (
     <div
       data-slot="app-shell"
+      data-desktop={desktop ?? undefined}
       className="flex h-dvh overflow-hidden bg-background text-foreground pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]"
     >
-      <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} />
-      <div className="grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden">
+      {/* Desktop shell (packages/desktop, macOS): the native title bar is a transparent overlay
+          with no title, 28px tall (a title bar's native height), and the traffic lights sit at
+          their native offset. Nothing is PAINTED for it — each column carries 28px of top
+          padding so its own colour runs to the window's edge, the way Finder's sidebar does —
+          and this transparent strip on top is what Tauri's injected handler drags the window by
+          (double-click zooms). Only the shell's init script sets `desktop`; a browser tab never
+          gets any of it. */}
+      {desktop === 'macos' ? (
+        <div
+          data-slot="desktop-titlebar"
+          data-tauri-drag-region=""
+          className="fixed inset-x-0 top-0 z-[60] flex h-[28px] select-none items-center pl-[80px]"
+        >
+          {version && latestVersion && latestVersion !== version ? (
+            <TitlebarUpdateButton latestVersion={latestVersion} />
+          ) : null}
+        </div>
+      ) : null}
+      <Sidebar {...nav} width={sidebarWidth} onWidthChange={changeSidebarWidth} desktop={desktop} />
+      <div
+        className={cn(
+          'grid min-w-0 flex-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden',
+          desktop === 'macos' && 'pt-[28px]',
+        )}
+      >
         {/* The Sheet root renders no DOM of its own. Keep only the mobile controls inside its
             context so a sidebar update cannot propagate through the routed view. */}
         <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
@@ -323,6 +351,44 @@ export const AppShell = React.memo(function AppShell({
   )
 })
 
+/**
+ * The title strip's "Update cezar" button (desktop shell only): shown whenever the channel the
+ * cockpit follows has something newer than what is running, sitting right after the traffic
+ * lights where the native title would be. With nothing running, one click starts the update and
+ * the dialog shows the install log and the restart. With tasks in flight the dialog opens to its
+ * warning instead and waits for "Update & restart": a restart interrupts them.
+ */
+function TitlebarUpdateButton({ latestVersion }: { latestVersion: string }) {
+  const [open, setOpen] = React.useState(false)
+  return (
+    <>
+      <button
+        type="button"
+        data-slot="titlebar-update"
+        onClick={() => setOpen(true)}
+        title={`Update cezar to v${latestVersion} and restart`}
+        className="inline-flex h-[18px] items-center gap-1 rounded-full border border-primary/40 bg-primary/15 px-2 text-[11px] font-semibold text-foreground transition-colors hover:bg-primary/30"
+      >
+        <StatusDot tone="pending" pulse className="size-[5px] shrink-0" />
+        Update cezar
+        <span className="font-mono font-medium text-muted-foreground">v{latestVersion}</span>
+      </button>
+      {open ? <SelfUpdateDialog open={open} onOpenChange={setOpen} autoApply={latestVersion} /> : null}
+    </>
+  )
+}
+
+/** Which desktop shell hosts this page, read once from the init script's `data-cez-desktop`
+ *  (packages/desktop). Null in every browser. */
+function useDesktopShell(): 'macos' | 'windows' | 'linux' | null {
+  const [platform] = React.useState<'macos' | 'windows' | 'linux' | null>(() => {
+    if (typeof document === 'undefined') return null
+    const value = document.documentElement.dataset.cezDesktop
+    return value === 'macos' || value === 'windows' || value === 'linux' ? value : null
+  })
+  return platform
+}
+
 type NavProps = {
   activeTo: string | null
   items: NavItem[]
@@ -332,6 +398,7 @@ type NavProps = {
   skillsUpdateAvailable: boolean
   version: string | null
   latestVersion: string | null
+  starCount: number | null
   taskQuickList?: ReactNode
   hostWidget?: ReactNode
   toolsMenu?: ReactNode
@@ -351,14 +418,22 @@ type NavProps = {
  * the class is left off entirely below `md`, where `hidden` takes the element out of flow and the
  * drawer (a fixed 264px) is the sidebar instead.
  */
-const Sidebar = React.memo(function Sidebar({ width, onWidthChange, ...props }: NavProps & SidebarResize) {
+const Sidebar = React.memo(function Sidebar({
+  width,
+  onWidthChange,
+  desktop = null,
+  ...props
+}: NavProps & SidebarResize & { desktop?: 'macos' | 'windows' | 'linux' | null }) {
   return (
     <aside
       data-slot="sidebar"
       style={{ width }}
-      className="relative hidden shrink-0 flex-col border-r border-border bg-sidebar md:flex"
+      className={cn(
+        'relative hidden shrink-0 flex-col border-r border-border bg-sidebar md:flex',
+        desktop === 'macos' && 'pt-[28px]',
+      )}
     >
-      <SidebarContent {...props} />
+      <SidebarContent {...props} compactHeader={desktop === 'macos'} />
       <SidebarResizeHandle width={width} onWidthChange={onWidthChange} />
     </aside>
   )
@@ -516,6 +591,7 @@ function SidebarContent({
   skillsUpdateAvailable,
   version,
   latestVersion,
+  starCount,
   taskQuickList,
   hostWidget,
   toolsMenu,
@@ -523,6 +599,7 @@ function SidebarContent({
   singleProject,
   onNavigate,
   headerAction,
+  compactHeader = false,
 }: NavProps & {
   /** Fires on any in-drawer navigation. The route-change effect already closes the drawer for
    *  every *changed* route; this also covers re-clicking the active item (per the spec, Tasks
@@ -530,6 +607,10 @@ function SidebarContent({
   onNavigate?: () => void
   /** The drawer's close button. Absent on desktop, which has nothing to close. */
   headerAction?: ReactNode
+  /** Under the desktop shell's title strip the brand row already has 28px above it, so it
+   *  gives up most of its own top padding — otherwise the logo floats a full toolbar's height
+   *  below the traffic lights. */
+  compactHeader?: boolean
 }) {
   return (
     <div
@@ -540,9 +621,8 @@ function SidebarContent({
       // an `@min-[…]/sidebar:` query and returns when the user drags the column wider.
       className="@container/sidebar flex min-h-0 flex-1 flex-col pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)]"
     >
-      <div className="flex items-center gap-[9px] px-3.5 pt-3.5 pb-2.5">
-        <BrandTile />
-        <span className="text-[15px] font-semibold">cezar</span>
+      <div className={cn('flex items-center gap-[9px] px-3.5 pb-2.5', compactHeader ? 'pt-1.5' : 'pt-3.5')}>
+        <BrandLockup />
         {/* With project groups mounted the boot repo/branch is one group header among many —
             a chip repeating it up here would just be the first group's header said twice. */}
         {repo && !projectGroups ? (
@@ -694,6 +774,7 @@ function SidebarContent({
             {toolsMenu}
           </div>
           {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
+          {starCount === null ? null : <StarChip count={starCount} />}
           <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
           <ThemeToggle />
         </div>
@@ -915,30 +996,58 @@ function CommandPaletteHint() {
  */
 function VersionChip({ version, latestVersion }: { version: string; latestVersion: string | null }) {
   const updateAvailable = Boolean(latestVersion && latestVersion !== version)
+  // The chip opens the self-update dialog (PoC): channel, latest, and a version picker.
+  const [open, setOpen] = React.useState(false)
   return (
-    <span
-      data-slot="version-chip"
-      data-update-available={updateAvailable ? 'true' : undefined}
-      title={updateAvailable ? `v${version} — update available: v${latestVersion}` : `v${version}`}
-      className="flex min-w-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground"
-    >
-      {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px] shrink-0" /> : null}
-      <span className="truncate">v{version}</span>
-    </span>
+    <>
+      <button
+        type="button"
+        data-slot="version-chip"
+        data-update-available={updateAvailable ? 'true' : undefined}
+        title={updateAvailable ? `v${version} — update available: v${latestVersion}` : `v${version}`}
+        aria-label={updateAvailable ? `cezar v${version}, update to v${latestVersion} available — open updater` : `cezar v${version} — open updater`}
+        onClick={() => setOpen(true)}
+        className="flex min-w-0 cursor-pointer items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      >
+        {updateAvailable ? <StatusDot tone="pending" pulse className="size-[5px] shrink-0" /> : null}
+        <span className="truncate">v{version}</span>
+      </button>
+      {open ? <SelfUpdateDialog open={open} onOpenChange={setOpen} /> : null}
+    </>
   )
 }
 
-/** The Open Mercato brand mark. The SVG carries its own purple tile and rounded corners, so it is
- *  the tile — no wrapper background. */
-function BrandTile() {
+/**
+ * The footer's ⭐ ask: a link to cezar's repository with its current star count.
+ *
+ * It is a request and only a request. Nothing about cezar behaves differently for someone who
+ * never clicks it, there is no reward on the other side, and it cannot be "completed" — which is
+ * also why it has no dismiss control: a chip the size of the version chip, sitting quietly in the
+ * chrome, has nothing to dismiss.
+ *
+ * `shrink-0`, unlike `VersionChip`. That chip is the controls row's ONE elastic item on purpose
+ * (#876: a long nightly version string has to come out of somewhere), and a second elastic
+ * control would give the row two ways to lose — this one is at most six characters wide
+ * (`⭐ 12.3k`), so it can afford to be rigid and let the version string keep the give.
+ *
+ * `rel="noreferrer"` alongside `noopener`: a local cockpit's URL is nobody's business, and the
+ * whole point of the ask is that github.com learns nothing about the person making it.
+ */
+function StarChip({ count }: { count: number }) {
+  const formatted = formatStarCount(count)
   return (
-    <img
-      src={brandLogoUrl}
-      alt=""
-      aria-hidden="true"
-      data-slot="brand-tile"
-      className="size-[26px] shrink-0 rounded-sm"
-    />
+    <a
+      data-slot="star-chip"
+      href={CEZAR_REPO_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
+      aria-label={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
+      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
+      <span aria-hidden="true">⭐</span>
+      <span>{formatted}</span>
+    </a>
   )
 }
 

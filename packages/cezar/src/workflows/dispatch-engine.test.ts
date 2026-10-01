@@ -428,6 +428,28 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(true);
     }, 60_000);
 
+    it('keeps an inbox delivery ahead of a monitoring park at turn end', async () => {
+      const stdinFile = join(repoRoot, 'mock-stdin-own-inbox-monitoring.ndjson');
+      savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;
+      process.env.CEZ_MOCK_STDIN_FILE = stdinFile;
+      const root = store.createRun({ title: 'root', workflow: 'quick-task', task: 'hold', steps: [] });
+      store.updateRun(root.id, { status: 'waiting', dispatch: rootOf(root.id) });
+      const child = start('mock:pause mock:monitoring keep watching', childOf(root.id), { autonomous: true });
+      await waitFor(child.id, () => stdin(stdinFile).includes('keep watching'));
+      const inbox = join(treeDirOf(root.id), 'inbox', child.id.slice(0, 8));
+      mkdirSync(inbox, { recursive: true });
+      writeFileSync(join(inbox, 'from-parent.md'), '# Redirect\n\nKeep going with the parent\'s latest instruction.\n');
+
+      // The note is persisted immediately after sendMessage accepts the delivery, while the
+      // mock's stdin writer may flush its JSON line a tick later. Wait for the actual inbound
+      // evidence before asking `delivered` to parse the file; otherwise the regression itself
+      // races the fixture and can report a false failure under suite load.
+      await waitFor(child.id, () => stdin(stdinFile).includes('## Tree inbox'), 40_000);
+      expect(delivered(stdinFile, '## Tree inbox')).toContain('from-parent.md');
+      expect(notes(child.id).some((n) => n.startsWith('tree inbox digest delivered into the session at turn end'))).toBe(true);
+      expect(store.getRun(child.id)?.activity).toBeUndefined();
+    }, 60_000);
+
     it('tells a parked parent, through its inbox, that a child is blocked on the Guard', async () => {
       const stdinFile = join(repoRoot, 'mock-stdin-blocked.ndjson');
       savedEnv.CEZ_MOCK_STDIN_FILE = process.env.CEZ_MOCK_STDIN_FILE;

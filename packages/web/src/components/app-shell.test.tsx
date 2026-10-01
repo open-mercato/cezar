@@ -57,11 +57,29 @@ describe('AppShell', () => {
     expect(within(screen.getByRole('main')).getByText('route content')).toBeTruthy()
   })
 
-  it('renders the brand tile from the shared /icon.svg asset', () => {
+  // Brand guideline ("Znak z nazwą"): the mark WITHOUT its tile, in the text colour, beside the
+  // lowercase name in Chakra Petch SemiBold — 26px over 19px with a gap of 0.6 × the type size.
+  it('renders the brand lockup: the tile-less mark beside the lowercase name', () => {
     renderShell('/')
-    const tile = document.querySelector('[data-slot="brand-tile"]') as HTMLImageElement | null
-    expect(tile).toBeTruthy()
-    expect(tile!.getAttribute('src')).toBe('/icon.svg')
+    const lockup = sidebar().querySelector('[data-slot="brand-lockup"]') as HTMLElement | null
+    expect(lockup).toBeTruthy()
+    expect(lockup!.style.gap).toBe('11.4px')
+
+    const mark = lockup!.querySelector('[data-slot="brand-mark"]') as SVGElement | null
+    expect(mark).toBeTruthy()
+    expect(mark!.getAttribute('height')).toBe('26')
+    expect(mark!.getAttribute('fill')).toBe('currentColor')
+    // No tile: polygons only, no rect behind them and no <img> of the tiled icon.
+    expect(mark!.querySelectorAll('polygon')).toHaveLength(4)
+    expect(mark!.querySelector('rect')).toBeNull()
+    expect(sidebar().querySelector('img[src="/icon.svg"]')).toBeNull()
+
+    const name = lockup!.querySelector('[data-slot="brand-name"]') as HTMLElement | null
+    expect(name?.textContent).toBe('cezar')
+    expect(name!.style.fontSize).toBe('19px')
+    expect(name!.style.fontFamily).toBe('var(--brand)')
+    expect(name!.className).toContain('font-semibold')
+    expect(name!.className).toContain('tracking-normal')
   })
 
   it('resets the main scroller to the top on navigation (#mobile-scroll-top)', () => {
@@ -342,6 +360,7 @@ describe('AppShell', () => {
       expect(document.querySelector('[data-slot="repo-chip"]')).toBeNull()
       expect(document.querySelector('[data-slot="nav-badge"]')).toBeNull()
       expect(document.querySelector('[data-slot="version-chip"]')).toBeNull()
+      expect(document.querySelector('[data-slot="star-chip"]')).toBeNull()
     })
 
     it('renders the repo chip and version chip from props', () => {
@@ -349,6 +368,63 @@ describe('AppShell', () => {
       expect(screen.getByText('cezar / main')).toBeTruthy()
       // The chip prefixes the raw semver from /api/v1/health — `v1.2.3`, mono, muted.
       expect(within(footer()).getByText('v1.2.3')).toBeTruthy()
+    })
+
+    describe('the ⭐ ask', () => {
+      const chip = () => document.querySelector('[data-slot="star-chip"]') as HTMLAnchorElement | null
+
+      it('renders the count beside the version chip, in the one controls row', () => {
+        renderShell('/', { version: '1.2.3', starCount: 1234 })
+        const row = document.querySelector('[data-slot="sidebar-footer-controls"]') as HTMLElement
+        expect(row.querySelector('[data-slot="star-chip"]')).not.toBeNull()
+        expect(within(footer()).getByText('1.2k')).toBeTruthy()
+      })
+
+      it('is absent — not empty — when the count is unavailable', () => {
+        // Offline, a rate-limited IP, or `CEZ_NO_BANNER=1`. A button advertising a number it
+        // cannot produce is worse than no button, and the row has no room to spare either.
+        renderShell('/', { version: '1.2.3', starCount: null })
+        expect(chip()).toBeNull()
+      })
+
+      it('still renders at zero — a real count, not a missing one', () => {
+        renderShell('/', { version: '1.2.3', starCount: 0 })
+        expect(chip()).not.toBeNull()
+        expect(within(footer()).getByText('0')).toBeTruthy()
+      })
+
+      it('links to cezar, in a new tab, leaking neither opener nor referrer', () => {
+        renderShell('/', { starCount: 42 })
+        expect(chip()?.getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
+        expect(chip()?.getAttribute('target')).toBe('_blank')
+        expect(chip()?.getAttribute('rel')).toContain('noopener')
+        expect(chip()?.getAttribute('rel')).toContain('noreferrer')
+      })
+
+      it('names itself for a screen reader with the exact count, not the abbreviation', () => {
+        renderShell('/', { starCount: 12_345 })
+        // The visible chip abbreviates for the 264px column; the accessible name must not —
+        // "12.3k stars" is a worse answer to "how many" than the number itself.
+        const label = chip()?.getAttribute('aria-label') ?? ''
+        expect(label).toMatch(/star cezar on github/i)
+        // Formatted for the reader's own locale, so assert it the same way rather than pinning
+        // `12,345` — that spelling is a property of the test machine, not of this component.
+        expect(label).toContain(new Intl.NumberFormat().format(12_345))
+        expect(label).not.toContain('12.3k')
+      })
+
+      it('is shrink-0, leaving the version chip as the row\'s one elastic item (#876)', () => {
+        // Two elastic controls would give the row two ways to lose its width budget. The star
+        // chip is six characters at worst, so it can afford to be rigid.
+        renderShell('/', { version: '1.2.3', starCount: 12_345 })
+        expect(chip()?.className).toContain('shrink-0')
+      })
+
+      it('offers no reward and blocks nothing — the chip is a link and only a link', () => {
+        renderShell('/', { starCount: 1000 })
+        expect(chip()?.tagName).toBe('A')
+        expect(chip()?.textContent ?? '').not.toMatch(/\b(unlock|reward|free|upgrade|pro|premium)\b/i)
+      })
     })
 
     describe('version chip update affordance (#368)', () => {

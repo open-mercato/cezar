@@ -296,11 +296,14 @@ Useful environment variables:
 | `CEZ_CLAUDE_BIN=/path/to/claude` | Override which `claude` binary is used. Rarely needed: when it is unset, cezar takes `claude` from PATH, and failing that looks where Claude Code's own installers put it — `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin` — so an install the launching shell never added to PATH is still found. |
 | `CEZ_CODEX_BIN=/path/to/codex` | Override which `codex` binary is used. |
 | `CEZ_OPENCODE_BIN=/path/to/opencode` | Override which `opencode` binary is used. |
+| `CEZ_CURSOR_AGENT_BIN=/path/to/agent` | Override which Cursor Agent CLI (`agent`) binary is used. |
 | `CEZ_PI_BIN=/path/to/pi` | Override which `pi` binary is used. |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME` | The agents' **own** variables, honoured where the vendor documents one. Setting one moves that agent's **default account** — the config folder cezar discovers. A *second* login of the same CLI is deliberately not an environment setting, since one process-wide value cannot differ per project: add it under **Settings → Agent accounts** and pick it per project. |
 | `CEZ_BROWSE_ROOT=~/` | Default root for **Add project → Open local folder…**. The picker cannot navigate above it; a saved workspace value overrides the environment default and must name an existing folder. |
 | `CEZ_PROJECTS_DIR=~/cezar/projects` | Default destination for **Clone from GitHub**. Saved workspace settings override it, and missing directories are created recursively. |
 | `CEZ_SKILLS_AUTO_UPDATE=0` | Disable automatic checks and updates for upstream-CLI-tracked Open Mercato skill installations. On by default; a saved global Skills setting overrides this environment default. Checks are delayed, bounded, cached, and non-blocking. |
+| `CEZ_UPDATE_CHANNEL=nightly` | Release channel the self-updater follows: `stable` (npm `latest`, the default), `nightly`, or `development` (no automatic updates; pick a cezar worktree or an open PR's preview build by hand). A channel saved from the version chip's dialog overrides this seed. |
+| `CEZ_SUPERVISED=1` | A supervisor relaunches cezar (the desktop shell sets `CEZ_DESKTOP=1`, which implies it): after an update the process exits with status 75 instead of re-exec'ing itself, so the supervisor starts the new version. Off by default. |
 | `CEZ_AUTONOMOUS_DEFAULT=0` | Seed the New Task Autonomous default (`0` or `1`). Without a seed, skills default on and workflows off; a saved global Resources setting overrides it. |
 | `CEZ_WORKTREE_DEFAULT=1` | Seed the New Task Worktree default (`0` or `1`). Without a seed, eligible runs default on; a saved global Resources setting overrides it. |
 | `CEZ_DISABLE_REPO_LOCK=1` | **Dangerous escape hatch:** allow any run executing in the repository root — an explicit `worktree=false` run, non-Git degradation, or a continuation whose worktree cannot be restored — to proceed without Cezar’s repository-root lease. Agents can overwrite each other’s files or Git state; isolated worktree runs are unaffected. Off by default; only the exact value `1` enables it. |
@@ -317,7 +320,7 @@ Useful environment variables:
 | `CEZ_TITLE_UPDATES=0` | Turn off the live task-title refresh (namer re-runs on each turn end). The Settings → Agents toggle overrides this default. |
 | `CEZ_AUTONAME=0` | Disable ALL LLM task naming (creation + live) — titles stay heuristic (`437: /om-auto-review-pr`). Under `CEZ_DRY_RUN=1` naming is already off unless forced with `CEZ_AUTONAME=1`. |
 | `CEZ_REVIEW_GATE=1` | Turn ON the optional diff-first review gate (#489): a successful, non-autonomous run with changes parks at `review` (Accept / Send back / Draft PR) instead of finishing. Off by default — changed runs settle to `done` with the diff left in the worktree. Only `1` enables. The Settings → Agents toggle overrides this; autonomous runs always skip it. |
-| `CEZ_NO_BANNER=1` | Skip the `open-mercato/skills` banner on `cezar serve` startup. (The cockpit no longer shows a banner — its skills now live on the Skills page's Manage panel — so this env var is the terminal banner's only switch.) |
+| `CEZ_NO_BANNER=1` | Silence every promo: the `open-mercato/skills` banner and the star-ask line on `cezar serve` startup, the sidebar's ⭐ chip, and the one-time toast after the first successful run. It is also the star count's off switch — with it set, `GET /api/v1/star-count` answers `available: false` and cezar makes no request to github.com for it. Dismissing the banner in the cockpit (back when it had one) still silences the terminal half on its own. |
 | `VITE_CEZ_API_BASE=http://localhost:4321` | **Build time only**, and only when the cockpit bundle is deployed apart from the service it talks to. Empty (the default) means "the origin that served this page", which is right for both normal cases: the CLI serves the bundle itself, and `npm run dev` proxies `/api` to the local service. A deployment that must be configured without a rebuild can put `<meta name="cez-api-base" content="…">` in the served HTML instead, which wins over this. |
 
 ### Troubleshooting: the agent's shell returns nothing
@@ -361,6 +364,7 @@ cezar is not married to one vendor. Every agent step runs through a single
 | **Claude Code** (default) | [`claude`](https://github.com/anthropics/claude-code) | Headless `stream-json` mode. | Per-tool `--allowedTools` (`bashAllowlist` scopes `Bash`); `dontAsk` denies unapproved tools without prompting (`CEZ_APPROVAL_GATE=1` → `acceptEdits` + approval UI). |
 | **Codex** | [`codex`](https://github.com/openai/codex) | `codex app-server` — JSON-RPC over stdio, the same transport the Codex IDE extensions use. | Ignores `allowedTools`; the default auto mode uses `danger-full-access` with `approvalPolicy: never` (`CEZ_CODEX_NETWORK=0` opts into the network-blocked `workspace-write` sandbox). |
 | **OpenCode** _(experimental)_ | [`opencode`](https://opencode.ai) | `opencode serve` — a local HTTP server with an SSE event stream. | Ignores `allowedTools` entirely; every permission is auto-approved. |
+| **Cursor** | [`agent`](https://cursor.com/docs/cli/overview) (Cursor Agent CLI) | Headless print mode: `agent -p --force --trust --output-format stream-json`. Continue is fresh-session in v1 (print mode exits per turn). Its documented output carries no token/cost figures, so a Cursor run's header always reads zero tokens and no cost — that is the backend not reporting usage, not the run using nothing. | Ignores `allowedTools`; `--force` / `--trust` auto-approves tool use for unattended runs. |
 | **pi** _(experimental)_ | [`pi`](https://github.com/badlogic/pi-mono) | Persistent `--mode rpc` over JSONL; models are picked with the `provider/model` convention. | Maps `allowedTools` onto pi's `--tools` allowlist; a configured `bashAllowlist` disables Bash because pi cannot express command-prefix rules. |
 
 > ⚠️ **OpenCode and pi support are experimental.** Both runners work but are less
@@ -369,10 +373,10 @@ cezar is not married to one vendor. Every agent step runs through a single
 > rough edges.
 
 On startup cezar probes which CLIs are installed and the cockpit only offers
-the backends it found — install any one of the four and you're operational.
+the backends it found — install any one of the five and you're operational.
 
 **Models come from your own machine.** The model picker does not ship a list of
-vendor releases that goes stale between cezar versions. For Claude, Codex and
+vendor releases that goes stale between cezar versions. For Claude, Codex, Cursor and
 OpenCode cezar asks the CLI on your host what *it* currently offers (Claude
 Code's `list_models` control request; the Codex app-server's `model/list`;
 `opencode models`) and shows exactly that, in that order — so a model your
@@ -677,6 +681,47 @@ npm run uninstall-as-command    # removes cezar / cez / cezar-cli / cezar-run (e
 - **Already installed the published `@open-mercato/cezar` globally?** The
   link/snapshot install replaces it; `uninstall-as-command` removes ours, and
   `npm i -g @open-mercato/cezar` brings the published one back.
+
+### Run the desktop app (or `cezar`) on a worktree
+
+The desktop app and the managed `cezar` launcher both run whatever `~/.cezar/versions/current`
+points at. A **linked checkout** puts a worktree there without copying it: the version entry is a
+symlink to the worktree's `packages/cezar`, so it runs straight off the worktree (and its own
+`node_modules`), and every rebuild is live on the next restart.
+
+A worktree has to be built to run. The cockpit does that for you; the desktop menu and the
+terminal need it done by hand (`npm install && npm run build` in the worktree). Pick one of:
+
+- **Cockpit**: open the version chip and switch the release channel to **Development**. The
+  **Worktrees** tab lists every worktree of every registered cezar repo (task worktrees included),
+  newest commit first, each with its task title, last commit, open PR and build age (a build older
+  than the last commit is marked **needs rebuild**). The filter matches task, branch, commit
+  subject or `#PR`. Pick one and choose **Switch & restart**. A worktree marked **not built** or
+  **needs rebuild** offers **Build & switch** / **Rebuild & switch** instead: cezar runs
+  `npm install` (when its dependencies are missing or its lockfile changed) and the server and
+  cockpit builds in the worktree, with the output in the dialog, then switches. Picking the
+  running worktree while it needs a rebuild offers **Rebuild & restart**. The **Pull requests** tab lists
+  cezar's open pull requests with the preview build CI published for them (npm dist-tag
+  `pr-<N>`); pick one and choose **Install & restart**. A PR without a build (a fork, CI not green
+  yet) is listed but cannot be picked. The development channel never offers updates on its own;
+  switch back to **Stable** or **Nightly** to follow releases again.
+- **Desktop menu**: **Cezar ▸ Versions** lists linked worktrees by branch
+  (`cez/cb28888e — 0.13.0 (worktree)`). Clicking one switches and restarts.
+- **Terminal**:
+
+  ```bash
+  cezar link [<dir>] --use   # link the checkout (default: cwd) and make it current
+  cezar versions             # installs, links, and cezar worktrees not linked yet
+  cezar use 0.13.0           # back to a published release
+  cezar unlink <id>          # forget a link (the worktree is untouched)
+  ```
+
+  The desktop app picks up a terminal switch on its next start, and the Versions menu refreshes
+  when the window regains focus.
+
+Links are hidden from the lists once their worktree is deleted. Switch away before you remove a
+worktree the app is running from. Cockpits in hosted mode never list worktrees and never link
+one. Releases older than this feature ignore links, but the desktop menu still switches from them.
 
 ### In-checkout scripts
 

@@ -109,7 +109,7 @@ export function AddAccountDialog({
               data-slot="add-account-provider"
               value={provider}
               onChange={(event) => setProvider(event.target.value as ProviderId)}
-              className="rounded-md border border-input bg-card px-2 py-1 text-[13px] outline-none focus-visible:border-ring"
+              className="rounded-md border border-input bg-card px-2 py-1 text-[13px] outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
             >
               {providers.map((id) => (
                 <option key={id} value={id}>
