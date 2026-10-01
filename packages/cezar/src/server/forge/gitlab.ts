@@ -131,7 +131,7 @@ function firstLine(s: string): string {
  *  glab 1.118's CLI commands (`repo view`, `issue list`, `mr create`, …) print a failure as a
  *  padded banner — a blank line, `ERROR`, a blank line — then the message word-wrapped over several
  *  lines, so a first-line reader saw only "ERROR" and a tail reader saw the wrap's fragments
- *  (verified live against gitlab.com, review of roszekF/cezar#1). `glab api` and older releases
+ *  (verified live against gitlab.com). `glab api` and older releases
  *  print one plain line and keep their existing handling. */
 function glabBoxedError(stderr: string): string | null {
   const lines = stderr.split('\n').map((l) => l.trim());

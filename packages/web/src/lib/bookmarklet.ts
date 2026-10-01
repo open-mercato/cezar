@@ -15,11 +15,13 @@
  * cockpit you saved it from — no guessing the port, and multi-repo users get the right one for
  * free (each cockpit stamps its own origin).
  *
- * CSP caveat for GitLab: the "no fetch, only navigate" reasoning above was VERIFIED against
- * GitHub's live CSP (2026-07). It is UNVERIFIED for GitLab — this run has no live GitLab
- * instance to test the bookmarklet against (gitlab.com or self-managed), so the GitLab matcher
- * ships on the assumption that `window.open` is equally unrestricted there. The GitHub form
- * itself is unchanged by this Step.
+ * CSP for GitLab: VERIFIED against gitlab.com's live CSP (2026-10-01). Like GitHub's, it blocks a
+ * page-context fetch to localhost (`connect-src 'self' https://gitlab.com …`) and has no
+ * navigation directive, so the generated program — which only reads `location.href` and calls
+ * `open()` — opened the cockpit's composer from a gitlab.com merge request in a subgroup project
+ * exactly as it does from a GitHub PR. A self-managed instance sets its own CSP (admin-configurable),
+ * so the same reasoning holds unless an admin adds a navigation restriction; that remains
+ * untested. The GitHub form itself is unchanged.
  *
  * The `/new?skill=&auto=&key=&ref=` deep-link grammar is a PROTECTED contract
  * (BACKWARD_COMPATIBILITY.md §1) and is unchanged — only the client-side discovery is.
@@ -93,7 +95,9 @@ function buildMatcher(gitlabHosts: readonly string[]): { pattern: string; alert:
   // harvests `new URL(repoUrl).host` — and `repoUrl` preserves the remote's own scheme and port
   // for a self-managed instance (Decision D3). A host like `gitlab.acme.internal:8929`, served
   // over plain `http` on the corporate network, was collected and could never match.
-  const gitlabPattern = String.raw`^https?:\/\/(?:${hostAlternation})\/(?:[^\/]+\/){1,}[^\/]+\/-\/(?:merge_requests|issues)\/\d+`
+  // `work_items` too: gitlab.com redirects `/-/issues/N` to `/-/work_items/N`, so that is the URL an
+  // issue page actually shows when the bookmarklet runs (verified live, 2026-10-01).
+  const gitlabPattern = String.raw`^https?:\/\/(?:${hostAlternation})\/(?:[^\/]+\/){1,}[^\/]+\/-\/(?:merge_requests|issues|work_items)\/\d+`
   return { pattern: `${GITHUB_PATTERN}|${gitlabPattern}`, alert: BOTH_FORGES_ALERT }
 }
 

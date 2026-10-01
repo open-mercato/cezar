@@ -424,6 +424,22 @@ describe('taskReferences', () => {
       { kind: 'Issue', number: 7, url: `${GITLAB_REPO}/-/issues/7` },
     ])
   })
+
+  // The #1151 association list (`prRefs`) synthesizes a number-only ref's URL too — through the
+  // same forge-aware rule, or a GitLab task's chip would link `/pull/N`, a 404 on GitLab.
+  it('links a number-only prRefs entry with the GitLab grammar on a GitLab project', () => {
+    const GITLAB_REPO = 'https://gitlab.com/group/sub/repo'
+    const r = run({
+      prRefs: [
+        { number: 7, origin: 'marker', at: '2026-01-01T00:00:00.000Z' },
+        { number: 8, origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
+      ],
+    } as never)
+    expect(taskReferences(r, GITLAB_REPO, 'gitlab')).toEqual([
+      { kind: 'PR', number: 7, url: `${GITLAB_REPO}/-/merge_requests/7` },
+      { kind: 'PR', number: 8, url: `${GITLAB_REPO}/-/merge_requests/8` },
+    ])
+  })
 })
 
 describe('taskIssueUrl', () => {

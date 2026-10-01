@@ -108,6 +108,10 @@ describe('bookmarkletUrl GitLab matcher (spec 2026-08-10-forge-provider-adapters
     expect(matcher.test('https://gitlab.com/group/repo/-/issues/3')).toBe(true)
     expect(matcher.test('https://gitlab.acme.internal/group/sub/repo/-/merge_requests/5')).toBe(true)
     expect(matcher.test('https://gitlab.acme.internal/group/repo/-/issues/3')).toBe(true)
+    // gitlab.com redirects `/-/issues/N` to `/-/work_items/N`, so that is the URL the bookmarklet
+    // actually sees on an issue page (verified live, 2026-10-01).
+    expect(matcher.test('https://gitlab.com/group/sub/repo/-/work_items/3')).toBe(true)
+    expect(matcher.test('https://gitlab.acme.internal/group/repo/-/work_items/3')).toBe(true)
     // GitHub still matches — this is additive, not a replacement.
     expect(matcher.test('https://github.com/open-mercato/cezar/pull/1')).toBe(true)
     // Rejects a host that is not in the known list.

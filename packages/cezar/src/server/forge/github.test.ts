@@ -3322,7 +3322,7 @@ describe('whyLine', () => {
 
 // Node builds a failed `execFile`'s message as `Command failed: <argv>\n<stderr>`. With an invalid
 // token, `gh` explains itself on stderr — and every forge route used to report only the preamble,
-// "Command failed: gh repo view --json nameWithOwner" (live, against a private repo, PR #1 review).
+// "Command failed: gh repo view --json nameWithOwner" (verified live against a private repo).
 describe('an unauthenticated gh: every route reports what gh said, not the command', () => {
   const GH_401 = 'HTTP 401: Bad credentials (https://api.github.com/graphql)';
 

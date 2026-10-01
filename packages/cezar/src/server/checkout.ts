@@ -368,7 +368,7 @@ const GLAB_CREDENTIAL_HELPER = '!glab auth git-credential';
  *
  *  Unlike `gh`, `glab repo clone` handed a full HTTPS URL does NOT authenticate the clone: it runs
  *  a bare `git clone`, so a private project failed with "could not read Username" (verified live
- *  against gitlab.com, glab 1.118, review of roszekF/cezar#1). The credential helper therefore rides
+ *  against gitlab.com, glab 1.118). The credential helper therefore rides
  *  along as `git clone -c` flags — git applies them BEFORE fetching and writes them into the new
  *  repo's config. Throws on a non-http(s) `cloneUrl` (`gitlabCloneOrigin`). */
 export function glabCloneArgs(ref: RepoRef, dir: string): string[] {

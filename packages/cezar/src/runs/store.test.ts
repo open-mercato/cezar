@@ -2117,6 +2117,20 @@ describe('RunStore — GitLab URL shapes (spec 2026-08-10-forge-provider-adapter
     expect(loaded?.issueNumber).toBe(88);
   });
 
+  // gitlab.com serves issues as `/-/work_items/N` now (it redirects `/-/issues/N` there, and
+  // `glab` lists their web_url that way — verified live 2026-10-01). The cockpit's "Run agent on
+  // this issue" writes that URL into the task, so the issue association must survive it.
+  it('adopts a GitLab work-item issue link (/-/work_items/N) and seeds issueNumber from it', () => {
+    const { store, run } = freshRun();
+    store.appendEvent(run.id, {
+      type: 'result',
+      result: 'Fixing https://gitlab.com/group/sub/proj/-/work_items/89 now.',
+    });
+    const loaded = store.getRun(run.id);
+    expect(loaded?.referencedIssueUrl).toBe('https://gitlab.com/group/sub/proj/-/work_items/89');
+    expect(loaded?.issueNumber).toBe(89);
+  });
+
   it('never reads one forge’s shape on the other’s host, nor a one-segment project path', () => {
     const { store, run } = freshRun();
     store.appendEvent(run.id, {

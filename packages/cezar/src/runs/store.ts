@@ -416,8 +416,10 @@ const GITLAB_PROJECT_URL = String.raw`https?:\/\/(?!github\.com\/)[^/\s]+(?:\/(?
 const PR_URL_RE = new RegExp(
   String.raw`https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+|${GITLAB_PROJECT_URL}merge_requests\/\d+`,
 );
+// `work_items`: gitlab.com serves issues as `/-/work_items/N` now — it redirects `/-/issues/N`
+// there and `glab` reports their web_url that way (verified live, 2026-10-01).
 const ISSUE_URL_RE = new RegExp(
-  String.raw`https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+|${GITLAB_PROJECT_URL}issues\/\d+`,
+  String.raw`https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+|${GITLAB_PROJECT_URL}(?:issues|work_items)\/\d+`,
 );
 /** A whole GitLab ref URL, capturing its project path (`group/sub/project`) — `refUrlRepo`. */
 const GITLAB_REF_URL_RE = /^https?:\/\/(?!github\.com\/)[^/\s]+\/((?:(?!-\/)[^/\s]+\/){1,}(?!-\/)[^/\s]+)\/-\/(?:merge_requests|issues)\/\d+$/;
