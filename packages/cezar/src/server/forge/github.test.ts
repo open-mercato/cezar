@@ -3319,3 +3319,47 @@ describe('whyLine', () => {
     expect(whyLine('\n  \n')).toBe('gh failed');
   });
 });
+
+// Node builds a failed `execFile`'s message as `Command failed: <argv>\n<stderr>`. With an invalid
+// token, `gh` explains itself on stderr — and every forge route used to report only the preamble,
+// "Command failed: gh repo view --json nameWithOwner" (live, against a private repo, PR #1 review).
+describe('an unauthenticated gh: every route reports what gh said, not the command', () => {
+  const GH_401 = 'HTTP 401: Bad credentials (https://api.github.com/graphql)';
+
+  beforeEach(() => {
+    vi.stubEnv('CEZ_DRY_RUN', '');
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((...args: unknown[]) => {
+      const argv = (args[1] as string[] | undefined) ?? [];
+      const cb = args[args.length - 1] as (e: unknown, r: unknown) => void;
+      const stderr = `${GH_401}\nTry authenticating with:  gh auth login -h github.com\n`;
+      cb(Object.assign(new Error(`Command failed: gh ${argv.join(' ')}\n${stderr}`), { code: 1, stderr }), null);
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  let seq = 0;
+  const driver = () => createGithubDriver(`/repo/gh-401-${++seq}`, { owner: 'owner', repo: 'repo' });
+
+  it('detect', async () => {
+    expect(await driver().detect()).toEqual({ available: false, reason: GH_401 });
+  });
+
+  it('the list tab', async () => {
+    expect(await fetchGithub(`/repo/gh-401-list-${++seq}`)).toMatchObject({ available: false, reason: GH_401 });
+  });
+
+  it('a conversation thread', async () => {
+    expect(await fetchGithubComments(`/repo/gh-401-thread-${++seq}`, 'issue', 1)).toMatchObject({ available: false, reason: GH_401 });
+  });
+
+  it('CI glyphs, file changes and reference status', async () => {
+    const d = driver();
+    expect(await d.listChecks!([3])).toMatchObject({ available: false, reason: GH_401 });
+    expect(await d.prDiff!(3)).toMatchObject({ available: false, reason: GH_401 });
+    expect(await d.refStatus!([3], [1])).toMatchObject({ available: false, reason: GH_401 });
+  });
+});

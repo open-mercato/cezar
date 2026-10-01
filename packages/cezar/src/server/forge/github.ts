@@ -174,7 +174,7 @@ export async function fetchGithubPrDiff(
       available: false,
       reason: isNotFound(err)
         ? GH_NOT_FOUND_REASON
-        : firstLine(message),
+        : whyLine(message),
     };
   }
 }
@@ -499,22 +499,20 @@ export async function fetchGithub(repoRoot: string, refresh = false, limit = 30)
     const message = err instanceof Error ? err.message : String(err);
     const reason = isNotFound(err)
       ? GH_NOT_FOUND_REASON
-      : firstLine(message);
+      : whyLine(message);
     return { available: false, reason, issues: [], prs: [] };
   }
-}
-
-function firstLine(s: string): string {
-  return s.split('\n').find((l) => l.trim().length > 0)?.trim() ?? 'gh failed';
 }
 
 /**
  * The line of a `gh` failure that says WHY, not just that it failed (#969).
  *
  * Node prefixes a failed subprocess with `Command failed: <the whole argv>` and puts the forge's
- * own message on the lines after it. `firstLine` therefore reports the command back at the reader —
- * which is how "your token cannot read check runs" came out looking like a GitHub outage. This
+ * own message on the lines after it, so the first line only reports the command back at the reader —
+ * which is how "your token cannot read check runs" came out looking like a GitHub outage, and how an
+ * expired token read "Command failed: gh repo view --json nameWithOwner" on every forge route. This
  * skips that preamble whenever there is something behind it, and falls back to it when there isn't.
+ * Every `gh` failure reason in this driver goes through it.
  */
 export function whyLine(s: string): string {
   const lines = s.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
@@ -702,7 +700,7 @@ export async function searchGithubItems(
     const message = err instanceof Error ? err.message : String(err);
     const reason = isNotFound(err)
       ? GH_NOT_FOUND_REASON
-      : firstLine(message);
+      : whyLine(message);
     return { available: false, reason, items: [] };
   }
 }
@@ -1304,7 +1302,7 @@ export async function fetchGithubChecks(repoRoot: string, numbers: number[]): Pr
       available: false,
       reason: isNotFound(err)
         ? GH_NOT_FOUND_REASON
-        : firstLine(message),
+        : whyLine(message),
     };
   }
 }
@@ -1757,7 +1755,7 @@ export async function fetchRefStatuses(
       // A failed chunk costs only its own numbers; the rest still resolve. They are recorded as
       // FAILED rather than left absent, so nothing downstream mistakes them for "no such number".
       out.failed.push(...chunk);
-      out.reason ??= firstLine(err instanceof Error ? err.message : String(err));
+      out.reason ??= whyLine(err instanceof Error ? err.message : String(err));
     }
   }
   return out;
@@ -2105,7 +2103,7 @@ export async function fetchGithubRefStatus(
       available: false,
       reason: isNotFound(err)
         ? GH_NOT_FOUND_REASON
-        : firstLine(message),
+        : whyLine(message),
       recheckAfterMs: REF_STATUS_RETRY_MS,
     };
   }
@@ -2273,7 +2271,7 @@ export async function fetchGithubComments(
       ? GH_NOT_FOUND_REASON
       : /404|not found/i.test(message)
         ? 'not found on GitHub — it may be closed or deleted'
-        : firstLine(message);
+        : whyLine(message);
     return { available: false, reason, comments: [] };
   }
 }
@@ -2469,7 +2467,7 @@ async function probeGithub(repoRoot: string): Promise<ForgeAvailability> {
       available: false,
       reason: isNotFound(err)
         ? GH_NOT_FOUND_REASON
-        : firstLine(message),
+        : whyLine(message),
     };
   }
 }
@@ -2756,7 +2754,7 @@ export async function fetchPrMergeState(
     mergeStateCache.set(key, { at: Date.now(), value });
     return value;
   } catch (error) {
-    // `whyLine`, not `firstLine`: a reason of "Command failed: gh pr view 353 --json …" is the
+    // `whyLine`, not the first line: a reason of "Command failed: gh pr view 353 --json …" is the
     // command echoed back, and reads like an outage. The line after it says what actually went
     // wrong (#969).
     return { available: false, reason: whyLine(error instanceof Error ? error.message : String(error)) };
@@ -2827,7 +2825,7 @@ async function mergePullRequest(
     evictMergedPrCaches(repoRoot);
     return { merged: true, number, url: current.url, method: input.method, ...(result.sha ? { mergeCommitSha: result.sha } : {}) };
   } catch (error) {
-    const message = firstLine(error instanceof Error ? error.message : String(error));
+    const message = whyLine(error instanceof Error ? error.message : String(error));
     const status = /403|permission|forbidden/i.test(message) ? 403 : /404|not found/i.test(message) ? 404 : 502;
     return { merged: false, status, error: status === 403 ? 'GitHub permission denied.' : status === 404 ? 'Pull request or repository not found.' : 'GitHub could not complete the merge.' };
   } finally {
@@ -2972,6 +2970,6 @@ async function recentGithubCreated(
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { available: false, items: [], reason: /ENOENT/.test(message)
-      ? 'gh CLI not found — install it and run `gh auth login`' : firstLine(message) };
+      ? 'gh CLI not found — install it and run `gh auth login`' : whyLine(message) };
   }
 }
