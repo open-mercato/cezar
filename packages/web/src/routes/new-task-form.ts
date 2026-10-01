@@ -65,13 +65,12 @@ export interface ModelPreset {
 /**
  * Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner decides.
  *
- * For a runner that discovers (`MODEL_DISCOVERY_RUNNERS` — claude, codex, opencode, cursor) this list is
+ * For a runner that discovers (`MODEL_DISCOVERY_RUNNERS` — claude, codex, opencode, cursor, pi) this list is
  * only the FALLBACK, used when the host catalog has nothing to offer; a live catalog replaces it.
  * Nothing dated may be listed for those — pinned ids (`claude-opus-4-8`, `gpt-5.1-codex`) are
  * exactly the drift discovery exists to end (#794 for OpenCode, #784 for Claude). Claude
  * therefore keeps only its tier aliases, which stay true across every rollout because the CLI
- * resolves them itself; Codex, OpenCode and Cursor list `auto` alone. pi has no host catalog yet, so its
- * entries are the real picker contents rather than a fallback.
+ * resolves them itself; Codex, OpenCode, Cursor and Pi list `auto` alone as their fallback.
  */
 export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   claude: [
@@ -92,9 +91,6 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   // pi selects a model with the same `provider/model` convention as opencode.
   pi: [
     { id: '', label: 'auto', desc: 'Use your pi default model' },
-    { id: 'anthropic/claude-opus-4-8', label: 'claude-opus-4.8', desc: 'via Anthropic' },
-    { id: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', desc: 'via Anthropic' },
-    { id: 'openai/gpt-5.1', label: 'gpt-5.1', desc: 'via OpenAI' },
   ],
 }
 
@@ -188,6 +184,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   codex: 'Codex',
   opencode: 'OpenCode',
   cursor: 'Cursor',
+  pi: 'Pi',
 }
 
 export function modelCatalogStatus(

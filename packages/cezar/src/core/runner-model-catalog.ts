@@ -101,9 +101,11 @@ function unavailableReason(runner: RunnerId): string {
     runner === 'codex'
       ? 'Codex'
       : runner === 'claude'
-        ? 'Claude'
-        : runner === 'cursor'
-          ? 'Cursor'
-          : 'OpenCode';
+      ? 'Claude'
+      : runner === 'cursor'
+        ? 'Cursor'
+        : runner === 'opencode'
+          ? 'OpenCode'
+          : 'Pi';
   return `${name} model discovery is temporarily unavailable`;
 }

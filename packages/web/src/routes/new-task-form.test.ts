@@ -158,7 +158,7 @@ describe('model option resolution', () => {
     // #794 gave OpenCode a catalog and #784 gave Claude one, so the picker no longer has a
     // preset-only runner. The contract's list is the single source both the route and the picker
     // compile against — this asserts they still agree on who discovers.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor'])
+    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'pi'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 

@@ -123,11 +123,26 @@ describe('workspace model catalog API', () => {
     });
   });
 
+  it('answers Pi models discovered by its host CLI', async () => {
+    const server = createApp({
+      repoRoot: root,
+      store,
+      manager: {} as RunManager,
+      version: 'test',
+      modelCatalog: new RunnerModelCatalog({
+        adapters: { pi: { discover: async () => [{ id: 'anthropic/claude-sonnet-5', label: 'claude-sonnet-5', description: 'via anthropic' }] } },
+      }),
+    });
+    const response = await apiRequest(server, '/api/v1/models?runner=pi');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ runner: 'pi', models: [{ id: 'anthropic/claude-sonnet-5' }], source: 'live' });
+  });
+
   // Every runner cezar ships now discovers, so only a MISSING or unknown `runner` is rejected.
   it.each(['/api/v1/models', '/api/v1/models?runner=nope'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, or cursor' });
+    expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, cursor, or pi' });
   });
 
   it('returns a Cursor catalog when that adapter is registered', async () => {
