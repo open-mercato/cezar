@@ -37,6 +37,12 @@ const PROJECT_JSON = JSON.stringify({
 /** A realistic `glab` auth failure: the API client's error line, as glab prints it to stderr. */
 const GLAB_401 = 'GET https://gitlab.com/api/v4/projects/acme%2Fdemo: 401 {message: 401 Unauthorized}';
 
+/** The same failure as glab 1.118 really prints it (captured live from `glab repo view` with an
+ *  invalid token): a padded `ERROR` banner, then the message, wrapped and right-padded. */
+const GLAB_118_BOXED_401 =
+  '          \n   ERROR  \n          \n  Get https://gitlab.com/api/v4/projects/acme%2Fdemo: 401 {message: 401 \n  Unauthorized}.       \n\n';
+const GLAB_118_401_REASON = 'Get https://gitlab.com/api/v4/projects/acme%2Fdemo: 401 {message: 401 Unauthorized}.';
+
 type Callback = (err: unknown, value?: unknown) => void;
 
 const reply = (fn: (cb: Callback) => void) =>
@@ -114,6 +120,11 @@ describe('GitLab driver — detect', () => {
     const root = freshRoot();
     expect(await createGitlabDriver(root, parsed()).detect()).toEqual({ available: false, reason: GLAB_401 });
     expect(gitlabProjectWebUrl(root)).toBeNull();
+  });
+
+  it("reports glab 1.118's boxed error message, never its ERROR banner", async () => {
+    reply((cb) => cb(Object.assign(new Error('Command failed: glab repo view --output json'), { code: 1, stderr: GLAB_118_BOXED_401 })));
+    expect(await createGitlabDriver(freshRoot(), parsed()).detect()).toEqual({ available: false, reason: GLAB_118_401_REASON });
   });
 
   it('falls back to the error message, then to "glab failed", when there is no stderr', async () => {
@@ -477,6 +488,12 @@ describe('GitLab driver — listIssues / listPRs / listAll', () => {
     routeGlab({ issue: { fail: GLAB_401 }, mr: '[]', api: '[]' });
     const driver = createGitlabDriver(freshRoot(), parsed());
     expect(await driver.listAll!()).toEqual({ available: false, reason: GLAB_401, issues: [], prs: [] });
+  });
+
+  it("a glab 1.118 boxed failure on the list calls answers with the message, not the banner", async () => {
+    routeGlab({ issue: { fail: GLAB_118_BOXED_401 }, mr: '[]', api: '[]' });
+    const driver = createGitlabDriver(freshRoot(), parsed());
+    expect(await driver.listAll!()).toEqual({ available: false, reason: GLAB_118_401_REASON, issues: [], prs: [] });
   });
 
   it('a labels endpoint failure leaves the list available without labelColors', async () => {

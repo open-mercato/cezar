@@ -171,10 +171,12 @@ describe('checkout — repo reference parsing', () => {
       }
     });
 
-    it('hands glab the rebuilt URL, never the raw input', () => {
+    it('hands glab the rebuilt URL, never the raw input — and the credential helper for the clone itself', () => {
       const ref = parseRepoRef('git@git.corp.example:platform/deploy.git');
       expect(ref).not.toBeNull();
       if (!ref) return;
+      // glab does not authenticate `git clone` of a full HTTPS URL (live gitlab.com, glab 1.118):
+      // without the `-c` helper a private project fails with "could not read Username".
       expect(glabCloneArgs(ref, '/checkouts/deploy')).toEqual([
         'repo',
         'clone',
@@ -182,6 +184,10 @@ describe('checkout — repo reference parsing', () => {
         '/checkouts/deploy',
         '--',
         '--progress',
+        '-c',
+        'credential.https://git.corp.example.helper=',
+        '-c',
+        'credential.https://git.corp.example.helper=!glab auth git-credential',
       ]);
     });
   });
@@ -275,6 +281,25 @@ describe('checkout — persisted GitLab credentials (4.2-review-fix)', () => {
       const worktree = join(root, 'task');
       git('worktree', 'add', '-qb', 'task', worktree);
       expect(execFileSync('git', ['-C', worktree, 'config', '--get-all', 'credential.https://gitlab.com.helper'], { encoding: 'utf8' })).toBe('\n!glab auth git-credential\n');
+    });
+  });
+
+  it('authenticates the clone itself: glab gets the helper as git -c flags, and never prompts', async () => {
+    // Records glab's argv and the prompt switches it saw, then clones like the fake above.
+    const recorder = `#!/bin/sh\nprintf '%s\\n' "$@" > "$(dirname "$0")/argv"\nprintf '%s|%s\\n' "$GLAB_NO_PROMPT" "$GIT_TERMINAL_PROMPT" > "$(dirname "$0")/env"\n${FAKE_GLAB.replace('#!/bin/sh\n', '')}`;
+    await withFakeGlab(recorder, async (root, repo) => {
+      const ref = parseRepoRef('https://gitlab.com/acme/private-app')!;
+      expect(await glabCloneRunner(ref, repo, () => {}, undefined)).toEqual({ ok: true });
+      const argv = readFileSync(join(root, 'bin', 'argv'), 'utf8').trim().split('\n');
+      expect(argv.slice(argv.indexOf('--'))).toEqual([
+        '--',
+        '--progress',
+        '-c',
+        'credential.https://gitlab.com.helper=',
+        '-c',
+        'credential.https://gitlab.com.helper=!glab auth git-credential',
+      ]);
+      expect(readFileSync(join(root, 'bin', 'env'), 'utf8').trim()).toBe('1|0');
     });
   });
 

@@ -1288,6 +1288,21 @@ describe('the unavailable forge state, and forge-flavored copy across the tab', 
     expect((postedRun(sent) as { task?: string }).task).toBe(githubTaskRef(ISSUE_142, 'gitlab'))
   })
 
+  it('labels the hand-off button "MR" on a GitLab merge request', async () => {
+    stubFetch({
+      'GET /api/v1/health': () => jsonResponse({ ...health(['claude']), forge: { kind: 'gitlab', available: true } }),
+    })
+    await openDetail('/github/prs/137')
+    await waitFor(() => expect(screen.getByRole('button', { name: /Run agent on this MR/ })).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /Run agent on this PR/ })).toBeNull()
+  })
+
+  it('keeps the hand-off button "PR" on a GitHub pull request', async () => {
+    stubFetch()
+    await openDetail('/github/prs/137')
+    await waitFor(() => expect(screen.getByRole('button', { name: /Run agent on this PR/ })).toBeTruthy())
+  })
+
   it('shows the GitLab-flavored loading subtitle while the list request is in flight', async () => {
     stubFetch({
       'GET /api/v1/github?limit=1000': () => new Promise<Response>(() => {}),

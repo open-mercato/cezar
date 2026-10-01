@@ -88,7 +88,10 @@ export function HandToAgent({
 }) {
   const queryClient = useQueryClient()
   const uiState = useUiState()
-  const kindLabel = item.kind === 'pr' ? 'PR' : 'issue'
+  // GitLab says "MR" and writes it `!N` — the same spelling `githubTaskRef` puts in the prompt.
+  const gitlabMr = forgeKind === 'gitlab' && item.kind === 'pr'
+  const kindLabel = item.kind === 'pr' ? (gitlabMr ? 'MR' : 'PR') : 'issue'
+  const itemRef = `${kindLabel} ${gitlabMr ? '!' : '#'}${item.number}`
   // A skill deleted since it was toggled must not reach the server (legacy rule).
   const validSkills = selectedSkills.filter((name) => skills.some((skill) => skill.name === name))
   // The box is PRE-FILLED with the item's reference (#524) rather than starting empty: what you
@@ -182,7 +185,7 @@ export function HandToAgent({
       // confirms itself as a toast, the way every other cockpit action does. Unconditional, not
       // mobile-only: a second confirmation costs nothing on desktop, and a viewport-conditional
       // toast is one more thing to get wrong.
-      toast(`Added to the queue — ${kindLabel} #${item.number}`)
+      toast(`Added to the queue — ${itemRef}`)
       // Frequency sort (#408): every hand-off skill counts, mirroring the /new composer.
       // Only bump once the CURRENT map is actually known (`uiState.data` present). The PUT
       // merge is shallow (`uiStateSchema` passthrough, src/server/server.ts), so the client

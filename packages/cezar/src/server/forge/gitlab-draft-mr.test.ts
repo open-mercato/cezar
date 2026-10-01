@@ -164,6 +164,24 @@ describe('GitLab driver — createPR (draft merge request)', () => {
     });
   });
 
+  it("reports glab 1.118's boxed failure as one readable line (live: MR already exists)", async () => {
+    // Captured live from `glab mr create` on a branch that already had an open MR (gitlab.com, glab 1.118).
+    glabFails(
+      '\nCreating draft merge request for cez/abc123 into main in acme/demo\n\n' +
+        'Failed to create merge request. Created recovery file: /home/u/.config/glab-cli/recover/acme/demo/mr.json\n' +
+        "Run the command again with the '--recover' option to retry.\n" +
+        '          \n   ERROR  \n          \n' +
+        '  Post https://gitlab.com/api/v4/projects/acme%2Fdemo/merge_requests: 409 {message: [Another \n' +
+        '  open merge request already exists for this source branch: !2]}.                    \n\n',
+    );
+    const driver = createGitlabDriver(freshRoot(), remoteOf('git@gitlab.com:acme/demo.git'));
+    expect(await driver.createPR(input())).toEqual({
+      ok: false,
+      error:
+        'glab mr create failed — Post https://gitlab.com/api/v4/projects/acme%2Fdemo/merge_requests: 409 {message: [Another open merge request already exists for this source branch: !2]}.',
+    });
+  });
+
   it('refuses success when glab printed no merge request URL', async () => {
     glabReply(null, 'Creating merge request…\n', 'https://gitlab.com/acme/demo/-/issues/5\n');
     const driver = createGitlabDriver(freshRoot(), remoteOf('git@gitlab.com:acme/demo.git'));

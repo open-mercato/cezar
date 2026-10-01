@@ -357,26 +357,34 @@ export const ghCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
     signal,
   );
 
-/** Kept pure like `ghCloneArgs`: `glab repo clone <rebuilt URL> <dir> -- --progress`
+/** glab's git credential helper (glab 1.118 provides `glab auth git-credential`, the twin of
+ *  `gh auth git-credential`). */
+const GLAB_CREDENTIAL_HELPER = '!glab auth git-credential';
+
+/** Kept pure like `ghCloneArgs`: `glab repo clone <rebuilt URL> <dir> -- --progress -c …`
  *  (spec 2026-08-10-forge-provider-adapters, Step 4.2). The full URL, not the
  *  bare path, so an on-prem instance is cloned from the host the dialog showed
- *  rather than whatever `GITLAB_HOST` / glab's default host happens to be. */
+ *  rather than whatever `GITLAB_HOST` / glab's default host happens to be.
+ *
+ *  Unlike `gh`, `glab repo clone` handed a full HTTPS URL does NOT authenticate the clone: it runs
+ *  a bare `git clone`, so a private project failed with "could not read Username" (verified live
+ *  against gitlab.com, glab 1.118, review of roszekF/cezar#1). The credential helper therefore rides
+ *  along as `git clone -c` flags — git applies them BEFORE fetching and writes them into the new
+ *  repo's config. Throws on a non-http(s) `cloneUrl` (`gitlabCloneOrigin`). */
 export function glabCloneArgs(ref: RepoRef, dir: string): string[] {
-  return ['repo', 'clone', ref.cloneUrl, dir, '--', '--progress'];
+  const key = `credential.${gitlabCloneOrigin(ref)}.helper`;
+  return ['repo', 'clone', ref.cloneUrl, dir, '--', '--progress', '-c', `${key}=`, '-c', `${key}=${GLAB_CREDENTIAL_HELPER}`];
 }
 
-/** GitLab twin of `persistGhCredentialHelper` (4.2-review-fix): `glab` also
- *  injects credentials only for the clone command itself, so without this a
- *  task worktree's first raw `git push` against an HTTPS GitLab remote would
- *  have nothing to authenticate with. Keyed on the clone's own origin — never
- *  a hardcoded host — because a GitLab source can be gitlab.com or any
- *  discovered on-prem instance, each needing its own `credential.<origin>.helper`
- *  entry (glab 1.118 provides `glab auth git-credential`, the twin of
- *  `gh auth git-credential`). */
+/** GitLab twin of `persistGhCredentialHelper` (4.2-review-fix): re-asserts the helper the clone's
+ *  `-c` flags already wrote (`glabCloneArgs`), so a task worktree's first raw `git push` against an
+ *  HTTPS GitLab remote authenticates through `glab` even if the clone left no helper behind. Keyed
+ *  on the clone's own origin — never a hardcoded host — because a GitLab source can be gitlab.com
+ *  or any discovered on-prem instance, each needing its own `credential.<origin>.helper` entry. */
 async function persistGlabCredentialHelper(dir: string, origin: string): Promise<boolean> {
   for (const args of [
     ['--replace-all', `credential.${origin}.helper`, ''],
-    ['--add', `credential.${origin}.helper`, '!glab auth git-credential'],
+    ['--add', `credential.${origin}.helper`, GLAB_CREDENTIAL_HELPER],
   ]) {
     const ok = await new Promise<boolean>((resolvePromise) => {
       execFile('git', ['-C', dir, 'config', '--local', ...args],
@@ -405,27 +413,30 @@ function gitlabCloneOrigin(ref: RepoRef): string {
 /** `glab repo clone` — the GitLab twin of `ghCloneRunner`, same streaming,
  *  cancellation and ENOENT degradation, plus its own persisted credential
  *  helper (4.2-review-fix) so later task-worktree pushes authenticate through
- *  `glab`. `NO_PROMPT` is glab's `GH_PROMPT_DISABLED`. */
-export const glabCloneRunner: CloneRunner = (ref, dir, onLine, signal) =>
-  spawnClone(
+ *  `glab`. `GLAB_NO_PROMPT` is glab's `GH_PROMPT_DISABLED`; glab 1.118 deprecated
+ *  the older `NO_PROMPT` spelling with a warning line that led every clone error,
+ *  and it stays set for glab releases that predate the rename. */
+export const glabCloneRunner: CloneRunner = async (ref, dir, onLine, signal) => {
+  let origin: string;
+  let args: string[];
+  try {
+    origin = gitlabCloneOrigin(ref);
+    args = glabCloneArgs(ref, dir);
+  } catch (err) {
+    return { ok: false, error: errText(err) };
+  }
+  return spawnClone(
     'glab',
-    glabCloneArgs(ref, dir),
-    { ...process.env, NO_PROMPT: '1', GIT_TERMINAL_PROMPT: '0' },
+    args,
+    { ...process.env, GLAB_NO_PROMPT: '1', NO_PROMPT: '1', GIT_TERMINAL_PROMPT: '0' },
     'glab repo clone',
-    async () => {
-      let origin: string;
-      try {
-        origin = gitlabCloneOrigin(ref);
-      } catch (err) {
-        return { ok: false, error: errText(err) };
-      }
-      return (await persistGlabCredentialHelper(dir, origin))
-        ? { ok: true }
-        : { ok: false, error: 'Could not configure GitLab credentials for the checkout. Check directory permissions and retry.' };
-    },
+    async () => (await persistGlabCredentialHelper(dir, origin))
+      ? { ok: true }
+      : { ok: false, error: 'Could not configure GitLab credentials for the checkout. Check directory permissions and retry.' },
     onLine,
     signal,
   );
+};
 
 /** `CEZ_DRY_RUN=1` — a fake clone so the dialog (and the tests) can exercise
  *  the whole flow offline: a few progress lines and a plausible repo on disk.

@@ -127,12 +127,26 @@ function firstLine(s: string): string {
   return s.split('\n').find((l) => l.trim().length > 0)?.trim() ?? 'glab failed';
 }
 
-/** `glab`'s own words for a failure: the first stderr line when the error carries stderr (a
- *  non-zero exit), else the error message's first line. `execFile`'s message starts with
- *  "Command failed: glab …", which says nothing the user can act on. */
+/** The message of a boxed glab error, re-joined into one line — or null when `stderr` has no box.
+ *  glab 1.118's CLI commands (`repo view`, `issue list`, `mr create`, …) print a failure as a
+ *  padded banner — a blank line, `ERROR`, a blank line — then the message word-wrapped over several
+ *  lines, so a first-line reader saw only "ERROR" and a tail reader saw the wrap's fragments
+ *  (verified live against gitlab.com, review of roszekF/cezar#1). `glab api` and older releases
+ *  print one plain line and keep their existing handling. */
+function glabBoxedError(stderr: string): string | null {
+  const lines = stderr.split('\n').map((l) => l.trim());
+  const banner = lines.lastIndexOf('ERROR');
+  if (banner < 0) return null;
+  const message = lines.slice(banner + 1).filter(Boolean).join(' ').replace(/\s+/g, ' ').trim();
+  return message || null;
+}
+
+/** `glab`'s own words for a failure: the boxed message or first stderr line when the error
+ *  carries stderr (a non-zero exit), else the error message's first line. `execFile`'s message
+ *  starts with "Command failed: glab …", which says nothing the user can act on. */
 function glabFailureReason(err: unknown): string {
   const stderr = typeof err === 'object' && err !== null ? (err as { stderr?: unknown }).stderr : undefined;
-  if (typeof stderr === 'string' && stderr.trim()) return firstLine(stderr);
+  if (typeof stderr === 'string' && stderr.trim()) return glabBoxedError(stderr) ?? firstLine(stderr);
   return firstLine(err instanceof Error ? err.message : String(err));
 }
 
@@ -1174,7 +1188,7 @@ async function createGitlabDraftMr(repoRoot: string, parsed: ParsedRemote, input
         error: `glab is not authenticated for ${host} — run \`glab auth login --hostname ${host}\`, or merge the branch locally`,
       };
     }
-    return { ok: false, error: `glab mr create failed — ${tail(mr.stderr) || 'unknown error'}` };
+    return { ok: false, error: `glab mr create failed — ${glabBoxedError(mr.stderr) ?? (tail(mr.stderr) || 'unknown error')}` };
   }
 
   // glab prints the MR URL on stdout; accept stderr too, as the GitHub path does.
