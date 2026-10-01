@@ -1073,7 +1073,7 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
     const notes = () =>
       store.readEvents(record.id).filter((e) => e.type === 'note').map((e) => String(e.message));
 
-    await waitFor(record.id, () => notes().some((m) => m.includes('wake-ups paused while subtasks are in flight')));
+    await waitFor(record.id, () => notes().some((m) => m.includes('wake-ups paused while subtasks are running')));
     // Many timer periods (60ms each) pass: none wakes the run or advances the counter.
     await new Promise((resolve) => setTimeout(resolve, 1_000));
     expect(notes().filter((m) => m.includes('wake-ups paused'))).toHaveLength(1);
@@ -1084,6 +1084,22 @@ describe('CEZ:MONITORING parks as running/monitoring, not waiting (#490)', () =>
     // case): the timer is still armed, so its next fire wakes the run exactly as before.
     store.updateRun(child.id, { status: 'cancelled' });
     await waitFor(record.id, () => notes().some((m) => m.includes('automatic monitoring wake-up (1/40)')));
+  }, 30_000);
+
+  it('wakes a monitor whose only child is WAITING on a human (#1198 review m4)', async () => {
+    // A child parked on its own CEZ:ASK will not settle — and so will not report — until someone
+    // answers it. It must not pause the parent's timer, or the tree has no on-by-default exit.
+    manager.dispose();
+    const semaphore = new WorkspaceSemaphore({ initial: { monitoringWakeIntervalMinutes: 0.001 } });
+    manager = new RunManager(store, repoRoot, { semaphore });
+    const record = manager.startRun(SINGLE_STEP, { task: 'mock:monitoring keep going', worktree: false });
+    currentId = record.id;
+    const child = store.createRun({ title: 'subtask', workflow: 'quick-task', task: 'child work', steps: [] });
+    store.updateRun(child.id, { status: 'waiting', dispatch: { rootRunId: record.id, parentRunId: record.id } });
+    const notes = () =>
+      store.readEvents(record.id).filter((e) => e.type === 'note').map((e) => String(e.message));
+    await waitFor(record.id, () => notes().some((m) => m.includes('automatic monitoring wake-up (1/40)')));
+    expect(notes().some((m) => m.includes('wake-ups paused'))).toBe(false);
   }, 30_000);
 
   it('a markerless turn-end still parks as waiting with no activity', async () => {
