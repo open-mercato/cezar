@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { isBenignError, routeShape, telemetryPageFor } from './telemetry'
+import { clientSurface, isBenignError, routeShape, telemetryPageFor } from './telemetry'
 
 describe('routeShape', () => {
   it('keeps the route and drops every user value', () => {
@@ -30,5 +30,14 @@ describe('isBenignError', () => {
     expect(isBenignError('ResizeObserver loop limit exceeded')).toBe(true)
     expect(isBenignError('Importing a module script failed.')).toBe(false)
     expect(isBenignError("TypeError: undefined is not an object (evaluating 'a.b')")).toBe(false)
+  })
+})
+
+describe('clientSurface', () => {
+  it('reads the desktop shell stamp', () => {
+    expect(clientSurface()).toBe('browser')
+    document.documentElement.dataset.cezDesktop = 'macos'
+    expect(clientSurface()).toBe('desktop')
+    delete document.documentElement.dataset.cezDesktop
   })
 })

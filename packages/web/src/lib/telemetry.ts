@@ -108,6 +108,15 @@ const session = {
   latestVersion: null as string | null,
 }
 
+/** `desktop` inside the Tauri shell, `browser` otherwise. The shell's init script stamps
+ *  `window.__CEZ_DESKTOP__` and `<html data-cez-desktop>` on every page it shows (packages/desktop
+ *  `INIT_SCRIPT`) — the same flag the title strip reads; Tauri's own IPC global is the fallback
+ *  for a shell that predates the stamp. */
+export function clientSurface(): 'desktop' | 'browser' {
+  if ('__CEZ_DESKTOP__' in window || document.documentElement.dataset.cezDesktop) return 'desktop'
+  return '__TAURI_INTERNALS__' in window ? 'desktop' : 'browser'
+}
+
 function wideContext(extra: Context = {}): Context {
   const ua = navigator.userAgent
   const now = performance.now()
@@ -119,7 +128,7 @@ function wideContext(extra: Context = {}): Context {
     'session.age_s': Math.round(now / 1000),
     'session.navigations': session.navigations,
     'session.errors': session.errors,
-    'client.surface': '__TAURI_INTERNALS__' in window || '__TAURI__' in window ? 'desktop' : 'browser',
+    'client.surface': clientSurface(),
     'client.engine': engine(ua),
     'client.os': os(ua),
     'client.online': navigator.onLine,
