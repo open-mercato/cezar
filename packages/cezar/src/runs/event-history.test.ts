@@ -270,6 +270,59 @@ describe('live cursor replay and compact context', () => {
     expect(context.contextEvents.length).toBeLessThan(10);
   });
 
+  it('bounds turn boundaries in a long run without sub-agent roots', async () => {
+    const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [];
+    for (let index = 0; index < 2_000; index += 1) {
+      const turnSeq = index * 2 + 1;
+      events.push(
+        { seq: turnSeq, type: 'turn.started', turnId: `turn-${index}` },
+        { seq: turnSeq + 1, type: 'turn.completed', turnId: `turn-${index}` },
+      );
+    }
+
+    const context = await deriveRunContextEvents(fixture(events));
+    expect(context.contextEvents).toHaveLength(100);
+    expect(context.contextEvents[0]?.seq).toBe(3_901);
+    expect(context.contextEvents.at(-1)?.seq).toBe(4_000);
+  });
+
+  it('bounds boundaries without dropping an active root or its newest child', async () => {
+    const events: Array<Partial<RunEvent> & Pick<RunEvent, 'seq' | 'type'>> = [
+      { seq: 1, type: 'turn.started', turnId: 'root-turn' },
+      {
+        seq: 2,
+        type: 'item.started',
+        item: { kind: 'tool', id: 'task-1', toolKind: 'task', status: 'running' },
+      },
+    ];
+    for (let index = 0; index < 2_000; index += 1) {
+      const turnSeq = index * 2 + 3;
+      events.push(
+        { seq: turnSeq, type: 'turn.started', turnId: `turn-${index}` },
+        {
+          seq: turnSeq + 1,
+          type: 'item.updated',
+          item: {
+            kind: 'tool',
+            id: 'child-1',
+            parentItemId: 'task-1',
+            status: 'running',
+            title: `activity ${index}`,
+          },
+        },
+      );
+    }
+
+    const context = await deriveRunContextEvents(fixture(events));
+    const itemEvents = context.contextEvents.filter(({ type }) => type.startsWith('item.'));
+    const boundaryEvents = context.contextEvents.filter(({ type }) =>
+      ['turn.started', 'turn.completed', 'user-message', 'session.ended', 'session.error'].includes(type),
+    );
+    expect(itemEvents.map(({ seq }) => seq)).toEqual([2, 4, 4_002]);
+    expect(boundaryEvents).toHaveLength(101);
+    expect(boundaryEvents[0]?.seq).toBe(1);
+  });
+
   it('preserves the current plan and lets a settled earlier fan-out bound carry-over', async () => {
     const events = [
       { seq: 1, type: 'turn.started', turnId: 't1' },

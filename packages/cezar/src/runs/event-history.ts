@@ -13,6 +13,7 @@ import {
 
 const READ_CHUNK_BYTES = 64 * 1024;
 const MAX_CURSOR_BYTES = 2_048;
+const MAX_CONTEXT_BOUNDARIES = RUN_HISTORY_PAGE_ITEMS;
 
 const pageCursorSchema = z.object({
   v: z.literal(1),
@@ -495,6 +496,17 @@ export async function deriveRunContextEvents(filePath: string): Promise<RunHisto
   const roots = new Map<string, ContextItem>();
   const children = new Map<string, ContextItem>();
   const rootsByTurn = new Map<number, Set<string>>();
+  const protectedBoundaries = new Map<number, RunHistoryEvent>();
+  const retainBoundaryWindow = () => {
+    const protectedSeqs = new Set([...protectedBoundaries.values()].map(({ seq }) => seq));
+    const firstRecent = Math.max(0, boundaries.length - MAX_CONTEXT_BOUNDARIES);
+    if (firstRecent === 0) return;
+    boundaries.splice(
+      0,
+      firstRecent,
+      ...boundaries.slice(0, firstRecent).filter(({ seq }) => protectedSeqs.has(seq)),
+    );
+  };
 
   const itemIdentity = (event: RunHistoryEvent, id: string) => `${event.stepId ?? ''}:${id}`;
   const pruneSettledHistory = () => {
@@ -522,6 +534,7 @@ export async function deriveRunContextEvents(filePath: string): Promise<RunHisto
       if (candidateTurn > pruneThrough) continue;
       for (const id of ids) roots.delete(id);
       rootsByTurn.delete(candidateTurn);
+      protectedBoundaries.delete(candidateTurn);
     }
     const retainedRootIds = new Set([...roots.values()].map(({ id }) => id));
     for (const [key, item] of children) {
@@ -547,6 +560,7 @@ export async function deriveRunContextEvents(filePath: string): Promise<RunHisto
       if (event.type === 'user-message' || event.type === 'turn.started') {
         turn += 1;
         boundaries.push(event);
+        retainBoundaryWindow();
         pruneSettledHistory();
         continue;
       }
@@ -556,6 +570,7 @@ export async function deriveRunContextEvents(filePath: string): Promise<RunHisto
         event.type === 'session.error'
       ) {
         boundaries.push(event);
+        retainBoundaryWindow();
         continue;
       }
       if (event.type === 'item.started' || event.type === 'item.updated' || event.type === 'item.completed') {
@@ -590,6 +605,10 @@ export async function deriveRunContextEvents(filePath: string): Promise<RunHisto
           const ids = rootsByTurn.get(turn);
           if (ids) ids.add(key);
           else rootsByTurn.set(turn, new Set([key]));
+          const boundary = boundaries.at(-1);
+          if (boundary?.type === 'user-message' || boundary?.type === 'turn.started') {
+            protectedBoundaries.set(turn, boundary);
+          }
         }
         pruneSettledHistory();
       }
