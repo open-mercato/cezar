@@ -109,7 +109,12 @@ describe('detectEnvironment — glab probe', () => {
   // the probe's budget, which is the one thing the budget exists to bound.
   it('spends ONE budget across both reads: the second gets what the first left', async () => {
     const SLOW_MS = 120;
-    // Only the first read is slow, so the budget the second one gets is observably smaller.
+    // Only the first read is slow, so the budget the second one gets is observably smaller. The
+    // budget is measured on `Date.now()`, so the "slow" read advances a fake clock by exactly
+    // SLOW_MS — a real `setTimeout(SLOW_MS)` may fire a millisecond early against `Date.now()`,
+    // which made this assertion flake in CI (2381 > 2380).
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
     execFileMock.mockImplementation((...args: unknown[]) => {
       const bin = args[0] as string;
       const argv = (args[1] as string[] | undefined) ?? [];
@@ -119,12 +124,15 @@ describe('detectEnvironment — glab probe', () => {
         return;
       }
       const stdout = argv.includes('token') ? 'glpat-example\n' : 'gitlab.com\n';
-      const respond = () => cb(null, { stdout, stderr: '' });
-      if (argv.includes('token')) respond();
-      else setTimeout(respond, SLOW_MS);
+      if (!argv.includes('token')) now += SLOW_MS;
+      cb(null, { stdout, stderr: '' });
     });
 
-    await detectEnvironment();
+    try {
+      await detectEnvironment();
+    } finally {
+      clock.mockRestore();
+    }
     const [first, second] = glabCalls();
     expect(first?.opts.timeout).toBe(2_500);
     expect(second?.opts.timeout).toBeLessThanOrEqual(2_500 - SLOW_MS);
