@@ -171,6 +171,8 @@ export const uiStateSchema = z.looseObject({
   runsView: z.enum(['list', 'table']).optional(),
   /** The GitHub tab's last-selected sub-tab (#417). Absent → issues. */
   githubView: z.enum(['issues', 'prs']).optional(),
+  /** The GitHub tab's list order. Absent → newest first, which is what `gh` already returns. */
+  githubSort: z.enum(['newest', 'oldest']).optional(),
   /** Settings → Appearance. The theme itself stays in localStorage (`cez-theme`) — it must
    *  pre-paint, and it is per-browser by design. */
   appearance: appearanceSchema.optional(),

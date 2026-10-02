@@ -363,6 +363,12 @@ describe('sanitizeAttachmentName (#929)', () => {
     expect(sanitizeAttachmentName('a<b>c:d"e|f?g*h.txt', 'text/plain')).toBe('a-b-c-d-e-f-g-h.txt');
   });
 
+  it('strips bidi and format display controls without changing ordinary Unicode', () => {
+    const bidiAndFormatControls = '\u200e\u200f\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069';
+    expect(sanitizeAttachmentName(`brief${bidiAndFormatControls}dm.txt`, 'text/plain')).toBe('briefdm.txt');
+    expect(sanitizeAttachmentName('résumé-日本語.txt', 'text/plain')).toBe('résumé-日本語.txt');
+  });
+
   /**
    * The case the whole helper exists for. The media type is what the allowlist screened; letting
    * the NAME contradict it would mean a `text/plain` upload landing in the user's project as

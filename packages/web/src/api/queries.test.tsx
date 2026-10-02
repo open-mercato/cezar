@@ -917,10 +917,18 @@ describe('useMarkRunUnseen', () => {
 })
 
 describe('usePatchRun', () => {
-  it('PATCHes the title and invalidates every runs query on success', async () => {
-    fetchMock.mockResolvedValue(json({ id: 'run-1', title: 'New name', titleSummary: 'New name' }))
+  it('writes the successful title receipt into list/detail caches and invalidates the finder', async () => {
+    const current = {
+      id: 'run-1', title: 'Old name', titleSummary: 'Old name', titleOrigin: 'auto' as const,
+      workflow: 'quick-task', task: 'do it', status: 'running' as const, createdAt: '2026-01-01',
+      tokensUsed: 0, archived: false, steps: [],
+    }
+    const updated = { ...current, title: 'New name', titleSummary: 'New name', titleOrigin: 'user' as const }
+    fetchMock.mockResolvedValue(json(updated))
     const client = createQueryClient()
     const invalidate = vi.spyOn(client, 'invalidateQueries')
+    client.setQueryData(queryKeys.runs.list(), [current])
+    client.setQueryData(queryKeys.runs.detail('run-1'), current)
     const { result } = renderHook(() => usePatchRun('run-1'), {
       wrapper: ({ children }: { children: ReactNode }) => (
         <QueryClientProvider client={client}>{children}</QueryClientProvider>
@@ -934,8 +942,11 @@ describe('usePatchRun', () => {
     expect(path).toBe('/api/v1/runs/run-1')
     expect(init.method).toBe('PATCH')
     expect(JSON.parse(init.body as string)).toEqual({ title: 'New name' })
+    expect(client.getQueryData<typeof current[]>(queryKeys.runs.list())?.[0]).toMatchObject(updated)
+    expect(client.getQueryData<typeof current>(queryKeys.runs.detail('run-1'))).toMatchObject(updated)
     // `runs.all` is a prefix of the list, detail and diff keys — one call reaches them all.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.runs.all })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeys.runsIndex })
   })
 
   it('does not invalidate anything on failure', async () => {

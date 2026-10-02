@@ -21,7 +21,11 @@ export type UiBackend = 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi'
 /** Tool lifecycle status (ACP-aligned; `running` ≡ ACP `in_progress`). */
 export type ToolStatus = 'pending' | 'running' | 'completed' | 'failed' | 'declined'
 
-/** Icon/verb hint for a tool item — a superset of ACP's ToolKind. */
+/**
+ * Icon/verb hint for a tool item — a superset of ACP's ToolKind.
+ * `task` = subagent spawn; `skill` = a skill invocation loaded into the current agent's turn.
+ * The two are distinct kinds because the Agents dock counts `task` items as live fan-out (#1202).
+ */
 export type ToolKind =
   | 'read'
   | 'edit'
@@ -32,6 +36,7 @@ export type ToolKind =
   | 'think'
   | 'fetch'
   | 'task'
+  | 'skill'
   | 'plan'
   | 'other'
 

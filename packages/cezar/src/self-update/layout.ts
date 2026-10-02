@@ -9,12 +9,19 @@
  *   ~/.cezar/bin/cezar, cez                       launchers that exec `current`'s entry
  *
  * `<id>` is the version string, plus `+local` for a build installed from a checkout so it never
- * collides with the registry release it was cut from. Everything is under `cezarHomeDir()` so
+ * collides with the registry release it was cut from.
+ *
+ * A LINKED checkout (`cezar link`, source `link`) is the development variant: instead of a copy,
+ * `versions/<version>+<branch>/node_modules/@open-mercato/cezar` is a symlink (a junction on
+ * Windows) to a worktree's `packages/cezar`. Node runs the entry through its realpath, so the
+ * checkout's own `node_modules` resolve, and every rebuild of that worktree is live on the next
+ * restart. Anything that reads `current` — the launchers, the desktop shell — runs it unchanged.
+ * Removing a link removes the link, never the checkout. Everything is under `cezarHomeDir()` so
  * `CEZ_HOME` keeps tests off the real home. Delete the whole directory and `cezar install`
  * rebuilds it — state, never configuration.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { z } from 'zod';
 
@@ -64,8 +71,11 @@ export function currentEntry(env: NodeJS.ProcessEnv = process.env): string {
 const manifestSchema = z
   .object({
     version: z.string(),
-    source: z.enum(['registry', 'local']),
+    source: z.enum(['registry', 'local', 'link']),
     installedAt: z.string(),
+    /** `link` only: the linked package root (`<worktree>/packages/cezar`) and its branch. */
+    checkout: z.string().optional(),
+    branch: z.string().optional(),
   })
   .passthrough();
 export type InstallManifest = z.infer<typeof manifestSchema>;
@@ -174,7 +184,100 @@ export function activate(id: string, env: NodeJS.ProcessEnv = process.env): void
 
 export function removeInstalled(id: string, env: NodeJS.ProcessEnv = process.env): void {
   if (id === activeId(env)) throw new Error(`version ${id} is active — switch first`);
+  // `rmSync` never follows symlinks, so a linked checkout loses its link, not its files.
   rmSync(versionDir(id, env), { recursive: true, force: true });
+}
+
+/** Build metadata for a branch name: `cez/cb28888e` → `cez-cb28888e`. */
+export function branchSlug(branch: string): string {
+  return branch
+    .replace(/[^0-9A-Za-z-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+/** The id a linked checkout gets: `<version>+<branch slug>` — semver build metadata, so it
+ *  orders as its version everywhere and still reads as the branch in every version list. */
+export function linkId(version: string, branch: string): string {
+  const slug = branchSlug(branch) || 'checkout';
+  return assertSafeId(`${version}+${slug}`);
+}
+
+export interface LinkResult {
+  id: string;
+  version: string;
+  entry: string;
+}
+
+/**
+ * Register a built checkout's package root (the directory holding `@open-mercato/cezar`'s
+ * package.json and `dist/index.js`) as a version: a link, not a copy. Re-linking the same
+ * checkout replaces its previous entry (the version or branch may have moved since); a
+ * DIFFERENT checkout that would get the same id gets a path-derived suffix instead.
+ */
+export function linkCheckout(packageRoot: string, branch: string, env: NodeJS.ProcessEnv = process.env, preferredId?: string): LinkResult {
+  let root = resolve(packageRoot);
+  try {
+    root = realpathSync(root);
+  } catch {
+    // Missing: the package.json read below says so.
+  }
+  let pkg: { name?: unknown; version?: unknown } | null = null;
+  try {
+    pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as { name?: unknown; version?: unknown };
+  } catch {
+    pkg = null;
+  }
+  if (!pkg || pkg.name !== PACKAGE_NAME || typeof pkg.version !== 'string') throw new Error(`${root} is not a ${PACKAGE_NAME} package`);
+  if (!existsSync(join(root, 'dist', 'index.js'))) throw new Error(`${root} is not built — run \`npm run build\` in the checkout first`);
+  const version = pkg.version;
+
+  const installed = listLinks(env);
+  for (const entry of installed) {
+    if (entry.checkout === root && entry.id !== activeId(env)) removeInstalled(entry.id, env);
+  }
+  // Discovery may already have told this checkout apart from a sibling on the same slug
+  // (`preferredId`, the suffixed form): link it under the id the picker showed.
+  const base = linkId(version, branch);
+  const suffixed = suffixedLinkId(base, root);
+  let id = preferredId === suffixed ? suffixed : base;
+  const clash = readManifest(id, env);
+  if (clash && clash.checkout !== root) id = suffixed;
+
+  const scopeDir = join(versionDir(id, env), 'node_modules', ...PACKAGE_NAME.split('/').slice(0, -1));
+  const link = join(scopeDir, PACKAGE_NAME.split('/').pop()!);
+  mkdirSync(scopeDir, { recursive: true });
+  removeLink(link);
+  symlinkSync(root, link, process.platform === 'win32' ? 'junction' : 'dir');
+  writeManifest(id, { version, source: 'link', installedAt: new Date().toISOString(), checkout: root, branch }, env);
+  return { id, version, entry: versionEntry(id, env) };
+}
+
+/** Every linked checkout, dangling ones included (a worktree that was removed) — `listInstalled`
+ *  hides those, but they still need finding to be pruned or replaced. */
+export function listLinks(env: NodeJS.ProcessEnv = process.env): InstalledEntry[] {
+  const dir = versionsDir(env);
+  if (!existsSync(dir)) return [];
+  const active = activeId(env);
+  const out: InstalledEntry[] = [];
+  for (const name of readdirSync(dir)) {
+    if (name === CURRENT_LINK || name.startsWith('.')) continue;
+    const manifest = readManifest(name, env);
+    if (manifest?.source === 'link') out.push({ ...manifest, id: name, active: name === active });
+  }
+  return out;
+}
+
+/** The id a checkout gets when `base` already belongs to another checkout or install. */
+export function suffixedLinkId(base: string, packageRoot: string): string {
+  return assertSafeId(`${base}.${shortHash(packageRoot)}`);
+}
+
+function shortHash(value: string): string {
+  let hash = 5381;
+  for (let i = 0; i < value.length; i++) hash = ((hash << 5) + hash + value.charCodeAt(i)) >>> 0;
+  return hash.toString(36).slice(0, 6);
 }
 
 /**

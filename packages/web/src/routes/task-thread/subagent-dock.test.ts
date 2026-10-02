@@ -4,6 +4,7 @@ import type { ToolStatus, UiToolItem } from '@open-mercato/cezar-api-client'
 
 import {
   activeSubagent,
+  collectSkills,
   collectSubagents,
   findSubagent,
   subagentActivityText,
@@ -454,5 +455,83 @@ describe('subagentChildren', () => {
     const turns = [turn('turn-1', [task('a', 'running')])]
     expect(subagentChildren(turns, 'a')).toEqual([])
     expect(subagentChildren(turns, 'ghost')).toEqual([])
+  })
+})
+
+/**
+ * #1202 — a skill is not a sub-agent.
+ *
+ * `Skill` used to be mapped to `toolKind: 'task'` (#529, for the bot icon), so every skill
+ * invocation became a dock row. Because a `Skill` call settles at once and adopts no children,
+ * the dock read `Agents · 1/1 — starting…`: an agent simultaneously finished and not started,
+ * pinned above the composer for a fan-out that never happened.
+ */
+describe('skills are not agents (#1202)', () => {
+  const skill = (id: string, name: string, extra: Partial<UiToolItem> = {}): UiToolItem => ({
+    kind: 'tool',
+    id,
+    name: 'Skill',
+    toolKind: 'skill',
+    title: `Skill: ${name}`,
+    status: 'completed',
+    ...extra,
+  })
+
+  it('collectSubagents ignores a skill — a skill-only turn docks nothing', () => {
+    expect(collectSubagents([turn('turn-1', [skill('s', 'om-auto-create-pr')])])).toEqual([])
+  })
+
+  it('collectSubagents counts only the real agent when a turn has both', () => {
+    const agents = collectSubagents([turn('turn-1', [skill('s', 'om-auto-create-pr'), task('a', 'running')])])
+    expect(agents.map((agent) => agent.id)).toEqual(['a'])
+    expect(subagentCounts(agents)).toEqual({ done: 0, total: 1 })
+  })
+
+  it('collectSkills names the run’s skills in stream order', () => {
+    const skills = collectSkills([
+      turn('turn-1', [skill('s1', 'om-auto-create-pr'), task('a', 'running')]),
+      turn('turn-2', [skill('s2', 'om-code-review')]),
+    ])
+    expect(skills).toEqual([
+      { id: 's1', name: 'om-auto-create-pr' },
+      { id: 's2', name: 'om-code-review' },
+    ])
+  })
+
+  it('collectSkills survives a turn-less thread and a skill-less run', () => {
+    expect(collectSkills([])).toEqual([])
+    expect(collectSkills([turn('turn-1', [task('a', 'running')])])).toEqual([])
+  })
+
+  it('collectSkills lists a re-invoked skill once, keeping its first position', () => {
+    const skills = collectSkills([
+      turn('turn-1', [skill('s1', 'om-auto-create-pr')]),
+      turn('turn-2', [skill('s2', 'om-code-review'), skill('s3', 'om-auto-create-pr')]),
+    ])
+    expect(skills.map((entry) => entry.name)).toEqual(['om-auto-create-pr', 'om-code-review'])
+    expect(skills[0]!.id).toBe('s1')
+  })
+
+  it('collectSkills drops a failed or declined invocation — it loaded no instructions', () => {
+    const skills = collectSkills([
+      turn('turn-1', [
+        skill('s1', 'om-code-review', { status: 'failed' }),
+        skill('s2', 'om-auto-qa-pr', { status: 'declined' }),
+        skill('s3', 'om-auto-create-pr', { status: 'running' }),
+      ]),
+    ])
+    expect(skills.map((entry) => entry.name)).toEqual(['om-auto-create-pr'])
+  })
+
+  it('collectSkills ignores a sub-agent’s own skill — that one is not governing the run', () => {
+    const skills = collectSkills([
+      turn('turn-1', [task('a', 'running'), skill('s', 'om-code-review', { parentItemId: 'a' })]),
+    ])
+    expect(skills).toEqual([])
+  })
+
+  it('collectSkills falls back to the whole title when it carries no skill name', () => {
+    const bare: UiToolItem = { kind: 'tool', id: 's', name: 'Skill', toolKind: 'skill', title: 'Skill', status: 'completed' }
+    expect(collectSkills([turn('turn-1', [bare])])).toEqual([{ id: 's', name: 'Skill' }])
   })
 })

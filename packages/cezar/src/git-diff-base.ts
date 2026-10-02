@@ -84,7 +84,9 @@ const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2
 
 /**
  * The freshest ref the configured base branch names: `origin/<base>` when the
- * local branch is behind it (or missing entirely), the local branch otherwise.
+ * local branch is behind it, the local branch when it is equal or ahead (or
+ * origin has no such branch), and — when the two diverged — whichever side the
+ * task actually forked from.
  *
  * Same rule as `resolveBaseRef` (`git-worktree.ts`), which picks the fork point
  * when the worktree is created; this one re-applies it every time a diff is
@@ -100,7 +102,23 @@ async function freshestBaseRef(runGit: GitRunner, base: string): Promise<string>
   // Exits 0 iff local is equal to or ahead of origin — the case where the local
   // ref carries unpushed base commits and is the better answer.
   const localCurrent = await runGit(['merge-base', '--is-ancestor', remote, base]);
-  return localCurrent.ok ? base : remote;
+  if (localCurrent.ok) return base;
+  const localBehind = await runGit(['merge-base', '--is-ancestor', base, remote]);
+  if (localBehind.ok) return remote;
+  // DIVERGED. `resolveBaseRef` forks a zero-config task from the user's own
+  // diverged branch (`keepDiverged`) but a configured base from origin, and
+  // only the fork shows which: the task forked from whichever side's
+  // merge-base with HEAD is the newer one. Keep local only when its merge-base
+  // strictly descends from origin's — otherwise the stale-base rule stands.
+  const [mbLocal, mbRemote] = await Promise.all([
+    runGit(['merge-base', base, 'HEAD']),
+    runGit(['merge-base', remote, 'HEAD']),
+  ]);
+  const local = mbLocal.ok ? mbLocal.stdout.trim() : '';
+  const upstream = mbRemote.ok ? mbRemote.stdout.trim() : '';
+  if (!local || !upstream || local === upstream) return remote;
+  const forkedFromLocal = await runGit(['merge-base', '--is-ancestor', upstream, local]);
+  return forkedFromLocal.ok ? base : remote;
 }
 
 /**

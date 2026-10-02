@@ -123,7 +123,7 @@ function TrackerBrowse({ scopePending, association, selectedId, drafts, selectio
       </div>
       <div className="mt-2.5 flex items-center justify-between border-b border-border pb-2">
         <h2 className="text-[13px] font-medium">Issues · {items.length}{result.hasNextPage ? '+' : ''}</h2>
-        <select aria-label="Issue state" className="min-w-0 rounded-md border border-input bg-card px-2 py-1 text-xs" value={state} onChange={(event) => { setState(event.target.value as 'active' | 'all'); setStateExplicit(true) }}><option value="active">Active</option><option value="all">All states</option></select>
+        <select aria-label="Issue state" className="min-w-0 rounded-md border border-input bg-card px-2 py-1 text-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50" value={state} onChange={(event) => { setState(event.target.value as 'active' | 'all'); setStateExplicit(true) }}><option value="active">Active</option><option value="all">All states</option></select>
       </div>
       <form className="mt-2.5 flex items-center gap-2 pb-3" onSubmit={(event) => {
         event.preventDefault()

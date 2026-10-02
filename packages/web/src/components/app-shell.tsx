@@ -20,6 +20,7 @@ import { openCommandPalette } from '@/components/command-palette'
 import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
+import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
 import { BrandLockup } from '@/components/brand-mark'
 import { SelfUpdateDialog } from '@/components/self-update-dialog'
 import { StatusDot } from '@/components/status-dot'
@@ -73,6 +74,10 @@ export type AppShellProps = {
   /** The npm registry's newer version, when the server's update check found one (#368). The
    *  chip grows a pulsing pending dot + tooltip; absent or equal to `version`, it stays plain. */
   latestVersion?: string | null
+  /** cezar's own GitHub star count for the footer's ⭐ ask. `null` — offline, rate-limited, or
+   *  promos silenced with `CEZ_NO_BANNER=1` — renders NO chip at all rather than an empty one:
+   *  a button asking to be clicked while admitting it cannot count is worse than no button. */
+  starCount?: number | null
   /** Step 3.3's grouped task quick-list. */
   taskQuickList?: ReactNode
   /** The sidebar's machine glance (spec `.ai/specs/2026-09-20-host-telemetry-sidebar-widget.md`):
@@ -174,6 +179,7 @@ export const AppShell = React.memo(function AppShell({
   skillsUpdateAvailable = false,
   version = null,
   latestVersion = null,
+  starCount = null,
   taskQuickList,
   hostWidget,
   toolsMenu,
@@ -257,6 +263,7 @@ export const AppShell = React.memo(function AppShell({
     skillsUpdateAvailable,
     version,
     latestVersion,
+    starCount,
     taskQuickList,
     hostWidget,
     toolsMenu,
@@ -372,6 +379,7 @@ type NavProps = {
   skillsUpdateAvailable: boolean
   version: string | null
   latestVersion: string | null
+  starCount: number | null
   taskQuickList?: ReactNode
   hostWidget?: ReactNode
   toolsMenu?: ReactNode
@@ -564,6 +572,7 @@ function SidebarContent({
   skillsUpdateAvailable,
   version,
   latestVersion,
+  starCount,
   taskQuickList,
   hostWidget,
   toolsMenu,
@@ -746,6 +755,7 @@ function SidebarContent({
             {toolsMenu}
           </div>
           {version ? <VersionChip version={version} latestVersion={latestVersion} /> : null}
+          {starCount === null ? null : <StarChip count={starCount} />}
           <GlobalSettingsLink onNavigate={onNavigate} className="ml-auto" />
           <ThemeToggle />
         </div>
@@ -985,6 +995,40 @@ function VersionChip({ version, latestVersion }: { version: string; latestVersio
       </button>
       {open ? <SelfUpdateDialog open={open} onOpenChange={setOpen} /> : null}
     </>
+  )
+}
+
+/**
+ * The footer's ⭐ ask: a link to cezar's repository with its current star count.
+ *
+ * It is a request and only a request. Nothing about cezar behaves differently for someone who
+ * never clicks it, there is no reward on the other side, and it cannot be "completed" — which is
+ * also why it has no dismiss control: a chip the size of the version chip, sitting quietly in the
+ * chrome, has nothing to dismiss.
+ *
+ * `shrink-0`, unlike `VersionChip`. That chip is the controls row's ONE elastic item on purpose
+ * (#876: a long nightly version string has to come out of somewhere), and a second elastic
+ * control would give the row two ways to lose — this one is at most six characters wide
+ * (`⭐ 12.3k`), so it can afford to be rigid and let the version string keep the give.
+ *
+ * `rel="noreferrer"` alongside `noopener`: a local cockpit's URL is nobody's business, and the
+ * whole point of the ask is that github.com learns nothing about the person making it.
+ */
+function StarChip({ count }: { count: number }) {
+  const formatted = formatStarCount(count)
+  return (
+    <a
+      data-slot="star-chip"
+      href={CEZAR_REPO_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
+      aria-label={`Star cezar on GitHub — ${count.toLocaleString()} stars`}
+      className="flex shrink-0 items-center gap-1 rounded-full border border-border px-1.5 py-px font-mono text-[10px] font-medium text-soft-foreground outline-none hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+    >
+      <span aria-hidden="true">⭐</span>
+      <span>{formatted}</span>
+    </a>
   )
 }
 

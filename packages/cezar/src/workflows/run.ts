@@ -50,7 +50,7 @@ import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
-import { autosaveCommit, createWorktree, resolveBaseRef, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
+import { autosaveCommit, chooseForkBase, createWorktree, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -1550,9 +1550,13 @@ export class RunManager {
     if (queuedContinuation && sessionStep?.sessionId) {
       const backend = run.runner ?? 'claude';
       const sessionBackend = sessionStep.backend ?? backend;
+      // Same rule as `continueRun`: a session created under another account than the run's
+      // chosen one cannot be resumed without silently switching the login back.
+      const sessionAccount = sessionStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
+      const accountMatches = run.agentProfile === undefined || run.agentProfile === sessionAccount;
       this.pendingContinuations.set(run.id, {
         stepId: queuedContinuation.id,
-        sessionId: sessionBackend === backend ? sessionStep.sessionId : undefined,
+        sessionId: sessionBackend === backend && accountMatches ? sessionStep.sessionId : undefined,
         backend,
         prompt: RESTART_CONTINUATION_PROMPT,
         images: [],
@@ -3333,7 +3337,13 @@ export class RunManager {
     // open a fresh conversation while the thread claimed it had resumed. A step that recorded no
     // account predates the feature and therefore ran under the discovered one.
     const sessionAccount = sessionStep.profileId ?? DEFAULT_AGENT_ACCOUNT_ID;
-    const accountSwitched = opts.agentProfile !== undefined && opts.agentProfile !== sessionAccount;
+    // The account this turn must run on: the composer's pick, else the one the run already
+    // chose. The run's own choice counts too — a record whose newest session predates an
+    // account switch (a fresh continuation that recorded no session id) must not be resumed
+    // under the account the user switched away from.
+    const targetAccount = opts.agentProfile
+      ?? (targetRunner === (run.runner ?? 'claude') ? run.agentProfile : undefined);
+    const accountSwitched = targetAccount !== undefined && targetAccount !== sessionAccount;
     const resume = sessionBackend === targetRunner && !accountSwitched;
 
     // Follow-up runner/model/account override (#401, spec 2026-07-29-agent-profiles): the composer
@@ -3467,6 +3477,13 @@ export class RunManager {
     const portableContext = record && sessionId === undefined
       ? freshContinuationContext(record, this.store.readEvents(runId))
       : undefined;
+    // A fresh session is pinned and recorded up front, exactly like a workflow step's
+    // (`runAgentStep`): Claude emits no `session` event of its own, so an unpinned fresh
+    // continuation left its step without a session id, and the NEXT Continue resumed the last
+    // step that had one — an older session under whatever account created it, silently undoing
+    // the account switch this continuation was opened for. Runners that mint their own id still
+    // overwrite it through the `session` event.
+    const spawnSessionId = sessionId ?? randomUUID();
     // The env is a live ceiling: a run created while the inbox was on must not keep writing
     // follow-ups after it is switched off.
     const generateFollowups = followupsEnabled() && record?.generateFollowups !== false;
@@ -3545,7 +3562,7 @@ export class RunManager {
       status: 'running',
       iterations: 1,
       startedAt: new Date().toISOString(),
-      sessionId,
+      sessionId: spawnSessionId,
       backend,
     });
     this.store.appendEvent(runId, { type: 'step-start', stepId, name: 'Continue', kind: 'agent', iteration: 1 });
@@ -3747,6 +3764,9 @@ export class RunManager {
         status: 'failed',
         error: message,
         finishedAt: failedAt,
+        // The fresh session pinned up front was never created: leaving its id on the step
+        // would make the next Continue `--resume` a conversation that does not exist.
+        ...(sessionId === undefined ? { sessionId: undefined } : {}),
       });
       this.store.updateRun(runId, {
         status: 'failed',
@@ -3868,7 +3888,7 @@ export class RunManager {
         ),
         env: continueProfile.env,
         model: continueModel,
-        sessionId,
+        sessionId: spawnSessionId,
         resume: sessionId !== undefined,
         timeoutMs: 0,
       },
@@ -4002,26 +4022,22 @@ export class RunManager {
       });
       // Fork from the configured base branch (config.json `baseBranch`, e.g.
       // `develop`) — also the target of the eventual draft PR. Unresolvable
-      // (typo, not fetched) → note + the currently checked-out branch.
+      // (typo, not fetched) → note + the currently checked-out branch. Either
+      // way the base goes through `resolveBaseRef` (`chooseForkBase`), which
+      // fetches origin first so a new task forks from the newest tip, never a
+      // stale local ref — while a checked-out branch that diverged from origin
+      // keeps the user's local work.
       //
       // A task that already recorded a fork point keeps it: its worktree is
       // reused as-is, and re-resolving against a since-changed config would
       // silently re-anchor the `merge-base` every diff/shortstat is measured
       // from, shifting "what did this task change" under an existing task.
       const recorded = this.store.getRun(runId)?.baseBranch;
-      let base = recorded ?? repo.branch;
-      const configured = recorded ? undefined : config.baseBranch;
-      if (configured) {
-        const resolved = await resolveBaseRef(this.repoRoot, configured);
-        if (resolved) {
-          base = resolved;
-        } else {
-          emit({
-            type: 'note',
-            message: `configured base branch "${configured}" not found (locally or on origin) — using "${repo.branch}"`,
-          });
-        }
-      }
+      const base =
+        recorded ??
+        (await chooseForkBase(this.repoRoot, repo.branch, config.baseBranch, (message) =>
+          emit({ type: 'note', message }),
+        ));
       try {
         const wt = await createWorktree(this.repoRoot, runId, base);
         state.cwd = wt.path;

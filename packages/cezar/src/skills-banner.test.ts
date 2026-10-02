@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SKILLS_BANNER_LINES, printSkillsBanner, shouldShowSkillsBanner } from './skills-banner.ts';
+import {
+  SKILLS_BANNER_LINES,
+  STAR_BANNER_LINE,
+  printSkillsBanner,
+  printStarBanner,
+  shouldShowSkillsBanner,
+} from './skills-banner.ts';
 
 /**
  * The banner's wiring and its two off switches (#391). `printSkillsBanner` is what `serve` calls,
@@ -94,5 +100,53 @@ describe('printSkillsBanner', () => {
   it('emits no ANSI escapes — startup output stays readable when piped to a file', () => {
     const ESC = String.fromCharCode(27);
     for (const line of SKILLS_BANNER_LINES) expect(line).not.toContain(ESC);
+  });
+});
+
+/**
+ * The star ask's terminal surface. Its whole contract is "one line, same off switches": a promo
+ * printed on every `serve` is exactly where an ask becomes a nag, so the size and the silence
+ * are both pinned.
+ */
+describe('printStarBanner', () => {
+  it('asks for a star and says where', async () => {
+    await printStarBanner(repoRoot, log);
+    const text = printed.join('\n');
+    expect(text).toContain('star');
+    expect(text).toContain('https://github.com/open-mercato/cezar');
+  });
+
+  it('is exactly one line — plus the blank that separates the block from what follows', async () => {
+    await printStarBanner(repoRoot, log);
+    expect(printed).toEqual([STAR_BANNER_LINE, undefined]);
+    expect(STAR_BANNER_LINE.length).toBeLessThanOrEqual(90);
+  });
+
+  it('offers nothing and withholds nothing — a request, not a transaction', () => {
+    // The brief's one hard constraint: no reward, no gate. If this line ever grows a "get" or an
+    // "unlock", the ask has quietly become a deal and the test should be the thing that says so.
+    expect(STAR_BANNER_LINE).not.toMatch(/\b(unlock|reward|free|upgrade|pro|premium|trial)\b/i);
+  });
+
+  it('is silent when CEZ_NO_BANNER=1 — one switch for the whole promo block', async () => {
+    process.env.CEZ_NO_BANNER = '1';
+    await printStarBanner(repoRoot, log);
+    expect(printed).toEqual([]);
+  });
+
+  it('is silent once the banner block has been dismissed', async () => {
+    writeUiState(JSON.stringify({ dismissedSkillsBanner: true }));
+    await printStarBanner(repoRoot, log);
+    expect(printed).toEqual([]);
+  });
+
+  it('prints when ui-state.json is missing or malformed — degrades to shown, never throws', async () => {
+    writeUiState('{not json');
+    await printStarBanner(repoRoot, log);
+    expect(printed.join('\n')).toContain('github.com/open-mercato/cezar');
+  });
+
+  it('emits no ANSI escapes', () => {
+    expect(STAR_BANNER_LINE).not.toContain(String.fromCharCode(27));
   });
 });

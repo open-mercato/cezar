@@ -1,6 +1,6 @@
 {
   "name": "@open-mercato/cezar-desktop",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Desktop shell for cezar (PoC): a Tauri window around the managed cezar install — a Dock/taskbar app, no terminal. Not an npm workspace on purpose: it pulls the Tauri CLI, which the service, contract and cockpit never need.",
   "type": "module",

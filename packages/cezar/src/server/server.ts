@@ -48,6 +48,7 @@ import {
   type PickVariantResponse,
   type RunIndexEntry,
   type RunsIndexResponse,
+  type StarCountPayload,
 } from '@open-mercato/cezar-contract';
 // A contract VALUE, like `workspaceUiStateSchema` in workspace/migrations.ts — the request
 // schema this route validates with is the same one the client compiles against.
@@ -93,8 +94,9 @@ import {
 import { planChain, slugify } from '../planner.ts';
 import { discoverSkills } from '../skills.ts';
 import { SkillsUpdateConflictError, SkillsUpdateCoordinator, SkillsUpdateService, type SkillsUpdateState } from '../skills-update.ts';
-import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema } from '@open-mercato/cezar-contract';
+import { selfUpdateApplyRequestSchema, selfUpdateChannelRequestSchema, selfUpdateDevelopmentQuerySchema } from '@open-mercato/cezar-contract';
 import { SelfUpdateBusyError, SelfUpdateService } from '../self-update/service.ts';
+import { StarCountReader } from './star-count.ts';
 import { getTeamSkillsCached, refreshTeamSkills, waitForTeamSkills } from '../skills-remote.ts';
 import { appendHandoffHeartbeat, handoffProgressExcerpt, readHandoff } from '../handoff.ts';
 import { markStarted, onTodosChanged, readTodos, removeTodo, todoTaskText, type TodoItem } from '../todos.ts';
@@ -306,6 +308,10 @@ export interface ServerDeps {
    *  the CLI, which knows the entry file, the port and how to restart; absent in tests and for
    *  bare `createApp` callers, where the family answers a read-only "not available" status. */
   selfUpdate?: SelfUpdateService;
+  /** cezar's own GitHub star count behind `GET /api/v1/star-count` (the cockpit's ⭐ ask).
+   *  Defaults to a reader that asks github.com at most once per six hours and caches the answer
+   *  under `~/.cache/cez/`; tests inject their own so no suite ever reaches the network. */
+  starCount?: { read(): Promise<StarCountPayload> };
   /** WebSocket subscription hub (`/api/v1/ws`, src/server/ws.ts). `createApp`
    *  only registers topics on it — `startServer` builds one and attaches it
    *  to the HTTP server it binds. Optional so legacy callers/tests change
@@ -820,6 +826,11 @@ const uiStateSchema = z
     // The GitHub tab's last-selected sub-tab (#417): issues or PRs. ADDITIVE — an old
     // ui-state.json without the key behaves as the default (issues).
     githubView: z.enum(['issues', 'prs']).optional(),
+    // The GitHub tab's list order: newest first (what `gh` returns) or oldest first, for working
+    // the backlog from the long-waiting end. ADDITIVE, like `githubView` above — an old
+    // ui-state.json without the key behaves as the default (newest), and the sort is applied
+    // client-side, so this key changes presentation only, never what `GET /github` fetches.
+    githubSort: z.enum(['newest', 'oldest']).optional(),
     // Settings → Appearance (redesign R6): accent + density. ADDITIVE — the theme itself
     // stays in the browser (`cez-theme` localStorage, pre-paint). The cockpit always PUTs
     // the whole object because the top-level merge below is shallow.
@@ -1212,6 +1223,7 @@ export function createApp(deps: ServerDeps) {
       readOnly: true,
       trimPaths: () => !capabilities().localHandoff,
     });
+  const starCount = deps.starCount ?? new StarCountReader();
 
   // ---- workspace boot-project identity (multi-project spec) ----------------
   // The boot flow (`initWorkspace` in src/index.ts) registers the boot repo
@@ -2973,12 +2985,25 @@ export function createApp(deps: ServerDeps) {
   // registry, so the request cannot inject code, and a VPS behind the installer's Basic auth
   // is exactly where "update from the cockpit" replaces `cezar server-deploy` — but hosted
   // applies are FORWARD-ONLY (see the guard on /apply below).
+  // ---- chained family: the star ask (workspace-level) ----------------------
+  // cezar's own star count, for the cockpit's ⭐ button. Workspace-level and single-mount, like
+  // `/health`: it says nothing about any project, and there is nothing for a project scope to
+  // change about it. Never fails — `{ available: false }` is the ordinary offline answer, so the
+  // cockpit's chip simply is not there rather than showing an error nobody asked for.
+  const starCountRoutes = new Hono().get('/star-count', async (c) => c.json(await starCount.read()));
+
   const selfUpdateRoutes = new Hono()
     .get('/workspace/self-update', async (c) => c.json(await selfUpdate.status()))
 
     .post('/workspace/self-update/refresh', async (c) => c.json(await selfUpdate.status({ refresh: true })))
 
-    .put('/workspace/self-update/channel', jsonZodValidator(selfUpdateChannelRequestSchema, { message: 'body must be { channel: "stable" | "nightly" }' }), async (c) => {
+    // The development channel's pickers: cezar's own worktrees and its open PRs' preview builds.
+    // A separate read because it costs a git call per worktree and a GitHub round trip.
+    .get('/workspace/self-update/development', queryZodValidator(selfUpdateDevelopmentQuerySchema), async (c) =>
+      c.json(await selfUpdate.development({ refresh: c.req.valid('query').refresh === '1' })),
+    )
+
+    .put('/workspace/self-update/channel', jsonZodValidator(selfUpdateChannelRequestSchema, { message: 'body must be { channel: "stable" | "nightly" | "development" }' }), async (c) => {
       const { channel } = c.req.valid('json');
       await selfUpdate.setChannel(channel);
       return c.json(await selfUpdate.status());
@@ -6347,6 +6372,7 @@ export function createApp(deps: ServerDeps) {
     .route('/', agentProfilesRoutes)
     .route('/', skillsUpdateRoutes)
     .route('/', selfUpdateRoutes)
+    .route('/', starCountRoutes)
     .route('/', workspaceConfigRoutes)
     .route('/', fsBrowseRoutes)
     .route('/', automationChecksRoutes)
