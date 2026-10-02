@@ -25,6 +25,7 @@ describe('the config API', () => {
   const savedCodexHome = process.env.CODEX_HOME;
   const savedXdgConfigHome = process.env.XDG_CONFIG_HOME;
   const savedModelsLocked = process.env.CEZ_AGENT_MODELS_LOCKED;
+  const savedTitleUpdates = process.env.CEZ_TITLE_UPDATES;
   let store: RunStore;
   let app: Hono;
 
@@ -36,6 +37,8 @@ describe('the config API', () => {
     process.env.CODEX_HOME = join(homeRoot, '.codex');
     process.env.XDG_CONFIG_HOME = join(homeRoot, '.config');
     delete process.env.CEZ_AGENT_MODELS_LOCKED;
+    // The effective title-update default folds this env in; pin it so the defaults below are.
+    delete process.env.CEZ_TITLE_UPDATES;
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
     mkdirSync(join(homeRoot, '.cezar'), { recursive: true });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
@@ -57,6 +60,8 @@ describe('the config API', () => {
     else process.env.XDG_CONFIG_HOME = savedXdgConfigHome;
     if (savedModelsLocked === undefined) delete process.env.CEZ_AGENT_MODELS_LOCKED;
     else process.env.CEZ_AGENT_MODELS_LOCKED = savedModelsLocked;
+    if (savedTitleUpdates === undefined) delete process.env.CEZ_TITLE_UPDATES;
+    else process.env.CEZ_TITLE_UPDATES = savedTitleUpdates;
   });
 
   const configPath = () => join(repoRoot, '.ai/cezar', 'config.json');
@@ -84,6 +89,7 @@ describe('the config API', () => {
       memoryLimitMb: null,
       worktreeRetention: 10,
       liveTitleUpdates: null,
+      effectiveLiveTitleUpdates: false,
       reviewGate: null,
     });
   });
@@ -201,6 +207,7 @@ describe('the config API', () => {
       memoryLimitMb: null,
       worktreeRetention: 10,
       liveTitleUpdates: null,
+      effectiveLiveTitleUpdates: false,
       reviewGate: null,
     });
   });
@@ -270,11 +277,26 @@ describe('liveTitleUpdates round-trip (task auto-naming spec)', () => {
   it('sets, answers and clears the key (null → env default decides)', async () => {
     const off = (await (await put({ liveTitleUpdates: false })).json()) as Record<string, unknown>;
     expect(off.liveTitleUpdates).toBe(false);
+    expect(off.effectiveLiveTitleUpdates).toBe(false);
     expect(rawFile().liveTitleUpdates).toBe(false);
 
     const cleared = (await (await put({ liveTitleUpdates: null })).json()) as Record<string, unknown>;
     expect(cleared.liveTitleUpdates).toBeNull();
+    expect(cleared.effectiveLiveTitleUpdates).toBe(false);
     expect(rawFile().liveTitleUpdates).toBeUndefined();
+  });
+
+  it('reports the CEZ_TITLE_UPDATES opt-in through the effective field while the raw key stays null', async () => {
+    const saved = process.env.CEZ_TITLE_UPDATES;
+    process.env.CEZ_TITLE_UPDATES = '1';
+    try {
+      const body = (await (await apiRequest(app, '/api/v1/config')).json()) as Record<string, unknown>;
+      expect(body.liveTitleUpdates).toBeNull();
+      expect(body.effectiveLiveTitleUpdates).toBe(true);
+    } finally {
+      if (saved === undefined) delete process.env.CEZ_TITLE_UPDATES;
+      else process.env.CEZ_TITLE_UPDATES = saved;
+    }
   });
 });
 

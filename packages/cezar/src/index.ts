@@ -248,7 +248,9 @@ async function serveCommand(
   });
   const version = readOwnVersion();
 
-  const checks = await detectEnvironment();
+  // Probed alongside boot and awaited only for the banner, after the listener is up; health adopts
+  // the same promise rather than probing the host a second time.
+  const hostChecks = detectEnvironment();
   const repo = await getRepoInfo(repoRoot);
 
   // Startup reconcile (spec 006): sweep worktrees whose run no longer exists.
@@ -331,8 +333,10 @@ async function serveCommand(
     providerRuntimeAuth,
     workspaceEvents,
     selfUpdate,
+    hostChecks,
   }, port);
   const url = `http://localhost:${port}`;
+  const checks = await hostChecks;
 
   console.log(`\n  cezar v${version} — ${repoRoot}`);
   console.log(`  ${repo ? `branch ${repo.branch}` : 'not a git repository (tasks run in place, one at a time; repo view is empty)'}`);

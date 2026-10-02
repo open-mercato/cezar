@@ -59,8 +59,9 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
-import { detectEnvironment } from '../core/backend-detect.ts';
+import { detectEnvironment, type BackendCheck } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
+import { createHostProbeCache, passthroughProbe } from './host-probe-cache.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { ContentBlock } from '../core/agent-runner.ts';
 import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-model-policy.ts';
@@ -133,7 +134,7 @@ import {
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
-import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
+import { getBranches, getCommit, getDiff, getLog, getRepoBranch, getRepoInfo, getStatus } from './git.ts';
 import {
   collectChanges,
   collectCommitChanges,
@@ -199,6 +200,7 @@ import { mergeWriteWorkspaceUiState, readWorkspaceUiState } from '../workspace/u
 import { checkoutRepo, type CloneRunner } from './checkout.ts';
 import { ProjectContextError, ProjectContexts, type ProjectContext } from './project-context.ts';
 import { reviewGateEnabled } from '../runs/review-gate.ts';
+import { liveTitleUpdatesEnabled } from '../runs/auto-name.ts';
 import { readUiState, uiStatePath } from '../ui-state.ts';
 import { agentHomePaths, expandTilde } from '../paths.ts';
 import { isLoopbackHostHeader, normalizeHostname, resolveCapabilities } from './capabilities.ts';
@@ -323,6 +325,9 @@ export interface ServerDeps {
   hostSampler?: HostSampler;
   /** Re-arm the workspace automation timer after definition mutations. */
   automationsChanged?: () => void;
+  /** The boot banner's `detectEnvironment()`, still running or done — seeds the health cache's
+   *  host checks so boot probes the host once, not twice. */
+  hostChecks?: Promise<BackendCheck[]>;
 }
 
 // ---- project-scoped routing (multi-project spec, step 2.2) -----------------
@@ -1601,7 +1606,42 @@ export function createApp(deps: ServerDeps) {
     await next();
   };
   app.use(`${V1_PREFIX}/health`, healthCors);
-  // One builder for both transports: `GET /api/health` (the authoritative,
+  // The host checks (agent CLI `--version`, `gh auth token`, `git --version`) and the repo's root
+  // and remote cost about nine spawns and change only when a human installs, logs in or
+  // re-remotes, so on the live server they sit behind a minutes-long cache; only the branch
+  // (#369) is read on every health tick. Without a hub there is no tick, so the hub-less app
+  // keeps probing per request.
+  const HOST_PROBE_TTL_MS = 5 * 60_000;
+  // The same TTL/ceiling pair as the health snapshot one screen below, one level down: a
+  // background `cezar serve` has no ticker, so without a ceiling the FIRST health read after
+  // hours of idling would answer from the boot probe and only the NEXT read would see the truth.
+  // Past the ceiling the read waits for the probe instead.
+  const HOST_PROBE_MAX_STALE_MS = 15 * 60_000;
+  const hostChecks = deps.socketHub
+    ? createHostProbeCache(detectEnvironment, HOST_PROBE_TTL_MS, { maxStaleMs: HOST_PROBE_MAX_STALE_MS })
+    : passthroughProbe(detectEnvironment);
+  if (deps.hostChecks) hostChecks.seed(deps.hostChecks);
+  const repoIdentity = deps.socketHub
+    ? createHostProbeCache(() => getRepoInfo(bootRoot), HOST_PROBE_TTL_MS, {
+        maxStaleMs: HOST_PROBE_MAX_STALE_MS,
+      })
+    : passthroughProbe(() => getRepoInfo(bootRoot));
+  const currentRepoInfo = async (): ReturnType<typeof getRepoInfo> => {
+    const identity = await repoIdentity.get();
+    // Not a repo (yet): ask again next tick, so a `git init` shows up within seconds.
+    if (!identity) {
+      repoIdentity.invalidate();
+      return null;
+    }
+    if (!deps.socketHub) return identity;
+    const branch = await getRepoBranch(identity.root);
+    if (branch === null) {
+      repoIdentity.invalidate();
+      return null;
+    }
+    return { ...identity, branch };
+  };
+  // One builder for both transports: `GET /api/v1/health` (the authoritative,
   // CORS-open discovery endpoint) and the `health` topic on `/api/v1/ws` below
   // push the byte-identical shape, so the two can never drift.
   // Deliberately UNANNOTATED: this literal is the source of the `/health` shape. Annotating it
@@ -1611,8 +1651,8 @@ export function createApp(deps: ServerDeps) {
   // sends, which is what lets the DTO be derived instead of maintained.
   const healthSnapshot = async () => {
     const [checks, repo, config, workspace] = await Promise.all([
-      detectEnvironment(),
-      getRepoInfo(bootRoot),
+      hostChecks.get(),
+      currentRepoInfo(),
       loadConfig(bootRoot),
       workspaceSummary(),
     ]);
@@ -1656,9 +1696,9 @@ export function createApp(deps: ServerDeps) {
     };
   };
   // ---- server-side health cache (stale-while-revalidate) -------------------
-  // The snapshot is expensive: ~0.8 s of agent-CLI `--version` probes plus
-  // ~0.4 s of git. Paying that on the browser's FIRST `GET /api/health` is
-  // exactly the few-seconds-blank the cockpit showed at load. So on the live
+  // A cold snapshot waits for the host probes above. Paying that on the
+  // browser's FIRST `GET /api/v1/health` is exactly the few-seconds-blank the
+  // cockpit showed at load. So on the live
   // server the snapshot is computed at the server's OWN pace: both the GET and
   // the WS `health` topic serve the cached value immediately and revalidate
   // behind the response, and the cache is pre-warmed at boot so that first
@@ -1670,7 +1710,7 @@ export function createApp(deps: ServerDeps) {
   // `health` topic the publisher's interval keeps the cache warm and the two are
   // the same number — but the normal state of a background `cezar serve` is NO
   // subscriber, and then nothing refreshes the cache at all: the next `GET
-  // /api/health`, an hour later, would answer with the boot pre-warm's payload
+  // /api/v1/health`, an hour later, would answer with the boot pre-warm's payload
   // and only the request AFTER it would see the truth. That endpoint is the
   // bookmarklet contract (BACKWARD_COMPATIBILITY.md §2, "the most
   // externally-depended-on JSON in the app") and `repo.branch` going stale is
@@ -1722,7 +1762,7 @@ export function createApp(deps: ServerDeps) {
   // statement because Hono accumulates its route types through the chain: a
   // statement's return value is discarded, so `typeof app` would record nothing
   // and `hc<AppType>` would have no endpoint to offer. `createApp` mounts this
-  // under both `/api` (the frozen legacy spelling) and `/api/v1`.
+  // under `/api/v1` (the unversioned `/api` surface was removed).
   const healthRoutes = new Hono().get('/health', async (c) => c.json(await readHealth()));
 
   // The push twin of the poll it replaced (#369): while at least one cockpit
@@ -1756,7 +1796,7 @@ export function createApp(deps: ServerDeps) {
   // Pre-warm on the live-server path only (startServer injects the hub; a bare
   // app in tests does not, so tests never spawn the probes here): the cache
   // fills while the browser is still downloading the bundle, so its first
-  // `GET /api/health` reads a warm value instead of the cold ~1 s compute.
+  // `GET /api/v1/health` reads a warm value instead of the cold ~1 s compute.
   if (deps.socketHub) void refreshHealth();
   // The Machine card's live channel (spec `.ai/specs/2026-09-20-host-resource-telemetry.md`):
   // demand-driven like every topic — the sampler's timer starts on 0→1 and stops on 1→0, so an
@@ -1881,6 +1921,12 @@ export function createApp(deps: ServerDeps) {
       queryZodValidator(z.object({ refresh: queryValue.refine((v) => v === undefined || v === '1') }), { message: 'refresh must be 1 when provided' }),
       async (c) => {
         const query = { data: c.req.valid('query') };
+        // "Check again" after installing a CLI, `gh auth login` or `git remote add` must reach
+        // health's checks and repo identity too.
+        if (query.data.refresh === '1') {
+          hostChecks.invalidate();
+          repoIdentity.invalidate();
+        }
         return c.json(await providerStatus({ refresh: query.data.refresh === '1' }));
       },
     )
@@ -5950,8 +5996,10 @@ export function createApp(deps: ServerDeps) {
       // on disk. 0 = unlimited. Always materialized (schema default 10).
       worktreeRetention: config.worktreeRetention,
       // Live title updates (task auto-naming spec): tri-state — null means "no
-      // config key, the CEZ_TITLE_UPDATES env default (ON) decides".
+      // config key, the CEZ_TITLE_UPDATES env default (OFF) decides".
       liveTitleUpdates: config.liveTitleUpdates ?? null,
+      // What the switch must render: the feature's real state once the env default is folded in.
+      effectiveLiveTitleUpdates: liveTitleUpdatesEnabled(config),
       // Optional review gate (#489): tri-state — null means "no config key, the
       // CEZ_REVIEW_GATE env default (OFF) decides".
       reviewGate: config.reviewGate ?? null,

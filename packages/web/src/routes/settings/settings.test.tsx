@@ -75,6 +75,7 @@ const AGENTS_CONFIG = {
   memoryLimitMb: null,
   worktreeRetention: 10,
   liveTitleUpdates: null,
+  effectiveLiveTitleUpdates: false,
   reviewGate: null,
 }
 

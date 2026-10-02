@@ -33,19 +33,18 @@ export function autoNamingActive(env: NodeJS.ProcessEnv = process.env): boolean 
 }
 
 /**
- * Live title updates switch (owner decision on PR #479 — deliberately ON by
- * default, deviating from the cost-opt-in house rule; cost is bounded by the
- * cheap `namerModel`, one call per turn end, and the skip conditions in
- * `RunManager.recordTurnEnd`). Precedence: `config.liveTitleUpdates` (the
- * Settings toggle) wins over the `CEZ_TITLE_UPDATES` env default (`'0'` = off)
- * wins over the built-in ON.
+ * Live title updates switch: off by default, because every refresh is one more
+ * agent process and model call per turn end that the run's own cost never shows.
+ * Creation-time naming stays on (see `autoNamingActive`). Precedence:
+ * `config.liveTitleUpdates` (the Settings toggle) wins over the
+ * `CEZ_TITLE_UPDATES` env default (`'1'` = on) wins over the built-in OFF.
  */
 export function liveTitleUpdatesEnabled(
   config: { liveTitleUpdates?: boolean },
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   if (config.liveTitleUpdates !== undefined) return config.liveTitleUpdates;
-  return env.CEZ_TITLE_UPDATES !== '0';
+  return env.CEZ_TITLE_UPDATES === '1';
 }
 
 export const NAMER_SYSTEM_PROMPT =

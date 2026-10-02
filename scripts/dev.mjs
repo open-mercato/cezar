@@ -54,7 +54,7 @@ const deadline = Date.now() + 15_000;
 while (Date.now() < deadline) {
   if (server.exitCode !== null) break; // server died — the exit handler below reports it
   try {
-    const res = await fetch(`http://127.0.0.1:${apiPort}/api/health`);
+    const res = await fetch(`http://127.0.0.1:${apiPort}/api/v1/health`);
     if (res.ok) break;
   } catch {
     // not listening yet
