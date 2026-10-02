@@ -39,6 +39,8 @@ export interface AgentHomePaths {
   copilot: string;
   /** `~/.junie` — no relocation var documented (see `PROFILE_ENV_VAR.junie`) */
   junie: string;
+  /** `$XDG_CONFIG_HOME/kilo` or `~/.config/kilo` */
+  kiloConfig: string;
 }
 
 export interface ConfigFileDef {
@@ -85,6 +87,7 @@ const COPILOT_CONFIG_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-
 const COPILOT_MCP_DOCS = 'https://docs.github.com/en/copilot/how-tos/copilot-cli#mcp-servers';
 const COPILOT_INSTRUCTIONS_DOCS =
   'https://docs.github.com/en/copilot/customizing-copilot/adding-repository-custom-instructions-for-github-copilot';
+const KILO_CLI_CONFIG_DOCS = 'https://kilo.ai/docs/code-with-ai/platforms/cli';
 
 /**
  * The table. Order is presentation order: per runner, then user → project →
@@ -377,6 +380,40 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: COPILOT_INSTRUCTIONS_DOCS,
   },
 
+  // ---- Kilo Code ----
+  {
+    id: 'kilo.user.config',
+    runners: ['kilo'],
+    kind: 'settings',
+    scope: 'user',
+    resolve: (_repo, home) => join(home.kiloConfig, 'kilo.jsonc'),
+    label: '~/.config/kilo/kilo.jsonc',
+    format: 'jsonc',
+    tracked: 'outside-repo',
+    holdsMcp: true,
+    modelKey: 'model',
+    modelPriority: 1,
+    precedence:
+      'Global config. Project-level configuration takes precedence over global settings. MCP servers are configured in this file.',
+    docsUrl: KILO_CLI_CONFIG_DOCS,
+  },
+  {
+    id: 'kilo.project.config',
+    runners: ['kilo'],
+    kind: 'settings',
+    scope: 'project',
+    resolve: (repo) => join(repo, 'kilo.jsonc'),
+    label: 'kilo.jsonc',
+    format: 'jsonc',
+    tracked: 'tracked',
+    holdsMcp: true,
+    modelKey: 'model',
+    modelPriority: 2,
+    precedence:
+      'Project-level configuration takes precedence over global settings. MCP servers are configured in this file. Runs read the committed copy.',
+    docsUrl: KILO_CLI_CONFIG_DOCS,
+  },
+
   // ---- Cursor Agent CLI ----
   {
     id: 'cursor.user.settings',
@@ -434,10 +471,10 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     docsUrl: CURSOR_CLI_CONFIG_DOCS,
   },
 
-  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode AND Copilot ----
+  // ---- Shared: <repo>/AGENTS.md is read by Codex, OpenCode, Copilot CLI AND Kilo ----
   {
     id: 'project.agents',
-    runners: ['codex', 'opencode', 'copilot'],
+    runners: ['codex', 'opencode', 'copilot', 'kilo'],
     kind: 'memory',
     scope: 'project',
     resolve: (repo) => join(repo, 'AGENTS.md'),
@@ -445,7 +482,7 @@ export const CONFIG_FILES: ConfigFileDef[] = [
     format: 'markdown',
     tracked: 'tracked',
     precedence:
-      'Read by Codex, OpenCode and Copilot CLI (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set. Runs read the committed copy.',
+      'Read by Codex, OpenCode, Copilot CLI and Kilo (Claude ignores it). Codex concatenates it root-down; OpenCode uses the first match and prefers it over CLAUDE.md; Copilot reads it alongside .github/copilot-instructions.md unless --no-custom-instructions is set; Kilo reads it as project instructions (its /init command creates it). Runs read the committed copy.',
     docsUrl: OPENCODE_RULES_DOCS,
   },
 ];

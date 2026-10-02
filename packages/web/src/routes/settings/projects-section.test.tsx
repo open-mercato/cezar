@@ -673,13 +673,39 @@ describe('Global settings → Projects', () => {
     })
   })
 
-  it('disables Remove for the project cezar is serving', async () => {
+  it('offers Remove for the project cezar is serving, and explains what removing it does', async () => {
     serve()
     renderProjects()
     await waitFor(() => expect(rows()).toHaveLength(3))
-    // The server refuses it too (it is serving that repo); disabling explains it first.
-    expect(removeButton('cezar')?.disabled).toBe(true)
-    expect(removeButton('cezar')?.title).toContain('is serving this project')
+    // The boot project is removable: it leaves the project list, it does not stop the server.
+    // The button stays enabled and the tooltip explains that instead of refusing.
+    expect(removeButton('cezar')?.disabled).toBe(false)
+    expect(removeButton('cezar')?.title).toContain('not from the running server')
+
+    // …and the confirm step says the same thing, because "unregisters it" alone does not tell
+    // the user that the folder cezar is running from is the one being unregistered.
+    fireEvent.click(removeButton('cezar')!)
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog.textContent).toContain('cezar is serving this folder right now')
+    // Ordinary rows do not carry the sentence — it is only true of the one being served.
+    expect(dialog.querySelector('[data-slot="projects-remove-boot"]')).not.toBeNull()
+
+    fireEvent.click(confirmButton()!)
+    await waitFor(() =>
+      expect(requests.filter((r) => r.method === 'DELETE')).toEqual([
+        { method: 'DELETE', url: '/api/v1/projects/cezar' },
+      ]),
+    )
+  })
+
+  it('says nothing about serving on a project cezar is NOT running from', async () => {
+    serve()
+    renderProjects()
+    await waitFor(() => expect(rows()).toHaveLength(3))
+    expect(removeButton('shop-backend')?.title).toBe('')
+
+    fireEvent.click(removeButton('shop-backend')!)
+    expect((await screen.findByRole('alertdialog')).querySelector('[data-slot="projects-remove-boot"]')).toBeNull()
   })
 
   /**

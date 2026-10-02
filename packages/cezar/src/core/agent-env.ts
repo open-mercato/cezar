@@ -240,6 +240,10 @@ const BACKEND_ALLOW_PREFIXES: Record<AgentBackend, readonly string[]> = {
   // it authenticates with (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_HOST`) are already forwarded to every
   // backend below, and `COPILOT_GITHUB_TOKEN` is covered by this prefix — so nothing else widens.
   copilot: ['COPILOT_'],
+  // kilo selects models as `provider/model` exactly like opencode/pi (it is an OpenCode fork),
+  // so it needs its own config plus any provider a model id can name. `KILO_` carries kilo's
+  // own overrides (`KILO_PROVIDER`, `KILO_API_KEY`, server auth).
+  kilo: ['KILO_', ...MULTI_PROVIDER_PREFIXES],
 };
 
 /** `gh` handoff (draft PRs) works in every backend — the one credential the

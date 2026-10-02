@@ -59,6 +59,10 @@ const CONNECTED_OUTPUT: Record<ProviderId, string> = {
   // Copilot's probe drives its ACP server, so its "connected" evidence is the `session/new`
   // answer (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: '{"jsonrpc":"2.0","id":1,"result":{"sessionId":"3f1b6f2e-0000-4000-8000-1f2e3d4c5b6a"}}',
+  kilo: [
+    '┌  Credentials ~/.local/share/kilo/auth.json',
+    '└  1 credential',
+  ].join('\n'),
 };
 
 const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
@@ -73,12 +77,16 @@ const DISCONNECTED_OUTPUT: Record<ProviderId, string> = {
     isAuthenticated: false,
   }),
   pi: 'No models available. Use /login to authenticate.',
-  junie: 'Junie version: 26.9.22 (3419.7)',
-  copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
-};
+    junie: 'Junie version: 26.9.22 (3419.7)',
+    copilot: '{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"Authentication required"}}',
+    kilo: [
+      '┌  Credentials ~/.local/share/kilo/auth.json',
+      '└  0 credentials',
+    ].join('\n'),
+  };
 
 const providerForExecutable = (executable: string): ProviderId => {
-  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot') return executable;
+  if (executable === 'claude' || executable === 'codex' || executable === 'opencode' || executable === 'pi' || executable === 'junie' || executable === 'copilot' || executable === 'kilo') return executable;
   if (executable === 'agent') return 'cursor';
   throw new Error(`unexpected executable: ${executable}`);
 };
@@ -142,7 +150,7 @@ describe('workspace provider API', () => {
       return {
         stdout: state === 'connected' ? CONNECTED_OUTPUT[provider] : DISCONNECTED_OUTPUT[provider],
         stderr: '',
-        exitCode: state === 'connected' || provider === 'opencode' ? 0 : 1,
+        exitCode: state === 'connected' || provider === 'opencode' || provider === 'kilo' ? 0 : 1,
       };
     }),
   });
@@ -209,6 +217,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'kilo', status: 'connected', enabled: true },
       ],
     });
   });
@@ -216,7 +225,7 @@ describe('workspace provider API', () => {
   it('GET /api/v1/providers/status skips probes and provider preferences under the explicit model lock', async () => {
     process.env.CEZ_AGENT_MODELS_LOCKED = '1';
     const runCommand = vi.fn<RunProviderCommand>();
-    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot']);
+    const workspaceConfig = memoryWorkspaceConfig(['claude', 'codex', 'opencode', 'cursor', 'pi', 'copilot', 'kilo']);
     const response = await apiRequest(app({
       providerAuth: service({}, runCommand),
       workspaceConfig,
@@ -232,6 +241,7 @@ describe('workspace provider API', () => {
         { provider: 'pi', status: 'connected', enabled: true },
         { provider: 'junie', status: 'connected', enabled: true },
         { provider: 'copilot', status: 'connected', enabled: true },
+        { provider: 'kilo', status: 'connected', enabled: true },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -737,7 +747,7 @@ describe('workspace provider API', () => {
     });
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, or copilot' });
+      expect(await response.json()).toEqual({ error: 'provider must be claude, codex, opencode, cursor, pi, copilot, or kilo' });
   });
 
   it('never places request-controlled text in the opened command', async () => {

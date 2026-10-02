@@ -56,6 +56,7 @@ export const RUNNERS: readonly RunnerOption[] = [
   { id: 'cursor', label: 'cursor', desc: 'Cursor Agent CLI' },
   { id: 'pi', label: 'pi', desc: 'pi CLI (provider/model)' },
   { id: 'copilot', label: 'copilot', desc: 'GitHub Copilot CLI (ACP)' },
+  { id: 'kilo', label: 'kilo', desc: 'Kilo Code CLI (provider/model)' },
 ]
 
 export interface ModelPreset {
@@ -67,7 +68,7 @@ export interface ModelPreset {
 /**
  * Static model presets per runner. `id: ''` is always "auto" — no model flag, the runner decides.
  *
- * For a runner that discovers (`MODEL_DISCOVERY_RUNNERS` — claude, codex, opencode, cursor) this list is
+ * For a runner that discovers (`MODEL_DISCOVERY_RUNNERS` — claude, codex, opencode, cursor, kilo) this list is
  * only the FALLBACK, used when the host catalog has nothing to offer; a live catalog replaces it.
  * Nothing dated may be listed for those — pinned ids (`claude-opus-4-8`, `gpt-5.1-codex`) are
  * exactly the drift discovery exists to end (#794 for OpenCode, #784 for Claude). Claude
@@ -108,7 +109,12 @@ export const MODELS_BY_RUNNER: Record<Runner, readonly ModelPreset[]> = {
   copilot: [
     { id: '', label: 'auto', desc: 'Let Copilot pick the model' },
   ],
-}
+  // kilo selects a model with the same `provider/model` convention; the host
+  // catalog (MODEL_DISCOVERY_RUNNERS) replaces this fallback when live.
+  kilo: [
+    { id: '', label: 'auto', desc: 'Use your Kilo default model' },
+  ],
+};
 
 /**
  * Bare id shapes that name a backend's OWN vendor. Structural rather than dated, which is the
@@ -139,7 +145,7 @@ const NATIVE_MODEL_ID_PREFIX: Partial<Record<Runner, RegExp>> = {
  *  native id space (`claude-…`, `gpt-…`), which a `provider/model` runner cannot claim either
  *  way, so a bare vendor id stays a cross-runner mismatch on pi and OpenCode as much as it is
  *  on the other backends. */
-const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi']
+const PROVIDER_SPANNING_RUNNERS: readonly Runner[] = ['opencode', 'pi', 'kilo']
 
 /** Keep recognized presets from another backend out of a runner's custom-model escape hatch
  * (#480).
@@ -201,6 +207,7 @@ const DISCOVERY_RUNNER_LABEL: Record<ModelDiscoveryRunner, string> = {
   opencode: 'OpenCode',
   junie: 'Junie',
   cursor: 'Cursor',
+  kilo: 'Kilo',
 }
 
 export function modelCatalogStatus(

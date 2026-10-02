@@ -13,21 +13,34 @@ import {
   ListChecksIcon,
   LinkIcon,
   MemoryStickIcon,
+  PauseIcon,
   PencilIcon,
+  PlayIcon,
   PlusIcon,
   ScaleIcon,
   SearchIcon,
   SearchXIcon,
+  Trash2Icon,
   WorkflowIcon,
 } from 'lucide-react'
 import * as React from 'react'
 import { Link, useNavigate } from '@/lib/project-router'
 
-import { archiveFinished, markAllRunsSeen, patchRun } from '@/api/client'
+import { archiveFinished, deleteAllRuns, markAllRunsSeen, patchRun, setRunQueuePaused, startQueuedRuns } from '@/api/client'
 import { useRunUsage } from '@/api/global-events'
-import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRuns, writePatchedRunToCaches } from '@/api/queries'
+import { queryKeys, useHealth, usePinRun, useReferenceProjectId, useRunQueue, useRuns, writePatchedRunToCaches } from '@/api/queries'
 import type { RunRecord } from '@open-mercato/cezar-api-client'
 import { CenteredState } from '@/components/centered-state'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { DiffStatLabel } from '@/components/diff-stat'
 import { DirectionalUsage } from '@/components/directional-usage'
 import { TitleEditInput, useTitleEditor } from '@/components/editable-title'
@@ -92,6 +105,12 @@ export function TasksOverview({
   onMarkAllRead,
   onRename,
   onTogglePin,
+  queuePaused,
+  queuedCount = 0,
+  queueBusy = false,
+  onStartQueued = () => undefined,
+  onQueuePauseChange = () => undefined,
+  onDeleteAll = () => undefined,
   now = Date.now(),
   showTokens = true,
   showCost = true,
@@ -114,6 +133,19 @@ export function TasksOverview({
    *  for every surface at once — so the row's own control is also the only thing on this page
    *  that explains why one is up there. */
   onTogglePin?: (run: RunRecord, pinned: boolean) => void
+  /** The engine's queue hold, or `undefined` until `GET /runs/queue` answers. The three queue
+   *  controls stay disabled rather than painting a state nobody has confirmed. */
+  queuePaused?: boolean
+  /** Runs waiting behind the hold, per the same read. Gates Start and Pause. */
+  queuedCount?: number
+  /** Any queue mutation in flight — disables all three controls so a second press cannot race. */
+  queueBusy?: boolean
+  /** "Start tasks": drain the queue under the ordinary caps. */
+  onStartQueued?: () => void
+  /** Pause or resume the queue. */
+  onQueuePauseChange?: (paused: boolean) => void
+  /** "Delete tasks": empty the project, behind the confirmation dialog this component owns. */
+  onDeleteAll?: () => void
   /** Injected so the ages are not racing the clock in tests. */
   now?: number
   /** Presentation capability; defaults visible for older health responses and direct renders. */
@@ -178,6 +210,16 @@ export function TasksOverview({
           </OverviewTab>
         </div>
         <div className="flex-1" />
+        {/* Start / Pause / Delete, immediately right of the tabs — the queue controls. */}
+        <QueueControls
+          paused={queuePaused}
+          queued={queuedCount}
+          totalTasks={all.length}
+          busy={queueBusy}
+          onStart={onStartQueued}
+          onPauseChange={onQueuePauseChange}
+          onDelete={onDeleteAll}
+        />
         {/* Count-gated, like the broom beside it: offered only while there is unread history to
             clear (#unread-done-items). Archived runs are never unread, so this only ever lights
             on the Active tab in practice — no need to also gate on `view`. */}
@@ -1117,6 +1159,139 @@ function BranchChip({ branch }: { branch: string }) {
 }
 
 /**
+ * The queue controls that sit immediately right of the Active/Archived tabs: **Start tasks**,
+ * **Pause tasks** and **Delete tasks**.
+ *
+ * Presentational, like the rest of this file: it takes the engine's answer and three callbacks and
+ * renders. Everything about WHAT they do lives in the route (`TasksOverviewRoute`) and the engine —
+ * in particular the pause is a real hold on `pump()`, not a local toggle, and `paused` arrives from
+ * the server so a second cockpit cannot paint a queue the engine is not holding.
+ *
+ * Two deliberate asymmetries, both about not lying:
+ *
+ *  - **Pause is a toggle, Start is not.** They read as a pair but are not inverses: Pause holds the
+ *    queue, Start *drains* it under `maxParallel` and reports how many actually left. So while the
+ *    queue is held the button says **Resume**, and once it is running again it says **Start
+ *    tasks** again — one button whose label is the honest next action, rather than two that can
+ *    disagree with each other.
+ *  - **Start and Pause are gated on `queued > 0`, Delete on the project's task count** — the
+ *    count-gating the broom beside them already uses. A "Pause" that pauses nothing teaches the
+ *    operator the button does not work. The one exception is **Resume**, which stays offered at
+ *    zero: a pause that has already drained the queue is exactly the state where leaving the hold
+ *    on would silently wedge every task created after it.
+ *
+ * Delete is the only destructive one, and it never fires from a single click: it routes through the
+ * design-system AlertDialog like every other irreversible action in the cockpit (native `confirm()`
+ * is banned), and the dialog names the count so "delete all" is never a guess.
+ */
+function QueueControls({
+  paused,
+  queued,
+  totalTasks,
+  busy,
+  onStart,
+  onPauseChange,
+  onDelete,
+}: {
+  /** The engine's hold. `undefined` while the first read is in flight — the buttons stay disabled
+   *  rather than rendering a state nobody has confirmed. */
+  paused: boolean | undefined
+  /** Runs waiting behind the hold, per `GET /runs/queue`. Gates Start and Pause. */
+  queued: number
+  /** Every task in the project, for the delete confirmation. */
+  totalTasks: number
+  /** Any of the three mutations in flight — disables all three, so a second press cannot race the
+   *  first. Delete in particular is not idempotent from the operator's side of the dialog. */
+  busy: boolean
+  onStart: () => void
+  onPauseChange: (paused: boolean) => void
+  onDelete: () => void
+}) {
+  const [confirming, setConfirming] = React.useState(false)
+  const known = paused !== undefined
+  const held = paused === true
+  const idle = !busy && known
+
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        data-slot="start-tasks"
+        // Gated on there being WORK WAITING, not on the hold: the sweep is idempotent and starts
+        // whatever `maxParallel` allows, so it is a real action whether or not the queue is held —
+        // and holding it back while tasks visibly sit queued would be a dead control in front of
+        // the operator, which is worse than a press that releases one more task. Pressing it while
+        // the queue is already draining is harmless and can still pick up a slot that just freed.
+        disabled={!idle || queued === 0}
+        onClick={onStart}
+        title={
+          held
+            ? 'Resume this queue and start its tasks in order'
+            : 'Start the queued tasks in order, as slots free up'
+        }
+      >
+        <PlayIcon className="size-3.5" aria-hidden="true" />
+        Start tasks
+      </Button>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        data-slot="pause-tasks"
+        data-paused={held ? 'true' : 'false'}
+        // Resume is offered even at `queued === 0`: a pause that has already drained the queue is
+        // exactly the state where leaving the hold on would silently wedge every FUTURE task.
+        disabled={!idle || (!held && queued === 0)}
+        onClick={() => onPauseChange(!held)}
+        title={held ? 'Let the queue start tasks again' : 'Hold the queue — running tasks finish, no new one starts'}
+      >
+        {held ? <PlayIcon className="size-3.5" aria-hidden="true" /> : <PauseIcon className="size-3.5" aria-hidden="true" />}
+        {held ? 'Resume tasks' : 'Pause tasks'}
+      </Button>
+      <Button
+        type="button"
+        variant="danger-ghost"
+        size="sm"
+        data-slot="delete-tasks"
+        disabled={!idle || totalTasks === 0}
+        onClick={() => setConfirming(true)}
+        title="Delete every task in this project, including archived ones"
+      >
+        <Trash2Icon className="size-3.5" aria-hidden="true" />
+        Delete tasks
+      </Button>
+
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete all {totalTasks} tasks?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This empties the project — every task, archived ones included. Each one's worktree,
+              branch, transcript and attachments are removed with it, and it cannot be undone.
+              {totalTasks > 0 ? ' Running tasks are cancelled first.' : ''}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              data-slot="delete-tasks-confirm"
+              onClick={() => {
+                setConfirming(false)
+                onDelete()
+              }}
+            >
+              Delete everything
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  )
+}
+
+/**
  * The overview wired to live data: `useRuns()` (kept fresh by the global SSE stream), the shared
  * Active/Archived context (the sidebar's tabs and these are one state), and the archive-finished
  * mutation. The invalidate on success is the authoritative half of the doctrine — the stream will
@@ -1151,6 +1326,61 @@ export function TasksOverviewRoute() {
   })
   // Pinning (#935) — this page is the scoped project's own table, so no explicit project id.
   const pin = usePinRun()
+  // The queue hold behind the header's Start / Pause / Delete. Read once and re-read on focus; the
+  // three mutations below write through and invalidate it, which is the authoritative half — the
+  // engine has no `run` event for a hold, so nothing else would correct the header's belief.
+  const queue = useRunQueue()
+  const refreshQueue = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.queue() })
+  const refreshRuns = () => queryClient.invalidateQueries({ queryKey: queryKeys.runs.all })
+
+  // Pause / resume. The server answers the state the ENGINE settled on, which is written straight
+  // into the cache: a cockpit that raced another tab then renders what is true rather than what it
+  // asked for.
+  const pause = useMutation({
+    mutationFn: (paused: boolean) => setRunQueuePaused(paused),
+    onSuccess: (state) => {
+      queryClient.setQueryData(queryKeys.runs.queue(), state)
+      void refreshQueue()
+    },
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+
+  // "Start tasks". Reports the RELEASE COUNT rather than a bare success, because the sweep starts
+  // only what `maxParallel` allows — "Started 2 of 5" is the truth, and a toast claiming the queue
+  // emptied would be the kind of message that sends someone looking for tasks that are still
+  // waiting their turn.
+  const startQueued = useMutation({
+    mutationFn: startQueuedRuns,
+    onSuccess: (result) => {
+      void refreshQueue()
+      void refreshRuns()
+      toast(
+        result.released === 0
+          ? 'No task could start — the parallel limit is full'
+          : `Started ${result.released} task${result.released === 1 ? '' : 's'}`,
+      )
+    },
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+
+  // "Delete tasks". Irreversible, so the dialog in `QueueControls` gates it; `unsettled` is
+  // surfaced rather than swallowed, because a provider that never acknowledged its cancellation
+  // means a process may outlive the record we just deleted.
+  const deleteAll = useMutation({
+    mutationFn: deleteAllRuns,
+    onSuccess: (result) => {
+      void refreshQueue()
+      void refreshRuns()
+      toast(
+        result.unsettled > 0
+          ? `Deleted ${result.deleted} tasks — ${result.unsettled} did not stop in time; check for a stray agent process`
+          : `Deleted ${result.deleted} task${result.deleted === 1 ? '' : 's'}`,
+        result.unsettled > 0 ? { tone: 'danger' } : undefined,
+      )
+    },
+    onError: (error: Error) => toast(error.message, { tone: 'danger' }),
+  })
+  const queueBusy = pause.isPending || startQueued.isPending || deleteAll.isPending
   const now = useNow(30_000)
   const taskTableColumns = useTaskTableColumns()
   // Chip statuses are hydrated HERE rather than inside `TasksOverview`, which is a pure
@@ -1189,6 +1419,12 @@ export function TasksOverviewRoute() {
             { onError: (error: Error) => toast(error.message, { tone: 'danger' }) },
           )
         }
+        queuePaused={queue.data?.paused}
+        queuedCount={queue.data?.queued ?? 0}
+        queueBusy={queueBusy}
+        onStartQueued={() => startQueued.mutate()}
+        onQueuePauseChange={(paused) => pause.mutate(paused)}
+        onDeleteAll={() => deleteAll.mutate()}
         now={now}
         showTokens={metricVisibility.tokens}
         showCost={metricVisibility.cost}

@@ -2,7 +2,7 @@ import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createLaunchScript, openInTerminal, refuseSpawnUnderTest, wslTerminalLaunchers } from './open-in-terminal.ts';
+import { createLaunchScript, handoffCommand, openInTerminal, refuseSpawnUnderTest, wslTerminalLaunchers } from './open-in-terminal.ts';
 
 describe('wslTerminalLaunchers (#361 WSL support)', () => {
   it('tries Windows Terminal first, re-entering the distro through wsl.exe', () => {
@@ -82,6 +82,48 @@ describe('openInTerminal env (spec 2026-07-29-agent-profiles)', () => {
         CLAUDE_CONFIG_DIR: `/home/u${String.fromCharCode(10)}evil`,
       }),
     ).resolves.toBe(false);
+  });
+});
+
+/**
+ * A terminal emulator is single-instance over D-Bus: the window cezar opens is created by the
+ * emulator ALREADY RUNNING since login and inherits ITS PATH, not cezar's. A CLI only an
+ * interactive shell finds — `kilo` in `~/.kilo/bin`, added by a `.bashrc` line — is therefore
+ * absent there, and "Connect" answered `kilo: command not found` for a CLI cezar itself had just
+ * run successfully (reported from the Providers card).
+ *
+ * So the handoff prepends cezar's own PATH dirs. Asserted through `handoffCommand`, the whole of
+ * what a launcher would run — `openInTerminal` itself would open a window on this machine (#820).
+ */
+describe('handoffCommand PATH handoff (single-instance emulator)', () => {
+  it('prepends cezar PATH dirs so a CLI the session shell finds is findable in the window', () => {
+    const command = handoffCommand('kilo auth login', {}, 'linux', '/usr/bin:/home/u/.kilo/bin');
+    expect(command).toBe('export PATH=\'/usr/bin\':\'/home/u/.kilo/bin\':"$PATH"; kilo auth login');
+  });
+
+  it('keeps the account env and the command, PATH first', () => {
+    const command = handoffCommand('claude --resume abc', { CLAUDE_CONFIG_DIR: '/w' }, 'linux', '/usr/bin');
+    expect(command).toBe(
+      'export PATH=\'/usr/bin\':"$PATH"; export CLAUDE_CONFIG_DIR=\'/w\'; claude --resume abc',
+    );
+  });
+
+  it('degrades to the bare command when the PATH cannot be embedded — never refuses', () => {
+    // Best-effort by design: unlike the account env, a missing PATH augmentation cannot aim the
+    // window at the wrong account, and the command may still resolve.
+    const evil = `/home/u${String.fromCharCode(9)}bin`;
+    expect(handoffCommand('kilo auth login', {}, 'linux', evil)).toBe('kilo auth login');
+    expect(handoffCommand('kilo auth login', {}, 'linux', undefined)).toBe('kilo auth login');
+  });
+
+  it('still fails CLOSED on an unembeddable account env', () => {
+    expect(handoffCommand('claude --resume abc', { CLAUDE_CONFIG_DIR: 'a"b' }, 'win32', 'C:\\tools'))
+      .toBeNull();
+  });
+
+  it('renders the win32 spelling, PATH dirs and all', () => {
+    expect(handoffCommand('kilo auth login', {}, 'win32', String.raw`C:\tools;C:\Users\u\.kilo\bin`))
+      .toBe('set "PATH=C:\\tools;C:\\Users\\u\\.kilo\\bin;%PATH%" && kilo auth login');
   });
 });
 

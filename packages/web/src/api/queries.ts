@@ -44,6 +44,7 @@ import {
   getRunDrafts,
   getRunFile,
   getRunHandoff,
+  getRunQueue,
   getRuns,
   getRunsIndex,
   getImportableSkills,
@@ -176,6 +177,10 @@ export const queryKeys = {
     drafts: (id: string) => [queryScope(), 'runs', 'drafts', id] as const,
     commits: (id: string) => [queryScope(), 'runs', 'commits', id] as const,
     commit: (id: string, sha: string) => [queryScope(), 'runs', 'commit', id, sha] as const,
+    /** The operator's hold on the queue + the work waiting behind it. Separate from `list()`
+     *  because it is ENGINE state rather than a record: it is written by the PAUSE button and read
+     *  by the header, and no `run` SSE event carries it (a hold is not a run transition). */
+    queue: () => [queryScope(), 'runs', 'queue'] as const,
   },
   groups: {
     detail: (groupId: string) => [queryScope(), 'groups', groupId] as const,
@@ -452,7 +457,8 @@ export function useRunnerModelCatalogs(
   const pi = useRunnerModels('pi', enabled)
   const junie = useRunnerModels('junie', enabled)
   const copilot = useRunnerModels('copilot', enabled)
-  return { claude, codex, junie, opencode, cursor, pi, copilot }
+  const kilo = useRunnerModels('kilo', enabled)
+  return { claude, codex, junie, opencode, cursor, pi, copilot, kilo }
 }
 
 export function useProviderStatus() {
@@ -918,6 +924,27 @@ export function useOpenTargets() {
     queryKey: queryKeys.openTargets,
     queryFn: ({ signal }) => getOpenTargets({ signal }),
     staleTime: 5 * 60_000,
+  })
+}
+
+/**
+ * The project's queue hold, for the Tasks header's PAUSE/Start buttons.
+ *
+ * NOT on the global SSE stream and deliberately so: a hold is engine state, not a run transition,
+ * so no `run` event can carry it and bolting a publisher onto the run topic for it would wake every
+ * cockpit on a change only one of them can act on. Instead this is a plain read, and the header
+ * writes through `useMutation` + an invalidate — the same shape the archive-finished sweep uses.
+ *
+ * `staleTime` is short and `refetchOnWindowFocus` is left at its default so a cockpit that was
+ * reloaded (or left open in a background tab while someone else paused the queue) re-reads the hold
+ * rather than painting a queue the engine is not actually holding. Everything else on this page is
+ * stream-patched; this one key is allowed to ask.
+ */
+export function useRunQueue() {
+  return useQuery({
+    queryKey: queryKeys.runs.queue(),
+    queryFn: ({ signal }) => getRunQueue({ signal }),
+    staleTime: 5_000,
   })
 }
 

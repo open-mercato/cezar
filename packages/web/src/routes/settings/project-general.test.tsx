@@ -191,13 +191,32 @@ describe('the General page', () => {
     })
   })
 
-  it('refuses to remove the boot project before the click, with the reason', async () => {
+  it('offers to remove the boot project, and says what that does NOT stop', async () => {
     renderAt('/p/boot/settings')
     const remove = await screen.findByRole('button', { name: /^Remove cezar from the workspace/ })
-    expect(remove.hasAttribute('disabled')).toBe(true)
+    // The button used to be disabled with "stop cezar and run `cezar projects remove`" — a
+    // refusal for something that needs no stopping. Unregistering leaves the project list; the
+    // server keeps serving the folder, and the sentence next to the button says so.
+    expect(remove.hasAttribute('disabled')).toBe(false)
     expect(document.querySelector('[data-slot="project-general-remove-boot"]')?.textContent).toContain(
-      'cezar is serving this project',
+      'cezar keeps running here until you stop it',
     )
+
+    fireEvent.click(remove)
+    const dialog = await screen.findByRole('alertdialog')
+    expect(dialog.querySelector('[data-slot="projects-remove-boot"]')?.textContent).toContain(
+      'keeps serving it after this',
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove from list' }))
+    await waitFor(() =>
+      expect(requests.some((r) => r.method === 'DELETE' && r.url === '/api/v1/projects/boot')).toBe(true),
+    )
+    // Still leaves the URL, which the server keeps answering: the boot project's id resolves
+    // whether or not a registry row is behind it.
+    await waitFor(() => {
+      expect(document.querySelector('[data-route="settings"]')).toBeNull()
+    })
   })
 
   it('offers to add — not manage — the folder cezar is serving but has not saved', async () => {

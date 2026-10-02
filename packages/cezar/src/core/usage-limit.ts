@@ -48,6 +48,26 @@ const CLAUDE_MARKER_RE = /claude(?:\s+ai)?\s+usage\s+limit\s+reached\s*\|\s*(\d{
 const LIMIT_PHRASE_RE =
   /\b(?:usage|rate|session|weekly|hourly)[\s-]?limit\b|\brate[_-]?limit(?:_error|ed)?\b|\bquota\s+(?:exceeded|reached)\b|\bout\s+of\s+(?:credits|quota)\b/i;
 
+/**
+ * Is this refusal the provider declining to SERVE us right now, as opposed to a bug in the work?
+ *
+ * The sibling question `parseUsageLimit` asks is narrower, deliberately: it also demands a
+ * recoverable reset instant, because it feeds a SCHEDULE ("resume at T"). This one only asks
+ * "was the door shut?" — which is what a caller needs before it treats a turn as PROGRESS. The
+ * autonomous nudge turns on exactly that distinction: a turn the provider refused to run is not a
+ * step forward, and relaunching into the same refusal is how 40 nudges get burned in 14 seconds.
+ *
+ * It deliberately shares `LIMIT_PHRASE_RE` with `parseUsageLimit` — one notion of "this is a
+ * limit, not a crash", so the two can never disagree about whether a message is a limit at all.
+ *
+ * Callers MUST pass an ERROR string, never agent prose: a run whose agent writes "I'll respect
+ * the rate limit" must not read as rate-limited. Only the error path may call this.
+ */
+export function isProviderRefusal(message: string | undefined): boolean {
+  if (!message) return false;
+  return LIMIT_PHRASE_RE.test(message);
+}
+
 /** `…try again at 2026-08-03T18:00:00Z`, `…resets at 2026-08-03 18:00`. */
 const RESET_AT_RE =
   /(?:resets?|reset[s]?\s+at|try\s+again|retry|available\s+again|unlocks?)\b[^\n]{0,24}?\b(\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)?)/i;

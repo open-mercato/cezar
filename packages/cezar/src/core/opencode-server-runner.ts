@@ -27,6 +27,7 @@ import {
   type OpencodeUiMapperState,
   type OpencodeUiMapping,
 } from './opencode-ui-mapper.ts';
+import { OpencodeV2Translator, type OpencodeEvent } from './opencode-v2-events.ts';
 
 export interface OpencodeRunnerOptions {
   /** Override the binary name/path; defaults to `opencode` on PATH. */
@@ -37,12 +38,18 @@ export interface OpencodeRunnerOptions {
 
 const SERVER_START_TIMEOUT_MS = 30_000;
 
+/** How long startup keeps watching for the password line after the URL
+ *  appears. A password-protected 2.x prints both in the same instant; a
+ *  server without auth prints only the URL and must not pay the full start
+ *  timeout for a line that will never come. */
+const PASSWORD_LINE_GRACE_MS = 600;
+
 /** Grace between the teardown SIGTERM and the SIGKILL that follows it. */
 export const KILL_GRACE_MS = 4_000;
 
 /**
- * How long a turn waits for a `session.idle` that never comes, once the prompt
- * POST has settled and the event bus has gone quiet.
+ * How long a turn waits for a `session.idle` that never comes, once the turn's
+ * HTTP wait has settled and the event bus has gone quiet.
  *
  * `session.idle` is the turn boundary (#897), and the window below is the
  * transition out of the state that signal would otherwise be the only exit
@@ -58,10 +65,20 @@ export const TURN_IDLE_GRACE_MS = 5_000;
  * the opencode TUI talks to) with an SSE event stream. One server per session,
  * bound to the run's `cwd` (worktree), gives OpenCode the same multi-turn shape
  * as the Claude runner: each `sendMessage` posts another prompt to the same
- * session (history is kept server-side) and `session/abort` cancels. "Continue"
- * starts a fresh server and a fresh session — `bootstrap()` always `POST
- * /session` and does not read `spec.sessionId`; resuming a server-side session
- * id is not implemented.
+ * session (history is kept server-side) and `POST /api/session/:id/interrupt`
+ * cancels. "Continue" starts a fresh server and a fresh session —
+ * `bootstrap()` always `POST /api/session` and does not read `spec.sessionId`;
+ * resuming a server-side session id is not implemented.
+ *
+ * The 2.x wire it speaks: Basic auth (`opencode:<password>`, the password the
+ * server prints on stdout) over an `/api` prefix; the model is bound to the
+ * SESSION (`{model:{providerID, id}}` at creation — the prompt body carries
+ * none); a prompt is `POST .../prompt` (fast admission) followed by the
+ * `POST /api/experimental/session/:id/wait` long poll, which answers when the
+ * agent loop goes idle — v1 held the message POST open for the same span; and
+ * the turn boundary arrives on the SSE bus as `session.execution.succeeded`,
+ * which `OpencodeV2Translator` reshapes into the v1 `session.idle` both
+ * consumers (#897 fix and protocol-v2 mapper) already read.
  *
  * Auth = the host's opencode config/logins. The agent runs autonomously
  * (auto-approved permissions); OpenCode has no per-tool allowlist, so
@@ -108,6 +125,10 @@ class OpencodeSession implements AgentSession {
   private readonly hasExited: () => boolean;
   private serverOpen = true;
   private baseUrl: string | undefined;
+  /** The server password (2.x prints `server password <pw>` after its URL);
+   *  sent as Basic auth on every call, including the SSE bus. Absent only on
+   *  a server that printed none — then no auth header goes out either. */
+  private password: string | undefined;
   private sessionId: string | undefined;
   private ready!: Promise<void>;
   private resolveExit!: () => void;
@@ -132,9 +153,12 @@ class OpencodeSession implements AgentSession {
   private tokensUsed = 0;
   private lastCost: number | undefined;
   private turnInFlight = false;
-  /** Has this turn's prompt POST settled (either way)? Until it has, nothing
-   *  synthesizes a turn end — only the wire does. */
+  /** Has this turn's HTTP wait (prompt + long poll) settled (either way)?
+   *  Until it has, nothing synthesizes a turn end — only the wire does. */
   private turnPostSettled = false;
+  /** Monotonic prompt counter — a prompt that was superseded mid-flight must
+   *  not touch the newer turn's flags when its own requests finally settle. */
+  private turnSeq = 0;
   /** Resolves the in-flight turn's `prompt()` — called from `finishTurn()`. */
   private endTurn: (() => void) | undefined;
   private turnGraceTimer: NodeJS.Timeout | undefined;
@@ -153,6 +177,9 @@ class OpencodeSession implements AgentSession {
    *  lands in R2 step 2.1). Both streams now take their turn end from the wire
    *  `session.idle`; v1's used to be synthesized from the HTTP response. */
   private uiState: OpencodeUiMapperState = createOpencodeUiState();
+  /** 2.x → v1 frame reshaping, per session (buffers and role announcements
+   *  are session-scoped — see `opencode-v2-events.ts`). */
+  private readonly translator = new OpencodeV2Translator();
   private autoEndTimer: NodeJS.Timeout | undefined;
   private spawnFailed: Error | null = null;
   private timedOut = false;
@@ -213,7 +240,9 @@ class OpencodeSession implements AgentSession {
     }
 
     this.ready = (async () => {
-      this.baseUrl = await urlReady;
+      const info = await urlReady;
+      this.baseUrl = info.url;
+      this.password = info.password;
       await this.bootstrap();
     })();
 
@@ -294,7 +323,7 @@ class OpencodeSession implements AgentSession {
   interrupt(): void {
     this.serverOpen = false;
     if (this.baseUrl && this.sessionId) {
-      void this.http('POST', `/session/${this.sessionId}/abort`, undefined).catch(() => undefined);
+      void this.http('POST', `/api/session/${this.sessionId}/interrupt`, undefined).catch(() => undefined);
     }
     this.finishTurn();
     this.sse.abort();
@@ -336,29 +365,66 @@ class OpencodeSession implements AgentSession {
 
   // ---- server lifecycle ---------------------------------------------------
 
-  private waitForServerUrl(fallbackPort: number): Promise<string> {
+  /**
+   * Watch the server's stdout for its bound URL — and, on 2.x, the password
+   * it prints right behind it (`server listening on <url>`, then `server
+   * password <pw>`, in the same instant). The password gates EVERY call
+   * including the session create, so startup waits for the pair; a server
+   * that prints no password (none of ours, but a config can disable auth)
+   * gets a short grace after the URL instead of the full start timeout.
+   */
+  private waitForServerUrl(fallbackPort: number): Promise<ServerInfo> {
     return new Promise((resolve, reject) => {
       let buffer = '';
-      const timer = setTimeout(() => {
+      let url: string | undefined;
+      let password: string | undefined;
+      let grace: NodeJS.Timeout | undefined;
+      let settled = false;
+      const finish = (): void => {
+        if (settled || url === undefined) return;
+        settled = true;
         cleanup();
-        // Nothing parsed — try the port we asked for.
-        resolve(`http://127.0.0.1:${fallbackPort}`);
+        resolve(password === undefined ? { url } : { url, password });
+      };
+      const onData = (chunk: string) => {
+        if (settled) return;
+        buffer += chunk;
+        if (password === undefined) {
+          const pm = /server password\s+(\S+)/.exec(buffer);
+          if (pm) password = pm[1];
+        }
+        if (url === undefined) {
+          const m = /https?:\/\/[\d.]+:\d+/.exec(buffer);
+          if (!m) return;
+          url = m[0];
+          if (password !== undefined) return finish();
+          grace = setTimeout(finish, PASSWORD_LINE_GRACE_MS);
+          grace.unref?.();
+          return;
+        }
+        if (password !== undefined) finish();
+      };
+      const timer = setTimeout(() => {
+        if (settled) return;
+        if (url === undefined) {
+          // Nothing parsed — try the port we asked for.
+          settled = true;
+          cleanup();
+          resolve({ url: `http://127.0.0.1:${fallbackPort}` });
+          return;
+        }
+        finish();
       }, SERVER_START_TIMEOUT_MS);
       timer.unref?.();
-      const onData = (chunk: string) => {
-        buffer += chunk;
-        const m = /https?:\/\/[\d.]+:\d+/.exec(buffer);
-        if (m) {
-          cleanup();
-          resolve(m[0]);
-        }
-      };
       const onExit = () => {
+        if (settled) return;
+        settled = true;
         cleanup();
         reject(new Error('opencode serve exited before it started listening'));
       };
       const cleanup = () => {
         clearTimeout(timer);
+        if (grace) clearTimeout(grace);
         this.child.stdout.off('data', onData);
         this.child.off('exit', onExit);
       };
@@ -369,8 +435,16 @@ class OpencodeSession implements AgentSession {
   }
 
   private async bootstrap(): Promise<void> {
-    const created = await this.http('POST', '/session', { title: 'cezar task' });
-    this.sessionId = stringField(created, 'id');
+    const body: Record<string, unknown> = { title: 'cezar task' };
+    // 2.x binds the model to the SESSION — the prompt body has no model
+    // field (v1 sent `{providerID, modelID}` per message; 2.x's Model.Ref is
+    // `{providerID, id}` at creation time). `spec.model` arrives already
+    // normalised to canonical `provider/model` (the run wiring's fail-loud
+    // gate) and is split with the shared parser every runner uses.
+    const model = parseModelIdentity(this.spec.model);
+    if (model) body.model = { providerID: model.provider, id: model.model };
+    const created = await this.http('POST', '/api/session', body);
+    this.sessionId = sessionIdFrom(created);
     if (!this.sessionId) throw new Error('opencode did not return a session id');
     this.emit({ type: 'session', sessionId: this.sessionId });
     const sessionId = this.sessionId;
@@ -387,15 +461,19 @@ class OpencodeSession implements AgentSession {
 
   /**
    * Post one prompt and resolve when the TURN ends — not when the HTTP
-   * response does.
+   * responses do.
    *
-   * Opencode holds `POST /session/:id/message` open for the whole turn, so the
-   * response is neither a reliable nor a timely boundary: it lands before the
-   * final text part (the bundled mock exists to pin that ordering), and when
-   * the transport drops it mid-turn the turn has not ended at all. Reading it
-   * as the boundary is what parked live runs under "Needs you" at exactly 5:00
-   * (#897). The end comes from the wire `session.idle`, the same signal v2 has
-   * always used, with `armTurnGrace()` as the bounded way out when no such
+   * 2.x splits what v1 did in one held-open `POST /session/:id/message`:
+   * `POST .../prompt` only ADMITS the input (it answers in ~0.5 s, before the
+   * agent has produced anything), and `POST /api/experimental/session/:id/wait`
+   * is the long poll that answers when the agent loop goes idle — tools and
+   * all. That wait is the held-open request of this design: no client-side
+   * timeout can cut it (it goes through `opencode-http.ts`'s `node:http`), a
+   * transport drop mid-turn is the #897 shape and is treated exactly as v1
+   * treated a dropped message POST, and reading any of it as the boundary is
+   * what parked live runs under "Needs you" at exactly 5:00. The end comes
+   * from the wire `session.idle` (2.x `session.execution.succeeded`, via the
+   * translator), with `armTurnGrace()` as the bounded way out when no such
    * signal is coming.
    */
   private async prompt(text: string): Promise<void> {
@@ -409,6 +487,7 @@ class OpencodeSession implements AgentSession {
       clearTimeout(this.autoEndTimer);
       this.autoEndTimer = undefined;
     }
+    const seq = ++this.turnSeq;
     this.turnInFlight = true;
     this.turnPostSettled = false;
     this.turnDropped = undefined;
@@ -417,33 +496,43 @@ class OpencodeSession implements AgentSession {
     });
     // v2 turn boundary — the prompt POST is the turn start (§7.1).
     this.emitUi(opencodeTurnStarted);
-    const body: Record<string, unknown> = { parts: [{ type: 'text', text }] };
-    // `spec.model` arrives already normalised to canonical `provider/model`
-    // (the run wiring's fail-loud gate). Split it with the shared parser — the
-    // one every runner uses — into opencode's `{ providerID, modelID }`.
-    const id = parseModelIdentity(this.spec.model);
-    if (id) body.model = { providerID: id.provider, modelID: id.model };
+    // Shared error handling for both requests below: a transport drop on a
+    // session the event bus still shows alive is no evidence about the agent
+    // — swallow it and keep listening. Anything else (an HTTP status, a dead
+    // server) is a real failure. Once superseded, this turn is closed and its
+    // late verdicts belong to nobody — the newer turn owns the flags.
     let failure: unknown;
-    try {
-      const res = await this.http('POST', `/session/${this.sessionId}/message`, body);
-      this.absorbUsage(res);
-    } catch (err) {
-      // A transport drop on a session the event bus still shows alive is no
-      // evidence about the agent — swallow it and keep listening. Anything
-      // else (an HTTP status, a dead server) is a real failure and is raised
-      // to the caller exactly as before.
+    const record = (err: unknown): void => {
+      if (seq !== this.turnSeq) return;
       if (this.isDropWhileSessionLives(err)) {
         this.turnDropped = err instanceof Error ? err.message : String(err);
       } else {
         failure = err;
       }
+    };
+    try {
+      const res = await this.http('POST', `/api/session/${this.sessionId}/prompt`, { text });
+      this.absorbUsage(res);
+    } catch (err) {
+      record(err);
     }
-    this.turnPostSettled = true;
-    if (failure !== undefined) {
-      this.finishTurn();
-      throw failure;
+    if (failure === undefined) {
+      // The long poll — v1's held-open message POST, renamed. It settles when
+      // the loop is idle (or 204s at once if the turn already finished).
+      try {
+        await this.http('POST', `/api/experimental/session/${this.sessionId}/wait`, {});
+      } catch (err) {
+        record(err);
+      }
     }
-    this.armTurnGrace();
+    if (seq === this.turnSeq) {
+      this.turnPostSettled = true;
+      if (failure !== undefined) {
+        this.finishTurn();
+        throw failure;
+      }
+      this.armTurnGrace();
+    }
     await turnEnded;
   }
 
@@ -485,9 +574,9 @@ class OpencodeSession implements AgentSession {
 
   /**
    * Arm (or re-arm) the wait for a `session.idle` that may never come. Only
-   * meaningful once the POST has settled — before that the turn is plainly
-   * still running. With no event bus to listen to there is nothing to wait
-   * for, so the HTTP response stays the boundary, exactly as it was.
+   * meaningful once the turn's HTTP wait has settled — before that the turn is
+   * plainly still running. With no event bus to listen to there is nothing to
+   * wait for, so the settled response stays the boundary, exactly as it was.
    */
   private armTurnGrace(): void {
     if (!this.turnInFlight || !this.turnPostSettled) return;
@@ -503,7 +592,8 @@ class OpencodeSession implements AgentSession {
     this.turnGraceTimer.unref?.();
   }
 
-  /** Did the prompt POST drop on a session the event bus still shows alive? */
+  /** Did the turn's HTTP wait drop on a session the event bus still shows
+   *  alive? (Works for the prompt POST and the `wait` long poll alike.) */
   private isDropWhileSessionLives(err: unknown): boolean {
     // An HTTP status is an answer from the server, not a lost connection.
     if (!(err instanceof OpencodeTransportError)) return false;
@@ -518,8 +608,9 @@ class OpencodeSession implements AgentSession {
    *  event emitted after this resolves can be missed. */
   private async consumeEvents(): Promise<void> {
     if (!this.baseUrl) return;
-    this.sseConnected = await openOpencodeEventStream(`${this.baseUrl}/event`, {
+    this.sseConnected = await openOpencodeEventStream(`${this.baseUrl}/api/event`, {
       signal: this.sse.signal,
+      headers: this.authHeaders(),
       onFrame: (frame) => this.handleFrame(frame),
       // The bus is the turn's evidence of life; once it is gone a turn waiting
       // on `session.idle` would wait forever.
@@ -536,14 +627,19 @@ class OpencodeSession implements AgentSession {
       .filter((l) => l.startsWith('data:'))
       .map((l) => l.slice(5).trim());
     if (dataLines.length === 0) return;
-    let evt: OpencodeEvent;
+    let parsed: unknown;
     try {
-      evt = JSON.parse(dataLines.join('\n')) as OpencodeEvent;
+      parsed = JSON.parse(dataLines.join('\n'));
     } catch {
       return;
     }
-    this.emitUi((state) => mapOpencodeEvent(evt, state));
-    this.handleEvent(evt);
+    // 2.x frames get reshaped into v1 events here — the ONE place the two
+    // wire generations meet; v1 frames pass through byte-identical (see
+    // `opencode-v2-events.ts` for why everything downstream stays v1).
+    for (const evt of this.translator.translate(parsed)) {
+      this.emitUi((state) => mapOpencodeEvent(evt, state));
+      this.handleEvent(evt);
+    }
   }
 
   private handleEvent(evt: OpencodeEvent): void {
@@ -635,7 +731,7 @@ class OpencodeSession implements AgentSession {
   /**
    * One call to the server. Goes through `opencode-http.ts` rather than the
    * global `fetch` so no undici `headersTimeout`/`bodyTimeout` default cuts the
-   * prompt long-poll at 300 s (#897) — see that module's header for why.
+   * `wait` long poll at 300 s (#897) — see that module's header for why.
    *
    * Rejects with `OpencodeTransportError` when the connection failed and a
    * plain `Error` when the server answered with a status; only the caller can
@@ -647,7 +743,11 @@ class OpencodeSession implements AgentSession {
     body: unknown,
   ): Promise<Record<string, unknown>> {
     if (!this.baseUrl) throw new Error('opencode server not ready');
-    const res = await opencodeRequest(`${this.baseUrl}${path}`, { method, body });
+    const res = await opencodeRequest(`${this.baseUrl}${path}`, {
+      method,
+      body,
+      headers: this.authHeaders(),
+    });
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`${method} ${path} → ${res.status} ${res.body.slice(0, 200)}`);
     }
@@ -657,6 +757,13 @@ class OpencodeSession implements AgentSession {
     } catch {
       return {};
     }
+  }
+
+  /** Basic auth header for the server's password (2.x requires it on every
+   *  call); `undefined` when the server printed no password. */
+  private authHeaders(): Record<string, string> | undefined {
+    if (this.password === undefined) return undefined;
+    return { authorization: `Basic ${Buffer.from(`opencode:${this.password}`).toString('base64')}` };
   }
 
   private emit(event: AgentEvent): void {
@@ -680,9 +787,22 @@ class OpencodeSession implements AgentSession {
 
 // ---- helpers --------------------------------------------------------------
 
-interface OpencodeEvent {
-  type?: string;
-  properties?: Record<string, unknown>;
+/** What the server printed: its bound URL, and its password if it printed
+ *  one (2.x does, right behind the URL). */
+interface ServerInfo {
+  url: string;
+  password?: string;
+}
+
+/** 2.x wraps created resources as `{data:{id}}`; tolerate the bare v1 `{id}`
+ *  shape too, so a stub that answers the old way still boots. */
+function sessionIdFrom(created: Record<string, unknown>): string | undefined {
+  const data = created.data;
+  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    const id = stringField(data as Record<string, unknown>, 'id');
+    if (id !== undefined) return id;
+  }
+  return stringField(created, 'id');
 }
 
 function textOf(content: ContentBlock[]): string {

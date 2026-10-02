@@ -154,18 +154,21 @@ describe('SIGTERM→SIGKILL escalation for an opencode server that survives SIGT
  * #897 — an OpenCode turn that runs longer than five minutes used to park the
  * run under "Needs you".
  *
- * `opencode` holds `POST /session/:id/message` open for the whole agent turn.
- * Node's global `fetch` is undici, whose default `headersTimeout`/`bodyTimeout`
- * is 300_000 ms, so a turn still working at 5:00 lost its request with
- * `TypeError: fetch failed` — and `prompt()`'s `finally` emitted `turn-end`
- * anyway, which `workflows/run.ts` reads as "the agent stopped". The reporter
- * measured four consecutive turns on one run each dropping at exactly 5:00,
- * with SSE and tool events still flowing afterwards.
+ * `opencode` held `POST /session/:id/message` open for the whole agent turn
+ * in v1; 2.x's equivalent is the `POST /api/experimental/session/:id/wait`
+ * long poll, which answers when the agent loop goes idle. Either way the
+ * request is the held-open one, and Node's global `fetch` is undici, whose
+ * default `headersTimeout`/`bodyTimeout` is 300_000 ms, so a turn still
+ * working at 5:00 lost its request with `TypeError: fetch failed` — and
+ * `prompt()`'s `finally` emitted `turn-end` anyway, which
+ * `workflows/run.ts` reads as "the agent stopped". The reporter measured four
+ * consecutive turns on one run each dropping at exactly 5:00, with SSE and
+ * tool events still flowing afterwards.
  *
  * The mock server's `#drop-post` script is that shape without the five-minute
- * wait: the message POST's socket dies mid-turn, the session keeps streaming,
- * and `session.idle` arrives later. It reproduces the CLIENT-visible symptom,
- * which is the only thing the runner can react to.
+ * wait: the wait long poll's socket dies mid-turn, the session keeps
+ * streaming, and `session.idle` arrives later. It reproduces the
+ * CLIENT-visible symptom, which is the only thing the runner can react to.
  */
 describe('#897 a turn that outlives its prompt POST', () => {
   const mockBin = join(dirname(fileURLToPath(import.meta.url)), '__fixtures__', 'opencode', 'mock-opencode-serve.mjs');

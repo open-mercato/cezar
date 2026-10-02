@@ -7,7 +7,7 @@ import { resolveClaudeBin } from './claude-bin.ts';
 import { quoteExecutable, withEnvPrefix } from './shell-env.ts';
 import { probeJunieAuthentication } from './junie-auth-probe.ts';
 
-export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+export const PROVIDER_IDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'kilo'] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export type ProviderConnectionState =
   | 'connected'
@@ -309,6 +309,24 @@ function parseCopilotStatus(result: ProviderCommandResult): ProviderConnectionSt
   return null;
 }
 
+/**
+ * Kilo Code CLI status via `kilo auth list` (an OpenCode fork with the same
+ * summary shape): the listing names its credential store and ends with an
+ * `N credentials` line. Any stored credential counts as connected; an
+ * explicit zero means signed out.
+ */
+function parseKiloStatus(result: ProviderCommandResult): ProviderConnectionState | null {
+  if (result.exitCode !== 0) return null;
+  const lines = normalizedLines(result.stdout, result.stderr);
+  const summaries = lines
+    .map((line) => line.match(/(\d+)\s+credentials?$/)?.[1])
+    .filter((count): count is string => count !== undefined);
+  if (summaries.length !== 1) return null;
+  const storedCount = Number(summaries[0]);
+  if (!Number.isSafeInteger(storedCount)) return null;
+  return storedCount > 0 ? 'connected' : 'disconnected';
+}
+
 const DESCRIPTORS: readonly ProviderDescriptor[] = [
   {
     id: 'claude',
@@ -369,6 +387,14 @@ const DESCRIPTORS: readonly ProviderDescriptor[] = [
     installHint: 'Install GitHub Copilot CLI (`npm i -g @github/copilot`), then run `copilot login`.',
     parse: parseCopilotStatus,
     stdin: copilotAcpProbeStdin,
+  },
+  {
+    id: 'kilo',
+    executable: () => process.env.CEZ_KILO_BIN ?? 'kilo',
+    statusArgs: ['auth', 'list'],
+    loginArgs: ['auth', 'login'],
+    installHint: 'Install Kilo Code (npm i -g @kilocode/cli), then run `kilo auth login`.',
+    parse: parseKiloStatus,
   },
 ];
 

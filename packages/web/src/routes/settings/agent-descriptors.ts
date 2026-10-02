@@ -136,6 +136,21 @@ export const AGENT_DESCRIPTORS: AgentDescriptor[] = [
       ),
     ],
   },
+  {
+    id: 'kilo',
+    label: 'Kilo Code',
+    note: EDITOR_PLUS_COMMIT,
+    groups: [
+      group('kilo', 'settings', 'Settings'),
+      group(
+        'kilo',
+        'mcp',
+        'MCP',
+        'Configured in kilo.jsonc — the same file as Kilo’s settings.',
+      ),
+      group('kilo', 'memory', 'Memory & instructions'),
+    ],
+  },
 ]
 
 export function descriptorFor(agent: Runner): AgentDescriptor {

@@ -24,9 +24,12 @@ import { toast } from '@/components/ui/toaster'
  * back on its own: boot registration is seed-once (`shouldAutoRegisterProject`), so serving the
  * folder again never re-registers it.
  *
- * The refusals stay the server's: a project with running tasks and the boot project both answer
- * 409, whose message is toasted verbatim. Callers that can know about the boot project up front
- * (both of them) disable the trigger instead, so the explanation arrives before the click.
+ * The refusal that stays the server's is live work: a project with running tasks answers 409, and
+ * its message is toasted verbatim. The boot project is NOT a refusal any more — removing the folder
+ * cezar is serving is allowed and does what the button says (it leaves your project list; cezar
+ * keeps serving the folder until you stop it). `isBoot` says so in the confirm step, because "it
+ * stops being one of my projects" and "cezar stops running there" are two different sentences and
+ * only the first one is true.
  */
 
 /** The deregistration itself, with the wording every caller shares. `onRemoved` runs only after
@@ -52,10 +55,13 @@ export function useProjectRemoval() {
 /** The confirm step. `project` doubles as the open state — `null` while it is closed. */
 export function RemoveProjectDialog({
   project,
+  isBoot = false,
   onOpenChange,
   onConfirm,
 }: {
   project: ProjectListEntry | null
+  /** The folder this server was started in — see the header comment on why it is asked. */
+  isBoot?: boolean
   onOpenChange: (open: boolean) => void
   onConfirm: () => void
 }) {
@@ -71,6 +77,16 @@ export function RemoveProjectDialog({
             <span className="mt-1 block truncate font-mono text-[11px] text-foreground" title={project?.root}>
               {project?.root}
             </span>
+            {isBoot ? (
+              // The consequence the plain wording above does not cover, and the reason this dialog
+              // exists as its own component: cezar is serving this folder, and unregistering it
+              // does not stop that.
+              <span data-slot="projects-remove-boot" className="mt-1 block text-[11px]">
+                cezar is serving this folder right now, and keeps serving it after this — it just
+                leaves your project list until you add it back.
+                {project ? ' If it was your only project, cezar will list it again as “not registered”.' : null}
+              </span>
+            ) : null}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

@@ -9,6 +9,7 @@ import type {
   continueResponseSchema,
   createPrResponseSchema,
   createRunResponseSchema,
+  deleteAllResponseSchema,
   deleteRunResponseSchema,
   editQueuedMessageResponseSchema,
   finishResponseSchema,
@@ -16,8 +17,10 @@ import type {
   gitPushResponseSchema,
   messageResponseSchema,
   openInCliResponseSchema,
+  queueStateSchema,
   removeQueuedMessageResponseSchema,
   removeWorktreeResponseSchema,
+  startQueuedResponseSchema,
   runCommitsResponseSchema,
   runRecordSchema,
 } from '@open-mercato/cezar-contract';
@@ -70,6 +73,10 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type CreatePr201 = InferResponseType<Run['pr']['$post'], 201>;
   type RemoveWorktree200 = InferResponseType<Run['remove-worktree']['$post'], 200>;
   type DeleteRun200 = InferResponseType<Run['$delete'], 200>;
+  type QueueGet200 = InferResponseType<Runs['queue']['$get'], 200>;
+  type QueuePost200 = InferResponseType<Runs['queue']['$post'], 200>;
+  type StartQueued200 = InferResponseType<Runs['start-queued']['$post'], 200>;
+  type DeleteAll200 = InferResponseType<Runs['delete-all']['$post'], 200>;
 
   type _Checks = [
     // the record, in both of its two forms
@@ -94,6 +101,15 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     >,
     // lifecycle
     Assert<Exact<z.infer<typeof archiveFinishedResponseSchema>, ArchiveFinished200>>,
+    // The Tasks header's queue controls. GET and POST assert the SAME schema on purpose: the
+    // cockpit paints "Paused" from the GET and clears the hold by POSTing, so if the two answers
+    // ever diverged the header could show a queue that disagrees with the engine in the one place
+    // the operator is deciding whether to press Start.
+    Assert<Exact<z.infer<typeof queueStateSchema>, QueueGet200>>,
+    Assert<Exact<z.infer<typeof queueStateSchema>, QueuePost200>>,
+    // A COUNT, not a boolean — the sweep releases what `maxParallel` allows, not the whole queue.
+    Assert<Exact<z.infer<typeof startQueuedResponseSchema>, StartQueued200>>,
+    Assert<Exact<z.infer<typeof deleteAllResponseSchema>, DeleteAll200>>,
     Assert<Exact<z.infer<typeof cancelResponseSchema>, Cancel200>>,
     Assert<Exact<z.infer<typeof finishResponseSchema>, Finish200>>,
     Assert<Exact<z.infer<typeof continueResponseSchema>, Continue200>>,

@@ -12,9 +12,9 @@ import {
  *
  * Why not the global `fetch`. Node's `fetch` is undici, and undici applies a
  * `headersTimeout`/`bodyTimeout` default of 300_000 ms to every request. The
- * prompt POST is a long poll — opencode does not answer `POST
- * /session/:id/message` until the agent's turn is over, tools and all — so at
- * exactly 5:00 undici tore it down with `TypeError: fetch failed`, the runner
+ * turn wait is a long poll — opencode does not answer `POST
+ * /api/experimental/session/:id/wait` until the agent's loop goes idle, tools
+ * and all — so at exactly 5:00 undici tore it down with `TypeError: fetch failed`, the runner
  * read that as the end of the turn, and the cockpit parked a run whose session
  * was still working (#897). Raising the limit means constructing an `undici`
  * Agent, i.e. a new runtime dependency of the published CLI for a request the
@@ -42,6 +42,9 @@ export interface OpencodeRequestOptions {
    *  when this is `undefined`. */
   readonly body?: unknown;
   readonly signal?: AbortSignal;
+  /** Extra headers merged into the request — the runner's Basic auth, which
+   *  opencode 2.x requires on every call including the SSE bus. */
+  readonly headers?: Record<string, string>;
 }
 
 /**
@@ -72,7 +75,7 @@ function open(url: string, options: RequestOptions): ClientRequest | Error {
 export function opencodeRequest(url: string, opts: OpencodeRequestOptions): Promise<OpencodeResponse> {
   return new Promise<OpencodeResponse>((resolve, reject) => {
     const payload = opts.body === undefined ? undefined : JSON.stringify(opts.body);
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { ...(opts.headers ?? {}) };
     if (payload !== undefined) {
       headers['content-type'] = 'application/json';
       headers['content-length'] = String(Buffer.byteLength(payload));
@@ -99,6 +102,9 @@ export function opencodeRequest(url: string, opts: OpencodeRequestOptions): Prom
 
 export interface OpencodeEventStreamOptions {
   readonly signal?: AbortSignal;
+  /** Extra headers merged into the request (Basic auth — the bus is not
+   *  anonymous either). */
+  readonly headers?: Record<string, string>;
   /** One `\n\n`-delimited SSE frame, without its terminating blank line. */
   readonly onFrame: (frame: string) => void;
   /** Called once when the stream is over — server gone, aborted, or the
@@ -127,7 +133,7 @@ export function openOpencodeEventStream(
     };
     const req = open(url, {
       method: 'GET',
-      headers: { accept: 'text/event-stream' },
+      headers: { accept: 'text/event-stream', ...(opts.headers ?? {}) },
       agent: AGENT,
       signal: opts.signal,
     });

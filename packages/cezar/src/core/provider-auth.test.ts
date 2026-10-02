@@ -57,6 +57,14 @@ const connectedResults: Record<string, ProviderCommandResult> = {
     stderr: '',
     exitCode: 0,
   },
+  kilo: {
+    stdout: [
+      '┌  Credentials ~/.local/share/kilo/auth.json',
+      '└  1 credential',
+    ].join('\n'),
+    stderr: '',
+    exitCode: 0,
+  },
   // Copilot's probe drives its ACP server; a `sessionId` back means the credential is entitled
   // (`.ai/runs/2026-09-27-copilot-cli-runner/copilot-acp-notes.md`).
   copilot: {
@@ -75,6 +83,7 @@ const originalEnv = {
   CEZ_PI_BIN: process.env.CEZ_PI_BIN,
   CURSOR_API_KEY: process.env.CURSOR_API_KEY,
   CEZ_COPILOT_BIN: process.env.CEZ_COPILOT_BIN,
+  CEZ_KILO_BIN: process.env.CEZ_KILO_BIN,
 };
 
 beforeEach(() => {
@@ -86,6 +95,7 @@ beforeEach(() => {
   delete process.env.CEZ_PI_BIN;
   delete process.env.CURSOR_API_KEY;
   delete process.env.CEZ_COPILOT_BIN;
+  delete process.env.CEZ_KILO_BIN;
 });
 
 afterEach(() => {
@@ -107,6 +117,7 @@ function resultFor(executable: string): ProviderCommandResult {
   if (executable === 'agent' || executable.includes('cursor')) return connectedResults.cursor!;
   if (executable.includes('opencode')) return connectedResults.opencode!;
   if (executable.includes('copilot')) return connectedResults.copilot!;
+  if (executable.includes('kilo')) return connectedResults.kilo!;
   return connectedResults.pi!;
 }
 
@@ -509,6 +520,63 @@ describe('provider auth parsers', () => {
     await expect(statuses(service)).resolves.toMatchObject({ opencode: { status: 'unknown' } });
   });
 
+  it('recognizes a Kilo stored credential as connected', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'kilo'
+        ? {
+          stdout: [
+            '┌  Credentials ~/.local/share/kilo/auth.json',
+            '└  1 credential',
+          ].join('\n'),
+          stderr: '',
+          exitCode: 0,
+        }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ kilo: { status: 'connected' } });
+  });
+
+  it('recognizes a Kilo zero-credential list as disconnected', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'kilo'
+        ? {
+          stdout: [
+            'Credentials ~/.local/share/kilo/auth.json',
+            '0 credentials',
+          ].join('\n'),
+          stderr: '',
+          exitCode: 0,
+        }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ kilo: { status: 'disconnected' } });
+  });
+
+  it.each([
+    'New auth output format v99',
+    ['┌  Credentials ~/.local/share/kilo/auth.json', '└  credentials: many'].join('\n'),
+  ])('does not guess from Kilo output without a valid count summary', async (stdout) => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'kilo'
+        ? { stdout, stderr: 'error', exitCode: 0 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ kilo: { status: 'unknown' } });
+  });
+
+  it('does not accept a Kilo credential summary on an unexpected nonzero exit', async () => {
+    const service = new ProviderAuthService({
+      runCommand: runner((executable) => executable === 'kilo'
+        ? { ...connectedResults.kilo!, exitCode: 7 }
+        : { stdout: 'unrecognized', stderr: '', exitCode: 0 }),
+    });
+
+    await expect(statuses(service)).resolves.toMatchObject({ kilo: { status: 'unknown' } });
+  });
+
   it('recognizes Cursor isAuthenticated: true as connected', async () => {
     const service = new ProviderAuthService({
       runCommand: runner((executable) => (executable === 'agent' || executable.includes('cursor'))
@@ -625,6 +693,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot' },
+        { provider: 'kilo' },
       ],
     });
   });
@@ -649,6 +718,7 @@ describe('ProviderAuthService', () => {
       { executable: 'agent', args: ['status', '--format', 'json'], timeoutMs: 10_000 },
       { executable: 'pi', args: ['--list-models'], timeoutMs: 10_000 },
       { executable: 'copilot', args: ['--acp'], timeoutMs: 10_000 },
+      { executable: 'kilo', args: ['auth', 'list'], timeoutMs: 10_000 },
     ]);
     release();
     await expect(pending).resolves.toBeDefined();
@@ -1105,6 +1175,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'kilo', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();
@@ -1218,6 +1289,7 @@ describe('ProviderAuthService', () => {
         { provider: 'pi', status: 'connected' },
         { provider: 'junie', status: 'connected' },
         { provider: 'copilot', status: 'connected' },
+        { provider: 'kilo', status: 'connected' },
       ],
     });
     expect(runCommand).not.toHaveBeenCalled();

@@ -161,10 +161,11 @@ describe('model option resolution', () => {
   })
 
   it('exactly the runners with a host catalog discover their models', () => {
-    // #794 gave OpenCode a catalog, #784 gave Claude one and #807 gave Cursor one. The contract's
-    // list is the single source both the route and the picker compile against — this asserts they
-    // still agree on who discovers, and that a runner is never added to it by accident.
-    expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie'])
+  // #794 gave OpenCode a catalog, #784 gave Claude one, #807 gave Cursor one and Kilo reads its
+  // own `models` listing. The contract's list is the single source both the route and the picker
+  // compile against — this asserts they still agree on who discovers, and that a runner is never
+  // added to it by accident.
+  expect(MODEL_DISCOVERY_RUNNERS).toEqual(['claude', 'codex', 'opencode', 'cursor', 'junie', 'kilo'])
     expect(MODEL_DISCOVERY_RUNNERS.every((runner) => runnerDiscoversModels(runner))).toBe(true)
   })
 

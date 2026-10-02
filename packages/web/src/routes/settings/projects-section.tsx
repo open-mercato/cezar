@@ -326,6 +326,7 @@ function RegistryTable({
 
       <RemoveProjectDialog
         project={confirming}
+        isBoot={confirming?.id === registry.bootProject}
         onOpenChange={(open) => !open && setConfirming(null)}
         onConfirm={confirmRemoval}
       />
@@ -407,10 +408,11 @@ function ProjectRow({
             // word, so the accessible name contains the visible one (WCAG 2.5.3 Label in Name) and
             // speech input still reaches the control. Same shape as the General page's button.
             aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-            // The boot project is refused server-side too (this server runs out of it);
-            // disabling here means the user gets the explanation before the click, not after.
-            title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
-            disabled={disabled || isBoot}
+            // Removing the folder cezar is serving is allowed — it leaves the project list, not
+            // the running server — so this is an explanation, never a refusal. The confirm step
+            // repeats it before the user commits.
+            title={isBoot ? 'cezar is serving this project — removing it drops it from your project list, not from the running server' : undefined}
+            disabled={disabled}
             onClick={onRemove}
           >
             Remove

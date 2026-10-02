@@ -52,6 +52,9 @@ export const KNOWN_PRESETS_BY_RUNNER: Record<RunnerId, readonly string[]> = {
   // `claude-sonnet-4`). Naming them here would make this guard reject a legitimate codex or
   // claude model as "another runner's preset" — the exact failure pi's comment warns about.
   copilot: [],
+  // kilo lists nothing for the same reasons pi does: host discovery plus the canonical
+  // `provider/model` convention with no default provider.
+  kilo: [],
 };
 
 /**

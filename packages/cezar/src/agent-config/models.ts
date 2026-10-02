@@ -4,6 +4,7 @@ import { codexModelSettingsStrategy } from './model-settings/codex.ts';
 import { junieModelSettingsStrategy } from './model-settings/junie.ts';
 import { copilotModelSettingsStrategy } from './model-settings/copilot.ts';
 import { cursorModelSettingsStrategy } from './model-settings/cursor.ts';
+import { kiloModelSettingsStrategy } from './model-settings/kilo.ts';
 import { opencodeModelSettingsStrategy } from './model-settings/opencode.ts';
 import { piModelSettingsStrategy } from './model-settings/pi.ts';
 import type { AgentModelSettings, AgentModelSettingsStrategy } from './model-settings/types.ts';
@@ -24,6 +25,7 @@ const MODEL_SETTINGS_STRATEGIES: Record<RunnerId, AgentModelSettingsStrategy> = 
   pi: piModelSettingsStrategy,
   junie: junieModelSettingsStrategy,
   copilot: copilotModelSettingsStrategy,
+  kilo: kiloModelSettingsStrategy,
 };
 
 export function readAgentModelSettings(

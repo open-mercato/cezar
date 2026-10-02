@@ -67,6 +67,7 @@ import { AGENT_MODELS_LOCKED_ERROR, agentModelsLocked } from '../core/agent-mode
 import { discoverClaudeModels } from '../core/claude-model-catalog.ts';
 import { discoverCodexModels } from '../core/codex-model-catalog.ts';
 import { discoverCursorModels } from '../core/cursor-model-catalog.ts';
+import { discoverKiloModels } from '../core/kilo-model-catalog.ts';
 import { discoverOpencodeModels } from '../core/opencode-model-catalog.ts';
 import { discoverJunieModels } from '../core/junie-model-catalog.ts';
 import {
@@ -598,7 +599,7 @@ export interface WorkspaceConfigResponse {
    *  optional: absent means "no opinion", which must stay distinguishable from a chosen value. */
   agentDefaults: {
     runner?: ProviderId;
-    models?: { claude?: string; codex?: string; opencode?: string };
+    models?: { claude?: string; codex?: string; opencode?: string; kilo?: string };
   };
 }
 
@@ -978,6 +979,15 @@ const pinSchema = z.object({
   pinned: z.boolean().optional(),
 });
 
+// `POST /api/v1/runs/queue` — the operator's hold on this project's queue. The flag is REQUIRED
+// here, unlike `archiveSchema`/`pinSchema` above where an absent body means "do the thing": a bare
+// POST on a two-state resource has no obvious default, and defaulting it to "resume" would make a
+// dropped or empty request silently start work the operator had paused. A wrong-typed value is a
+// 400 through the middleware, per #429.
+const queuePauseSchema = z.object({
+  paused: z.boolean(),
+});
+
 // Request-body size guards (#429). A generous global cap keeps a single
 // localhost request from being unbounded (the largest legit body is 4 pasted
 // images at ~7 MB base64 each); the ui-state PUT gets a much tighter cap since
@@ -1157,6 +1167,7 @@ export function createApp(deps: ServerDeps) {
       opencode: { discover: () => discoverOpencodeModels({ cwd: bootRoot }) },
       junie: { discover: () => discoverJunieModels({ cwd: bootRoot }) },
       cursor: { discover: () => discoverCursorModels() },
+      kilo: { discover: () => discoverKiloModels({ cwd: bootRoot }) },
     },
   });
   const providerAuth = deps.providerAuth ?? new ProviderAuthService({ cwd: bootRoot });
@@ -1808,7 +1819,7 @@ export function createApp(deps: ServerDeps) {
     // `modelDiscoveryRunnerSchema` is the contract's own list of the runners with an
     // authoritative host-local catalog (#794, #784), so the client compiles against exactly what
     // this validates. A runner absent from it has no discovery path and this 400s.
-    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, or junie' }), async (c) => {
+    .get('/models', queryZodValidator(z.object({ runner: z.union([z.string(), z.array(z.string()).transform((v) => v[0] as string)]).pipe(modelDiscoveryRunnerSchema) }), { message: 'runner must be claude, codex, opencode, cursor, junie, or kilo' }), async (c) => {
       const query = { data: c.req.valid('query') };
       return c.json(await modelCatalog.get(query.data.runner));
     });
@@ -1932,7 +1943,7 @@ export function createApp(deps: ServerDeps) {
       },
     )
 
-    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, or copilot' }), async (c) => {
+    .post('/providers/connect', jsonZodValidator(providerConnectSchema, { message: 'provider must be claude, codex, opencode, cursor, pi, copilot, or kilo' }), async (c) => {
       const body = { data: c.req.valid('json') };
 
       const provider = body.data.provider as ProviderId;
@@ -2030,6 +2041,7 @@ export function createApp(deps: ServerDeps) {
       ...(profile.provider === 'codex' ? { codex: profile.path } : {}),
       ...(profile.provider === 'opencode' ? { opencodeConfig: profile.path } : {}),
       ...(profile.provider === 'cursor' ? { cursor: profile.path } : {}),
+      ...(profile.provider === 'kilo' ? { kiloConfig: profile.path } : {}),
     };
     const defs = listConfigFiles().filter(
       (def) => def.scope === 'user' && def.runners.includes(profile.provider),
@@ -2589,22 +2601,20 @@ export function createApp(deps: ServerDeps) {
       }
       if (!entry) return c.json({ error: `unknown project: ${id}` }, 404);
 
-      // The boot project is refused, not removed: this server is serving that
-      // repo right now, and dropping its registry row would break the session's
-      // own sidebar while the process keeps running out of it. Offline removal
-      // is the honest gesture — `cezar projects remove` has no such refusal
-      // because it runs with no server. The pane disables the button and says
-      // the same thing.
-      if (id === bootId) {
-        return c.json(
-          {
-            error: `cezar is serving ${entry.name} right now — stop it and run \`cezar projects remove ${id}\` to drop the registry entry`,
-          },
-          409,
-        );
-      }
+      // The BOOT project is removable, and this is why that is safe rather than
+      // merely convenient. Removing a row drops a project from the user's list;
+      // it never stops a process, and this one keeps being served: `resolveBootProject`
+      // caches the id the boot context answers, so `/p/<boot>/…` and `default` keep
+      // resolving until cezar is stopped, the dashboard keeps counting the folder
+      // (it reports the boot root explicitly, unregistered or not), and the slug stays
+      // reserved against a newly added folder claiming the served one. What the user
+      // asked for — a folder that is no longer one of their projects — is exactly what
+      // happens. (It used to be refused with a 409 telling them to stop cezar first,
+      // which is a worse answer than the one the button's own confirm dialog already
+      // gives: nothing on disk is deleted either way.)
+      const isBoot = id === bootId;
 
-      const active = activeRunCount(id);
+      const active = activeRunCount(id, isBoot);
       if (active > 0) {
         return c.json(
           {
@@ -2627,8 +2637,17 @@ export function createApp(deps: ServerDeps) {
       if (!removed) return c.json({ error: `unknown project: ${id}` }, 404);
       // In-process handles for a project no route can reach any more: store
       // closed (index flushed), manager's timers and usage subscription dropped.
-      trackerWatches.invalidateProject(entry.root);
-      contexts.dispose(id);
+      //
+      // NOT for the boot project, which is still being served — it is still doing
+      // work the cockpit can navigate to by URL, its store is the one this process
+      // booted on (it is seeded outside the lazy map, so `contexts.dispose` is a
+      // no-op there today), and its tracker connection is still configured. Closing
+      // either would be the removal reaching past the registry row it was asked to
+      // drop. Both handles are released the moment cezar stops.
+      if (!isBoot) {
+        trackerWatches.invalidateProject(entry.root);
+        contexts.dispose(id);
+      }
       workspaceEvents.emit('project-removed', { id });
       const body: RemoveProjectResponse = { removed: true, id };
       return c.json(body);
@@ -2919,11 +2938,22 @@ export function createApp(deps: ServerDeps) {
    * rejected for the same reason as the `rm` above: `RunStore.open` creates
    * directories, and a stale `running` row left by a crashed process would
    * become a 409 the user could never clear.
+   *
+   * `isBoot` names the one project whose context is NOT in that map — the boot
+   * context is seeded separately, so without it this reports 0 for the project
+   * this server is running, which is now removable.
    */
-  const activeRunCount = (projectId: string): number => {
-    const ctx = contexts.peek(projectId);
-    if (!ctx) return 0;
-    return ctx.store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).length;
+  const activeRunCount = (projectId: string, isBoot = false): number => {
+    // `isBoot` is not an optimisation, it is the only way this reports the project
+    // this server is actually running: the boot context is seeded outside the lazy
+    // map, so `peek` answers `undefined` for it. While removal of a project with live
+    // tasks is refused, reading 0 there was harmless — the boot project could not be
+    // removed anyway. Now that it can, the boot project's own store has to be the one
+    // counted, or deregistering it mid-flight orphans tasks that keep running with no
+    // registry row to reach them through.
+    const store = isBoot ? bootContext.store : contexts.peek(projectId)?.store;
+    if (!store) return 0;
+    return store.listRuns().filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).length;
   };
 
   // Workspace-level by design: update state spans project and global installs,
@@ -3255,6 +3285,7 @@ export function createApp(deps: ServerDeps) {
             pi: z.string().trim().min(1).max(200).nullable().optional(),
             junie: z.string().trim().min(1).max(200).nullable().optional(),
             copilot: z.string().trim().min(1).max(200).nullable().optional(),
+            kilo: z.string().trim().min(1).max(200).nullable().optional(),
           })
           .optional(),
       })
@@ -4053,6 +4084,39 @@ export function createApp(deps: ServerDeps) {
     // The read-receipt sweep (#unread-done-items) — the mark-read twin of the archive
     // sweep above, and under the same registration-order guard.
     .post('/runs/read-all', (c) => c.json({ read: c.get('project').store.markAllRead() }))
+
+    // ---- the Tasks header's queue controls (Active/Archived, then Start / Pause / Delete) -------
+    //
+    // All four sit ABOVE the `/:id/...` routes for the reason the two sweeps above do: registered
+    // after them, `queue`, `start-queued` and `delete-all` would match as a run id and 404 on a
+    // lookup of a task that does not exist.
+
+    /** Read the hold and the work behind it. The cockpit paints "Paused" from this and nowhere
+     *  else, so it is the one route a second cockpit (or a refresh) can rebuild the header from. */
+    .get('/runs/queue', (c) => c.json(c.get('project').manager.queueState()))
+
+    /** Set or lift the hold. Answers the resulting state rather than an echo of the request, so a
+     *  client that raced another tab still renders what the ENGINE believes. */
+    .post('/runs/queue', jsonZodValidator(queuePauseSchema), (c) =>
+      c.json(c.get('project').manager.setQueuePaused(c.req.valid('json').paused)),
+    )
+
+    /** "Start tasks": lift the hold if set, then drain the queue under the ordinary caps. Answers
+     *  how many runs were RELEASED — under `maxParallel` that is fewer than were waiting, and a
+     *  boolean would promise the caller that the whole queue is now running. */
+    .post('/runs/start-queued', async (c) => c.json(await c.get('project').manager.startQueued()))
+
+    /**
+     * "DELETE tasks": empty the project. Irreversible, and the cockpit gates it behind a
+     * confirmation dialog naming the count — the server does not second-guess a deliberate call,
+     * but it does report honestly. `unsettled > 0` means a provider never acknowledged its
+     * cancellation inside the bounded wait, so a process may outlive its record; the count is in
+     * the answer precisely so the operator is not told "all clean" when it was not.
+     */
+    .post('/runs/delete-all', async (c) => {
+      const { deleted, cancelled, unsettled } = await c.get('project').manager.deleteAllRuns();
+      return c.json({ deleted, cancelled, unsettled });
+    })
 
     .post('/runs/:id/archive', jsonZodValidator(archiveSchema, { absent: ({}) }), async (c) => {
       const { store } = c.get('project');
@@ -6737,6 +6801,8 @@ export function resumeCommand(runner: string | undefined, sessionId: string): st
     case 'copilot':
       // `--resume <id>` takes a session id, a task id or an id prefix (`copilot --help`, 1.0.88).
       return `copilot --resume ${sessionId}`;
+    case 'kilo':
+      return `kilo --session ${sessionId}`;
     default:
       return `claude --resume ${sessionId}`;
   }

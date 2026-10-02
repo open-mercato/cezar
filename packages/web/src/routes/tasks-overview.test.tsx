@@ -10,6 +10,7 @@ import { createQueryClient } from '@/api/query-client'
 import type { ProcessUsage, RunRecord } from '@open-mercato/cezar-api-client'
 import { ListViewProvider } from '@/components/list-view'
 import { TaskQuickListContainer } from '@/components/task-quick-list'
+import { Toaster, resetToasts } from '@/components/ui/toaster'
 import { TasksOverview, TasksOverviewRoute } from '@/routes/tasks-overview'
 
 const NOW = Date.parse('2026-07-14T12:00:00.000Z')
@@ -1025,6 +1026,7 @@ describe('TasksOverviewRoute — wired to the app', () => {
 
   afterEach(() => {
     cleanup()
+    resetToasts()
     fetchMock.mockReset()
     vi.unstubAllGlobals()
   })
@@ -1062,6 +1064,200 @@ describe('TasksOverviewRoute — wired to the app', () => {
   const overviewTab = (view: string) =>
     document.querySelector(`[data-slot="overview-tab"][data-view="${view}"]`) as HTMLElement
   const sidebarRow = (id: string) => document.querySelector(`[data-slot="task-row"][data-run-id="${id}"]`)
+
+  // ---- the three queue controls, right of the Active/Archived tabs --------------------
+
+  const startBtn = () => document.querySelector('[data-slot="start-tasks"]') as HTMLButtonElement
+  const pauseBtn = () => document.querySelector('[data-slot="pause-tasks"]') as HTMLButtonElement
+  const deleteBtn = () => document.querySelector('[data-slot="delete-tasks"]') as HTMLButtonElement
+
+  /**
+   * Renders the route with a queue the fetch mock answers, plus the runs the table lists.
+   *
+   * The queue GET is STATEFUL on purpose. Every mutation here is followed by an authoritative
+   * invalidate — "the endpoint's answer is the truth" — so a mock that kept answering the state it
+   * was constructed with would overwrite each write with the value it started from, and the header
+   * would look broken for a reason that exists only in the double. Modelling the engine's own
+   * state is what lets these tests assert the real round-trip.
+   */
+  function renderQueue(
+    queue: { paused: boolean; queued: number },
+    runs: RunRecord[],
+    handlers: Record<string, (init?: RequestInit) => Response> = {},
+  ) {
+    const engine = { ...queue }
+    const queuePosts: boolean[] = []
+    fetchMock.mockImplementation(async (input, init) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      const handler = handlers[`${method} ${url}`]
+      if (handler) return handler(init)
+      if (url === '/api/v1/runs/queue') {
+        if (method === 'POST') {
+          engine.paused = JSON.parse(String(init?.body)).paused
+          queuePosts.push(engine.paused)
+        }
+        return json(engine)
+      }
+      if (url === '/api/v1/runs') return json(runs)
+      return json({})
+    })
+    return {
+      ...render(
+        <QueryClientProvider client={createQueryClient()}>
+          <MemoryRouter>
+            <ListViewProvider>
+              <TasksOverviewRoute />
+            </ListViewProvider>
+          </MemoryRouter>
+          {/* The toast surface — the release counts and the unsettled warning are reported there,
+              so a test that cannot see it would pass on a button that reported nothing. */}
+          <Toaster />
+        </QueryClientProvider>,
+      ),
+      /** Every `paused` value the header POSTed, in order. */
+      queuePosts,
+    }
+  }
+
+  it('renders the three controls beside the Active/Archived tabs', async () => {
+    renderQueue({ paused: false, queued: 2 }, [run({ id: 'q1', status: 'queued' })])
+    await waitFor(() => expect(tableRow('q1')).not.toBeNull())
+
+    // To the RIGHT of the tabs, in order: Start, Pause, Delete. The tab strip is the header's
+    // first child after the title, so "right of it" is what the order below pins.
+    const header = document.querySelector('header')!
+    const order = [...header.querySelectorAll('button')].map((b) => b.getAttribute('data-slot'))
+    const tabsAt = order.indexOf('overview-tab')
+    expect(tabsAt).toBeGreaterThanOrEqual(0)
+    const after = order.slice(tabsAt).filter((slot) => slot !== 'overview-tab')
+    expect(after.slice(0, 3)).toEqual(['start-tasks', 'pause-tasks', 'delete-tasks'])
+    expect(startBtn().textContent).toContain('Start tasks')
+    expect(pauseBtn().textContent).toContain('Pause tasks')
+    expect(deleteBtn().textContent).toContain('Delete tasks')
+  })
+
+  it('pauses and resumes through the engine, and reflects the state it answers with', async () => {
+    const { queuePosts } = renderQueue({ paused: false, queued: 3 }, [run({ id: 'p1', status: 'queued' })])
+    await waitFor(() => expect(tableRow('p1')).not.toBeNull())
+    await waitFor(() => expect(pauseBtn().disabled).toBe(false))
+
+    // The hold is the ENGINE's, not a local toggle — so the label has to come back from the server.
+    fireEvent.click(pauseBtn())
+    await waitFor(() => expect(pauseBtn().textContent).toContain('Resume tasks'))
+    expect(queuePosts).toEqual([true])
+
+    fireEvent.click(pauseBtn())
+    await waitFor(() => expect(pauseBtn().textContent).toContain('Pause tasks'))
+    expect(queuePosts).toEqual([true, false])
+  })
+
+  it('Start is offered whenever work is waiting, and reports what it released', async () => {
+    // Start and Pause are NOT inverses: Start drains the queue under `maxParallel`. It is gated on
+    // there being work waiting, NOT on the hold — a dead control in front of a visibly non-empty
+    // queue is worse than a press that releases one more task.
+    renderQueue({ paused: false, queued: 3 }, [run({ id: 's1', status: 'queued' })])
+    await waitFor(() => expect(tableRow('s1')).not.toBeNull())
+    await waitFor(() => expect(startBtn().disabled).toBe(false))
+    await waitFor(() => expect(pauseBtn().disabled).toBe(false))
+
+    cleanup()
+    renderQueue(
+      { paused: true, queued: 3 },
+      [run({ id: 's2', status: 'queued' })],
+      { 'POST /api/v1/runs/start-queued': () => json({ released: 2 }) },
+    )
+    await waitFor(() => expect(tableRow('s2')).not.toBeNull())
+    await waitFor(() => expect(startBtn().disabled).toBe(false))
+    fireEvent.click(startBtn())
+    // A COUNT, not a boolean: under a cap of 2, five queued tasks release two and the toast must
+    // not claim the queue emptied.
+    expect(await screen.findByText('Started 2 tasks')).toBeTruthy()
+  })
+
+  it('a queue that cannot start anything says so instead of claiming success', async () => {
+    renderQueue(
+      { paused: true, queued: 3 },
+      [run({ id: 'n1', status: 'queued' })],
+      { 'POST /api/v1/runs/start-queued': () => json({ released: 0 }) },
+    )
+    await waitFor(() => expect(tableRow('n1')).not.toBeNull())
+    await waitFor(() => expect(startBtn().disabled).toBe(false))
+    fireEvent.click(startBtn())
+    expect(await screen.findByText('No task could start — the parallel limit is full')).toBeTruthy()
+  })
+
+  it('holds both queue buttons while the queue is empty, and never offers Resume into a wedge', async () => {
+    renderQueue({ paused: false, queued: 0 }, [run({ id: 'e1', status: 'done' })])
+    await waitFor(() => expect(tableRow('e1')).not.toBeNull())
+    // A Pause that pauses nothing teaches the operator the button does not work.
+    expect(pauseBtn().disabled).toBe(true)
+    expect(startBtn().disabled).toBe(true)
+
+    cleanup()
+    // …but a pause that has already drained the queue is exactly when leaving the hold on would
+    // silently wedge every FUTURE task, so Resume stays offered.
+    renderQueue({ paused: true, queued: 0 }, [run({ id: 'e2', status: 'done' })])
+    await waitFor(() => expect(tableRow('e2')).not.toBeNull())
+    await waitFor(() => expect(pauseBtn().disabled).toBe(false))
+    expect(pauseBtn().textContent).toContain('Resume tasks')
+  })
+
+  it('Delete asks first, names the count, and only then empties the project', async () => {
+    let deleted = 0
+    renderQueue(
+      { paused: false, queued: 0 },
+      [run({ id: 'd1' }), run({ id: 'd2' })],
+      {
+        'POST /api/v1/runs/delete-all': () => {
+          deleted += 1
+          return json({ deleted: 2, cancelled: 1, unsettled: 0 })
+        },
+      },
+    )
+    await waitFor(() => expect(tableRow('d1')).not.toBeNull())
+    await waitFor(() => expect(deleteBtn().disabled).toBe(false))
+
+    // One click is never enough — irreversible, and native confirm() is banned in this cockpit.
+    fireEvent.click(deleteBtn())
+    const dialog = await screen.findByRole('alertdialog')
+    expect(within(dialog).getByText(/Delete all 2 tasks\?/)).toBeTruthy()
+    expect(deleted).toBe(0)
+
+    // Backing out changes nothing.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
+    expect(deleted).toBe(0)
+
+    // Confirming is what fires it.
+    fireEvent.click(deleteBtn())
+    const again = await screen.findByRole('alertdialog')
+    fireEvent.click(within(again).getByRole('button', { name: 'Delete everything' }))
+    await waitFor(() => expect(deleted).toBe(1))
+  })
+
+  it('surfaces a delete that left a process behind, rather than reporting a clean sweep', async () => {
+    renderQueue(
+      { paused: false, queued: 0 },
+      [run({ id: 'u1' })],
+      { 'POST /api/v1/runs/delete-all': () => json({ deleted: 1, cancelled: 1, unsettled: 1 }) },
+    )
+    await waitFor(() => expect(tableRow('u1')).not.toBeNull())
+    await waitFor(() => expect(deleteBtn().disabled).toBe(false))
+    fireEvent.click(deleteBtn())
+    fireEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Delete everything' }),
+    )
+    expect(await screen.findByText(/did not stop in time/)).toBeTruthy()
+  })
+
+  it('offers nothing to delete on a project with no tasks at all', async () => {
+    renderQueue({ paused: false, queued: 0 }, [])
+    await waitFor(() =>
+      expect(document.querySelector('[data-slot="tasks-empty"]')).not.toBeNull(),
+    )
+    expect(deleteBtn().disabled).toBe(true)
+  })
 
   it('shares the Active/Archived state with the sidebar — either set of tabs flips both', async () => {
     renderApp([run({ id: 'act', status: 'running' }), run({ id: 'arc', status: 'done', archived: true })])

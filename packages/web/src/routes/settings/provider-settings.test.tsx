@@ -17,6 +17,7 @@ const ALL_STATUSES: ProviderStatusResponse = {
     { provider: 'opencode', status: 'not-installed', enabled: true },
     { provider: 'cursor', status: 'not-installed', enabled: true },
     { provider: 'pi', status: 'not-installed', enabled: true },
+    { provider: 'kilo', status: 'not-installed', enabled: true },
   ],
 }
 
@@ -76,10 +77,10 @@ function serve({
       if (url === '/api/v1/providers/connect' && method === 'POST') {
         return json(connect, connectCode)
       }
-      if (/^\/api\/v1\/providers\/(claude|codex|opencode|cursor|pi)\/enabled$/.test(url) && method === 'PUT') {
+      if (/^\/api\/v1\/providers\/(claude|codex|opencode|cursor|pi|kilo)\/enabled$/.test(url) && method === 'PUT') {
         return enabledResponses.shift() ?? json(status)
       }
-      if (/^\/api\/v1\/providers\/(claude|codex|opencode|cursor|pi)\/retry$/.test(url) && method === 'POST') {
+      if (/^\/api\/v1\/providers\/(claude|codex|opencode|cursor|pi|kilo)\/retry$/.test(url) && method === 'POST') {
         return json(retry, retryCode)
       }
       return new Promise<never>(() => {})
@@ -128,7 +129,7 @@ describe('ProviderSettings', () => {
       [...document.querySelectorAll('[data-slot="provider-card"]')].map((item) =>
         item.querySelector('h3')?.textContent,
       ),
-    ).toEqual(['Claude Code', 'Codex', 'Junie', 'OpenCode', 'Cursor', 'pi', 'GitHub Copilot CLI'])
+  ).toEqual(['Claude Code', 'Codex', 'Junie', 'OpenCode', 'Cursor', 'pi', 'GitHub Copilot CLI', 'Kilo Code'])
   })
 
   it('presents discovery truth, enablement, and runtime recovery without hiding diagnostics', async () => {

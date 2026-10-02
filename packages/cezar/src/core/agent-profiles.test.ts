@@ -20,6 +20,11 @@ describe('PROFILE_ENV_VAR', () => {
     expect(PROFILE_CAPABLE_PROVIDERS).toEqual(['claude', 'codex']);
   });
 
+  it('leaves Kilo unsupported — its credentials do not follow its config dir', () => {
+    expect(PROFILE_ENV_VAR.kilo).toBeNull();
+    expect(supportsProfiles('kilo')).toBe(false);
+  });
+
   it('covers every provider, so adding one forces a decision here', () => {
     expect(Object.keys(PROFILE_ENV_VAR).sort()).toEqual([...PROVIDER_IDS].sort());
   });

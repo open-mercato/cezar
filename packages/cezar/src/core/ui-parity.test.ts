@@ -42,7 +42,7 @@ import { describe, expect, it } from 'vitest';
 import type { UiEvent, UiItem } from './ui-events.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot'] as const;
+const BACKENDS = ['claude', 'codex', 'opencode', 'cursor', 'pi', 'junie', 'copilot', 'kilo'] as const;
 
 /** Every event across every golden fixture of one backend. */
 function fixtureEvents(backend: (typeof BACKENDS)[number]): UiEvent[] {
@@ -78,10 +78,21 @@ const CAPABILITIES: ReadonlyArray<
   [
     'plan.updated with entries (TodoWrite / todoList / todowrite)',
     (events) => events.some((e) => e.type === 'plan.updated' && e.entries.length > 0),
+    // Kilo's `run --format json` wire taxonomy is five frames
+    // (step_start/text/tool_use/step_finish/error) with no checklist channel —
+    // verified against kilo 7.7.9, see kilo-ui-mapper.ts header.
+    ['kilo'],
   ],
   ['tool status: running', (events) => hasToolStatus(events, 'running')],
   ['tool status: completed', (events) => hasToolStatus(events, 'completed')],
-  ['tool status: failed', (events) => hasToolStatus(events, 'failed')],
+  [
+    'tool status: failed',
+    (events) => hasToolStatus(events, 'failed'),
+    // No failed tool state in the verified kilo wire samples (only `completed`
+    // tool states observed); the mapper still maps any non-completed terminal
+    // status to failed — pinned by kilo-ui-mapper.test.ts, not by a fixture.
+    ['kilo'],
+  ],
   // Non-empty is the point: a reasoning item with no text renders as a dead
   // "Thinking —" row, so presence alone is not parity (#528).
   [
@@ -89,11 +100,15 @@ const CAPABILITIES: ReadonlyArray<
     (events) => items(events).some((item) => item.kind === 'reasoning' && item.text.trim() !== ''),
     // Cursor's docs are explicit: "`thinking` events are suppressed in print mode and will
     // not appear in any output format" (cursor.com/docs/cli/reference/output-format).
-    ['cursor'],
+    // Kilo emits finished text blocks only — no thinking channel in the
+    // `run --format json` taxonomy (kilo-ui-mapper.ts header).
+    ['cursor', 'kilo'],
   ],
   [
     'structured diffs (Edit input / fileChange.changes / patch parts)',
     (events) => items(events).some((item) => item.kind === 'tool' && (item.diffs?.length ?? 0) > 0),
+    // Kilo tool states carry a rendered `output` string, never structured diffs.
+    ['kilo'],
   ],
   [
     'sub-agent task items (Task / review-mode items / subtask parts)',
@@ -101,7 +116,9 @@ const CAPABILITIES: ReadonlyArray<
     // junie's `tool_call.kind` is unmodified core ACP — read/edit/delete/move/search/execute/
     // think/fetch/other, no `task` (agentclientprotocol.com/protocol/schema#toolkind) — and
     // `nativeSubagentSessions` has no published wire shape, so there is nothing to map.
-    ['junie'],
+    // No task-kind tool observed on the kilo wire and no parent attribution to
+    // nest it under — same cell as codex/cursor/pi, cited in the mapper header.
+    ['junie', 'kilo'],
   ],
   [
     'usage.updated with raw token counts',

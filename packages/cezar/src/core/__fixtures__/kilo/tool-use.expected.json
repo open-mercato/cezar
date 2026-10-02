@@ -1,0 +1,89 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "ses_f09475b5dffeYu5jUi4Zql4aaS",
+    "backend": "kilo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "tool",
+      "id": "9e7bdcf6-3409-9342-9506-016238cf360c_0",
+      "name": "bash",
+      "toolKind": "execute",
+      "title": "Ran echo KILO_TOOL_TEST",
+      "status": "running",
+      "input": {
+        "command": "echo KILO_TOOL_TEST",
+        "description": "Echoes test string to verify tool"
+      }
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "tool",
+      "id": "9e7bdcf6-3409-9342-9506-016238cf360c_0",
+      "name": "bash",
+      "toolKind": "execute",
+      "title": "Ran echo KILO_TOOL_TEST",
+      "status": "completed",
+      "input": {
+        "command": "echo KILO_TOOL_TEST",
+        "description": "Echoes test string to verify tool"
+      },
+      "output": "KILO_TOOL_TEST\n"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 112,
+      "output": 42,
+      "total": 15811
+    },
+    "costUsd": 0
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_2",
+      "role": "assistant",
+      "text": "DONE"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_2",
+      "role": "assistant",
+      "text": "DONE"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 214,
+      "output": 42,
+      "total": 15863
+    },
+    "costUsd": 0
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 214,
+      "output": 42,
+      "total": 15863
+    },
+    "costUsd": 0
+  }
+]

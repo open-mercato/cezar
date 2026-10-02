@@ -329,6 +329,7 @@ export function depCheckStep(opts: DepStepOpts = {}): InstallStep {
 const NPM_GLOBAL: Record<string, string> = {
   claude: '@anthropic-ai/claude-code',
   codex: '@openai/codex',
+  kilo: '@kilocode/cli',
 };
 
 /** Ubuntu/Debian installer: apt for gh, sudo npm -g for the agent CLIs (system node). */
@@ -386,6 +387,7 @@ function removeHintFor(name: string): string {
   const npm: Record<string, string> = {
     claude: 'npm rm -g @anthropic-ai/claude-code',
     codex: 'npm rm -g @openai/codex',
+    kilo: 'npm rm -g @kilocode/cli',
   };
   if (name === 'gh') return 'sudo apt-get remove -y gh';
   return npm[name] ?? `# remove ${name} manually`;
@@ -396,6 +398,7 @@ export function brewRemoveHint(name: string): string {
   const npm: Record<string, string> = {
     claude: 'npm rm -g @anthropic-ai/claude-code',
     codex: 'npm rm -g @openai/codex',
+    kilo: 'npm rm -g @kilocode/cli',
   };
   if (name === 'gh') return 'brew uninstall gh';
   return npm[name] ?? `# remove ${name} manually`;

@@ -1,0 +1,16 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "ses_f09457e7cffelI9GPfRSmNyWYl",
+    "backend": "kilo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "error"
+  }
+]

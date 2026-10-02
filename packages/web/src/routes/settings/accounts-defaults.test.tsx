@@ -156,6 +156,7 @@ function renderAccounts() {
       </MemoryRouter>
     </QueryClientProvider>,
   )
+  return client
 }
 
 const defaults = () => document.querySelector('[data-slot="accounts-defaults"]')
@@ -223,7 +224,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     )
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     // The built-in fallback, rendered rather than thrown.
     expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
   })
@@ -232,9 +233,9 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     expect(rows().map((r) => r.getAttribute('data-value'))).toEqual([
-      'claude', 'claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot',
+      'claude', 'claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'kilo',
     ])
     expect(rows()[1]?.textContent).toContain('~/.claude-klaudiusz')
   })
@@ -243,7 +244,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     expect(rowFor('claude', '')?.getAttribute('aria-checked')).toBe('true')
   })
 
@@ -251,7 +252,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     fireEvent.click(rowFor('codex')!)
 
     await waitFor(() => expect(configPuts()).toHaveLength(1))
@@ -265,7 +266,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     fireEvent.click(rowFor('claude', 'klaudiusz')!)
 
     await waitFor(() => expect(selections()).toHaveLength(1))
@@ -292,7 +293,7 @@ describe('Agent accounts → Defaults for new projects', () => {
     serve({ accounts: { ...ACCOUNTS, defaults: { claude: 'klaudiusz' } } })
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     fireEvent.click(rowFor('claude', '')!)
 
     await waitFor(() => expect(selections()).toHaveLength(1))
@@ -320,11 +321,41 @@ describe('Agent accounts → Defaults for new projects', () => {
     expect(repoConfigWrites()).toHaveLength(0)
   })
 
+  /**
+   * The composer does NOT read this workspace cache: `GET /api/config` merges these machine-wide
+   * defaults into the repo's own on every read, and the model pill resolves from THAT
+   * (`queryKeys.config`, scoped per repo). So writing here without refreshing the project copy left
+   * every already-open task-start surface offering the model the user had just replaced — the
+   * change appeared not to take until something else happened to refetch.
+   */
+  it('refreshes the project config the composer resolves its model from', async () => {
+    serve({ agentDefaults: { models: { claude: 'opus' } } })
+    const client = renderAccounts()
+    // The composer has already fetched the project config and holds the old default.
+    client.setQueryData(queryKeys.config, {
+      defaultRunner: 'claude',
+      defaultModels: { claude: 'sonnet' },
+      modelsLocked: false,
+    })
+
+    const select = () =>
+      document.querySelector<HTMLSelectElement>('[data-slot="accounts-default-model"][data-runner="claude"]')
+    await waitFor(() => expect(select()).not.toBeNull())
+
+    fireEvent.change(select()!, { target: { value: '' } })
+    await waitFor(() => expect(configPuts()).toHaveLength(1))
+    // Invalidated, not rewritten: this endpoint is project-scoped and its answer differs per repo
+    // (a repo may pin its own model), so the only correct move is to let it re-read.
+    await waitFor(() =>
+      expect(client.getQueryState(queryKeys.config)?.isInvalidated).toBe(true),
+    )
+  })
+
   it('says these are defaults a project can override, not a setting it imposes', async () => {
     serve()
     renderAccounts()
 
-    await waitFor(() => expect(rows()).toHaveLength(8))
+    await waitFor(() => expect(rows()).toHaveLength(9))
     const pane = defaults()
     expect(pane?.textContent).toContain('has not chosen for itself')
     expect(pane?.textContent).toContain('keeps its own')

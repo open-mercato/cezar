@@ -99,6 +99,7 @@ const configSchema = z.object({
       cursor: z.string().trim().min(1).max(200).optional(),
       pi: z.string().trim().min(1).max(200).optional(),
       copilot: z.string().trim().min(1).max(200).optional(),
+      kilo: z.string().trim().min(1).max(200).optional(),
     })
     .optional()
     .catch(undefined),

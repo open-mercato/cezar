@@ -31,19 +31,22 @@ let stream;
 const info = ${JSON.stringify(costField)};
 const server = createServer((req, res) => {
   req.resume();
-  if (req.url === '/event') {
+  if (req.url === '/api/event') {
     stream = res;
     res.writeHead(200, {'content-type':'text/event-stream'});
     res.flushHeaders();
-  } else if (req.url === '/session') {
-    res.end(JSON.stringify({id:'session-cost'}));
+  } else if (req.url === '/api/session') {
+    res.end(JSON.stringify({data:{id:'session-cost'}}));
   } else {
     for (let i=0; i<2; i++) stream?.write('data: '+JSON.stringify({type:'message.updated',properties:{info:{id:'message-cost',role:'assistant',...info}}})+'\\n\\n');
     stream?.write('data: '+JSON.stringify({type:'session.idle',properties:{sessionID:'session-cost'}})+'\\n\\n');
     res.end(JSON.stringify(info));
   }
 });
-server.listen(0, '127.0.0.1', () => console.log('http://127.0.0.1:'+server.address().port));
+server.listen(0, '127.0.0.1', () => {
+  console.log('http://127.0.0.1:'+server.address().port);
+  console.log('server password stub-secret');
+});
 ` : `
 process.stdin.once('data', () => {
   console.log(${JSON.stringify(JSON.stringify(frame))});

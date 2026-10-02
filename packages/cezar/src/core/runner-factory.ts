@@ -6,6 +6,7 @@ import { CopilotAcpRunner } from './copilot-acp-runner.ts';
 import { OpencodeServerRunner } from './opencode-server-runner.ts';
 import { CursorAgentRunner } from './cursor-agent-runner.ts';
 import { PiRunner } from './pi-runner.ts';
+import { KiloRunner } from './kilo-runner.ts';
 
 /**
  * The single place that maps a backend id onto a concrete runner. Everything
@@ -27,6 +28,8 @@ export function createRunner(backend: AgentBackend | RunnerId | undefined): Agen
       return new JunieRunner();
     case 'copilot':
       return new CopilotAcpRunner();
+    case 'kilo':
+      return new KiloRunner();
     case 'claude':
     case 'claude-cli':
     default:

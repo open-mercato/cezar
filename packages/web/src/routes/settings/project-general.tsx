@@ -188,17 +188,19 @@ function ProjectFacts({ project, canRemove }: { project: ProjectListEntry; canRe
  * Deregister this project — the registry table's per-row Remove, offered where the user already
  * is. Same hook, same dialog, same words (remove-project.tsx).
  *
- * The boot project cannot be removed from the cockpit: this server is serving that folder, and
- * dropping its registry row would break the session's own sidebar, so the server 409s. Disabling
- * here means the explanation arrives before the click rather than as an error toast after it —
- * and the offline gesture (`cezar projects remove`, which has no such refusal) is what the
- * message points at.
+ * The boot project — the folder this server is serving — can be removed from here too. It used to
+ * be refused (a 409 saying to stop cezar first, with the button disabled so the explanation came
+ * before the click), and the refusal was the wrong shape rather than a wrong rule: nothing about
+ * unregistering stops the process, and the server keeps serving that folder under both `default`
+ * and its own id until it is stopped. So the button stays enabled and the dialog (`isBoot`) says
+ * what actually happens — it leaves the project list, and cezar keeps running here.
  *
  * On success the URL this page lives at (`/p/<id>/settings`) has just stopped resolving, so the
  * navigation is part of the action, not a nicety. It targets the BOOT project explicitly rather
  * than `/`: the bare root restores the last saved location, and whether the removed project has
- * already left the registry cache when that check runs is a race — this is the one project that
- * is always registered.
+ * already left the registry cache when that check runs is a race — the boot project's id is the
+ * one that always resolves, because the scope gate answers it whether or not a registry row is
+ * behind it.
  */
 function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bootProject: string }) {
   const [confirming, setConfirming] = useState<ProjectListEntry | null>(null)
@@ -221,8 +223,10 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
           // reach it, then says what "Remove" actually does — the row context that makes a bare
           // "Remove" safe-sounding isn't read out with it.
           aria-label={`Remove ${project.name} from the workspace — unregisters it, no files are deleted`}
-          title={isBoot ? 'cezar is serving this project — stop it and use `cezar projects remove`' : undefined}
-          disabled={isBoot || remove.isPending}
+          // The boot project is removable: this server keeps serving the folder, it just stops
+          // being one of the user's projects. Explains the consequence instead of refusing.
+          title={isBoot ? 'cezar is serving this project — removing it drops it from your project list, not from the running server' : undefined}
+          disabled={remove.isPending}
           onClick={() => setConfirming(project)}
           className="text-danger"
         >
@@ -230,12 +234,13 @@ function RemoveProject({ project, bootProject }: { project: ProjectListEntry; bo
         </Button>
         {isBoot ? (
           <span data-slot="project-general-remove-boot" className="text-[11px] text-soft-foreground">
-            cezar is serving this project — stop cezar and run `cezar projects remove` to drop it.
+            cezar is serving this project — removing it only drops it from your project list; cezar keeps running here until you stop it.
           </span>
         ) : null}
       </div>
       <RemoveProjectDialog
         project={confirming}
+        isBoot={isBoot}
         onOpenChange={(open) => !open && setConfirming(null)}
         onConfirm={() => {
           setConfirming(null)

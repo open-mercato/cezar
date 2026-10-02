@@ -48,12 +48,17 @@ const providerAuth = (disconnected: ProviderId[] = []) => new ProviderAuthServic
         ? 'codex'
         : executable === 'opencode'
           ? 'opencode'
-          : 'pi';
+          : executable === 'kilo'
+            ? 'kilo'
+            : 'pi';
     if (disconnected.includes(provider)) return { stdout: '', stderr: '', exitCode: 1 };
     if (provider === 'claude') return { stdout: '{"loggedIn":true}', stderr: '', exitCode: 0 };
     if (provider === 'codex') return { stdout: 'Logged in using ChatGPT', stderr: '', exitCode: 0 };
     if (provider === 'opencode') {
       return { stdout: '┌  Credentials ~/.local/share/opencode/auth.json\n└  1 credential', stderr: '', exitCode: 0 };
+    }
+    if (provider === 'kilo') {
+      return { stdout: '┌  Credentials ~/.local/share/kilo/auth.json\n└  1 credential', stderr: '', exitCode: 0 };
     }
     return {
       stdout: 'provider  model  context  max-out  thinking  images\nanthropic  claude  200K  64K  yes  yes',
@@ -149,6 +154,7 @@ describe('POST /api/v1/runs/:id/open-in — agent CLI resume vs fresh launch', (
     ['claude', 'cli:claude', 'claude --resume sess-1'],
     ['codex', 'cli:codex', 'codex resume sess-1'],
     ['opencode', 'cli:opencode', 'opencode --session sess-1'],
+    ['kilo', 'cli:kilo', 'kilo --session sess-1'],
   ] as const)('the %s CLI resumes its own %s session', async (runner, target, expected) => {
     const run = makeRun(runner, 'sess-1');
     const res = await openIn(run.id, target);

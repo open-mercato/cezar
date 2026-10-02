@@ -167,6 +167,13 @@ export async function readAccountIdentity(
   if (provider === 'claude') return readClaudeIdentity(configDir);
   if (provider === 'codex') return readCodexIdentity(configDir);
   if (provider === 'cursor') return readCursorIdentity(configDir, opts.runCommand);
+  if (provider === 'kilo') {
+    return {
+      available: false,
+      reason: 'Kilo keeps its login outside its config folder, so cezar cannot read it.',
+      fields: [],
+    };
+  }
   return {
     available: false,
     reason: 'OpenCode keeps its login outside its config folder, so cezar cannot read it.',

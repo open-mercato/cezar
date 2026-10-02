@@ -119,6 +119,10 @@ export const BACKEND_MODEL_MAP: Readonly<Record<AgentBackend, BackendModelMap>> 
   // the run (#405's invariant). Rejecting a bare id the way opencode and pi do would reject the
   // only form Copilot accepts.
   copilot: { defaultProvider: 'github' },
+  // kilo selects across providers with the same `provider/model` convention
+  // (OpenCode fork) — no default provider, so a bare model is rejected loudly
+  // and `toBackendModel` hands kilo the full `provider/model` on its `-m`.
+  kilo: {},
 };
 
 const SLASH = '/';

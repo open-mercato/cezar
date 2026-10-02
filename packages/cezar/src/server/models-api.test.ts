@@ -124,11 +124,34 @@ describe('workspace model catalog API', () => {
     });
   });
 
+  it('answers the Kilo catalog too — same provider/model line shape as OpenCode', async () => {
+    const server = createApp({
+      repoRoot: root,
+      store,
+      manager: {} as RunManager,
+      version: 'test',
+      modelCatalog: new RunnerModelCatalog({
+        adapters: {
+          kilo: {
+            discover: async () => [{ id: 'kilo/kilo-auto', label: 'kilo/kilo-auto', description: 'via kilo' }],
+          },
+        },
+      }),
+    });
+    const response = await apiRequest(server, '/api/v1/models?runner=kilo');
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      runner: 'kilo',
+      models: [{ id: 'kilo/kilo-auto', description: 'via kilo' }],
+      source: 'live',
+    });
+  });
+
   // Every runner cezar ships now discovers, so only a MISSING or unknown `runner` is rejected.
   it.each(['/api/v1/models', '/api/v1/models?runner=nope'])('rejects invalid query %s', async (path) => {
     const response = await apiRequest(app(async () => []), path);
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, cursor, or junie' });
+  expect(await response.json()).toEqual({ error: 'runner must be claude, codex, opencode, cursor, junie, or kilo' });
   });
 
   it('returns a Cursor catalog when that adapter is registered', async () => {

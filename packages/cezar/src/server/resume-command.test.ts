@@ -20,6 +20,7 @@ describe('resumeCommand — session id validation', () => {
     // Verified live (`junie --help`, 26.9.22): `--resume` alone reopens the last session; the
     // target is named by the separate `--session-id=<id>` flag, not a positional argument.
     expect(resumeCommand('junie', id)).toBe(`junie --resume --session-id=${id}`);
+    expect(resumeCommand('kilo', id)).toBe(`kilo --session ${id}`);
   });
 
   // Every runner id must map to a command — an id that fell through to the `claude` default

@@ -13,7 +13,7 @@ import {
 } from '../core/ask.ts';
 import { AUTO_END_DELAY_MS, type AgentSession } from '../core/claude-cli-runner.ts';
 import { onUsage, registerRunProcess, unregisterRunProcess, type ProcessUsage } from '../core/process-usage.ts';
-import { parseUsageLimit } from '../core/usage-limit.ts';
+import { isProviderRefusal, parseUsageLimit } from '../core/usage-limit.ts';
 import { createRunner } from '../core/runner-factory.ts';
 import type { RunnerId } from '../core/agent-runner.ts';
 import { modelConflictsWithRunner } from '../core/model-presets.ts';
@@ -50,7 +50,7 @@ import { materializeSkillDir } from '../skills-remote.ts';
 import { seedAgentConfigLocalLayer } from '../agent-config/seed.ts';
 import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
-import { autosaveCommit, chooseForkBase, createWorktree, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
+import { autosaveCommit, chooseForkBase, createWorktree, removeWorktree, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
 import { loadWorkflows } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
@@ -117,6 +117,13 @@ async function configuredModelProvider(
 }
 /** Maximum time a live provider gets to honor cancellation before its slot is reaped. */
 const CANCEL_GRACE_MS = 1_000;
+/**
+ * Ceiling on how long `startQueued` waits for the pump chain to go idle before it reports what it
+ * measured. Generous next to a sweep (which is a queue walk plus a `getRepoInfo` read), and bounded
+ * because the count it returns must eventually be sent — a request that never returns is worse than
+ * one that reports a slightly stale queue.
+ */
+const START_PUMP_IDLE_MS = 5_000;
 /**
  * Task-completion marker from the agent contract (HANDOFF_INSTRUCTIONS): a
  * turn whose text ends with `CEZ:DONE` means "goal achieved, nothing to ask" —
@@ -403,6 +410,11 @@ interface ActiveRun {
    *  cannot answer (a disabled capability, a missing credential), and parks instead of burning
    *  the remaining nudges — the live-session lesson behind `tryAutonomousNudge`. */
   lastOverriddenAsk?: string;
+  /** Set when the provider REFUSED the turn that just ended (rate limit / quota / usage limit),
+   *  cleared on the next turn that actually starts. A refused turn is not progress: the nudge
+   *  used to relaunch into the same refusal, burning all `MAX_AUTO_CONTINUES` in seconds and
+   *  then idling out the full `IDLE_TIMEOUT_MS` for nothing. See `tryAutonomousNudge`. */
+  turnRefused?: boolean;
   /** Registry snapshot used to expand `/skill` follow-ups before a backend can
    *  mistake them for its own slash commands (#676). */
   skills?: Skill[];
@@ -1010,6 +1022,23 @@ export class RunManager {
   /** Set by the watchdog for exactly one sweep: ignore the usage-limit hold and make progress. */
   private forceNextPump = false;
 
+  /**
+   * The operator's hold on THIS project's queue (`POST /runs/queue`, the Tasks header's
+   * "PAUSE tasks"): while set, `pump()` starts nothing new.
+   *
+   * Process-local and OFF at boot, deliberately. It gates ADMISSION from the queue and nothing else
+   * — the #347 exemption carries over verbatim, so a run parked at `waiting` still resumes through
+   * `deliverMessage` and a monitoring wake still re-enters its session; only the next NEW task
+   * waits. A running task is never interrupted, so a pause cannot leave a half-written tree.
+   *
+   * NOT persisted, and that is the load-bearing decision. A durable hold would outlive the process
+   * that set it, and every boot would re-apply a pause nobody is there to lift — the queue would
+   * sit idle behind a button on a page that is not open, which is the dead-end state the doctrine
+   * warns about. A restart therefore always resumes work, and the hold lasts exactly as long as the
+   * operator's intent: until they press Start, or the server restarts.
+   */
+  private queuePaused = false;
+
   /** Runs the watchdog started despite the hold. The spawn-time gate (`requeueWhileHeld`) would
    *  otherwise hand them straight back and the rescue would undo itself in a millisecond. */
   private readonly forceStarted = new Set<string>();
@@ -1457,6 +1486,12 @@ export class RunManager {
         // no runner, and then the account it would use is the configured default.
         const defaultRunner = anyHold ? (await loadConfig(this.repoRoot)).defaultRunner : undefined;
         const startable = (id: string): boolean => {
+          // The operator's hold is the FIRST question, before the account holds and before capacity:
+          // while the queue is paused nothing starts for any reason, so the sweep below finds
+          // nothing startable and leaves every run queued in its existing order. Checking it here
+          // rather than around the loop is what makes it total — a run cannot slip past through a
+          // second entry point, because this predicate is the only gate `pump()` has.
+          if (this.queuePaused) return false;
           const queued = this.store.getRun(id);
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
           return capacity();
@@ -2605,6 +2640,170 @@ export class RunManager {
       }
     }
     return { deadline, inFlight };
+  }
+
+  /**
+   * The queue hold and how much work is waiting behind it — `GET /runs/queue` (and the answer
+   * `POST /runs/queue` gives back, which is the same object on purpose).
+   *
+   * `queued` counts the ENGINE's queue, not the `queued` STATUS, and the two are deliberately not
+   * the same number. A record can sit at `queued` with no queue entry behind it (the watchdog's
+   * lost-run shape, `rescueStalledQueue`), and a run the engine holds has not necessarily reached
+   * its `queued` record yet. What the operator is about to be told is "N tasks are waiting" — so
+   * it must be the number `pump()` would actually consider, which is `this.queue.length`.
+   */
+  queueState(): { paused: boolean; queued: number } {
+    return { paused: this.queuePaused, queued: this.queue.length };
+  }
+
+  /**
+   * Set or lift the operator's hold (`POST /runs/queue`). Returns the state the engine is now in,
+   * so the caller never has to compose a second answer from its own input.
+   *
+   * Lifting the hold PUMPS, rather than waiting for the next unrelated event to free a slot. A
+   * press of "Start tasks" with the queue already full and nothing running would otherwise leave the
+   * work sitting until some unrelated event happened to fire `release()` — a button that looks
+   * broken rather than one that started the tasks. `pump()` is idempotent and honors the caps, so
+   * this can only ever start what would have been started anyway.
+   */
+  setQueuePaused(paused: boolean): { paused: boolean; queued: number } {
+    if (this.queuePaused === paused) return this.queueState();
+    this.queuePaused = paused;
+    if (!paused) void this.pump();
+    return this.queueState();
+  }
+
+  /**
+   * "Start tasks" (`POST /runs/start-queued`): lift the hold if it is set, then drain the queue
+   * under the ordinary caps. Returns how many runs LEFT the queue.
+   *
+   * The count is a count, not a boolean, and the difference is the whole reason this is not just
+   * `setQueuePaused(false)`: the sweep admits work only while `maxParallel` has room, so five
+   * queued tasks under a cap of two release two and the other three stay exactly where they were.
+   * The cockpit reports what it got rather than claiming the queue emptied.
+   *
+   * Measured as the queue's length before and after an AWAITED pump, not as the number of records
+   * that changed status — `pump()` hands a run to `execute()` and returns before the spawn
+   * finishes, so a synchronous read would report a release that had not been dequeued yet, and a
+   * sweep that started nothing would report the tasks it was resuming as if it had started them.
+   *
+   * The hold is cleared HERE rather than through `setQueuePaused(false)` on purpose. That setter
+   * pumps as a side effect, and `pump()` answers immediately when a sweep is already in flight (it
+   * re-arms `pumpAgain` and returns) — so delegating to it would leave this method measuring a
+   * queue the background sweep had not drained yet, and reporting `released: 0` for a press that
+   * did start every task it was allowed to. Hence: clear the flag, pump once, then WAIT for the
+   * pump chain to actually go idle.
+   */
+  async startQueued(): Promise<{ released: number }> {
+    this.queuePaused = false;
+    const before = this.queue.length;
+    await this.pump();
+    await this.waitForPumpIdle(START_PUMP_IDLE_MS);
+    return { released: Math.max(0, before - this.queue.length) };
+  }
+
+  /**
+   * Resolve once no `pump()` sweep is in flight, or when `timeoutMs` elapses.
+   *
+   * `pump()` is re-entrant by design — a request arriving mid-sweep sets `pumpAgain` and returns —
+   * so `await this.pump()` is NOT a promise that the queue has been swept. Anything that measures
+   * the result of a sweep has to wait on this instead, or it reads the queue mid-flight.
+   */
+  private async waitForPumpIdle(timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (this.pumping && Date.now() < deadline) {
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 10);
+        timer.unref?.();
+      });
+    }
+  }
+
+  /** Runs this manager still holds, across the queue and both spawn windows. Zero is the only
+   *  value that means "safe to remove a worktree". */
+  private heldRunCount(): number {
+    return this.active.size + this.starting.size + this.queue.length;
+  }
+
+  /**
+   * "DELETE tasks" (`POST /runs/delete-all`): empty this project, active and archived alike.
+   *
+   * Three ordered steps, and the order is the correctness of the whole route:
+   *
+   *  1. **Hold the queue first.** A task that entered `pump()` between the cancel sweep and the
+   *     delete sweep would spawn a CLI, mint a worktree and a branch, and then be deleted out from
+   *     under itself — a leaked process and a leaked branch, with the record already gone. Pausing
+   *     first makes the set of runs fixed at the moment the sweep began.
+   *  2. **Cancel what is still live, repeatedly, until the registries are empty.** Two separate
+   *     reasons this cannot be one pass. A run with an open session is not cancelled
+   *     synchronously: `cancelOne` arms `CANCEL_GRACE_MS` and the process keeps running until the
+   *     provider settles, with the agent's cwd inside the worktree we are about to remove — so the
+   *     drain has to be WAITED for. And a run in the `starting` window (dequeued by `pump()`, not
+   *     yet registered in `active`) is not reachable by `cancelOne` AT ALL; it registers a moment
+   *     later and would otherwise run to completion inside the sweep. Re-cancelling until two
+   *     consecutive passes find nothing new closes that window, and the loop is BOUNDED — a
+   *     provider that never settles must not hang the request forever. What is left over is
+   *     reported as `unsettled` rather than papered over.
+   *  3. **Delete every record**, removing each worktree and branch on the way, exactly as the
+   *     per-run `DELETE /runs/:id` does. That route is the reference implementation of "delete
+   *     cleans up after itself" (spec 006) and this one must not be a second, weaker version.
+   *
+   * The hold is lifted in a `finally`, whatever happens: leaving a project paused because a delete
+   * failed would be the worst possible outcome of this route — the tasks are gone AND the queue is
+   * wedged, so the next task created would sit forever behind a button the operator has no reason
+   * to look for.
+   */
+  async deleteAllRuns(): Promise<{ deleted: number; cancelled: number; unsettled: number }> {
+    const wasPaused = this.queuePaused;
+    this.queuePaused = true;
+    try {
+      let cancelled = 0;
+      // `CANCEL_GRACE_MS` is the engine's own settle window; the multiplier is headroom for the
+      // provider's teardown promise to resolve and its `dropActive` to land.
+      const deadline = Date.now() + CANCEL_GRACE_MS * 5;
+      for (;;) {
+        for (const id of [...this.active.keys(), ...this.starting, ...this.queue]) {
+          if (this.cancel(id)) cancelled += 1;
+        }
+        if (this.heldRunCount() === 0) break;
+        if (Date.now() >= deadline) break;
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, 25);
+          timer.unref?.();
+        });
+      }
+      // Whatever is still held has outlasted the bounded wait: a process may outlive its record.
+      const unsettled = this.heldRunCount();
+      let deleted = 0;
+      for (const run of this.store.listRuns()) {
+        if (run.worktreePath) await removeWorktree(this.repoRoot, run.worktreePath, run.branch);
+        if (this.store.deleteRun(run.id)) deleted += 1;
+      }
+      return { deleted, cancelled, unsettled };
+    } finally {
+      this.queuePaused = wasPaused;
+      if (!this.queuePaused) void this.pump();
+    }
+  }
+
+  /**
+   * Resolve once nothing is active, starting or queued, or when `timeoutMs` elapses — whichever
+   * comes first. Returns how many runs were STILL held when it gave up (0 when it drained).
+   *
+   * The count is not decoration: it is how `deleteAllRuns` stays honest about a provider that
+   * never settled, and it is why the wait is bounded rather than open-ended.
+   */
+  private async waitUntilSettled(timeoutMs: number): Promise<number> {
+    const deadline = Date.now() + timeoutMs;
+    const stragglers = () => this.active.size + this.starting.size + this.queue.length;
+    while (stragglers() > 0) {
+      if (Date.now() >= deadline) return stragglers();
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 25);
+        timer.unref?.();
+      });
+    }
+    return 0;
   }
 
 
@@ -4810,6 +5009,12 @@ export class RunManager {
     if (state.cancelled || (this.active.has(runId) && this.active.get(runId) !== state)) return;
     this.recordUsageUiEvent(runId, state, event);
     sink.handle(event);
+    // A new turn is the provider's answer to the last one: whatever refused us has been given a
+    // fresh chance, so the flag that made `tryAutonomousNudge` park is stale from here on. Set on
+    // `session.error` below, which is the ONLY place that sees the provider's own words — never
+    // the agent's prose, which may talk about rate limits without being one.
+    if (event.type === 'turn.started') state.turnRefused = false;
+    if (event.type === 'session.error' && isProviderRefusal(event.message)) state.turnRefused = true;
     if (event.type !== 'ask.requested' || state.cancelled) return;
     this.clearIdleTimer(state);
     this.leaveMonitoring(runId);
@@ -5258,6 +5463,9 @@ export class RunManager {
    *    the portable `CEZ:ASK` marker is a turn-end signal this helper can outrank, a native ask
    *    is not. Named here so the gap is recorded where someone reasoning about autonomous
    *    liveness will look for it.
+   *  - a turn the PROVIDER refused (`turnRefused`, see below): an unattended run that stops
+   *    because the provider's door is shut is correct; one that re-fires the same request 40
+   *    times into the same refusal is not.
    */
   private tryAutonomousNudge(
     runId: string,
@@ -5267,6 +5475,25 @@ export class RunManager {
     dispatchTurn: DispatchTurnResult,
   ): boolean {
     if (!state.autonomous) return false;
+    // The provider REFUSED this turn (rate limit / quota). It produced no work, so nudging is not
+    // "keep going" — it is the same request fired again into a door that is already shut. Measured
+    // on a free-tier model, that is not a rare edge: 40 nudges burned in 14 seconds, every one of
+    // them refused, and the run then sat out the whole `IDLE_TIMEOUT_MS` (15m) waiting for a turn
+    // that could not come. Parking here is what the flag has always been FOR — an unattended run
+    // that stops for a human is the promise; a run that thrashes against a provider quota is not
+    // unattended work, it is unattended waste.
+    //
+    // Park, do not fail: the refusal is the provider's, and the session is still open with its
+    // work intact, so `continueRun` resumes it unchanged. `scheduleAutoResumeIfLimited` still
+    // owns the resume-on-reset path for runs that FAIL on a limit carrying a usable instant.
+    if (state.turnRefused) {
+      this.store.appendEvent(runId, {
+        type: 'note',
+        stepId,
+        message: `autonomous — the provider refused this turn (rate limit or quota), so the run parks instead of retrying into the same refusal; it keeps its work and can be continued`,
+      });
+      return false;
+    }
     // Three dispatch exceptions (spec 2026-09-10-dispatch), each closing a hole the nudge would
     // otherwise punch through the feature's guarantees — and living HERE, in the one helper both
     // turn-end handlers call, so neither site can drift from the other:

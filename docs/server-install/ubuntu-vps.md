@@ -56,7 +56,7 @@ node packages/cezar/dist/index.js server-install --platform ubuntu-vps
 
 | Step | What happens |
 |------|--------------|
-| **Dependencies** | Detects `claude` / `codex` / `opencode` / `gh` / `git`; offers to install the missing ones. At least one agent CLI is required. |
+| **Dependencies** | Detects `claude` / `codex` / `opencode` / `kilo` / `gh` / `git`; offers to install the missing ones. At least one agent CLI is required. |
 | **Reverse proxy** | Installs **nginx**, writes an `auth_basic` + SSE-safe proxy vhost, creates the **htpasswd** identity file, and — if `ufw` is active — allows `Nginx Full` (ports 80/443). |
 | **Domain + SSL** *(optional)* | Points the vhost's `server_name` at your domain, then runs `certbot --nginx` for a Let's Encrypt certificate with auto-redirect. Skippable — you can add it later. |
 | **Service** | Installs a **systemd** unit (rootless `--user` + linger where possible, else a system unit), **starts cezar now**, enables it on boot, and waits for it to answer on the loopback port. |

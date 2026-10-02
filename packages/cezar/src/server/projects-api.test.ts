@@ -714,14 +714,73 @@ describe('workspace projects API', () => {
       expect(await registeredIds()).toEqual([other.id]);
     });
 
-    it('refuses the boot project (and its `default` alias) — this server is serving it', async () => {
+    it('removes the boot project — the row is dropped and the server keeps serving the folder', async () => {
+      // The boot project's row is removable: it leaves the user's project list, and nothing about
+      // unregistering stops the process that is serving it. What used to be a 409 here ("stop cezar
+      // and run `cezar projects remove`") was a refusal the button's own confirm dialog already
+      // explained better.
       const boot = await registerProject(repoRoot);
-      for (const id of [boot.id, 'default']) {
-        const { status, body } = await del(id);
-        expect(status, id).toBe(409);
-        expect(body.error, id).toContain('is serving');
-      }
+      const other = await registerProject(otherRoot);
+      writeFileSync(join(repoRoot, 'README.md'), '# keep me\n', 'utf8');
+      // Built once up front so the snapshot is not racing the boot context's own first writes
+      // (`ensureLaunchKey`) — the assertion is about the REMOVAL touching nothing, not about
+      // what booting a project leaves behind.
+      await apiRequest(makeApp(), `/api/v1/p/${boot.id}/runs`, { method: 'GET' });
+      const before = snapshot(repoRoot);
+
+      const { status, body } = await del(boot.id);
+
+      expect(status).toBe(200);
+      expect(body).toEqual({ removed: true, id: boot.id });
+      // Gone from the registry…
+      expect((await getProjects()).projects.map((p) => p.id)).toEqual([other.id]);
+      // …and NOTHING on disk changed, exactly like every other removal.
+      expect(snapshot(repoRoot)).toEqual(before);
+      expect(before['README.md']).toBe('# keep me\n');
+      // The URL does NOT stop resolving: `resolveBootProject` caches the id the boot context
+      // answers, so the scope gate keeps serving this project with no registry row behind it.
+      // A cockpit left standing on it must not turn into a 404.
+      const scoped = await apiRequest(makeApp(), `/api/v1/p/${boot.id}/runs`, { method: 'GET' });
+      expect(scoped.status).toBe(200);
+      expect(await scoped.json()).toEqual([]);
+      // The alias now resolves to an id that has no row, so it is an unknown project — the same
+      // 404 any other removed id answers with.
+      expect((await del('default')).status).toBe(404);
+    });
+
+    it('lists a removed boot project again as unregistered when it was the only one', async () => {
+      // The honest post-state of removing your last project: the folder cezar runs from is still
+      // served, and with an empty registry `GET /projects` names it as the "not registered" row
+      // (the same rule a fresh boot in an unsaved folder follows) rather than pretending the
+      // server has nothing to serve.
+      const boot = await registerProject(repoRoot);
+      expect((await del(boot.id)).status).toBe(200);
+
+      const after = await getProjects();
+      expect(after.projects.map((p) => p.id)).toEqual([boot.id]);
+      expect(after.projects[0]?.unregistered).toBe(true);
+      expect(after.bootProject).toBe(boot.id);
+      expect((await registeredProjects()).map((p) => p.id)).toEqual([]);
+    });
+
+    it('409s removing the boot project while IT has running tasks', async () => {
+      // `activeRunCount` reads the BOOT store, not `contexts.peek` — the boot context is seeded
+      // outside the lazy map, so the peek-only version reported 0 here. That was harmless while
+      // the boot project could not be removed at all; now it would let a live agent keep burning
+      // tokens under a root no route resolves any more.
+      const boot = await registerProject(repoRoot);
+      const run = store.createRun({ title: 'live', workflow: 'quick-task', task: 'x', steps: [] });
+      expect(run.status).toBe('queued');
+
+      const refused = await del(boot.id);
+
+      expect(refused.status).toBe(409);
+      expect(refused.body.runningTasks).toBe(1);
+      expect(refused.body.error).toMatch(/running task/);
       expect((await getProjects()).projects.map((p) => p.id)).toEqual([boot.id]);
+
+      store.updateRun(run.id, { status: 'done' });
+      expect((await del(boot.id)).status).toBe(200);
     });
   });
 

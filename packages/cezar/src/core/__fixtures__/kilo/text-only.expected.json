@@ -1,0 +1,49 @@
+[
+  {
+    "type": "session.started",
+    "sessionId": "ses_f0948378fffeXFwVgoh4ZCc6NM",
+    "backend": "kilo"
+  },
+  {
+    "type": "turn.started",
+    "turnId": "turn_1"
+  },
+  {
+    "type": "item.started",
+    "item": {
+      "kind": "message",
+      "id": "item_1",
+      "role": "assistant",
+      "text": "KILO_PROBE_OK"
+    }
+  },
+  {
+    "type": "item.completed",
+    "item": {
+      "kind": "message",
+      "id": "item_1",
+      "role": "assistant",
+      "text": "KILO_PROBE_OK"
+    }
+  },
+  {
+    "type": "usage.updated",
+    "usage": {
+      "input": 15721,
+      "output": 6,
+      "total": 15752
+    },
+    "costUsd": 0
+  },
+  {
+    "type": "turn.completed",
+    "turnId": "turn_1",
+    "stopReason": "end_turn",
+    "usage": {
+      "input": 15721,
+      "output": 6,
+      "total": 15752
+    },
+    "costUsd": 0
+  }
+]

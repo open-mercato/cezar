@@ -5,6 +5,7 @@ import { Fragment, useState } from 'react'
 import { ApiError, putWorkspaceConfig } from '@/api/client'
 
 import {
+  queryKeys,
   useAgentAccountDetails,
   useAgentProfiles,
   useHealth,
@@ -97,6 +98,7 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
   cursor: 'Cursor',
   pi: 'pi',
   copilot: 'GitHub Copilot CLI',
+  kilo: 'Kilo Code',
 }
 
 /** The vendor's own install/login instruction, shown when the CLI is not on this machine. */
@@ -108,6 +110,7 @@ const PROVIDER_INSTALL: Record<ProviderId, string> = {
   cursor: 'curl https://cursor.com/install -fsS | bash',
   pi: 'https://github.com/badlogic/pi-mono',
   copilot: 'npm i -g @github/copilot',
+  kilo: 'npm i -g @kilocode/cli',
 }
 
 /** Same vocabulary the Providers card uses — one wording for "is this logged in?". */
@@ -372,7 +375,16 @@ function DefaultsForNewProjects({ profiles }: { profiles: AgentProfilesResponse 
 
   const save = useMutation({
     mutationFn: (patch: SetWorkspaceConfigInput) => putWorkspaceConfig(patch),
-    onSuccess: (result) => queryClient.setQueryData(workspaceQueryKeys.config, result),
+    // Two caches, one meaning. The composer resolves its model pill from the PROJECT config
+    // (`queryKeys.config`, scoped per repo) because that endpoint merges these machine-wide
+    // defaults into the repo's own on every read — but writing here only updated the workspace
+    // cache, so a composer already open kept offering the model the user had just replaced. Both
+    // now move together: the workspace copy for this pane, the project copy for every task-start
+    // surface (`/new`, the skill picker, automations).
+    onSuccess: async (result) => {
+      queryClient.setQueryData(workspaceQueryKeys.config, result)
+      await queryClient.invalidateQueries({ queryKey: queryKeys.config })
+    },
     onError: (error: Error) => toast(error.message, { tone: 'danger' }),
   })
 

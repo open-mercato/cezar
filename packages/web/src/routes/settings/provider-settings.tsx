@@ -25,6 +25,7 @@ export const PROVIDERS = [
   { id: 'cursor', label: 'Cursor', login: 'agent login' },
   { id: 'pi', label: 'pi', login: 'pi /login' },
   { id: 'copilot', label: 'GitHub Copilot CLI', login: 'copilot login' },
+  { id: 'kilo', label: 'Kilo Code', login: 'kilo auth login' },
 ] as const
 
 const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
@@ -35,6 +36,7 @@ const providerWriteState = <T,>(value: T): Record<ProviderId, T> => ({
   cursor: value,
   pi: value,
   copilot: value,
+  kilo: value,
 })
 
 const STATUS_PRESENTATION = {

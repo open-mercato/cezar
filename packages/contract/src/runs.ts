@@ -495,6 +495,51 @@ export type ArchiveFinishedResponse = z.infer<typeof archiveFinishedResponseSche
 export const markAllReadResponseSchema = z.object({ read: z.number() });
 export type MarkAllReadResponse = z.infer<typeof markAllReadResponseSchema>;
 
+/**
+ * `GET /runs/queue` + `POST /runs/queue` — the project's queue hold and the work waiting behind it.
+ *
+ * ONE schema for both routes because they answer the same object, and `POST /runs/queue` must not
+ * be able to drift from what a reader fetched a moment earlier: the cockpit paints "Paused" from
+ * this shape and clears the hold by POSTing it, so a divergence would show a queue that says it is
+ * running while the engine holds it (or the reverse — a button that claims to resume something that
+ * is not paused).
+ *
+ * `paused` is the hold itself and `queued` is how many runs are waiting for a slot behind it. Both
+ * are always present: `paused: false` is the shipped default and a real answer, not an absent key.
+ */
+export const queueStateSchema = z.object({ paused: z.boolean(), queued: z.number() });
+export type QueueState = z.infer<typeof queueStateSchema>;
+
+/**
+ * `POST /runs/start-queued` — how many runs the sweep released to the engine.
+ *
+ * A COUNT and not a boolean, because this route admits work under the ordinary `maxParallel` cap:
+ * clicking it with five queued tasks and a cap of two starts two, and reporting `true` would promise
+ * the caller that all five are running. `released` is what left the queue in this sweep.
+ */
+export const startQueuedResponseSchema = z.object({ released: z.number() });
+export type StartQueuedResponse = z.infer<typeof startQueuedResponseSchema>;
+
+/**
+ * `POST /runs/delete-all` — the bulk sweep that empties the project.
+ *
+ * `deleted` counts every record that went (active and archived alike) and `cancelled` how many of
+ * those had to be stopped first, because `DELETE /runs/:id` refuses an active run with a 409. The
+ * split is what lets the cockpit say "deleted 12, cancelled 2" instead of implying a task that was
+ * mid-turn finished on its own.
+ *
+ * `unsettled` is the honest failure channel and is why this is not `z.literal(true)`: cancellation
+ * of a run with an open session is asynchronous, and a provider that never acknowledged its
+ * teardown inside the bounded wait leaves a process whose record is already gone. Zero in every
+ * ordinary case; non-zero means the operator should be told, not shown a clean "deleted N".
+ */
+export const deleteAllResponseSchema = z.object({
+  deleted: z.number(),
+  cancelled: z.number(),
+  unsettled: z.number(),
+});
+export type DeleteAllResponse = z.infer<typeof deleteAllResponseSchema>;
+
 /** `DELETE /runs/:id` — an active run is a 409 and an unknown one a 404, so this only ever
  *  reports success. */
 export const deleteRunResponseSchema = z.object({ deleted: z.literal(true) });

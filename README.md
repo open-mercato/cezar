@@ -121,8 +121,9 @@
 
 You need **Node 20+** and at least one agent CLI you're logged into:
 [Claude Code](https://github.com/anthropics/claude-code), [Codex](https://github.com/openai/codex),
-[GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai),
-[Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli) or [pi](https://github.com/badlogic/pi-mono).
+  [GitHub Copilot CLI](https://github.com/github/copilot-cli), [OpenCode](https://opencode.ai),
+  [Cursor Agent](https://cursor.com/docs/cli/overview), [Junie](https://junie.jetbrains.com/cli),
+  [pi](https://github.com/badlogic/pi-mono) or [Kilo Code](https://kilo.ai).
 `git` and `gh` are optional.
 
 ```bash

@@ -19,15 +19,18 @@ import {createServer} from 'node:http';
 let stream;
 const server=createServer((req,res)=>{
 req.resume();
-if(req.url==='/event'){stream=res;res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();}
-else if(req.url==='/session'){res.end(JSON.stringify({id:'s'}));}
-else if(req.url.endsWith('/abort')){res.end('{}');}
+if(req.url==='/api/event'){stream=res;res.writeHead(200,{'content-type':'text/event-stream'});res.flushHeaders();}
+else if(req.url==='/api/session'){res.end(JSON.stringify({data:{id:'s'}}));}
+else if(req.url.endsWith('/interrupt')){res.end('{}');}
 else {
 stream.write('data: '+JSON.stringify({type:'message.updated',properties:{info:{id:'a',sessionID:'s',role:'assistant',cost:0,tokens:{input:0,output:0}}}})+'\\n\\n');
 stream.write('data: '+JSON.stringify({type:'message.updated',properties:{info:{id:'a',sessionID:'s',role:'assistant',tokens:{input:10000,output:500}}}})+'\\n\\n');
 setTimeout(()=>{res.writeHead(500);res.end('backend failed before final cost report');},100);
 }});
-server.listen(0,'127.0.0.1',()=>console.log('http://127.0.0.1:'+server.address().port));
+server.listen(0,'127.0.0.1',()=>{
+console.log('http://127.0.0.1:'+server.address().port);
+console.log('server password stub-secret');
+});
 `,{mode:0o700});
   vi.stubEnv('CEZ_OPENCODE_BIN', bin);
   const manager = new RunManager(store, dir, {

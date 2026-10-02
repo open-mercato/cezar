@@ -28,6 +28,8 @@ import type {
   ApiRun,
   ArchiveFinishedResponse,
   MarkAllReadResponse,
+  QueueState,
+  StartQueuedResponse,
   CancelAutoResumeResponse,
   CancelResponse,
   ChangesPayload,
@@ -41,6 +43,7 @@ import type {
   CreateRunInput,
   CreateRunResponse,
   DeleteDraftResponse,
+  DeleteAllResponse,
   DeleteRunResponse,
   DeleteWorkflowResponse,
   DraftEntry,
@@ -1379,6 +1382,53 @@ export async function archiveFinished(): Promise<ArchiveFinishedResponse> {
       param: { projectId: queryScope() },
     }),
     '/runs/archive-finished',
+  )
+}
+
+/** Read the project's queue hold and how much work is waiting behind it — the Tasks header's
+ *  "PAUSE tasks" state. Read rather than mirrored locally: the hold lives in the engine, and a
+ *  second cockpit (or a refresh) has to be able to rebuild the header from this alone. */
+export async function getRunQueue(opts?: ReadOptions): Promise<QueueState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs.queue.$get({ param: { projectId: queryScope() }, ...opts }),
+    '/runs/queue',
+  )
+}
+
+/** Set or lift the hold. The answer is the state the ENGINE ended up in, not an echo of the
+ *  request, so a client that raced another tab still renders what is true. */
+export async function setRunQueuePaused(paused: boolean): Promise<QueueState> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs.queue.$post({
+      param: { projectId: queryScope() },
+      json: { paused },
+    }),
+    '/runs/queue',
+  )
+}
+
+/** "Start tasks": lift the hold if it is set, then drain the queue under the ordinary caps.
+ *  `released` is how many runs left the queue — under `maxParallel` that can be fewer than were
+ *  waiting, which is why the button reports a count instead of claiming the queue emptied. */
+export async function startQueuedRuns(): Promise<StartQueuedResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs['start-queued'].$post({
+      param: { projectId: queryScope() },
+    }),
+    '/runs/start-queued',
+  )
+}
+
+/** "DELETE tasks": empty the project, active and archived alike. IRREVERSIBLE — each task's
+ *  worktree, branch, transcript and attachments go with it — so the cockpit confirms first.
+ *  `unsettled > 0` means a provider never acknowledged its cancellation and a process may outlive
+ *  its record; it is in the answer so the UI can say so rather than reporting a clean sweep. */
+export async function deleteAllRuns(): Promise<DeleteAllResponse> {
+  return unwrap(
+    await cez.api.v1.p[':projectId'].runs['delete-all'].$post({
+      param: { projectId: queryScope() },
+    }),
+    '/runs/delete-all',
   )
 }
 

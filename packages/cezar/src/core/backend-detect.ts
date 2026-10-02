@@ -6,7 +6,7 @@ import { resolveClaudeBin } from './claude-bin.ts';
 const exec = promisify(execFile);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'gh' | 'git';
+  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'junie' | 'copilot' | 'kilo' | 'gh' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -28,6 +28,7 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probePi(),
     probeJunie(),
     probeCopilot(),
+    probeKilo(),
     probeGh(),
     probeGit(),
   ]);
@@ -92,14 +93,32 @@ async function probeCodex(): Promise<BackendCheck> {
   }
 }
 
+/**
+ * OpenCode's runner speaks the 2.x HTTP+SSE wire (`/api` prefix, Basic auth,
+ * `session.execution.*` events). That is a clean break from 1.x, whose server
+ * exposes none of those routes — and `opencode-ai` on npm still resolves
+ * `latest` to the 1.18 line, so a fresh npm install gives a 1.x CLI. Reporting
+ * it "available" would let a user pick OpenCode and watch every call 404
+ * mid-run; this probe fails it up front with the one command that fixes it.
+ * (v2 prints `opencode vX.Y.Z`; v1 prints the bare `X.Y.Z`.)
+ */
 async function probeOpencode(): Promise<BackendCheck> {
   const bin = process.env.CEZ_OPENCODE_BIN ?? 'opencode';
   try {
     const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    const version = stdout.trim();
+    const major = /(\d+)\.\d+\.\d+/.exec(version)?.[1];
+    if (major === '1') {
+      return {
+        name: 'opencode',
+        available: false,
+        hint: `OpenCode ${version} is the 1.x line; cezar needs 2.x (the \`/api\` server). Run \`opencode upgrade\` or reinstall from https://opencode.ai`,
+      };
+    }
     return {
       name: 'opencode',
       available: true,
-      version: stdout.trim(),
+      version,
       hint: 'if no provider is configured, run `opencode` once to set one up',
     };
   } catch {
@@ -224,6 +243,31 @@ async function probeGh(): Promise<BackendCheck> {
       name: 'gh',
       available: false,
       hint: 'install the GitHub CLI and run `gh auth login` (only needed for PR creation)',
+    };
+  }
+}
+
+async function probeKilo(): Promise<BackendCheck> {
+  // Dry-run stands the runner up on the shared mock, so report it present.
+  if (process.env.CEZ_DRY_RUN === '1') {
+    return { name: 'kilo', available: true, version: 'mock (CEZ_DRY_RUN=1)' };
+  }
+  const bin = process.env.CEZ_KILO_BIN ?? 'kilo';
+  try {
+    const { stdout } = await exec(bin, ['--version'], { timeout: 10_000 });
+    return {
+      name: 'kilo',
+      available: true,
+      version: stdout.trim(),
+      hint: 'if not authenticated, run `kilo auth login`',
+    };
+  } catch {
+    // A missing `kilo` CLI is never a boot failure — the runner just isn't
+    // offered, exactly like an absent codex/opencode.
+    return {
+      name: 'kilo',
+      available: false,
+      hint: 'optional: install Kilo Code (npm i -g @kilocode/cli) and log in to use the kilo runner',
     };
   }
 }

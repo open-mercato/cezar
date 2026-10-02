@@ -4,7 +4,7 @@ import type { ProviderStatus, ProviderStatusResponse, Runner } from '@open-merca
  *  provider derives it instead of keeping a fifth hand-written copy — the copy in
  *  `accounts-section.tsx` silently dropped Copilot when #582 added it, and nothing in the
  *  type system noticed, because a `ProviderId[]` literal is under-wide, never wrong. */
-export const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot']
+export const RUNNER_ORDER: readonly Runner[] = ['claude', 'codex', 'junie', 'opencode', 'cursor', 'pi', 'copilot', 'kilo']
 const PROVIDER_STATES = new Set(['connected', 'disconnected', 'not-installed', 'unknown'])
 
 function isRecord(value: unknown): value is Record<string, unknown> {

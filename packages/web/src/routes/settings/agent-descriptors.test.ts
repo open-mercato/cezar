@@ -28,9 +28,10 @@ function fileOf(over: Partial<AgentConfigFile> & Pick<AgentConfigFile, 'id'>): A
 
 describe('AGENT_DESCRIPTORS', () => {
   // `pi` has no entry on purpose — no pi-owned config file is cataloged yet, so its pane would
-  // be three empty groups (see the descriptor table's header comment).
+  // be three empty groups (see the descriptor table's header comment). Kilo does have cataloged
+  // config files, so it gets a full settings+mcp+memory entry.
   it('has one entry per config-owning runner; Cursor has settings+mcp (no memory group yet)', () => {
-    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'opencode', 'cursor'])
+    expect(AGENT_DESCRIPTORS.map((d) => d.id)).toEqual(['claude', 'codex', 'copilot', 'opencode', 'cursor', 'kilo'])
     for (const d of AGENT_DESCRIPTORS.filter((d) => d.id !== 'cursor')) {
       expect(d.groups.map((g) => g.id)).toEqual(['settings', 'mcp', 'memory'])
       expect(d.groups.find((g) => g.id === 'mcp')?.note).toBeTruthy()

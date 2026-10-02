@@ -58,6 +58,7 @@ export const PROFILE_ENV_VAR: Record<ProviderId, string | null> = {
   pi: null,
   junie: null,
   copilot: null,
+  kilo: null,
 };
 
 /** Providers that can carry more than one account — what the UI offers "Add account" for. */
@@ -116,4 +117,7 @@ const PROFILE_DIR_MARKERS: Record<ProviderId, readonly string[]> = {
   junie: [],
   // Same for copilot (`PROFILE_ENV_VAR.copilot === null`).
   copilot: [],
+  // kilo cannot carry profiles either (no documented single home variable relocating
+  // credentials + config); same exhaustive-table entry as pi.
+  kilo: [],
 };

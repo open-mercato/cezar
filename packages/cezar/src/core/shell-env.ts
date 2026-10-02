@@ -109,3 +109,63 @@ export function withEnvPrefix(
   const prefix = renderEnvPrefix(env, platform);
   return prefix === null ? null : `${prefix}${command}`;
 }
+
+/**
+ * The directories of a `PATH`-shaped value, in order, without empty entries or repeats.
+ *
+ * Windows separates with `;`, so splitting a win32 PATH on `:` would tear `C:\Program Files\…`
+ * into fragments and hand the handoff a PATH that points nowhere. Repeats are collapsed because a
+ * real one is often a mess (`~/.local/bin` three times over) and the prefix is rendered into a
+ * command line the user can read.
+ */
+export function pathDirsFromPathEnv(pathEnv: string | undefined, platform: NodeJS.Platform): string[] {
+  if (pathEnv === undefined || pathEnv === '') return [];
+  const dirs = pathEnv.split(platform === 'win32' ? ';' : ':').filter((dir) => dir !== '');
+  return [...new Set(dirs)];
+}
+
+/**
+ * A PATH prefix that PREPENDS `dirs` to whatever PATH the shell it lands in already has — the
+ * command runs, and the window keeps it because the user types the next command there themselves.
+ *
+ * Why a terminal handoff needs this at all: the window is not started from cezar's environment.
+ * Terminal emulators are single-instance over D-Bus — `xfce4-terminal`, the `x-terminal-emulator`
+ * alias on XFCE, opens the new window from the instance already running since login — so the
+ * spawned process inherits the EMULATOR's PATH, not the caller's. A CLI installed where only an
+ * interactive shell finds it (a `.bashrc` PATH line, as with `kilo` in `~/.kilo/bin`) is then
+ * simply absent, and the handoff answers `command not found` for a CLI cezar itself just ran.
+ *
+ * Additive, never a replacement: the window keeps its own PATH and gains cezar's, so a narrower
+ * cezar environment cannot take a directory away from the user. Order follows cezar's own PATH,
+ * which is the resolution order that just produced the working command.
+ *
+ * `null` means "nothing to add, or it cannot be embedded safely here" — callers treat that as
+ * best-effort degradation (see {@link withPathPrefix}), NOT as a refusal: unlike the account env
+ * above, a missing PATH augmentation cannot silently aim a window at the wrong account, and the
+ * command may well resolve without it.
+ */
+export function renderPathPrefix(dirs: readonly string[], platform: NodeJS.Platform): string | null {
+  const unique = [...new Set(dirs)].filter((dir) => dir !== '');
+  if (unique.length === 0) return null;
+  for (const dir of unique) {
+    if (CONTROL_CHARS_RE.test(dir)) return null;
+    if (platform === 'win32' && WIN32_UNSAFE_RE.test(dir)) return null;
+  }
+  // `%PATH%` expands before the assignment in cmd.exe; on POSIX the quoted `"$PATH"` is read by
+  // the shell at assignment time. Both keep the window's own entries.
+  if (platform === 'win32') return `set "PATH=${unique.join(';')};%PATH%" && `;
+  return `export PATH=${unique.map(shellQuote).join(':')}:"$PATH"; `;
+}
+
+/**
+ * `renderPathPrefix` applied to a command, or `null` when there is no safe PATH prefix to add.
+ * A `null` here means "run the command as-is", never "refuse to launch".
+ */
+export function withPathPrefix(
+  command: string,
+  dirs: readonly string[],
+  platform: NodeJS.Platform,
+): string | null {
+  const prefix = renderPathPrefix(dirs, platform);
+  return prefix === null ? null : `${prefix}${command}`;
+}

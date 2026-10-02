@@ -3,8 +3,34 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { shellQuote, withEnvPrefix } from '../core/shell-env.ts';
+import { pathDirsFromPathEnv, shellQuote, withEnvPrefix, withPathPrefix } from '../core/shell-env.ts';
 import { isWsl, wslDistroName } from './wsl.ts';
+
+/**
+ * The command line a terminal handoff runs, with both environment halves rendered into it.
+ *
+ * Two prefixes, failing differently on purpose:
+ *   - the account env (a `CLAUDE_CONFIG_DIR` and friends) is load-bearing — a window aimed at the
+ *     wrong account shows nothing wrong on screen — so an unrenderable value returns `null` and the
+ *     caller launches nothing at all;
+ *   - the PATH augmentation is best-effort: it only makes cezar's own CLI dirs findable in a
+ *     window the EMULATOR spawns (single-instance emulators inherit the running instance's PATH,
+ *     not ours — see {@link renderPathPrefix}), so an unrenderable PATH degrades to the bare
+ *     command rather than blocking a handoff that may still work.
+ *
+ * Exported for tests: {@link openInTerminal} reaches a real emulator, and this is the whole of
+ * what it would have run.
+ */
+export function handoffCommand(
+  command: string,
+  env: Record<string, string>,
+  platform: NodeJS.Platform,
+  pathEnv: string | undefined,
+): string | null {
+  const based = withEnvPrefix(command, env, platform);
+  if (based === null) return null;
+  return withPathPrefix(based, pathDirsFromPathEnv(pathEnv, platform), platform) ?? based;
+}
 
 /**
  * Open a real terminal window at `cwd` running `command` — the "take over the
@@ -30,7 +56,7 @@ export async function openInTerminal(
    *  than no terminal, since nothing in the window would say so. */
   env: Record<string, string> = {},
 ): Promise<boolean> {
-  const prefixed = withEnvPrefix(command, env, process.platform);
+  const prefixed = handoffCommand(command, env, process.platform, process.env.PATH);
   if (prefixed === null) return false;
 
   if (process.platform === 'darwin') {
