@@ -419,6 +419,36 @@ export const runIndexEntrySchema = z.object({
 });
 export type RunIndexEntry = z.infer<typeof runIndexEntrySchema>;
 
+const workspaceRunEventOmitted = {
+  task: true,
+  systemPrompt: true,
+  queuedMessages: true,
+  steps: true,
+  workflowDef: true,
+} as const;
+
+/**
+ * The record keys the workspace stream's `run` frame leaves out: the prompt text and the step
+ * and workflow structure. Only the task thread reads them, and it receives the whole record on
+ * its own per-run stream (`GET /runs/:id/events` → `run`). A consumer patching a cached record
+ * from this frame keeps its own copies of these keys rather than dropping them.
+ */
+export const WORKSPACE_RUN_EVENT_OMITTED_KEYS = Object.keys(workspaceRunEventOmitted) as Array<
+  keyof typeof workspaceRunEventOmitted
+>;
+
+/**
+ * The `run` frame on `GET /api/v1/workspace/events`: the stored record minus
+ * `WORKSPACE_RUN_EVENT_OMITTED_KEYS`, stamped with the owning `project`. Every other record key
+ * rides it, so a list row patched from it answers as a `GET /runs` row does. It is not a strict
+ * superset of `runIndexEntrySchema`: that row also carries the live `usage` sample, which this
+ * frame never has (`withUsage` attaches it to route answers only).
+ */
+export const workspaceRunEventSchema = runRecordSchema.omit(workspaceRunEventOmitted).extend({
+  project: z.string(),
+});
+export type WorkspaceRunEvent = z.infer<typeof workspaceRunEventSchema>;
+
 /**
  * `GET /workspace/runs-index`.
  *

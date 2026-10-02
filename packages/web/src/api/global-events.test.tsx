@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createUsageStore, type UsageStore } from './events'
 import { GlobalEventsProvider, useGlobalEvents, useRunUsage, useUsage } from './global-events'
-import { setApiScope } from '@open-mercato/cezar-api-client'
+import { setApiScope, WORKSPACE_RUN_EVENT_OMITTED_KEYS } from '@open-mercato/cezar-api-client'
 import { createQueryClient } from './query-client'
 import { queryKeys, useProviderStatus, useRuns, useTodos, workspaceQueryKeys } from './queries'
 import { RUN_EVENT_BATCH_MS } from './run-events'
@@ -122,6 +122,13 @@ const CONNECTED_PROVIDERS: ProviderStatusResponse = {
  *  stamp riding along, which the parser strips back off before the reducers see it. */
 function stampedRun(record: RunRecord, project = BOOT): string {
   return JSON.stringify({ ...record, project })
+}
+
+/** A `run` frame exactly as the workspace stream sends it now: the thread-only keys left off. */
+function slimRun(record: RunRecord, project = BOOT): string {
+  const frame: Record<string, unknown> = { ...record, project }
+  for (const key of WORKSPACE_RUN_EVENT_OMITTED_KEYS) delete frame[key]
+  return JSON.stringify(frame)
 }
 
 async function flushRunEvents(): Promise<void> {
@@ -359,6 +366,279 @@ describe('useGlobalEvents — run events', () => {
     expect(detail?.usage).toEqual(SAMPLE)
     // r2 was never opened: a summary must not masquerade as a fetched detail.
     expect(client.getQueryData(queryKeys.runs.detail('r2'))).toBeUndefined()
+  })
+
+  it('patches a cached row and detail from a slim frame, keeping what the frame leaves out', async () => {
+    const steps: RunRecord['steps'] = [{ id: 'agent', name: 'agent', kind: 'agent', status: 'running', iterations: 1, tokensUsed: 5 }]
+    const cached = runRecord('r1', { task: 'the prompt', steps, activity: 'monitoring', error: 'old' })
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [cached])
+    client.setQueryData<ApiRun>(queryKeys.runs.detail('r1'), { ...cached, usage: SAMPLE })
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'done', tokensUsed: 7 })))
+    await flushRunEvents()
+
+    for (const row of [
+      client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.[0],
+      client.getQueryData<ApiRun>(queryKeys.runs.detail('r1')),
+    ]) {
+      expect(row).toMatchObject({ status: 'done', tokensUsed: 7, task: 'the prompt', steps })
+      expect(row).not.toHaveProperty('activity')
+      expect(row).not.toHaveProperty('error')
+    }
+    expect(client.getQueryData<ApiRun>(queryKeys.runs.detail('r1'))?.usage).toEqual(SAMPLE)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('fetches one run for a slim frame about a run the list never held, and inserts it as a row', async () => {
+    vi.useFakeTimers()
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [runRecord('r0')])
+    vi.mocked(fetch).mockResolvedValueOnce(json(runRecord('r1', { status: 'queued', task: 'fetched' })))
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'queued' })))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+
+    // One bounded read of the single run, not a whole-list refetch.
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(String(vi.mocked(fetch).mock.calls[0]?.[0])).toContain('/runs/r1')
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.map((row) => row.id))
+      .toEqual(['r0', 'r1'])
+  })
+
+  it('asks for a new run once, however many slim frames it emits', async () => {
+    vi.useFakeTimers()
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [runRecord('r0')])
+    const deferred = deferredResponse()
+    vi.mocked(fetch).mockReturnValueOnce(deferred.promise)
+    const { source } = mount()
+
+    for (const status of ['queued', 'running', 'running'] as const) {
+      source.emit('run', slimRun(runRecord('r1', { status })))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+      })
+    }
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    await act(async () => deferred.resolve(json(runRecord('r1', { status: 'running' }))))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.map((row) => row.id))
+      .toEqual(['r0', 'r1'])
+  })
+
+  it('keeps a fetched unknown run on the list it arrived under, not the scope active at resolution', async () => {
+    vi.useFakeTimers()
+    setApiScope('project-a')
+    const projectAKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(projectAKey, [runRecord('r0')])
+    const deferred = deferredResponse()
+    vi.mocked(fetch).mockReturnValueOnce(deferred.promise)
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'queued' }), 'project-a'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    // The fetch starts under project-a; switch before its response lands.
+    setApiScope('project-b')
+    const projectBKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(projectBKey, [runRecord('b0')])
+
+    await act(async () => deferred.resolve(json(runRecord('r1', { status: 'queued', task: 'fetched' }))))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(client.getQueryData<ApiRun[]>(projectAKey)?.map((row) => row.id)).toEqual(['r0', 'r1'])
+    expect(client.getQueryData<ApiRun[]>(projectBKey)?.map((row) => row.id)).toEqual(['b0'])
+  })
+
+  it('applies a newer frame that arrives while the unknown run is still hydrating', async () => {
+    vi.useFakeTimers()
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [runRecord('r0')])
+    const deferred = deferredResponse()
+    vi.mocked(fetch).mockReturnValueOnce(deferred.promise)
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'queued' })))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    // The read is in flight; the run reaches a terminal state before the response resolves.
+    source.emit('run', slimRun(runRecord('r1', { status: 'done' })))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+
+    const steps: RunRecord['steps'] = [{ id: 'agent', name: 'agent', kind: 'agent', status: 'running', iterations: 1, tokensUsed: 0 }]
+    await act(async () => deferred.resolve(json(runRecord('r1', { status: 'queued', task: 'fetched', steps }))))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // The hydrated row carries the fetched required keys but the newer frame's status.
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.find((row) => row.id === 'r1'))
+      .toMatchObject({ status: 'done', task: 'fetched', steps })
+  })
+
+  it('does not resurrect a run deleted while its unknown-run read was in flight', async () => {
+    vi.useFakeTimers()
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [runRecord('r0')])
+    const deferred = deferredResponse()
+    vi.mocked(fetch).mockReturnValueOnce(deferred.promise)
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'queued' })))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    source.emit('run-deleted', JSON.stringify({ id: 'r1', project: BOOT }))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+
+    await act(async () => deferred.resolve(json(runRecord('r1', { status: 'queued', task: 'fetched' }))))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.map((row) => row.id)).toEqual(['r0'])
+  })
+
+  it('retries a transient unknown-run read and inserts the row once it answers', async () => {
+    vi.useFakeTimers()
+    client.setQueryData<ApiRun[]>(queryKeys.runs.list(), [runRecord('r0')])
+    vi.mocked(fetch)
+      .mockRejectedValueOnce(new Error('connection refused'))
+      .mockResolvedValueOnce(json(runRecord('r1', { status: 'running', task: 'fetched' })))
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'running' })))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+
+    expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(client.getQueryData<ApiRun[]>(queryKeys.runs.list())?.find((row) => row.id === 'r1'))
+      .toMatchObject({ status: 'running', task: 'fetched' })
+  })
+
+  it('pins an unknown-run retry to the project the frame arrived in', async () => {
+    vi.useFakeTimers()
+    setApiScope('project-a')
+    const projectAKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(projectAKey, [runRecord('r0')])
+    vi.mocked(fetch)
+      .mockRejectedValueOnce(new Error('connection refused'))
+      .mockResolvedValueOnce(json(runRecord('r1', { status: 'running', task: 'fetched' })))
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'running' }), 'project-a'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    // The first read failed; the user switches projects before the retry fires.
+    setApiScope('project-b')
+    const projectBKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(projectBKey, [runRecord('b0')])
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+
+    // The retry must read the captured project, not whatever scope is active now.
+    expect(String(vi.mocked(fetch).mock.calls.at(-1)?.[0])).toContain('/p/project-a/runs/r1')
+    expect(client.getQueryData<ApiRun[]>(projectAKey)?.map((row) => row.id)).toEqual(['r0', 'r1'])
+    expect(client.getQueryData<ApiRun[]>(projectBKey)?.map((row) => row.id)).toEqual(['b0'])
+  })
+
+  it('does not overwrite a row another path refreshed while the unknown run was hydrating', async () => {
+    vi.useFakeTimers()
+    const listKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(listKey, [runRecord('r0')])
+    const deferred = deferredResponse()
+    vi.mocked(fetch).mockReturnValueOnce(deferred.promise)
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'queued' })))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    // A reconnect reconcile (or a mutation) lands the row with fresh data while our read is open.
+    client.setQueryData<ApiRun[]>(listKey, [runRecord('r0'), runRecord('r1', { status: 'done', task: 'fresh' })])
+
+    await act(async () => deferred.resolve(json(runRecord('r1', { status: 'queued', task: 'stale' }))))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // The list already owns the row; the older read must not clobber it.
+    expect(client.getQueryData<ApiRun[]>(listKey)?.find((row) => row.id === 'r1'))
+      .toMatchObject({ status: 'done', task: 'fresh' })
+  })
+
+  it('folds a pending frame over a row another path inserted while the unknown run was hydrating', async () => {
+    vi.useFakeTimers()
+    const listKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(listKey, [runRecord('r0')])
+    const deferred = deferredResponse()
+    vi.mocked(fetch).mockReturnValueOnce(deferred.promise)
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'queued' })))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    // The run failed while the read was open — the frame is held as pending.
+    source.emit('run', slimRun(runRecord('r1', { status: 'failed' })))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    // A refetch triggered by createRun lands the row first, with the older queued status.
+    client.setQueryData<ApiRun[]>(listKey, [runRecord('r0'), runRecord('r1', { status: 'queued', task: 'refetched' })])
+
+    await act(async () => deferred.resolve(json(runRecord('r1', { status: 'queued', task: 'fetched', steps: [] }))))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+
+    // The fetched record must not clobber the refetched one, but the pending frame must still land.
+    expect(client.getQueryData<ApiRun[]>(listKey)?.find((row) => row.id === 'r1'))
+      .toMatchObject({ status: 'failed', task: 'refetched' })
+  })
+
+  it('refetches the captured project list once when unknown-run retries are exhausted', async () => {
+    vi.useFakeTimers()
+    setApiScope('project-a')
+    const projectAKey = queryKeys.runs.list()
+    client.setQueryData<ApiRun[]>(projectAKey, [runRecord('r0')])
+    vi.mocked(fetch).mockRejectedValue(new Error('connection refused'))
+    const invalidate = vi.spyOn(client, 'invalidateQueries')
+    const { source } = mount()
+
+    source.emit('run', slimRun(runRecord('r1', { status: 'failed' }), 'project-a'))
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(RUN_EVENT_BATCH_MS + 5)
+    })
+    // Every attempt is awaited: three failures exhaust the bounded retry schedule.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000)
+    })
+
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: projectAKey, refetchType: 'active' })
   })
 
   it('invalidates the changes cache on a run event so an ended run’s final writes appear (#488)', async () => {
