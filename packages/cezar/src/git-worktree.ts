@@ -549,6 +549,22 @@ export async function worktreeDiff(
 }
 
 /**
+ * The paths `worktreeDiff` would show, one per entry, with the same merge-base anchoring. Null on
+ * git failure.
+ */
+export async function worktreeChangedFiles(worktreePath: string, baseBranch: string): Promise<string[] | null> {
+  if (!isSafeGitRef(baseBranch)) return null;
+  // Repeats worktreeDiff's intent-to-add so the list stays complete for a caller that did not
+  // diff first; it is idempotent and runs once per scoped settle.
+  await git(worktreePath, ['add', '-N', '.']);
+  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+  const res = await git(worktreePath, ['-c', 'core.quotePath=false', 'diff', '--name-only', base]);
+  if (!res.ok) return null;
+  return res.stdout.split('\n').filter((line) => line.length > 0);
+}
+
+/**
  * `git diff --stat` version of `worktreeDiff` (spec 010 — the variant
  * comparison columns). Same merge-base anchoring, and it stays whole-branch
  * for a reason of its own: variants are sibling cezar worktrees, each on its

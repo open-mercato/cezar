@@ -41,7 +41,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-dispatch-'));
-    for (const key of ['CEZ_DRY_RUN', 'CEZ_DISPATCH']) savedEnv[key] = process.env[key];
+    for (const key of ['CEZ_DRY_RUN', 'CEZ_DISPATCH', 'CEZ_API_URL', 'CEZ_MOCK_ARGS_FILE', 'CEZ_AUTOMATIONS']) savedEnv[key] = process.env[key];
     process.env.CEZ_DRY_RUN = '1';
     process.env.CEZ_DISPATCH = '1';
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
@@ -173,7 +173,7 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       }));
       const child = store.getRun(created.id);
       expect(child?.title).toBe('Take the left flank');
-      expect(child?.dispatch).toEqual({ rootRunId: parent.id, parentRunId: parent.id, budgetUsd: 2.5 });
+      expect(child?.dispatch).toEqual({ rootRunId: parent.id, parentRunId: parent.id, budgetUsd: 2.5, scope: 'src/left/**', retryLimit: 1 });
       expect(child?.autonomous).toBe(true);
       // The child forks off the PARENT's branch, which is what `execute()` reads.
       expect(child?.baseBranch).toBe(store.getRun(parent.id)?.branch);
@@ -521,6 +521,94 @@ describe('the dispatch engine (spec 2026-09-10-dispatch)', () => {
       const record = start('mock:ask mock:autonomous which library?', undefined, { autonomous: true });
       await waitFor(record.id, settled);
       expect(notes(record.id).some((n) => n.includes('autonomous — continuing'))).toBe(true);
+    }, 40_000);
+  });
+
+  // ---- what a session is told (spec 2026-09-30-system-prompt-diet) --------------------------
+
+  describe('the session prompt', () => {
+    /** Every `--append-system-prompt` the mock was spawned with, in spawn order. */
+    const systemPrompts = (file: string): string[] =>
+      stdin(file)
+        .trim()
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => JSON.parse(line) as string[])
+        .map((argv) => argv[argv.indexOf('--append-system-prompt') + 1] ?? '');
+
+    it('teaches a root to dispatch and create automations, and hands a child only its short block', async () => {
+      const argsFile = join(repoRoot, 'mock-args.ndjson');
+      process.env.CEZ_MOCK_ARGS_FILE = argsFile;
+      process.env.CEZ_API_URL = 'http://127.0.0.1:4321';
+      delete process.env.CEZ_AUTOMATIONS;
+      const parent = await parkedRoot();
+      const root = systemPrompts(argsFile)[0] ?? '';
+      expect(root).toContain('node "$CEZ_BIN" task create');
+      expect(root).toContain('Automations.');
+      const created = dispatchOk(parent.id, order('mock:done review the left flank', { kind: 'review', review_of: ['cez/x'] }));
+      await waitFor(created.id, settled);
+      const child = systemPrompts(argsFile).find((prompt) => prompt.includes('You were dispatched.')) ?? '';
+      expect(child).toContain('node "$CEZ_BIN" task report');
+      expect(child).toContain('Your KIND is review.');
+      expect(child).not.toContain('task create');
+      expect(child).not.toContain('Automations.');
+      // Seeded as the child's extra prompt AND resolved for its session: composed once, not twice.
+      expect(child.split('You were dispatched.')).toHaveLength(2);
+    }, 40_000);
+  });
+
+  describe('retry_limit', () => {
+    it('caps how often cezar auto-continues a child, then parks it with the reason', async () => {
+      const parent = await parkedRoot();
+      const created = dispatchOk(parent.id, order('mock:autonomous keep at it', { retry_limit: 0 }));
+      await waitFor(created.id, (r) => r?.status === 'waiting' || settled(r));
+      expect(store.getRun(created.id)?.status).toBe('waiting');
+      expect(notes(created.id).some((n) => n.startsWith('retry limit reached — its order allows 0 auto-continues'))).toBe(true);
+      expect(notes(created.id).some((n) => n.includes('autonomous — continuing'))).toBe(false);
+    }, 40_000);
+
+    it('leaves a child without one on the ordinary auto-continue cap', async () => {
+      const parent = await parkedRoot();
+      const created = dispatchOk(parent.id, order('mock:autonomous keep at it'));
+      await waitFor(created.id, settled);
+      expect(notes(created.id).some((n) => n.includes('autonomous — continuing'))).toBe(true);
+    }, 40_000);
+
+    it('lets the user finish a retry-capped park — it settles done and reports done, not partial', async () => {
+      const parent = await parkedRoot();
+      const created = dispatchOk(parent.id, order('mock:autonomous keep at it', { retry_limit: 0 }));
+      await waitFor(created.id, (r) => r?.status === 'waiting');
+      expect(store.getRun(created.id)?.dispatch?.retryLimitReached).toBe(true);
+      // The user answers the parked run. That wake is not the capped nudge, so the retry park is
+      // retired and this turn's CEZ:DONE lets the run settle finished instead of as unfinished.
+      expect(manager.sendMessage(created.id, [{ type: 'text', text: 'mock:done use date-fns' }])).toBe(true);
+      await waitFor(created.id, settled);
+      expect(store.getRun(created.id)?.status).toBe('done');
+      expect(store.getRun(created.id)?.dispatch?.retryLimitReached).toBeUndefined();
+      const reportPath = join(treeDirOf(parent.id), 'units', created.id.slice(0, 8), 'report.md');
+      const deadline = Date.now() + 5_000;
+      while (!existsSync(reportPath) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25));
+      const report = readFileSync(reportPath, 'utf8');
+      expect(report).toContain('"status": "done"');
+      expect(report).not.toContain('"status": "partial"');
+    }, 40_000);
+  });
+
+  describe('the scope check', () => {
+    it('compares a settled child’s changed files with its declared scope and puts the verdict in its report', async () => {
+      const parent = await parkedRoot();
+      const created = dispatchOk(parent.id, order('mock:pause mock:done take the left flank', { scope: 'src/left/' }));
+      await waitFor(created.id, (r) => Boolean(r?.worktreePath && existsSync(r.worktreePath)));
+      const worktree = store.getRun(created.id)?.worktreePath as string;
+      mkdirSync(join(worktree, 'src/left'), { recursive: true });
+      writeFileSync(join(worktree, 'src/left/a.ts'), 'export {};\n');
+      writeFileSync(join(worktree, 'outside.txt'), 'x\n');
+      await waitFor(created.id, settled);
+      // The mock agent also writes a notes.md at the worktree root on every turn.
+      const verdict = 'scope check: 2 of 3 changed files outside the declared scope: notes.md, outside.txt';
+      expect(store.getRun(created.id)?.dispatch?.scopeCheck).toBe(verdict);
+      const report = readFileSync(join(treeDirOf(parent.id), 'units', created.id.slice(0, 8), 'report.md'), 'utf8');
+      expect(report).toContain(verdict);
     }, 40_000);
   });
 

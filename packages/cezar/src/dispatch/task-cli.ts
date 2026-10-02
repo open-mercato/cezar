@@ -8,6 +8,7 @@
  * set the same three and use it too. No server, no dispatch: the command says so and exits 2.
  */
 import { parseArgs } from 'node:util';
+import { DISPATCH_MAX_IN_FLIGHT, runnerSchema, taskTreeNodeSchema, type TaskTreeNode } from '@open-mercato/cezar-contract';
 
 export interface TaskCliEnv {
   CEZ_API_URL?: string;
@@ -21,16 +22,38 @@ export interface TaskCliIo {
   error: (line: string) => void;
 }
 
-const USAGE = `cez task — dispatch cezar tasks from inside a task (on by default; CEZ_DISPATCH=0 on the cockpit turns it off)
+const USAGE = `cez task — dispatch cezar tasks from inside a task, and report back (on by default; CEZ_DISPATCH=0 on the cockpit turns it off)
+Always run it as node "$CEZ_BIN" task …: a cez on your PATH may be an older install.
 
-  cez task create "<objective>" [--title "…"] [--kind implement|review] [--review-of <branch|run>]
-                  [--scope "…"] [--budget <usd>] [--success "…"] [--evidence "…"] [--tools A,B]
-                  [--runner claude|codex|opencode] [--model <model>] [--retry-limit <0-3>]
-  cez task report --status done|partial|failed|blocked --result "…" [--evidence "…"]…
-                  [--verdict approve|changes|reject] [--suggestions "…"]… [--confidence <0-1>]
-                  [--side-effect "…"]… [--error "…"]… [--next "…"]
-  cez task list                       the tree this task belongs to, with status and cost
-  cez task tree <run id>              the tree rooted at (or containing) another run`;
+cez task create "<objective>" [flags]    dispatch ONE child task; prints its run id and branch
+  "<objective>"                 the child's whole assignment: goal, context, what finished means — it sees nothing else you know
+  --title "<text>"              the child's name in the task lists (default: the objective's first line)
+  --kind implement|review       implement (default) does the work; review judges another task's branch and must give a verdict
+  --review-of <branch|run id>   for --kind review: what it reviews (repeatable)
+  --scope "<paths>"             files or directories it may touch; give siblings DISJOINT scopes. cezar checks the child's changed files against it at settle (prefix match up to the first * or ?; give directories with a trailing slash)
+  --budget <usd>                optional hard cap, carved out of your remaining budget and returned unspent at settle. Omit it unless the user or your order named a cost limit: under a capped parent a child without one gets the whole remainder, under an uncapped parent it is uncapped. Asking for more than you have left is refused
+  --success "<text>"            how the child knows it is done
+  --evidence "<text>"           what the child must show in its report
+  --tools A,B                   the tools the child may use (default: the run-wide default)
+  --runner ${runnerSchema.options.join('|')}  who runs the child (default: yours); use the runner the user named, else a cheaper or faster one for narrow, well-specified work
+  --model <model>               the child's model (default: yours)
+  --retry-limit <0-3>           the most times cezar auto-continues the child after a turn that ended unfinished; past it the child parks
+  Rules: COMMIT before dispatching (children fork your committed tip). At most ${DISPATCH_MAX_IN_FLIGHT} children in flight under one task; one more is refused. When a dispatch succeeds, end your turn with CEZ:MONITORING to wait for its report.
+
+cez task report --status <status> --result "<text>" [flags]    record this task's report; delivered to the parent when it settles
+  --status done|partial|failed|blocked
+  --result "<text>"             what you did and the state now
+  --evidence "<text>"           a command you ran and what it printed, a file you changed, a test that passed (repeatable)
+  --verdict approve|changes|reject  required for a review task: approve when the work holds, changes with file:line findings, reject when wrong or unsafe
+  --suggestions "<text>"        what the ROOT should know outside your order; forwarded to the root's inbox (repeatable)
+  --confidence <0-1>
+  --side-effect "<text>"        something you changed outside the repository (repeatable)
+  --error "<text>"              an error you hit (repeatable)
+  --next "<text>"               the recommended next action
+
+cez task list [--json]          the tree this task belongs to, with status, cost and reports
+cez task tree <run id> [--json] the tree rooted at (or containing) another run
+  --json                        one JSON array, root first then depth-first: {id, parentRunId?, depth, status, title, branch?, costUsd?, kind?, report?}`;
 
 function base(env: TaskCliEnv): { url: string; scope: string } | null {
   const url = env.CEZ_API_URL?.replace(/\/+$/, '');
@@ -66,15 +89,15 @@ export async function runTaskCommand(
     io.log(USAGE);
     return command ? 0 : 2;
   }
+  // The reference needs no cockpit: an agent reads it before it has anything to send.
+  if (rest.includes('--help') || rest.includes('-h')) {
+    io.log(USAGE);
+    return 0;
+  }
   const api = base(env);
   if (!api) {
     io.error('cez task: CEZ_API_URL is not set — this command only works inside a task run by a cockpit with dispatch on (it is on by default; CEZ_DISPATCH=0 turns it off). Do not substitute sub-agents or do the delegated work yourself: stop and report that dispatch is unavailable.');
     return 2;
-  }
-
-  if (rest.includes('--help') || rest.includes('-h')) {
-    io.log(USAGE);
-    return 0;
   }
 
   try {
@@ -165,7 +188,8 @@ export async function runTaskCommand(
       }
       case 'list':
       case 'tree': {
-        const anchor = command === 'tree' ? rest[0] : env.CEZ_TASK_ID;
+        const asJson = rest.includes('--json');
+        const anchor = command === 'tree' ? rest.find((arg) => arg !== '--json') : env.CEZ_TASK_ID;
         if (!anchor) throw new Error(command === 'tree' ? 'a run id is required' : 'CEZ_TASK_ID is not set');
         const response = await io.fetch(`${api.scope}/runs`);
         if (!response.ok) throw new Error(`could not list runs — ${await readError(response)}`);
@@ -173,7 +197,7 @@ export async function runTaskCommand(
           id: string;
           title: string;
           status: string;
-          costUsd?: number;
+          costUsd?: number | null;
           branch?: string;
           dispatch?: { rootRunId: string; parentRunId?: string; kind?: string; report?: { status: string; verdict?: string } };
         }>;
@@ -186,8 +210,24 @@ export async function runTaskCommand(
           const key = run.dispatch.parentRunId ?? '';
           byParent.set(key, [...(byParent.get(key) ?? []), run]);
         }
+        const nodes: TaskTreeNode[] = [];
         const print = (run: (typeof runs)[number], depth: number): void => {
-          const cost = run.costUsd !== undefined ? ` $${run.costUsd.toFixed(2)}` : '';
+          if (asJson) {
+            nodes.push(taskTreeNodeSchema.parse({
+              id: run.id,
+              ...(run.dispatch?.parentRunId ? { parentRunId: run.dispatch.parentRunId } : {}),
+              depth,
+              status: run.status,
+              title: run.title,
+              ...(run.branch ? { branch: run.branch } : {}),
+              ...(typeof run.costUsd === 'number' ? { costUsd: run.costUsd } : {}),
+              ...(run.dispatch?.kind ? { kind: run.dispatch.kind } : {}),
+              ...(run.dispatch?.report ? { report: { status: run.dispatch.report.status, ...(run.dispatch.report.verdict ? { verdict: run.dispatch.report.verdict } : {}) } } : {}),
+            }));
+            for (const child of byParent.get(run.id) ?? []) print(child, depth + 1);
+            return;
+          }
+          const cost = typeof run.costUsd === 'number' ? ` $${run.costUsd.toFixed(2)}` : '';
           const report = run.dispatch?.report ? ` → ${run.dispatch.report.status}${run.dispatch.report.verdict ? ` (${run.dispatch.report.verdict})` : ''}` : '';
           io.log(`${'  '.repeat(depth)}${run.id.slice(0, 8)}  ${run.status}${cost}  ${run.title}${run.branch ? `  [${run.branch}]` : ''}${report}`);
           for (const child of byParent.get(run.id) ?? []) print(child, depth + 1);
@@ -195,6 +235,7 @@ export async function runTaskCommand(
         const root = runs.find((run) => run.id === rootId);
         if (root) print(root, 0);
         else for (const child of byParent.get('') ?? []) print(child, 0);
+        if (asJson) io.log(JSON.stringify(nodes));
         return 0;
       }
       default:

@@ -2,17 +2,17 @@
  * What a task is told about GitHub automations, and the playbook the built-in
  * `create-cezar-automation` skill runs under (spec `.ai/specs/2026-09-13-automations-from-prompt.md`).
  *
- * Two texts, one mechanism. `AUTOMATIONS_PROMPT` is the SHORT part composed into every task's
+ * Two texts, one mechanism. `AUTOMATIONS_PROMPT` is the SHORT part composed into a root task's
  * system prompt while automations are on and reachable — enough for an agent to recognise "do X
- * whenever Y happens on GitHub" as an automation rather than a one-off, and to know the CLI that
- * creates one. `CREATE_AUTOMATION_SKILL_BODY` is the full playbook: it goes into the run only when
+ * whenever Y happens on GitHub" as an automation rather than a one-off, and to know where the CLI
+ * describes itself. `CREATE_AUTOMATION_SKILL_BODY` is the full playbook: it goes into the run only when
  * the user picks the skill (or the agent, having read the short part, runs `cez automation schema`
  * to get the same reference). Neither is composed when the cockpit cannot serve the routes — an
  * agent told about a CLI whose every call is refused reads the refusal as an instruction (the
  * dispatch lesson, spec 2026-09-10-dispatch A2/A8).
  *
- * The CLI contract below is the ONLY place an agent learns the `cez automation` commands, so it
- * restates the definition keys of `automationDefinitionSchema` (`./types.ts`) one for one.
+ * `AUTOMATION_SCHEMA_REFERENCE` is the ONLY place an agent learns the definition, so it restates
+ * the keys of `automationDefinitionSchema` (`./types.ts`) one for one.
  */
 
 export const CREATE_AUTOMATION_SKILL_NAME = 'create-cezar-automation';
@@ -110,22 +110,9 @@ Prompt placeholders, substituted per launch — GitHub poll: {{github.kind}} (is
 
 A new automation is PAUSED unless created with --enable. Enabling a GitHub poll establishes a current-time baseline: only pull requests and issues that appear AFTER it are ever launched, never the backlog. Enabling a schedule arms its next occurrence. Editing a definition never re-considers what an earlier revision already saw.`;
 
-/** The part composed into EVERY task's system prompt while automations are on and reachable. */
-export const AUTOMATIONS_PROMPT = `Automations. This cockpit can do recurring work for you without you doing it once: an automation is a tracker event poll for this project’s connected Jira/Linear issues, a bounded GitHub poll — a new pull request, a new issue, a label added to or removed from an issue, a review submitted on a pull request, a review requested (or re-requested from someone who already reviewed) — optionally filtered by author, assignee, labels or reviewer — or a schedule (every day at a time, weekdays, one weekday a week, every N hours), and it launches an ordinary cezar task for every match or occurrence, with a prompt template you write. When the user asks for something to happen "whenever", "every time" or "each time" a pull request or issue appears, is labelled, is reviewed or a review is (re-)requested, or "every day at", "on weekdays", "every Friday", "every 6 hours", they are asking for an automation: create one instead of doing the work once, and instead of polling GitHub or sleeping yourself.
-
-Always through the cockpit's own binary, node "$CEZ_BIN", because a cez on your PATH may be an older install without this command; every "cez automation …" below means node "$CEZ_BIN" automation …:
-
-  cez automation schema                              the definition shape, every key, every bound, the prompt placeholders
-  cez automation create --file <def.json> [--enable]  create one from JSON (paused unless --enable); --json '<json>' or stdin work too
-  cez automation add --name <n> (--cron "0 4 * * *" | --on <event> --every 5m) --prompt <p> [--workflow w] [--runner r] [--model m] [--autonomous] [--dispatch [--max-subtasks N] [--review-child]] [--label l] [--author a] [--enable]
-                                                     the same, from flags — for the common shapes; JSON carries every filter
-  cez automation check <id> [--execute]              GitHub or tracker poll: preview what the filter matches right now (launches nothing without --execute)
-  cez automation run <id>                            schedule: launch it once, now, by hand — paused or not
-  cez automation list | show <id> | update <id> --file <def.json> | enable <id> | pause <id> | delete <id>
-
-For a tracker, first GET /api/v1/p/:projectId/tracker/automation-options to discover supported events, the exact association and status/label IDs. Use JSON with trackerTrigger through create --file; never edit automation state files. Jira supports creation and status transitions; Linear supports creation only.
-
-Read cez automation schema first. Create it PAUSED — for a GitHub or tracker poll run a preview check so the user can see what it would have matched; for a schedule tell the user the next occurrence — unless they explicitly asked for it to be enabled; only enable when the user asked, and say so. Never enable a GitHub poll whose filter you have not previewed. Apply the same preview requirement to tracker polls; create paused, check, then enable when requested. The command prints the automation's id and its page in the cockpit — put that link in your final message. If cez automation is refused or CEZ_BIN is unset, stop and report that automations are unavailable on this cockpit: do not write a cron job, a GitHub Action or a polling script in the repository as a substitute.`;
+/** The part composed into a root task's system prompt while automations are on and reachable.
+ *  The command list lives in `cez automation --help` and the definition in `cez automation schema`. */
+export const AUTOMATIONS_PROMPT = `Automations. This cockpit can do recurring work: an automation is a tracker event poll for this project's connected Jira/Linear issues, a bounded GitHub poll (a new pull request or issue, a label added to or removed from an issue, a review submitted or (re-)requested, optionally filtered by author, assignee, labels or reviewer) or a schedule (every day at a time, weekdays, one weekday a week, every N hours), and it launches an ordinary cezar task for every match or occurrence. When the user asks for something to happen "whenever", "every time" or "each time" a pull request or issue appears, is labelled or reviewed, or "every day at", "on weekdays", "every Friday", "every 6 hours", create an automation instead of doing the work once, and instead of polling GitHub or sleeping yourself. First read node "$CEZ_BIN" automation schema (the definition, including the tracker automation-options lookup) and node "$CEZ_BIN" automation --help (the commands) — always through that binary, because a cez on your PATH may be an older install. Create it PAUSED; for a GitHub or tracker poll run a preview check, and never enable a GitHub poll whose filter you have not previewed, nor a tracker poll; only enable when the user asked, and say so. Put the automation's cockpit link in your final message. If cez automation is refused or CEZ_BIN is unset, stop and report that automations are unavailable on this cockpit: do not write a cron job, a GitHub Action or a polling script in the repository as a substitute.`;
 
 /**
  * The built-in skill's body — the full playbook a run under `create-cezar-automation` follows.

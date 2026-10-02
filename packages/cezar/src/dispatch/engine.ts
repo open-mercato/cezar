@@ -19,7 +19,7 @@ import type { RunRecord } from '../runs/store.ts';
 /**
  * Children in flight under ONE parent — the CONTRACT's value, re-exported rather than restated.
  * The schema bounds a user's `inFlight` by it (`dispatchIntentSchema`), `dispatch()` enforces it,
- * and `DISPATCH_PROMPT` tells the agent what it is: three enforcement points for one brake, and a
+ * and `cez task --help` tells the agent what it is: three enforcement points for one brake, and a
  * second literal `4` here is how they drift.
  */
 export const MAX_CHILDREN_IN_FLIGHT = DISPATCH_MAX_IN_FLIGHT;
@@ -111,7 +111,9 @@ export function childTaskEnvelope(
   if (child.max_cost !== undefined) lines.push(`- Max cost: ${usd(child.max_cost)}`);
   if (child.success_criteria) lines.push(`- Success criteria: ${child.success_criteria}`);
   if (child.required_evidence) lines.push(`- Required evidence: ${child.required_evidence}`);
-  if (child.retry_limit !== undefined) lines.push(`- Retry limit: ${child.retry_limit}`);
+  if (child.retry_limit !== undefined) {
+    lines.push(`- Retry limit: ${child.retry_limit} (cezar continues you after an unfinished turn at most ${child.retry_limit} time${child.retry_limit === 1 ? '' : 's'}, then parks you)`);
+  }
   if (parent.branch) lines.push(`- Parent branch (your fork point): ${parent.branch}`);
   lines.push(`- Ordered by: run ${parent.id}`);
   lines.push(...extraLines);
@@ -163,6 +165,9 @@ export function childSettleReport(
   // `done`, and reporting that upward as success would turn "I stopped and asked before doing
   // something irreversible" into a clean `done` nobody ever answered — the Guard's whole premise.
   const unanswered = own ? undefined : child.dispatch?.pendingAsk;
+  // The retry cap stopped cezar before the task finished; the run settles unfinished, and the
+  // parent hears `partial` rather than reading the ceiling as a finished job.
+  const retryLimited = own || unanswered ? undefined : child.dispatch?.retryLimitReached;
   const report: DispatchReport =
     own ??
     (unanswered
@@ -174,17 +179,28 @@ export function childSettleReport(
           errors: child.error ? [child.error] : [],
           suggestions: [],
         } satisfies DispatchReport)
-      : ({
-          status: statusToReportStatus(child.status),
-          result:
-            context.resumeNotes?.trim() ||
-            child.error?.trim() ||
-            'no structured report — the run settled without calling `cez task report`',
-          evidence: [],
-          side_effects: [],
-          errors: child.error ? [child.error] : [],
-          suggestions: [],
-        } satisfies DispatchReport));
+      : retryLimited
+        ? ({
+            status: 'partial',
+            result:
+              child.error?.trim() ||
+              'the retry limit stopped cezar auto-continuing before the task finished — continue it to keep going',
+            evidence: [],
+            side_effects: [],
+            errors: child.error ? [child.error] : [],
+            suggestions: [],
+          } satisfies DispatchReport)
+        : ({
+            status: statusToReportStatus(child.status),
+            result:
+              context.resumeNotes?.trim() ||
+              child.error?.trim() ||
+              'no structured report — the run settled without calling `cez task report`',
+            evidence: [],
+            side_effects: [],
+            errors: child.error ? [child.error] : [],
+            suggestions: [],
+          } satisfies DispatchReport));
 
   const where = child.branch
     ? `${child.id}, branch ${child.branch}${child.baseBranch ? ` off ${child.baseBranch}` : ''}`
@@ -200,14 +216,80 @@ export function childSettleReport(
   if (child.diffStat) {
     parts.push(`diff ${child.diffStat.files} files, +${child.diffStat.adds} -${child.diffStat.dels}`);
   }
+  if (child.dispatch?.scopeCheck) parts.push(child.dispatch.scopeCheck);
   const text = `Report from task "${child.title}" (${where}): ${parts.join('; ')}`;
   return { text, report };
 }
 
-/** Append a report to a parent's pending list, keeping the newest `MAX_PENDING_REPORTS`. */
+/** Append a report to a parent's pending list, keeping the newest `MAX_PENDING_REPORTS` and
+ *  counting the ones trimmed off, so the flushed block can say they exist. */
 export function withPendingReport(dispatch: RunDispatch, entry: DispatchPendingReport): RunDispatch {
-  const pendingReports = [...(dispatch.pendingReports ?? []), entry].slice(-MAX_PENDING_REPORTS);
-  return { ...dispatch, pendingReports };
+  const all = [...(dispatch.pendingReports ?? []), entry];
+  const dropped = Math.max(0, all.length - MAX_PENDING_REPORTS);
+  const droppedReports = (dispatch.droppedReports ?? 0) + dropped;
+  return { ...dispatch, pendingReports: all.slice(-MAX_PENDING_REPORTS), ...(droppedReports ? { droppedReports } : {}) };
+}
+
+/** Every token that could name a path: a separator, a wildcard, an extension, or a bare word
+ *  ("docs"). Prose is not filtered out here — a bare word can only ADD matches, so it errs towards
+ *  "inside", and `scopeVerdict` refuses an "outside" verdict when no token clearly names a path. */
+function scopePathTokens(scope: string): string[] {
+  return scope
+    .split(/[\s,;]+/)
+    .map(scopePathToken)
+    .filter((token) => token.length > 0 && (/[/*?]/.test(token) || /\.[A-Za-z0-9]+$/.test(token) || /^[A-Za-z0-9._-]+$/.test(token)));
+}
+
+/** A token that names a path without ambiguity: a glob, a directory (trailing slash) or a file
+ *  (extension). Bare words ("docs") and slash-prose ("and/or") match, but cannot on their own
+ *  justify telling the parent a correct change fell outside its scope. */
+function isUnambiguousPathToken(token: string): boolean {
+  return /[*?[{]/.test(token) || token.endsWith('/') || /\.[A-Za-z0-9]+$/.test(token);
+}
+
+/** A bare root ("/", ".", "*") means the whole repository; otherwise a token loses the quoting
+ *  and sentence punctuation around it and its leading "/" or "./", because `git diff --name-only`
+ *  paths are repository-relative. */
+function scopePathToken(raw: string): string {
+  const quoted = raw.replace(/^[`'"(]+|[`'")]+$/g, '');
+  if (/^(\.\/?|\/|\*)$/.test(quoted)) return '*';
+  return quoted.replace(/[`'").,:;]+$/, '').replace(/^\.?\/+/, '');
+}
+
+/** Everything before the first glob metacharacter: matching by that prefix can only err towards
+ *  "inside", so a correct change is never reported as out of scope. */
+function literalPrefix(token: string): string {
+  const wildcard = token.search(/[*?[{]/);
+  return wildcard < 0 ? token : token.slice(0, wildcard);
+}
+
+const SCOPE_CHECK_LISTED = 5;
+
+/** The engine's own files-vs-scope verdict for a settled child, as the one line its report carries. */
+export function scopeVerdict(scope: string, changedFiles: readonly string[]): string {
+  const tokens = scopePathTokens(scope);
+  if (tokens.length === 0) return 'scope check: not checked — the declared scope names no paths';
+  if (changedFiles.length === 0) return 'scope check: no changed files';
+  const inside = (file: string): boolean =>
+    tokens.some((token) => {
+      const prefix = literalPrefix(token);
+      if (prefix !== token || token.endsWith('/')) return file.startsWith(prefix);
+      return file === token || file.startsWith(`${token}/`);
+    });
+  const outside = changedFiles.filter((file) => !inside(file));
+  if (outside.length === 0) {
+    return `scope check: all ${changedFiles.length} changed file${changedFiles.length === 1 ? '' : 's'} inside the declared scope`;
+  }
+  // An "outside" verdict needs at least one token that clearly names a path. When every token is
+  // prose or a bare word, a file reading outside is a parse failure ("and/or the auth module"),
+  // not a finding — and the parent, told not to re-derive it, would reject correct work. This
+  // holds however many files matched, so a partial match cannot promote an ambiguous reading.
+  if (!tokens.some(isUnambiguousPathToken)) {
+    return 'scope check: not checked — the declared scope names no unambiguous paths';
+  }
+  const listed = outside.slice(0, SCOPE_CHECK_LISTED).join(', ');
+  const more = outside.length > SCOPE_CHECK_LISTED ? ` and ${outside.length - SCOPE_CHECK_LISTED} more` : '';
+  return `scope check: ${outside.length} of ${changedFiles.length} changed file${changedFiles.length === 1 ? '' : 's'} outside the declared scope: ${listed}${more}`;
 }
 
 /**
@@ -215,13 +297,17 @@ export function withPendingReport(dispatch: RunDispatch, entry: DispatchPendingR
  * Rendered as prose rather than JSON for the same reason the delivered message is:
  * a commander reads its children's reports, it does not parse them.
  */
-export function pendingReportsBlock(reports: readonly DispatchPendingReport[]): string | undefined {
+export function pendingReportsBlock(reports: readonly DispatchPendingReport[], dropped = 0): string | undefined {
   if (reports.length === 0) return undefined;
   const lines = reports.map((entry) => {
     const parts = [`status ${entry.report.status}`, entry.report.result];
     if (entry.report.evidence.length) parts.push(`evidence: ${entry.report.evidence.join(' · ')}`);
     if (entry.report.errors.length) parts.push(`errors: ${entry.report.errors.join(' · ')}`);
+    if (entry.scopeCheck) parts.push(entry.scopeCheck);
     return `- "${entry.title}" (${entry.fromRunId}, ${entry.at}): ${parts.join('; ')}`;
   });
+  if (dropped > 0) {
+    lines.unshift(`- ${dropped} older report${dropped === 1 ? ' is' : 's are'} not repeated here — read units/*/report.md in the tree directory`);
+  }
   return `## Reports from your dispatched tasks\n${lines.join('\n')}`;
 }

@@ -11,14 +11,26 @@ import {
 /** The prompts are the ONLY place an agent learns the `cez automation` CLI and the definition
  *  shape, so they must name every command, every event and every key the storage schema accepts. */
 describe('the automations prompt part', () => {
-  it('teaches the CLI through the cockpit’s own entrypoint, and the create → check → enable order', () => {
-    expect(AUTOMATIONS_PROMPT).toContain('node "$CEZ_BIN" automation');
-    for (const command of ['schema', 'create --file', '--enable', 'add --name', '--cron', 'check <id>', 'run <id>', 'list', 'show <id>', 'update <id>', 'enable <id>', 'pause <id>', 'delete <id>']) {
-      expect(AUTOMATIONS_PROMPT).toContain(command);
-    }
+  it('points at the CLI’s own reference through the cockpit’s entrypoint, and keeps the create → check → enable order', () => {
+    expect(AUTOMATIONS_PROMPT).toContain('node "$CEZ_BIN" automation schema');
+    expect(AUTOMATIONS_PROMPT).toContain('node "$CEZ_BIN" automation --help');
     expect(AUTOMATIONS_PROMPT).toMatch(/Create it PAUSED/);
-    expect(AUTOMATIONS_PROMPT).toMatch(/Never enable a GitHub poll whose filter you have not previewed/);
+    expect(AUTOMATIONS_PROMPT).toMatch(/Never enable a GitHub poll whose filter you have not previewed/i);
     expect(AUTOMATIONS_PROMPT).toContain('"every day at"');
+    expect(AUTOMATIONS_PROMPT).toContain('cockpit link');
+  });
+
+  it('leaves the command-by-command reference to cez automation --help', async () => {
+    for (const command of ['create --file', 'add --name', '--cron', 'update <id>', 'pause <id>', 'delete <id>']) {
+      expect(AUTOMATIONS_PROMPT).not.toContain(command);
+    }
+    expect(AUTOMATIONS_PROMPT.length).toBeLessThan(1600);
+    const out: string[] = [];
+    const { runAutomationCommand } = await import('./automation-cli.ts');
+    expect(await runAutomationCommand(['--help'], {}, { fetch, log: (line) => out.push(line), error: () => {} })).toBe(0);
+    for (const command of ['schema', 'create [--file', '--enable', 'add --name', '--cron', 'check <id>', 'run <id>', 'list', 'show <id>', 'update <id>', 'enable <id>', 'pause <id>', 'delete <id>']) {
+      expect(out.join('\n')).toContain(command);
+    }
   });
 
   it('names the intent it recognises and forbids the substitutes a refused agent reaches for', () => {
