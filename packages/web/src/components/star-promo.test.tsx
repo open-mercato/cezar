@@ -1,47 +1,50 @@
 import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createQueryClient } from '@/api/query-client'
 import { queryKeys, workspaceQueryKeys } from '@/api/queries'
-import type { RunRecord, RunStatus, StarCountPayload } from '@open-mercato/cezar-api-client'
-import { STAR_TOAST_SEEN_KEY } from '@/lib/star-promo'
-import { Toaster, resetToasts } from './ui/toaster'
+import type { DashboardInsights, RunRecord, StarCountPayload } from '@open-mercato/cezar-api-client'
+import {
+  STAR_ASK_KEY,
+  STAR_ASK_PENDING_MS,
+  STAR_ASK_PRESENCE_MS,
+  STAR_ASK_SETTLE_MS,
+  STAR_TOAST_SEEN_KEY,
+} from '@/lib/star-promo'
 import { StarPromo } from './star-promo'
 
 /**
- * The star ask's one-time toast, wired: cache observation → toast, at most once per browser.
+ * The star ask, wired: cache observation → presence → dialog.
  *
- * Every case here is about a silence. The toast itself is three lines; what makes it a request
- * rather than a nag is the set of moments it declines to fire in, so those are what this pins.
+ * Most cases here are about a silence. What makes the dialog a request rather than a nag is the
+ * set of moments it declines to open in — a first try, an empty room, a person mid-sentence —
+ * so those are what this pins.
  */
 
 let clients: QueryClient[] = []
+let visibility: DocumentVisibilityState = 'visible'
 
-function run(over: Partial<RunRecord> = {}): RunRecord {
+function run(id: string, status: RunRecord['status']): RunRecord {
   return {
-    id: 'r1',
-    title: 'Normalize the agent-event protocol',
+    id,
+    title: `task ${id}`,
     workflow: 'default',
-    task: 'normalize the protocol',
-    status: 'running',
+    task: 'do it',
+    status,
     createdAt: '2026-07-14T10:00:00.000Z',
     tokensUsed: 0,
     archived: false,
     steps: [],
-    ...over,
   }
 }
-
-const AVAILABLE: StarCountPayload = {
-  available: true,
-  count: 1234,
-  url: 'https://github.com/open-mercato/cezar',
-}
+const AVAILABLE: StarCountPayload = { available: true, count: 1234, url: 'https://github.com/open-mercato/cezar' }
 const UNAVAILABLE: StarCountPayload = { available: false, url: 'https://github.com/open-mercato/cezar' }
+/** Two finished runs and one about to finish: the third success is the qualifying moment. */
+const SEED = [run('a', 'done'), run('b', 'review'), run('c', 'running')]
+const THIRD_DONE = [run('a', 'done'), run('b', 'review'), run('c', 'done')]
 
-/** Mount the watcher over a seeded cache, then apply the patch the SSE layer would. */
-function mount(starCount: StarCountPayload | undefined, seed: RunRecord[]) {
+function mount(starCount: StarCountPayload | undefined = AVAILABLE, seed: RunRecord[] = SEED) {
   vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => {})))
   const client = createQueryClient()
   clients.push(client)
@@ -50,172 +53,171 @@ function mount(starCount: StarCountPayload | undefined, seed: RunRecord[]) {
   render(
     <QueryClientProvider client={client}>
       <StarPromo />
-      <Toaster />
     </QueryClientProvider>,
   )
   const patch = (runs: RunRecord[]) => act(() => client.setQueryData(queryKeys.runs.list(), runs))
   return { client, patch }
 }
-
-const toasts = () => screen.queryAllByRole('status').map((node) => node.textContent ?? '')
+const touch = () => act(() => fireEvent.pointerDown(window))
+const settle = () => act(() => vi.advanceTimersByTime(STAR_ASK_SETTLE_MS))
+const dialog = () => screen.queryByRole('dialog')
+const record = () => JSON.parse(localStorage.getItem(STAR_ASK_KEY) ?? 'null')
 
 beforeEach(() => {
+  vi.useFakeTimers({ now: Date.parse('2026-10-02T12:00:00.000Z') })
   localStorage.clear()
+  visibility = 'visible'
+  vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visibility)
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true)
 })
 
 afterEach(() => {
-  act(() => resetToasts())
   cleanup()
   for (const client of clients) client.clear()
   clients = []
   localStorage.clear()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
   vi.restoreAllMocks()
 })
 
 describe('StarPromo', () => {
-  it('asks once when the first run enters done, with a link to cezar', () => {
-    const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
-    patch([run({ status: 'done' })])
-
-    expect(toasts()).toHaveLength(1)
-    expect(toasts()[0]).toContain('🎉')
-    const link = screen.getByRole('link', { name: 'Star on GitHub' })
-    expect(link.getAttribute('href')).toBe('https://github.com/open-mercato/cezar')
+  it('asks when a run ends well, the user has three successes and is at the screen', () => {
+    const { patch } = mount()
+    touch()
+    patch(THIRD_DONE)
+    expect(dialog()).toBeNull() // never under a click in flight
+    settle()
+    expect(dialog()).not.toBeNull()
+    expect(screen.getByRole('heading', { name: 'Is cezar pulling its weight?' })).toBeTruthy()
+    expect(screen.getByText(/1\.2k stars on GitHub/)).toBeTruthy()
+    expect(screen.getByRole('link', { name: /Star cezar on GitHub/ }).getAttribute('href')).toBe(
+      'https://github.com/open-mercato/cezar',
+    )
+    expect(record()).toMatchObject({ asks: 1 })
   })
 
-  it('claims a PR only when the run actually opened one', () => {
-    // In cezar a run ends at the review gate with its diff in the worktree; pushing a draft PR
-    // is a separate, optional step, so most first runs have no PR to celebrate.
-    const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
-    patch([run({ status: 'done' })])
-    expect(toasts()[0]).toContain('First task done')
-    expect(toasts()[0]).not.toContain('PR')
+  it('stays silent for a first try — fewer than three successes is not "really uses cezar"', () => {
+    const { patch } = mount(AVAILABLE, [run('a', 'done'), run('c', 'running')])
+    touch()
+    patch([run('a', 'done'), run('c', 'done')])
+    settle()
+    expect(dialog()).toBeNull()
   })
 
-  it('says "First PR ready" when the run did open one', () => {
-    const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
-    patch([run({ status: 'done', pullRequestUrl: 'https://github.com/open-mercato/cezar/pull/7' })])
-    expect(toasts()[0]).toContain('First PR ready')
+  it('waits for someone to come back to a hidden tab, then asks', () => {
+    const { patch } = mount()
+    visibility = 'hidden'
+    touch()
+    patch(THIRD_DONE)
+    settle()
+    expect(dialog()).toBeNull()
+    act(() => vi.advanceTimersByTime(5 * 60_000))
+    visibility = 'visible'
+    touch()
+    settle()
+    expect(dialog()).not.toBeNull()
   })
 
-  it('treats review as a success too — it is where a run that produced a PR parks', () => {
-    const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
-    patch([run({ status: 'review' })])
-    expect(toasts()).toHaveLength(1)
+  it('does not ask an empty room: no movement within the presence window means not watching', () => {
+    const { patch } = mount()
+    touch()
+    act(() => vi.advanceTimersByTime(STAR_ASK_PRESENCE_MS + 1))
+    patch(THIRD_DONE)
+    settle()
+    expect(dialog()).toBeNull()
+    touch()
+    settle()
+    expect(dialog()).not.toBeNull()
   })
 
-  it('never asks twice, however many runs succeed afterwards', () => {
-    const { patch } = mount(AVAILABLE, [run({ id: 'a', status: 'running' }), run({ id: 'b', status: 'running' })])
-    patch([run({ id: 'a', status: 'done' }), run({ id: 'b', status: 'running' })])
-    patch([run({ id: 'a', status: 'done' }), run({ id: 'b', status: 'review' })])
-    expect(toasts()).toHaveLength(1)
+  it('lets a held success expire after the pending window', () => {
+    const { patch } = mount()
+    visibility = 'hidden'
+    patch(THIRD_DONE)
+    act(() => vi.advanceTimersByTime(STAR_ASK_PENDING_MS + 1))
+    visibility = 'visible'
+    touch()
+    settle()
+    expect(dialog()).toBeNull()
   })
 
-  it('records the ask so the NEXT session stays silent', () => {
-    const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
-    patch([run({ status: 'done' })])
-    expect(localStorage.getItem(STAR_TOAST_SEEN_KEY)).not.toBeNull()
-
-    // A fresh mount over the same storage is the next page load.
-    act(() => resetToasts())
-    cleanup()
-    const second = mount(AVAILABLE, [run({ id: 'c', status: 'running' })])
-    second.patch([run({ id: 'c', status: 'done' })])
-    expect(toasts()).toHaveLength(0)
+  it('never interrupts typing', () => {
+    const { patch } = mount()
+    const field = document.createElement('textarea')
+    document.body.append(field)
+    field.focus()
+    touch()
+    patch(THIRD_DONE)
+    settle()
+    expect(dialog()).toBeNull()
+    field.blur()
+    touch()
+    settle()
+    expect(dialog()).not.toBeNull()
+    field.remove()
   })
 
   it('stays silent on a cold boot full of finished runs', () => {
-    // The cache seeds from the boot fetch. Nothing there is a transition, so a user opening the
-    // cockpit on a week of finished work is not congratulated on a run from Tuesday.
-    mount(AVAILABLE, [run({ id: 'a', status: 'done' }), run({ id: 'b', status: 'review' })])
-    expect(toasts()).toHaveLength(0)
-  })
-
-  it('stays silent for failures and cancellations', () => {
-    const { patch } = mount(AVAILABLE, [run({ id: 'a', status: 'running' }), run({ id: 'b', status: 'running' })])
-    patch([run({ id: 'a', status: 'failed' }), run({ id: 'b', status: 'cancelled' })])
-    expect(toasts()).toHaveLength(0)
+    mount(AVAILABLE, THIRD_DONE)
+    touch()
+    settle()
+    expect(dialog()).toBeNull()
   })
 
   it('stays silent when promos are off — CEZ_NO_BANNER=1 reaches the browser as available:false', () => {
-    const { patch } = mount(UNAVAILABLE, [run({ status: 'running' })])
-    patch([run({ status: 'done' })])
-    expect(toasts()).toHaveLength(0)
-    // And the flag is untouched, so the ask is deferred rather than silently spent.
-    expect(localStorage.getItem(STAR_TOAST_SEEN_KEY)).toBeNull()
+    const { patch } = mount(UNAVAILABLE)
+    touch()
+    patch(THIRD_DONE)
+    settle()
+    expect(dialog()).toBeNull()
   })
 
-  it('stays silent while the count has not answered yet', () => {
-    const { patch } = mount(undefined, [run({ status: 'running' })])
-    patch([run({ status: 'done' })])
-    expect(toasts()).toHaveLength(0)
+  it('counts the retired toast as an ask, so a recent toast holds the dialog back', () => {
+    localStorage.setItem(STAR_TOAST_SEEN_KEY, new Date().toISOString())
+    const { patch } = mount()
+    touch()
+    patch(THIRD_DONE)
+    settle()
+    expect(dialog()).toBeNull()
   })
 
-  it('stays silent when this browser has already seen it, even on a brand-new success', () => {
-    localStorage.setItem(STAR_TOAST_SEEN_KEY, '2026-01-01T00:00:00.000Z')
-    const { patch } = mount(AVAILABLE, [run({ status: 'running' })])
-    patch([run({ status: 'done' })])
-    expect(toasts()).toHaveLength(0)
+  it('records "Don\'t ask again" for good, and "Maybe later" as a snooze', () => {
+    const { patch } = mount()
+    touch()
+    patch(THIRD_DONE)
+    settle()
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Maybe later' })))
+    expect(record()).toEqual({ asks: 1, lastAskedAt: new Date().toISOString() })
+    localStorage.setItem(STAR_ASK_KEY, JSON.stringify({ asks: 0 }))
+    patch(SEED)
+    touch()
+    patch(THIRD_DONE)
+    settle()
+    act(() => fireEvent.click(screen.getByRole('button', { name: 'Don’t ask again' })))
+    expect(record()).toMatchObject({ outcome: 'never' })
   })
 
-  it('keeps observing transitions while gated, so flipping a gate cannot replay an old success', () => {
-    // The whole point of tracking statuses before the gate: a run that finished while promos
-    // were off is history, not a queued toast.
-    const client = createQueryClient()
-    clients.push(client)
-    vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => {})))
-    client.setQueryData(workspaceQueryKeys.starCount, UNAVAILABLE)
-    client.setQueryData(queryKeys.runs.list(), [run({ status: 'running' })])
-    render(
-      <QueryClientProvider client={client}>
-        <StarPromo />
-        <Toaster />
-      </QueryClientProvider>,
-    )
-    act(() => client.setQueryData(queryKeys.runs.list(), [run({ status: 'done' })]))
-    expect(toasts()).toHaveLength(0)
-
-    // The gate opens. The already-`done` run is not a transition any more, so nothing fires.
-    act(() => client.setQueryData(workspaceQueryKeys.starCount, AVAILABLE))
-    act(() => client.setQueryData(queryKeys.runs.list(), [run({ status: 'done' })]))
-    expect(toasts()).toHaveLength(0)
+  it('records a star when the link is followed', () => {
+    const { patch } = mount()
+    touch()
+    patch(THIRD_DONE)
+    settle()
+    act(() => fireEvent.click(screen.getByRole('link', { name: /Star cezar on GitHub/ })))
+    expect(record()).toMatchObject({ outcome: 'starred' })
+    expect(dialog()).toBeNull()
   })
 
-  it('blocks nothing and renders nothing of its own', () => {
-    const { container } = render(
-      <QueryClientProvider client={(() => {
-        const client = createQueryClient()
-        clients.push(client)
-        return client
-      })()}>
-        <StarPromo />
-      </QueryClientProvider>,
-    )
-    expect(container.innerHTML).toBe('')
-  })
-
-  it('survives an unset run list — the cache is empty before the first fetch lands', () => {
-    const client = createQueryClient()
-    clients.push(client)
-    vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => {})))
-    client.setQueryData(workspaceQueryKeys.starCount, AVAILABLE)
-    expect(() =>
-      render(
-        <QueryClientProvider client={client}>
-          <StarPromo />
-          <Toaster />
-        </QueryClientProvider>,
-      ),
-    ).not.toThrow()
-    act(() => client.setQueryData<RunRecord[]>(queryKeys.runs.list(), undefined as unknown as RunRecord[]))
-    expect(toasts()).toHaveLength(0)
-  })
-
-  it('ignores statuses outside the success set', () => {
-    const { patch } = mount(AVAILABLE, [run({ status: 'queued' })])
-    const nonSuccess: RunStatus[] = ['running', 'waiting', 'failed', 'cancelled']
-    for (const status of nonSuccess) patch([run({ status })])
-    expect(toasts()).toHaveLength(0)
+  it('makes the case with the user\'s own last 30 days when they are known', () => {
+    const { client, patch } = mount()
+    client.setQueryData([...workspaceQueryKeys.dashboard, 'insights', '30d'], {
+      delivered: { completedTasks: 23, prsOpened: 4, prsTouched: 4, issues: 1, additions: 966, deletions: 667, files: 27, measuredTasks: 22 },
+    } as unknown as DashboardInsights)
+    touch()
+    patch(THIRD_DONE)
+    settle()
+    expect(screen.getByText('Your last 30 days with cezar')).toBeTruthy()
+    expect(screen.getByText('23')).toBeTruthy()
+    expect(screen.getByText('+966')).toBeTruthy()
   })
 })

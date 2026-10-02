@@ -13,38 +13,8 @@ import type { RunRecord, RunStatus } from '@open-mercato/cezar-api-client'
 /** Where every surface of the ask points. */
 export const CEZAR_REPO_URL = 'https://github.com/open-mercato/cezar'
 
-/**
- * The toast, from the brief (rendered in English like the rest of the cockpit, which has no i18n
- * layer): "Pierwszy PR gotowy 🎉 Jeśli cezar oszczędził Ci czas, gwiazdka pomaga innym go
- * znaleźć".
- */
-export const STAR_TOAST_MESSAGE =
-  'First PR ready 🎉 If cezar saved you time, a star helps others find it'
-
-/**
- * The same ask for a run that finished without opening a PR.
- *
- * The brief named the TRIGGER as the first successful run and the COPY as "first PR ready", and
- * in cezar those are not the same event: a run ends at the review gate with its diff in the
- * worktree, and pushing a draft PR is a separate, optional step. Most first runs have no PR.
- * Celebrating one that does not exist is the kind of small lie that costs exactly the goodwill
- * this toast is asking for, so the opening clause follows the truth and the ask — the half that
- * is always true — is word-for-word the same.
- */
-export const STAR_TOAST_MESSAGE_NO_PR =
-  'First task done 🎉 If cezar saved you time, a star helps others find it'
-
-/** Which of the two the moment earns. */
-export function starToastMessage(withPullRequest: boolean): string {
-  return withPullRequest ? STAR_TOAST_MESSAGE : STAR_TOAST_MESSAGE_NO_PR
-}
-export const STAR_TOAST_ACTION_LABEL = 'Star on GitHub'
-/** Longer than an ordinary toast: this one asks the reader to do something, and the default five
- *  seconds is tuned for "that worked", not for a sentence plus a decision. Still auto-dismissing
- *  — an ask that has to be closed by hand is a modal wearing a toast's clothes. */
-export const STAR_TOAST_MS = 12_000
-
-/** `cez:star-toast-seen`. Namespaced like the cockpit's other local keys. */
+/** Where the retired one-time toast (#1200) recorded itself. Still READ: a browser that saw the
+ *  toast has spent one of its asks, so the dialog never opens as if it were the first. */
 export const STAR_TOAST_SEEN_KEY = 'cez:star-toast-seen'
 
 // ---- the count -------------------------------------------------------------------------------
@@ -66,34 +36,104 @@ export function formatStarCount(count: number): string {
   return `${Math.floor(thousands)}k`
 }
 
-// ---- the one-time flag -----------------------------------------------------------------------
+// ---- the ask's record ------------------------------------------------------------------------
+
+/** `cez:star-ask` — how often this browser was asked, when, and whether it answered for good. */
+export const STAR_ASK_KEY = 'cez:star-ask'
+
+/** Proof of real use rather than a first try: this many runs ended well before we ask. */
+export const STAR_ASK_MIN_SUCCESSES = 3
+/** A "Maybe later" is honoured for two weeks. */
+export const STAR_ASK_SNOOZE_MS = 14 * 24 * 60 * 60_000
+/** Three asks, ever. Past that the chip in the sidebar is the whole request. */
+export const STAR_ASK_MAX_ASKS = 3
+/** "Watching" means a pointer or key moved this recently in a visible, focused window. */
+export const STAR_ASK_PRESENCE_MS = 60_000
+/** A success that lands while the user is away waits this long for them to come back. */
+export const STAR_ASK_PENDING_MS = 30 * 60_000
+/** Once everything lines up, wait this long and check again — never open under a moving click. */
+export const STAR_ASK_SETTLE_MS = 1_500
+
+export interface StarAskRecord {
+  asks: number
+  lastAskedAt?: string
+  /** `starred` (followed the link) and `never` (said so) both end the asking for good. */
+  outcome?: 'starred' | 'never'
+}
 
 /**
- * Whether the toast has already been shown in this browser.
+ * This browser's record, or `null` when it cannot be read.
  *
- * **Every failure answers `true`.** A private window, a disabled store, a quota-full origin — in
- * all of them the flag cannot be written, so a `false` here would mean the toast fires again on
- * the next successful run, and the next, forever. The failure mode of "seen" is one user who
- * never gets the ask; the failure mode of "not seen" is a nag. Only one of those is acceptable
- * for something billed as a single request.
+ * **`null` means "do not ask"** — the same fail-closed rule the toast had. Where the record cannot
+ * be read it cannot be written either, so an ask there would have no memory and repeat on every
+ * success. The failure mode of closed is one user who is never asked; the failure mode of open
+ * is a nag.
  */
-export function hasSeenStarToast(storage: Pick<Storage, 'getItem'> | null = safeStorage()): boolean {
-  if (!storage) return true
+export function readStarAsk(storage: Pick<Storage, 'getItem'> | null = safeStorage()): StarAskRecord | null {
+  if (!storage) return null
   try {
-    return storage.getItem(STAR_TOAST_SEEN_KEY) !== null
+    const raw = storage.getItem(STAR_ASK_KEY)
+    if (raw !== null) {
+      const parsed = JSON.parse(raw) as Partial<StarAskRecord>
+      return {
+        asks: Number.isInteger(parsed.asks) && parsed.asks! >= 0 ? parsed.asks! : STAR_ASK_MAX_ASKS,
+        ...(typeof parsed.lastAskedAt === 'string' ? { lastAskedAt: parsed.lastAskedAt } : {}),
+        ...(parsed.outcome === 'starred' || parsed.outcome === 'never' ? { outcome: parsed.outcome } : {}),
+      }
+    }
+    const toast = storage.getItem(STAR_TOAST_SEEN_KEY)
+    return toast === null ? { asks: 0 } : { asks: 1, lastAskedAt: toast }
   } catch {
-    return true
+    return null
   }
 }
 
-/** Records the toast as shown. Called BEFORE the toast is published, so a write that throws
- *  halfway cannot leave a shown-but-unrecorded state. */
-export function markStarToastSeen(storage: Pick<Storage, 'setItem'> | null = safeStorage()): void {
+/** Never throws: a full quota must not take the cockpit down, and reading already fails closed. */
+export function writeStarAsk(
+  record: StarAskRecord,
+  storage: Pick<Storage, 'setItem'> | null = safeStorage(),
+): void {
   try {
-    storage?.setItem(STAR_TOAST_SEEN_KEY, new Date().toISOString())
+    storage?.setItem(STAR_ASK_KEY, JSON.stringify(record))
   } catch {
-    // Nothing to do and nothing to report: `hasSeenStarToast` already fails closed.
+    // Nothing to do: `readStarAsk` answers `null` (do not ask) wherever this keeps failing.
   }
+}
+
+/** Whether this browser may be asked now: no final answer, asks left, and any snooze over. */
+export function mayAskForStar(record: StarAskRecord | null, now: number): boolean {
+  if (!record || record.outcome || record.asks >= STAR_ASK_MAX_ASKS) return false
+  if (!record.lastAskedAt) return true
+  const last = Date.parse(record.lastAskedAt)
+  return !Number.isFinite(last) || now - last >= STAR_ASK_SNOOZE_MS
+}
+
+/** How many of the listed runs ended well — the "really uses cezar" half of the gate. */
+export function countSuccesses(runs: readonly Pick<RunRecord, 'status'>[] | undefined): number {
+  return (runs ?? []).filter((run) => SUCCESS_STATUSES.has(run.status)).length
+}
+
+export interface PresenceInput {
+  now: number
+  visible: boolean
+  focused: boolean
+  lastInteractionAt: number
+  /** A text field has focus: they are mid-thought, and a dialog would steal their keystrokes. */
+  typing: boolean
+  /** Something else is already asking for their attention. */
+  dialogOpen: boolean
+}
+
+/** The "watching the screen" half: visible, focused, recently touched, and not busy. */
+export function isUserPresent(p: PresenceInput): boolean {
+  return (
+    p.visible &&
+    p.focused &&
+    !p.typing &&
+    !p.dialogOpen &&
+    p.now - p.lastInteractionAt >= 0 &&
+    p.now - p.lastInteractionAt <= STAR_ASK_PRESENCE_MS
+  )
 }
 
 /**
