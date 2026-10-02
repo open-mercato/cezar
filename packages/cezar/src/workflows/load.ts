@@ -5,6 +5,7 @@ import {
   QUICK_TASK_WORKFLOW,
   normalizeWorkflowDoc,
   stepsIssue,
+  workflowDefSchema,
   workflowFileSchema,
   type WorkflowDef,
 } from './types.ts';
@@ -67,4 +68,35 @@ export async function loadWorkflows(
   ];
   workflows.sort((a, b) => a.name.localeCompare(b.name));
   return { workflows, issues };
+}
+
+/**
+ * The catalog's CURRENT entry under a queued run's snapshot name, when it differs from the
+ * snapshot (#1078) — the definition that run should start with instead.
+ *
+ * `startRun` snapshots the workflow at creation (the record's `workflowDef`, #367), so a run that
+ * waited in the queue while its file gained a step would otherwise run the old chain — while a
+ * run started at that same instant gets the new one, because the loader has no cache. Only a
+ * catalog entry is re-resolved: a workflow file, or the built-in `quick-task`. The ad-hoc chains
+ * ("(planned)", "(inbox)") are `built-in` too but live on the record alone, so a file that
+ * happens to share their name must never replace them. A file deleted or made invalid since the
+ * run was queued is absent from the catalog, and the snapshot runs as before. That includes a file
+ * that overrode `quick-task`: the loader then restores the built-in under the same name, so a
+ * snapshot never moves from a file to a built-in — the file's steps would be silently dropped.
+ *
+ * Returns `undefined` when there is nothing newer to take. Compared through the persisted
+ * schema, so a snapshot read back from `runs.json` (keys in schema order) and the same file
+ * freshly loaded are equal.
+ */
+export function newerCatalogWorkflow(snapshot: WorkflowDef, catalog: readonly WorkflowDef[]): WorkflowDef | undefined {
+  if (snapshot.source !== 'file' && snapshot.name !== QUICK_TASK_WORKFLOW.name) return undefined;
+  const current = catalog.find((w) => w.name === snapshot.name);
+  if (!current || (snapshot.source === 'file' && current.source !== 'file')) return undefined;
+  const canonical = (def: WorkflowDef): string | undefined => {
+    const parsed = workflowDefSchema.safeParse(def);
+    return parsed.success ? JSON.stringify(parsed.data) : undefined;
+  };
+  const next = canonical(current);
+  if (next === undefined || next === canonical(snapshot)) return undefined;
+  return current;
 }

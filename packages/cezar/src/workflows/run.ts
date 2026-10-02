@@ -52,7 +52,7 @@ import { readAgentModelProvider } from '../agent-config/models.ts';
 import { loadConfig, resolveWorktreeRetention } from '../config.ts';
 import { autosaveCommit, chooseForkBase, createWorktree, worktreeDiff, worktreeShortstat } from '../git-worktree.ts';
 import { getHeadCommit, getRepoInfo } from '../server/git.ts';
-import { loadWorkflows } from './load.ts';
+import { loadWorkflows, newerCatalogWorkflow } from './load.ts';
 import type { QueuedMessage, RunRecord, RunStore, StepState } from '../runs/store.ts';
 // Task dispatch (spec 2026-09-10-dispatch). Every import below is inert unless the feature is
 // ON *and* the run carries a `dispatch`: `dispatchOf()` is the single gate, and a run without one
@@ -1461,6 +1461,11 @@ export class RunManager {
           if (queued && anyHold && accountHeldFor(queued, holds, defaultRunner ?? 'claude')) return false;
           return capacity();
         };
+        // The catalog as it is NOW (#1078), read once per sweep and only when a fresh run can
+        // actually start — never inside the loop, whose dequeue must stay in one synchronous tick.
+        const catalog = this.queue.some((id) => this.pendingJobs.has(id) && startable(id))
+          ? await loadWorkflows(this.repoRoot).then((loaded) => loaded.workflows, () => undefined)
+          : undefined;
         while (this.queue.length > 0) {
           // FIFO among the runs that CAN start; a held one keeps its place in the queue rather
           // than being dequeued and re-queued (which would churn its position and its record).
@@ -1503,8 +1508,11 @@ export class RunManager {
           // in the same synchronous tick as the `pendingJobs.delete` above, so no
           // handler can observe a half-dequeued run.
           const input = this.hydrateQueuedInput(runId, job.input);
+          // …and the workflow the same way (#1078): a file edited while the run waited is run as
+          // it is now, exactly as a run started now would be.
+          const workflow = catalog ? this.refreshQueuedWorkflow(runId, job.workflow, catalog) : job.workflow;
           const ownerToken = Symbol('run-owner');
-          void this.execute(runId, job.workflow, input, ownerToken).catch((err: unknown) => {
+          void this.execute(runId, workflow, input, ownerToken).catch((err: unknown) => {
             const message = err instanceof Error ? err.message : String(err);
             const state = this.active.get(runId);
             if (!state || state.ownerToken !== ownerToken || state.cancelled) return;
@@ -1745,6 +1753,25 @@ export class RunManager {
     // one — see `reconcileAutoResumes`.
     this.reconcileAutoResumes();
     void this.pump();
+  }
+
+  /**
+   * Swap a dequeued run's snapshot for the catalog's current definition when it changed while the
+   * run was queued (#1078; see `newerCatalogWorkflow` for which runs qualify). The record follows
+   * — `workflowDef` and the step rail both — so the run shows the workflow it actually runs. A
+   * run that already started a step (a re-queue from inside `execute`) keeps what it has.
+   */
+  private refreshQueuedWorkflow(runId: string, snapshot: WorkflowDef, catalog: readonly WorkflowDef[]): WorkflowDef {
+    const current = newerCatalogWorkflow(snapshot, catalog);
+    if (!current) return snapshot;
+    const steps = current.steps.map((s) => ({ id: s.id, name: s.name ?? s.id, kind: stepKind(s) }));
+    if (!this.store.replacePendingSteps(runId, steps)) return snapshot;
+    this.store.updateRun(runId, { workflowDef: current });
+    this.store.appendEvent(runId, {
+      type: 'lifecycle',
+      message: `workflow "${current.name}" changed while the task was queued — starting with the current version`,
+    });
+    return current;
   }
 
   /** The persisted definition when it looks sane, else the catalog by name. */
