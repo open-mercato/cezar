@@ -302,7 +302,11 @@ async function serveCommand(
     trimPaths: () => !resolveCapabilities(process.env, bindHost).localHandoff,
     restart: () => {
       store.flush();
-      restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() });
+      // The old process stops here, so it reports its own stop before handing over (bounded).
+      track('app_stop', { reason: 'restart' });
+      void flushTelemetry(1_000).finally(() =>
+        restartProcess({ server: httpServer, args: process.argv.slice(2), port, supervised: isSupervised() }),
+      );
     },
   });
   void selfUpdate.updateAvailable().then((latest) => {
@@ -371,7 +375,7 @@ async function serveCommand(
     if (stopping) process.exit(0); // a second Ctrl-C never waits on telemetry
     stopping = true;
     store.flush();
-    track('app_stop');
+    track('app_stop', { reason: 'signal' });
     void flushTelemetry().finally(() => process.exit(0));
   };
   process.on('SIGINT', shutdown);
@@ -418,10 +422,11 @@ async function serveCommand(
       try {
         process.stderr.write('  supervisor is gone — shutting down\n');
         store.flush();
+        track('app_stop', { reason: 'supervisor_gone' });
       } catch {
         // Nothing left to save that is worth staying alive for.
       }
-      process.exit(0);
+      void flushTelemetry(1_000).finally(() => process.exit(0));
     }, 2_000).unref();
   }
 

@@ -385,6 +385,32 @@ fn refresh_versions_menu(app: &AppHandle, shell: &Shell) {
     }
 }
 
+/// How long a stopping sidecar gets to run its own shutdown before it is killed. cezar's SIGTERM
+/// handler flushes run state and sends its `app_stop` telemetry, bounded at 1.5 s.
+#[cfg(target_os = "macos")]
+const SIDECAR_STOP_GRACE: Duration = Duration::from_secs(2);
+
+/// Stop the sidecar the way Ctrl-C in a terminal would: SIGTERM first, so cezar's own shutdown
+/// runs (`store.flush()`, the `app_stop` event), then SIGKILL if it is still there after
+/// `SIDECAR_STOP_GRACE`. A bare `kill()` is SIGKILL — it skipped all of that. Only macOS links
+/// `libc` (Cargo.toml); elsewhere this keeps the hard kill.
+fn stop_sidecar(child: &mut Child) {
+    #[cfg(target_os = "macos")]
+    {
+        // SAFETY: `kill(2)` on our own child's pid; a pid that already exited is a harmless ESRCH.
+        if unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) } == 0 {
+            let deadline = Instant::now() + SIDECAR_STOP_GRACE;
+            while Instant::now() < deadline {
+                if matches!(child.try_wait(), Ok(Some(_))) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+    let _ = child.kill();
+}
+
 /// Point `current` at an installed id (atomic rename over the old link) and relaunch.
 fn switch_version(shell: &Shell, id: &str) -> bool {
     let dir = cezar_home().join("versions");
@@ -397,7 +423,7 @@ fn switch_version(shell: &Shell, id: &str) -> bool {
     let mut guard = shell.child.lock().unwrap();
     if let Some(child) = guard.as_mut() {
         shell.restart_requested.store(true, Ordering::SeqCst);
-        let _ = child.kill();
+        stop_sidecar(child);
     }
     true
 }
@@ -539,7 +565,7 @@ pub fn run() {
     let shell_for_signal = shell.clone();
     let _ = ctrlc::set_handler(move || {
         if let Some(mut child) = shell_for_signal.child.lock().unwrap().take() {
-            let _ = child.kill();
+            stop_sidecar(&mut child);
             let _ = child.wait();
         }
         std::process::exit(0);
@@ -662,7 +688,7 @@ pub fn run() {
                     save_geometry(&window);
                 }
                 if let Some(mut child) = shell_for_run.child.lock().unwrap().take() {
-                    let _ = child.kill();
+                    stop_sidecar(&mut child);
                     let _ = child.wait();
                 }
             }
@@ -942,7 +968,7 @@ fn update_cezar(app: &AppHandle, shell: &Shell, title: &str) -> bool {
         let mut guard = shell.child.lock().unwrap();
         if let Some(child) = guard.as_mut() {
             shell.restart_requested.store(true, Ordering::SeqCst);
-            let _ = child.kill();
+            stop_sidecar(child);
         }
     }
     ok

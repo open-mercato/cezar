@@ -21,7 +21,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { cezarHomeDir } from './paths.ts';
 
-export const DEFAULT_TELEMETRY_URL = 'https://telemetry-worker.patzick.workers.dev';
+export const DEFAULT_TELEMETRY_URL = 'https://telemetry-ingest.patzick.workers.dev';
 const SERVICE = 'cezar';
 const TIMEOUT_MS = 3_000;
 /** At most one report per minute for the same error (the worker's "don't flood" rule). */
