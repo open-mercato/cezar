@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process';
-import { accessSync, constants, existsSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import type { RunnerId } from '../core/agent-runner.ts';
-import { claudeShellCommand } from '../core/claude-bin.ts';
+import { claudeShellCommand, isExecutable } from '../core/claude-bin.ts';
 import { isShellEmbeddable, quoteExecutable } from '../core/shell-env.ts';
 import { openInTerminal, refuseSpawnUnderTest } from './open-in-terminal.ts';
 import { isWsl, translateToWindowsPath } from './wsl.ts';
@@ -91,12 +91,7 @@ export function resolveOnPath(
   for (const dir of dirs) {
     if (!dir) continue;
     for (const name of names) {
-      try {
-        accessSync(join(dir, name), constants.X_OK);
-        return name;
-      } catch {
-        // keep looking
-      }
+      if (isExecutable(join(dir, name))) return name;
     }
   }
   return null;
