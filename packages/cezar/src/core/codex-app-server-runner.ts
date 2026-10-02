@@ -29,6 +29,7 @@ import {
 } from './codex-app-server-transport.ts';
 import {
   codexSessionStarted,
+  codexTurnFailed,
   createCodexUiState,
   mapCodexNotification,
   type CodexUiMapping,
@@ -102,6 +103,10 @@ class CodexSession implements AgentSession {
   private stdinOpen = true;
   private threadId: string | undefined;
   private activeTurnId: string | undefined;
+  /** Codex reports provider failures in a standalone `error` notification immediately before
+   *  the terminal `turn/completed` frame. Keep it until that boundary so the v1 error event
+   *  carries the provider's real message (and reset time) instead of a generic fallback. */
+  private pendingTurnError: { message: string; codexErrorInfo?: string } | undefined;
   private pendingUserInput: PendingUserInput | undefined;
   private readonly toolCalls: AgentToolCallRecord[] = [];
   private readonly textChunks: string[] = [];
@@ -508,7 +513,24 @@ class CodexSession implements AgentSession {
       case 'turn/started': {
         if (this.isForeignThreadTurn(params)) break; // sub-agent child thread — not our turn (#600)
         this.activeTurnId = turnIdOf(params) ?? this.activeTurnId;
+        this.pendingTurnError = undefined;
         this.compactionEndedTurn = false; // the boundary is turn-scoped (#955)
+        break;
+      }
+      case 'error': {
+        if (this.isForeignThreadTurn(params)) break;
+        const error = params.error;
+        const message = typeof error === 'string'
+          ? error
+          : stringField((error as Record<string, unknown> | undefined) ?? {}, 'message')
+            ?? stringField(params, 'message');
+        if (message) {
+          const errorRecord = error && typeof error === 'object' && !Array.isArray(error)
+            ? error as Record<string, unknown>
+            : {};
+          const codexErrorInfo = stringField(params, 'codexErrorInfo') ?? stringField(errorRecord, 'codexErrorInfo');
+          this.pendingTurnError = { message, ...(codexErrorInfo ? { codexErrorInfo } : {}) };
+        }
         break;
       }
       case 'item/agentMessage/delta': {
@@ -574,15 +596,18 @@ class CodexSession implements AgentSession {
         // partial prose before the turn boundary (run.ts reads markers there).
         this.textCoalescer.flush();
         // A turn that ended on nothing but a context compaction (#955). Only a CLEAN
-        // boundary carries it: a `turn/failed` already emits an authoritative error, and
+        // boundary carries it: a failed turn already emits an authoritative error, and
         // stacking a "keep going" reason on top of it would be two verdicts for one turn.
-        const compacted = method === 'turn/completed' && this.compactionEndedTurn;
+        const failed = method === 'turn/failed' || codexTurnFailed(params);
+        const compacted = method === 'turn/completed' && !failed && this.compactionEndedTurn;
         this.compactionEndedTurn = false;
-        if (method === 'turn/failed' && !this.terminatedByCezar) {
+        if (failed && !this.terminatedByCezar) {
           const error = params.error as Record<string, unknown> | undefined;
-          const message = stringField(error ?? {}, 'message') ?? 'codex turn failed';
-          this.emit({ type: 'error', message });
+          const message = this.pendingTurnError?.message ?? stringField(error ?? {}, 'message') ?? 'codex turn failed';
+          const codexErrorInfo = this.pendingTurnError?.codexErrorInfo;
+          this.emit({ type: 'error', message: codexErrorInfo ? `${message} [${codexErrorInfo}]` : message });
         }
+        this.pendingTurnError = undefined;
         // The bare event when there is nothing extra to say, so every existing consumer
         // and every golden recording sees the exact frame it saw before (§7 additive).
         this.emit(compacted ? { type: 'turn-end', reason: 'context-compaction' } : { type: 'turn-end' });

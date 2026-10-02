@@ -3919,7 +3919,9 @@ export class RunManager {
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      sink.sessionEnded('error', message);
+      // Codex can emit a v1 error before the resumed session rejects. Preserve the settle
+      // signal without persisting a second copy of that provider message.
+      sink.sessionEnded('error', sessionError ? undefined : message);
       if (!state.cancelled && this.active.get(runId) === state) {
         this.store.updateStep(runId, stepId, { status: 'failed', error: message, finishedAt: finishedAt() });
         appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=failed`);
@@ -4760,7 +4762,10 @@ export class RunManager {
     try {
       const result = await session.result;
       if (sessionError) {
-        sink.sessionEnded('error', sessionError);
+        // The v1 error was already persisted by onEvent. Keep the v2 settle signal, but do not
+        // copy the same provider message into session.error/session.ended: the thread renders
+        // both vocabularies and would show the quota failure twice.
+        sink.sessionEnded('error');
         return sessionError;
       }
       // v2 counterpart of v1's `done` (spec: the mappers leave session-close
@@ -4772,7 +4777,9 @@ export class RunManager {
       return null;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      sink.sessionEnded('error', message); // alongside v1's fatal `error`
+      // A runner may reject after emitting its v1 error event (Codex does this for a failed
+      // turn). The settle event is still required, but its message would be a duplicate.
+      sink.sessionEnded('error', sessionError ? undefined : message);
       return message;
     } finally {
       this.recordUsagePeaks(runId, state);
