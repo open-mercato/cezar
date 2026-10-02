@@ -2669,13 +2669,26 @@ describe('a context-compaction boundary keeps the run working (#955)', () => {
     runId = undefined;
   });
 
-  afterEach(() => {
-    if (runId) manager.cancel(runId);
-    manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
-    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
-    if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
-    store.flush();
-    rmSync(repoRoot, { recursive: true, force: true });
+  afterEach(async () => {
+    const active = manager as unknown as {
+      active: Map<string, { session?: { result: Promise<unknown>; interrupt(): void } }>;
+    };
+    try {
+      if (runId) {
+        manager.cancel(runId);
+        // Cancellation marks the run immediately, but the session's result owns the
+        // final event delivery. Await it before removing the fixture so a late `done`
+        // cannot append into a vanished store (#1105).
+        const session = active.active.get(runId)?.session;
+        if (session) await session.result;
+      }
+    } finally {
+      manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
+      if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN; else process.env.CEZ_DRY_RUN = savedDryRun;
+      if (savedCodexBin === undefined) delete process.env.CEZ_CODEX_BIN; else process.env.CEZ_CODEX_BIN = savedCodexBin;
+      store.flush();
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 
   const waitFor = async (predicate: () => boolean, ms = 20_000) => {
