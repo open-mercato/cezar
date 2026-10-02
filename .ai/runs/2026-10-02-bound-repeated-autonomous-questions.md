@@ -10,8 +10,8 @@ Non-goals: change the ask marker schema, dispatch behavior, native ask handling,
 
 ### Phase 1: diagnosis and guard
 
-- [x] 1.1 Add the K=2 consecutive overridden-question state and apply it in both turn-end handlers. — implementation pending commit
-- [x] 1.2 Add a reworded-blocker dry-run fixture and document the regression boundary. — implementation pending commit
+- [x] 1.1 Add the K=2 consecutive overridden-question state and apply it in both turn-end handlers. — da510660
+- [x] 1.2 Add a reworded-blocker dry-run fixture and document the regression boundary. — da510660
 
 ### Phase 2: verification and handoff
 
@@ -24,14 +24,16 @@ The two hand-written turn-end handlers can diverge; the reset must run before DO
 
 ## Progress
 
+PR: #1227
+
 > Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
 
 ### Phase 1: diagnosis and guard
 
-- [ ] 1.1 Add the K=2 consecutive overridden-question state and apply it in both turn-end handlers.
-- [ ] 1.2 Add a reworded-blocker dry-run fixture and document the regression boundary.
+- [x] 1.1 Add the K=2 consecutive overridden-question state and apply it in both turn-end handlers. — da510660
+- [x] 1.2 Add a reworded-blocker dry-run fixture and document the regression boundary. — da510660
 
 ### Phase 2: verification and handoff
 
-- [ ] 2.1 Run targeted regression checks and the configured validation gate.
-- [ ] 2.2 Review the diff, commit the final changes, and open the issue PR.
+- [x] 2.1 Run targeted regression checks and the configured validation gate. — verified 2026-10-02
+- [x] 2.2 Review the diff, commit the final changes, and open the issue PR. — PR #1227
