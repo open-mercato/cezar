@@ -900,47 +900,109 @@ function DispatchParentLine({ run }: { run: ApiRun }) {
   )
 }
 
+/** Which runs the reader has opened the subtasks disclosure for. Its own map, not
+ *  `detailsOpenByRun`: that one answers the phone-width meta row, and sharing it would pop the
+ *  diff line open because someone asked to see the rest of the children. Module-level and
+ *  run-keyed for the same reason as that map — a Session → Changes hop remounts this header, and
+ *  run A → run B does not — so the choice is read from the current run on every render.
+ *  Session-lifetime only. */
+const subtasksOpenByRun = new Map<string, boolean>()
+
+/** Inline child links before the rest fold behind "+N more". Presentation only, not a setting:
+ *  two names the work without a header that grows with the fan-out. */
+const COLLAPSED_SUBTASK_LINKS = 2
+
 /**
- * "Subtasks: <child> · <child> …" — one collapsed row naming the tasks this one dispatched.
+ * "Subtasks: <child> · <child> …" — the tasks this one dispatched.
  *
  * Derived from the run list this page already holds rather than fetched: a child's link is its
  * id and its dot is its status, both of which `useRuns()` carries and keeps live over the run
  * stream. Nothing renders for a run that dispatched nothing — which is every run on a server
- * that never turned dispatch on.
+ * that never turned dispatch on. Titles, status, count and links are recomputed from that list
+ * on every render, so a stream patch cannot leave a stale child behind.
  *
- * Deliberately ONE row, truncated: the full tree is the task list, and a header that grew a list
- * would push the transcript off the screen exactly when a parent has the most children.
+ * The default is ONE row: at most two links, no wrapping, and a "+N more" disclosure for the
+ * rest. A header that grew a line per child would push the transcript off the screen exactly
+ * when a parent has the most children. The omitted links are not rendered, so keyboard focus
+ * cannot land on a chip the row has clipped away. Expanding is explicit and remembered for this
+ * run; only then may the links wrap onto more rows, and "Show less" stays put — outside the
+ * link region, so a narrow pane cannot scroll it away. The full tree remains the task list.
  */
 function DispatchChildrenLine({ run }: { run: ApiRun }) {
   const runs = useRuns()
+  // The map is the state — a re-render bump rather than a mirrored `useState` — so switching
+  // runs reads that run's own answer instead of the last one's. Hooks stay above the empty
+  // return: a parent whose children have not arrived yet still has to subscribe.
+  const [, bumpSubtasks] = useReducer((count: number) => count + 1, 0)
+  const subtasksId = useId()
   const children = (runs.data ?? []).filter(
     (candidate) => candidate.dispatch?.parentRunId === run.id,
   )
+  // A stored "open" only applies while there is something to disclose. Live shrinkage to two
+  // or fewer must not leave a "Show less" pointing at nothing.
+  const overflow = children.length > COLLAPSED_SUBTASK_LINKS
+  const expanded = overflow && (subtasksOpenByRun.get(run.id) ?? false)
+  const toggleSubtasks = () => {
+    subtasksOpenByRun.set(run.id, !expanded)
+    bumpSubtasks()
+  }
   if (children.length === 0) return null
+  const shown = expanded ? children : children.slice(0, COLLAPSED_SUBTASK_LINKS)
   return (
     <div
       data-slot="dispatch-children"
-      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+      className={cn(
+        'mt-1 flex min-w-0 gap-2 text-xs text-muted-foreground',
+        expanded ? 'items-start' : 'items-center',
+      )}
     >
       <span className="shrink-0">Subtasks</span>
-      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden">
-        {children.map((child) => {
-          const attention = deriveAttention(child)
-          return (
-            <Link
-              key={child.id}
-              to={`/tasks/${child.id}`}
-              data-slot="dispatch-child"
-              data-run-id={child.id}
-              title={`${runTitle(child)} — ${attention.label}`}
-              className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"
-            >
-              <StatusDot tone={attention.tone} pulse={attention.pulse} />
-              <span className="truncate">{runTitle(child)}</span>
-            </Link>
-          )
-        })}
-      </span>
+      {/* The group takes the leftover width and shrinks; the disclosure does not, so "+N more"
+          stays on the row when the titles are long. Short titles leave it beside the chips
+          rather than pinned to the far edge — the link region itself does not grow. */}
+      <div className={cn('flex min-w-0 flex-1 gap-2', expanded ? 'items-start' : 'items-center')}>
+        <span
+          id={subtasksId}
+          className={cn(
+            'flex min-w-0 items-center gap-x-2 gap-y-0.5',
+            expanded ? 'flex-wrap' : 'flex-nowrap overflow-hidden',
+          )}
+        >
+          {shown.map((child) => {
+            const attention = deriveAttention(child)
+            return (
+              <Link
+                key={child.id}
+                to={`/tasks/${child.id}`}
+                data-slot="dispatch-child"
+                data-run-id={child.id}
+                title={`${runTitle(child)} — ${attention.label}`}
+                className={cn(
+                  // `max-w-52` is a fixed cap. A percentage (`min(100%, …)`) is cyclic inside this
+                  // flex item, so the row would swallow the leftover width and park the disclosure
+                  // at the far edge. `shrink` below the cap is what keeps "+N more" on a narrow row.
+                  'inline-flex min-w-0 max-w-52 items-center gap-1.5 truncate hover:text-foreground',
+                  expanded ? 'shrink-0' : 'shrink',
+                )}
+              >
+                <StatusDot tone={attention.tone} pulse={attention.pulse} />
+                <span className="min-w-0 truncate">{runTitle(child)}</span>
+              </Link>
+            )
+          })}
+        </span>
+        {overflow ? (
+          <button
+            type="button"
+            className="shrink-0 rounded-sm whitespace-nowrap px-0.5 text-muted-foreground hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+            aria-expanded={expanded}
+            aria-controls={subtasksId}
+            onClick={toggleSubtasks}
+          >
+            {expanded ? 'Show less' : `+${children.length - COLLAPSED_SUBTASK_LINKS} more`}
+          </button>
+        ) : null}
+      </div>
     </div>
   )
 }
