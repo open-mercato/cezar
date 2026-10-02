@@ -3213,10 +3213,10 @@ export class RunManager {
     // Persist the attachments so the thread can render them (not just count them) — the same
     // on-disk store + `/images/` route the agent's own screenshots use. `pasted` prefix marks
     // these as user attachments (vs. agent tool screenshots) on disk (#357).
-    // The session can still refuse despite reporting open. Commit image library copies
-    // only after it accepts; the run-local paths are needed to build the message first.
-    const imageLibraryWrites: Array<() => void> = [];
-    const persisted = userAuthored ? this.persistPastedAttachments(runId, content, imageLibraryWrites) : [];
+    // The session can still refuse despite reporting open. Commit library copies — image or
+    // file alike — only after it accepts; the run-local paths are needed to build the message first.
+    const deferredLibraryWrites: Array<() => void> = [];
+    const persisted = userAuthored ? this.persistPastedAttachments(runId, content, deferredLibraryWrites) : [];
     const images = persisted.map((saved) => saved.url);
     if (userAuthored) {
       this.store.appendEvent(runId, {
@@ -3238,11 +3238,11 @@ export class RunManager {
     const expanded = userAuthored ? expandRegistrySlashSkill(blocks, state.skills ?? []) : blocks;
     const deliverable = persisted.length
       ? [...expanded, pastedAttachmentsNote(persisted, this.attachmentLibraryHint(persisted) ??
-          (imageLibraryWrites.length ? attachmentLibraryDir(this.dataDir) : undefined))]
+          (deferredLibraryWrites.length ? attachmentLibraryDir(this.dataDir) : undefined))]
       : expanded;
     const delivered = state.session.sendMessage(deliverable);
     if (delivered) {
-      for (const write of imageLibraryWrites) write();
+      for (const write of deferredLibraryWrites) write();
       this.clearPendingAsk(runId);
       this.clearIdleTimer(state);
       this.clearMonitoringWakeTimer(state, runId);
@@ -5106,16 +5106,20 @@ export class RunManager {
   private persistPastedAttachments(
     runId: string,
     content: readonly PastedContent[],
-    imageLibraryWrites?: Array<() => void>,
+    // Named either way. A FILE is exactly as capable of being refused as a named image once it
+    // travels through `deliverMessage` — the write must wait on acceptance the same way (#1019).
+    deferredLibraryWrites?: Array<() => void>,
   ): PersistedAttachment[] {
     return content
       .map((b) =>
         b.type === 'image'
           ? this.fileInAttachmentLibrary(
-              this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted'), imageLibraryNames.get(b), imageLibraryWrites,
+              this.persistAttachment(runId, b.source.media_type, b.source.data, 'pasted'), imageLibraryNames.get(b), deferredLibraryWrites,
             )
           : b.type === 'file'
-            ? this.fileInAttachmentLibrary(this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name)
+            ? this.fileInAttachmentLibrary(
+                this.persistAttachment(runId, b.mediaType, b.data, 'pasted'), b.name, deferredLibraryWrites,
+              )
             : null,
       )
       .filter((saved): saved is PersistedAttachment => saved !== null);
@@ -5159,13 +5163,9 @@ export class RunManager {
     return existsSync(dir) ? dir : undefined;
   }
 
-  /**
-   * The attachment library to name in a message's note, or `undefined` when there is nothing to
-   * point at yet — no attachment on this message, or a project where nothing has ever been filed.
-   *
-   * The name metadata is intentionally not serialized into PersistedAttachment. The
-   * directory hint therefore depends on persisted attachments and library existence.
-   */
+  /** The note points to the project library, including files from earlier messages.
+   * Check disk existence rather than transient name metadata so queued/recovered images
+   * receive the same hint as fresh uploads. Nameless attachments are still never filed. */
   private attachmentLibraryHint(attachments: PersistedAttachment[]): string | undefined {
     return attachments.length ? this.grantableAttachmentLibrary() : undefined;
   }

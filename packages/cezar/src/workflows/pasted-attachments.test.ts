@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import * as fs from 'node:fs';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +26,9 @@ import {
   isImageAttachmentName,
   sanitizeAttachmentName,
 } from '@open-mercato/cezar-contract';
+
+// Native ESM exports cannot be spied on directly. Keep real filesystem behavior by default.
+vi.mock('node:fs', { spy: true });
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -281,7 +285,7 @@ describe('attachment media types, extensions and blocks (#950)', () => {
    * The image branch produces a `ContentBlock`, which is the runner protocol and reaches a vendor
    * API verbatim. An extra key here would survive `contentBlocksOf` and be sent to a backend that
    * rejects unknown fields — so a name offered for an image must never be carried on the block
-   * itself, with or without a `dataDir` to file it under (below, #960).
+   * itself (#960).
    */
   it('never puts a name on an image block, even when the client sends one', () => {
     expect(toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' })).toEqual({
@@ -290,33 +294,27 @@ describe('attachment media types, extensions and blocks (#950)', () => {
     });
   });
 
-  // Conversion retains private name metadata but must not persist rejected requests.
-  it('keeps named image conversion free of filesystem side effects', () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cez-image-library-'));
-    try {
-      const block = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' });
-      expect(block).toEqual({
-        type: 'image',
-        source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
-      });
-      expect(existsSync(attachmentLibraryDir(dataDir))).toBe(false);
-    } finally {
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
-
-  /** A clipboard paste has no name to file under — filing it would give the library the exact
-   *  `pasted-2.png` clutter #929 already refuses for files, so a nameless image is skipped even
-   *  when a `dataDir` is given. */
-  it('never files a pasted (nameless) image during conversion', () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'cez-image-library-'));
-    try {
-      toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64 });
-      expect(existsSync(attachmentLibraryDir(dataDir))).toBe(false);
-    } finally {
-      rmSync(dataDir, { recursive: true, force: true });
-    }
-  });
+  // Watch the actual library writer's filesystem operations, independent of its destination.
+  // Clipboard images must remain side-effect-free too, even though they carry no library name.
+  it.each([['named', 'diagram.png'], ['nameless', undefined]] as const)(
+    'keeps %s image conversion free of filesystem writes',
+    (_kind, name) => {
+      const mkdir = vi.spyOn(fs, 'mkdirSync').mockClear().mockImplementation(() => undefined);
+      const write = vi.spyOn(fs, 'writeFileSync').mockClear().mockImplementation(() => undefined);
+      try {
+        const block = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, ...(name ? { name } : {}) });
+        expect(block).toEqual({
+          type: 'image',
+          source: { type: 'base64', media_type: 'image/png', data: TINY_PNG_B64 },
+        });
+        expect(mkdir).not.toHaveBeenCalled();
+        expect(write).not.toHaveBeenCalled();
+      } finally {
+        write.mockRestore();
+        mkdir.mockRestore();
+      }
+    },
+  );
 
   it('keeps file blocks out of what a session is handed — a backend never sees one', () => {
     const content: PastedContent[] = [
@@ -750,7 +748,7 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
   }, 30_000);
 
   // Accepted image-only messages must file their original name and mention the library.
-  it('a message with only a named image still gets the library mention', async () => {
+  it.each(['initial', 'queued'] as const)('a named image in the %s message gets the library mention', async (delivery) => {
     writeFileSync(stdinFile, '', 'utf8');
     writeFileSync(argsFile, '', 'utf8');
     const workflow: WorkflowDef = {
@@ -767,15 +765,17 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
       steps: [{ id: 'hold', command: `${process.execPath} -e "setTimeout(() => {}, 500)"` }],
     };
     manager.startRun(holder, { task: 'occupy the only slot', worktree: false });
-    const image = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: 'diagram.png' });
-    expect(existsSync(join(attachmentLibraryDir(dataDir), 'diagram.png'))).toBe(false);
+    const image = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64, name: `diagram-${delivery}.png` });
+    expect(existsSync(join(attachmentLibraryDir(dataDir), `diagram-${delivery}.png`))).toBe(false);
     const record = manager.startRun(workflow, {
       task: 'find the diagram',
-      images: [image],
+      ...(delivery === 'initial' ? { images: [image] } : {}),
       worktree: false,
     });
 
-    const libraryPath = join(attachmentLibraryDir(dataDir), 'diagram.png');
+    if (delivery === 'queued') expect(manager.enqueueMessage(record.id, [image])).not.toBeNull();
+
+    const libraryPath = join(attachmentLibraryDir(dataDir), `diagram-${delivery}.png`);
     expect(readFileSync(libraryPath).equals(Buffer.from(TINY_PNG_B64, 'base64'))).toBe(true);
 
     await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
@@ -784,6 +784,29 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
 
     const lines = readStdinLines();
     expect(lines[0]?.userText).toContain(`kept under their original names in ${attachmentLibraryDir(dataDir)}`);
+  }, 30_000);
+
+  // The note describes the project library, not a copy of the current clipboard image.
+  it('mentions an existing library without filing an unnamed image', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    writeFileSync(argsFile, '', 'utf8');
+    copyToAttachmentLibrary(dataDir, 'earlier-brief.md', Buffer.from('hi'));
+    const libraryBefore = readdirSync(attachmentLibraryDir(dataDir));
+    const workflow: WorkflowDef = {
+      name: 'library-unnamed-image-test',
+      source: 'built-in',
+      steps: [
+        { id: 'work', prompt: '{{task}}' },
+        { id: 'verify', command: 'true' },
+      ],
+    };
+    const image = toPastedContent({ mediaType: 'image/png', data: TINY_PNG_B64 });
+    const record = manager.startRun(workflow, { task: 'look at this', images: [image], worktree: false });
+    await waitForStatus(record.id, ['done', 'review', 'failed', 'cancelled']);
+
+    const lines = readStdinLines();
+    expect(lines[0]?.userText).toContain(`kept under their original names in ${attachmentLibraryDir(dataDir)}`);
+    expect(readdirSync(attachmentLibraryDir(dataDir))).toEqual(libraryBefore);
   }, 30_000);
 
   /** The agent's own tool screenshots share `persistAttachment` with user uploads. They must not
@@ -843,6 +866,34 @@ describe('pasted screenshots materialize to disk and reach the agent as file pat
     expect(opening).toBeDefined();
     expect(opening?.userText).toContain('here is the brief');
     expect(opening?.userText).toContain(`- ${join(dataDir, 'runs', `${record.id}-images`, stackedName)}`);
+  }, 30_000);
+
+  /** The image branch above defers its library write until `deliverMessage` confirms
+   *  acceptance; the FILE branch (PDF/TXT/MD) must do the same — a named document is exactly
+   *  as capable of being refused as a named image, and #1019 is about the write, not the type. */
+  it('a follow-up pasted FILE is not filed when the backend refuses', async () => {
+    writeFileSync(stdinFile, '', 'utf8');
+    const workflow: WorkflowDef = {
+      name: 'pasted-followup-file-test',
+      source: 'built-in',
+      steps: [{ id: 'work', prompt: '{{task}}' }],
+    };
+    const record = manager.startRun(workflow, { task: 'chat with me' });
+    await waitForStatus(record.id, ['waiting']);
+
+    const state = (manager as unknown as {
+      active: Map<string, { session: { sendMessage(content: ContentBlock[]): boolean } }>;
+    }).active.get(record.id)!;
+    const refusal = vi.spyOn(state.session, 'sendMessage').mockReturnValueOnce(false);
+    try {
+      expect(manager.sendMessage(record.id, [
+        toPastedContent({ mediaType: 'application/pdf', data: TINY_PDF_B64, name: 'backend-refused.pdf' }),
+      ])).toBe(false);
+      expect(existsSync(join(attachmentLibraryDir(dataDir), 'backend-refused.pdf'))).toBe(false);
+    } finally {
+      refusal.mockRestore();
+    }
+    manager.finish(record.id);
   }, 30_000);
 
   it('a follow-up pasted image is saved and its path is appended to the delivered message', async () => {

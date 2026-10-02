@@ -189,9 +189,10 @@ describe('queued prompt stack routes (#472)', () => {
 
   it('rejects a 21st stacked message with a named 400', async () => {
     seed(...Array.from({ length: 20 }, (_, i) => `m${i}`));
-    const res = await post({ text: 'one too many' });
+    const res = await post({ text: 'one too many', images: [{ mediaType: 'image/png', data: 'aaaa', name: 'refused.png' }] });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toContain('20 message limit');
+    expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
   });
 
   it('rejects an over-cap image count across the stack', async () => {
@@ -203,12 +204,13 @@ describe('queued prompt stack routes (#472)', () => {
     const res = await post({
       text: 'two more',
       images: [
-        { mediaType: 'image/png', data: 'aaaa' },
+        { mediaType: 'image/png', data: 'aaaa', name: 'refused.png' },
         { mediaType: 'image/png', data: 'bbbb' },
       ],
     });
     expect(res.status).toBe(400);
     expect(((await res.json()) as { error: string }).error).toContain('8 attachment limit');
+    expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
   });
 
   /**
@@ -218,10 +220,11 @@ describe('queued prompt stack routes (#472)', () => {
    */
   it('rejects an append that individually fits but overflows the folded total', async () => {
     seed('x'.repeat(100_000), 'y'.repeat(99_000));
-    const res = await post({ text: 'z'.repeat(2_000) });
+    const res = await post({ text: 'z'.repeat(2_000), images: [{ mediaType: 'image/png', data: 'aaaa', name: 'refused.png' }] });
     expect(res.status).toBe(400);
     const { error } = (await res.json()) as { error: string };
     expect(error).toContain('200000 character limit');
+    expect(existsSync(attachmentLibraryDir(join(repoRoot, '.ai/cezar')))).toBe(false);
     // …and reports the total it would have reached.
     expect(error).toMatch(/would be \d+/);
     // The rejected message was never written.
@@ -317,16 +320,11 @@ describe('queued prompt stack routes (#472)', () => {
     expect(await removed.json()).toEqual({ error: 'run already started' });
   });
 
-  /**
-   * A named image is filed as a side effect of building `images` (#960) — before this, editing a
-   * queued message already past `status: 'queued'` still built it ahead of the 409, leaving an
-   * orphan copy in the library for an edit that never took effect. `editQueuedMessage` is not
-   * reached at all here (`rung` stays `'queued'`), so a regression would show up as the fake's
-   * `null` fallback instead — an equally correct 409, but only after filing the image first.
-   */
+  // The engine rejects edits after dequeue; conversion itself must not file the image.
   it('409s before filing a named image once the run has already started', async () => {
     seed('too late');
     store.updateRun(record.id, { status: 'running' });
+    rung = 'live';
     const res = await patchMsg('msg-1', {
       images: [{ mediaType: 'image/png', data: Buffer.from('fake-png').toString('base64'), name: 'diagram.png' }],
     });
