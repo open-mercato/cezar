@@ -1,10 +1,11 @@
-import { QueryClientProvider } from '@tanstack/react-query'
+import { QueryClientProvider, type QueryClient } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
 import { createQueryClient } from '@/api/query-client'
+import { queryKeys } from '@/api/queries'
 import type { ApiRun, RunStatus, StepState } from '@open-mercato/cezar-api-client'
 import { Toaster, resetToasts } from '@/components/ui/toaster'
 
@@ -98,14 +99,15 @@ function stubFetch(overrides: Record<string, () => Response> = {}): SentRequest[
   return sent
 }
 
-function renderHeader(
+function headerElement(
   record: ApiRun,
+  queryClient: QueryClient,
   onMarkedUnread?: () => void,
   planTally?: { done: number; total: number },
   continuationEngine?: ReactNode,
 ) {
-  return render(
-    <QueryClientProvider client={createQueryClient()}>
+  return (
+    <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[`/tasks/${record.id}`]}>
         <Routes>
           <Route
@@ -123,8 +125,18 @@ function renderHeader(
         </Routes>
         <Toaster />
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   )
+}
+
+function renderHeader(
+  record: ApiRun,
+  onMarkedUnread?: () => void,
+  planTally?: { done: number; total: number },
+  continuationEngine?: ReactNode,
+  queryClient = createQueryClient(),
+) {
+  return render(headerElement(record, queryClient, onMarkedUnread, planTally, continuationEngine))
 }
 
 const actionBar = () => within(document.querySelector('[data-slot="run-actions"]') as HTMLElement)
@@ -1584,5 +1596,277 @@ describe('dispatch lines', () => {
     renderHeader(run('running', { dispatch: { rootRunId: 'r1' } }))
     await waitFor(() => expect(document.querySelector('[data-slot="run-actions"]')).not.toBeNull())
     expect(document.querySelector('[data-slot="unit-role"]')).toBeNull()
+  })
+
+  /** A parent id no other case has expanded. The disclosure memory is a module map keyed by run
+   *  id, and it is supposed to survive unmount, so two cases that share an id would leak. */
+  const subtask = (parentId: string, n: number, status: RunStatus = 'running', title?: string): ApiRun => {
+    const label = title ?? `Subtask ${n}`
+    return run(status, {
+      id: `${parentId}-c${n}`,
+      title: label,
+      titleSummary: label,
+      dispatch: { rootRunId: parentId, parentRunId: parentId },
+    })
+  }
+  const parentOf = (id: string) => run('running', { id, dispatch: { rootRunId: id } })
+  const classesOf = (element: Element) => element.className.split(/\s+/)
+  const moreButton = () => screen.queryByRole('button', { name: /^\+\d+ more$/ })
+
+  it('keeps eight long subtasks on one row until the disclosure is opened', async () => {
+    const id = freshRunId()
+    const title = (n: number) =>
+      `Investigate the unusually long subtask title number ${n} that would wrap the dispatch header`
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          ...Array.from({ length: 8 }, (_, index) => subtask(id, index + 1, 'running', title(index + 1))),
+          run('done', { id: `${id}-other`, titleSummary: 'Unrelated' }),
+        ]),
+    })
+    renderHeader(parentOf(id))
+
+    const toggle = await screen.findByRole('button', { name: '+6 more' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(toggle.closest('a')).toBeNull()
+    expect(childLinks()).toHaveLength(2)
+    expect(childLinks().map((link) => link.getAttribute('href'))).toEqual([
+      `/tasks/${id}-c1`,
+      `/tasks/${id}-c2`,
+    ])
+    expect(screen.queryByText(title(3))).toBeNull()
+    const links = document.getElementById(toggle.getAttribute('aria-controls') ?? '')
+    expect(links).not.toBeNull()
+    expect(classesOf(links!).includes('flex-nowrap')).toBe(true)
+    expect(classesOf(links!).includes('flex-wrap')).toBe(false)
+    expect(classesOf(links!).includes('min-w-0')).toBe(true)
+    expect(classesOf(toggle).includes('shrink-0')).toBe(true)
+    expect(classesOf(childLinks()[0]!).includes('min-w-0')).toBe(true)
+
+    fireEvent.click(toggle)
+
+    const less = screen.getByRole('button', { name: 'Show less' })
+    expect(less.getAttribute('aria-expanded')).toBe('true')
+    expect(classesOf(document.getElementById(less.getAttribute('aria-controls') ?? '')!).includes('flex-wrap')).toBe(true)
+    expect(childLinks().map((link) => link.getAttribute('href'))).toEqual(
+      Array.from({ length: 8 }, (_, index) => `/tasks/${id}-c${index + 1}`),
+    )
+    for (let n = 1; n <= 8; n += 1) expect(screen.getByText(title(n))).not.toBeNull()
+    expect(screen.queryByText('Unrelated')).toBeNull()
+
+    fireEvent.click(less)
+
+    expect(screen.getByRole('button', { name: '+6 more' }).getAttribute('aria-expanded')).toBe('false')
+    expect(childLinks()).toHaveLength(2)
+    expect(screen.queryByText(title(8))).toBeNull()
+  })
+
+  it('discloses only past two children, and keeps each link’s destination, dot and tooltip', async () => {
+    const id = freshRunId()
+    const client = createQueryClient()
+    const listed = [
+      subtask(id, 1, 'running', 'Review the running child'),
+      subtask(id, 2, 'done', 'Review the finished child'),
+      subtask(id, 3, 'failed', 'Review the failed child'),
+      run('done', { id: `${id}-other`, titleSummary: 'Unrelated task' }),
+      run('running', {
+        id: `${id}-foreign`,
+        titleSummary: 'Someone else’s child',
+        dispatch: { rootRunId: 'else', parentRunId: 'else' },
+      }),
+    ]
+    stubFetch({ '/api/v1/runs': () => jsonResponse(listed) })
+    renderHeader(parentOf(id), undefined, undefined, undefined, client)
+
+    await screen.findByRole('button', { name: '+1 more' })
+    expect(childLinks().map((link) => link.getAttribute('href'))).toEqual([
+      `/tasks/${id}-c1`,
+      `/tasks/${id}-c2`,
+    ])
+    expect(childLinks()[0]?.getAttribute('title')).toBe('Review the running child — running')
+    expect(childLinks()[0]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('violet')
+    expect(childLinks()[1]?.getAttribute('title')).toBe('Review the finished child — done')
+    expect(childLinks()[1]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('success')
+    expect(document.querySelector(`[data-run-id="${id}-c3"]`)).toBeNull()
+    expect(screen.queryByText('Unrelated task')).toBeNull()
+    expect(screen.queryByText('Someone else’s child')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '+1 more' }))
+    expect(childLinks()).toHaveLength(3)
+    expect(childLinks()[2]?.getAttribute('href')).toBe(`/tasks/${id}-c3`)
+    expect(childLinks()[2]?.getAttribute('title')).toBe('Review the failed child — failed')
+    expect(childLinks()[2]?.querySelector('[data-slot="status-dot"]')?.getAttribute('data-tone')).toBe('danger')
+    fireEvent.click(screen.getByRole('button', { name: 'Show less' }))
+    expect(moreButton()?.textContent).toBe('+1 more')
+
+    // The list this row already holds — a cache write, not another fetch. React Query notifies
+    // on the next tick, the same way a stream patch lands.
+    const patchRuns = async (runs: ApiRun[]) => {
+      act(() => {
+        client.setQueryData(queryKeys.runs.list(), runs)
+      })
+    }
+
+    await patchRuns(listed.slice(0, 2))
+    await waitFor(() => expect(moreButton()).toBeNull())
+    expect(childLinks()).toHaveLength(2)
+
+    await patchRuns(listed.slice(0, 1))
+    await waitFor(() => expect(childLinks().map((link) => link.getAttribute('href'))).toEqual([`/tasks/${id}-c1`]))
+    expect(moreButton()).toBeNull()
+
+    await patchRuns([listed[3]!])
+    await waitFor(() => expect(childrenLine()).toBeNull())
+  })
+
+  it('toggles from the keyboard and omits overflow links from the collapsed tab order', async () => {
+    const id = freshRunId()
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          subtask(id, 1, 'running', 'First visible child'),
+          subtask(id, 2, 'done', 'Second visible child'),
+          subtask(id, 3, 'failed', 'Hidden until expanded'),
+        ]),
+    })
+    renderHeader(parentOf(id))
+
+    const toggle = (await screen.findByRole('button', { name: '+1 more' })) as HTMLButtonElement
+    expect(toggle.tagName).toBe('BUTTON')
+    expect(toggle.type).toBe('button')
+    const controls = toggle.getAttribute('aria-controls')
+    expect(controls).not.toBe('')
+    const region = document.getElementById(controls ?? '')
+    expect(region?.querySelectorAll('[data-slot="dispatch-child"]')).toHaveLength(2)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    // Not rendered, not aria-hidden: a clipped link would still take keyboard focus.
+    expect(document.querySelector(`[data-run-id="${id}-c3"]`)).toBeNull()
+    expect([...(childrenLine()?.querySelectorAll('a, button') ?? [])]).toHaveLength(3)
+
+    toggle.focus()
+    expect(document.activeElement).toBe(toggle)
+    // jsdom never maps Enter/Space onto a click (HTMLButtonElement only submits a form). Prove
+    // the key is not swallowed, then perform the click a browser would for that focused button.
+    expect(fireEvent.keyDown(toggle, { key: 'Enter' })).toBe(true)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+
+    const less = screen.getByRole('button', { name: 'Show less' }) as HTMLButtonElement
+    expect(less.getAttribute('aria-expanded')).toBe('true')
+    expect(less.getAttribute('aria-controls')).toBe(controls)
+    expect(document.getElementById(controls ?? '')?.querySelectorAll('a')).toHaveLength(3)
+    expect(document.querySelector(`[data-run-id="${id}-c3"]`)).not.toBeNull()
+    less.focus()
+    expect(fireEvent.keyDown(less, { key: ' ' })).toBe(true)
+    expect(fireEvent.keyUp(less, { key: ' ' })).toBe(true)
+    fireEvent.click(less)
+
+    expect(screen.getByRole('button', { name: '+1 more' }).getAttribute('aria-expanded')).toBe('false')
+    expect(document.querySelector(`[data-run-id="${id}-c3"]`)).toBeNull()
+  })
+
+  it('remembers the disclosure for that run across a swap and a remount, and not for another run', async () => {
+    const idA = freshRunId()
+    const idB = freshRunId()
+    const client = createQueryClient()
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse([
+          subtask(idA, 1),
+          subtask(idA, 2),
+          subtask(idA, 3),
+          subtask(idB, 1),
+          subtask(idB, 2),
+          subtask(idB, 3),
+        ]),
+    })
+    const view = renderHeader(parentOf(idA), undefined, undefined, undefined, client)
+    const opened = await screen.findByRole('button', { name: '+1 more' })
+    const contentId = opened.getAttribute('aria-controls')
+    fireEvent.click(opened)
+    expect(screen.getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true')
+
+    // Same header instance, next run: a useState seed would still be open.
+    view.rerender(headerElement(parentOf(idB), client))
+    const collapsed = await screen.findByRole('button', { name: '+1 more' })
+    expect(collapsed.getAttribute('aria-expanded')).toBe('false')
+    expect(collapsed.getAttribute('aria-controls')).toBe(contentId)
+    expect(childLinks().map((link) => link.getAttribute('data-run-id'))).toEqual([`${idB}-c1`, `${idB}-c2`])
+
+    view.rerender(headerElement(parentOf(idA), client))
+    expect(screen.getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true')
+    expect(childLinks()).toHaveLength(3)
+
+    view.unmount()
+    renderHeader(parentOf(idA), undefined, undefined, undefined, client)
+    expect((await screen.findByRole('button', { name: 'Show less' })).getAttribute('aria-expanded')).toBe('true')
+    expect(childLinks().map((link) => link.getAttribute('href'))).toEqual([
+      `/tasks/${idA}-c1`,
+      `/tasks/${idA}-c2`,
+      `/tasks/${idA}-c3`,
+    ])
+  })
+
+  it('follows the runs list as children arrive, change status, and disappear', async () => {
+    const id = freshRunId()
+    const client = createQueryClient()
+    stubFetch({
+      '/api/v1/runs': () => new Promise<Response>(() => {}) as unknown as Response,
+    })
+    renderHeader(parentOf(id), undefined, undefined, undefined, client)
+    expect(childrenLine()).toBeNull()
+
+    const arrived = [
+      subtask(id, 1, 'running', 'Live running child'),
+      subtask(id, 2, 'done', 'Live finished child'),
+      subtask(id, 3, 'failed', 'Live failed child'),
+    ]
+    const patchRuns = (runs: ApiRun[]) => {
+      act(() => {
+        client.setQueryData(queryKeys.runs.list(), runs)
+      })
+    }
+
+    patchRuns(arrived)
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '+1 more' }).getAttribute('aria-expanded')).toBe('false'),
+    )
+    expect(childLinks().map((link) => link.getAttribute('href'))).toEqual([
+      `/tasks/${id}-c1`,
+      `/tasks/${id}-c2`,
+    ])
+
+    patchRuns([
+      subtask(id, 1, 'failed', 'Live running child'),
+      arrived[1]!,
+      arrived[2]!,
+      subtask(id, 4, 'done', 'Live fourth child'),
+    ])
+    await waitFor(() => expect(screen.getByRole('button', { name: '+2 more' })).not.toBeNull())
+    expect(childLinks()[0]?.getAttribute('title')).toBe('Live running child — failed')
+    expect(document.querySelector(`[data-run-id="${id}-c4"]`)).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '+2 more' }))
+    expect(childLinks().map((link) => link.getAttribute('href'))).toEqual([
+      `/tasks/${id}-c1`,
+      `/tasks/${id}-c2`,
+      `/tasks/${id}-c3`,
+      `/tasks/${id}-c4`,
+    ])
+
+    patchRuns([arrived[0]!, arrived[1]!])
+    await waitFor(() => expect(childLinks()).toHaveLength(2))
+    expect(screen.queryByRole('button', { name: 'Show less' })).toBeNull()
+    expect(moreButton()).toBeNull()
+
+    patchRuns([])
+    await waitFor(() => expect(childrenLine()).toBeNull())
+
+    patchRuns(arrived)
+    // The shrink hid the control; it did not forget that this run was opened.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Show less' }).getAttribute('aria-expanded')).toBe('true'),
+    )
+    expect(childLinks()).toHaveLength(3)
   })
 })
