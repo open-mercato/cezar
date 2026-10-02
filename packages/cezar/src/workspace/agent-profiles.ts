@@ -33,21 +33,39 @@ export interface ResolvedAgentProfile {
 }
 
 /**
+ * Which `agentHomePaths()` entry is each provider's own per-user home.
+ *
+ * A `Record<ProviderId, …>` rather than the ternary chain this used to be: the chain defaulted
+ * every id it did not name to Claude's home, so a newly added provider inherited `~/.claude` as
+ * its "discovered account" and the Settings → Agent accounts row printed another vendor's folder
+ * under its name — which is exactly what happened to `copilot` (#582). Adding a provider without
+ * a row here is now a type error.
+ *
+ * `pi` is the one honest fallback: it ships no per-user home of its own (`agentHomePaths` has no
+ * entry for it, same reason `PROFILE_ENV_VAR.pi` is `null`), so its row keeps the long-standing
+ * Claude-home behavior rather than inventing a path cezar cannot verify.
+ */
+const PROVIDER_HOME: Record<ProviderId, (home: ReturnType<typeof agentHomePaths>) => string> = {
+  claude: (home) => home.claude,
+  codex: (home) => home.codex,
+  opencode: (home) => home.opencodeConfig,
+  cursor: (home) => home.cursor,
+  pi: (home) => home.claude,
+  copilot: (home) => home.copilot,
+};
+
+/**
  * The implicit account for a provider: whatever `agentHomePaths()` discovers, which already
  * honours the vendors' own `CLAUDE_CONFIG_DIR` / `CODEX_HOME` / `CURSOR_CONFIG_DIR` /
- * `XDG_CONFIG_HOME`. Setting one of those on the cezar process therefore moves the DEFAULT
- * account rather than being ignored.
+ * `COPILOT_HOME` / `XDG_CONFIG_HOME`. Setting one of those on the cezar process therefore moves
+ * the DEFAULT account rather than being ignored.
  */
 export function defaultAgentProfile(
   provider: ProviderId,
   env: NodeJS.ProcessEnv = process.env,
 ): ResolvedAgentProfile {
   const home = agentHomePaths(env);
-  const path =
-    provider === 'codex' ? home.codex
-    : provider === 'opencode' ? home.opencodeConfig
-    : provider === 'cursor' ? home.cursor
-    : home.claude;
+  const path = PROVIDER_HOME[provider](home);
   return {
     id: DEFAULT_AGENT_ACCOUNT_ID,
     provider,

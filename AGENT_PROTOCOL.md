@@ -484,8 +484,8 @@ To be first-class:
    `BACKEND_MODEL_MAP`'s default column, so a bare id fails loud.
 10. **Permissions** — a backend cezar starts in an "approve everything" mode MUST still answer an
    approval request that arrives anyway. No cockpit surface can answer one yet, so a run parked on
-   a `session/request_permission` would be a state with no exit; `copilot-acp-runner.ts` and
-   `gemini-acp-runner.ts` auto-approve with a `note` instead.
+   a `session/request_permission` would be a state with no exit; `copilot-acp-runner.ts`
+   auto-approves with a `note` instead.
 11. **Credentials** — one entry in `BACKEND_ALLOW_PREFIXES` (`agent-env.ts`):
    `buildChildEnv` is least-privilege per backend, so a multi-provider runner
    must receive credentials for every provider its own model ids can name
