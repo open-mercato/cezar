@@ -60,6 +60,13 @@ export function RepoChangesSection() {
         </span>
       </div>
 
+      {changes.data?.truncated ? (
+        <p data-slot="changes-truncated-note" className="border-b px-4 py-2 text-xs text-soft-foreground md:px-6">
+          This diff is too large to show in full — later files are listed without their patch, or left out.
+          The totals above still count every changed file.
+        </p>
+      ) : null}
+
       {changes.isPending ? (
         <p data-slot="changes-loading" className="px-4 py-6 text-center text-xs text-soft-foreground md:px-6">
           Loading changes…

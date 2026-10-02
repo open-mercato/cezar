@@ -1,10 +1,11 @@
 import { execFile } from 'node:child_process';
-import { rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { lstat, open, readFile, readdir, realpath, stat } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
-import { resolveTaskDiffBase, type RepointedHead } from '../git-diff-base.ts';
+import { resolveTaskDiffBase } from '../git-diff-base.ts';
+import { withScratchIntentToAddIndex } from '../git-worktree.ts';
 import { isSafeGitRef } from '../git-refs.ts';
+import type { ChangedFile, ChangesPayload } from '@open-mercato/cezar-contract';
 
 /**
  * Session git plumbing for the cockpit's Changes & Files tabs (redesign spec
@@ -54,30 +55,12 @@ function gitReason(res: GitResult, fallback: string): string {
 
 /** Per-file patch cap — the GUI shows a "truncated" note past this. */
 const PATCH_CAP = 200_000;
+/** Aggregate caps on one changes payload: rows past the file cap are dropped, and once the JSON
+ *  would pass the byte cap every later file keeps its row but loses its patch (`patchOmitted`). */
+export const CHANGES_FILE_CAP = 1000;
+export const CHANGES_JSON_CAP = 4 * 1024 * 1024;
 
-export interface ChangedFile {
-  path: string;
-  /** Rename/copy source — present only when `status` is renamed/copied. */
-  oldPath?: string;
-  status: 'added' | 'modified' | 'deleted' | 'renamed' | 'copied';
-  adds: number;
-  dels: number;
-  binary: boolean;
-  /** True when `path`'s extension is one the raw-bytes route (`/files?raw=1`) will serve as an
-   *  `<img>` (#365) — lets the diff pane preview it inline instead of the "Binary file" note,
-   *  even for extensions (SVG) git itself doesn't flag `binary`. Present only when true. */
-  image?: boolean;
-  patch: string;
-}
-
-export interface ChangesPayload {
-  files: ChangedFile[];
-  stat: { adds: number; dels: number; files: number };
-  /** Present when a run worktree was repointed away from the task branch (#591). In that case the
-   *  payload is intentionally limited to uncommitted changes instead of attributing the
-   *  checked-out branch's history to this task. */
-  repointedHead?: RepointedHead;
-}
+export type { ChangedFile, ChangesPayload };
 
 export type ChangesResult = { ok: true; changes: ChangesPayload } | { ok: false; error: string };
 
@@ -243,49 +226,144 @@ function statusWord(letter: string): ChangedFile['status'] {
 
 /**
  * Structured "what changed here" for a directory vs its base branch:
- * committed + uncommitted + untracked (via `add -N`), anchored by the shared
+ * committed + uncommitted + untracked, anchored by the shared
  * `resolveTaskDiffBase` rule (`src/git-diff-base.ts`) — the merge-base against
  * the freshest base ref, so the diff stays *this task's* changes even after the
  * base moves on, and the branch's state at `runStartedAt` when the agent
  * repointed the worktree onto another branch (#591, #751).
  * `worktreeShortstat` resolves through the same helper; the text-blob `/diff`
  * endpoint (`worktreeDiff`) deliberately does not — see its own note.
+ *
+ * Untracked files are listed through a scratch index (`withScratchIntentToAddIndex`), never
+ * the real one: this backs read-only GETs, and the real index is either the user's own or the
+ * agent's staging area. Results are cached per directory and fingerprint (`changesFingerprint`).
  */
 export async function collectChanges(
   dir: string,
   baseBranch: string,
   opts: {
     patchCap?: number;
-    intentToAdd?: boolean;
     taskBranch?: string;
     runStartedAt?: string;
   } = {},
 ): Promise<ChangesResult> {
   if (!isSafeGitRef(baseBranch)) return { ok: false, error: 'refusing option-like base ref' };
   const patchCap = opts.patchCap ?? PATCH_CAP;
-  // `git add -N .` (intent-to-add) makes untracked files appear in the diff, but it MUTATES the
-  // index — fine in a task worktree cezar owns, but forbidden on the user's real main tree (a
-  // read-only GET must never stage files, #major-index-mutation). When `intentToAdd` is false we
-  // build a SCRATCH index (GIT_INDEX_FILE) seeded from HEAD + intent-to-add, so untracked files
-  // still show WITHOUT touching the user's real index.
-  let env: Record<string, string> | undefined;
-  let scratchIndex: string | undefined;
-  try {
-    if (opts.intentToAdd === false) {
-      scratchIndex = join(tmpdir(), `cez-scratch-index-${process.pid}-${scratchSeq++}`);
-      env = { GIT_INDEX_FILE: scratchIndex };
-      await git(dir, ['read-tree', 'HEAD'], env); // seed with tracked files; harmless if no HEAD
-      await git(dir, ['add', '-N', '.'], env);
-    } else {
-      await git(dir, ['add', '-N', '.']);
+  const key = JSON.stringify([dir, baseBranch, opts.taskBranch ?? null, opts.runStartedAt ?? null, patchCap]);
+  const fingerprint = await changesFingerprint(dir, baseBranch);
+  if (fingerprint === undefined) return computeChanges(dir, baseBranch, patchCap, opts);
+  const cached = changesCache.get(key);
+  if (cached && cached.fingerprint === fingerprint && Date.now() - cached.at < CHANGES_CACHE_TTL_MS) {
+    return cached.result;
+  }
+  const flightKey = `${key}\0${fingerprint}`;
+  const pending = changesInflight.get(flightKey);
+  if (pending) return pending;
+  const flight = computeChanges(dir, baseBranch, patchCap, opts).then((result) => {
+    if (result.ok) {
+      changesCache.delete(key);
+      changesCache.set(key, { fingerprint, at: Date.now(), result });
+      while (changesCache.size > CHANGES_CACHE_ENTRIES) {
+        const oldest = changesCache.keys().next().value;
+        if (oldest === undefined) break;
+        changesCache.delete(oldest);
+      }
     }
+    return result;
+  });
+  changesInflight.set(flightKey, flight);
+  try {
+    return await flight;
+  } finally {
+    changesInflight.delete(flightKey);
+  }
+}
+
+/** Bounds staleness the fingerprint cannot see (two same-size writes inside one mtime tick). */
+const CHANGES_CACHE_TTL_MS = 120_000;
+/** Each entry can hold up to `CHANGES_JSON_CAP` of payload. TTL and this bound are the only
+ *  eviction: a finished run is exactly the one whose Changes tab gets reviewed. Insertion order
+ *  decides, not use — a hit serves the entry without moving it, so a tab polled steadily still
+ *  ages out behind eight newer directories. With eight slots and a 120 s TTL that costs one
+ *  recompute, which is why it is not worth the re-insert on the read path. */
+const CHANGES_CACHE_ENTRIES = 8;
+const changesCache = new Map<string, { fingerprint: string; at: number; result: ChangesResult }>();
+const changesInflight = new Map<string, Promise<ChangesResult>>();
+
+/** Test hook: forget every cached changes payload. */
+export function clearChangesCache(): void {
+  changesCache.clear();
+}
+
+/**
+ * Everything a changes payload depends on, in two cheap git reads plus one `lstat` per dirty
+ * path: HEAD and every index entry that differs from it (`status --porcelain=v2 --branch`),
+ * every modified or untracked path (whose content is then pinned by its size and mtime), and
+ * the base refs the diff anchor resolves from. `GIT_OPTIONAL_LOCKS=0` keeps `git status` from
+ * refreshing — and so locking and rewriting — the real index. Undefined when git cannot answer,
+ * which disables caching for that call.
+ */
+async function changesFingerprint(dir: string, baseBranch: string): Promise<string | undefined> {
+  const env = { GIT_OPTIONAL_LOCKS: '0' };
+  const [status, refs] = await Promise.all([
+    git(dir, ['status', '--porcelain=v2', '-z', '--branch', '--untracked-files=all'], env),
+    git(
+      dir,
+      [
+        'for-each-ref',
+        '--format=%(refname) %(objectname)',
+        `refs/heads/${baseBranch}`,
+        `refs/remotes/origin/${baseBranch}`,
+        `refs/remotes/${baseBranch}`,
+        `refs/tags/${baseBranch}`,
+      ],
+      env,
+    ),
+  ]);
+  if (!status.ok || !refs.ok) return undefined;
+  const stamps = await Promise.all(
+    porcelainV2Paths(status.stdout).map(async (path) => {
+      try {
+        const info = await lstat(join(dir, path), { bigint: true });
+        return `${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+      } catch {
+        return '-';
+      }
+    }),
+  );
+  return createHash('sha1').update(status.stdout).update('\0').update(refs.stdout).update('\0').update(stamps.join('\n')).digest('hex');
+}
+
+/** The worktree-side paths `git status --porcelain=v2 -z` lists. Exported for tests. */
+export function porcelainV2Paths(out: string): string[] {
+  const tokens = out.split('\0');
+  const paths: string[] = [];
+  const fieldsBeforePath: Record<string, number> = { '1': 8, '2': 9, u: 10, '?': 1 };
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i] ?? '';
+    const skip = fieldsBeforePath[token.slice(0, token.indexOf(' '))];
+    if (skip === undefined) continue;
+    let at = 0;
+    for (let n = 0; n < skip && at >= 0; n++) at = token.indexOf(' ', at) + 1 || -1;
+    if (at > 0) paths.push(token.slice(at));
+    if (token.startsWith('2 ')) i += 1; // the rename's origin path rides in the next token
+  }
+  return paths;
+}
+
+async function computeChanges(
+  dir: string,
+  baseBranch: string,
+  patchCap: number,
+  opts: { taskBranch?: string; runStartedAt?: string },
+): Promise<ChangesResult> {
+  return withScratchIntentToAddIndex(dir, async (env) => {
     // Which ref anchors this task's diff — merge-base normally, the checked-out branch's
     // pre-run state when the agent repointed the worktree onto it (#591, #751). The rule is
     // shared with `worktreeShortstat`, and it runs WITH the scratch-index `env`: picking
     // between two repointed anchors compares them with `git diff --shortstat`, and `git diff`
-    // refreshes and rewrites the index it reads. On the user's real main tree that would be a
-    // read-only GET writing their index, and it would measure against a different index than
-    // the listing below. The ref lookups themselves ignore `GIT_INDEX_FILE`.
+    // refreshes and rewrites the index it reads. The ref lookups themselves ignore
+    // `GIT_INDEX_FILE`.
     const { base, repointedHead } = await resolveTaskDiffBase(
       (args) => git(dir, args, env),
       baseBranch,
@@ -304,19 +382,44 @@ export async function collectChanges(
 
     return {
       ok: true,
-      changes: {
+      changes: capChangesPayload({
         ...assemblePayload(nameStatus.stdout, numstat.stdout, patchOut.stdout, patchCap),
         ...(repointedHead ? { repointedHead } : {}),
-      },
+      }),
     };
-  } finally {
-    if (scratchIndex) rmSync(scratchIndex, { force: true });
-  }
+  });
 }
 
-/** Monotonic suffix for scratch index files, so concurrent /api/repo/changes calls never share
- *  one (each is cleaned up in the finally above). */
-let scratchSeq = 0;
+/** Apply `CHANGES_FILE_CAP` and `CHANGES_JSON_CAP` to an assembled payload, in git's file order.
+ *  Every kept row's bare size is reserved first, so a few huge patches cannot push later files
+ *  out of the list; patches then fill what is left. `stat` is left as computed over every file.
+ *  Exported for tests. */
+export function capChangesPayload(
+  payload: ChangesPayload,
+  caps: { files: number; bytes: number } = { files: CHANGES_FILE_CAP, bytes: CHANGES_JSON_CAP },
+): ChangesPayload {
+  const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value), 'utf8') + 1;
+  const rows = payload.files
+    .slice(0, caps.files)
+    .map((file) => ({ file, bare: jsonBytes({ ...file, patch: '', patchOmitted: true }) }));
+  const budget = caps.bytes - jsonBytes({ ...payload, files: [], truncated: true });
+  let rowBytes = rows.reduce((sum, row) => sum + row.bare, 0);
+  while (rows.length > 0 && rowBytes > budget) rowBytes -= rows.pop()?.bare ?? 0;
+  let patchBudget = budget - rowBytes;
+  let omitting = false;
+  const files = rows.map(({ file, bare }) => {
+    if (!file.patch) return file;
+    const extra = omitting ? Infinity : jsonBytes(file) - bare;
+    if (extra <= patchBudget) {
+      patchBudget -= extra;
+      return file;
+    }
+    omitting = true;
+    return { ...file, patch: '', patchOmitted: true as const };
+  });
+  const truncated = omitting || files.length < payload.files.length;
+  return { ...payload, files, ...(truncated ? { truncated: true as const } : {}) };
+}
 
 /** The three raw `git diff` listings (name-status, numstat, patch) → the `{files, stat}`
  *  payload. Shared by the working-tree diff above and the commit diff below. Each file's

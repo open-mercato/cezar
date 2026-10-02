@@ -226,6 +226,32 @@ describe('the Changes tab route', () => {
     )
   })
 
+  it('says so when the server capped a large diff', async () => {
+    stubFetch({
+      'GET /api/v1/runs/r1/changes': () =>
+        jsonResponse({ files: [], stat: { adds: 9000, dels: 0, files: 1500 }, truncated: true }),
+    })
+    renderChangesRoute()
+
+    await waitFor(() => expect(document.querySelector('[data-slot="changes-truncated-note"]')).not.toBeNull())
+    expect(document.querySelector('[data-slot="changes-truncated-note"]')?.textContent).toContain('too large to show in full')
+  })
+
+  it('never calls a file whose patch the cap omitted "metadata only"', async () => {
+    stubFetch({
+      'GET /api/v1/runs/r1/changes': () =>
+        jsonResponse({
+          files: [{ path: 'src/big.ts', status: 'added', adds: 250, dels: 0, binary: false, patch: '', patchOmitted: true }],
+          stat: { adds: 9000, dels: 0, files: 1500 },
+          truncated: true,
+        }),
+    })
+    renderChangesRoute()
+
+    await waitFor(() => expect(screen.getAllByText(/Patch omitted/).length).toBeGreaterThan(0))
+    expect(screen.queryByText('No content changes (metadata only).')).toBeNull()
+  })
+
   it('a 409 ("no worktree") renders the server reason and disables the git actions', async () => {
     stubFetch({
       'GET /api/v1/runs/r1/changes': () =>

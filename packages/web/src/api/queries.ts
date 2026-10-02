@@ -1056,6 +1056,9 @@ export function useRunDiff(id: string | undefined) {
   })
 }
 
+/** The Changes/Commits refetch for an active run the stream has said nothing about. */
+export const RUN_GIT_BACKSTOP_MS = 60_000
+
 /** The structured session diff behind the Changes tab (R5). A 409 (for example, a reclaimed
  *  worktree whose directory is unavailable) is a real answer, not a network hiccup — retrying
  *  cannot change it, so retries are off and the view renders the server's own reason. */
@@ -1065,9 +1068,11 @@ export function useRunChanges(id: string | undefined, live = false) {
     queryFn: ({ signal }) => getRunChanges(id as string, { signal }),
     enabled: Boolean(id),
     retry: false,
-    // While the run is active the agent is still writing — poll so the Changes tab keeps up
-    // instead of showing a stale empty snapshot from before the first write (#changes-live).
-    refetchInterval: live ? 4000 : false,
+    // Every run-record update on the stream refetches this (global-events.tsx); each agent
+    // message moves the record's token count, so the tab keeps up message by message. A long
+    // shell command, or a person editing the worktree by hand, changes files while the record
+    // stays still — this slow backstop is for those (#changes-live).
+    refetchInterval: live ? RUN_GIT_BACKSTOP_MS : false,
     // Once a run finishes, polling stops (live === false) — but final agent/post-run-hook
     // writes and the user editing files in the worktree still change the diff. Scope a
     // focus refetch and a zero staleTime to THIS query (the global client keeps
@@ -1103,15 +1108,16 @@ export function useGroup(groupId: string | undefined) {
   })
 }
 
-/** A run's commit list (Commits tab). Polls while active so new commits appear as the agent
- *  works. A 409 from an unavailable backing directory is a real answer retries can't change. */
+/** A run's commit list (Commits tab). The stream refetches it when a step or the run changes
+ *  state (global-events.tsx); a commit made mid-step shows by the slow backstop. A 409 from an
+ *  unavailable backing directory is a real answer retries can't change. */
 export function useRunCommits(id: string | undefined, live = false) {
   return useQuery({
     queryKey: queryKeys.runs.commits(id ?? ''),
     queryFn: ({ signal }) => getRunCommits(id as string, { signal }),
     enabled: Boolean(id),
     retry: false,
-    refetchInterval: live ? 5000 : false,
+    refetchInterval: live ? RUN_GIT_BACKSTOP_MS : false,
   })
 }
 

@@ -5,6 +5,7 @@ import { DiffStatLabel } from '@/components/diff-stat'
 import { cn } from '@/lib/utils'
 
 import { ImagePreview, shouldPreviewImage } from './image-preview'
+import { PATCH_OMITTED_NOTE } from './notes'
 import type { DiffFileChange, DiffProps } from './types'
 
 /**
@@ -137,6 +138,8 @@ function FallbackFile({
         <ImagePreview file={file} imageSrc={imageSrc} onOpenInApp={onOpenInApp} />
       ) : file.binary ? (
         <p className="px-4 py-2.5 text-xs text-soft-foreground">Binary file — no text diff.</p>
+      ) : file.patchOmitted ? (
+        <p className="px-4 py-2.5 text-xs text-soft-foreground">{PATCH_OMITTED_NOTE}</p>
       ) : file.patch === '' ? (
         <p className="px-4 py-2.5 text-xs text-soft-foreground">No content changes (metadata only).</p>
       ) : (

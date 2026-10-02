@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
-import { existsSync, realpathSync, type Dirent } from 'node:fs';
-import { readdir, readFile, rm, stat } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
+import { existsSync, realpathSync, rmSync, type Dirent } from 'node:fs';
+import { copyFile, readdir, readFile, rm, stat, utimes } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { resolveTaskDiffBase } from './git-diff-base.ts';
 import { isSafeGitRef } from './git-refs.ts';
@@ -44,6 +46,15 @@ function git(
       (err, stdout, stderr) => resolve({ ok: !err, stdout: stdout ?? '', stderr: stderr ?? '' }),
     );
   });
+}
+
+/**
+ * Scratch-index overrides (`GIT_INDEX_FILE`) as `git()` options. The overrides layer onto the
+ * ambient environment: `execFile`'s `env` replaces it wholesale, and a git that lost `PATH` or
+ * `HOME` behaves differently from the one every other call site runs.
+ */
+function envOpts(env: Record<string, string>): { env: NodeJS.ProcessEnv } {
+  return { env: { ...process.env, ...env } };
 }
 
 /** Upper bound on the pre-fork fetch; a slow or unreachable remote must not stall task start. */
@@ -516,6 +527,76 @@ async function gitHasIdentity(dir: string): Promise<boolean> {
   return name.ok && name.stdout.trim() !== '' && email.ok && email.stdout.trim() !== '';
 }
 
+const REAL_INDEX_PATHS_MAX = 64;
+const realIndexPaths = new Map<string, string>();
+
+async function realIndexPath(dir: string): Promise<string | undefined> {
+  const known = realIndexPaths.get(dir);
+  if (known) return known;
+  const res = await git(dir, ['rev-parse', '--git-path', 'index']);
+  const out = res.stdout.trim();
+  if (!res.ok || !out) return undefined;
+  const path = resolve(dir, out);
+  if (realIndexPaths.size >= REAL_INDEX_PATHS_MAX) {
+    const oldest = realIndexPaths.keys().next().value;
+    if (oldest !== undefined) realIndexPaths.delete(oldest);
+  }
+  realIndexPaths.set(dir, path);
+  return path;
+}
+
+/** Test hook: how many worktrees' index paths are remembered. */
+export function realIndexPathCount(): number {
+  return realIndexPaths.size;
+}
+
+/**
+ * Git trusts an entry's stat data only when the entry is older than the index file itself; an
+ * entry written in the same second is "racily clean" and gets its content compared. A copy
+ * stamped with the current time would make every such entry look settled, and a same-size edit
+ * made in that second would drop out of the diff — so the copy keeps the original's times. They
+ * are read before copying, so a concurrent rewrite can only make the copy look older, which
+ * errs toward comparing content.
+ */
+async function copyIndex(from: string, to: string): Promise<boolean> {
+  try {
+    const info = await stat(from);
+    await copyFile(from, to);
+    await utimes(to, info.atime, info.mtime);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Runs `fn` with `GIT_INDEX_FILE` pointing at a throwaway copy of `dir`'s index plus
+ * intent-to-add entries for untracked files, so a diff can list untracked files without
+ * writing the real index — which, in a task worktree, is the agent's own staging area.
+ * The copy keeps the real index's stat cache; a scratch index seeded by `read-tree HEAD`
+ * instead has none, and git then re-hashes every tracked file on the first diff.
+ *
+ * One write can still reach the real git dir: with `core.splitIndex` on, the copy points at a
+ * `sharedindex.*` there, and `add -N` on the copy may write a new shared index beside it. The
+ * real index file itself is never written.
+ */
+export async function withScratchIntentToAddIndex<T>(
+  dir: string,
+  fn: (env: Record<string, string>) => Promise<T>,
+): Promise<T> {
+  const scratch = join(tmpdir(), `cez-scratch-index-${process.pid}-${randomBytes(6).toString('hex')}`);
+  const env = { GIT_INDEX_FILE: scratch };
+  try {
+    const real = await realIndexPath(dir);
+    const copied = real ? await copyIndex(real, scratch) : false;
+    if (!copied) await git(dir, ['read-tree', 'HEAD'], envOpts(env)); // no index yet; harmless if no HEAD
+    await git(dir, ['add', '-N', '.'], envOpts(env));
+    return await fn(env);
+  } finally {
+    rmSync(scratch, { force: true });
+  }
+}
+
 /**
  * "What did this task change": diff of the worktree (committed + uncommitted
  * + untracked, via `add -N`) against the merge-base with its base branch —
@@ -539,13 +620,14 @@ export async function worktreeDiff(
   cap = DIFF_CAP,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '(diff failed: refusing option-like base ref)';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
-  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', base]);
-  if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
-  if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
-  return res.stdout;
+  return withScratchIntentToAddIndex(worktreePath, async (env) => {
+    const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+    const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+    const res = await git(worktreePath, ['diff', base], envOpts(env));
+    if (!res.ok) return `(diff failed: ${res.stderr.trim() || 'unknown git error'})`;
+    if (res.stdout.length > cap) return `${res.stdout.slice(0, cap)}\n… (diff truncated)`;
+    return res.stdout;
+  });
 }
 
 /**
@@ -562,11 +644,12 @@ export async function worktreeDiffStat(
   baseBranch: string,
 ): Promise<string> {
   if (!isSafeGitRef(baseBranch)) return '';
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
-  const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
-  const res = await git(worktreePath, ['diff', '--stat', base]);
-  return res.ok ? res.stdout.trim() : '';
+  return withScratchIntentToAddIndex(worktreePath, async (env) => {
+    const mergeBase = await git(worktreePath, ['merge-base', baseBranch, 'HEAD']);
+    const base = mergeBase.ok && mergeBase.stdout.trim() ? mergeBase.stdout.trim() : baseBranch;
+    const res = await git(worktreePath, ['diff', '--stat', base], envOpts(env));
+    return res.ok ? res.stdout.trim() : '';
+  });
 }
 
 /** Aggregate diff numbers (#389) — the shape stored on `RunRecord.diffStat`. */
@@ -621,18 +704,19 @@ export async function worktreeShortstat(
   opts: { taskBranch?: string; runStartedAt?: string } = {},
 ): Promise<DiffStat | null> {
   if (!isSafeGitRef(baseBranch)) return null;
-  await git(worktreePath, ['add', '-N', '.']); // intent-to-add: untracked files show up
-  const { base, repointedHead } = await resolveTaskDiffBase(
-    (args) => git(worktreePath, args),
-    baseBranch,
-    opts,
-  );
-  const res = await git(worktreePath, ['diff', '--shortstat', base]);
-  if (!res.ok) return null;
-  // The key stays ABSENT (not `false`) on a normal run: `diffStat` is persisted in
-  // `runs.json` and served on the runs API, so the un-narrowed shape must keep
-  // round-tripping byte-identically.
-  return { ...parseShortstat(res.stdout), ...(repointedHead ? { repointed: true } : {}) };
+  return withScratchIntentToAddIndex(worktreePath, async (env) => {
+    const { base, repointedHead } = await resolveTaskDiffBase(
+      (args) => git(worktreePath, args, env),
+      baseBranch,
+      opts,
+    );
+    const res = await git(worktreePath, ['diff', '--shortstat', base], envOpts(env));
+    if (!res.ok) return null;
+    // The key stays ABSENT (not `false`) on a normal run: `diffStat` is persisted in
+    // `runs.json` and served on the runs API, so the un-narrowed shape must keep
+    // round-tripping byte-identically.
+    return { ...parseShortstat(res.stdout), ...(repointedHead ? { repointed: true } : {}) };
+  });
 }
 
 /**

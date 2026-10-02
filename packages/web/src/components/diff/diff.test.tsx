@@ -152,6 +152,14 @@ describe('Diff facade', () => {
     expect(screen.getByText('Binary file — no text diff.')).not.toBeNull()
     expect(screen.getByText('No content changes (metadata only).')).not.toBeNull()
   })
+
+  it('says a capped file\'s patch was omitted instead of calling it metadata-only', async () => {
+    const capped: DiffFileChange = { path: 'src/a.ts', status: 'added', adds: 250, dels: 0, binary: false, patch: '', patchOmitted: true }
+    await renderDiff(<Diff files={[capped]} />)
+
+    expect(screen.getByText(/Patch omitted/)).not.toBeNull()
+    expect(screen.queryByText('No content changes (metadata only).')).toBeNull()
+  })
 })
 
 describe('Diff facade — image previews (#365)', () => {

@@ -87,6 +87,9 @@ export const changedFileSchema = z.object({
   image: z.boolean().optional(),
   /** This file's unified-diff section; possibly `… (patch truncated)`, possibly empty. */
   patch: z.string(),
+  /** Present only when the payload's aggregate cap blanked this file's `patch`: the file did
+   *  change (`adds`/`dels` stay exact), its diff just did not fit. */
+  patchOmitted: z.literal(true).optional(),
 });
 export type ChangedFile = z.infer<typeof changedFileSchema>;
 
@@ -97,6 +100,9 @@ export const changesPayloadSchema = z.object({
   stat: diffStatSchema,
   /** Additive context for review tasks whose worktree HEAD no longer matches their own branch. */
   repointedHead: z.object({ headBranch: z.string(), taskBranch: z.string() }).optional(),
+  /** Present only when the aggregate size or file-count cap dropped trailing files or blanked
+   *  their patches. `stat` still counts every changed file. */
+  truncated: z.literal(true).optional(),
 });
 export type ChangesPayload = z.infer<typeof changesPayloadSchema>;
 

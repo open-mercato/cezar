@@ -1,14 +1,17 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Hono } from 'hono';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { changesPayloadSchema } from '@open-mercato/cezar-contract';
 import { RunStore, type RunRecord } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
 import {
   FILE_CONTENT_CAP,
   assemblePayload,
+  capChangesPayload,
+  clearChangesCache,
   collectChanges,
   collectRunCommits,
   commitAll,
@@ -16,6 +19,7 @@ import {
   imageMimeType,
   isOsOpenableImage,
   patchByPath,
+  porcelainV2Paths,
   pushCurrentBranch,
   readWorktreePath,
   splitPatch,
@@ -59,6 +63,9 @@ describe('collectChanges — structured diff vs base', () => {
   let dir: string;
 
   beforeEach(() => {
+    // The payload cache lives on the module, so without this every test in this worker shares
+    // eight slots with every other — the entry-bound test below is the one that notices first.
+    clearChangesCache();
     dir = mkdtempSync(join(tmpdir(), 'cez-changes-'));
     initRepo(dir);
   });
@@ -220,28 +227,119 @@ describe('collectChanges — structured diff vs base', () => {
     expect(result.changes.files[0]?.patch).toContain('… (patch truncated)');
   });
 
-  it('intentToAdd:false never stages into the index (#major-index-mutation)', async () => {
+  it('never stages into the real index, yet still lists untracked files (#major-index-mutation)', async () => {
     writeFileSync(join(dir, 'tracked.txt'), 'a\n');
     g(dir, 'add', '-A');
     g(dir, 'commit', '-m', 'base');
     writeFileSync(join(dir, 'untracked.txt'), 'scratch\n');
+    const indexBefore = readFileSync(join(dir, '.git', 'index'));
 
-    // The read-only main-tree path must NOT run `git add -N` — the file stays untracked.
-    const result = await collectChanges(dir, 'main', { intentToAdd: false });
+    const result = await collectChanges(dir, 'main');
     expect(result.ok).toBe(true);
+    if (result.ok) expect(result.changes.files.some((f) => f.path === 'untracked.txt')).toBe(true);
     const status = execFileSync('git', ['status', '--porcelain', 'untracked.txt'], {
       cwd: dir,
       encoding: 'utf8',
     });
     expect(status.startsWith('??')).toBe(true); // still untracked, not `A ` (intent-to-add)
-
-    // Default (worktree) behavior still surfaces the untracked file's diff.
-    const withAdd = await collectChanges(dir, 'main');
-    expect(withAdd.ok).toBe(true);
-    if (withAdd.ok) expect(withAdd.changes.files.some((f) => f.path === 'untracked.txt')).toBe(true);
+    expect(readFileSync(join(dir, '.git', 'index'))).toEqual(indexBefore);
   });
 
-  it('intentToAdd:false leaves the real index untouched on a repointed HEAD too', async () => {
+  it('leaves a task worktree index untouched — the agent owns its staging area', async () => {
+    writeFileSync(join(dir, 'tracked.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    const wt = join(dir, 'wt');
+    g(dir, 'worktree', 'add', '-q', '-b', 'cez/task1234', wt, 'main');
+    const indexPath = g(wt, 'rev-parse', '--path-format=absolute', '--git-path', 'index').trim();
+    // A same-size edit inside the second the index was written: only git's racy-entry check
+    // (entry not older than the index file) sees it, so the scratch copy must keep that timing.
+    const checkedOut = statSync(join(wt, 'tracked.txt')).mtime;
+    writeFileSync(join(wt, 'tracked.txt'), 'b\n');
+    utimesSync(join(wt, 'tracked.txt'), checkedOut, checkedOut);
+    utimesSync(indexPath, checkedOut, checkedOut);
+    writeFileSync(join(wt, 'new.txt'), 'untracked in the worktree\n');
+    const indexBefore = readFileSync(indexPath);
+
+    const result = await collectChanges(wt, 'main', { taskBranch: 'cez/task1234' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.changes.files.map((f) => f.path).sort()).toEqual(['new.txt', 'tracked.txt']);
+    expect(readFileSync(indexPath)).toEqual(indexBefore);
+    expect(g(wt, 'ls-files', '--', 'new.txt')).toBe('');
+  });
+
+  it('serves a repeat call from the cache and recomputes once the worktree moves', async () => {
+    writeFileSync(join(dir, 'tracked.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    writeFileSync(join(dir, 'tracked.txt'), 'b\n');
+
+    const first = await collectChanges(dir, 'main');
+    const second = await collectChanges(dir, 'main');
+    expect(second).toBe(first);
+
+    // Same size, different content: only the dirty file's mtime tells the two apart.
+    writeFileSync(join(dir, 'tracked.txt'), 'c\n');
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(join(dir, 'tracked.txt'), later, later);
+    const edited = await collectChanges(dir, 'main');
+    expect(edited).not.toBe(first);
+    if (edited.ok) expect(edited.changes.files[0]?.patch).toContain('+c');
+
+    writeFileSync(join(dir, 'fresh.txt'), 'new\n');
+    const withNew = await collectChanges(dir, 'main');
+    if (withNew.ok) expect(withNew.changes.files.map((f) => f.path)).toContain('fresh.txt');
+
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'commit everything');
+    const committed = await collectChanges(dir, 'main');
+    expect(committed).not.toBe(withNew);
+  });
+
+  it('keeps at most eight directories\' payloads in the cache', async () => {
+    writeFileSync(join(dir, 'tracked.txt'), 'a\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-m', 'base');
+    writeFileSync(join(dir, 'tracked.txt'), 'b\n');
+    const links = mkdtempSync(join(tmpdir(), 'cez-changes-links-'));
+    try {
+      const aliases = Array.from({ length: 9 }, (_, i) => {
+        const alias = join(links, `wt${i}`);
+        symlinkSync(dir, alias);
+        return alias;
+      });
+      const first = await collectChanges(aliases[0]!, 'main');
+      expect(await collectChanges(aliases[0]!, 'main')).toBe(first);
+      for (const alias of aliases.slice(1)) await collectChanges(alias, 'main');
+      expect(await collectChanges(aliases[0]!, 'main')).not.toBe(first);
+    } finally {
+      rmSync(links, { recursive: true, force: true });
+    }
+  });
+
+  it('caps the aggregate payload and flags it truncated, keeping the full stat', async () => {
+    g(dir, 'commit', '--allow-empty', '-m', 'root');
+    for (let i = 0; i < 12; i++) writeFileSync(join(dir, `f${String(i).padStart(2, '0')}.txt`), `${'line\n'.repeat(400)}`);
+    const result = await collectChanges(dir, 'main');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect('truncated' in result.changes).toBe(false);
+    expect(result.changes.files.some((f) => 'patchOmitted' in f)).toBe(false);
+    expect(() => changesPayloadSchema.strict().parse(result.changes)).not.toThrow();
+    const capped = capChangesPayload(result.changes, { files: 10, bytes: 12_000 });
+    expect(capped.truncated).toBe(true);
+    expect(capped.files).toHaveLength(10);
+    expect(capped.stat).toEqual(result.changes.stat);
+    expect(capped.files[0]?.patch).not.toBe('');
+    expect('patchOmitted' in (capped.files[0] ?? {})).toBe(false);
+    expect(capped.files.at(-1)).toMatchObject({ patch: '', patchOmitted: true });
+    expect(capped.files.at(-1)?.adds).toBe(400);
+    expect(() => changesPayloadSchema.strict().parse(capped)).not.toThrow();
+    expect(Buffer.byteLength(JSON.stringify(capped), 'utf8')).toBeLessThanOrEqual(12_000);
+  });
+
+  it('leaves the real index untouched on a repointed HEAD too', async () => {
     // Choosing between the two repointed anchors compares them with `git diff --shortstat`,
     // and `git diff` REWRITES the index it reads (a stat refresh). Those probes must run on
     // the scratch index like every other diff here, or a read-only GET against the user's own
@@ -265,7 +363,6 @@ describe('collectChanges — structured diff vs base', () => {
     const indexBefore = readFileSync(join(dir, '.git', 'index'));
 
     const result = await collectChanges(dir, 'main', {
-      intentToAdd: false,
       taskBranch: 'cez/task1234',
       runStartedAt: '2026-06-01T00:00:00Z',
     });
@@ -315,6 +412,22 @@ describe('assemblePayload — patches attach to files by path, not by position (
     expect(byPath.get('a.txt')?.patch).toContain('+new-a');
     expect(byPath.get('a.txt')?.patch).not.toContain('new-b');
     expect(byPath.get('b.txt')?.patch).toContain('+new-b');
+  });
+});
+
+describe('porcelainV2Paths — the dirty paths the changes cache stamps', () => {
+  it('reads ordinary, renamed, unmerged and untracked entries, and skips headers', () => {
+    const out = [
+      '# branch.oid 1111111111111111111111111111111111111111',
+      '# branch.head main',
+      '1 .M N... 100644 100644 100644 aaaa aaaa src/a file.ts',
+      '2 R. N... 100644 100644 100644 bbbb bbbb R100 new name.ts',
+      'old name.ts',
+      'u UU N... 100644 100644 100644 100644 cccc dddd eeee conflicted.ts',
+      '? untracked dir/x.txt',
+      '',
+    ].join('\0');
+    expect(porcelainV2Paths(out)).toEqual(['src/a file.ts', 'new name.ts', 'conflicted.ts', 'untracked dir/x.txt']);
   });
 });
 

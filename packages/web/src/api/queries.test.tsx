@@ -25,6 +25,7 @@ import {
   usePutAgentConfigFile,
   useRun,
   useRunChanges,
+  useRunCommits,
   useRuns,
   useSkills,
   useSkillsUpdate,
@@ -989,6 +990,26 @@ describe('useRunChanges', () => {
     expect(options?.staleTime).toBe(0)
     // …but an inactive run still must not poll.
     expect(options?.refetchInterval).toBe(false)
+  })
+})
+
+describe('useRunChanges / useRunCommits — active runs', () => {
+  it('lean on the stream and keep only a slow backstop poll while the run is active', async () => {
+    fetchMock.mockImplementation(async (url) =>
+      String(url).includes('/commits') ? json({ commits: [] }) : json({ files: [], stat: { adds: 0, dels: 0, files: 0 } }),
+    )
+    const client = createQueryClient()
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    )
+    const changes = renderHook(() => useRunChanges('run-1', true), { wrapper })
+    const commits = renderHook(() => useRunCommits('run-1', true), { wrapper })
+    await waitFor(() => expect(changes.result.current.isSuccess && commits.result.current.isSuccess).toBe(true))
+
+    const interval = (key: readonly unknown[]) =>
+      client.getQueryCache().find({ queryKey: key })?.observers[0]?.options.refetchInterval
+    expect(interval(queryKeys.runs.changes('run-1'))).toBe(60_000)
+    expect(interval(queryKeys.runs.commits('run-1'))).toBe(60_000)
   })
 })
 

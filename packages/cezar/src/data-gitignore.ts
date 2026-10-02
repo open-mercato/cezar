@@ -16,6 +16,7 @@ import { join } from 'node:path';
 export const DATA_GITIGNORE_ENTRIES = [
   'runs.json',
   'runs.json.tmp',
+  'runs.json.*.tmp', // per-writer staging file of the atomic runs.json write
   'runs/',
   'dispatch/', // filesystem channel for dispatched task trees
   // The per-project attachment library (#929): every named file a user attaches to any task is
