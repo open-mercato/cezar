@@ -1578,6 +1578,78 @@ describe('dispatch lines', () => {
     expect(childLinks().map((a) => a.getAttribute('href'))).toEqual(['/tasks/k1', '/tasks/k2'])
   })
 
+  // A parent with dozens of children used to wrap this row into a header-filling grid (the
+  // screenshot that filed the fix): the fold keeps the row to one line until asked.
+  it('folds a long subtask list behind a toggle and expands it on demand', async () => {
+    const children = Array.from({ length: 6 }, (_, index) =>
+      run('done', {
+        id: `k${index + 1}`,
+        titleSummary: `Review PR #${index + 1}`,
+        dispatch: { rootRunId: 'r9', parentRunId: 'r9' },
+      }),
+    )
+    stubFetch({ '/api/v1/runs': () => jsonResponse(children) })
+    renderHeader(run('running', { id: 'r9', dispatch: { rootRunId: 'r9' } }))
+    const toggle = () => document.querySelector('[data-slot="dispatch-children-toggle"]') as HTMLElement
+
+    // Folded by default: a preview, a "+N more" tail, and the toggle says so.
+    await waitFor(() => expect(childLinks()).toHaveLength(3))
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+    expect(document.querySelector('[data-slot="dispatch-children-more"]')?.textContent).toBe('+3 more')
+
+    fireEvent.click(toggle())
+    await waitFor(() => expect(childLinks()).toHaveLength(6))
+    expect(toggle().getAttribute('aria-expanded')).toBe('true')
+    expect(document.querySelector('[data-slot="dispatch-children-more"]')).toBeNull()
+
+    fireEvent.click(toggle())
+    await waitFor(() => expect(childLinks()).toHaveLength(3))
+    expect(toggle().getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('shows a short subtask list whole, with no toggle to mislead', async () => {
+    stubFetch({
+      '/api/v1/runs': () =>
+        jsonResponse(
+          [1, 2, 3].map((n) =>
+            run('done', {
+              id: `k${n}`,
+              titleSummary: `Review PR #${n}`,
+              dispatch: { rootRunId: 'r10', parentRunId: 'r10' },
+            }),
+          ),
+        ),
+    })
+    renderHeader(run('running', { id: 'r10', dispatch: { rootRunId: 'r10' } }))
+    await waitFor(() => expect(childLinks()).toHaveLength(3))
+    expect(document.querySelector('[data-slot="dispatch-children-toggle"]')).toBeNull()
+    expect(document.querySelector('[data-slot="dispatch-children-more"]')).toBeNull()
+  })
+
+  // Run A → run B on `/tasks/:id` reconciles rather than remounts, so the fold is kept in the
+  // per-run map (the `detailsOpenByRun` contract) instead of component state.
+  it('remembers an expanded list for its own run across a remount', async () => {
+    const children = Array.from({ length: 5 }, (_, index) =>
+      run('done', {
+        id: `m${index + 1}`,
+        titleSummary: `Ship part ${index + 1}`,
+        dispatch: { rootRunId: 'r11', parentRunId: 'r11' },
+      }),
+    )
+    stubFetch({ '/api/v1/runs': () => jsonResponse(children) })
+    const first = renderHeader(run('running', { id: 'r11', dispatch: { rootRunId: 'r11' } }))
+    await waitFor(() => expect(childLinks()).toHaveLength(3))
+    fireEvent.click(document.querySelector('[data-slot="dispatch-children-toggle"]') as HTMLElement)
+    await waitFor(() => expect(childLinks()).toHaveLength(5))
+    first.unmount()
+
+    renderHeader(run('running', { id: 'r11', dispatch: { rootRunId: 'r11' } }))
+    await waitFor(() => expect(childLinks()).toHaveLength(5))
+    expect(
+      document.querySelector('[data-slot="dispatch-children-toggle"]')?.getAttribute('aria-expanded'),
+    ).toBe('true')
+  })
+
   // The role chip is gone with the ranks it named — nothing in the header may reintroduce it.
   it('wears no rank chip', async () => {
     stubFetch()

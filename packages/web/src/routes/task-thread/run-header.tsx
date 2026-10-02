@@ -900,46 +900,111 @@ function DispatchParentLine({ run }: { run: ApiRun }) {
   )
 }
 
+/** How many child links the folded subtask row previews before its "+N more" tail. */
+const CHILD_PREVIEW_COUNT = 3
+
+/** Expand memory per run id — the same module-level map `detailsOpenByRun` above and
+ *  `WorkflowSteps`' `openByRun` keep, for the same reason: `RunHeader` is rendered separately by
+ *  each task route, so a Session → Changes hop remounts it and plain `useState` would throw the
+ *  reader's explicit expand away. Session-lifetime only; no server persistence invented. */
+const childrenOpenByRun = new Map<string, boolean>()
+
+/** One child link: dot and title read off the run list, target off `dispatch`. */
+function DispatchChildLink({ child }: { child: ApiRun }) {
+  const attention = deriveAttention(child)
+  return (
+    <Link
+      to={`/tasks/${child.id}`}
+      data-slot="dispatch-child"
+      data-run-id={child.id}
+      title={`${runTitle(child)} — ${attention.label}`}
+      className="inline-flex min-w-0 max-w-52 items-center gap-1.5 truncate hover:text-foreground"
+    >
+      <StatusDot tone={attention.tone} pulse={attention.pulse} />
+      <span className="truncate">{runTitle(child)}</span>
+    </Link>
+  )
+}
+
 /**
- * "Subtasks: <child> · <child> …" — one collapsed row naming the tasks this one dispatched.
+ * "Subtasks: <child> · <child> …" — the row naming the tasks this one dispatched, folded by
+ * default once the list outgrows `CHILD_PREVIEW_COUNT`: the first few links stay visible, the
+ * rest hide behind a "+N more" tail and a small chevron toggle.
  *
  * Derived from the run list this page already holds rather than fetched: a child's link is its
  * id and its dot is its status, both of which `useRuns()` carries and keeps live over the run
  * stream. Nothing renders for a run that dispatched nothing — which is every run on a server
  * that never turned dispatch on.
  *
- * Deliberately ONE row, truncated: the full tree is the task list, and a header that grew a list
- * would push the transcript off the screen exactly when a parent has the most children.
+ * The fold is the point: a parent with dozens of children used to wrap this row into a grid that
+ * owned the header and pushed the transcript (tool calls included) off the screen. A short list
+ * renders whole with no toggle to mislead, and an explicit expand is remembered per run.
  */
 function DispatchChildrenLine({ run }: { run: ApiRun }) {
   const runs = useRuns()
   const children = (runs.data ?? []).filter(
     (candidate) => candidate.dispatch?.parentRunId === run.id,
   )
+  // The map IS the state (with a re-render bump), never a `useState` mirror: run A → run B on
+  // `/tasks/:id` reconciles instead of remounting, so mirrored state would carry A's expansion
+  // into B — the trap `detailsOpenByRun` documents above, repeated here on purpose.
+  const [, bumpChildren] = useReducer((n: number) => n + 1, 0)
+  const listId = useId()
   if (children.length === 0) return null
+  const collapsible = children.length > CHILD_PREVIEW_COUNT
+  const expanded = collapsible && (childrenOpenByRun.get(run.id) ?? false)
+  const visible = collapsible && !expanded ? children.slice(0, CHILD_PREVIEW_COUNT) : children
+  const hiddenCount = children.length - visible.length
+  const toggle = (next: boolean) => {
+    childrenOpenByRun.set(run.id, next)
+    bumpChildren()
+  }
   return (
     <div
       data-slot="dispatch-children"
-      className="mt-1 flex min-w-0 items-center gap-2 overflow-hidden text-xs text-muted-foreground"
+      className={cn(
+        'mt-1 flex min-w-0 gap-2 text-xs text-muted-foreground',
+        expanded ? 'items-start' : 'items-center',
+      )}
     >
       <span className="shrink-0">Subtasks</span>
-      <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 overflow-hidden">
-        {children.map((child) => {
-          const attention = deriveAttention(child)
-          return (
-            <Link
-              key={child.id}
-              to={`/tasks/${child.id}`}
-              data-slot="dispatch-child"
-              data-run-id={child.id}
-              title={`${runTitle(child)} — ${attention.label}`}
-              className="inline-flex max-w-52 items-center gap-1.5 truncate hover:text-foreground"
-            >
-              <StatusDot tone={attention.tone} pulse={attention.pulse} />
-              <span className="truncate">{runTitle(child)}</span>
-            </Link>
-          )
-        })}
+      {collapsible ? (
+        <button
+          type="button"
+          data-slot="dispatch-children-toggle"
+          aria-expanded={expanded}
+          aria-controls={listId}
+          aria-label={expanded ? 'Collapse subtasks' : `Show all ${children.length} subtasks`}
+          onClick={() => toggle(!expanded)}
+          className="shrink-0 rounded-sm p-1 text-soft-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <ChevronDownIcon
+            aria-hidden
+            className={cn('size-3.5 transition-transform', expanded && 'rotate-180')}
+          />
+        </button>
+      ) : null}
+      <span
+        id={listId}
+        data-slot="dispatch-children-list"
+        className={cn(
+          'flex min-w-0 flex-1 items-center gap-x-2',
+          expanded ? 'flex-wrap gap-y-0.5' : 'flex-nowrap',
+        )}
+      >
+        {visible.map((child) => (
+          <DispatchChildLink key={child.id} child={child} />
+        ))}
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            data-slot="dispatch-children-more"
+            onClick={() => toggle(true)}
+            className="shrink-0 whitespace-nowrap text-soft-foreground transition-colors hover:text-foreground"
+          >
+            +{hiddenCount} more
+          </button>
+        ) : null}
       </span>
     </div>
   )
