@@ -213,6 +213,8 @@ export function EnginePills({
         onPick={(next) => onChange({ ...pick, model: next })}
         options={models.map((m) => ({ value: m.id, label: m.label, desc: m.desc }))}
         status={modelCatalogStatus(runner, catalog.data, catalog.isError)}
+        searchPlaceholder="Search models…"
+        emptyLabel="No models found."
       />
     </>
   )

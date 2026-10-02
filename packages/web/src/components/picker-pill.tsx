@@ -38,6 +38,7 @@ export function PickerPill({
   disabledHint,
   status,
   searchPlaceholder,
+  emptyLabel,
 }: {
   slot: string
   ariaLabel: string
@@ -55,13 +56,23 @@ export function PickerPill({
   status?: string
   /** Add a name filter above longer option catalogs. */
   searchPlaceholder?: string
+  /** What the filter says when it matches nothing. Defaults to a generic "No matches." — call
+   *  sites with a specific catalog (branches, models) should name it. */
+  emptyLabel?: string
 }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
+  // Match the label OR the value: a model's value is the id sent on the wire, and the two can
+  // diverge (the `auto` preset, a pretty label over a native id) — a search that only saw the
+  // label would miss a row a user typed by its real name.
+  const query = search.trim().toLowerCase()
   const visibleOptions = searchPlaceholder
-    ? options.filter((option) => option.label.toLowerCase().includes(search.trim().toLowerCase()))
+    ? options.filter(
+        (option) =>
+          option.label.toLowerCase().includes(query) || option.value.toLowerCase().includes(query),
+      )
     : options
 
   useEffect(() => {
@@ -157,7 +168,9 @@ export function PickerPill({
           ))}
         </DropdownMenuRadioGroup>
         {searchPlaceholder && visibleOptions.length === 0 ? (
-          <p className="px-2 py-5 text-center text-xs text-muted-foreground">No branches found.</p>
+          <p className="px-2 py-5 text-center text-xs text-muted-foreground">
+            {emptyLabel ?? 'No matches.'}
+          </p>
         ) : null}
         {status ? (
           <DropdownMenuItem disabled className="border-t border-border text-[11.5px] text-muted-foreground">
