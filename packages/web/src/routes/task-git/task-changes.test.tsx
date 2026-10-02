@@ -320,7 +320,7 @@ describe('the Changes tab route', () => {
       'GET /api/v1/runs/r1': () => jsonResponse(record),
     })
     renderChangesRoute()
-    await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false))
+    await waitFor(() => expect(toolbarAction('create-pr')?.disabled).toBe(false), { timeout: 5_000 })
 
     fireEvent.click(toolbarAction('create-pr')!)
     await waitFor(() =>

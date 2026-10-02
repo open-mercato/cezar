@@ -174,7 +174,7 @@ export function AppearanceSection() {
 
       <Field
         title="Reading width"
-        hint="Wide lets a task's session and commits use more of the screen. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
+        hint="Wide gives task sessions, commits, and skill content more room. Narrow keeps a comfortable reading column. The Changes tab is always full-width."
       >
         <Segmented slot="appearance-width" label="Reading width" value={width} options={WIDTH_OPTIONS} onChange={setWidth} />
       </Field>

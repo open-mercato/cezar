@@ -39,19 +39,10 @@ export const skillSchema = z.object({
 export type Skill = z.infer<typeof skillSchema>;
 
 /**
- * One row in the "Manage skills" panel — a skill a default (vendor) repo offers, from
- * `GET /skills/importable`, independent of whether it is currently kept.
- *
- * `description` is optional because that is what the WIRE says: the handler builds
- * `{ name, description: skill.description }` and `JSON.stringify` omits an undefined value, so
- * a description-less skill is serialized as `{ "name": "…" }`. The route's own type disagrees
- * (it claims the key is always present) — a handler defect, see
- * `contract-parity.workflows.test.ts`.
+ * A skill offered by the default (vendor) repo, from `GET /skills/importable`, independent of
+ * whether it is enabled. The full definition lets the Skills catalog preview it before enabling.
  */
-export const importableSkillSchema = z.object({
-  name: z.string(),
-  description: z.string().optional(),
-});
+export const importableSkillSchema = skillSchema;
 export type ImportableSkill = z.infer<typeof importableSkillSchema>;
 
 // ---- follow-up inbox / todos (spec 007) ---------------------------------------------------

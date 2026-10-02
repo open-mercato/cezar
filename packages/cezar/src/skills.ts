@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import { join, resolve, basename, dirname, extname } from 'node:path';
 import { gatedSkillsRepos } from './config.ts';
 import { getTeamSkillsCached } from './skills-remote.ts';
-import { readWorkspaceUiState } from './workspace/ui-state.ts';
+import { readUiState } from './ui-state.ts';
 import { builtinSkills } from './automations/builtin-skill.ts';
 
 /**
@@ -78,12 +78,11 @@ const GLOBAL_SKILL_DIRS: Array<{ dir: string; source: Skill['source'] }> = [
  *
  * Opt-out gate: skills from a *default* (vendor) skills repo — `open-mercato/skills`
  * for the zero-config majority, see `gatedSkillsRepos` — appear unless the user has
- * curated them away. `importedSkills` in the GLOBAL `~/.cezar/ui-state.json` (not the
- * per-repo file — the selection describes the person and must not depend on the launch
- * directory, multi-project workspace) is a tri-state: ABSENT means "not curated" and
- * every default skill shows (the historical behavior — no upgrade break for existing
- * installs); a PRESENT array (even `[]`) means the user has taken control and only those
- * names show. A repo that sets its own `skillsRepos` gates nothing regardless. This is the
+ * curated them away. `importedSkills` in this repo's `.ai/cezar/ui-state.json` is a tri-state:
+ * ABSENT means "not curated" and every default skill shows unless an older workspace-level
+ * selection exists (readUiState supplies that as a compatibility fallback); a PRESENT array
+ * (even `[]`) means the project has taken control and only those names show. A repo that sets
+ * its own `skillsRepos` gates nothing regardless. This is the
  * single chokepoint, so the decision is identical for every consumer — catalog, composer
  * picker, planner, runner.
  */
@@ -94,7 +93,7 @@ export async function discoverSkills(repoRoot: string): Promise<Skill[]> {
       ...GLOBAL_SKILL_DIRS.map(({ dir, source }) => readMarkdownSkills(dir, source)),
     ]),
     gatedSkillsRepos(repoRoot),
-    readWorkspaceUiState(),
+    readUiState(repoRoot),
   ]);
   const teamSkills = filterImportedTeamSkills(
     getTeamSkillsCached(repoRoot),
