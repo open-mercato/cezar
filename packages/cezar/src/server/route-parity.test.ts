@@ -234,6 +234,9 @@ describe('project-route alias parity (unprefixed vs /api/v1/p/<boot> vs /api/v1/
     await expectParity('/agent-config/no-such-file', json('PUT', { content: '{}', version: null }));
     await expectParity('/workflows/parse', json('POST', { yaml: '' }));
     // 404: unknown ids.
+    // The landing check's 404 is the route's own `{error: 'no such run: …'}` — Hono's built-in
+    // 404 is other text, so a missing registration could not pass for it.
+    await expectParity('/runs/no-such-run/land-check', json('POST', {}));
     await expectParity('/runs/no-such-run/archive', json('POST', {}));
     await expectParity('/runs/no-such-run/pin', json('POST', {}));
     await expectParity('/runs/no-such-run', json('PATCH', { title: 't' }));

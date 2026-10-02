@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChildEnv, looksSecret } from './agent-env.ts';
+import { buildCheckEnv, buildChildEnv, looksSecret } from './agent-env.ts';
 
 /**
  * #427: the spawned backend must NOT inherit the full host environment. It
@@ -325,6 +325,92 @@ describe('agent-profile config dirs reach the child', () => {
       source: { PATH: '/usr/bin', CEZ_AGENT_ENV_FULL: '1', CLAUDE_CONFIG_DIR: '/home/u/.claude' },
     });
     expect(env.CLAUDE_CONFIG_DIR).toBe('/home/u/.claude-klaudiusz');
+  });
+});
+
+/**
+ * The check env (#landing-check S1) is the agent env's mirror image: the
+ * credential families an agent step legitimately needs (`GITHUB_TOKEN`/`GH_*`,
+ * vendor keys, `CEZ_*`) are precisely the ones a check must never see, and a
+ * name that merely LOOKS credential-shaped (`SSH_AUTH_SOCK`) is dropped too.
+ * The one hatch is `CEZ_ENV_PASSTHROUGH`, which forwards exactly the vars it
+ * names — and only those.
+ */
+describe('buildCheckEnv — the minimal check env', () => {
+  const HOST: NodeJS.ProcessEnv = {
+    PATH: '/usr/bin:/bin',
+    HOME: '/home/dev',
+    LANG: 'en_US.UTF-8',
+    TMPDIR: '/tmp',
+    // Handles a check may be given by name, kept out otherwise:
+    MY_CHECK_TOKEN: 'check-token-probe',
+    SSH_AUTH_SOCK: '/tmp/ssh-abc/agent.1',
+    // Credentials that must never ride along:
+    GITHUB_TOKEN: 'ghs_probe',
+    GH_HOST: 'github.com',
+    ANTHROPIC_API_KEY: 'sk-ant-probe',
+    AWS_SECRET_ACCESS_KEY: 'aws-probe',
+    NPM_TOKEN: 'npm-probe',
+    CEZ_CHECK_PROBE: 'cez-probe',
+  };
+
+  it('keeps the toolchain allowlist and drops gh/vendor/CEZ credentials', () => {
+    const env = buildCheckEnv(HOST);
+    expect(env.PATH).toBe('/usr/bin:/bin');
+    expect(env.HOME).toBe('/home/dev');
+    expect(env.LANG).toBe('en_US.UTF-8');
+    expect(env.TMPDIR).toBe('/tmp');
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.GH_HOST).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(env.NPM_TOKEN).toBeUndefined();
+    expect(env.CEZ_CHECK_PROBE).toBeUndefined();
+    // Not named, and the name patterns read `_AUTH_` as credential-shaped.
+    expect(env.SSH_AUTH_SOCK).toBeUndefined();
+    expect(env.MY_CHECK_TOKEN).toBeUndefined();
+  });
+
+  it('honours CEZ_ENV_PASSTHROUGH for a variable a check genuinely needs', () => {
+    const env = buildCheckEnv({
+      ...HOST,
+      CEZ_ENV_PASSTHROUGH: 'MY_CHECK_TOKEN, SSH_AUTH_SOCK',
+    });
+    expect(env.MY_CHECK_TOKEN).toBe('check-token-probe');
+    expect(env.SSH_AUTH_SOCK).toBe('/tmp/ssh-abc/agent.1');
+    // Named vars only — the hatch does not widen anything else.
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.CEZ_CHECK_PROBE).toBeUndefined();
+  });
+
+  it('takes a named var at its word — the name heuristic is the only thing it overrides', () => {
+    // `NPM_TOKEN` is credential-SHAPED rather than part of a family this cut
+    // fences off, so naming it forwards it, exactly as `buildChildEnv`'s
+    // passthrough does. Naming is the operator's deliberate act; the families
+    // below are not on offer.
+    const env = buildCheckEnv({ ...HOST, CEZ_ENV_PASSTHROUGH: 'NPM_TOKEN' });
+    expect(env.NPM_TOKEN).toBe('npm-probe');
+  });
+
+  it('cannot reopen the credential families by naming them', () => {
+    const env = buildCheckEnv({
+      ...HOST,
+      CEZ_ENV_PASSTHROUGH: 'GITHUB_TOKEN,ANTHROPIC_API_KEY,AWS_SECRET_ACCESS_KEY,CEZ_CHECK_PROBE',
+    });
+    expect(env.GITHUB_TOKEN).toBeUndefined();
+    expect(env.GH_HOST).toBeUndefined();
+    expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+    expect(env.CEZ_CHECK_PROBE).toBeUndefined();
+  });
+
+  it('reads the passthrough case-insensitively and ignores an empty list', () => {
+    expect(buildCheckEnv({ ...HOST, CEZ_ENV_PASSTHROUGH: 'my_check_token' }).MY_CHECK_TOKEN).toBe(
+      'check-token-probe',
+    );
+    expect(buildCheckEnv({ ...HOST, CEZ_ENV_PASSTHROUGH: '' }).MY_CHECK_TOKEN).toBeUndefined();
+    expect(buildCheckEnv({ ...HOST, CEZ_ENV_PASSTHROUGH: ' , ' }).MY_CHECK_TOKEN).toBeUndefined();
   });
 });
 

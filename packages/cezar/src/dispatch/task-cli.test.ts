@@ -85,6 +85,88 @@ describe('cez task', () => {
     expect(h.calls).toHaveLength(0);
   });
 
+  describe('land-check', () => {
+    /** A harness whose replies are a SEQUENCE: the POST, then however many polls the case needs. */
+    const sequence = (replies: Array<{ status: number; body: unknown }>) => {
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      const out: string[] = [];
+      const err: string[] = [];
+      let index = 0;
+      let slept = 0;
+      const io: TaskCliIo = {
+        fetch: (async (url: string | URL | Request, init?: RequestInit) => {
+          calls.push({ url: String(url), init });
+          const reply = replies[Math.min(index, replies.length - 1)] ?? { status: 200, body: {} };
+          index += 1;
+          return new Response(JSON.stringify(reply.body), { status: reply.status, headers: { 'content-type': 'application/json' } });
+        }) as typeof fetch,
+        log: (line) => out.push(line),
+        error: (line) => err.push(line),
+        sleep: async () => {
+          slept += 1;
+        },
+      };
+      return { calls, out, err, io, slept: () => slept };
+    };
+
+    it('posts the flags for the calling task and prints the check run with its cockpit page', async () => {
+      const h = sequence([{ status: 201, body: { runId: 'check-1', ofRunId: 'run-1' } }]);
+      const code = await runTaskCommand(
+        ['land-check', '--sources', 'cez/a, cez/b', '--commands', 'npm run typecheck', '--commands', 'npm test\nnpm run build'],
+        env,
+        h.io,
+      );
+      expect(code).toBe(0);
+      expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs/run-1/land-check');
+      // Comma-splitting is for SOURCES only (a ref never contains one); a command may, so each
+      // `--commands` value is one command and a multi-line value is several.
+      expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({
+        sources: ['cez/a', 'cez/b'],
+        commands: ['npm run typecheck', 'npm test', 'npm run build'],
+      });
+      expect(h.out[0]).toContain('landing check check-1 started for run-1');
+      expect(h.out[0]).toContain('http://127.0.0.1:4321/p/proj/tasks/check-1');
+    });
+
+    it('takes an explicit run id positionally and sends an empty request when nothing is named', async () => {
+      const h = sequence([{ status: 201, body: { runId: 'check-2', ofRunId: 'other-run' } }]);
+      expect(await runTaskCommand(['land-check', 'other-run'], env, h.io)).toBe(0);
+      expect(h.calls[0]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs/other-run/land-check');
+      expect(JSON.parse(String(h.calls[0]?.init?.body))).toEqual({});
+    });
+
+    it('--wait follows the check run to its verdict: exit 0 only for passed', async () => {
+      const green = sequence([
+        { status: 201, body: { runId: 'check-1', ofRunId: 'run-1' } },
+        { status: 200, body: { status: 'running', landingCheck: {} } },
+        { status: 200, body: { status: 'done', landingCheck: { verdict: 'passed' } } },
+      ]);
+      expect(await runTaskCommand(['land-check', '--wait'], env, green.io)).toBe(0);
+      expect(green.calls[1]?.url).toBe('http://127.0.0.1:4321/api/v1/p/proj/runs/check-1');
+      expect(green.out.at(-1)).toContain('landing check verdict — passed');
+      expect(green.slept()).toBe(1);
+
+      // A check that could not run is not a check that passed — every other verdict exits 1.
+      const red = sequence([
+        { status: 201, body: { runId: 'check-1', ofRunId: 'run-1' } },
+        { status: 200, body: { status: 'failed', landingCheck: { verdict: 'conflict', reason: 'merge-conflict' } } },
+      ]);
+      expect(await runTaskCommand(['land-check', '--wait'], env, red.io)).toBe(1);
+      expect(red.out.at(-1)).toContain('conflict (merge-conflict)');
+    });
+
+    it('surfaces a refusal and refuses to run without a cockpit, like every other verb', async () => {
+      const refused = sequence([{ status: 409, body: { error: 'a landing check is already in flight' } }]);
+      expect(await runTaskCommand(['land-check'], env, refused.io)).toBe(1);
+      expect(refused.err[0]).toContain('landing check refused — a landing check is already in flight');
+
+      const none = sequence([]);
+      expect(await runTaskCommand(['land-check'], {}, none.io)).toBe(2);
+      expect(none.err[0]).toContain('CEZ_API_URL is not set');
+      expect(none.calls).toHaveLength(0);
+    });
+  });
+
   it('list prints the tree this task belongs to, indented, with status, cost and verdicts', async () => {
     const h = harness({
       status: 200,

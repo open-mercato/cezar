@@ -59,6 +59,9 @@ import {
   updateProjectInputSchema,
 } from '@open-mercato/cezar-contract';
 import { dispatchInputSchema, dispatchIntentSchema, dispatchReportSchema } from '@open-mercato/cezar-contract';
+// The landing-check request shape (`POST /runs/:id/land-check`, spec 2026-09-29-landing-check) is
+// a contract VALUE too: the route validates with exactly the schema the CLI compiles against.
+import { landingCheckInputSchema } from '@open-mercato/cezar-contract';
 import { detectEnvironment } from '../core/backend-detect.ts';
 import { hostUsageSampler, type HostSampler } from '../core/host-usage.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
@@ -131,6 +134,10 @@ import {
   type DeleteDraftResponse,
 } from '@open-mercato/cezar-contract';
 import { toPastedContent, type PastedContent, type RunManager } from '../workflows/run.ts';
+// Read-time staleness for a landing check (spec `.ai/specs/2026-09-29-landing-check.md`): the
+// recorded sha of a base or source ref no longer matches what that ref resolves to. Derived on
+// the way out, exactly like `usage` — never persisted, never a rewrite of the stored verdict.
+import { gitIn, landingCheckStale } from '../workflows/landing-check.ts';
 import { removeWorktree, worktreeDiff, worktreeDiffStat, worktreeSizeBytes } from '../git-worktree.ts';
 import { isReclaimable, reclaimWorktrees } from '../runs/retention.ts';
 import { getBranches, getCommit, getDiff, getLog, getRepoInfo, getStatus } from './git.ts';
@@ -4013,9 +4020,25 @@ export function createApp(deps: ServerDeps) {
   // Additive `usage` field (#348): the latest CPU/RSS/proc-count sample of the
   // run's live process tree — absent for finished runs and when `ps` yields
   // nothing. The stored record itself is never touched.
-  const withUsage = (run: RunRecord): RunRecord & { usage?: ReturnType<typeof currentUsage> } => {
+  //
+  // `landingCheckStale` (spec 2026-09-29-landing-check) rides the same way: a READ-TIME fact
+  // about a landing check whose recorded base/source shas no longer match their refs. It is
+  // derived, never persisted, and absent (not `false`) on every run that has no landing-check
+  // verdict — an absent key means "nothing to be stale about", which a boolean cannot say.
+  // Both keys are spread CONDITIONALLY for the reason the parity guard exists: writing
+  // `landingCheckStale: undefined` would type a key as always-present that `JSON.stringify`
+  // then drops from the wire.
+  const withUsage = async (
+    run: RunRecord,
+    repoRoot: string,
+  ): Promise<RunRecord & { usage?: ReturnType<typeof currentUsage>; landingCheckStale?: boolean }> => {
     const usage = currentUsage(run.id);
-    return usage ? { ...run, usage } : run;
+    const stale = await landingCheckStale({ landingCheck: run.landingCheck, git: gitIn(repoRoot) });
+    return {
+      ...run,
+      ...(usage ? { usage } : {}),
+      ...(stale !== undefined ? { landingCheckStale: stale } : {}),
+    };
   };
 
   // The inbox half of a composer launch (#374). Since the cockpit's "▶ Run"
@@ -4040,7 +4063,10 @@ export function createApp(deps: ServerDeps) {
 
   // ---- chained family: runs lifecycle + artifacts (project-scoped) ----
   const runsRoutes = new Hono<ProjectApiEnv>()
-    .get('/runs', (c) => c.json(c.get('project').store.listRuns().map(withUsage)))
+    .get('/runs', async (c) => {
+      const { root: repoRoot, store } = c.get('project');
+      return c.json(await Promise.all(store.listRuns().map((run) => withUsage(run, repoRoot))));
+    })
 
     // Registered before the `/:id/...` routes so "archive-finished" and "read-all"
     // never match as a run id.
@@ -4175,10 +4201,10 @@ export function createApp(deps: ServerDeps) {
       return c.json(run, 201);
     })
 
-    .get('/runs/:id', (c) => {
-      const { store } = c.get('project');
+    .get('/runs/:id', async (c) => {
+      const { root: repoRoot, store } = c.get('project');
       const run = store.getRun(c.req.param('id'));
-      return run ? c.json(withUsage(run)) : c.json({ error: 'not found' }, 404);
+      return run ? c.json(await withUsage(run, repoRoot)) : c.json({ error: 'not found' }, 404);
     })
 
     .get(
@@ -4816,6 +4842,31 @@ export function createApp(deps: ServerDeps) {
       });
       return c.json({ url: outcome.url, dryRun: outcome.dryRun }, 201);
     })
+
+    // Landing check (spec `.ai/specs/2026-09-29-landing-check.md`, PR 4): freeze run `:id`'s
+    // committed branch tip as the subject's base, derive the tree's eligible children as sources,
+    // and create the CHECK RUN that will materialize the combination in a fresh worktree of its
+    // own and run the repository's gate on it. Asynchronous by construction: this answers the
+    // check run's id immediately (201) and every command runs later, in that run.
+    //
+    // The invoking run may still be RUNNING — that is the normal case (a dispatch parent calls
+    // this before its own merge), and the subject is its committed branch tip frozen HERE. The
+    // only 409 is a landing check already in flight for this project: two would materialize two
+    // combinations in two worktrees and race for the same resources for no benefit.
+    //
+    // An absent/empty body is the common shape (the engine derives everything); a present body
+    // may name explicit sources and/or commands. `landingCheckInputSchema` is `.strict()`, so a
+    // misspelled `source` is a 400 via the validator trio rather than a silent no-op filter.
+    .post(
+      '/runs/:id/land-check',
+      jsonZodValidator(landingCheckInputSchema, { absent: ({}) }),
+      async (c) => {
+        const { manager } = c.get('project');
+        const outcome = await manager.startLandingCheck(c.req.param('id'), c.req.valid('json'));
+        if ('refused' in outcome) return c.json({ error: outcome.refused }, outcome.notFound ? 404 : 409);
+        return c.json(outcome, 201);
+      },
+    )
 
     // Archived tasks keep their worktree for inspection; this is the explicit
     // "🧹 Remove worktree" cleanup (spec 006).

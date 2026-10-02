@@ -13,7 +13,12 @@ import { MAX_REF } from './task-refs.ts';
 import { workflowDefSchema } from '../workflows/types.ts';
 // A contract VALUE, like `workspaceUiStateSchema` in `workspace/migrations.ts`: the persisted
 // `dispatch` object and its wire half are literally the same schema, so they cannot drift.
-import { dispatchSchema, trackerAssociationSchema, trackerAutomationEventSchema } from '@open-mercato/cezar-contract';
+import {
+  dispatchSchema,
+  landingCheckSchema,
+  trackerAssociationSchema,
+  trackerAutomationEventSchema,
+} from '@open-mercato/cezar-contract';
 
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 
@@ -242,6 +247,11 @@ export const runRecordSchema = z.object({
    *  a `dispatch` that no longer fits must drop the FIELD, never the whole index. The run then reads
    *  as an ordinary flat task — degraded, but running. */
   dispatch: dispatchSchema.optional().catch(undefined),
+  /** The landing check (spec `.ai/specs/2026-09-29-landing-check.md`): the frozen subject, the
+   *  resolved plan and the verdict of a check run. `.catch(undefined)` on the same terms as
+   *  `dispatch` above — it is one run's evidence, and a record that no longer fits it must lose
+   *  the FIELD, never the whole index. */
+  landingCheck: landingCheckSchema.optional().catch(undefined),
   status: z.enum(['queued', 'running', 'waiting', 'review', 'done', 'failed', 'cancelled']),
   /** Sub-state of `running` (spec 2026-07-18-subagent-monitoring-status, #490):
    *  `monitoring` while the agent is still working on its own downstream work.

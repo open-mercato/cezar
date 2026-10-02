@@ -14,6 +14,7 @@ import type {
   finishResponseSchema,
   gitCommitResponseSchema,
   gitPushResponseSchema,
+  landingCheckResponseSchema,
   messageResponseSchema,
   openInCliResponseSchema,
   removeQueuedMessageResponseSchema,
@@ -58,6 +59,9 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
   type RunPatch200 = InferResponseType<Run['$patch'], 200>;
   type ArchiveFinished200 = InferResponseType<Runs['archive-finished']['$post'], 200>;
   type Cancel200 = InferResponseType<Run['cancel']['$post'], 200>;
+  // The landing check (spec 2026-09-29-landing-check) answers the CHECK RUN's id at 201, before
+  // any merge or command has happened — the async half of the trigger is the whole shape.
+  type LandCheck201 = InferResponseType<Run['land-check']['$post'], 201>;
   type Message200 = InferResponseType<Run['messages']['$post'], 200>;
   type QueuedPatch200 = InferResponseType<Run['queued-messages'][':msgId']['$patch'], 200>;
   type QueuedDelete200 = InferResponseType<Run['queued-messages'][':msgId']['$delete'], 200>;
@@ -97,6 +101,7 @@ describe('src/contract/runs.ts matches the runs routes exactly', () => {
     Assert<Exact<z.infer<typeof cancelResponseSchema>, Cancel200>>,
     Assert<Exact<z.infer<typeof finishResponseSchema>, Finish200>>,
     Assert<Exact<z.infer<typeof continueResponseSchema>, Continue200>>,
+    Assert<Exact<z.infer<typeof landingCheckResponseSchema>, LandCheck201>>,
     Assert<Exact<z.infer<typeof deleteRunResponseSchema>, DeleteRun200>>,
     Assert<Exact<z.infer<typeof createPrResponseSchema>, CreatePr201>>,
     // the queued prompt stack (#472)

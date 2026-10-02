@@ -16,6 +16,7 @@ import {
   resolveExtraSystemPrompt,
   skillSystemPrompt,
 } from './run.ts';
+import { mockAgentWithRealChecks } from './mock-agent.testkit.ts';
 
 const run = promisify(execFile);
 const GIT_ID = ['-c', 'user.name=test', '-c', 'user.email=test@local'];
@@ -94,12 +95,16 @@ describe('skill-aware task naming (#432)', () => {
 });
 
 /**
- * End-to-end through the real engine with CEZ_DRY_RUN=1: the config default
- * and the per-run override must reach the claude CLI's argv verbatim
+ * End-to-end through the real engine with the bundled mock agent: the config
+ * default and the per-run override must reach the claude CLI's argv verbatim
  * (`--append-system-prompt`, captured via the mock's CEZ_MOCK_ARGS_FILE hook)
  * and be echoed on the RunRecord.
+ *
+ * Not a DRY RUN: the golden workflows end in a real `verify` check, and a dry
+ * run spawns nothing for one (#landing-check S1). `mock-agent.testkit.ts` is the
+ * seam that keeps the agent mocked without making that claim.
  */
-describe('systemPrompt end-to-end (dry run)', () => {
+describe('systemPrompt end-to-end (mock agent)', () => {
   const CONFIG_PROMPT = 'CONFIG-DEFAULT: always write tests first.';
   const OVERRIDE_PROMPT = 'PER-RUN OVERRIDE: answer in bullet points.';
   const SKILL_DESCRIPTION = 'Review a pull request by number and report actionable findings.';
@@ -110,12 +115,12 @@ describe('systemPrompt end-to-end (dry run)', () => {
   let store: RunStore;
   let manager: RunManager;
   const savedEnv: Record<string, string | undefined> = {};
+  let restoreMockAgent: () => void = () => undefined;
 
   beforeAll(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-sysprompt-'));
     argsFile = join(repoRoot, 'mock-args.ndjson');
     inheritedTodos = join(repoRoot, 'inherited-todos.json');
-    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
     savedEnv.CEZ_MOCK_ARGS_FILE = process.env.CEZ_MOCK_ARGS_FILE;
     savedEnv.CEZ_TODOS_FILE = process.env.CEZ_TODOS_FILE;
     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
@@ -124,7 +129,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
     savedEnv.CEZ_AUTOMATIONS = process.env.CEZ_AUTOMATIONS;
     // The dispatch and automations tests below set and clear this; restore whatever the outer process had.
     savedEnv.CEZ_API_URL = process.env.CEZ_API_URL;
-    process.env.CEZ_DRY_RUN = '1';
+    restoreMockAgent = mockAgentWithRealChecks();
     // Dispatch is on by default (spec 2026-09-10-dispatch A2) and composes its own prompt part
     // ahead of everything asserted here. These goldens are about the BASE composition, so they
     // run with it off; the default-on part is pinned by its own test below.
@@ -171,6 +176,7 @@ describe('systemPrompt end-to-end (dry run)', () => {
   });
 
   afterAll(() => {
+    restoreMockAgent();
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -327,12 +333,21 @@ describe('systemPrompt end-to-end (dry run)', () => {
     const record = manager.startRun(skillWorkflow, { task: '437' });
 
     // Dry-run guard (without the CEZ_AUTONAME=1 force): no key is recorded,
-    // the namer is never consulted.
+    // the namer is never consulted. This suite is no longer a dry run, so the
+    // window is opened here on purpose.
     const forced = process.env.CEZ_AUTONAME;
+    const savedDryForGuard = process.env.CEZ_DRY_RUN;
     delete process.env.CEZ_AUTONAME;
-    await seam.maybeRefreshTitle(record.id, 'made real progress on the fix');
-    expect(seam.lastNamerKey.has(record.id)).toBe(false);
-    process.env.CEZ_AUTONAME = forced;
+    process.env.CEZ_DRY_RUN = '1';
+    try {
+      await seam.maybeRefreshTitle(record.id, 'made real progress on the fix');
+      expect(seam.lastNamerKey.has(record.id)).toBe(false);
+    } finally {
+      if (savedDryForGuard === undefined) delete process.env.CEZ_DRY_RUN;
+      else process.env.CEZ_DRY_RUN = savedDryForGuard;
+      if (forced === undefined) delete process.env.CEZ_AUTONAME;
+      else process.env.CEZ_AUTONAME = forced;
+    }
 
     // Outside dry-run, a fast-failing fake binary guards against real spawns.
     const savedDry = process.env.CEZ_DRY_RUN;
@@ -532,8 +547,10 @@ describe('systemPrompt end-to-end (dry run)', () => {
  * and the reason the ceiling lives in the manager rather than in the HTTP route. A route-level
  * gate would leave every one of those callers writing todos.json on a server that has the inbox
  * off.
+ *
+ * The agent is the bundled mock, NOT a dry run — see the suite above.
  */
-describe('the global follow-up gate (dry run)', () => {
+describe('the global follow-up gate (mock agent)', () => {
   const CONFIG_PROMPT = 'CONFIG-DEFAULT: always write tests first.';
   let repoRoot: string;
   let argsFile: string;
@@ -541,17 +558,17 @@ describe('the global follow-up gate (dry run)', () => {
   let store: RunStore;
   let manager: RunManager;
   const savedEnv: Record<string, string | undefined> = {};
+  let restoreMockAgent: () => void = () => undefined;
 
   beforeAll(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-followup-gate-'));
     argsFile = join(repoRoot, 'mock-args.ndjson');
     inheritedTodos = join(repoRoot, 'inherited-todos.json');
-    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
     savedEnv.CEZ_MOCK_ARGS_FILE = process.env.CEZ_MOCK_ARGS_FILE;
     savedEnv.CEZ_TODOS_FILE = process.env.CEZ_TODOS_FILE;
     savedEnv.CEZ_FOLLOWUPS = process.env.CEZ_FOLLOWUPS;
     savedEnv.CEZ_DISPATCH = process.env.CEZ_DISPATCH;
-    process.env.CEZ_DRY_RUN = '1';
+    restoreMockAgent = mockAgentWithRealChecks();
     process.env.CEZ_DISPATCH = '0'; // base composition only — see the first suite
     process.env.CEZ_MOCK_ARGS_FILE = argsFile;
     // A parent cezar's inbox, as in the suite above: the gate must not leak into it either.
@@ -575,6 +592,7 @@ describe('the global follow-up gate (dry run)', () => {
   });
 
   afterAll(() => {
+    restoreMockAgent();
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;

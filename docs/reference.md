@@ -254,7 +254,40 @@ steps:
 
 `{{task}}` is replaced with the task text you typed. When a check fails and loops
 back, its failing output is appended to the retried agent's prompt so the next
-attempt can see what broke.
+attempt can see what broke. Only a non-zero exit loops back: a check that could
+not execute — `timed-out` (the per-command limit or the whole-gate deadline),
+`could-not-run` (no POSIX shell) or a `CEZ_DRY_RUN=1` skip — ends the run right
+there, because re-running the agent to launch a command that runs nothing only
+spends turns.
+
+Check steps run through a hardened runner, because they are the one kind of step
+that executes repository code unattended:
+
+- **Wall clock.** Each command is bounded at 20 minutes
+  (`"checkTimeoutMs"` in `.ai/cezar/config.json`) and the whole gate — every
+  check the run executes, retries included — at 45 minutes
+  (`"checkGateTimeoutMs"`); `0` removes either limit.
+- **Process group.** The command gets its own process group, so a timeout or a
+  cancel SIGTERMs the group, waits 5 s, then SIGKILLs it — a grandchild that
+  traps SIGTERM still dies, and orphans left by a command that exits early are
+  reaped. `close` is never trusted to arrive on its own: if something that left
+  the group (`setsid`/`detached`) still holds the pipes after the grace, they
+  are cut so the outcome always settles.
+- **Tail-preserving output.** The transcript keeps its last 20,000 characters
+  with a marker naming how much was elided; the failing line is at the tail, so
+  the old head-kept cap no longer hides the reason from the retried agent.
+- **Minimal environment.** A check gets no `GITHUB_TOKEN`/`GH_*`, no vendor API
+  or cloud credentials and no `CEZ_*`, and it runs a non-login shell. One hatch
+  applies: `CEZ_ENV_PASSTHROUGH` forwards exactly the host vars it names (a
+  check that genuinely needs a CI flag, a tool's config dir or `SSH_AUTH_SOCK`),
+  never one of those credential families even when named. `CEZ_AGENT_ENV_FULL`
+  does not apply. This is **not a sandbox**: the check still runs as your user
+  and can read files by path; it only stops ambient credentials from riding
+  along.
+- **Non-green outcomes are named.** A timeout, a cancellation, a missing `bash`
+  (Windows, or a trimmed image) and a `CEZ_DRY_RUN=1` dry run all produce a
+  distinct non-green outcome — `timed-out`, `cancelled`, `could-not-run`,
+  `skipped` — so "it did not run" can never be read as "it passed".
 
 Prefer skills over steps? A workflow can also be written in the portable
 shorthand — an ordered list of skill names, each becoming one agent step:
@@ -285,7 +318,7 @@ Useful environment variables:
 
 | Var | Effect |
 |---|---|
-| `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. |
+| `CEZ_DRY_RUN=1` | Use the bundled mock instead of the real `claude` CLI — the entire cockpit works offline, for demos and development. Check steps (`command:`) spawn nothing either: the step is recorded `skipped` and the run ends `failed`, so a dry run can never report a gate it never ran as green. |
 | `CEZ_INSTANCE_ID` | Internal server-install identity set automatically in generated systemd/launchd services; normally leave unset. It is surfaced additively by `/api/v1/health` for install verification. |
 | `CEZ_AGENT_MODELS_LOCKED=1` | Globally lock each runner to the model configured in its native Claude/Codex/OpenCode settings while keeping runner selection available. Exact `1` also delegates authentication and provider enablement to those native agents, so Cezar skips its credential probes and provider-disable preferences. Existing Cezar presets are preserved but ignored, and an environment change requires a restart. The config-file equivalent is `"modelsLocked": true` in global `~/.cezar/config.json` or one repository's `.ai/cezar/config.json`; config-file locks do not disable provider checks. |
 | `CEZ_APPROVAL_GATE=1` | Opt into Claude's interactive approval UI; by default, unapproved tools are denied without interrupting the run. |
@@ -312,7 +345,7 @@ Useful environment variables:
 | `CEZ_HIDE_COST=1` | Hide backend-reported monetary cost throughout the browser cockpit while leaving raw input/output token counts visible. Only the exact value `1` enables it; telemetry and API payloads are unchanged, and a restart is required after changing it. |
 | `CEZ_HIDE_TOKEN_METRICS=1` | Legacy master switch that hides both token usage and cost. It takes precedence over the two independent flags; only the exact value `1` enables it, payloads are unchanged, and a restart is required. |
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
-| `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
+| `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents — and to check steps, whose env is cut harder (no `GH_*`, no vendor/cloud credentials, no `CEZ_*`; a named var never reopens those families). By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent or a check needs. |
 | `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
 | `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |
 | `CEZ_REDACT_SECRETS=0` | Disable scrubbing of credential values/token shapes from the on-disk state (the NDJSON transcript and the free-text fields of `runs.json`). On by default; leave it on. Best-effort defense-in-depth, not a guarantee: it catches known token shapes and the values of your own secret-named env vars, so a credential in neither category can still get through. |
@@ -489,7 +522,9 @@ never blocks startup):
   "defaultRunner": "claude", // agent backend: "claude" (default) · "codex" · "opencode" · "pi"
   "modelsLocked": true,      // optional: native per-runner model is fixed/read-only; runner stays selectable
   "plannerModel": "sonnet",  // model the "Plan first" button uses to draft chains
-  "baseBranch": "develop"    // branch worktrees fork from + PRs target (also settable in the Git tab)
+  "baseBranch": "develop",   // branch worktrees fork from + PRs target (also settable in the Git tab)
+  "checkTimeoutMs": 1200000,     // optional: per check-step wall clock in ms (default 20 min; 0 = no per-command limit)
+  "checkGateTimeoutMs": 2700000  // optional: whole check gate deadline in ms — every check of one run, retries included (default 45 min; 0 = off)
 }
 ```
 

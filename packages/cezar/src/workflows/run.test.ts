@@ -20,6 +20,7 @@ import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
 import { appendTurnText, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
+import { mockAgentWithRealChecks } from './mock-agent.testkit.ts';
 import type { WorkflowDef } from './types.ts';
 
 type UsageAccountingHarness = {
@@ -878,11 +879,15 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
   let store: RunStore;
   let manager: RunManager;
   const savedEnv: Record<string, string | undefined> = {};
+  // The `verify` check is a REAL command: the run only proves the lone agent
+  // step got no chain note if the workflow runs to its end. A dry run spawns
+  // nothing for a check (#landing-check S1), so the agent is mocked through the
+  // binary instead — see `mock-agent.testkit.ts`.
+  let restoreMockAgent: () => void = () => undefined;
 
   beforeAll(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-410-single-'));
-    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
-    process.env.CEZ_DRY_RUN = '1';
+    restoreMockAgent = mockAgentWithRealChecks();
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
@@ -893,6 +898,7 @@ describe('a single agent step plus a check step gets NO chain note (#410)', () =
 
   afterAll(() => {
     manager.dispose(); // see DISPOSE at the top of this file
+    restoreMockAgent();
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -1273,6 +1279,10 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
   let manager: RunManager;
   let currentId: string | undefined;
   const savedEnv: Record<string, string | undefined> = {};
+  // `verify` is a REAL check step — the tests below prove the workflow either
+  // stopped before it or ran through it, and a dry run spawns nothing for a
+  // check (#landing-check S1). Hence the mock binary, not CEZ_DRY_RUN.
+  let restoreMockAgent: () => void = () => undefined;
   const SINGLE_STEP: WorkflowDef = {
     name: 'quick-task',
     source: 'built-in',
@@ -1302,8 +1312,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
 
   beforeEach(async () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-473-'));
-    savedEnv.CEZ_DRY_RUN = process.env.CEZ_DRY_RUN;
-    process.env.CEZ_DRY_RUN = '1';
+    restoreMockAgent = mockAgentWithRealChecks();
     await run('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
     writeFileSync(join(repoRoot, 'a.txt'), 'one\n');
     await run('git', ['add', '-A'], { cwd: repoRoot });
@@ -1316,6 +1325,7 @@ describe('CEZ:ASK parks as waiting and emits ask.requested (#473)', () => {
   afterEach(() => {
     if (currentId) manager.cancel(currentId);
     manager.dispose(); // see DISPOSE at the top of this file — after the cancel it enables
+    restoreMockAgent();
     for (const [key, value] of Object.entries(savedEnv)) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
