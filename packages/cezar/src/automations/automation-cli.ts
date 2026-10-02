@@ -4,8 +4,9 @@
  *
  * A thin HTTP client over the automations family, addressed like `cez task` is: `CEZ_API_URL`
  * (the cockpit) and `CEZ_PROJECT_ID` (which project the run belongs to), both put in every agent's
- * environment by the engine while the cockpit is reachable. No server: the command says so and
- * exits 2. Automations off on the cockpit (`CEZ_AUTOMATIONS` unset): every route answers 409 with
+ * environment by the engine while the cockpit is reachable; a person at a shell sets them by hand.
+ * No server: the command says so (`cockpit-address.ts`, worded for whoever is asking) and exits 2.
+ * Automations off on the cockpit (`CEZ_AUTOMATIONS` unset): every route answers 409 with
  * the flag's name, which this command relays verbatim and exits 1 — the agent is told to stop and
  * report, never to substitute a cron job or a polling script.
  *
@@ -16,11 +17,14 @@
 import { readFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { trackerAutomationOptionsSchema, SCHEDULE_TYPES, parseCron, scheduleLabel, type AutomationSchedule } from '@open-mercato/cezar-contract';
+import { missingCockpitMessage } from '../cockpit-address.ts';
 import { AUTOMATION_SCHEMA_REFERENCE } from './prompts.ts';
 
 export interface AutomationCliEnv {
   CEZ_API_URL?: string;
   CEZ_PROJECT_ID?: string;
+  /** Set for every agent by the engine; only read to pick who the missing-address message is for. */
+  CEZ_TASK_ID?: string;
 }
 
 export interface AutomationCliIo {
@@ -221,7 +225,11 @@ export async function runAutomationCommand(
   }
   const api = base(env);
   if (!api) {
-    io.error('cez automation: CEZ_API_URL is not set — this command only works inside a task run by a cockpit with automations on. Do not substitute a cron job, a GitHub Action or a polling script: stop and report that automations are unavailable.');
+    io.error(missingCockpitMessage({
+      command: 'cez automation',
+      example: 'cez automation list',
+      insideTask: 'this command only works inside a task run by a cockpit with automations on. Do not substitute a cron job, a GitHub Action or a polling script: stop and report that automations are unavailable.',
+    }, env));
     return 2;
   }
   const json = async (url: string, init?: RequestInit): Promise<Response> =>

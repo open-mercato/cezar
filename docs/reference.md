@@ -7,6 +7,7 @@ Everything the [README](../README.md) leaves out: the full configuration, every 
 - [Multiple projects, one cockpit](#multiple-projects-one-cockpit)
 - [Workflow format](#workflow-format)
 - [How it runs agents](#how-it-runs-agents) (environment variables, troubleshooting)
+- [Talking to a running cockpit](#talking-to-a-running-cockpit) (`cez runs`, `cez task`, `cez automation`, the HTTP API)
 - [Coding agent backends](#coding-agent-backends)
 - [Remote access (host cezar on a server)](#remote-access-host-cezar-on-a-server)
 - [Configuration](#configuration-optional)
@@ -219,8 +220,8 @@ a queue or a routing rule. Removing one changes what you see and nothing else.
 `/settings` — still answers, bound to the project cezar was started in; the
 cockpit redirects flat paths to their `/p/<boot>/…` twin, so existing bookmarks
 and bookmarklets need no change. The HTTP API is the exception: it moved to
-`/api/v1/…` (see the CHANGELOG), so a script that calls it needs the extra
-segment.
+`/api/v1/…` (see the CHANGELOG and [The HTTP API](#the-http-api)), so a script
+that calls it needs the extra segment.
 
 > **Hosted cockpit?** The folder picker is confined to the independent browse
 > root. Set `CEZ_BROWSE_ROOT` narrowly before first boot (or save it in
@@ -350,6 +351,60 @@ the disk holding the repo. `CEZ_AGENT_TMPDIR=0` turns the whole mechanism off �
 per-task directory and pre-spawn check alike — and hands agents the host
 `TMPDIR` again, which is the way out if the check itself is wrong on your
 platform.
+
+---
+
+## Talking to a running cockpit
+
+The cockpit is a local HTTP server; three CLIs and any script can talk to it
+while it runs. They find it through `CEZ_API_URL` — the address the cockpit
+printed after `cockpit →` when it started (`http://127.0.0.1:4321` unless that
+port was busy or you passed `--port`).
+
+### From a shell: `cez runs`, `cez task`, `cez automation`
+
+Inside a task, cezar sets `CEZ_API_URL`, `CEZ_PROJECT_ID` and `CEZ_TASK_ID` for
+the agent. From your own terminal, set the address yourself:
+
+```bash
+export CEZ_API_URL=http://127.0.0.1:4321
+cez runs list                       # this project's tasks, newest first
+cez runs list --status running,review --json
+cez automation list                 # automations, with state and counts
+cez task tree <run id>              # a dispatch tree
+```
+
+On a cockpit that serves several projects, add `CEZ_PROJECT_ID=<id>`
+(`cezar projects` lists the ids); without it every command addresses the
+project the cockpit was started in.
+
+`CEZ_API_URL` is never guessed. For an agent, its absence is how the cockpit
+says dispatch or automations are unavailable, and a fallback would let a task
+write to whatever cockpit owns the port. So a command run without it exits `2`
+and explains how to set it (inside a task, it tells the agent to stop and
+report instead).
+
+`cez runs` is read-only. Cancel, relaunch and archive from the cockpit, or call
+the API below.
+
+### The HTTP API
+
+- **Everything is under `/api/v1`.** The unversioned `/api/*` spelling was
+  removed on purpose and answers `404` — `GET /api/v1/runs` is right,
+  `GET /api/runs` is not.
+- **Project scope.** Every project route also answers under
+  `/api/v1/p/<projectId>/…`; the unscoped path is bound to the project the
+  cockpit was started in. Workspace-wide routes (`/api/v1/projects`,
+  `/api/v1/workspace/…`) have no scoped twin.
+- **Discovery.** `GET /api/v1/health` answers without the request-origin guard,
+  so it is the call to probe whether a cockpit is up and which version it runs.
+- **Routes and shapes.** The route inventory is section 2 of
+  [BACKWARD_COMPATIBILITY.md](../BACKWARD_COMPATIBILITY.md); every request and
+  response is a zod schema in [`packages/contract`](../packages/contract/src).
+  The common ones: `GET/POST /runs`, `GET /runs/:id`,
+  `POST /runs/:id/{cancel,messages,continue,archive}`, `GET /automations`.
+- **No built-in auth.** The cockpit binds `127.0.0.1` and trusts the machine;
+  see [Remote access](#remote-access-host-cezar-on-a-server) before exposing it.
 
 ---
 

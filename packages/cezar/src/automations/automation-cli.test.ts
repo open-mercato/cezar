@@ -190,9 +190,17 @@ describe('cez automation', () => {
     expect(await runAutomationCommand(['schema'], {}, schema.io)).toBe(0);
     expect(schema.out[0]).toBe(AUTOMATION_SCHEMA_REFERENCE);
     const none = harness([]);
-    expect(await runAutomationCommand(['list'], {}, none.io)).toBe(2);
+    expect(await runAutomationCommand(['list'], { CEZ_TASK_ID: 'run-1' }, none.io)).toBe(2);
     expect(none.err[0]).toContain('CEZ_API_URL is not set');
     expect(none.err[0]).toContain('Do not substitute a cron job');
+    expect(none.calls).toHaveLength(0);
+  });
+
+  it('outside a task, a missing address is explained to the person instead of calling it task-only (#1080)', async () => {
+    const none = harness([]);
+    expect(await runAutomationCommand(['list'], {}, none.io)).toBe(2);
+    expect(none.err[0]).toContain('CEZ_API_URL=http://127.0.0.1:4321 cez automation list');
+    expect(none.err[0]).not.toContain('only works inside a task');
     expect(none.calls).toHaveLength(0);
   });
 
