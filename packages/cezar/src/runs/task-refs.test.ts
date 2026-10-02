@@ -44,6 +44,42 @@ describe('extractTaskRefs', () => {
   });
 });
 
+describe('extractTaskRefs — GitLab (spec 2026-08-10-forge-provider-adapters)', () => {
+  it('reads the GitLab-tab templates verbatim, `!` and `#` sigils alike', () => {
+    expect(
+      extractTaskRefs('Address GitLab merge request !454: show CI status\n\nhttps://gitlab.com/group/proj/-/merge_requests/454'),
+    ).toEqual({ prNumber: 454 });
+    expect(extractTaskRefs('Address GitLab merge request #455: show CI status')).toEqual({ prNumber: 455 });
+    expect(extractTaskRefs('Address GitLab merge request !456: show CI status')).toEqual({ prNumber: 456 });
+    expect(
+      extractTaskRefs('Fix GitLab issue #432: bad titles\n\nhttps://gitlab.com/group/proj/-/issues/432'),
+    ).toEqual({ issueNumber: 432 });
+    expect(extractTaskRefs('Fix GitLab issue #433: bad titles')).toEqual({ issueNumber: 433 });
+  });
+
+  it('MR and issue URLs on any host, subgroup paths included', () => {
+    expect(extractTaskRefs('see https://gitlab.com/group/sub/proj/-/merge_requests/41 please')).toEqual({ prNumber: 41 });
+    expect(extractTaskRefs('see https://git.example.com:8443/a/b/c/-/issues/12')).toEqual({ issueNumber: 12 });
+    expect(extractTaskRefs('diff at https://gitlab.example.com/team/app/-/merge_requests/7/diffs')).toEqual({ prNumber: 7 });
+  });
+
+  it('never reads a GitHub-shaped path as GitLab, nor a one-segment project', () => {
+    // No `/-/` → not GitLab; not github.com → not GitHub. Only the tier-4 fallback is left.
+    expect(extractTaskRefs('https://gitlab.com/o/r/pull/5')).toEqual({});
+    expect(extractTaskRefs('https://gitlab.com/proj/-/merge_requests/1')).toEqual({});
+  });
+
+  it('the leftmost URL wins across both forges', () => {
+    expect(
+      extractTaskRefs('port https://gitlab.com/g/p/-/merge_requests/3 like https://github.com/o/r/pull/9'),
+    ).toEqual({ prNumber: 3 });
+  });
+
+  it('free-text "merge request N"', () => {
+    expect(extractTaskRefs('continue merge request 468')).toEqual({ prNumber: 468 });
+  });
+});
+
 describe('titleRefNumber', () => {
   it('prefers pr, then issue, then ambiguous', () => {
     expect(titleRefNumber({ prNumber: 1, issueNumber: 2, ambiguousNumber: 3 })).toBe(1);

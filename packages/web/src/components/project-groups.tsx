@@ -23,7 +23,7 @@ import { useHealth, usePinRun, useProjectRuns } from '@/api/queries'
 import type { ProjectListEntry, RunRecord } from '@open-mercato/cezar-api-client'
 import { useSidebarNavigate } from '@/components/app-shell'
 import { useListView } from '@/components/list-view'
-import { activeNavPath, visibleNavItems } from '@/components/nav-items'
+import { activeNavPath, resolveForgeNavItems, visibleNavItems } from '@/components/nav-items'
 import { ReferenceStatusProvider } from '@/components/reference-status'
 import { QuickListBuckets } from '@/components/task-quick-list'
 import { toast } from '@/components/ui/toaster'
@@ -638,12 +638,15 @@ function ProjectGroup({
                 group offers a GitHub tab — the boot folder's health-level forge answer says
                 nothing about the other projects in the workspace. Whether `gh` itself works
                 still surfaces inside the tab as its availability hint. */}
-            {visibleNavItems({
-              forge: project.forge === 'github',
-              inbox: inboxAvailable,
-              automations: automationsAvailable,
-              tracker: project.tracker,
-            }).map((item) => {
+            {resolveForgeNavItems(
+              visibleNavItems({
+                forge: project.forge !== undefined,
+                inbox: inboxAvailable,
+                automations: automationsAvailable,
+                tracker: project.tracker,
+              }),
+              project.forge,
+            ).map((item) => {
               // Only the active group can own the current URL: the flat route map is
               // project-agnostic, so `/git` lights Git in exactly one project — the scoped one.
               const isActive = active && item.to === activeTo
@@ -687,7 +690,13 @@ function ProjectGroup({
 
           {/* This group's own project, explicitly: a collapsed sidebar can show six projects at
               once, and #42 means a different pull request in each of them. */}
-          <ReferenceStatusProvider projectId={project.id} requests={referenceRequests}>
+          <ReferenceStatusProvider
+            projectId={project.id}
+            // Its own forge too, for the same reason (Step 5.10): a sidebar showing a GitHub and
+            // a GitLab project must not tell both chips that GitHub is unreachable.
+            forge={project.forge}
+            requests={referenceRequests}
+          >
             <QuickListBuckets
               buckets={buckets}
               currentRunId={active ? currentRunId : null}

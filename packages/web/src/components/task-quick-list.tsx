@@ -625,6 +625,8 @@ export function TaskQuickListContainer() {
   // empty state would claim "No tasks yet" before we know whether there are any.
   if (!runs.data) return null
 
+  // No `forge` on the provider: this list is the ACTIVE project's, whose forge the shell's
+  // `ReferenceForgeScope` already names (Step 5.10). The per-project sidebar groups name theirs.
   return (
     <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
       <TaskQuickList

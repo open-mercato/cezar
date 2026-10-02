@@ -243,6 +243,21 @@ const GH_ALLOW_NAMES: ReadonlySet<string> = upperSet([
   'GH_CONFIG_DIR',
 ]);
 
+/** `glab` handoff (GitLab draft merge requests, clone) for the same reason as
+ *  `GH_ALLOW_NAMES` above (spec 2026-08-10-forge-provider-adapters, Step 4.3):
+ *  a PAT, the self-managed instance's host/API host for `glab`'s own auth
+ *  resolution, and its config dir. Kept as its own set rather than folded into
+ *  `GH_ALLOW_NAMES` — the two forges' env vars are unrelated names, and a
+ *  future forge-specific gate (dropping GH_* on a GitLab-only project, say)
+ *  would need them separable. */
+const GLAB_ALLOW_NAMES: ReadonlySet<string> = upperSet([
+  'GITLAB_TOKEN',
+  'GITLAB_HOST',
+  'GLAB_CONFIG_DIR',
+  'GITLAB_URI',
+  'GITLAB_API_HOST',
+]);
+
 /**
  * Claude Code can be pointed at Bedrock or Vertex instead of the Anthropic API
  * by `CLAUDE_CODE_USE_BEDROCK=1` / `CLAUDE_CODE_USE_VERTEX=1`. Those toggles
@@ -366,11 +381,12 @@ export function buildChildEnv(opts: BuildChildEnvOptions): NodeJS.ProcessEnv {
     const key = name.toUpperCase();
     // cezar's own namespace (CEZ_DRY_RUN plumbing, mock hooks, run wiring).
     if (key.startsWith('CEZ_')) return true;
-    // Backend auth + gh handoff + the cloud creds an active Bedrock/Vertex
+    // Backend auth + gh/glab handoff + the cloud creds an active Bedrock/Vertex
     // toggle needs: forwarded even though they are secrets — the backend cannot
     // authenticate without them. They are still redacted before anything
     // reaches the on-disk NDJSON (see secret-redaction.ts).
     if (GH_ALLOW_NAMES.has(key)) return true;
+    if (GLAB_ALLOW_NAMES.has(key)) return true;
     if (matchesPrefix(key, backendPrefixes)) return true;
     if (cloudNames.has(key) || matchesPrefix(key, cloudPrefixes)) return true;
     // Explicit opt-in passthrough.

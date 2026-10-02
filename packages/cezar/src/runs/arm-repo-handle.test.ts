@@ -1,15 +1,25 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// `vi.hoisted` so the mock fn exists before the hoisted `vi.mock` factory closes over it.
+// `vi.hoisted` so the mock fns exist before the hoisted `vi.mock` factories close over them.
 const resolveRepoHandleMock = vi.hoisted(() => vi.fn());
+const getRepoInfoMock = vi.hoisted(() => vi.fn());
 // The forge module shells out to `gh`. Mocking it is the whole point of this file: what is under
 // test is the WRAPPER's contract — background, never throwing — not the lookup itself, which has
 // its own coverage in `server/forge/github.test.ts`.
-vi.mock('../server/forge/github.ts', () => ({
+// Partial: `forge/gitlab.ts` imports real constants from this module (its checks budget), and a
+// bare factory would make those `undefined` for every importer in the same graph.
+vi.mock('../server/forge/github.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../server/forge/github.ts')>()),
   resolveRepoHandle: (...args: unknown[]) => resolveRepoHandleMock(...args),
+}));
+// The remote read is a `git` spawn for the same reason — the classification it feeds
+// (`forgeKindOfRemote`, `parseRemote`) is REAL here, because that mapping is the fix under test.
+vi.mock('../server/git.ts', () => ({
+  getRepoInfo: (...args: unknown[]) => getRepoInfoMock(...args),
 }));
 
 import { armRepoHandle } from './arm-repo-handle.ts';
+import { __setForgeHostsForTests } from '../server/forge/index.ts';
 
 import type { RunStore } from './store.ts';
 
@@ -21,6 +31,16 @@ import type { RunStore } from './store.ts';
  * never fail the boot."
  */
 describe('armRepoHandle (#945)', () => {
+  beforeEach(() => {
+    // No remote by default: an unclassified root takes the `gh` route, exactly as before.
+    getRepoInfoMock.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    __setForgeHostsForTests(null);
+    vi.clearAllMocks();
+  });
+
   /** Just enough store to observe the one call this module makes. */
   const fakeStore = () => {
     const setRepoHandle = vi.fn();
@@ -78,5 +98,74 @@ describe('armRepoHandle (#945)', () => {
     release({ owner: 'open-mercato', name: 'cezar' });
     await settle();
     expect(setRepoHandle).toHaveBeenCalledWith({ owner: 'open-mercato', name: 'cezar' });
+  });
+
+  /**
+   * Step 4.4-review-fix-2. `resolveRepoHandle` shells `gh repo view`, which never answers on a
+   * GitLab project — so the store stayed handle-less there and `isRepoScopedRef` degraded to
+   * "adopt anything", the exact defect #945 fixed for GitHub. A GitLab handle comes from the
+   * remote instead, as the whole project path split at its last separator.
+   */
+  describe('on a GitLab project the handle comes from the remote', () => {
+    it('arms the whole subgroup path, and never asks `gh` about it', async () => {
+      getRepoInfoMock.mockResolvedValue({ root: '/repo', branch: 'main', remote: 'git@gitlab.com:group/sub/proj.git' });
+      const { store, setRepoHandle } = fakeStore();
+
+      armRepoHandle(store, '/repo');
+      await settle();
+
+      // `{owner, name}` rejoins to `group/sub/proj` — what `refUrlRepo` reads out of an MR URL,
+      // and `host` scopes that path to this instance (Step 5.9).
+      expect(setRepoHandle).toHaveBeenCalledWith({ owner: 'group/sub', name: 'proj', host: 'gitlab.com' });
+      expect(resolveRepoHandleMock).not.toHaveBeenCalled();
+    });
+
+    it('arms a self-managed instance the same way, port and http scheme included', async () => {
+      // Only the discovery cache can classify an on-prem host — the same map `resolveForge` reads.
+      __setForgeHostsForTests({ 'gitlab.acme.internal': 'gitlab' });
+      getRepoInfoMock.mockResolvedValue({
+        root: '/repo',
+        branch: 'main',
+        remote: 'http://gitlab.acme.internal:8929/group/repo.git',
+      });
+      const { store, setRepoHandle } = fakeStore();
+
+      armRepoHandle(store, '/repo');
+      await settle();
+
+      // The host is the instance's hostname, port-free — `parseRemote` keeps the port in `origin`
+      // alone, and `isRepoScopedRef` compares hostnames (Step 5.9).
+      expect(setRepoHandle).toHaveBeenCalledWith({
+        owner: 'group',
+        name: 'repo',
+        host: 'gitlab.acme.internal',
+      });
+    });
+
+    it('leaves a GitHub project on `gh repo view` — renames and redirects still resolve', async () => {
+      getRepoInfoMock.mockResolvedValue({ root: '/repo', branch: 'main', remote: 'git@github.com:open-mercato/cezar.git' });
+      resolveRepoHandleMock.mockResolvedValue({ owner: 'open-mercato', name: 'cezar' });
+      const { store, setRepoHandle } = fakeStore();
+
+      armRepoHandle(store, '/repo');
+      await settle();
+
+      expect(resolveRepoHandleMock).toHaveBeenCalledWith('/repo');
+      // No `host` on a `gh`-resolved handle — the GitHub comparison stays path-only (Step 5.9).
+      expect(setRepoHandle).toHaveBeenCalledWith({ owner: 'open-mercato', name: 'cezar' });
+    });
+
+    it('falls back to `gh` for a host nothing has classified yet', async () => {
+      // A GitHub Enterprise host before discovery warms: unknown kind, so nothing changes.
+      getRepoInfoMock.mockResolvedValue({ root: '/repo', branch: 'main', remote: 'git@ghe.corp.example:team/app.git' });
+      resolveRepoHandleMock.mockResolvedValue(null);
+      const { store, setRepoHandle } = fakeStore();
+
+      armRepoHandle(store, '/repo');
+      await settle();
+
+      expect(resolveRepoHandleMock).toHaveBeenCalledWith('/repo');
+      expect(setRepoHandle).toHaveBeenCalledWith(null);
+    });
   });
 });

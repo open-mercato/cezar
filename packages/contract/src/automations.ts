@@ -282,8 +282,11 @@ export type AutomationListEntry = z.infer<typeof automationListEntrySchema>;
 /**
  * `GET /automations` — the whole page in one read.
  *
- * `available`/`reason` are the forge's own cached availability (the same degrade `/github` uses:
- * no GitHub remote, no `gh`, offline — never a 5xx), and `scheduler` summarizes the timer:
+ * `available`/`reason` answer "can GITHUB-EVENT automations run here" — the GitHub forge's own
+ * cached availability (the same degrade `/github` uses: no GitHub remote, no `gh`, offline —
+ * never a 5xx), and `false` outright on a project whose forge is not a GitHub one (spec
+ * 2026-08-10-forge-provider-adapters Step 4.6). Schedule automations need no forge and are
+ * unaffected. `scheduler` summarizes the timer:
  * `scheduled` when any definition is enabled, `idle` otherwise, with `nextDue` the earliest
  * pending check across them.
  */

@@ -807,6 +807,42 @@ describe('global tasks page', () => {
     })
   })
 
+  // Step 5.10: this page paints rows from several projects at once, so a chip's tooltip names
+  // the forge of the project ITS row belongs to — one provider, a forge per chip.
+  it('names each row’s own forge in its chip panel', async () => {
+    stubFetch({
+      projects: PROJECTS.map((project) =>
+        project.id === 'api'
+          ? { ...project, forge: 'gitlab' as const, repoUrl: 'https://gitlab.com/acme/api' }
+          : project,
+      ),
+      runs: [
+        {
+          ...RUNS[0]!,
+          pullRequestUrl: 'https://gitlab.com/acme/api/-/merge_requests/42',
+          referencedPullRequestUrl: undefined,
+          referencedIssueUrl: undefined,
+          markerRefs: undefined,
+        },
+        RUNS[1]!,
+      ],
+      // Answered, available, and neither number is in the map — the "not found here" sentence,
+      // which is one of the three that used to hard-code GitHub.
+      refStatus: { api: { prs: {}, issues: {} }, web: { prs: {}, issues: {} } },
+    })
+    renderPage()
+    await screen.findByText('Add checkout endpoint')
+
+    const panelText = () =>
+      document.querySelector('[data-slot="reference-status-card"]')?.textContent ?? ''
+    fireEvent.focus(document.querySelector('[data-run-id="a1"] [data-slot="pr-chip"]')!)
+    await waitFor(() => expect(panelText()).toContain('GitLab has no such number here'))
+
+    fireEvent.blur(document.querySelector('[data-run-id="a1"] [data-slot="pr-chip"]')!)
+    fireEvent.focus(document.querySelector('[data-run-id="w1"] [data-slot="issue-chip"]')!)
+    await waitFor(() => expect(panelText()).toContain('GitHub has no such number here'))
+  })
+
   it('leaves every chip neutral when the forge cannot be reached', async () => {
     // "We could not ask" must never be paintable as "nothing is wrong".
     stubFetch()

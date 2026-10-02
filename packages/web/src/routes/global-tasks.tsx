@@ -22,7 +22,7 @@ import {
   useRunsIndex,
   workspaceQueryKeys,
 } from '@/api/queries'
-import type { ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
+import type { ForgeKind, ProjectListEntry, RunIndexEntry, RunsIndexResponse } from '@open-mercato/cezar-api-client'
 import { dispatchKindLabel, subtaskLabel, taskTreeRows, type TaskTreeInput } from '@/lib/task-tree'
 import { CenteredState } from '@/components/centered-state'
 import { FacetFilter, SegmentedControl, ToggleChip } from '@/components/facet-filter'
@@ -342,7 +342,7 @@ export function GlobalTasksRoute() {
   const referenceRequests = React.useMemo(
     () =>
       visible.flatMap((task) =>
-        taskReferences(task.run, task.project?.repoUrl).map((reference) => ({
+        taskReferences(task.run, task.project?.repoUrl, task.project?.forge).map((reference) => ({
           projectId: task.run.projectId,
           kind: reference.kind,
           number: reference.number,
@@ -830,7 +830,9 @@ function TaskRow({
   // The project's own repo root is what makes a reference known only by NUMBER clickable. A
   // project-scoped view can use the one repo it is standing in; this page has a different repo
   // per row, which is why the registry entry carries `repoUrl`.
-  const references = taskReferences(run, task.project?.repoUrl)
+  // `forge ?? null` reaches the chips below as an explicit "this row's project has no forge", so
+  // a chip names GitHub rather than inheriting the scoped project's forge from the shell (5.10).
+  const references = taskReferences(run, task.project?.repoUrl, task.project?.forge)
   const subtasks = subtaskLabel(childCount)
   // The SAME live/peak rule the per-project table applies. The live sample rides the index row
   // itself (`run.usage`, attached server-side per poll) rather than the run event stream, which
@@ -931,7 +933,7 @@ function TaskRow({
       </td>
       <td className={TD_BASE}>
         {references.length > 0 ? (
-          <ReferenceChips references={references} run={run} />
+          <ReferenceChips references={references} run={run} forge={task.project?.forge ?? null} />
         ) : (
           <Dash />
         )}
@@ -1068,9 +1070,14 @@ function ArchiveToggle({
 function ReferenceChips({
   references,
   run,
+  forge,
 }: {
   references: readonly TaskReference[]
   run: RunIndexEntry
+  /** The row's OWN project forge (Step 5.10) — this list paints rows from several projects at
+   *  once, so the scoped project's kind (which the shell provides everywhere else) would name
+   *  the wrong forge on most of them. `null` = this project has none, which reads as GitHub. */
+  forge?: ForgeKind | null
 }) {
   const shown = references.slice(0, MAX_VISIBLE_REFERENCES)
   const hidden = references.length - shown.length
@@ -1086,8 +1093,10 @@ function ReferenceChips({
           reference={reference}
           taskTitle={title}
           // Named per chip HERE and nowhere else: this page's rows come from different projects,
-          // and two of them may each have a #42.
+          // and two of them may each have a #42. Same reason for the forge: the tooltip must name
+          // the forge THIS row lives on.
           projectId={run.projectId}
+          forge={forge}
           // Same panel, same button, same prompt as the task's own page. The run record it needs
           // is fetched by the action itself, and only once the panel is open — this page's index
           // row is deliberately too slim to answer whether the task can be reopened.
@@ -1107,6 +1116,7 @@ function ReferenceChips({
           taskTitle={title}
           hidden={hidden}
           projectId={run.projectId}
+          forge={forge}
         />
       ) : null}
     </span>
@@ -1136,11 +1146,13 @@ function ReferenceOverflow({
   taskTitle,
   hidden,
   projectId,
+  forge,
 }: {
   references: readonly TaskReference[]
   taskTitle: string
   hidden: number
   projectId: string
+  forge?: ForgeKind | null
 }) {
   const [open, setOpen] = React.useState(false)
   // How it was opened decides whether focus moves into the list. A CLICK should hand the keyboard
@@ -1212,6 +1224,7 @@ function ReferenceOverflow({
               reference={reference}
               taskTitle={taskTitle}
               projectId={projectId}
+              forge={forge}
             />
           ))}
         </span>

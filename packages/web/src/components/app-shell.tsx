@@ -1,6 +1,7 @@
 import {
   FolderIcon,
   FolderOpenIcon,
+  GitForkIcon,
   LayersIcon,
   LayoutDashboardIcon,
   MenuIcon,
@@ -13,11 +14,11 @@ import * as React from 'react'
 import type { ReactNode } from 'react'
 import { Link as RouterLink, NavLink, matchPath, useLocation } from 'react-router'
 
+import type { ForgeKind, TrackerKind } from '@open-mercato/cezar-api-client'
 import { TRACKER_PROVIDERS } from '@/lib/tracker-providers'
 import { AddProjectDialog } from '@/components/add-project-dialog'
 import { CloneProjectDialog } from '@/components/clone-project-dialog'
 import { openCommandPalette } from '@/components/command-palette'
-import { GithubIcon } from '@/components/icons'
 import { commandShortcutHint } from '@/lib/use-command-shortcut'
 import { Link, stripProjectPrefix } from '@/lib/project-router'
 import { CEZAR_REPO_URL, formatStarCount } from '@/lib/star-promo'
@@ -34,8 +35,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
-import { activeNavItem, activeNavPath, visibleNavItems, type NavItem } from '@/components/nav-items'
-import type { TrackerKind } from '@open-mercato/cezar-api-client'
+import {
+  activeNavItem,
+  activeNavPath,
+  resolveForgeNavItem,
+  resolveForgeNavItems,
+  visibleNavItems,
+  type NavItem,
+} from '@/components/nav-items'
 import {
   DEFAULT_SIDEBAR_WIDTH,
   MAX_SIDEBAR_WIDTH,
@@ -91,6 +98,10 @@ export type AppShellProps = {
    *  Defaults to shown so the presentational shell stays renderable alone; the container
    *  passes the health payload's truth. */
   forgeAvailable?: boolean
+  /** Which forge the GitHub nav item's label/icon come from (`health.forge?.kind`, spec
+   *  2026-08-10-forge-provider-adapters, Step 3.8) — `undefined` (health not loaded yet, or an
+   *  older server) reads as GitHub, today's text. See `resolveForgeNavItem`. */
+  forgeKind?: ForgeKind
   /** Inbox gating (#471): `false` drops the Inbox nav item and its badge — the global inbox is
    *  opt-in via `CEZ_FOLLOWUPS=1`. Defaults to shown for the same reason as `forgeAvailable`. */
   inboxAvailable?: boolean
@@ -184,6 +195,7 @@ export const AppShell = React.memo(function AppShell({
   hostWidget,
   toolsMenu,
   forgeAvailable = true,
+  forgeKind,
   inboxAvailable = true,
   automationsAvailable = true,
   tracker,
@@ -196,7 +208,10 @@ export const AppShell = React.memo(function AppShell({
   // (multi-project spec, step 3.2) so `/p/cezar/git/commits` still lights Git.
   const areaPathname = stripProjectPrefix(pathname)
   const activeTo = activeNavPath(areaPathname)
-  const currentBase = activeNavItem(areaPathname)
+  // Resolved for the forge kind even though `activeNavItem` reads the full static table
+  // regardless of `forgeAvailable`: the mobile bar must still title an unavailable GitLab tab
+  // "GitLab", the same honesty the unavailable-state page itself observes.
+  const currentBase = resolveForgeNavItem(activeNavItem(areaPathname), forgeKind)
   const current = currentBase?.to === '/tracker' && tracker
     ? { ...currentBase, label: TRACKER_PROVIDERS[tracker].label }
     : currentBase
@@ -249,8 +264,12 @@ export const AppShell = React.memo(function AppShell({
   }, [])
 
   const items = React.useMemo(
-    () => visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, tracker }),
-    [forgeAvailable, inboxAvailable, automationsAvailable, tracker],
+    () =>
+      resolveForgeNavItems(
+        visibleNavItems({ forge: forgeAvailable, inbox: inboxAvailable, automations: automationsAvailable, tracker }),
+        forgeKind,
+      ),
+    [forgeAvailable, forgeKind, inboxAvailable, automationsAvailable, tracker],
   )
 
   const nav = {
@@ -915,8 +934,8 @@ function AddProjectMenu() {
           Open local folder…
         </DropdownMenuItem>
         <DropdownMenuItem data-slot="add-project-clone" onSelect={() => setCloning(true)}>
-          <GithubIcon aria-hidden="true" />
-          Clone from GitHub…
+          <GitForkIcon aria-hidden="true" />
+          Clone from a git forge…
         </DropdownMenuItem>
       </DropdownMenuContent>
       {browsing ? <AddProjectDialog open onOpenChange={setBrowsing} /> : null}

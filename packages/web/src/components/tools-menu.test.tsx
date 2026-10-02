@@ -135,6 +135,25 @@ describe('toolsBlocker', () => {
     expect(toolsBlocker({ ...HEALTH, checks: HEALTH.checks.map(unavailableIf('gh')) })).toBeNull()
   })
 
+  /** Spec 2026-08-10-forge-provider-adapters, Step 4.3: a `glab` health check joins `checks[]`
+   *  the same way `gh` did — it never picks a runner, so it must never move the aggregate dot,
+   *  only ever show up as an optional row/tooltip entry like `gh` and `codex` already do. */
+  it('never blocks the aggregate dot when the optional glab CLI is missing', () => {
+    const health: HealthResponse = {
+      ...HEALTH,
+      checks: [
+        ...HEALTH.checks,
+        {
+          name: 'glab',
+          available: false,
+          hint: 'optional: install the GitLab CLI and run `glab auth login` (only needed for GitLab projects)',
+        },
+      ],
+    }
+    expect(toolsBlocker(health)).toBeNull()
+    expect(toolsTooltip(health)).toBe('cezar v0.1.3 · optional: codex, glab not installed')
+  })
+
   it('stays quiet when an older server never probed the default runner', () => {
     expect(toolsBlocker({ ...HEALTH, defaultRunner: 'opencode' })).toBeNull()
   })
@@ -185,6 +204,31 @@ describe('ToolsMenu', () => {
     expect(within(menu).getByText('Installed tools')).toBeTruthy()
     // Exactly the four probed tools: the mockup's illustrative `mcp` row must NOT appear.
     expect(rowsIn(menu).map((row) => row.dataset.tool)).toEqual(['claude', 'gh', 'git', 'codex'])
+  })
+
+  it('renders a missing glab check as an ordinary row — never a runner, never a blocker', async () => {
+    const health: HealthResponse = {
+      ...HEALTH,
+      checks: [
+        ...HEALTH.checks,
+        {
+          name: 'glab',
+          available: false,
+          hint: 'optional: install the GitLab CLI and run `glab auth login` (only needed for GitLab projects)',
+        },
+      ],
+    }
+    renderMenu(health)
+    const menu = await openMenu()
+
+    expect(rowsIn(menu).map((row) => row.dataset.tool)).toEqual(['claude', 'gh', 'git', 'codex', 'glab'])
+    const row = rowsIn(menu).find((el) => el.dataset.tool === 'glab') as HTMLElement
+    expect(row.dataset.available).toBe('false')
+    expect(row.querySelector('[data-slot="tool-hint"]')?.textContent).toBe(
+      'optional: install the GitLab CLI and run `glab auth login` (only needed for GitLab projects)'
+    )
+    // Missing glab is a choice not taken (like `gh`), never a reason to blocker the aggregate dot.
+    expect(triggerDot().getAttribute('data-tone')).toBe('success')
   })
 
   it('renders an available tool as dot + mono name + version, not a link', async () => {
@@ -241,31 +285,45 @@ describe('ToolsMenu', () => {
   })
 })
 
-/** The env-chips popover is where the spec's degradation table says the missing-GitHub hint
- *  lives (R6 Step 1.1) — the note must explain the hidden tab, in the server's own words. */
+/** The env-chips popover is where the spec's degradation table says the missing-forge hint
+ *  lives (R6 Step 1.1, forge-neutral since spec 2026-08-10 Step 3.8) — the note must explain
+ *  the hidden tab, in the server's own words. */
 describe('forgeNote', () => {
   it('is null while the forge works — nothing to explain', () => {
     expect(forgeNote({ ...HEALTH, forge: { kind: 'github', available: true } })).toBeNull()
   })
 
-  it('a null forge explains the hidden tab as a missing GitHub remote', () => {
-    expect(forgeNote(HEALTH)).toContain('No GitHub remote detected')
-    expect(forgeNote(HEALTH)).toContain('GitHub tab is hidden')
+  // Forge-neutral since spec 2026-08-10-forge-provider-adapters, Step 3.8: `health.forge === null`
+  // means the remote classified as neither forge, so there is no kind left to name the tab after.
+  it('a null forge explains the hidden tab as no forge remote, GitHub or GitLab', () => {
+    expect(forgeNote(HEALTH)).toContain('No GitHub or GitLab remote detected')
+    expect(forgeNote(HEALTH)).toContain('the forge tab is hidden')
   })
 
-  it('an unavailable driver carries the server reason verbatim', () => {
+  it('an unavailable GitHub driver carries the server reason verbatim, named GitHub', () => {
     const note = forgeNote({
       ...HEALTH,
       forge: { kind: 'github', available: false, reason: 'gh not logged in' },
     })
     expect(note).toContain('gh not logged in')
+    expect(note).toContain('GitHub is unreachable')
     expect(note).toContain('GitHub tab is hidden')
+  })
+
+  it('an unavailable GitLab driver carries the server reason verbatim, named GitLab', () => {
+    const note = forgeNote({
+      ...HEALTH,
+      forge: { kind: 'gitlab', available: false, reason: 'glab not logged in' },
+    })
+    expect(note).toContain('glab not logged in')
+    expect(note).toContain('GitLab is unreachable')
+    expect(note).toContain('GitLab tab is hidden')
   })
 
   it('renders in the open menu when the forge is absent, and not when it works', async () => {
     const { unmount } = renderMenu(HEALTH)
     let menu = await openMenu()
-    expect(within(menu).getByText(/No GitHub remote detected/)).toBeTruthy()
+    expect(within(menu).getByText(/No GitHub or GitLab remote detected/)).toBeTruthy()
     unmount()
 
     renderMenu({ ...HEALTH, forge: { kind: 'github', available: true } })

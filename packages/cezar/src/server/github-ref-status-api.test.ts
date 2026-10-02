@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -16,6 +17,10 @@ import { apiRequest } from './loopback-request.testkit.ts';
  * never a throw), and the payload maps only the numbers the forge actually knew about. Driven
  * through `CEZ_DRY_RUN=1`, so no `gh` is touched; the gh-shelling and degrade paths are the
  * driver's own tests.
+ *
+ * The route resolves the forge from the project's remote (spec 2026-08-10-forge-provider-adapters,
+ * Step 1.7), so the fixture repo carries a github.com origin; a remote-less one degrades in the
+ * payload.
  */
 describe('the github ref-status API', () => {
   let repoRoot: string;
@@ -34,6 +39,12 @@ describe('the github ref-status API', () => {
   beforeEach(() => {
     repoRoot = mkdtempSync(join(tmpdir(), 'cez-ghrefstatus-'));
     mkdirSync(join(repoRoot, '.ai/cezar'), { recursive: true });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoRoot });
+    // A first commit, because the forge lookup (`getRepoInfo`) needs a resolvable HEAD.
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'init'], {
+      cwd: repoRoot,
+    });
+    execFileSync('git', ['remote', 'add', 'origin', 'https://github.com/acme/demo.git'], { cwd: repoRoot });
     store = RunStore.open(join(repoRoot, '.ai/cezar'));
     app = createApp({ repoRoot, store, manager: {} as RunManager, version: '0.0.0-test' });
   });
@@ -94,5 +105,22 @@ describe('the github ref-status API', () => {
     const many = Array.from({ length: 101 }, (_, i) => i + 1).join(',');
     expect((await apiRequest(app, `/api/v1/github/ref-status?prs=${many}`)).status).toBe(400);
     expect((await apiRequest(app, `/api/v1/github/ref-status?issues=${many}`)).status).toBe(400);
+  });
+
+  it('degrades in the payload (200, never a throw) when the project has no forge remote', async () => {
+    execFileSync('git', ['remote', 'remove', 'origin'], { cwd: repoRoot });
+    const res = await apiRequest(app, '/api/v1/github/ref-status?prs=128');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      available: false,
+      reason: 'No supported forge remote detected',
+      recheckAfterMs: null,
+    });
+  });
+
+  it('still 400s a malformed query before it looks for a forge', async () => {
+    execFileSync('git', ['remote', 'remove', 'origin'], { cwd: repoRoot });
+    expect((await apiRequest(app, '/api/v1/github/ref-status?prs=12,abc')).status).toBe(400);
+    expect((await apiRequest(app, '/api/v1/github/ref-status')).status).toBe(400);
   });
 });

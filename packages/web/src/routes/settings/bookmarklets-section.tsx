@@ -1,5 +1,5 @@
 import { TriangleAlertIcon, ZapIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { useHealth, useLaunchKey, useProjects, useSkills } from '@/api/queries'
 import type { Skill } from '@open-mercato/cezar-api-client'
@@ -7,7 +7,7 @@ import { repoChipOf } from '@/components/app-shell-container'
 import { CenteredState } from '@/components/centered-state'
 import { Input } from '@/components/ui/input'
 import { toast } from '@/components/ui/toaster'
-import { bookmarkletUrl } from '@/lib/bookmarklet'
+import { bookmarkletUrl, gitlabHostsFromProjects } from '@/lib/bookmarklet'
 import { useActiveProjectId } from '@/lib/project-router'
 import { orderSkills } from '@/lib/skills'
 
@@ -87,6 +87,15 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
     projects.data?.projects.find((project) => project.id === projectId)?.name ??
     repoChipOf(health.data)?.name ??
     null
+  // GitLab hosts this workspace knows about (spec 2026-08-10-forge-provider-adapters, Step 4.5):
+  // any registered project's self-managed GitLab remote, plus gitlab.com once the workspace has
+  // a GitLab project at all (Step 5.8) — so the launcher also matches a GitLab merge-request/
+  // issue page, not only GitHub's. A GitHub-only workspace derives none, and its launchers are
+  // the pre-GitLab program byte for byte.
+  const gitlabHosts = useMemo(
+    () => gitlabHostsFromProjects(projects.data?.projects),
+    [projects.data],
+  )
   const needle = filter.trim().toLowerCase()
   const shown = skills.filter((skill) => skill.name.toLowerCase().includes(needle))
 
@@ -114,7 +123,7 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
         {/* Generic launcher: no skill, auto forced off — it only prefills the form. */}
         <BookmarkletRow
           label={repoName ? `cezar (${repoName}): this PR/issue` : 'cezar: this PR/issue'}
-          url={bookmarkletUrl('', false, key, origin, projectId)}
+          url={bookmarkletUrl('', false, key, origin, projectId, gitlabHosts)}
           hint="prefills the form — nothing starts by itself"
         />
       </div>
@@ -133,7 +142,7 @@ export function BookmarkletPanel({ skills }: { skills: readonly Skill[] }) {
             <BookmarkletRow
               key={skill.path}
               label={repoName ? `/${skill.name} (${repoName})` : `/${skill.name}`}
-              url={bookmarkletUrl(skill.name, auto, key, origin, projectId)}
+              url={bookmarkletUrl(skill.name, auto, key, origin, projectId, gitlabHosts)}
               hint={skill.source}
             />
           ))

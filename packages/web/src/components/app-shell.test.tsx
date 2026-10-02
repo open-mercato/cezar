@@ -161,6 +161,29 @@ describe('AppShell', () => {
     expect(links).toHaveLength(NAV_ITEMS.filter((item) => !item.forge && !item.tracker).length)
   })
 
+  // Spec 2026-08-10-forge-provider-adapters, Step 3.8: the forge nav item's label/icon follow
+  // `health.forge?.kind`, both in the sidebar and on the mobile bar's title (which reads the
+  // active item regardless of `forgeAvailable`, honoring the unavailable-tab honesty rule).
+  describe('forgeKind (Step 3.8)', () => {
+    it('an absent forgeKind reads as GitHub — today\'s text, unchanged', () => {
+      renderShell()
+      expect(within(nav()).getByRole('link', { name: 'GitHub' })).toBeTruthy()
+    })
+
+    it('a gitlab forgeKind renames the nav item to GitLab', () => {
+      renderShell('/', { forgeKind: 'gitlab' })
+      expect(within(nav()).queryByRole('link', { name: 'GitHub' })).toBeNull()
+      const link = within(nav()).getByRole('link', { name: 'GitLab' })
+      expect(link.getAttribute('href')).toBe('/github')
+    })
+
+    it('titles the mobile bar GitLab on the forge route, even while it is unavailable', () => {
+      renderShell('/github', { forgeKind: 'gitlab', forgeAvailable: false })
+      const bar = document.querySelector('[data-slot="mobile-top-bar"]') as HTMLElement
+      expect(within(bar).getByText('GitLab')).toBeTruthy()
+    })
+  })
+
   // #801: same degradation for the opt-in automations capability — the item disappears, it does
   // not render disabled. The two gates on that item are independent: a forge alone is not enough.
   it('drops the Automations item when the capability is off', () => {

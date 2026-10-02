@@ -91,8 +91,9 @@ import {
 } from './client'
 import { queryScope, REFERENCE_STATUS_MAX, runnerDiscoversModels } from '@open-mercato/cezar-api-client'
 import { useProjectScope } from './project-scope-context'
+import { useActiveProjectId } from '@/lib/project-router'
 import { isReferenceStatus } from '@/lib/reference-status'
-import { githubRepoBase } from '@/lib/tasks-table'
+import { forgeRepoBase, type ForgeRepoBase } from '@/lib/tasks-table'
 import { normalizeTagsForDisplay } from '@/lib/project-tags'
 import type { ContinueOptions } from './client'
 import type {
@@ -104,6 +105,7 @@ import type {
   Runner,
   PatchRunInput,
   ProviderId,
+  ForgeKind,
   OpenAgentAccountFileInput,
   ProjectListEntry,
   ProjectsResponse,
@@ -880,9 +882,9 @@ export function useHealth() {
 }
 
 /**
- * The GitHub web root (`https://github.com/owner/repo`) of the project currently on screen, or
- * undefined when it cannot be proven — the only authority `taskIssueUrl` may synthesize a link
- * against (#526).
+ * The forge web root (`https://github.com/owner/repo`, `https://gitlab.acme.internal/group/repo`)
+ * and forge kind of the project currently on screen, or undefined when it cannot be proven — the
+ * only authority `taskIssueUrl`/`taskReferences` may synthesize a link against (#526).
  *
  * The boot-project guard is the load-bearing part. `/health` is WORKSPACE-level (project-scope.ts
  * `WORKSPACE_LEVEL`): the server always builds it from `bootRoot`, so its `repo.remote` names the
@@ -891,22 +893,62 @@ export function useHealth() {
  * — the same wrong-link defect #526 exists to kill.
  *
  * The per-project remote that guard was waiting for already exists: the registry serves each
- * project's own `repoUrl` (rebuilt server-side from the parsed remote, credentials stripped), and
- * it is what All tasks builds every cross-project chip from. Reading it here is what stops the
- * SAME task from showing a linked chip on `/tasks` and inert text on its own page — which is how
- * this was found: a declared PR was a dead `#901` in the task view and a working link one screen
- * over. Health stays the fallback, and stays boot-only, so an unregistered boot folder (or a
- * registry that has not loaded yet) keeps answering exactly as before.
+ * project's own `repoUrl`+`forge` (rebuilt server-side from the parsed remote, credentials
+ * stripped), and it is what All tasks builds every cross-project chip from. Reading it here is
+ * what stops the SAME task from showing a linked chip on `/tasks` and inert text on its own page
+ * — which is how this was found: a declared PR was a dead `#901` in the task view and a working
+ * link one screen over. Health stays the fallback, and stays boot-only, so an unregistered boot
+ * folder (or a registry that has not loaded yet) keeps answering exactly as before — its kind
+ * comes from `health.forge?.kind` (Step 3.9), the boot project's own server-discovered forge.
  */
-export function useProjectRepoBase(): string | undefined {
+export function useProjectRepoBase(): ForgeRepoBase | undefined {
   const health = useHealth().data
   const projects = useProjects().data?.projects
   const { projectId } = useProjectScope()
   const scopedId = projectId ?? health?.bootProject
   const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
-  if (registered?.repoUrl) return registered.repoUrl
+  // `repoUrl` and `forge` travel together (both server-built from the same parsed remote, both
+  // omitted for a project with none) — `kind` may still be undefined for a payload predating
+  // Step 1.2's contract widening, in which case a downstream URL builder reads it as GitHub.
+  if (registered?.repoUrl) return { base: registered.repoUrl, kind: registered.forge }
   const isBootProject = projectId === null || projectId === health?.bootProject
-  return isBootProject ? githubRepoBase(health?.repo?.remote) : undefined
+  return isBootProject ? forgeRepoBase(health?.repo?.remote, health?.forge?.kind) : undefined
+}
+
+/**
+ * Which forge the project currently on screen lives on — the one authority for every bit of copy
+ * that names a forge (the tab's title and hint, the document title, the hand-off wording).
+ *
+ * Same boot-project guard, and for the same reason, as `useProjectRepoBase` above: `/health` is
+ * WORKSPACE-level, so its `forge.kind` describes the project cezar launched in whichever project
+ * the URL is scoped to. Reading it per screen labelled a GitLab project's merge requests "Pull
+ * requests", told the user to run `gh auth login` for an unreachable `glab`, and wrote "Address
+ * GitHub pull request #12" into a run's prompt for a merge request (and the mirror case, a GitLab
+ * boot project mislabelling a GitHub one). The registry already carries each project's own
+ * server-classified `forge`, exactly as it carries `repoUrl` — this reads it there.
+ *
+ * Health stays the fallback and stays boot-only (plus the window before the registry answers, in
+ * which every workspace that HAS one project is describing that one project anyway), so a
+ * single-project cockpit — and an unregistered boot folder — answers exactly as it did before.
+ * Undefined means "not proven", which every `forge-display.ts` helper reads as GitHub, today's
+ * text; see `forgeLabel`/`forgeCli`/`forgePrNoun`.
+ */
+export function useForgeKind(): ForgeKind | undefined {
+  const health = useHealth().data
+  const projects = useProjects().data?.projects
+  // The provider's id where one is mounted, else the URL prefix: the shell and the ⌘K palette —
+  // the document title, the nav label and the chips' `ReferenceForgeScope` — sit ABOVE every
+  // `ProjectScopeProvider`, so the context alone would answer the boot project on every page.
+  // `default` is the reserved boot alias, the same as no prefix.
+  const activeProjectId = useActiveProjectId()
+  const projectId = activeProjectId === 'default' ? null : activeProjectId
+  const scopedId = projectId ?? health?.bootProject
+  const registered = scopedId === undefined ? undefined : projects?.find((project) => project.id === scopedId)
+  // `forge` is omitted for a project with no forge remote, and for a registry payload predating
+  // Step 1.2's contract widening — both degrade to the health fallback below, which is boot-only.
+  if (registered?.forge) return registered.forge
+  const isBootProject = projectId === null || projectId === health?.bootProject
+  return isBootProject || projects === undefined ? health?.forge?.kind : undefined
 }
 
 /** The local "Open in…" targets (#open-in). Machine-level and stable, so it caches broadly;

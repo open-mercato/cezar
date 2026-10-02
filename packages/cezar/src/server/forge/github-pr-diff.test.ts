@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fetchPrFilePages, GH_PR_DIFF_FILE_CAP } from './github.ts';
+import { fetchPrFilePages, GH_PR_DIFF_FILE_CAP, GH_PR_DIFF_JSON_CAP, GH_PR_PATCH_CAP } from './github.ts';
+import { FORGE_PR_DIFF_FILE_CAP, FORGE_PR_DIFF_JSON_CAP, FORGE_PR_PATCH_CAP } from './limits.ts';
 
 const row = (n: number) => ({
   filename: `src/file-${n}.ts`,
@@ -27,5 +28,16 @@ describe('GitHub PR file pagination', () => {
 
   it('rejects malformed GitHub page envelopes at the boundary', async () => {
     await expect(fetchPrFilePages(async () => JSON.stringify({ files: [] }))).rejects.toThrow();
+  });
+});
+
+describe('the forge-neutral prDiff caps (spec 2026-08-10-forge-provider-adapters, Step 3.5, D4)', () => {
+  it('GH_PR_DIFF_FILE_CAP / GH_PR_PATCH_CAP / GH_PR_DIFF_JSON_CAP alias the neutral constants unchanged', () => {
+    expect(GH_PR_DIFF_FILE_CAP).toBe(FORGE_PR_DIFF_FILE_CAP);
+    expect(GH_PR_DIFF_FILE_CAP).toBe(300);
+    expect(GH_PR_PATCH_CAP).toBe(FORGE_PR_PATCH_CAP);
+    expect(GH_PR_PATCH_CAP).toBe(512 * 1024);
+    expect(GH_PR_DIFF_JSON_CAP).toBe(FORGE_PR_DIFF_JSON_CAP);
+    expect(GH_PR_DIFF_JSON_CAP).toBe(4 * 1024 * 1024);
   });
 });

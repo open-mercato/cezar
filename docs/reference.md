@@ -62,7 +62,7 @@ Five moves that make the cockpit worth the browser tab:
   worktree's disk use with per-row delete and a **Reclaim now** button.
 - 🛡️ **Review gate.** A finished run with changes waits in `review`. Read the diff,
   type notes that go straight back into the agent's session, or push a
-  `gh pr create --draft`. You stay the merge button.
+  `gh pr create --draft` (or `glab mr create --draft` on GitLab). You stay the merge button.
 - 📱 **Runs on your coding server, drives from your pocket.** The cockpit is a
   responsive web app streaming over SSE, so the box running cezar can be a
   **VPS, cloud, or dedicated server** you never sit in front of. Point a browser
@@ -82,7 +82,7 @@ One browser window, with live task updates over Server-Sent Events:
 | **All tasks** | Every *registered project's* tasks in one table, filtered and grouped by tag, project, status or workflow — see [Grouping connected repositories](#grouping-connected-repositories-tags-and-the-all-tasks-page). Appears once a second project is registered. |
 | **Inbox** | **Opt-in** (`CEZ_FOLLOWUPS=1`; hidden by default). Follow-ups an agent left behind (`todos.json`) — one click turns a suggestion into the next task, pre-wired to its suggested skill. Off, agents are never asked to leave follow-ups; each task's own **Notes** handoff journal is unaffected. |
 | **Git** | Branch, working-tree status, diff vs HEAD, recent commits (click one for its inline patch + GitHub link), and the configurable base branch that worktrees fork from and PRs target. |
-| **GitHub** | Open issues and PRs of the repo's origin, read through your logged-in `gh`. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. |
+| **GitHub / GitLab** | Open issues and PRs (or merge requests) of the repo's origin, read through your logged-in `gh` or `glab`. The tab names whichever forge the remote belongs to — gitlab.com and self-managed instances are discovered from what `glab` is authenticated against. Hand an issue straight to the agent — pick a workflow and skills, one click runs it. |
 | **Skills** | Local skills plus the team skills repo, with a rendered body + prompt preview. Refresh pulls the latest from the remote. |
 | **Workflows** | Build a chain by drag-ordering skills, save it as portable YAML, import/export, or delete. Built-ins always come back. |
 | **Settings** | Appearance (dark/light theme, accent, density), agent backends, notifications, and the skills catalog. |
@@ -128,7 +128,7 @@ and task list — and the new-task composer names the project it will run in.
 - 📂 **Open local folder…** browses from the configured browse root
   (**Settings → Projects**, default `~/`) in a folder picker and
   registers the folder you pick.
-- ⬇️ **Clone from GitHub…** clones with your logged-in `gh` into the checkout
+- ⬇️ **Clone from a git forge…** clones with your logged-in `gh` or `glab` into the checkout
   root (**Settings → Projects**, default `~/cezar/projects`) with live progress,
   then registers the clone. Close the dialog and the clone is killed and its
   partial directory removed.
@@ -312,6 +312,7 @@ Useful environment variables:
 | `CEZ_HIDE_COST=1` | Hide backend-reported monetary cost throughout the browser cockpit while leaving raw input/output token counts visible. Only the exact value `1` enables it; telemetry and API payloads are unchanged, and a restart is required after changing it. |
 | `CEZ_HIDE_TOKEN_METRICS=1` | Legacy master switch that hides both token usage and cost. It takes precedence over the two independent flags; only the exact value `1` enables it, payloads are unchanged, and a restart is required. |
 | `GITHUB_TOKEN` | Fallback for GitHub reads/PRs when `gh` isn't authenticated. |
+| `GITLAB_TOKEN`, `GITLAB_HOST` | Read by `glab` itself; cezar only forwards them to agent processes (it never stores a forge credential). |
 | `CEZ_ENV_PASSTHROUGH=A,B` | Forward these extra host env vars to spawned agents. By default agents get a least-privilege env (safe shell/toolchain vars + the backend's own auth + `GITHUB_TOKEN` + `CEZ_*`), not your full environment — use this to add a var an agent needs. |
 | `CEZ_AGENT_ENV_FULL=1` | Escape hatch: give spawned agents the full host environment (pre-hardening behavior). Off by default; only set it if you understand that this hands every host secret to the agent process. |
 | `CEZ_AGENT_TMPDIR=0` | Stop giving each task its own temp directory and hand agents the host `TMPDIR` again (pre-#785 behavior). On by default: every run gets `TMPDIR`/`TEMP`/`TMP` pointing at `.ai/cezar/tmp/<task-id>`, created and write-probed before the agent spawns and reaped when the run ends, so concurrent tasks stop sharing one directory and a task refuses to start rather than run against a temp directory that silently swallows its shell output (see Troubleshooting below). Only an exact `0` disables it, and it disables the whole thing — the pre-spawn check included, so this stays an escape hatch you can actually take. |

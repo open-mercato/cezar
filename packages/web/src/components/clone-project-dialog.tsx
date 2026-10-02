@@ -42,13 +42,14 @@ export function githubSsoUrl(error: unknown): string | null {
 }
 
 /**
- * "Add project → Clone from GitHub" (multi-project spec, "Add project" option B / step 4.3).
+ * "Add project → Clone from a git forge" (multi-project spec, "Add project" option B / step 4.3;
+ * GitLab sources since spec 2026-08-10-forge-provider-adapters Step 4.2).
  *
  * The mockup's three parts, and what each one is faithful to:
  *
- * - **The repo input** takes `owner/repo` or any GitHub URL spelling. It is NOT validated here
- *   beyond "non-empty": the server parses it with the one parser that also decides what `gh`
- *   is handed, and a second, looser copy in the browser would only disagree with it.
+ * - **The repo input** takes `owner/repo` (GitHub), any GitHub URL spelling, or a GitLab URL
+ *   (subgroups included). It is NOT validated here beyond "non-empty": the server parses it with
+ *   the one parser that also decides which CLI (`gh`/`glab`) clones it and what it is handed, and a second, looser copy in the browser would only disagree with it.
  * - **The target preview** (`<projectsDir>/<name>`) is assembled from the registry response's
  *   `projectsDir` plus the editable name. It is a preview of the server's own composition rule,
  *   which is why the name defaults to the repo half of whatever was typed.
@@ -162,9 +163,10 @@ export function CloneProjectDialog({
         className="min-w-0 max-h-[calc(100dvh-2rem)] overflow-x-hidden overflow-y-auto sm:max-w-lg"
       >
         <DialogHeader>
-          <DialogTitle>Clone from GitHub</DialogTitle>
+          <DialogTitle>Clone from a git forge</DialogTitle>
           <DialogDescription>
-            cezar clones with <code>gh</code> into your checkout root and adds the result as a project.
+            cezar clones with <code>gh</code> (GitHub) or <code>glab</code> (GitLab) into your checkout root and
+            adds the result as a project.
           </DialogDescription>
         </DialogHeader>
 
@@ -174,7 +176,7 @@ export function CloneProjectDialog({
             id="clone-url"
             data-slot="clone-url"
             autoFocus
-            placeholder="owner/repo or https://github.com/owner/repo"
+            placeholder="owner/repo, or a GitHub / GitLab URL"
             value={url}
             disabled={checkout.isPending}
             onChange={(event) => setUrl(event.target.value)}

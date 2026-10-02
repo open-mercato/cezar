@@ -14,15 +14,19 @@ export type RepoInfo = z.infer<typeof repoInfoSchema>;
 
 /** One probed CLI behind the Tools menu. */
 export const backendCheckSchema = z.object({
-  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'gh', 'git']),
+  name: z.enum(['claude', 'codex', 'opencode', 'cursor', 'pi', 'gh', 'glab', 'git']),
   available: z.boolean(),
   version: z.string().optional(),
   hint: z.string().optional(),
 });
 export type BackendCheck = z.infer<typeof backendCheckSchema>;
 
+/** The forges a project's remote can classify as (spec 2026-08-10-forge-provider-adapters). */
+export const forgeKindSchema = z.enum(['github', 'gitlab']);
+export type ForgeKind = z.infer<typeof forgeKindSchema>;
+
 export const forgeInfoSchema = z.object({
-  kind: z.literal('github'),
+  kind: forgeKindSchema,
   /**
    * Whether the forge is reachable — **absent until the availability probe has warmed**.
    *

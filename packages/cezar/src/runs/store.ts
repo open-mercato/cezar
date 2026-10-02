@@ -314,8 +314,8 @@ export const runRecordSchema = z.object({
    *  instead of re-adopting the next URL as "the only one". Capped. */
   referencedPrCandidates: z.array(z.string()).optional(),
   /** The issue this task is ABOUT (spec 2026-07-21-report-ref-discovery):
-   *  auto-discovered from `github.com/…/issues/N` links in the conversation,
-   *  mirroring the referenced-PR tier. Display-only; never gates actions. */
+   *  auto-discovered from `github.com/…/issues/N` (or GitLab `…/-/issues/N`) links in the
+   *  conversation, mirroring the referenced-PR tier. Display-only; never gates actions. */
   referencedIssueUrl: z.string().optional(),
   /** Distinct issue URLs spotted so far — the referenced-issue working set,
    *  persisted like `referencedPrCandidates`. Capped. */
@@ -400,38 +400,103 @@ export interface RunEvent {
 const MAX_RUNS_KEPT = 300;
 const MAX_ARCHIVED_KEPT = 500;
 
-const PR_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+/;
-const ISSUE_URL_RE = /https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+/;
+// GitLab's shape (spec 2026-08-10-forge-provider-adapters): `http(s)://<any host>/<path…>/-/<kind>/N`,
+// where the project path is everything before `/-/` — a subgroup path is `group/sub/project`, so
+// it needs at least two segments but has no upper bound. The host is free (gitlab.com and every
+// self-managed instance) EXCEPT github.com, so a github.com URL is only ever GitHub-shaped; and
+// the GitHub alternative stays pinned to github.com, so neither shape matches the other's URLs.
+// The GitHub alternative comes first and is the pre-GitLab pattern byte for byte.
+//
+// `https?` and the free host (which carries its own `:port`) are the on-prem case, not laxity:
+// `parseRemote` deliberately keeps an `http://` remote's scheme and port (D3), and `task-refs.ts`
+// has always scanned prompts with `https?` — so an agent printing
+// `http://gitlab.acme.internal:8929/group/repo/-/merge_requests/12` got a ref from the prompt
+// half of one run and no chip from this half of the same run.
+const GITLAB_PROJECT_URL = String.raw`https?:\/\/(?!github\.com\/)[^/\s]+(?:\/(?!-\/)[^/\s]+){2,}\/-\/`;
+const PR_URL_RE = new RegExp(
+  String.raw`https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/pull\/\d+|${GITLAB_PROJECT_URL}merge_requests\/\d+`,
+);
+// `work_items`: gitlab.com serves issues as `/-/work_items/N` now — it redirects `/-/issues/N`
+// there and `glab` reports their web_url that way (verified live, 2026-10-01).
+const ISSUE_URL_RE = new RegExp(
+  String.raw`https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/issues\/\d+|${GITLAB_PROJECT_URL}(?:issues|work_items)\/\d+`,
+);
+/** A whole GitLab ref URL, capturing its project path (`group/sub/project`) — `refUrlRepo`. */
+const GITLAB_REF_URL_RE = /^https?:\/\/(?!github\.com\/)[^/\s]+\/((?:(?!-\/)[^/\s]+\/){1,}(?!-\/)[^/\s]+)\/-\/(?:merge_requests|issues)\/\d+$/;
 // The transcript auto-link is convenience only (the cockpit's own `gh pr create` path sets the
 // URL authoritatively). Adopt a PR URL ONLY when the agent actually CREATED one — a task that
 // reviews or merely references an existing PR must not get mislabeled with its number (#fake-pr).
+// `glab mr create` is GitLab's spelling of the same claim.
 const CREATED_PR_RE =
-  /\b(?:gh\s+pr\s+create|pull\s*request\s+created|created\s+(?:a\s+)?(?:draft\s+)?(?:pr|pull\s*request)|opened\s+(?:a\s+)?(?:draft\s+)?pull\s*request)\b/i;
+  /\b(?:gh\s+pr\s+create|glab\s+mr\s+create|pull\s*request\s+created|created\s+(?:a\s+)?(?:draft\s+)?(?:pr|pull\s*request)|opened\s+(?:a\s+)?(?:draft\s+)?pull\s*request)\b/i;
 
 /** Referenced-tier working-set cap (spec 2026-07-16-pr-autodiscovery): past
  *  this many distinct PRs the conversation is a survey, not a subject. */
 const MAX_PR_CANDIDATES = 8;
 
-/** The repository a project IS, as `resolveRepoHandle` reports it. `null`/absent means "unknown",
- *  which is a real and common state (no `gh`, no remote, a non-git root) — never an error. */
-export type RepoHandle = { owner: string; name: string };
+/** The repository a project IS, as `armRepoHandle` resolves it — `gh repo view` on GitHub, the
+ *  parsed remote on GitLab. `null`/absent means "unknown", which is a real and common state (no
+ *  `gh`, no remote, a non-git root) — never an error.
+ *
+ *  A GitLab project's identity is its whole path, so its handle is that path split at the last
+ *  separator: `group/sub/proj` arms `{owner: 'group/sub', name: 'proj'}`, which the comparison
+ *  below rejoins. The two halves are never read apart, only joined.
+ *
+ *  `host` is the instance the path lives on, lowercased and WITHOUT a port (`parseRemote`'s own
+ *  `host`). It is optional (Step 5.9): `gh repo view` answers a slug and no host, so a GitHub
+ *  handle carries none and the comparison stays path-only there — pre-5.9 behavior, byte for
+ *  byte. Only in memory, never written to `runs.json` (`RunStore.repoHandle` is a private field,
+ *  re-armed on every open), so widening it needs no migration. */
+export type RepoHandle = { owner: string; name: string; host?: string };
 
-/** `https://github.com/open-mercato/cezar/pull/402` → `open-mercato/cezar`, lowercased.
- *  Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
-function refUrlRepo(url: string): string | undefined {
+/** The repository a ref URL points at: its project path, plus the instance hosting it.
+ *  The path is `open-mercato/cezar` for `https://github.com/open-mercato/cezar/pull/402` and the
+ *  whole project path for a GitLab URL — `https://gitlab.example.com/group/sub/proj/-/
+ *  merge_requests/4` → `group/sub/proj` — which is exactly what that project's own handle joins
+ *  to, and what a prompt that pastes the URL contains.
+ *  `host` is the URL's hostname, lowercased, port dropped so it is comparable with a
+ *  `RepoHandle`'s (see `isRepoScopedRef`). Undefined when the string is not parseable as a URL —
+ *  the path half is deliberately more forgiving than `new URL`, so the two are independent. */
+type RefRepo = { path: string; host?: string };
+
+/** Undefined for anything that is not a `<host>/<owner>/<repo>/<kind>/<n>` forge URL. */
+function refUrlRepo(url: string): RefRepo | undefined {
+  const host = refUrlHost(url);
+  const gitlab = GITLAB_REF_URL_RE.exec(url);
+  if (gitlab?.[1]) return { path: gitlab[1].toLowerCase(), ...(host ? { host } : {}) };
   const parts = url.split('/');
   const owner = parts[parts.length - 4];
   const name = parts[parts.length - 3];
-  return owner && name ? `${owner}/${name}`.toLowerCase() : undefined;
+  if (!owner || !name) return undefined;
+  return { path: `${owner}/${name}`.toLowerCase(), ...(host ? { host } : {}) };
+}
+
+/** The URL's hostname — `hostname`, not `host`, so the port is dropped: a `RepoHandle`'s host
+ *  never carries one (`parseRemote` keeps the port in `origin` alone) and one instance is
+ *  routinely reached on different ports by ssh, https and its own web origin. Undefined when the
+ *  string does not parse, which leaves the comparison path-only for that URL. */
+function refUrlHost(url: string): string | undefined {
+  try {
+    return new URL(url).hostname.toLowerCase() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
  * May the referenced tier ADOPT this URL as the task's subject? (#945)
  *
  * The tier was text-scoped but never repo-scoped: `PR_URL_RE` matches any
- * `github.com/<owner>/<repo>/pull/N`, so a research task that cites one upstream PR handed the
- * resolver exactly one candidate and it became the task's identity — an `oko` task wearing
+ * `github.com/<owner>/<repo>/pull/N` (and, since the GitLab adapter, any `<path>/-/merge_requests/N`),
+ * so a research task that cites one upstream PR handed the resolver exactly one candidate and it became the task's identity — an `oko` task wearing
  * `supabase/cli#6056`. Nothing compared the URL's repository with the project's own.
+ *
+ * The comparison is HOST-AWARE where the handle knows its host (Step 5.9). `GITLAB_PROJECT_URL`
+ * accepts any host, so two instances sharing a project path were indistinguishable: a task on
+ * `gitlab.com/acme/widgets` adopted `https://gitlab.internal.corp/acme/widgets/-/merge_requests/7`
+ * — a mirror's merge request, or an unrelated namespace collision — as its own subject. A handle
+ * without a host (every `gh`-resolved GitHub one, and any handle armed by an older cezar) compares
+ * on the path alone, exactly as it did before.
  *
  * A foreign URL is adoptable only when the TASK PROMPT corroborates it: the prompt names that
  * `owner/repo`, which a pasted URL does inherently. That is the trust boundary this module already
@@ -448,10 +513,14 @@ function refUrlRepo(url: string): string | undefined {
  */
 function isRepoScopedRef(url: string, task: string, handle?: RepoHandle | null): boolean {
   if (!handle) return true;
-  const repo = refUrlRepo(url);
-  if (!repo) return true;
-  if (repo === `${handle.owner}/${handle.name}`.toLowerCase()) return true;
-  return task.toLowerCase().includes(repo);
+  const ref = refUrlRepo(url);
+  if (!ref) return true;
+  // Same host (when both sides know one) AND same path — the project's own ref.
+  const sameHost = !handle.host || !ref.host || ref.host === handle.host.toLowerCase();
+  if (sameHost && ref.path === `${handle.owner}/${handle.name}`.toLowerCase()) return true;
+  // The #819 escape hatch stays path-based: a prompt that pastes the URL contains the path, and
+  // the point of the hatch is that the USER named the work, whichever instance it lives on.
+  return task.toLowerCase().includes(ref.path);
 }
 
 /**

@@ -300,3 +300,67 @@ describe('githubRunBody backend (#401)', () => {
     expect(JSON.parse(JSON.stringify(clean))).not.toHaveProperty('model')
   })
 })
+
+// Spec 2026-08-10-forge-provider-adapters: the hand-off wording follows the forge, and
+// `task-refs.ts` learned the GitLab form in the same change — the coupling both files document.
+describe('forge-aware wording', () => {
+  const glIssue = () => item({ url: 'https://gitlab.com/acme/sub/demo/-/issues/142' })
+  const glMr = () =>
+    item({ kind: 'pr', number: 77, url: 'https://gitlab.com/acme/sub/demo/-/merge_requests/77' })
+
+  it('github (explicit, null or absent) is the pre-GitLab text byte for byte', () => {
+    for (const kind of ['github', null, undefined] as const) {
+      expect(githubTaskRef(item(), kind)).toBe(githubTaskRef(item()))
+      expect(githubTaskPrompt(item(), ['om-fix'], kind)).toBe(githubTaskPrompt(item(), ['om-fix']))
+      expect(githubRunBody(item(), null, [], 'Only triage.', {}, kind)).toEqual(
+        githubRunBody(item(), null, [], 'Only triage.'),
+      )
+    }
+    expect(githubTaskRef(item({ kind: 'pr', number: 7 }), 'github')).toContain('Address GitHub pull request #7:')
+  })
+
+  it('gitlab reads "Fix GitLab issue #N" and "Address GitLab merge request !N"', () => {
+    expect(githubTaskRef(glIssue(), 'gitlab')).toBe(
+      'Fix GitLab issue #142: Login form drops session on refresh\n\n' +
+        'https://gitlab.com/acme/sub/demo/-/issues/142',
+    )
+    expect(githubTaskRef(glMr(), 'gitlab')).toBe(
+      'Address GitLab merge request !77: Login form drops session on refresh\n\n' +
+        'https://gitlab.com/acme/sub/demo/-/merge_requests/77',
+    )
+    expect(githubTaskPrompt(glIssue(), [], 'gitlab')).toContain('\n\n---\n\nRepro: log in, hit reload.')
+  })
+
+  it('gitlab bodies carry the GitLab wording on every route', () => {
+    expect(githubRunBody(glMr(), 'ship-it', ['om-fix'], undefined, {}, 'gitlab').task).toMatch(
+      /^Address GitLab merge request !77:/,
+    )
+    expect(githubRunBody(glMr(), null, ['om-fix'], undefined, {}, 'gitlab').task).toMatch(
+      /^Address GitLab merge request !77:/,
+    )
+    expect(githubRunBody(glIssue(), null, [], 'Only triage.', {}, 'gitlab').task).toBe(
+      `${githubTaskRef(glIssue(), 'gitlab')}\n\nOnly triage.`,
+    )
+  })
+
+  it('a gitlab MR counts as mentioned when worded as a merge request', () => {
+    expect(mentionsItem('rebase merge request !77', glMr(), 'gitlab')).toBe(true)
+    expect(mentionsItem('rebase merge request 77', glMr(), 'gitlab')).toBe(true)
+    expect(mentionsItem('rebase PR #77', glMr(), 'gitlab')).toBe(true)
+    expect(mentionsItem('rebase !77', glMr(), 'gitlab')).toBe(false)
+    expect(mentionsItem('rebase merge request !770', glMr(), 'gitlab')).toBe(false)
+    // GitHub keeps its old bar: "merge request" was never its wording.
+    expect(mentionsItem('rebase merge request 77', { ...glMr(), url: 'https://github.com/acme/demo/pull/77' })).toBe(false)
+    const base = githubTaskRef(glMr(), 'gitlab')
+    expect(composeGithubTask(glMr(), [], `${base}\n\nAlso add tests.`, 'gitlab')).toBe(`${base}\n\nAlso add tests.`)
+  })
+
+  it('task-refs recovers the kind and number from the GitLab wording', () => {
+    expect(extractTaskRefs(githubTaskRef(glIssue(), 'gitlab')).issueNumber).toBe(142)
+    expect(extractTaskRefs(githubTaskRef(glMr(), 'gitlab')).prNumber).toBe(77)
+    const task = composeGithubTask(glMr(), [], 'Port this one to develop', 'gitlab')
+    expect(extractTaskRefs(task).prNumber).toBe(77)
+    // Without the URL, the worded form alone must still carry the kind.
+    expect(extractTaskRefs('Address GitLab merge request !77: Login form').prNumber).toBe(77)
+  })
+})

@@ -708,12 +708,12 @@ function MetaRow({
 }) {
   // #526: the issue chip may be synthesized from the CEZ:ISSUE marker, and the only repository
   // such a link may name is the one on screen — never the transcript's.
-  const repoBase = useProjectRepoBase()
+  const { base: repoBase, kind: forgeKind } = useProjectRepoBase() ?? {}
   // At most two references here, so this is a batch of one or two rather than of a table — but it
   // goes through the same seam, which is what keeps the header's chip and the table's chip
   // answering identically for the same PR.
   const projectId = useReferenceProjectId()
-  const references = useMemo(() => taskReferences(run, repoBase), [run, repoBase])
+  const references = useMemo(() => taskReferences(run, repoBase, forgeKind), [run, repoBase, forgeKind])
   const referenceRequests = useMemo(
     () =>
       projectId === undefined
@@ -774,7 +774,7 @@ function MetaRow({
       />,
     )
   }
-  const issueUrl = taskIssueUrl(run, repoBase)
+  const issueUrl = taskIssueUrl(run, repoBase, forgeKind)
   if (issueUrl && isHttpUrl(issueUrl)) {
     const number = prNumber(issueUrl)
     parts.push(
@@ -831,8 +831,10 @@ function MetaRow({
     )
   }
 
+  // `forge` on the provider: this page stands in ONE project, so every chip inside it names that
+  // project's forge in its tooltip rather than GitHub (Step 5.10).
   return (
-    <ReferenceStatusProvider projectId={projectId} requests={referenceRequests}>
+    <ReferenceStatusProvider projectId={projectId} forge={forgeKind} requests={referenceRequests}>
       <div
         data-slot="run-meta"
         className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground md:mt-1.5 md:gap-y-1"

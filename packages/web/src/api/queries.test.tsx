@@ -1,6 +1,7 @@
 import { QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
+import { MemoryRouter } from 'react-router'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ApiError } from './client'
@@ -10,6 +11,7 @@ import { ProjectScopeContext } from './project-scope-context'
 import type { GithubRefStatusData } from '@open-mercato/cezar-api-client'
 import {
   refStatusRecheckAfter,
+  useForgeKind,
   useReferenceProjectId,
   useProjectRepoBase,
   queryKeys,
@@ -1089,8 +1091,8 @@ describe('useProjectRepoBase', () => {
   }
 
   const REGISTRY = [
-    { id: 'boot-id', name: 'boot', root: '/home/me/cezar', repoUrl: 'https://github.com/o/boot' },
-    { id: 'proj-a', name: 'a', root: '/home/me/a', repoUrl: 'https://github.com/o/a' },
+    { id: 'boot-id', name: 'boot', root: '/home/me/cezar', repoUrl: 'https://github.com/o/boot', forge: 'github' },
+    { id: 'proj-a', name: 'a', root: '/home/me/a', repoUrl: 'https://github.com/o/a', forge: 'github' },
     { id: 'proj-b', name: 'b', root: '/home/me/b' },
   ]
 
@@ -1101,7 +1103,7 @@ describe('useProjectRepoBase', () => {
     const { result } = renderHook(() => useProjectRepoBase(), {
       wrapper: mounted('proj-a', { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, REGISTRY),
     })
-    expect(result.current).toBe('https://github.com/o/a')
+    expect(result.current).toEqual({ base: 'https://github.com/o/a', kind: 'github' })
   })
 
   it('never hands a project the boot repo — #526', () => {
@@ -1117,7 +1119,113 @@ describe('useProjectRepoBase', () => {
     const { result } = renderHook(() => useProjectRepoBase(), {
       wrapper: mounted(null, { ...HEALTH, bootProject: 'boot-id', repo: { remote: 'git@github.com:o/boot.git' } }, []),
     })
-    expect(result.current).toBe('https://github.com/o/boot')
+    expect(result.current).toEqual({ base: 'https://github.com/o/boot', kind: 'github' })
+  })
+})
+
+/**
+ * Which forge the copy on screen names (spec 2026-08-10-forge-provider-adapters,
+ * Step 3.8-review-fix-2).
+ *
+ * The bug this pins is `useProjectRepoBase`'s (#526) in another costume: `/health` is
+ * workspace-level, so a GitLab project opened in a workspace booted from a GitHub one had its
+ * merge requests labelled "Pull requests" and was told to run `gh auth login`.
+ */
+describe('useForgeKind', () => {
+  const mounted = (scope: string | null, health?: unknown, projects?: unknown) => {
+    const client = createQueryClient()
+    if (health !== undefined) client.setQueryData(queryKeys.health, health)
+    if (projects !== undefined) client.setQueryData(workspaceQueryKeys.projects, { projects })
+    return function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <QueryClientProvider client={client}>
+          <MemoryRouter>
+            <ProjectScopeContext.Provider value={{ projectId: scope, apiBase: '/api/v1' }}>
+              {children}
+            </ProjectScopeContext.Provider>
+          </MemoryRouter>
+        </QueryClientProvider>
+      )
+    }
+  }
+
+  // The shell and the ⌘K palette render OUTSIDE every `ProjectScopeProvider` (the routes mount
+  // it; `AppShellContainer` wraps the routes) — the URL prefix is the only scope they have.
+  const mountedAtUrl = (pathname: string, health: unknown, projects: unknown) => {
+    const client = createQueryClient()
+    client.setQueryData(queryKeys.health, health)
+    client.setQueryData(workspaceQueryKeys.projects, { projects })
+    return function Wrapper({ children }: { children: ReactNode }) {
+      return (
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={[pathname]}>{children}</MemoryRouter>
+        </QueryClientProvider>
+      )
+    }
+  }
+
+  const REGISTRY = [
+    { id: 'boot-id', name: 'boot', root: '/home/me/cezar', repoUrl: 'https://github.com/o/boot', forge: 'github' },
+    { id: 'proj-gl', name: 'gl', root: '/home/me/gl', repoUrl: 'https://gitlab.com/g/gl', forge: 'gitlab' },
+    { id: 'proj-b', name: 'b', root: '/home/me/b' },
+  ]
+
+  const GITHUB_HEALTH = { ...HEALTH, bootProject: 'boot-id', forge: { kind: 'github', available: true } }
+  const GITLAB_HEALTH = { ...HEALTH, bootProject: 'boot-id', forge: { kind: 'gitlab', available: true } }
+
+  it('reads the VIEWED project from the registry, not the boot project health describes', () => {
+    const { result } = renderHook(() => useForgeKind(), { wrapper: mounted('proj-gl', GITHUB_HEALTH, REGISTRY) })
+    expect(result.current).toBe('gitlab')
+  })
+
+  it('answers the mirror case the same way — a GitHub project under a GitLab boot project', () => {
+    const { result } = renderHook(() => useForgeKind(), {
+      wrapper: mounted('boot-id', GITLAB_HEALTH, [
+        { id: 'boot-id', name: 'boot', root: '/home/me/cezar', repoUrl: 'https://gitlab.com/g/boot', forge: 'gitlab' },
+        { id: 'proj-gh', name: 'gh', root: '/home/me/gh', repoUrl: 'https://github.com/o/gh', forge: 'github' },
+      ]),
+    })
+    expect(result.current).toBe('gitlab')
+    const other = renderHook(() => useForgeKind(), {
+      wrapper: mounted('proj-gh', GITLAB_HEALTH, [
+        { id: 'boot-id', name: 'boot', root: '/home/me/cezar', repoUrl: 'https://gitlab.com/g/boot', forge: 'gitlab' },
+        { id: 'proj-gh', name: 'gh', root: '/home/me/gh', repoUrl: 'https://github.com/o/gh', forge: 'github' },
+      ]),
+    })
+    expect(other.result.current).toBe('github')
+  })
+
+  it('falls back to health for the boot project — an unregistered boot folder still names its forge', () => {
+    const { result } = renderHook(() => useForgeKind(), { wrapper: mounted(null, GITLAB_HEALTH, []) })
+    expect(result.current).toBe('gitlab')
+  })
+
+  it('never hands a non-boot project the boot forge — undefined reads as GitHub, not as GitLab', () => {
+    // `proj-b` has no forge remote at all; health's kind is the boot project's.
+    const { result } = renderHook(() => useForgeKind(), { wrapper: mounted('proj-b', GITLAB_HEALTH, REGISTRY) })
+    expect(result.current).toBeUndefined()
+  })
+
+  it('reads the viewed project from the URL where no scope provider is mounted (the shell, the palette)', () => {
+    const { result } = renderHook(() => useForgeKind(), { wrapper: mountedAtUrl('/p/proj-gl/github', GITHUB_HEALTH, REGISTRY) })
+    expect(result.current).toBe('gitlab')
+    const nonForge = renderHook(() => useForgeKind(), { wrapper: mountedAtUrl('/p/proj-b/tasks', GITLAB_HEALTH, REGISTRY) })
+    expect(nonForge.result.current).toBeUndefined()
+  })
+
+  it('answers for the boot project on an unprefixed page and on the reserved `default` alias', () => {
+    const global = renderHook(() => useForgeKind(), { wrapper: mountedAtUrl('/tasks', GITHUB_HEALTH, REGISTRY) })
+    expect(global.result.current).toBe('github')
+    const alias = renderHook(() => useForgeKind(), { wrapper: mountedAtUrl('/p/default/github', GITHUB_HEALTH, REGISTRY) })
+    expect(alias.result.current).toBe('github')
+  })
+
+  it('answers from health while the registry has not loaded', () => {
+    // No registry entry to read yet — health is all there is, and in the one-project workspace
+    // that is the overwhelmingly common case it is describing this very project.
+    fetchMock.mockReturnValue(new Promise<Response>(() => {}))
+    const { result } = renderHook(() => useForgeKind(), { wrapper: mounted('proj-gl', GITLAB_HEALTH) })
+    expect(result.current).toBe('gitlab')
   })
 })
 

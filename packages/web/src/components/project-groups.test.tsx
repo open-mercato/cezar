@@ -225,6 +225,27 @@ describe('ProjectGroups', () => {
     expect(within(plainNav).queryByRole('link', { name: 'GitHub' })).toBeNull()
   })
 
+  it("keeps the forge tab for a project whose remote classifies as gitlab, labeled GitLab (spec 2026-08-10-forge-provider-adapters, Step 3.8)", async () => {
+    // The gate is "has a forge", not "is GitHub": a GitLab project keeps the forge nav item
+    // alongside a GitHub one — and since Step 3.8 it reads its OWN kind's label, not the other
+    // group's, because each group resolves `project.forge` independently.
+    storeCollapsed({ lab: false })
+    serve({
+      '/api/v1/p/cezar/runs': [],
+      '/api/v1/p/lab/runs': [],
+    })
+    renderGroups([
+      project(),
+      project({ id: 'lab', name: 'lab', forge: 'gitlab', lastOpenedAt: '2026-07-19T00:00:00.000Z' }),
+    ])
+
+    await waitFor(() => expect(disclosure('lab').getAttribute('aria-expanded')).toBe('true'))
+    const cezarNav = within(group('cezar')).getByRole('navigation', { name: 'cezar navigation' })
+    expect(within(cezarNav).getByRole('link', { name: 'GitHub' }).getAttribute('href')).toBe('/p/cezar/github')
+    const labNav = within(group('lab')).getByRole('navigation', { name: 'lab navigation' })
+    expect(within(labNav).getByRole('link', { name: 'GitLab' }).getAttribute('href')).toBe('/p/lab/github')
+  })
+
   // #801: every group reads ONE workspace capability, so no group can offer Automations while
   // another hides it — and with the opt-in off, none of them offers it at all.
   it("gates every group's Automations tab on the workspace capability (#801)", async () => {

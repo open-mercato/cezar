@@ -1,4 +1,4 @@
-import type { CreateRunInput, GithubItem, WorkflowStepDef } from '@open-mercato/cezar-api-client'
+import type { CreateRunInput, ForgeKind, GithubItem, WorkflowStepDef } from '@open-mercato/cezar-api-client'
 
 /**
  * The GitHub tab's hand-to-agent contract, ported verbatim from the legacy tab
@@ -17,10 +17,17 @@ export const MAX_CHAIN_STEPS = 8
  * (`src/runs/task-refs.ts`) has no `#N` or URL to recover the run's PR/issue attribution from.
  *
  * The wording is load-bearing, not decorative: `task-refs.ts`'s tier-2 patterns were written to
- * match "Address GitHub pull request #N" / "Fix GitHub issue #N" verbatim. Rewording this without
- * updating those regexes silently costs every run its PR/issue chip and its `#N` title prefix.
+ * match "Address GitHub pull request #N" / "Fix GitHub issue #N" verbatim — and, on a GitLab
+ * project (`forgeKind === 'gitlab'`, spec 2026-08-10-forge-provider-adapters), "Address GitLab
+ * merge request !N" / "Fix GitLab issue #N", `!` being GitLab's MR sigil. Rewording any of these
+ * without updating those regexes silently costs every run its PR/issue chip and its `#N` title
+ * prefix. An absent or unrecognized kind reads as GitHub — the pre-GitLab text, byte for byte.
  */
-export function githubTaskRef(item: GithubItem): string {
+export function githubTaskRef(item: GithubItem, forgeKind?: ForgeKind | null): string {
+  if (forgeKind === 'gitlab') {
+    const ref = item.kind === 'pr' ? `Address GitLab merge request !${item.number}` : `Fix GitLab issue #${item.number}`
+    return `${ref}: ${item.title}\n\n${item.url}`
+  }
   return `${item.kind === 'pr' ? 'Address GitHub pull request' : 'Fix GitHub issue'} #${item.number}: ${item.title}\n\n${item.url}`
 }
 
@@ -34,8 +41,12 @@ export function githubTaskRef(item: GithubItem): string {
  * `githubTaskRef` alone, per #524: a wall of quoted issue body is unreadable in a textarea the
  * user is meant to edit, and the agent can read the item itself from the URL.
  */
-export function githubTaskPrompt(item: GithubItem, skillNames: readonly string[] = []): string {
-  let task = githubTaskRef(item)
+export function githubTaskPrompt(
+  item: GithubItem,
+  skillNames: readonly string[] = [],
+  forgeKind?: ForgeKind | null,
+): string {
+  let task = githubTaskRef(item, forgeKind)
   if (item.body?.trim()) task += `\n\n---\n\n${item.body.trim()}`
   if (skillNames.length) task += skillsHint(skillNames)
   return task
@@ -74,9 +85,18 @@ export function applyItemTokens(text: string, item: GithubItem): string {
  *
  * `\b` after the digits keeps `#142` from being satisfied by `#1420` (digits are word characters,
  * so there is no boundary between "142" and "0").
+ *
+ * On a GitLab project a PR may also be worded "merge request 142" / "merge request !142" — the
+ * form `githubTaskRef` writes there, and one `task-refs.ts` keys on. GitHub keeps the old pattern.
  */
-export function mentionsItem(text: string, item: GithubItem): boolean {
+export function mentionsItem(text: string, item: GithubItem, forgeKind?: ForgeKind | null): boolean {
   if (text.includes(item.url)) return true
+  if (item.kind === 'pr' && forgeKind === 'gitlab') {
+    return new RegExp(
+      String.raw`\b(?:(?:pull\s+request|pr)\s*#?|merge\s+request\s*[#!]?)\s*${item.number}\b`,
+      'i',
+    ).test(text)
+  }
   const worded =
     item.kind === 'pr'
       ? String.raw`(?:pull\s+request|pr)`
@@ -100,17 +120,18 @@ export function composeGithubTask(
   item: GithubItem,
   skillNames: readonly string[],
   customPrompt?: string,
+  forgeKind?: ForgeKind | null,
 ): string {
   const raw = (customPrompt ?? '').trim()
-  if (!raw) return githubTaskPrompt(item, skillNames)
-  const ref = githubTaskRef(item)
+  if (!raw) return githubTaskPrompt(item, skillNames, forgeKind)
+  const ref = githubTaskRef(item, forgeKind)
   // Substitute tokens only in what the USER contributed. The box is pre-filled with `ref`, which
   // embeds `item.title` — and a title may itself contain a token ("Support {{url}} in prompt
   // templates"), which would otherwise be rewritten inside our own reference block.
   const custom = raw.startsWith(ref)
     ? ref + applyItemTokens(raw.slice(ref.length), item)
     : applyItemTokens(raw, item)
-  const task = mentionsItem(custom, item) ? custom : `${ref}\n\n${custom}`
+  const task = mentionsItem(custom, item, forgeKind) ? custom : `${ref}\n\n${custom}`
   return skillNames.length ? task + skillsHint(skillNames) : task
 }
 
@@ -139,6 +160,8 @@ export function skillChainSteps(names: readonly string[]): WorkflowStepDef[] {
  * `engineRunBody(useResolvedEngine(…))` from components/engine-pills. It arrives pre-shaped rather
  * than raw on purpose: the omit rules are subtle enough to be worth having in exactly one place,
  * and this stays a pure body builder. Omit it and the body is the pre-#401 one.
+ *
+ * `forgeKind` picks the task wording (`githubTaskRef`); omitted, it is GitHub's.
  */
 export function githubRunBody(
   item: GithubItem,
@@ -146,17 +169,18 @@ export function githubRunBody(
   skills: readonly string[],
   customPrompt?: string,
   backend: Pick<CreateRunInput, 'model' | 'runner' | 'agentProfile'> = {},
+  forgeKind?: ForgeKind | null,
 ): CreateRunInput {
   // A custom prompt EXTENDS the item context rather than replacing it (#524) — see
   // `composeGithubTask`. The workflow/skill routing and the #401 `backend` spread are unchanged;
   // only the task text is.
-  if (workflow) return { ...backend, workflow, task: composeGithubTask(item, skills, customPrompt) }
+  if (workflow) return { ...backend, workflow, task: composeGithubTask(item, skills, customPrompt, forgeKind) }
   if (skills.length) {
     return {
       ...backend,
       steps: skillChainSteps(skills),
-      task: composeGithubTask(item, [], customPrompt),
+      task: composeGithubTask(item, [], customPrompt, forgeKind),
     }
   }
-  return { ...backend, workflow: 'quick-task', task: composeGithubTask(item, [], customPrompt) }
+  return { ...backend, workflow: 'quick-task', task: composeGithubTask(item, [], customPrompt, forgeKind) }
 }

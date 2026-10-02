@@ -307,7 +307,8 @@ export function ThreadView({
   }, [edit, run.queuedMessages])
   // #526: the footer's issue link may be synthesized from the CEZ:ISSUE marker, and the only
   // repository it may ever name is the one on screen — never the transcript's.
-  const issueUrl = taskIssueUrl(run, useProjectRepoBase())
+  const projectRepo = useProjectRepoBase()
+  const issueUrl = taskIssueUrl(run, projectRepo?.base, projectRepo?.kind)
   const { search } = useLocation()
   const mode = threadRenderMode(search, rows.length)
   const scroll = useThreadScroll(`${run.id}:main`, {

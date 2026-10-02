@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,8 +8,9 @@ import { WorkspaceAutomationScheduler } from '../automations/scheduler.ts';
 import { AutomationStore } from '../automations/store.ts';
 import { RunStore } from '../runs/store.ts';
 import type { RunManager } from '../workflows/run.ts';
+import { __setForgeHostsForTests } from './forge/index.ts';
 import { apiRequest } from './loopback-request.testkit.ts';
-import { createApp, WorkspaceEventBus } from './server.ts';
+import { createApp, githubAutomationsBlocker, WorkspaceEventBus } from './server.ts';
 
 describe('GitHub automation API', () => {
   let root: string;
@@ -343,3 +345,165 @@ describe('automation API — kinds, run, templates (spec 2026-09-14)', () => {
 function readFileOrEmpty(path: string): string {
   return existsSync(path) ? readFileSync(path, 'utf8') : '';
 }
+
+/**
+ * Which projects can run GITHUB-EVENT automations (spec 2026-08-10-forge-provider-adapters,
+ * Step 4.6). The poller shells `gh` against github.com with no `--hostname`, so "a forge resolves"
+ * is not enough, and neither is "the forge is a GitHub one": only the literal host github.com can
+ * be served. Before Step 3.1 no GitLab driver existed and the literal host check happened to be
+ * equivalent; now it is not, and `GET /automations` must not report a GitLab project as ready for
+ * a GitHub trigger. Availability only: every route, status code, schema and the nav item are
+ * untouched, and schedule automations work on any remote at all.
+ */
+describe('GitHub-event automation availability by remote host', () => {
+  let root: string;
+  let home: string;
+  let store: RunStore;
+  const savedAutomations = process.env.CEZ_AUTOMATIONS;
+  const savedDryRun = process.env.CEZ_DRY_RUN;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'cezar-automation-forge-'));
+    home = mkdtempSync(join(tmpdir(), 'cezar-automation-forge-home-'));
+    process.env.CEZ_HOME = home;
+    process.env.CEZ_AUTOMATIONS = '1';
+    // No `gh` is ever shelled: the GitHub driver's detect answers `{available: true}` in dry run.
+    process.env.CEZ_DRY_RUN = '1';
+    mkdirSync(join(root, '.ai/cezar'), { recursive: true });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: root });
+    // A first commit, because the forge lookup (`getRepoInfo`) needs a resolvable HEAD.
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-m', 'init'], { cwd: root });
+    store = RunStore.open(join(root, '.ai/cezar'));
+  });
+  afterEach(() => {
+    store.flush();
+    __setForgeHostsForTests(null);
+    rmSync(root, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+    delete process.env.CEZ_HOME;
+    if (savedAutomations === undefined) delete process.env.CEZ_AUTOMATIONS;
+    else process.env.CEZ_AUTOMATIONS = savedAutomations;
+    if (savedDryRun === undefined) delete process.env.CEZ_DRY_RUN;
+    else process.env.CEZ_DRY_RUN = savedDryRun;
+  });
+
+  const remote = (url: string) => execFileSync('git', ['remote', 'add', 'origin', url], { cwd: root });
+  const app = () => createApp({ repoRoot: root, store, manager: {} as RunManager, version: 'test' });
+  const json = (body: unknown, method = 'POST'): RequestInit => ({
+    method,
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const availability = async (server: ReturnType<typeof app>) => {
+    const res = await apiRequest(server, '/api/v1/automations');
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { available: boolean; reason?: string };
+    return { available: body.available, reason: body.reason };
+  };
+  const poll = { name: 'Review new issues', events: ['issue.opened'], intervalSeconds: 300, filters: { lookbackDays: 7, maxRecords: 25 }, task: { prompt: 'Review {{github.url}}' } };
+  const schedule = { name: 'Nightly deps', kind: 'schedule', schedule: { type: 'daily', hour: 4, minute: 0 }, task: { prompt: 'Bump deps on {{date}}', workflow: 'quick-task' } };
+
+  it('reports a github.com remote as available, exactly as before', async () => {
+    remote('https://github.com/acme/demo.git');
+    expect(await availability(app())).toEqual({ available: true, reason: undefined });
+  });
+
+  it('keeps the original reason for a repo with no remote at all', async () => {
+    expect(await availability(app())).toEqual({ available: false, reason: 'No GitHub remote is configured' });
+  });
+
+  it('keeps the original reason for a host no forge claims', async () => {
+    remote('https://git.example.com/acme/demo.git');
+    expect(await availability(app())).toEqual({ available: false, reason: 'No GitHub remote is configured' });
+  });
+
+  it('refuses a GitLab remote with its own reason, though a GitLab driver resolves', async () => {
+    remote('https://gitlab.com/acme/demo.git');
+    expect(await availability(app())).toEqual({ available: false, reason: 'GitHub automations need a GitHub remote' });
+  });
+
+  // A GHE host IS a GitHub remote — `resolveForge` gives it the GitHub driver and its `/github*`
+  // routes work — but `automations/github-poller.ts` passes no `cwd` and no `--hostname` to `gh`
+  // and matches candidates against the literal `https://api.github.com/repos/<owner>/<repo>`, so
+  // arming it would poll github.com/acme/demo instead. Its own reason names the gap.
+  it('refuses a GitHub Enterprise host, which the github.com-only poller cannot serve', async () => {
+    __setForgeHostsForTests({ 'ghe.example.com': 'github' });
+    remote('git@ghe.example.com:acme/demo.git');
+    expect(await availability(app())).toEqual({ available: false, reason: 'GitHub automations need a github.com remote' });
+  });
+
+  // The forge only ever gates the GITHUB kind: a schedule needs no forge, so it must create,
+  // enable and arm on a GitLab remote exactly as it does anywhere else.
+  it('still creates, enables and arms a SCHEDULE automation on a GitLab remote', async () => {
+    remote('https://gitlab.com/acme/demo.git');
+    const server = app();
+    const created = await apiRequest(server, '/api/v1/automations', json(schedule));
+    expect(created.status).toBe(201);
+    const automation = ((await created.json()) as any).automation;
+    expect(automation).toMatchObject({ kind: 'schedule', enabled: false });
+    const enabled = await apiRequest(server, `/api/v1/automations/${automation.id}/enable`, { method: 'POST' });
+    expect(enabled.status).toBe(200);
+    const detail = (await (await apiRequest(server, `/api/v1/automations/${automation.id}`)).json()) as any;
+    expect(detail.automation).toMatchObject({ kind: 'schedule', enabled: true });
+    expect(detail.state).toMatchObject({ nextRunAt: expect.any(String) });
+    // And the list still answers 200 with the row on it, availability notwithstanding.
+    const list = (await (await apiRequest(server, '/api/v1/automations')).json()) as any;
+    expect(list.automations).toHaveLength(1);
+    expect(list.available).toBe(false);
+  });
+
+  it('refuses a github-kind manual check on a GitLab remote as it does with no remote', async () => {
+    remote('https://gitlab.com/acme/demo.git');
+    const server = app();
+    const created = ((await (await apiRequest(server, '/api/v1/automations', json(poll))).json()) as any).automation;
+    const queued = await apiRequest(server, `/api/v1/automations/${created.id}/check`, json({ mode: 'preview' }));
+    expect(queued.status).toBe(202);
+    const { checkId } = (await queued.json()) as { checkId: string };
+    let check: { status: string; error?: string } = { status: 'queued' };
+    // The background pass shells out to `git` for the remote before it can refuse; poll for it.
+    for (let attempt = 0; attempt < 200 && check.status !== 'error'; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      check = (await (await apiRequest(server, `/api/v1/automation-checks/${checkId}`)).json()) as { status: string; error?: string };
+    }
+    expect(check).toMatchObject({ status: 'error', error: 'No GitHub remote is configured' });
+    expect(readFileOrEmpty(join(root, '.ai/cezar/automation-receipts.ndjson'))).toBe('');
+  });
+});
+
+/**
+ * The single decision the three GitHub-event sites share (the `/automations` availability, the
+ * manual check and the boot `registerAutomationProject`). Testing it directly is how the boot
+ * registration is covered: `registerAutomationProject` lives inside `startServer`'s closure, and a
+ * project the blocker refuses gets no `github` handle, so it never arms a poller.
+ */
+describe('githubAutomationsBlocker', () => {
+  afterEach(() => __setForgeHostsForTests(null));
+
+  it('lets github.com through, in every remote form', () => {
+    expect(githubAutomationsBlocker('https://github.com/acme/demo.git')).toBeNull();
+    expect(githubAutomationsBlocker('git@github.com:acme/demo.git')).toBeNull();
+    expect(githubAutomationsBlocker('ssh://git@github.com/acme/demo.git')).toBeNull();
+  });
+
+  it('refuses a GitHub Enterprise host with its own reason, so boot arms no poller for it', () => {
+    __setForgeHostsForTests({ 'ghe.example.com': 'github' });
+    expect(githubAutomationsBlocker('git@ghe.example.com:acme/demo.git')).toEqual({
+      available: false,
+      reason: 'GitHub automations need a github.com remote',
+    });
+  });
+
+  it('refuses a GitLab host with the Step 4.6 reason', () => {
+    expect(githubAutomationsBlocker('https://gitlab.com/acme/demo.git')).toEqual({
+      available: false,
+      reason: 'GitHub automations need a GitHub remote',
+    });
+  });
+
+  it('keeps the original text for no remote, a local path and an unclaimed host', () => {
+    const original = { available: false, reason: 'No GitHub remote is configured' };
+    expect(githubAutomationsBlocker(undefined)).toEqual(original);
+    expect(githubAutomationsBlocker('/srv/repos/demo')).toEqual(original);
+    expect(githubAutomationsBlocker('https://git.example.com/acme/demo.git')).toEqual(original);
+  });
+});

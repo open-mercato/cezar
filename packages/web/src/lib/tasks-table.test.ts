@@ -5,9 +5,9 @@ import {
   compareGroups,
   filterRuns,
   finishedRunCount,
+  forgeRepoBase,
   formatCost,
   formatMem,
-  githubRepoBase,
   prNumber,
   scheduledResume,
   taskReference,
@@ -414,6 +414,32 @@ describe('taskReferences', () => {
   it('is empty when the task references nothing', () => {
     expect(taskReferences(run())).toEqual([])
   })
+
+  // Step 3.9: a self-managed GitLab subgroup remote gets the `/-/` grammar instead of GitHub's,
+  // and every GitHub case above stays byte-identical because it never passes a forge kind.
+  it('emits GitLab /-/merge_requests and /-/issues grammar for a self-managed subgroup remote', () => {
+    const GITLAB_REPO = 'https://gitlab.acme.internal/group/sub/repo'
+    expect(taskReferences(run({ prNumber: 42, issueNumber: 7 }), GITLAB_REPO, 'gitlab')).toEqual([
+      { kind: 'PR', number: 42, url: `${GITLAB_REPO}/-/merge_requests/42` },
+      { kind: 'Issue', number: 7, url: `${GITLAB_REPO}/-/issues/7` },
+    ])
+  })
+
+  // The #1151 association list (`prRefs`) synthesizes a number-only ref's URL too — through the
+  // same forge-aware rule, or a GitLab task's chip would link `/pull/N`, a 404 on GitLab.
+  it('links a number-only prRefs entry with the GitLab grammar on a GitLab project', () => {
+    const GITLAB_REPO = 'https://gitlab.com/group/sub/repo'
+    const r = run({
+      prRefs: [
+        { number: 7, origin: 'marker', at: '2026-01-01T00:00:00.000Z' },
+        { number: 8, origin: 'marker', at: '2026-01-02T00:00:00.000Z' },
+      ],
+    } as never)
+    expect(taskReferences(r, GITLAB_REPO, 'gitlab')).toEqual([
+      { kind: 'PR', number: 7, url: `${GITLAB_REPO}/-/merge_requests/7` },
+      { kind: 'PR', number: 8, url: `${GITLAB_REPO}/-/merge_requests/8` },
+    ])
+  })
 })
 
 describe('taskIssueUrl', () => {
@@ -462,9 +488,18 @@ describe('taskIssueUrl', () => {
     })
     expect(taskIssueUrl(r, 'https://github.com/elsewhere/x')).toBe('https://github.com/o/r/issues/524')
   })
+
+  it('synthesizes GitLab /-/issues/N grammar for a self-managed subgroup remote', () => {
+    const r = run({ markerRefs: { issue: 7 } })
+    expect(taskIssueUrl(r, 'https://gitlab.acme.internal/group/sub/repo', 'gitlab')).toBe(
+      'https://gitlab.acme.internal/group/sub/repo/-/issues/7',
+    )
+  })
 })
 
-describe('githubRepoBase', () => {
+describe('forgeRepoBase', () => {
+  // Every pre-GitLab githubRepoBase case, byte-identical: same input, same base string, now
+  // paired with the 'github' kind the function also reports.
   it.each([
     ['https://github.com/open-mercato/cezar.git', 'https://github.com/open-mercato/cezar'],
     ['https://github.com/open-mercato/cezar', 'https://github.com/open-mercato/cezar'],
@@ -472,19 +507,58 @@ describe('githubRepoBase', () => {
     ['git@github.com:open-mercato/cezar.git', 'https://github.com/open-mercato/cezar'],
     ['ssh://git@github.com:22/open-mercato/cezar.git', 'https://github.com/open-mercato/cezar'],
     ['https://github.com/open-mercato/cezar/', 'https://github.com/open-mercato/cezar'],
-  ])('normalizes %s', (remote, expected) => {
-    expect(githubRepoBase(remote)).toBe(expected)
+  ])('normalizes %s', (remote, expectedBase) => {
+    expect(forgeRepoBase(remote)).toEqual({ base: expectedBase, kind: 'github' })
   })
 
   it.each([
     ['undefined remote', undefined],
     ['no remote configured', ''],
-    ['a GitLab remote', 'git@gitlab.com:o/r.git'],
-    ['a self-hosted forge', 'https://git.example.com/o/r.git'],
+    ['a self-managed forge host with no kind given', 'https://git.example.com/o/r.git'],
     ['a local path', '/srv/git/repo.git'],
     ['a bare host with no owner', 'https://github.com/cezar'],
-  ])('has no GitHub base for %s', (_name, remote) => {
-    expect(githubRepoBase(remote)).toBeUndefined()
+  ])('has no base for %s', (_name, remote) => {
+    expect(forgeRepoBase(remote)).toBeUndefined()
+  })
+
+  it('recognizes gitlab.com as well-known even with no kind given', () => {
+    expect(forgeRepoBase('git@gitlab.com:o/r.git')).toEqual({ base: 'https://gitlab.com/o/r', kind: 'gitlab' })
+  })
+
+  it('accepts a self-managed GitLab subgroup remote once the server vouches for the host', () => {
+    expect(forgeRepoBase('git@gitlab.acme.internal:group/sub/repo.git', 'gitlab')).toEqual({
+      base: 'https://gitlab.acme.internal/group/sub/repo',
+      kind: 'gitlab',
+    })
+  })
+
+  it('rejects a self-managed host with no kind given — the cockpit has no discovery cache', () => {
+    expect(forgeRepoBase('git@gitlab.acme.internal:group/sub/repo.git')).toBeUndefined()
+  })
+
+  it('keeps http scheme and port for a self-managed instance (2.3 subgroup/origin rules)', () => {
+    expect(forgeRepoBase('http://gitlab.acme.internal:8929/group/repo', 'gitlab')).toEqual({
+      base: 'http://gitlab.acme.internal:8929/group/repo',
+      kind: 'gitlab',
+    })
+  })
+
+  // Mirrors the server parser's host rule (`parseRemote`): the capture admits whitespace, so a
+  // host carrying any is rejected rather than trimmed into something plausible-looking.
+  it.each([
+    ['https://gitlab.com /group/repo'],
+    ['https://gitlab.com\t/group/repo'],
+    ['git@gitlab.com :group/repo.git'],
+    ['http://[::1]:8929/group/repo'],
+  ])('rejects the malformed host in %j', (remote) => {
+    expect(forgeRepoBase(remote, 'gitlab')).toBeUndefined()
+  })
+
+  it('never carries credentials into the built base', () => {
+    expect(forgeRepoBase('https://user:token@gitlab.acme.internal/group/repo.git', 'gitlab')).toEqual({
+      base: 'https://gitlab.acme.internal/group/repo',
+      kind: 'gitlab',
+    })
   })
 })
 

@@ -126,13 +126,13 @@ function ProjectsPane({
         placeholder="~/"
         slot="browse"
         savedLabel="Browse folder"
-        footer="Only affects folder browsing; GitHub checkouts use the separate checkout folder."
+        footer="Only affects folder browsing; clones use the separate checkout folder."
       />
       <WorkspaceRootField
         configKey="projectsDir"
         value={config.projectsDir}
         title="Default checkout folder"
-        hint="Where “Clone from GitHub” puts new projects: <folder>/<project name>."
+        hint="Where “Clone from a git forge” puts new projects: <folder>/<project name>."
         placeholder="~/cezar/projects"
         slot="checkout"
         savedLabel="Checkout folder"

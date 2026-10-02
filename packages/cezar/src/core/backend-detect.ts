@@ -6,7 +6,7 @@ import { resolveClaudeBin } from './claude-bin.ts';
 const exec = promisify(execFile);
 
 export interface BackendCheck {
-  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'gh' | 'git';
+  name: 'claude' | 'codex' | 'opencode' | 'cursor' | 'pi' | 'gh' | 'glab' | 'git';
   available: boolean;
   version?: string;
   hint?: string;
@@ -14,10 +14,13 @@ export interface BackendCheck {
 
 /**
  * Probe the host for everything cez leans on: the agent CLIs (`claude`, and
- * the optional `codex` / `opencode` / `cursor` / `pi` alternatives), `gh`
- * (GitHub auth for PR creation) and `git`. Nothing is required except at
- * least one agent CLI — the GUI degrades gracefully, only offers the
- * runners that are present, and shows the hints for the rest.
+ * the optional `codex` / `opencode` / `cursor` / `pi` alternatives), `gh` (GitHub
+ * auth for PR creation), `glab` (GitLab auth for merge-request creation — spec
+ * 2026-08-10-forge-provider-adapters) and `git`. Nothing is required except at
+ * least one agent CLI — the GUI degrades gracefully, only offers the runners
+ * that are present, and shows the hints for the rest. `glab` in particular is
+ * optional in every sense: a GitHub-only project never needs it, so its
+ * absence is never an error and never fails boot (AGENTS.md "Zero config").
  */
 export async function detectEnvironment(): Promise<BackendCheck[]> {
   return Promise.all([
@@ -27,6 +30,7 @@ export async function detectEnvironment(): Promise<BackendCheck[]> {
     probeCursor(),
     probePi(),
     probeGh(),
+    probeGlab(),
     probeGit(),
   ]);
 }
@@ -167,6 +171,66 @@ async function probeGh(): Promise<BackendCheck> {
       hint: 'install the GitHub CLI and run `gh auth login` (only needed for PR creation)',
     };
   }
+}
+
+/** How long the `glab` probe may take IN TOTAL: its two reads share this one budget, so the
+ *  worst case is this number and not twice it. `detectEnvironment` feeds `healthSnapshot`, and a
+ *  snapshot older than `HEALTH_MAX_STALE_MS` makes `GET /api/v1/health` WAIT for this — the
+ *  bookmarklet's latency budget (CODE_REVIEW.md priority 2). Local reads answer in milliseconds;
+ *  this is only the ceiling for a pathological host. */
+const GLAB_PROBE_TIMEOUT_MS = 2_500;
+
+/** `glab`'s own version notifier is its one network touch on an otherwise local command; off, so
+ *  an offline host cannot spend the probe's budget on it. */
+const GLAB_PROBE_ENV = { ...process.env, GLAB_CHECK_UPDATE: 'false' };
+
+/**
+ * The GitLab equivalent of `probeGh`'s `gh auth token`, and deliberately the same SHAPE: a LOCAL
+ * config read, never `glab auth status`. `auth status` validates the token against every
+ * configured host over the NETWORK, and this probe runs on the health request path — offline, it
+ * would hold `/api/v1/health` open until its timeout, which reads as "cez is down" (AGENTS.md: a
+ * missing dependency degrades, never blocks). Live GitLab authentication is the off-path discovery
+ * warm-up's job (`server/forge/discovery.ts` rung 3), which does run `glab auth status`.
+ *
+ * Two local reads, because `glab config get token` without `--host` only sees the environment:
+ * the default host (which also proves `glab` is installed and runnable), then that host's token.
+ * `glab`'s lookup order is environment → local → global, so a `GITLAB_TOKEN` in the environment
+ * counts as authenticated exactly as `glab` itself would count it. They run against ONE deadline,
+ * not one timeout each: two sequential reads with the full budget apiece would put the health
+ * route's worst case at twice the number the budget was sized for.
+ *
+ * What this can and cannot see: it answers "is a credential configured for the host `glab` would
+ * use by default", not "is that credential still valid" — a revoked or expired token still reads
+ * as authenticated, and a user logged in ONLY to a self-managed host that is not their default
+ * reads as not authenticated. Both are the right trade for a check whose answer is a hint.
+ * ENOENT (glab not installed) lands in the same `catch` as a config read that fails, exactly like
+ * every other optional CLI here and exactly as before: no distinction is drawn between "not
+ * installed" and "not authenticated" (spec 2026-08-10-forge-provider-adapters, D6).
+ */
+async function probeGlab(): Promise<BackendCheck> {
+  try {
+    const deadline = Date.now() + GLAB_PROBE_TIMEOUT_MS;
+    const { stdout: host } = await exec('glab', ['config', 'get', 'host'], glabProbeOptions(deadline));
+    const { stdout: token } = await exec(
+      'glab',
+      ['config', 'get', 'token', '--host', host.trim() || 'gitlab.com'],
+      glabProbeOptions(deadline),
+    );
+    if (!token.trim()) throw new Error('no token configured');
+    return { name: 'glab', available: true, version: 'authenticated' };
+  } catch {
+    return {
+      name: 'glab',
+      available: false,
+      hint: 'optional: install the GitLab CLI and run `glab auth login` (only needed for GitLab projects)',
+    };
+  }
+}
+
+/** One probe read's options: whatever is left of the pair's shared budget. Never 0 — `execFile`
+ *  reads a timeout of 0 as "no timeout at all", the exact opposite of a spent budget. */
+function glabProbeOptions(deadline: number): { timeout: number; env: NodeJS.ProcessEnv } {
+  return { timeout: Math.max(1, deadline - Date.now()), env: GLAB_PROBE_ENV };
 }
 
 async function probeGit(): Promise<BackendCheck> {

@@ -1,9 +1,19 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createAutoUi } from './ui.ts';
-import { depCheckStep, generatePassword, sudoStep, StepAborted, StepSkipped, verifyCommand } from './steps.ts';
+import {
+  aptInstallTool,
+  brewInstallTool,
+  brewRemoveHint,
+  depCheckStep,
+  generatePassword,
+  sudoStep,
+  StepAborted,
+  StepSkipped,
+  verifyCommand,
+} from './steps.ts';
 import { RUNNER_IDS } from '../core/agent-runner.ts';
 import type { BackendCheck } from '../core/backend-detect.ts';
-import type { CommandResult, InstallContext, Runner, Ui } from './types.ts';
+import { CANCEL, type CommandResult, type InstallContext, type Runner, type Ui } from './types.ts';
 
 function makeCtx(over: {
   ui?: Ui;
@@ -236,5 +246,96 @@ describe('depCheckStep — the agent-CLI gate', () => {
   it('stays unsatisfied in dry-run — the step must still be offered', async () => {
     const step = depCheckStep({ detect: async () => [check('claude', true)] });
     await expect(step.check!(makeCtx({ dryRun: true }))).resolves.toBe(false);
+  });
+});
+
+/**
+ * Spec 2026-08-10-forge-provider-adapters, Step 4.3 / D6: `glab` mirrors `gh`'s installer control
+ * flow exactly, except an apt failure degrades to a one-line hint instead of aborting the whole
+ * dependency step — Debian and older Ubuntu don't carry `glab` in their archives.
+ */
+describe('aptInstallTool — glab (D6)', () => {
+  it('installs glab via `apt-get install -y glab` and verifies it, like gh', async () => {
+    const interactive = vi.fn(async () => 0);
+    const capture = vi.fn(async (program: string, args: string[]): Promise<CommandResult> => {
+      if (program === 'sudo' && args[0] === '-n') return { code: 0, stdout: '', stderr: '' }; // passwordless sudo
+      if (program === 'glab' && args[0] === '--version') return { code: 0, stdout: 'glab 1.118.0', stderr: '' };
+      return { code: 1, stdout: '', stderr: '' };
+    });
+    const ctx = makeCtx({ assumeYes: true, runner: { interactive, capture } });
+    await aptInstallTool(ctx, 'glab');
+    expect(interactive).toHaveBeenCalledWith(
+      'sudo',
+      ['bash', '-lc', 'apt-get update && apt-get install -y glab'],
+      undefined,
+    );
+  });
+
+  it('degrades a failed install to a one-line hint instead of failing the step', async () => {
+    const interactive = vi.fn(async () => 1); // apt-get install fails (package not in this distro's archive)
+    const capture = vi.fn(async (program: string, args: string[]): Promise<CommandResult> => {
+      if (program === 'sudo' && args[0] === '-n') return { code: 0, stdout: '', stderr: '' };
+      return { code: 1, stdout: '', stderr: '' }; // `glab --version` still fails after the failed install
+    });
+    const notes: Array<{ message: string; title?: string }> = [];
+    const ui: Ui = { ...createAutoUi(), note: (message, title) => notes.push({ message, title }) };
+    const ctx = makeCtx({ assumeYes: true, runner: { interactive, capture }, ui });
+
+    await expect(aptInstallTool(ctx, 'glab')).resolves.toBeUndefined();
+
+    expect(notes).toContainEqual({
+      message:
+        "glab is not in this distro's archive — install it from https://gitlab.com/gitlab-org/cli#installation to use GitLab projects",
+      title: 'glab',
+    });
+  });
+
+  it('still raises StepCancelled if the operator cancels mid-prompt (not swallowed)', async () => {
+    const capture = vi.fn(async (): Promise<CommandResult> => ({ code: 1, stdout: '', stderr: '' })); // no passwordless sudo
+    const ui: Ui = { ...createAutoUi(), select: async () => CANCEL as never };
+    const ctx = makeCtx({ assumeYes: false, runner: { capture }, ui });
+    // sudoStep's own StepCancelled (from the sudo/delegate choice) must still propagate —
+    // only the verify-failure path degrades to a hint.
+    await expect(aptInstallTool(ctx, 'glab')).rejects.toThrow();
+  });
+});
+
+describe('brewInstallTool — glab', () => {
+  it('installs glab via `brew install glab`, like gh', async () => {
+    const interactive = vi.fn(async () => 0);
+    const ctx = makeCtx({ runner: { interactive } });
+    await brewInstallTool(ctx, 'glab');
+    expect(interactive).toHaveBeenCalledWith('brew', ['install', 'glab']);
+  });
+
+  it('dry-run prints the intended command without executing', async () => {
+    const interactive = vi.fn(async () => 0);
+    const infos: string[] = [];
+    const ui: Ui = { ...createAutoUi(), info: (m) => infos.push(m) };
+    const ctx = makeCtx({ dryRun: true, runner: { interactive }, ui });
+    await brewInstallTool(ctx, 'glab');
+    expect(interactive).not.toHaveBeenCalled();
+    expect(infos).toContain('DRY RUN — would run: brew install glab');
+  });
+
+  it('brewRemoveHint names glab', () => {
+    expect(brewRemoveHint('glab')).toBe('brew uninstall glab');
+  });
+});
+
+describe('depCheckStep — records the apt remove hint for glab when picked', () => {
+  it('threads the default removeHint through to the installed artifact', async () => {
+    const installTool = vi.fn(async () => {});
+    const ui: Ui = { ...createAutoUi(), multiselect: (async () => ['glab']) as Ui['multiselect'] };
+    const step = depCheckStep({
+      detect: async () => [{ name: 'glab', available: false, hint: 'optional: install glab' }],
+      installTool,
+    });
+    const ctx = makeCtx({ ui });
+    const result = await step.run(ctx);
+    expect(installTool).toHaveBeenCalledWith(ctx, 'glab');
+    expect(result?.artifacts).toContainEqual(
+      expect.objectContaining({ name: 'glab', removeHint: 'sudo apt-get remove -y glab' }),
+    );
   });
 });

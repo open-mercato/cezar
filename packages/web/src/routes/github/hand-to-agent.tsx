@@ -11,7 +11,7 @@ import { Link } from '@/lib/project-router'
 
 import { createRun, putUiState } from '@/api/client'
 import { queryKeys, useHealth, useUiState } from '@/api/queries'
-import type { GithubItem, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
+import type { ForgeKind, GithubItem, Skill, WorkflowDef } from '@open-mercato/cezar-api-client'
 import { EnginePills, engineRunBody, useResolvedEngine, type EnginePick } from '@/components/engine-pills'
 import { WorkflowPicker, SkillsPicker } from '@/components/agent-task-pickers'
 import { Button } from '@/components/ui/button'
@@ -66,6 +66,7 @@ export function HandToAgent({
   onEngineChange,
   queuedRunId,
   onQueued,
+  forgeKind,
 }: {
   item: GithubItem
   workflows: readonly WorkflowDef[]
@@ -80,10 +81,17 @@ export function HandToAgent({
   /** The run already queued from this item, if any — renders the "✓ queued" affordance. */
   queuedRunId: string | null
   onQueued: (url: string, runId: string) => void
+  /** Which forge the item lives on (`useForgeKind()`, the VIEWED project's kind as the route
+   *  reads it — Step 3.8-review-fix-2) — picks the task wording `githubTaskRef` writes. Absent
+   *  reads as GitHub, today's text. */
+  forgeKind?: ForgeKind | null
 }) {
   const queryClient = useQueryClient()
   const uiState = useUiState()
-  const kindLabel = item.kind === 'pr' ? 'PR' : 'issue'
+  // GitLab says "MR" and writes it `!N` — the same spelling `githubTaskRef` puts in the prompt.
+  const gitlabMr = forgeKind === 'gitlab' && item.kind === 'pr'
+  const kindLabel = item.kind === 'pr' ? (gitlabMr ? 'MR' : 'PR') : 'issue'
+  const itemRef = `${kindLabel} ${gitlabMr ? '!' : '#'}${item.number}`
   // A skill deleted since it was toggled must not reach the server (legacy rule).
   const validSkills = selectedSkills.filter((name) => skills.some((skill) => skill.name === name))
   // The box is PRE-FILLED with the item's reference (#524) rather than starting empty: what you
@@ -96,7 +104,7 @@ export function HandToAgent({
   // that replaces it — github.tsx), and the component is keyed by `item.url`, not by title — so a
   // title that differs between the two payloads would otherwise leave `prompt !== base`, which
   // reads as "user-owned": the pre-fill would be persisted as a draft and auto-apply would stop.
-  const [base] = useState(() => githubTaskRef(item))
+  const [base] = useState(() => githubTaskRef(item, forgeKind))
   // The route remounts this component per item (key={item.url}); the DRAFT — not plain component
   // state (#408) — restores whatever was typed for THIS item, so switching away and back (or a
   // page refresh) never loses it. No draft stored → the pre-fill.
@@ -165,7 +173,7 @@ export function HandToAgent({
   const start = useMutation({
     mutationFn: async () => {
       if (!resolved.canRun) return null
-      return createRun(githubRunBody(item, workflow, validSkills, prompt, engineRunBody(resolved)))
+      return createRun(githubRunBody(item, workflow, validSkills, prompt, engineRunBody(resolved), forgeKind))
     },
     onSuccess: (created) => {
       if (created === null) return
@@ -177,7 +185,7 @@ export function HandToAgent({
       // confirms itself as a toast, the way every other cockpit action does. Unconditional, not
       // mobile-only: a second confirmation costs nothing on desktop, and a viewport-conditional
       // toast is one more thing to get wrong.
-      toast(`Added to the queue — ${kindLabel} #${item.number}`)
+      toast(`Added to the queue — ${itemRef}`)
       // Frequency sort (#408): every hand-off skill counts, mirroring the /new composer.
       // Only bump once the CURRENT map is actually known (`uiState.data` present). The PUT
       // merge is shallow (`uiStateSchema` passthrough, src/server/server.ts), so the client

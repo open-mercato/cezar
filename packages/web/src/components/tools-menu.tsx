@@ -3,6 +3,7 @@ import { Link } from '@/lib/project-router'
 
 import type { BackendCheck, HealthResponse, Runner } from '@open-mercato/cezar-api-client'
 import { StatusDot } from '@/components/status-dot'
+import { forgeLabel } from '@/lib/forge-display'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -64,16 +65,22 @@ export function toolsTooltip(health: HealthResponse): string {
 }
 
 /**
- * Why the GitHub tab is absent (R6 Step 1.1) — the env-chips popover is where the spec's
- * degradation table says the hint lives. Null while the forge works: a working forge needs
- * no explaining. Exported for the tests — the two sentences are a small contract.
+ * Why the forge tab is absent (R6 Step 1.1, forge-neutral since spec 2026-08-10 Step 3.8) — the
+ * env-chips popover is where the spec's degradation table says the hint lives. Null while the
+ * forge works: a working forge needs no explaining. Exported for the tests — the two sentences
+ * are a small contract.
+ *
+ * `health.forge` being absent means the remote classified as neither GitHub nor GitLab (or there
+ * is no remote at all), so there is no kind to name the tab after — the note stays forge-neutral.
+ * Once a kind IS known (the remote matched a forge but it is unreachable), the note names it.
  */
 export function forgeNote(health: HealthResponse): string | null {
   if (health.forge?.available) return null
   if (!health.forge) {
-    return 'No GitHub remote detected — the GitHub tab is hidden. Every plain-git feature still works.'
+    return 'No GitHub or GitLab remote detected — the forge tab is hidden. Every plain-git feature still works.'
   }
-  return `GitHub is unreachable — ${health.forge.reason ?? 'unknown reason'}. The GitHub tab is hidden until it comes back.`
+  const label = forgeLabel(health.forge.kind)
+  return `${label} is unreachable — ${health.forge.reason ?? 'unknown reason'}. The ${label} tab is hidden until it comes back.`
 }
 
 export function ToolsMenu({ health }: { health: HealthResponse | undefined }) {

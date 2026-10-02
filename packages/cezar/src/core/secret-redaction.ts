@@ -11,7 +11,8 @@
  *      vars (GITHUB_TOKEN, ANTHROPIC_API_KEY, AWS_SECRET_ACCESS_KEY, …). If
  *      any of them appears in event text, it is scrubbed.
  *   2. Pattern-based — well-known token shapes (gh*, sk-*, AKIA*, AIza*,
- *      xox*-*) so secrets that never lived in cezar's own env are still caught.
+ *      xox*-*, gl*- GitLab tokens) so secrets that never lived in cezar's own
+ *      env are still caught.
  *
  * Zero-config: redaction is on by default; `CEZ_REDACT_SECRETS=0` opts out.
  */
@@ -65,7 +66,18 @@ const TOKEN_PATTERNS: readonly RegExp[] = [
   /AIza[0-9A-Za-z_-]{35}/g, // Google API key
   /ya29\.[0-9A-Za-z_-]+/g, // Google OAuth access token
   /xox[baprs]-[0-9A-Za-z-]{10,}/g, // Slack
-  /glpat-[0-9A-Za-z_-]{20,}/g, // GitLab PAT
+  /glpat-[0-9A-Za-z_-]{20,}/g, // GitLab personal access token
+  /gloas-[0-9A-Za-z_-]{20,}/g, // GitLab OAuth application secret
+  /gldt-[0-9A-Za-z_-]{20,}/g, // GitLab deploy token
+  /glrt-[0-9A-Za-z_-]{20,}/g, // GitLab runner authentication token
+  /glcbt-[0-9A-Za-z_-]{20,}/g, // GitLab CI/CD job token
+  /glptt-[0-9A-Za-z_-]{20,}/g, // GitLab pipeline trigger token
+  /glft-[0-9A-Za-z_-]{20,}/g, // GitLab feed token
+  /glimt-[0-9A-Za-z_-]{20,}/g, // GitLab incoming mail token
+  /glagent-[0-9A-Za-z_-]{20,}/g, // GitLab agent (for Kubernetes) token
+  /glsoat-[0-9A-Za-z_-]{20,}/g, // GitLab SCIM OAuth access token
+  /glffct-[0-9A-Za-z_-]{20,}/g, // GitLab feature flags client token
+  /glwt-[0-9A-Za-z_-]{20,}/g, // GitLab workspace token
 ];
 
 function escapeRegExp(s: string): string {

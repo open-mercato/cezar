@@ -94,6 +94,47 @@ describe('redactSecrets', () => {
   });
 });
 
+/**
+ * Spec 2026-08-10-forge-provider-adapters, Step 4.3: GitLab issues several token shapes beyond
+ * the personal access token (`glpat-`) that `secret-redaction.ts` already caught — deploy tokens,
+ * runner tokens, CI/CD job tokens, etc. Each gets its own row so a regression in one prefix's
+ * regex (wrong length floor, wrong body class) fails on its own line.
+ */
+describe('redactSecrets — GitLab token prefixes', () => {
+  const cases: Array<[string, string]> = [
+    ['personal access token', 'glpat-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['OAuth application secret', 'gloas-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['deploy token', 'gldt-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['runner authentication token', 'glrt-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['CI/CD job token', 'glcbt-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['pipeline trigger token', 'glptt-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['feed token', 'glft-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['incoming mail token', 'glimt-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['agent (Kubernetes) token', 'glagent-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['SCIM OAuth access token', 'glsoat-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['feature flags client token', 'glffct-AbCdEfGhIjKlMnOpQrStUvWx'],
+    ['workspace token', 'glwt-AbCdEfGhIjKlMnOpQrStUvWx'],
+  ];
+
+  it.each(cases)('redacts a %s (%s)', (_label, token) => {
+    const out = redactSecrets(`export TOKEN=${token}`, []);
+    expect(out).not.toContain(token);
+    expect(out).toContain(REDACTED);
+  });
+
+  it('does not redact an ordinary word that merely starts with a GitLab-like prefix', () => {
+    // Short / non-hyphenated / dictionary text that must never be mistaken for a token: the
+    // patterns require the literal `gl*-` prefix AND a 20+ char body, so plain words survive.
+    const line = 'glossary glass globe glimpse gladly glacier';
+    expect(redactSecrets(line, [])).toBe(line);
+  });
+
+  it('does not redact a short glab-prefixed value under the 20-char body floor', () => {
+    const line = 'export TOKEN=glpat-tooshort';
+    expect(redactSecrets(line, [])).toBe(line);
+  });
+});
+
 describe('redactDeep', () => {
   it('scrubs string leaves in nested event structures', () => {
     const event = {

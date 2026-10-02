@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest'
 
-import { NAV_ITEMS, activeNavItem, activeNavPath, visibleNavItems } from './nav-items'
+import { GithubIcon, GitlabIcon } from './icons'
+import {
+  NAV_ITEMS,
+  activeNavItem,
+  activeNavPath,
+  resolveForgeNavItem,
+  resolveForgeNavItems,
+  visibleNavItems,
+} from './nav-items'
 
 /** Which nav item owns a URL. This is the rule that decides what the user sees lit up, and it
  *  is not a plain equality check — items own areas, and the Settings area nests. */
@@ -174,5 +182,62 @@ describe('visibleNavItems', () => {
         }
       }
     }
+  })
+})
+
+/** The forge-gated item's label/icon for a resolved kind (spec 2026-08-10, Step 3.8): GitHub is
+ *  the default text every earlier server ever spoke of, GitLab is the new one, and everything
+ *  else in the nav is untouched by either. */
+describe('resolveForgeNavItem / resolveForgeNavItems', () => {
+  const githubItem = NAV_ITEMS.find((item) => item.forge)!
+
+  it('an absent kind reads as GitHub — the exact same item reference', () => {
+    expect(resolveForgeNavItem(githubItem)).toBe(githubItem)
+  })
+
+  it('a github kind reads as GitHub too — same item reference', () => {
+    expect(resolveForgeNavItem(githubItem, 'github')).toBe(githubItem)
+  })
+
+  it('a gitlab kind swaps the label and the icon, leaving everything else the same', () => {
+    const resolved = resolveForgeNavItem(githubItem, 'gitlab')
+    expect(resolved).not.toBe(githubItem)
+    expect(resolved).toEqual({ ...githubItem, label: 'GitLab', icon: GitlabIcon })
+    expect(resolved!.icon).toBe(GitlabIcon)
+    expect(githubItem.icon).toBe(GithubIcon)
+  })
+
+  it('a non-forge item is never touched, whatever the kind', () => {
+    const tasksItem = NAV_ITEMS.find((item) => item.to === '/')!
+    expect(resolveForgeNavItem(tasksItem, 'gitlab')).toBe(tasksItem)
+  })
+
+  it('passes null through untouched', () => {
+    expect(resolveForgeNavItem(null, 'gitlab')).toBeNull()
+  })
+
+  it('resolveForgeNavItems only replaces the forge item, keeping every other reference', () => {
+    const items = visibleNavItems({ forge: true, inbox: true, automations: true })
+    const resolved = resolveForgeNavItems(items, 'gitlab')
+    expect(resolved.map((item) => item.label)).toEqual([
+      'Tasks',
+      'Inbox',
+      'Git',
+      'GitLab',
+      'Automations',
+      'Skills',
+      'Workflows',
+      'Settings',
+    ])
+    for (const item of items) {
+      if (item.forge) continue
+      expect(resolved).toContain(item)
+    }
+  })
+
+  it('resolveForgeNavItems is a no-op for an absent/github kind — byte-identical output', () => {
+    const items = visibleNavItems({ forge: true, inbox: true, automations: true })
+    expect(resolveForgeNavItems(items)).toEqual(items)
+    expect(resolveForgeNavItems(items, 'github')).toEqual(items)
   })
 })

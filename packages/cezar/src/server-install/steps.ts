@@ -281,7 +281,7 @@ export function depCheckStep(opts: DepStepOpts = {}): InstallStep {
   const hintFor = opts.removeHint ?? removeHintFor;
   return {
     id: 'deps',
-    title: 'Dependencies (agent CLIs + gh)',
+    title: 'Dependencies (agent CLIs + gh/glab)',
     async check(ctx) {
       if (ctx.dryRun) return false;
       const checks = await detect();
@@ -331,7 +331,15 @@ const NPM_GLOBAL: Record<string, string> = {
   codex: '@openai/codex',
 };
 
-/** Ubuntu/Debian installer: apt for gh, sudo npm -g for the agent CLIs (system node). */
+/**
+ * D6 (spec 2026-08-10-forge-provider-adapters): `glab` is not in every distro's apt archive
+ * (Debian and older Ubuntu don't carry it), so an apt failure degrades to this one-line hint
+ * instead of aborting the dependency step — a GitHub-only project never needed `glab` anyway.
+ */
+const GLAB_APT_HINT =
+  "glab is not in this distro's archive — install it from https://gitlab.com/gitlab-org/cli#installation to use GitLab projects";
+
+/** Ubuntu/Debian installer: apt for gh/glab, sudo npm -g for the agent CLIs (system node). */
 export const aptInstallTool: ToolInstaller = async (ctx, name) => {
   if (name === 'gh') {
     await sudoStep(ctx, {
@@ -341,10 +349,32 @@ export const aptInstallTool: ToolInstaller = async (ctx, name) => {
     });
     return;
   }
+  if (name === 'glab') {
+    // Mirrors the `gh` branch's control flow exactly, except a failed install never fails the
+    // step (D6): `skippable` routes a verification failure to `StepSkipped` instead of
+    // `StepAborted`, which this catches and turns into a note so the rest of the dependency
+    // step (other tools the operator picked) still completes.
+    try {
+      await sudoStep(ctx, {
+        description: 'Install the GitLab CLI (only needed for GitLab projects).',
+        command: 'apt-get update && apt-get install -y glab',
+        verify: (c) => verifyCommand(c, 'glab', ['--version']),
+        skippable: true,
+        skipHint: GLAB_APT_HINT,
+      });
+    } catch (err) {
+      if (err instanceof StepSkipped || err instanceof StepAborted) {
+        ctx.ui.note(GLAB_APT_HINT, 'glab');
+        return;
+      }
+      throw err;
+    }
+    return;
+  }
   await installViaNpmOrNote(ctx, name, true);
 };
 
-/** macOS installer: brew (no sudo) for gh, npm -g for the agent CLIs. */
+/** macOS installer: brew (no sudo) for gh/glab, npm -g for the agent CLIs. */
 export const brewInstallTool: ToolInstaller = async (ctx, name) => {
   if (name === 'gh') {
     if (ctx.dryRun) {
@@ -352,6 +382,14 @@ export const brewInstallTool: ToolInstaller = async (ctx, name) => {
       return;
     }
     await ctx.runner.interactive('brew', ['install', 'gh']);
+    return;
+  }
+  if (name === 'glab') {
+    if (ctx.dryRun) {
+      ctx.ui.info('DRY RUN — would run: brew install glab');
+      return;
+    }
+    await ctx.runner.interactive('brew', ['install', 'glab']);
     return;
   }
   await installViaNpmOrNote(ctx, name, false);
@@ -388,6 +426,7 @@ function removeHintFor(name: string): string {
     codex: 'npm rm -g @openai/codex',
   };
   if (name === 'gh') return 'sudo apt-get remove -y gh';
+  if (name === 'glab') return 'sudo apt-get remove -y glab';
   return npm[name] ?? `# remove ${name} manually`;
 }
 
@@ -398,5 +437,6 @@ export function brewRemoveHint(name: string): string {
     codex: 'npm rm -g @openai/codex',
   };
   if (name === 'gh') return 'brew uninstall gh';
+  if (name === 'glab') return 'brew uninstall glab';
   return npm[name] ?? `# remove ${name} manually`;
 }

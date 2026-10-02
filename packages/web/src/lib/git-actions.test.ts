@@ -121,6 +121,14 @@ describe('gitActionPolicy — create PR', () => {
     expect(find(base, 'create-pr')).toEqual({ id: 'create-pr', label: 'Create PR', enabled: true })
   })
 
+  // Forge-neutral since spec 2026-08-10-forge-provider-adapters, Step 3.8: `state.forge === null`
+  // means no remote classified as EITHER forge, not specifically GitHub.
+  it('the spec sentence, verbatim: no supported forge remote', () => {
+    const action = find(withState({ forge: null }), 'create-pr')
+    expect(action?.enabled).toBe(false)
+    expect(action?.reason).toBe('Create PR unavailable — no supported forge remote (GitHub or GitLab) detected')
+  })
+
   it.each<[Partial<GitActionState>, string]>([
     [{ hasWorktree: false }, 'no worktree'],
     [{ branch: undefined }, 'no worktree'],

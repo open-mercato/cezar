@@ -102,9 +102,22 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
   /** Above every platform's pid_max, so the real probe always reports it gone. */
   const UNREACHABLE_PID = 2_147_483_647;
 
+  /** A whole-second stamp, so every filesystem stores it exactly and the age arithmetic is exact. */
+  const LOCK_MTIME = new Date('2026-09-22T00:00:00.000Z');
+
   async function lockedDirectory(contents: string): Promise<string> {
     const dir = await directory();
     writeFileSync(join(dir, 'automation-poll.lock'), contents);
+    return dir;
+  }
+
+  /**
+   * The age rule compares the lock's real mtime against the store's clock, so a test that leaves
+   * both to the machine races them. Pin the mtime and drive the injected clock instead.
+   */
+  async function agedLockDirectory(contents: string): Promise<string> {
+    const dir = await lockedDirectory(contents);
+    utimesSync(join(dir, 'automation-poll.lock'), LOCK_MTIME, LOCK_MTIME);
     return dir;
   }
 
@@ -140,12 +153,25 @@ describe('AutomationStore.acquireLease — a lock nobody is holding any more (#9
   });
 
   it('falls back to the age rule for a lock whose pid cannot be read', async () => {
-    const dir = await lockedDirectory('{half-writ');
-    const store = AutomationStore.open(dir, { processAlive: () => false });
+    const dir = await agedLockDirectory('{half-writ');
+    // The clock sits on the lock's own mtime: the lock is zero milliseconds old.
+    const store = AutomationStore.open(dir, { processAlive: () => false, now: () => LOCK_MTIME });
     expect(store.acquireLease()).toBeUndefined();
-    // Same unreadable lock, now with staleAfterMs of 0: "stale regardless of age" is
-    // deterministic and does not depend on any real time having passed since it was written.
-    expect(store.acquireLease(0)).toBeDefined();
+    // Same unreadable lock under a zero window: reclaimed on age alone, in this very millisecond.
+    const lease = store.acquireLease(0);
+    expect(lease).toBeDefined();
+    lease?.release();
+  });
+
+  it('reclaims a lock whose age exactly equals the window', async () => {
+    const dir = await agedLockDirectory('{half-writ');
+    const now = new Date(LOCK_MTIME.getTime() + 60_000);
+    const store = AutomationStore.open(dir, { processAlive: () => false, now: () => now });
+    // One millisecond short of the window the lock is still someone else's.
+    expect(store.acquireLease(60_001)).toBeUndefined();
+    const lease = store.acquireLease(60_000);
+    expect(lease).toBeDefined();
+    lease?.release();
   });
 
   it('probes real pids when nothing is injected', async () => {

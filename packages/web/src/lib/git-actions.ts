@@ -92,7 +92,7 @@ function createPrAction(state: GitActionState): GitAction {
     return disabled(`Create PR unavailable — ${NO_WORKTREE_REASON}`)
   }
   if (state.forge === null) {
-    return disabled('Create PR unavailable — no supported forge remote (GitHub) detected')
+    return disabled('Create PR unavailable — no supported forge remote (GitHub or GitLab) detected')
   }
   if (!state.forge.available) {
     return disabled(`Create PR unavailable — ${state.forge.reason ?? 'the forge is unreachable'}`)
