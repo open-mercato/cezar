@@ -1,7 +1,6 @@
 import type { TrackerAssociation } from '@open-mercato/cezar-contract';
 import { TrackerAgentBindingError } from '../server/tracker/agent-credentials.ts';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -106,8 +105,15 @@ import { UiEventSink } from '../runs/ui-event-sink.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { chainStepNote, DEFAULT_ALLOWED_TOOLS, stepKind, type WorkflowDef, type WorkflowStepDef } from './types.ts';
 import { freshContinuationContext } from './continuation-context.ts';
-
-const CHECK_OUTPUT_CAP = 20_000;
+import {
+  CHECK_COMMAND_TIMEOUT_MS,
+  CHECK_GATE_TIMEOUT_MS,
+  runCheckCommand,
+  type CheckCommandOptions,
+  type CheckOutcome,
+  type CheckOutcomeStatus,
+} from './check-runner.ts';
+import { buildCheckEnv } from '../core/agent-env.ts';
 
 async function configuredModelProvider(
   backend: RunnerId,
@@ -445,6 +451,17 @@ interface ActiveRun {
     startedTurns: Set<string>;
     recordedTurns: Set<string>;
   };
+  /**
+   * Absolute epoch-ms deadline for this run's WHOLE check gate — every
+   * `command:` step the workflow executes, retries (`onFail`) included
+   * (`check-runner.ts`, `CHECK_GATE_TIMEOUT_MS`). Armed lazily before the first
+   * check of the run, because agent time is not gate time, and never reset: a
+   * check that loops back into its agent must not get a fresh 45 minutes per
+   * attempt, or the wall clock bounds nothing. `ActiveRun` is built in `execute`
+   * AND in `runContinuation`; a lazily-armed optional field reads identically
+   * in both.
+   */
+  checkGateDeadline?: number;
 }
 
 /** Safety cap on autonomous auto-continues per run — stops a stuck agent from nudging forever.
@@ -4218,8 +4235,19 @@ export class RunManager {
         continue;
       }
 
-      const { ok, output } = await this.runCheckStep(state, step, emit);
+      const { ok, output, status } = await this.runCheckStep(state, step, emit);
       if (state.cancelled) break;
+      if (status === 'skipped') {
+        // `CEZ_DRY_RUN=1` spawns nothing for a check, by contract. The step is
+        // recorded `skipped` — the rail's honest "never ran" glyph — and the
+        // workflow STOPS: walking into the next step would let a demo (or a CI
+        // smoke run) report success for a gate that never ran. The run settles
+        // `failed` with the reason, so "did not run" is never green.
+        const note = `skipped (CEZ_DRY_RUN=1) — nothing was run`;
+        this.finishStep(runId, step.id, 'skipped', note, emit);
+        runError = `check "${step.id}" skipped (CEZ_DRY_RUN=1) — nothing was run`;
+        break;
+      }
       if (ok) {
         this.finishStep(runId, step.id, 'done', undefined, emit);
         i++;
@@ -4227,10 +4255,20 @@ export class RunManager {
       }
 
       const used = retriesUsed.get(step.id) ?? 0;
-      if (step.onFail && used < step.onFail.max) {
+      const failureNote = checkFailureNote(step.command as string, status);
+      // A check that could not execute is not a check that failed, and looping
+      // the workflow back to an agent step cannot fix it: after the gate
+      // deadline expires every retry runs nothing (`timed-out`), a platform
+      // without a POSIX shell or a PATH without `bash` runs nothing every time
+      // (`could-not-run`), and a dry run never will (`skipped`, handled above).
+      // Retrying those burns agent turns on a command that cannot run, so the
+      // outcome the seam carried decides: only an exit status the agent could
+      // actually act on is retried.
+      const retryable = status === 'failed';
+      if (step.onFail && used < step.onFail.max && retryable) {
         retriesUsed.set(step.id, used + 1);
         checkFailure = output;
-        this.finishStep(runId, step.id, 'failed', 'check failed — looping back', emit);
+        this.finishStep(runId, step.id, 'failed', failureNote, emit);
         const retryIdx = workflow.steps.findIndex((s) => s.id === step.onFail?.retry);
         emit({
           type: 'note',
@@ -4246,8 +4284,16 @@ export class RunManager {
         continue;
       }
 
-      this.finishStep(runId, step.id, 'failed', `\`${step.command}\` exited non-zero`, emit);
-      runError = `check "${step.id}" failed${step.onFail ? ` after ${used + 1} attempts` : ''}`;
+      this.finishStep(runId, step.id, 'failed', failureNote, emit);
+      const why = status === 'timed-out' ? 'timed out' : status === 'could-not-run' ? 'could not run' : 'failed';
+      if (step.onFail && !retryable && used < step.onFail.max) {
+        emit({
+          type: 'note',
+          stepId: step.id,
+          message: `not retrying from "${step.onFail.retry}": the check did not run (${status}) — re-running it cannot change that`,
+        });
+      }
+      runError = `check "${step.id}" ${why}${step.onFail && retryable ? ` after ${used + 1} attempts` : ''}`;
       break;
     }
 
@@ -5486,46 +5532,64 @@ export class RunManager {
     }
   }
 
-  private runCheckStep(
+  /**
+   * One `command:` step, executed through the shared check seam
+   * (`./check-runner.ts`) — the same call the landing check's gate will make.
+   *
+   * The seam owns the spawn (group kill, wall clock, minimal env, tail cap);
+   * this method owns what the workflow knows: the transcript event, the run's
+   * interrupt handle, and the ONE rule the outcome set exists for — a timeout,
+   * a could-not-run and a dry run are never reported as a pass.
+   */
+  private async runCheckStep(
     state: ActiveRun,
     step: WorkflowStepDef,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
-  ): Promise<{ ok: boolean; output: string }> {
+  ): Promise<{ ok: boolean; output: string; status: CheckOutcomeStatus }> {
     const command = step.command as string;
     emit({ type: 'note', stepId: step.id, message: `$ ${command}` });
-    return new Promise((resolve) => {
+    const limits = await checkLimits(this.repoRoot);
+    if (state.checkGateDeadline === undefined && limits.gateTimeoutMs > 0) {
+      state.checkGateDeadline = Date.now() + limits.gateTimeoutMs;
+    }
+    const controller = new AbortController();
+    const previousInterrupt = state.interrupt;
+    state.interrupt = () => controller.abort();
+    let outcome: CheckOutcome;
+    try {
       // Check steps run in the same cwd as the agent steps — the worktree.
-      const child = spawn('bash', ['-lc', command], { cwd: state.cwd, env: process.env });
-      state.interrupt = () => child.kill('SIGTERM');
-
-      let output = '';
-      const collect = (chunk: Buffer) => {
-        if (output.length < CHECK_OUTPUT_CAP) {
-          output += chunk.toString('utf8');
-          if (output.length >= CHECK_OUTPUT_CAP) output += '\n… (output truncated)';
-        }
+      const options: CheckCommandOptions = {
+        cwd: state.cwd,
+        command,
+        env: buildCheckEnv(),
+        timeoutMs: limits.timeoutMs,
+        signal: controller.signal,
+        ...(state.checkGateDeadline !== undefined ? { gateDeadlineAt: state.checkGateDeadline } : {}),
       };
-      child.stdout.on('data', collect);
-      child.stderr.on('data', collect);
-      child.on('error', (err) => {
-        state.interrupt = () => undefined;
-        const message = `failed to spawn: ${err.message}`;
-        emit({ type: 'check-output', stepId: step.id, command, text: message, exitCode: -1 });
-        resolve({ ok: false, output: message });
-      });
-      child.on('close', (code) => {
-        state.interrupt = () => undefined;
-        const trimmed = output.trim() || '(no output)';
-        emit({ type: 'check-output', stepId: step.id, command, text: trimmed, exitCode: code ?? -1 });
-        resolve({ ok: code === 0, output: trimmed });
-      });
+      outcome = await runCheckCommand(options);
+    } finally {
+      // Restore rather than clobber: whoever set the previous handle owns it, and
+      // a stale no-op left behind would silently disarm a live session's
+      // cancellation (the half-fix AGENTS.md warns about).
+      state.interrupt = previousInterrupt;
+    }
+    emit({
+      type: 'check-output',
+      stepId: step.id,
+      command,
+      text: outcome.output,
+      exitCode: outcome.exitCode,
+      // Additive field (#landing-check S1): a timeout or a dry-run skip is a
+      // distinguishable outcome on the wire. Existing readers key on `exitCode`.
+      status: outcome.status,
     });
+    return { ok: outcome.ok, output: outcome.output, status: outcome.status };
   }
 
   private finishStep(
     runId: string,
     stepId: string,
-    status: 'done' | 'failed',
+    status: 'done' | 'failed' | 'skipped',
     error: string | undefined,
     emit: (event: { type: string; stepId?: string; [k: string]: unknown }) => void,
   ): void {
@@ -5537,6 +5601,31 @@ export class RunManager {
     emit({ type: 'step-end', stepId, status, ...(error ? { error } : {}) });
     appendHandoffHeartbeat(this.dataDir, runId, `step "${stepId}" complete — status=${status}`);
   }
+}
+
+/** The repo's check limits — `.ai/cezar/config.json` when set, defaults when not. */
+async function checkLimits(repoRoot: string): Promise<{ timeoutMs: number; gateTimeoutMs: number }> {
+  // `loadConfig` never throws (a missing/invalid file degrades to the defaults);
+  // the catch is belt-and-braces for a read that raced a permission change.
+  const config = await loadConfig(repoRoot).catch(() => null);
+  return {
+    timeoutMs: config?.checkTimeoutMs ?? CHECK_COMMAND_TIMEOUT_MS,
+    gateTimeoutMs: config?.checkGateTimeoutMs ?? CHECK_GATE_TIMEOUT_MS,
+  };
+}
+
+/**
+ * The step-level `error` for a non-green check. A timeout and a could-not-run
+ * are still FAILURES — they end the run just like a non-zero exit, and `onFail`
+ * deliberately does NOT loop back for them: a retry would re-run the agent for
+ * a command that cannot execute. But "exited non-zero" on a command that never
+ * started (or that we killed) is a lie a reviewer then spends an hour on. The
+ * transcript carries the detail; the step says which of the three happened.
+ */
+function checkFailureNote(command: string, status: CheckOutcomeStatus): string {
+  if (status === 'timed-out') return `\`${command}\` timed out`;
+  if (status === 'could-not-run') return `\`${command}\` could not run`;
+  return `\`${command}\` exited non-zero`;
 }
 
 function findLastAgentStepIndex(workflow: WorkflowDef): number {
