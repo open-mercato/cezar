@@ -404,6 +404,17 @@ export function NewTaskRoute() {
       setAutoStarting(false)
       return
     }
+    // A saved bookmarklet has no runner choice of its own: it implicitly targets the
+    // project's configured default. `resolveRunner` deliberately falls back to another
+    // connected runner for the editable composer, but that fallback must not turn an
+    // unattended launch into a task on a different subscription (or hide an unauthorized
+    // default behind a successful-looking start). Leave the prompt in the composer so the
+    // user can explicitly choose what should run.
+    if (runner !== defaultRunner) {
+      setNotice({ kind: 'prefill' })
+      setAutoStarting(false)
+      return
+    }
     void (async () => {
       let launchKey = ''
       try {
