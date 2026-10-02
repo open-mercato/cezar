@@ -131,6 +131,11 @@ async function respond(userText, imageCount) {
   // `mock:ask-truncated` → a complete payload one closing brace short (#936):
   // the closer repair should still produce one card, note the recovery, and
   // strip the raw marker (which ends on `]`, not `}`).
+  // `mock:ask-refs` → the same valid marker, but with task-reference marker lines AFTER it
+  // (#997, the ASK twin of `mock:monitoring-refs`): the handoff contract asks for those "as
+  // soon as you know" and names only DONE/MONITORING as coming last, so an agent that declares
+  // its issue in the turn it asks emits exactly this shape. It used to bury the marker — no
+  // card, and in a dispatched task an inbox message could answer the Guard instead of the human.
   const askMarker = userText.includes('mock:ask-bad')
     ? '\n\nCEZ:ASK {not valid json'
     : userText.includes('mock:ask-invalid')
@@ -166,7 +171,8 @@ async function respond(userText, imageCount) {
               ],
             },
           ],
-        })
+        }) +
+        (userText.includes('mock:ask-refs') ? '\nCEZ:ISSUE=997\nCEZ:TITLE=asking before declaring' : '')
       : '';
   // `mock:refs` → the reply carries the in-band task-reference markers
   // (spec 2026-07-18-task-ref-markers), so the declaration path is testable dry.

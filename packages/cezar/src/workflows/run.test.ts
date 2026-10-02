@@ -13,13 +13,14 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ContentBlock } from '../core/agent-runner.ts';
+import { parseAskMarker } from '../core/ask.ts';
 import type { UiEvent } from '../core/ui-events.ts';
 import { ClaudeCliRunner } from '../core/claude-cli-runner.ts';
 import { createWorktree } from '../git-worktree.ts';
 import { RunStore, type RunRecord, type StepState } from '../runs/store.ts';
 import { WorkspaceSemaphore } from '../workspace/semaphore.ts';
 import { parseTaskMarkers } from '../runs/task-markers.ts';
-import { appendTurnText, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
+import { appendTurnText, endsWithDoneMarker, endsWithMonitoringMarker, RunManager, turnEndMarkerText } from './run.ts';
 import type { WorkflowDef } from './types.ts';
 
 type UsageAccountingHarness = {
@@ -70,6 +71,32 @@ describe('appendTurnText', () => {
     expect(appendTurnText('', 'first')).toBe('first');
     expect(appendTurnText('first', '')).toBe('first');
     expect(appendTurnText(appendTurnText('', 'first'), 'second')).toBe('first\nsecond');
+  });
+});
+
+describe('turn-end markers tolerate trailing task references (#997)', () => {
+  const ask =
+    'CEZ:ASK {"questions":[{"header":"Scope","question":"Which scope?","options":[{"label":"Narrow"},{"label":"Wide"}]}]}';
+
+  it.each([
+    'finished\nCEZ:DONE\nCEZ:PR=42',
+    'finished\nCEZ:DONE\nCEZ:ISSUE=997',
+    'finished\nCEZ:DONE\nCEZ:TITLE=closing the issue',
+  ])('normalizes DONE before trailing references: %s', (turn) => {
+    expect(endsWithDoneMarker(turn)).toBe(true);
+  });
+
+  it('normalizes ASK before trailing references so the card parser still sees it', () => {
+    const normalized = turnEndMarkerText(`Need a decision.\n${ask}\nCEZ:ISSUE=997`);
+    expect(parseAskMarker(normalized)).not.toBeNull();
+  });
+
+  it.each([
+    'finished\nCEZ:DONE\nthen continued working',
+    'Need a decision.\nCEZ:ASK {"questions":[]}\nCEZ:ISSUE=997\nthen continued working',
+    'I will emit CEZ:DONE and CEZ:PR=42 in the next turn.',
+  ])('does not strip or promote marker-like prose: %s', (turn) => {
+    expect(turnEndMarkerText(turn)).toBe(turn);
   });
 });
 
