@@ -8414,8 +8414,9 @@ export class RunManager {
     if (state.cancelled) return false;
     // A question repeated verbatim after a nudge is not a preference the agent can settle on
     // its own — it is a blocker (the cockpit refused `cez task create`, a login is missing) that
-    // the nudge would merely make it work around, at full cost, until the cap. Park the run on
-    // the question instead, so the operator sees it now rather than after 40 more turns.
+    // the nudge would merely make it work around, at full cost. Keep this guard sticky across
+    // clean turns; the consecutive bound below is the wording-independent guard that resets on
+    // every clean turn, including DONE and MONITORING boundaries.
     const askKey = ask ? ask.questions.map((question) => question.question).join(' | ') : undefined;
     if (askKey !== undefined && askKey === state.lastOverriddenAsk) {
       this.store.appendEvent(runId, {
