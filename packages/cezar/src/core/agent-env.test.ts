@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChildEnv, looksSecret } from './agent-env.ts';
+import { BACKEND_ALLOW_PREFIXES, buildChildEnv, isClaudeBackend, looksSecret } from './agent-env.ts';
 
 /**
  * #427: the spawned backend must NOT inherit the full host environment. It
@@ -238,9 +238,9 @@ describe('buildChildEnv — Bedrock/Vertex toggles (#427 review)', () => {
     GOOGLE_CLOUD_PROJECT: 'my-project',
   };
 
-  it('CLAUDE_CODE_USE_BEDROCK=1 forwards the toggle AND the AWS creds it needs', () => {
+  it.each(['claude', 'claude-cli'] as const)('%s forwards the Bedrock toggle AND the AWS creds it needs', backend => {
     const env = buildChildEnv({
-      backend: 'claude',
+      backend,
       source: { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: '1', ...AWS },
     });
     expect(env.CLAUDE_CODE_USE_BEDROCK).toBe('1');
@@ -260,9 +260,9 @@ describe('buildChildEnv — Bedrock/Vertex toggles (#427 review)', () => {
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
   });
 
-  it('CLAUDE_CODE_USE_VERTEX=1 forwards the GCP config it needs, but not AWS', () => {
+  it.each(['claude', 'claude-cli'] as const)('%s forwards the Vertex GCP config it needs, but not AWS', backend => {
     const env = buildChildEnv({
-      backend: 'claude',
+      backend,
       source: { PATH: '/usr/bin', CLAUDE_CODE_USE_VERTEX: 'true', ...GCP, ...AWS },
     });
     expect(env.GOOGLE_APPLICATION_CREDENTIALS).toBe('/home/dev/gcp.json');
@@ -272,13 +272,35 @@ describe('buildChildEnv — Bedrock/Vertex toggles (#427 review)', () => {
     expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined(); // vertex ≠ bedrock
   });
 
-  it('a backend that never sees the toggle never gets the creds either', () => {
-    const env = buildChildEnv({
-      backend: 'codex',
-      source: { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: '1', ...AWS },
-    });
-    expect(env.CLAUDE_CODE_USE_BEDROCK).toBeUndefined();
-    expect(env.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+  it('a non-Claude allowlist containing CLAUDE_ cannot unlock Bedrock or Vertex creds', () => {
+    const original = BACKEND_ALLOW_PREFIXES.codex;
+    BACKEND_ALLOW_PREFIXES.codex = [...original, 'CLAUDE_'];
+    try {
+      const bedrock = buildChildEnv({
+        backend: 'codex',
+        source: { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: '1', ...AWS },
+      });
+      const vertex = buildChildEnv({
+        backend: 'codex',
+        source: { PATH: '/usr/bin', CLAUDE_CODE_USE_VERTEX: '1', ...GCP },
+      });
+      expect(bedrock.CLAUDE_CODE_USE_BEDROCK).toBe('1');
+      expect(bedrock.AWS_SECRET_ACCESS_KEY).toBeUndefined();
+      expect(vertex.CLAUDE_CODE_USE_VERTEX).toBe('1');
+      expect(vertex.GOOGLE_APPLICATION_CREDENTIALS).toBeUndefined();
+      expect(vertex.GOOGLE_CLOUD_PROJECT).toBeUndefined();
+    } finally {
+      BACKEND_ALLOW_PREFIXES.codex = original;
+    }
+  });
+
+  it('uses backend identity rather than a CLAUDE_ allowlist prefix for cloud unlocks', () => {
+    // A future non-Claude runner may add CLAUDE_-prefixed settings to its own
+    // allowlist. That must not make it eligible for these credentials.
+    expect(isClaudeBackend('codex')).toBe(false);
+    expect(isClaudeBackend('opencode')).toBe(false);
+    expect(isClaudeBackend('claude')).toBe(true);
+    expect(isClaudeBackend('claude-cli')).toBe(true);
   });
 });
 
