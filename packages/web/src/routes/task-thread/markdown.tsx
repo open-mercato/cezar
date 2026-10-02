@@ -2,11 +2,14 @@ import { memo, useState, type ComponentProps } from 'react'
 import {
   Streamdown,
   defaultRemarkPlugins,
+  defaultUrlTransform,
   type CodeHighlighterPlugin,
   type LinkSafetyConfig,
+  type UrlTransform,
 } from 'streamdown'
 
 import { SYN_THEME, highlight, highlightSync, supportedLanguages } from '@/lib/highlighter'
+import { isHttpUrl } from '@/lib/utils'
 
 import { LinkSafetyDialog } from './link-safety-dialog'
 
@@ -89,6 +92,18 @@ function remarkHardBreaks() {
  * exists to make consistent between the two sides. Compose onto the defaults instead.
  */
 const HARD_BREAKS = [...Object.values(defaultRemarkPlugins), remarkHardBreaks]
+
+/**
+ * Transcript markdown is agent-influenceable. Browser-openable links stay live; local file paths
+ * and other non-http link destinations stay visible but inert so the SPA never turns `/Users/...`
+ * into a bogus localhost route. Non-link URL attributes keep Streamdown's default transform so
+ * local images remain visible (#431 — href protocol guard).
+ */
+const markdownUrlTransform: UrlTransform = (url, key, node) => {
+  const transformed = defaultUrlTransform(url, key, node)
+  if (key !== 'href') return transformed
+  return isHttpUrl(transformed) ? transformed : undefined
+}
 
 /**
  * A compact preview still uses the real Markdown parser, but it cannot expose links or block
@@ -213,6 +228,7 @@ export const Markdown = memo(function Markdown({
       components={inline ? INLINE_COMPONENTS : MARKDOWN_COMPONENTS}
       urlTransform={transcriptUrlTransform}
       linkSafety={LINK_SAFETY}
+      urlTransform={markdownUrlTransform}
       // Copy + language chip on every fence (the deliverable); download is file-manager noise
       // in a chat, and table export dropdowns are R5-territory chrome.
       controls={{
