@@ -10,8 +10,8 @@ Non-goals: change the ask marker schema, dispatch behavior, native ask handling,
 
 ### Phase 1: diagnosis and guard
 
-- [ ] 1.1 Add the K=2 consecutive overridden-question state and apply it in both turn-end handlers.
-- [ ] 1.2 Add a reworded-blocker dry-run fixture and document the regression boundary.
+- [x] 1.1 Add the K=2 consecutive overridden-question state and apply it in both turn-end handlers. — implementation pending commit
+- [x] 1.2 Add a reworded-blocker dry-run fixture and document the regression boundary. — implementation pending commit
 
 ### Phase 2: verification and handoff
 

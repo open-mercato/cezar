@@ -86,6 +86,9 @@ let turn = 0;
 let autonomousArmed = false;
 let askRepeat = false;
 let monitoringSticky = false;
+// `mock:ask-reword` → the same blocker on every turn, worded differently each time. This models
+// an agent trying another workaround after each nudge instead of repeating the exact question.
+let askReword = false;
 // Must stay a prefix of `AUTONOMOUS_NUDGE` in `src/workflows/run.ts`. This is a plain script
 // and cannot import it, so `autonomous-nudge.test.ts` reads this line back and asserts the
 // coupling — reword the nudge and that test fails HERE rather than as an opaque timeout.
@@ -155,6 +158,7 @@ async function respond(userText, imageCount) {
   // `mock:monitoring-sticky` → this turn and every later one (a wake-up nudge included) ends with
   // CEZ:MONITORING: the watcher whose downstream work never finishes.
   if (userText.includes('mock:monitoring-sticky')) monitoringSticky = true;
+  if (userText.includes('mock:ask-reword')) askReword = true;
   // An inbox digest delivered into the session is answered with CEZ:DONE: the dry run proves the
   // message reached the model, then settles.
   // `mock:done-refs` → CEZ:DONE with a task-reference line AFTER it, the order an agent that
@@ -227,6 +231,20 @@ async function respond(userText, imageCount) {
                 options: [
                   { label: 'Minimal', description: 'd'.repeat(300), recommended: true },
                   { label: 'Expanded', description: 'Touch the wider surface' },
+                ],
+              },
+            ],
+          })
+      : askReword
+        ? '\n\nCEZ:ASK ' +
+          JSON.stringify({
+            questions: [
+              {
+                header: 'Blocked',
+                question: `The cockpit refused "cez task create" (attempt ${turn}) — how should I proceed?`,
+                options: [
+                  { label: 'Grant the capability', description: 'Enable dispatch for this run' },
+                  { label: 'Do it inline', description: 'Skip dispatch and work serially' },
                 ],
               },
             ],

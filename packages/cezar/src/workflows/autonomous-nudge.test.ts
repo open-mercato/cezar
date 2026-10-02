@@ -241,6 +241,23 @@ describe('autonomous mode nudges at turn end instead of parking (#autonomous)', 
     expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(true);
   }, 90_000);
 
+  it('parks on a reworded blocker after two consecutive overrides', async () => {
+    const record = manager.startRun(SINGLE_STEP, {
+      task: 'mock:ask-reword dispatch three sibling fixes',
+      worktree: false,
+      autonomous: true,
+    });
+    currentId = record.id;
+
+    await waitFor(record.id, (r) => r?.status === 'waiting', 60_000);
+    expect(nudgeNotes(record.id)).toHaveLength(2);
+    expect(notesMatching(record.id, 'question overridden by the auto-continue nudge')).toHaveLength(2);
+    const parked = notesMatching(record.id, 'consecutive questions were overridden');
+    expect(parked).toHaveLength(1);
+    expect(String(parked[0]?.message)).toContain('the run now waits for your answer');
+    expect(readEvents(record.id).some((e) => e.type === 'ask.requested')).toBe(true);
+  }, 90_000);
+
   it('records the CEZ:ASK it overrides, so an overridden question is not lost', async () => {
     // The nudge deliberately outranks `CEZ:ASK` while budget remains — but `stripAskMarker`
     // removes the marker from the visible text and no ask card is emitted, so without an
